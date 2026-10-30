@@ -25,7 +25,7 @@ from . import engine, loader
 from .diskops import DiskOps, FileOps, is_link, lstat_or_none
 from .engine import Access, Settlement
 from .envelope import (
-    EnvelopeError, RecordEnvelope, SourceManifest, parse_record, parse_source, record_document, source_document,
+    EnvelopeError, link_problem, RecordEnvelope, SourceManifest, parse_record, parse_source, record_document, source_document,
 )
 from .errors import (
     CommitIncomplete, ImmutableRevision, InvalidEnvelope, InvalidSourceState, NameCollision, NotALibrary,
@@ -84,24 +84,19 @@ class LibraryStore:
         """Create a library at ``path``; its parent must exist. Retryable after a crash."""
         ops = ops or DiskOps()
         locker = locker or OsLocker()
-        root = check_write_destination(_absolute(path))
-        if not os.path.isdir(root.parent) or is_link(root.parent):
+        root = check_write_destination(_absolute(path))  # resolved: no link remains in it
+        if not os.path.isdir(root.parent):
             raise LibraryPathError(f"{root.parent} must be an existing directory")
         info = lstat_or_none(root)
         if info is None:
             ops.make_dirs(root)  # the final component only: its parent exists
-        elif not stat.S_ISDIR(info.st_mode) or is_link(root):
+        elif not stat.S_ISDIR(info.st_mode):
             raise LibraryPathError(f"{root} exists and is not a directory")
         else:
             cls._require_restartable(ops, root)
         check_write_destination(root)  # the post-creation re-check
-        guard = Guard(root, RootIdentity.capture(root), limits)
-        access = Access(root, ops, guard)
-        if access.presence((TXN,)) != "present":
-            ops.make_dirs(root / TXN)
-        if access.presence((TXN, LOCK)) != "present":
-            ops.write_bytes(root / TXN / LOCK, b"")
-        lock = locker.acquire(root / TXN / LOCK)
+        access = Access(root, ops, Guard(root, RootIdentity.capture(root), limits))
+        lock = cls._lock(access, locker)
         try:
             engine.clean_staging(access)
             temp = ops.make_temp(root / TXN, prefix="marker", suffix=".new")
@@ -111,6 +106,16 @@ class LibraryStore:
             locker.release(lock)
             raise
         return cls(access, writable=True, locker=locker, lock=lock)
+
+    @staticmethod
+    def _lock(access: Access, locker: Locker) -> object:
+        """Make sure ``.txn`` and its lock file are real entries of this library, then lock."""
+        access.check_staging()
+        if access.presence((TXN,)) != "present":
+            access.ops.make_dirs(access.path((TXN,)))
+        if access.presence((TXN, LOCK)) != "present":
+            access.ops.write_bytes(access.path((TXN, LOCK)), b"")
+        return locker.acquire(access.path((TXN, LOCK)))
 
     @staticmethod
     def _require_restartable(ops: FileOps, root: Path) -> None:
@@ -127,19 +132,12 @@ class LibraryStore:
         """Open an existing library; a writable open takes the writer lock and recovers."""
         ops = ops or DiskOps()
         root = check_write_destination(_absolute(path))
-        if is_link(root):
-            raise LibraryPathError(f"{root} is a link")
-        guard = Guard(root, RootIdentity.capture(root), limits)
-        access = Access(root, ops, guard)
+        access = Access(root, ops, Guard(root, RootIdentity.capture(root), limits))
         cls._require_marker(access)
         if not writable:
             return cls(access, writable=False, locker=None, lock=None)
         locker = locker or OsLocker()
-        if access.presence((TXN,)) != "present":
-            ops.make_dirs(root / TXN)
-        if access.presence((TXN, LOCK)) != "present":
-            ops.write_bytes(root / TXN / LOCK, b"")
-        lock = locker.acquire(root / TXN / LOCK)
+        lock = cls._lock(access, locker)
         store = cls(access, writable=True, locker=locker, lock=lock)
         try:
             store.recover()
@@ -172,12 +170,13 @@ class LibraryStore:
         root = check_write_destination(_absolute(path))
         access = Access(root, ops, Guard(root, RootIdentity.capture(root)))
         cls._require_marker(access)
-        lock = locker.acquire(root / TXN / LOCK)
+        lock = cls._lock(access, locker)
         try:
             access.guard.check_session()
             if not access.journal_exists():
                 return ()
-            folder = (CONFLICTS, "discarded-" + etag(ops.read_bytes(access.journal))[7:19])
+            digest = etag(ops.read_bytes(access.journal)).removeprefix("sha256:")[:12]
+            folder = (CONFLICTS, f"discarded-{digest}")
             access.guard.check_write(folder + ("x",), staging_device=None)
             moved = [name for name in ops.list_dir(root / TXN) if is_staging_name(name)] + [access.journal.name]
             if access.presence(folder) != "present":
@@ -352,13 +351,17 @@ class _Commit:
             raise CommitIncomplete(f"failed after the commit point; recovery will finish it: {error}") from error
         if settlement.preserved:
             raise WriteConflict(settlement.preserved, settlement.published)
+        if settlement.incomplete:
+            raise CommitIncomplete("staged files vanished before publication (removed by another program?); "
+                                   f"not written: {', '.join(settlement.incomplete)}")
         return CommitResult(MappingProxyType({str(put.address): etag(put.data) for put in self.puts}))
 
     def _check_paths(self) -> int:
         guard = self.access.guard
         guard.check_session()
+        self.access.check_staging()
         staging = lstat_or_none(self.access.path((TXN,)))
-        if staging is None or not stat.S_ISDIR(staging.st_mode):
+        if staging is None:
             raise StoreError("the library has no staging directory; reopen it")
         guard.check_write((TXN, "x.new"), staging_device=None)
         for put in self.puts:
@@ -393,8 +396,7 @@ class _Commit:
             elif put.envelope.is_definition:
                 ref = put.envelope.address
                 assert isinstance(ref, SourceRef)
-                manifest, refs = touched.setdefault(ref.source, (None, []))
-                refs.append(ref)
+                touched.setdefault(ref.source, (None, []))[1].append(ref)
         for source_id, (manifest, new_refs) in touched.items():
             _validate_source(self.access, source_id, manifest, new_refs)
 
@@ -449,7 +451,7 @@ class _Commit:
         except OSError as error:
             try:
                 committed = access.journal_exists()
-            except OSError:
+            except (OSError, StoreError, ValueError):
                 committed = True  # unknown: let recovery decide
             if committed:
                 raise CommitIncomplete(f"the commit point may have been reached: {error}") from error
@@ -481,7 +483,10 @@ def _validate_source(access: Access, source_id: str, manifest: SourceManifest | 
     after = manifest or disk_manifest
     if after is None:
         raise InvalidSourceState(f"{source_id} has no manifest; write one in this transaction")
-    old_heads = disk_manifest.head_refs() if disk_manifest else {}
+    try:
+        old_heads = disk_manifest.head_refs() if disk_manifest else {}
+    except ValueError:  # an unreadable head map on disk: every new head counts as touched
+        old_heads = {}
     new_heads = after.head_refs()
     revisions = {key: dict(value) for key, value in scan.revisions.items()}
     for ref in new_refs:
@@ -501,12 +506,41 @@ def _validate_source(access: Access, source_id: str, manifest: SourceManifest | 
         if head is None and len(files) > 1:
             raise InvalidSourceState(f"{unpinned} would have {len(files)} revisions and no head")
     if manifest is not None:
-        old_links = list(disk_manifest.links) if disk_manifest else []
-        new_links = [link for link in manifest.links if link not in old_links]
-        if new_links:  # duplicates and self links among the new ones; ownership was checked at put
-            seen = set()
-            for link in manifest.links:
-                key = (link.subject, link.relation, link.object)
-                if key in seen and link in new_links:
-                    raise InvalidSourceState(f"duplicate link {link.subject} {link.relation} {link.object}")
-                seen.add(key)
+        _validate_links(access, source_id, disk_manifest, manifest)
+
+
+def _validate_links(access: Access, source_id: str, before: SourceManifest | None,
+                    after: SourceManifest) -> None:
+    """Refuse links the loader would drop that are not already dropped today (duplicates,
+    reversed symmetric duplicates, derivation cycles, also against every other source)."""
+    with access.cached_listings():
+        others = []
+        for other in loader.discover_sources(access):
+            if other == source_id:
+                continue
+            try:
+                manifest = loader.read_source(access, other).manifest
+                manifest.head_refs()
+            except (StoreError, ValueError):
+                continue  # an unreadable source declares nothing the loader would register
+            if any(found is not None and found[0] == "ownership"
+                   for found in (link_problem(link, other) for link in manifest.links)):
+                continue  # excluded by the loader, so its links are never registered
+            others.append(manifest)
+    where = {manifest.source: manifest.source for manifest in [*others, after]}
+
+    def dropped(own: SourceManifest | None) -> list[str]:
+        if own is None:
+            return []
+        stated = [(manifest.source, position, link) for manifest in [*others, own]
+                  for position, link in enumerate(manifest.links)]
+        problems: list[loader.LoadProblem] = []
+        loader.accept_links(stated, where, problems)
+        return [problem.detail for problem in problems if problem.source == source_id]
+
+    existing = dropped(before)
+    for detail in dropped(after):
+        if detail in existing:
+            existing.remove(detail)
+        else:
+            raise InvalidSourceState(f"{source_id}: {detail}")

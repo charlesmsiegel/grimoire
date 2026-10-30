@@ -113,5 +113,13 @@ class UnsupportedFormat(MalformedRecord):
     """A record in a format version this store does not write."""
 
 
+class AddressMismatch(MalformedRecord):
+    """A record whose ``address`` is not the one its path implies."""
+
+    def __init__(self, message: str, etag: str | None, claimed: object) -> None:
+        super().__init__(message, etag)
+        self.claimed = claimed
+
+
 class LinkRefused(LibraryPathError):
     """A symlink, junction or reparse point inside the library; never followed."""

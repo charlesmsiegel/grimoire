@@ -17,7 +17,7 @@ from grimoire.core.identity import InstanceRef, SourceRef, parse_ref, validate_s
 from grimoire.core.index import DIRECTED_RELATIONS, SYMMETRIC_RELATIONS
 
 from .errors import InvalidEnvelope
-from .jsonfmt import check_writable, freeze, is_etag, thaw
+from .jsonfmt import MAX_DEPTH, check_writable, depth_exceeds, freeze, is_etag, thaw
 
 RECORD_FORMAT = "grimoire.record/1"
 SOURCE_FORMAT = "grimoire.source/1"
@@ -51,7 +51,14 @@ def _frozen_extra(extra: object, known: frozenset[str]) -> Mapping[str, object]:
     clash = sorted(set(extra) & known)
     if clash:
         raise InvalidEnvelope(f"extra may not contain envelope fields: {clash}")
-    return freeze(extra)  # type: ignore[return-value]
+    return _freeze(extra)  # type: ignore[return-value]
+
+
+def _freeze(value: object) -> object:
+    """A payload or top-level field sits one level inside its document."""
+    if depth_exceeds(value, MAX_DEPTH - 1):
+        raise InvalidEnvelope(f"nested more than {MAX_DEPTH - 1} levels deep")
+    return freeze(value)  # type: ignore[return-value]
 
 
 def _optional_text(value: object, label: str, *, nonempty: bool = False) -> None:
@@ -91,7 +98,7 @@ class RecordEnvelope:
             _optional_text(getattr(self, label), label)
         if self.base_etag is not None and self.base is None:
             raise InvalidEnvelope("base_etag needs a base")
-        object.__setattr__(self, "payload", freeze(self.payload))
+        object.__setattr__(self, "payload", _freeze(self.payload))
         object.__setattr__(self, "extra", _frozen_extra(self.extra, _RECORD_FIELDS))
 
     @property

@@ -21,18 +21,25 @@ partial publish.
 
 from __future__ import annotations
 
+import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from .diskops import FileOps, lstat_or_none
-from .errors import RecoveryFailed, StoreError
+from grimoire.library import LibraryPathError
+
+from .diskops import FileOps, is_link, lstat_or_none
+from .errors import LinkRefused, RecoveryFailed, StoreError, UnstorableIdentifier
 from .guard import Guard
 from .journal import Entry, Journal, is_staging_name, parse
 from .jsonfmt import MAX_FILE_BYTES, etag
 from .layout import JOURNAL, TXN, Parts, conflict_parts, name_key
 
 Presence = Literal["absent", "present", "mismatch"]
+#: The "etag" of a path only a look-alike spelling occupies: equal to no old or new etag.
+LOOKALIKE = "lookalike"
 
 
 class Access:
@@ -42,6 +49,23 @@ class Access:
         self.root = root
         self.ops = ops
         self.guard = guard
+        self._listings: dict[Parts, list[str]] | None = None
+
+    @contextmanager
+    def cached_listings(self) -> Iterator[None]:
+        """Reuse directory listings while nothing is written (one load or one preflight)."""
+        outer, self._listings = self._listings, {} if self._listings is None else self._listings
+        try:
+            yield
+        finally:
+            self._listings = outer
+
+    def list_dir(self, parts: Parts) -> list[str]:
+        if self._listings is None:
+            return self.ops.list_dir(self.path(parts))
+        if parts not in self._listings:
+            self._listings[parts] = self.ops.list_dir(self.path(parts))
+        return self._listings[parts]
 
     def path(self, parts: Parts) -> Path:
         return self.root.joinpath(*parts)
@@ -54,7 +78,7 @@ class Access:
         """
         for index, part in enumerate(parts):
             try:
-                names = self.ops.list_dir(self.path(parts[:index]))
+                names = self.list_dir(parts[:index])
             except (FileNotFoundError, NotADirectoryError):
                 return "absent"
             if part in names:
@@ -64,10 +88,19 @@ class Access:
         return "present"
 
     def read(self, parts: Parts) -> bytes | None:
-        """The exact bytes at ``parts``, or ``None``; never through a link."""
+        """The exact bytes of the regular file at ``parts``, or ``None``; never through a link.
+
+        Anything else there (a directory, a FIFO, a device) is refused rather than
+        opened, so a stray entry can neither crash nor hang a reader.
+        """
         if self.presence(parts) != "present":
             return None
         self.guard.check_read(parts)
+        info = lstat_or_none(self.path(parts))
+        if info is None:
+            return None
+        if not stat.S_ISREG(info.st_mode):
+            raise UnstorableIdentifier(f"{'/'.join(parts)} is not a regular file")
         return self.ops.read_bytes(self.path(parts))
 
     def too_large(self, parts: Parts) -> bool:
@@ -75,14 +108,30 @@ class Access:
         return info is not None and info.st_size > MAX_FILE_BYTES
 
     def etag_of(self, parts: Parts) -> str | None:
+        """The current etag, ``None`` if absent, or ``LOOKALIKE`` if only a look-alike exists."""
+        if self.presence(parts) == "mismatch":
+            return LOOKALIKE
         data = self.read(parts)
         return None if data is None else etag(data)
+
+    def check_staging(self) -> None:
+        """``.txn`` and its lock are real entries of this library, never links elsewhere."""
+        staging = self.path((TXN,))
+        if is_link(staging):
+            raise LinkRefused(f"refusing a staging directory that is a link: {staging}")
+        info = lstat_or_none(staging)
+        if info is not None and not stat.S_ISDIR(info.st_mode):
+            raise LibraryPathError(f"{staging} is not a directory")
+        lock = staging / "lock"
+        if is_link(lock):
+            raise LinkRefused(f"refusing a lock file that is a link: {lock}")
 
     @property
     def journal(self) -> Path:
         return self.path((TXN, JOURNAL))
 
     def journal_exists(self) -> bool:
+        self.check_staging()  # never look through a linked staging directory
         return self.ops.exists(self.journal)
 
     def make_parent(self, parts: Parts) -> None:
@@ -107,6 +156,8 @@ def _text(parts: Parts) -> str:
 def check_entry_paths(access: Access, journal: Journal) -> None:
     """Every target and conflict path is writable without following a link or entering V1."""
     access.guard.check_session()
+    access.check_staging()
+    access.guard.check_write((TXN, JOURNAL), staging_device=None)
     staging = lstat_or_none(access.path((TXN,)))
     device = staging.st_dev if staging is not None else None
     for entry in journal.entries:
@@ -187,6 +238,10 @@ def clean_staging(access: Access) -> None:
 
 def recover(access: Access) -> Settlement:
     """Validate the journal and every path it names before changing anything."""
+    try:
+        access.check_staging()
+    except (StoreError, ValueError) as error:
+        raise RecoveryFailed(f"refusing to recover through an unsafe staging directory: {error}") from error
     if not access.journal_exists():
         if access.presence((TXN,)) == "present":
             clean_staging(access)

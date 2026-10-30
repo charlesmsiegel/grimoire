@@ -85,7 +85,14 @@ class DiskOps:
         os.remove(path)
 
     def make_dirs(self, path: PathArg) -> None:
+        missing = []
+        current = os.path.abspath(path)
+        while not os.path.lexists(current):
+            missing.append(current)
+            current = os.path.dirname(current)
         os.makedirs(path, exist_ok=True)
+        for created in reversed(missing):  # make each new entry durable in its parent
+            _sync_directory(os.path.dirname(created))
 
 
 def is_link(path: PathArg) -> bool:

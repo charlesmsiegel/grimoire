@@ -26,7 +26,9 @@ from grimoire.core.index import DIRECTED_RELATIONS, DefinitionIndex, DefinitionL
 from .diskops import is_link, lstat_or_none
 from .engine import Access
 from .envelope import EnvelopeError, LinkSpec, RecordEnvelope, SourceManifest, link_problem, parse_record, parse_source
-from .errors import MalformedRecord, RecordNotFound, StoreError, UnsupportedFormat
+from .errors import (
+    AddressMismatch, MalformedRecord, RecordNotFound, StoreError, UnstorableIdentifier, UnsupportedFormat,
+)
 from .jsonfmt import JsonError, etag, parse_strict
 from .layout import (
     CAMPAIGNS, CONFLICTS, INSTANCES, MANIFEST, MARKER, RECORDS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS,
@@ -99,7 +101,12 @@ def _document(access: Access, parts: Parts) -> tuple[Mapping[str, object], str]:
     """Parsed JSON and its etag; ``MalformedRecord`` for anything unreadable."""
     if access.too_large(parts):
         raise MalformedRecord(f"{_text(parts)} is too large to read", None)
-    data = access.read(parts)
+    try:
+        data = access.read(parts)
+    except OSError as error:
+        raise MalformedRecord(f"{_text(parts)} cannot be read: {error}", None) from error
+    except UnstorableIdentifier as error:  # a directory, FIFO or device where a file belongs
+        raise MalformedRecord(str(error), None) from error
     if data is None:
         raise RecordNotFound(_text(parts))
     try:
@@ -118,7 +125,8 @@ def read_record(access: Access, parts: Parts) -> StoredRecord:
         raise kind(f"{_text(parts)}: {error.detail}", tag) from None
     found = classify(parts)
     if found is None or found[1] != envelope.address:
-        raise MalformedRecord(f"{_text(parts)} holds {envelope.address}, not the record its path names", tag)
+        raise AddressMismatch(f"{_text(parts)} holds {envelope.address}, not the record its path names", tag,
+                              envelope.address)
     return StoredRecord(envelope, tag, previous)
 
 
@@ -155,7 +163,12 @@ def _is_dir(access: Access, parts: Parts) -> bool:
 def _listing(access: Access, parts: Parts, problems: list[LoadProblem], source: str | None) -> list[str]:
     """Names in a directory, skipping noise and reporting (never following) links."""
     names = []
-    for name in access.ops.list_dir(access.path(parts)):
+    try:
+        listed = access.list_dir(parts)
+    except OSError as error:
+        problems.append(LoadProblem(_text(parts), "unreadable", f"cannot list: {error}", source))
+        return []
+    for name in listed:
         if is_noise(name):
             continue
         if is_link(access.path(parts + (name,))):
@@ -172,7 +185,11 @@ def _has_files(access: Access, parts: Parts) -> bool:
         current = stack.pop()
         if not _is_dir(access, current):
             return True
-        for name in access.ops.list_dir(access.path(current)):
+        try:
+            names = access.list_dir(current)
+        except OSError:
+            return True
+        for name in names:
             if is_link(access.path(current + (name,))):
                 return True
             stack.append(current + (name,))
@@ -209,7 +226,7 @@ def scan_source(access: Access, source_id: str) -> SourceScan:
             found = link_problem(link, source_id)
             if found is not None and found[0] == "ownership":
                 scan.excluded_by.append(LoadProblem(_text(base + (MANIFEST,)), "ownership", found[1], source_id))
-    if access.presence(base) != "present":
+    if access.presence(base) != "present" or not _is_dir(access, base):
         return scan
     for name in _listing(access, base, problems, source_id):
         if name not in (MANIFEST, RECORDS):
@@ -236,19 +253,16 @@ def scan_source(access: Access, source_id: str) -> SourceScan:
                 revisions[ref.revision] = None  # type: ignore[index]
                 try:
                     stored = read_record(access, parts)
-                except UnsupportedFormat as error:
-                    problems.append(LoadProblem(_text(parts), "unsupported_format", str(error), source_id))
-                    continue
-                except MalformedRecord as error:
-                    claimed = _claimed_source(access, parts)
-                    if claimed is not None and claimed != source_id:
+                except AddressMismatch as error:
+                    claimed = error.claimed
+                    if isinstance(claimed, SourceRef) and claimed.source != source_id:
                         scan.excluded_by.append(LoadProblem(
-                            _text(parts), "ownership", f"{source_id} holds a record of {claimed}", source_id))
-                    code = "address_mismatch" if "not the record its path names" in str(error) else "malformed"
-                    problems.append(LoadProblem(_text(parts), code, str(error), source_id))
+                            _text(parts), "ownership", f"{source_id} holds a record of {claimed.source}",
+                            source_id))
+                    problems.append(LoadProblem(_text(parts), "address_mismatch", str(error), source_id))
                     continue
-                except (StoreError, ValueError) as error:
-                    problems.append(LoadProblem(_text(parts), "malformed", str(error), source_id))
+                except (StoreError, ValueError, OSError) as error:
+                    problems.append(LoadProblem(_text(parts), _code(error), str(error), source_id))
                     continue
                 envelope = stored.envelope
                 revisions[ref.revision] = StoredDefinition(  # type: ignore[index]
@@ -258,14 +272,12 @@ def scan_source(access: Access, source_id: str) -> SourceScan:
     return scan
 
 
-def _claimed_source(access: Access, parts: Parts) -> str | None:
-    """The source a mismatched record claims to belong to, if its address says."""
-    try:
-        document, _ = _document(access, parts)
-        envelope, _ = parse_record(document)
-    except (StoreError, EnvelopeError, ValueError):
-        return None
-    return envelope.address.source if isinstance(envelope.address, SourceRef) else None
+def _code(error: BaseException) -> str:
+    if isinstance(error, UnsupportedFormat):
+        return "unsupported_format"
+    if isinstance(error, AddressMismatch):
+        return "address_mismatch"
+    return "malformed"
 
 
 def evaluate(scan: SourceScan) -> tuple[list[StoredDefinition], dict[SourceRef, str], set[EntityKey],
@@ -330,7 +342,7 @@ def _reaches(graph: dict[SourceRef, set[SourceRef]], start: SourceRef, goal: Sou
     return False
 
 
-def _accept_links(stated: list[tuple[str, int, LinkSpec]], where: Mapping[str, str],
+def accept_links(stated: list[tuple[str, int, LinkSpec]], where: Mapping[str, str],
                   problems: list[LoadProblem]) -> list[DefinitionLink]:
     """Valid links; in-source ones first, then cross-source, each by declarer and file order."""
     def order(item: tuple[str, int, LinkSpec]) -> tuple[int, str, int]:
@@ -368,14 +380,19 @@ def _accept_links(stated: list[tuple[str, int, LinkSpec]], where: Mapping[str, s
 
 # -- the whole library --------------------------------------------------------------
 
-def _discover_sources(access: Access, problems: list[LoadProblem]) -> list[str]:
+def discover_sources(access: Access, problems: list[LoadProblem] | None = None) -> list[str]:
+    """Source ids with a ``_source`` directory, sorted; never through a link."""
+    problems = [] if problems is None else problems
+    if access.presence((SOURCES,)) != "present" or not _is_dir(access, (SOURCES,)) or is_link(
+            access.path((SOURCES,))):
+        return []
     found: list[str] = []
     stack: list[tuple[Parts, tuple[str, ...]]] = [((SOURCES,), ())]
     while stack:
         parts, segments = stack.pop()
         for name in _listing(access, parts, problems, None):
             child = parts + (name,)
-            if name == SOURCE_DIR and segments:
+            if name == SOURCE_DIR and segments and _is_dir(access, child):
                 found.append(":".join(segments))
             elif _is_dir(access, child) and classify((SOURCES, *segments, name, SOURCE_DIR, MANIFEST)):
                 stack.append((child, segments + (name,)))
@@ -418,27 +435,29 @@ def _discover_instances(access: Access, problems: list[LoadProblem]) -> dict[Ins
                         continue
                     try:
                         instances[found[1]] = read_record(access, parts)  # type: ignore[index]
-                    except UnsupportedFormat as error:
-                        problems.append(LoadProblem(_text(parts), "unsupported_format", str(error)))
-                    except MalformedRecord as error:
-                        code = "address_mismatch" if "not the record its path names" in str(error) else "malformed"
-                        problems.append(LoadProblem(_text(parts), code, str(error)))
-                    except (StoreError, ValueError) as error:
-                        problems.append(LoadProblem(_text(parts), "malformed", str(error)))
+                    except (StoreError, ValueError, OSError) as error:
+                        problems.append(LoadProblem(_text(parts), _code(error), str(error)))
     return instances
 
 
 def load(access: Access) -> LibraryView:
+    with access.cached_listings():
+        return _load(access)
+
+
+def _load(access: Access) -> LibraryView:
     problems: list[LoadProblem] = []
-    for name in _listing(access, (), problems, None):
+    roots = set()
+    for name in _listing(access, (), problems, None):  # links are reported here and never entered
         if name in (MARKER, TXN, CONFLICTS) or name in RESERVED_ROOTS:
             continue
         if name in (SOURCES, CAMPAIGNS) and _is_dir(access, (name,)):
+            roots.add(name)
             continue
         _unrecognized(access, (name,), problems, None)
 
     scans = {source_id: scan_source(access, source_id) for source_id in
-             (_discover_sources(access, problems) if access.presence((SOURCES,)) == "present" else [])}
+             (discover_sources(access, problems) if SOURCES in roots else [])}
     excluded: set[str] = set()
     for source_id, scan in scans.items():
         problems.extend(scan.problems)
@@ -474,7 +493,7 @@ def load(access: Access) -> LibraryView:
             dropped |= {(source_id, key) for key in gone}
             stated += [(source_id, position, spec) for position, spec in enumerate(manifest.links)]
         where = {source_id: _text(manifest_parts(source_id)) for source_id in scans}
-        links = _accept_links(stated, where, link_problems)
+        links = accept_links(stated, where, link_problems)
         index = DefinitionIndex(descriptors, definitions, heads, links)
         problems.extend(link_problems)
         return index, dropped, links
@@ -496,7 +515,7 @@ def load(access: Access) -> LibraryView:
             excluded |= blamed
             reported_excluded |= blamed
 
-    instances = _discover_instances(access, problems) if access.presence((CAMPAIGNS,)) == "present" else {}
+    instances = _discover_instances(access, problems) if CAMPAIGNS in roots else {}
     broken = _broken(index, links, excluded - empty, dropped, instances)
     sources = {source_id: scan.stored for source_id, scan in scans.items()
                if source_id not in excluded and scan.stored is not None}

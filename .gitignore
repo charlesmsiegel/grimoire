@@ -25,3 +25,6 @@ grimoire-v2-home/
 
 # V2 private/temporary specification, planning and review artifacts
 .superpowers/
+
+# Throwaway probe and scratch output
+backend/tmp*/

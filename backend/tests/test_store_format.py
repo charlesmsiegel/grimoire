@@ -195,3 +195,19 @@ def test_logical_addresses_are_resource_paths_and_conflicts_are_bounded():
     parts = conflict_parts(instance_parts(longest), "sha256:" + "f" * 64)
     assert parts[0] == CONFLICTS and len(parts) == 3 and len(parts[1]) == 16
     assert len(parts[2]) == 128 + 1 + 12  # bounded whatever the depth of the target
+
+
+def test_nesting_is_capped_so_whatever_is_written_reads_back():
+    deep = []
+    for _ in range(150):
+        deep = [deep]
+    with pytest.raises(InvalidEnvelope):
+        RecordEnvelope(INST, deep)
+    ok = []
+    for _ in range(90):
+        ok = [ok]
+    envelope = RecordEnvelope(INST, ok)
+    envelope.check_writable()
+    assert parse_record(parse_strict(render(record_document(envelope, None))))[0] == envelope
+    with pytest.raises(JsonError):
+        parse_strict(b'{"a": ' + b"[" * 150 + b"]" * 150 + b"}")

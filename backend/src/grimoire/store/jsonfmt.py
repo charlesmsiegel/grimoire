@@ -19,6 +19,8 @@ from .errors import InvalidEnvelope
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_INT_DIGITS = 4300
+#: Deeper JSON is refused when written and when read, so whatever is written reads back.
+MAX_DEPTH = 100
 _INT_LIMIT = 10 ** MAX_INT_DIGITS
 
 
@@ -79,6 +81,23 @@ def _walk(value: object):
             stack.extend(item)
 
 
+def depth_exceeds(value: object, limit: int = MAX_DEPTH) -> bool:
+    """Whether containers nest more than ``limit`` deep (iterative: no recursion limit)."""
+    stack = [(value, 1)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, Mapping):
+            children = item.values()
+        elif isinstance(item, (list, tuple)):
+            children = item
+        else:
+            continue
+        if depth > limit:
+            return True
+        stack.extend((child, depth + 1) for child in children)
+    return False
+
+
 def _encodable(text: str) -> bool:
     try:
         text.encode("utf-8")
@@ -102,6 +121,8 @@ def parse_strict(data: bytes) -> dict[str, object]:
                            parse_int=_parse_int, parse_float=_parse_float)
         if not isinstance(value, dict):
             raise JsonError("top level is not an object")
+        if depth_exceeds(value):
+            raise JsonError(f"nested more than {MAX_DEPTH} levels deep")
         for item in _walk(value):
             if isinstance(item, str) and not _encodable(item):
                 raise JsonError("contains a lone surrogate")
@@ -132,6 +153,8 @@ def thaw(value: object) -> object:
 
 def check_writable(value: object) -> None:
     """Refuse anything that would not read back identically."""
+    if depth_exceeds(value):  # the same limit reading applies
+        raise InvalidEnvelope(f"nested more than {MAX_DEPTH} levels deep")
     for item in _walk(value):
         if item is None or type(item) is bool:
             continue

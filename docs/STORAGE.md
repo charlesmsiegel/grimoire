@@ -43,9 +43,10 @@ All files are JSON: UTF-8 without a BOM, a top-level object, at most 8 MiB.
 **Reading is strict.** Each of the following is a load problem for that one file, never a crashed load:
 - invalid UTF-8, a BOM, duplicate keys;
 - `NaN`/`Infinity`, numbers that overflow, integers longer than 4300 digits;
-- lone surrogates, nesting deep enough to exhaust the parser.
+- lone surrogates, nesting deeper than 100 levels;
+- an unreadable file, or anything other than a regular file (a directory, FIFO or device) where a file belongs. These are never opened, so they cannot hang a reader.
 
-**Writing is deterministic:** sorted keys, two-space indent, `ensure_ascii=False`, trailing newline. A caller value that could not be read back is refused as `InvalidEnvelope`. A rewrite may reformat a hand-edited file; *values*, including unknown ones, are preserved.
+**Writing is deterministic:** sorted keys, two-space indent, `ensure_ascii=False`, trailing newline. A caller value that could not be read back is refused as `InvalidEnvelope`; this includes nesting deeper than 99 levels inside an envelope. A rewrite may reformat a hand-edited file; *values*, including unknown ones, are preserved. For the envelope's own optional fields (`name`, `owner`, `derived_from`, `base`, `base_etag`, `title`), an explicit `null` means absent and is not written back.
 
 **Etag (content revision):** `sha256:<hex>` of a file's exact bytes. It is never stored inside the file.
 
@@ -100,7 +101,7 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
 3. **Isolation and preflight.** Every one of these is read-only:
    - the root is the directory that was opened, by device and inode (or by resolved path where the filesystem reports no inode);
    - [`check_write_destination`](ARCHITECTURE.md#library-location-and-v1-isolation-implemented-grimoirelibrary) passes for the root and for each target's deepest existing directory, which catches bind mounts;
-   - no existing component of a target path, its `.conflicts` path or `.txn` is a link, junction or reparse point (`LinkRefused`), or a non-directory where a directory must be;
+   - no existing component of a target path, its `.conflicts` path, `.txn` or `.txn/lock` is a link, junction or reparse point (`LinkRefused`), or a non-directory where a directory must be. Every open, recovery, `discard_journal` and read applies the same check to `.txn` before touching anything inside it;
    - `.txn` and each target are on the same filesystem (`CrossDevice`);
    - paths fit the platform's limits: 259 UTF-16 units on Windows, `pathconf` elsewhere.
 4. **Compare-and-swap.** Any target whose current etag differs from `expected` (including exists versus absent), or whose current file is in a newer format, raises `StaleWrite` and lists every stale address.
@@ -109,7 +110,7 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
    - a head naming a missing or unreadable revision;
    - several revision files and no head;
    - an entity ID reused under another kind;
-   - a duplicate or invalid new link;
+   - a new link the loader would drop: a duplicate (including a reversed symmetric one) or one that closes a derivation cycle, checked against the links of every other source the loader would register. Only the committing source's own links are judged. Under the link-order policy below, a commit can cause *another* source's cross-source link to be dropped, and the next `load` reports it;
    - a revision without a manifest.
 
    A hand-made problem in an unrelated entity does not block a write, so repairs can be made incrementally.
@@ -118,7 +119,7 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
 9. **Commit point:** the journal is written and atomically replaced to `.txn/journal.json`. If that fails before the replace, nothing is published.
 10. **Pre-publish guard.** If any target now equals neither its old nor its new etag, an external edit raced the commit. The journal is first durably rewritten as `abort`, then every staged version is preserved in `.conflicts/`, and `WriteConflict(published=())` is raised.
 11. **Publish.** Each target is re-hashed immediately before its `replace`. An edit caught there is kept, the store's version is preserved, the remaining entries publish, and `WriteConflict` names both what was published and what was preserved.
-12. The journal is removed. Any failure in steps 10–12 raises `CommitIncomplete`, and the on-disk journal then blocks reads and commits until recovery.
+12. The journal is removed. Any failure in steps 10–12 raises `CommitIncomplete`, and the on-disk journal then blocks reads and commits until recovery. If staged files vanished before publication (removed by another program), commit also raises `CommitIncomplete` naming the targets that were not written; it never reports success for them.
 
 **Residual race (R7, pinned by a test):** an external edit landing between step 11's per-entry re-hash and its `replace` is overwritten. Multi-file atomicity holds only when no external edit happens concurrently.
 
@@ -136,7 +137,7 @@ Then each entry follows one table, shared with publication:
 | present | ≠ new | any | preserved; never published |
 | present | = new | = old | published |
 | present | = new | = new | temp removed |
-| present | = new | other | preserved; the human's file is kept |
+| present | = new | other, or only a differently spelled look-alike | preserved; the human's file is kept |
 
 An `abort` journal never publishes. A commit journal whose temps are all still present, and which would preserve any entry, is first rewritten as `abort`. A crash part-way through preserving can therefore never resume as a partial publish. Recovery then removes the journal and any uncommitted staging, and records `store.last_recovery`: what was published, preserved and left incomplete.
 
@@ -164,7 +165,7 @@ Damage is contained as locally as blame allows:
 | entity | `missing_head`, `bad_head`, `kind_reuse` | the entity is dropped; the rest of the source loads |
 | link | `bad_link` (invalid, duplicate, or closes a derivation cycle) | the link is dropped; sources stay |
 | source | `malformed`/`unsupported_format` manifest, `ownership`, `identity_conflict` | the source is excluded |
-| library | `link`, `unrecognized`, `name_mismatch` | reported only |
+| library | `link`, `unrecognized`, `name_mismatch`, `unreadable` (a directory that cannot be listed) | reported only |
 
 **Link order.** In-source links register first, then cross-source links, each group ordered by declaring source and then by file order. When two sources' cross-source links together close a derivation cycle, the link from the alphabetically later declarer is the one dropped. This is a policy to revisit with real data.
 
@@ -182,8 +183,11 @@ Broken-reference reasons are the index's `missing_source`, `missing_entity` and 
   - A second writer gets `LibraryLocked`.
   - On a filesystem that cannot lock (some network shares), a writable open fails with `LockUnavailable`; a read-only open still works.
   - The locker is injectable. Crash-exploration tests use a process-local `ProcessLocker`.
+- **A `LibraryStore` is single-threaded.** Its per-load listing cache is not shared safely between threads; use one store per thread or serialize access.
+- **A linked `.txn`** is refused everywhere, read-only opens and `discard_journal` included (`LinkRefused`). Remove the link by hand.
 - **Readers** (`writable=False`) take no lock and never recover. They are consistent only while no writer is active: a `load` that overlaps another process's commit may see a mix of old and new files. Cross-process read isolation is deferred to 019/030.
-- **Durability:** files are fsynced before they are renamed, and on POSIX the parent directory is fsynced after each rename (best-effort where a filesystem does not support it). Power loss is not simulated by the harness.
+- **Durability:** files are fsynced before they are renamed. On POSIX the parent directory is fsynced after each rename and after each directory the store creates; this is best-effort where a filesystem does not support it, but genuine I/O errors are raised. Power loss is not simulated by the harness.
+- **Windows reparse points:** every reparse point counts as a link and is refused, not only symlinks and junctions. A library inside a cloud-synced folder that uses placeholder files (such as OneDrive Files-On-Demand) is therefore refused. Narrowing this to specific reparse tags is future work.
 - A malformed **instance** can be replaced by passing its exact etag (`MalformedRecord.etag`); the caller has, in effect, seen those bytes. The old bytes are not copied first. A malformed definition revision can only be fixed by hand.
 
 ## Facet independence

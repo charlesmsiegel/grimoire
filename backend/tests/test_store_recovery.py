@@ -389,3 +389,45 @@ def test_interrupted_create_can_be_retried(tmp_path):
                        (idempotent_recovery(), RESIDUE), normalize=drop_empty_dirs)
     explore_crashes(sc, tmp_path, errors=True, recovery_crashes=True).assert_ok()
     assert locker.held == set()
+
+
+def test_a_commit_whose_staging_vanished_is_not_reported_as_success(tmp_path):
+    locker = ProcessLocker()
+    root = tmp_path / "root"
+    root.mkdir()
+    _setup(locker)(RootedFileOps(root, record=False), root)
+
+    def cleanup_tool(ops, root):  # another program empties the staging folder
+        for name in ops.list_dir(root / LIB / ".txn"):
+            if name.startswith("rec"):
+                ops.remove(root / LIB / ".txn" / name)
+
+    ops = RootedFileOps(root, plan=[Interleave(JOURNAL, cleanup_tool)], record=False)
+    with LibraryStore.open(root / LIB, ops=ops, locker=locker) as store:
+        txn = store.transaction()
+        txn.put(RecordEnvelope(InstanceRef("c9", "character", "x"), {"n": 1}), None)
+        with pytest.raises(CommitIncomplete, match="not written"):
+            txn.commit(owner_handle())
+        assert not (root / LIB / "campaigns" / "c9" / "instances" / "character" / "x.json").exists()
+
+
+def test_a_lookalike_created_while_down_is_never_overwritten(tmp_path):
+    """On a case-insensitive filesystem `X.json` *is* `x.json`; recovery must preserve, not publish."""
+    locker = ProcessLocker()
+    root = tmp_path / "root"
+    root.mkdir()
+    _setup(locker)(RootedFileOps(root, record=False), root)
+    folder = root / LIB / "campaigns" / "other" / "instances" / "character"
+
+    def create_x(ops, root, locker):
+        with LibraryStore.open(root / LIB, ops=ops, locker=locker) as store:
+            txn = store.transaction()
+            txn.put(RecordEnvelope(InstanceRef("other", "character", "x"), {"n": 1}), None)
+            txn.commit(owner_handle())
+
+    _crash_after_commit_point(root, locker, create_x)
+    (folder / "X.json").write_bytes(HUMAN)
+    with LibraryStore.open(root / LIB, locker=locker) as store:
+        assert store.last_recovery.preserved and not store.last_recovery.published
+    assert (folder / "X.json").read_bytes() == HUMAN
+    assert sorted(path.name for path in folder.iterdir()) == ["X.json", "bystander.json"]

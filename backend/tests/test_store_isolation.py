@@ -134,3 +134,26 @@ def test_a_root_swapped_after_open_refuses_to_commit(tmp_path):
         txn.commit(owner_handle())
     store.close()
     assert list((tmp_path / "lib").iterdir()) == []
+
+
+def test_a_linked_staging_directory_is_refused_everywhere(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "precious.new").write_text("not the store's")
+    (outside / "journal.json").write_text("{}")
+    lib = tmp_path / "lib"
+    store = LibraryStore.create(lib, locker=ProcessLocker())
+    seed(store)
+    os.rename(lib / ".txn", tmp_path / "txn-moved")
+    make_dir_link(lib / ".txn", outside)
+    before = snapshot(outside)
+    txn = store.transaction()
+    txn.put(instance(InstanceRef("c3", "character", "x"), WREN_R1), None)
+    with pytest.raises(LinkRefused):
+        txn.commit(owner_handle())
+    store.close()
+    with pytest.raises(LinkRefused):
+        LibraryStore.open(lib, locker=ProcessLocker())
+    with pytest.raises(LinkRefused):
+        LibraryStore.discard_journal(lib, locker=ProcessLocker())
+    assert snapshot(outside) == before

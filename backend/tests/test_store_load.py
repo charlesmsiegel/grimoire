@@ -284,3 +284,115 @@ def test_load_never_follows_a_link(library, tmp_path):
         view = reader.load()
     assert ops.sandbox_violation is None
     assert [(p.path, p.code) for p in view.problems] == [("sources/addon", "link")]
+
+
+# -- regressions from the implementation review ------------------------------------------
+
+@pytest.mark.parametrize("stray", ["record-is-dir", "manifest-is-dir", "source-dir-is-file", "instance-is-dir",
+                                   "fifo"])
+def test_a_stray_entry_in_an_add_on_never_crashes_or_hangs_a_load(library, stray):
+    root = library.root
+    _commit(library, (SourceManifest(ADDON, "human:fan"), None), (RecordEnvelope(ALT, {}), None))
+    addon = root / "sources/addon/fan/_source"
+    if stray == "record-is-dir":
+        (addon / "records/character/wren-alt/2.json").mkdir()
+        (addon / "records/character/wren-alt/2.json/x").write_text("x")
+    elif stray == "manifest-is-dir":
+        (addon / "manifest.json").unlink()
+        (addon / "manifest.json").mkdir()
+        (addon / "manifest.json" / "x").write_text("x")
+    elif stray == "source-dir-is-file":
+        shutil.rmtree(addon)
+        addon.write_text("not a directory")
+    elif stray == "instance-is-dir":
+        (root / "campaigns/c1/instances/character/odd.json").mkdir()
+        (root / "campaigns/c1/instances/character/odd.json/x").write_text("x")
+    else:
+        if not hasattr(__import__("os"), "mkfifo"):
+            pytest.skip("no FIFOs here")
+        __import__("os").mkfifo(addon / "records/character/wren-alt/2.json")
+    view = library.load()
+    assert view.index.resolve(WREN).ref == WREN_R1  # the user's world is unaffected
+    assert view.problems
+
+
+@pytest.mark.parametrize("name", ["sources", "campaigns"])
+def test_a_root_entry_that_is_a_file_is_reported_not_fatal(tmp_path, name):
+    store = LibraryStore.create(tmp_path / "lib")
+    (tmp_path / "lib" / name).write_text("oops")
+    assert [(p.path, p.code) for p in store.load().problems] == [(name, "unrecognized")]
+    store.close()
+
+
+def test_a_root_level_link_is_never_listed(library, tmp_path):
+    evil = tmp_path / "evil"
+    (evil / "world" / "evil" / "_source").mkdir(parents=True)
+    (evil / "world" / "evil" / "_source" / "manifest.json").write_text("{}")
+    shutil.rmtree(library.root / "sources")
+    make_dir_link(library.root / "sources", evil)
+    ops = RootedFileOps(library.root, record=False)
+    with LibraryStore.open(library.root, ops=ops, writable=False) as reader:
+        view = reader.load()
+    assert ops.sandbox_violation is None
+    assert [(p.path, p.code) for p in view.problems] == [("sources", "link")] and view.excluded == ()
+
+
+@pytest.mark.parametrize("heads", [{"wren": "r1"}, {"character/wren": "R1!"}])
+def test_a_mistyped_head_key_can_be_repaired_through_the_store(library, heads):
+    path = library.root / HARBOR_DIR / "manifest.json"
+    manifest = json.loads(path.read_bytes())
+    manifest["heads"] = heads
+    path.write_text(json.dumps(manifest))
+    assert library.load().excluded == (HARBOR,)
+    _commit(library, (harbor_manifest({"character/wren": "r1"}), etag(path.read_bytes())))
+    view = library.load()
+    assert view.excluded == () and view.index.resolve(WREN).ref == WREN_R1
+
+
+@pytest.mark.parametrize("case", ["duplicate-of-existing", "reversed-symmetric", "cycle-within",
+                                  "cycle-against-other-source"])
+def test_new_links_the_loader_would_drop_are_refused(library, case):
+    rival = SourceRef(HARBOR, "character", "rival", "r1")
+    _commit(library, (SourceManifest(ADDON, "human:fan"), None), (RecordEnvelope(ALT, {}), None),
+            (RecordEnvelope(rival, {}), None))
+    symmetric = LinkSpec(str(WREN), "same_individual", str(ALT))
+    base = [symmetric]
+    _commit(library, (harbor_manifest(links=base), library.read_source(HARBOR).etag))
+    if case == "duplicate-of-existing":
+        links = base + [LinkSpec(str(WREN), "same_individual", str(ALT))]
+    elif case == "reversed-symmetric":
+        links = base + [LinkSpec(str(WREN), "same_individual", str(ALT.unpinned()))]
+    elif case == "cycle-within":
+        links = base + [LinkSpec(str(WREN_R1), "derived_variant", str(rival)),
+                        LinkSpec(str(rival), "derived_variant", str(WREN_R1))]
+    else:
+        _commit(library, (SourceManifest(ADDON, "human:fan", links=(
+            LinkSpec(str(ALT), "derived_variant", str(WREN_R1)),)), library.read_source(ADDON).etag))
+        links = base + [LinkSpec(str(WREN_R1), "derived_variant", str(ALT))]
+    with pytest.raises(InvalidSourceState):
+        _commit(library, (harbor_manifest(links=links), library.read_source(HARBOR).etag))
+    # a dropped link that already exists on disk does not block an unrelated change
+    if case == "cycle-against-other-source":
+        path = library.root / HARBOR_DIR / "manifest.json"
+        manifest = json.loads(path.read_bytes())
+        manifest["links"].append({"subject": str(WREN_R1), "relation": "derived_variant", "object": str(ALT)})
+        path.write_text(json.dumps(manifest))
+        kept = [LinkSpec(**link) for link in manifest["links"]]
+        _commit(library, (harbor_manifest(links=kept, **{"x-notes": "edited"}), etag(path.read_bytes())))
+
+
+def test_links_of_a_source_the_loader_excludes_do_not_block_a_commit(library):
+    zed = SourceRef(HARBOR, "character", "zed", "r1")
+    why = SourceRef(ADDON, "character", "why", "r1")
+    _commit(library, (RecordEnvelope(zed, {}), None),
+            (SourceManifest(ADDON, "human:fan", links=(LinkSpec(str(why), "derived_variant", str(WREN_R1)),)),
+             None), (RecordEnvelope(why, {}), None))
+    _commit(library, (harbor_manifest(links=[LinkSpec(str(zed), "derived_variant", str(why))]),
+                      library.read_source(HARBOR).etag))
+    path = library.root / "sources/addon/fan/_source/manifest.json"
+    addon = json.loads(path.read_bytes())
+    addon["heads"] = {"why": "r1"}  # a hand-made bad head key: the loader excludes the add-on
+    path.write_text(json.dumps(addon))
+    links = [LinkSpec(str(zed), "derived_variant", str(why)), LinkSpec(str(WREN_R1), "derived_variant", str(zed))]
+    _commit(library, (harbor_manifest(links=links), library.read_source(HARBOR).etag))
+    assert library.load().excluded == (ADDON,)
