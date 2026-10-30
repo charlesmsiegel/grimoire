@@ -106,6 +106,7 @@ def test_known_must_be_a_collection_of_fact_ids(known):
     with pytest.raises(InvalidVoice) as raised:
         fragment(resolved((A1,)), known=known)
     assert PRIVATE not in str(raised.value)
+    assert raised.value.__cause__ is None
 
 
 @pytest.mark.parametrize("build", [
@@ -120,6 +121,7 @@ def test_secret_facts_are_validated(build):
     with pytest.raises(InvalidVoice) as raised:
         build()
     assert PRIVATE not in str(raised.value)
+    assert raised.value.__cause__ is None
 
 
 def test_secrets_must_be_secret_facts():

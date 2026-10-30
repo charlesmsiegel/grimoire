@@ -41,6 +41,8 @@ def test_a1_four_npcs_stay_distinguishable_and_nobody_leaks(cast, scene):
     assert distinguishability(cast["scenario"], run) == 1
     assert sum(len(lines) for lines in scene.values()) == 12
     assert len(run.calls) == 12 and {c.purpose for c in run.calls} == {"npc_generation"}
+    report = compare(cast["scenario"], run, run)
+    assert report.passed and report.synthetic and report.findings == ()
 
 
 def test_a1_attribution_does_not_depend_on_the_cue(cast, scene):
@@ -123,6 +125,7 @@ def test_f4_flattened_voices_regress_against_the_distinct_cast(cast, scene):
     candidate = fx.run(fx.render_scene(flat_voices, cast["controls"]), cast["scenario"], run_id="flat")
     report = compare(cast["scenario"], baseline, candidate)
     assert "voice_regression" in {finding.check for finding in report.findings}
+    assert "baseline_invalid" not in {finding.check for finding in report.findings}
 
 
 def test_f5_one_call_voicing_every_npc_fails_separate_generation(cast, scene):

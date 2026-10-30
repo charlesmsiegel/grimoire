@@ -100,6 +100,7 @@ def test_imported_card_fields_are_kept_exactly():
         "chara_card_v3", card_version=LegacyId("arch1", "worlds/w/characters/oda/v2.json"),
         example_messages=raw, anchor_text="Clipped.\n", extensions={})
     assert imported.example_messages == raw
+    assert imported.card_version == LegacyId("arch1", "worlds/w/characters/oda/v2.json")
     assert imported.anchor_text == "Clipped.\n"
     assert profile(imported=imported).imported is imported
 

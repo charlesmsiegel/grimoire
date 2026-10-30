@@ -54,7 +54,7 @@ How V1 `mes_example` and `voice_anchor.md` content becomes native examples and a
 - **Campaign-original actors** (no `source`) speak only from local items. A portrayal on one is `VoiceMismatch("campaign_original")`.
 - **Other refusals.** A binding for another actor or campaign is `VoiceMismatch("other_actor")`. An actor left with no items is `MissingVoice("no_profile")`.
 
-`ResolvedVoice` validates itself on construction: typed items within caps, pinned revisions, and provenance covering exactly its item ids. It records:
+Callers (027) must obtain voices only from `resolve_voice`. `ResolvedVoice` is a public, unsealed value, so building one by hand would skip the link and pin checks; it still validates itself on construction: typed items within caps, pinned revisions, and provenance covering exactly its item ids. It records:
 - `actor_revision`: the actor's own definition revision;
 - `portrayal`: the profile revision used;
 - the merged items;
@@ -102,7 +102,7 @@ Style examples (reference only; never repeat them verbatim):
 
 - `example_copies(text, voices)` returns `(actor, example_id)` for every example of every given voice that `text` reproduces: at least `SAMPLE_COPY_CHARS` (24, imported from the gate) contiguous normalised characters. Screened-out examples count too. Given the scene's voices, it agrees with the gate's `voice_sample_copy`.
 - `voice_overlap(a, b)` is the character-trigram cosine of two voices' authored text.
-- `flattened(voices, threshold=0.85)` returns the sorted actor-ref pairs whose overlap is at or above the threshold. Giving the same actor twice is `InvalidVoice`. It is a provisional authoring warning: it catches near-duplicate voices, not bland ones, and it is not a quality score.
+- `flattened(voices, threshold=0.85)` returns the sorted actor-ref pairs whose overlap is at or above the threshold. Giving the same actor twice, or a threshold outside [0, 1], is `InvalidVoice`. It is a provisional authoring warning: it catches near-duplicate voices, not bland ones, and it is not a quality score.
 
 **Dependency note.** Production voice screening imports `grimoire.evals.text` and `grimoire.evals.checks.SAMPLE_COPY_CHARS` (only those modules; enforced by the purity allowlist). Changing the gate's normaliser or copy length therefore changes runtime screening, by design: generation and evaluation use one matcher.
 
@@ -129,13 +129,25 @@ This proves the contract's plumbing: each fragment reaches only its own speaker'
 | Persistence and file format | 010 |
 | Which kinds besides `character` carry a voice | 009 |
 | Deriving `known`/secret sets from evidence | 012 |
-| Provider calls, call planning, usage accounting and cue construction | 027 |
+| Provider calls, call planning, usage accounting and cue construction (scene and dialogue context reach the renderer only through the cue) | 027 |
 | CC V3 parsing and import | 026 |
 | `story-quality/2` | 015 |
 | Author-editable anchors and correction→preference | milestone 2 |
 | Long-term voice development, emotional state and code-switching | milestone 3 |
-| Narrator style | — |
-| Physical voice/TTS | — |
+| Narrator style | narration stage, 027 |
+| Physical voice/TTS | voice sprints |
 | Delegated PC speech | — |
 
 None of this makes V2 playable.
+
+## Downstream consumers
+
+- **027 (per-NPC generation):**
+  - builds one fragment per speaker and keeps the `SpeakerRequest` shape for its provider calls;
+  - builds each cue from that speaker's own perspective;
+  - runs `example_copies` over every scene voice on each rendered line **before accepting it**. This is the runtime defence against verbatim examples.
+- **012 (epistemic policy):** supplies `known` and the `SecretFact` set from actor-only evidence projections.
+- **010 (native storage):** persists profiles and bindings as opaque envelopes without interpreting them.
+- **009 (entity facets):** decides which kinds besides `character` can carry a voice.
+- **026 (V1 import):** fills `ImportedVoiceSource` and the native anchors and examples from Character Card V3 and `voice_anchor.md`.
+- **015 (V0.2.1 measurement):** may reuse `voice_overlap` for voice baselines.

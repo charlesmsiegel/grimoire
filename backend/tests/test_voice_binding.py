@@ -8,7 +8,7 @@ from grimoire.core import (
 )
 from grimoire.voice import (
     InvalidVoice, MissingVoice, VoiceAnchor, VoiceBinding, VoiceCatalog, VoiceExample,
-    VoiceMismatch, VoiceProfile, resolve_voice,
+    VoiceMismatch, VoiceProfile, resolve_voice, speaker_fragment,
 )
 
 W, ADDON, OTHER, THIRD = "world:emberfall", "addon:masks", "world:other", "addon:x"
@@ -94,6 +94,9 @@ def test_a_linked_alternate_portrayal_can_be_selected_but_the_speaker_stays_the_
     resolved = resolve_voice(bellamy, CATALOG, index(link(ref("bellamy"), ref("bellamy-masked"))), binding)
     assert resolved.portrayal == MASK2 and resolved.actor_revision == BEL1
     assert resolved.name == "Bellamy"
+    fragment = speaker_fragment(resolved, secrets=(), known=())
+    assert fragment.name == "Bellamy" and fragment.text.startswith("Voice of Bellamy.")
+    assert "Masked Singer" not in fragment.text and "Behind the mask." in fragment.text
 
 
 def test_links_are_symmetric_for_selection():
@@ -232,6 +235,7 @@ def test_binding_values_are_validated(build):
     with pytest.raises(InvalidVoice) as raised:
         build()
     assert "Secret Marker Text" not in str(raised.value)
+    assert raised.value.__cause__ is None
 
 
 def test_resolve_requires_real_contract_values():
