@@ -56,17 +56,21 @@ class Scorecard:
 
 # --- traversal helpers --------------------------------------------------------------------------
 
-def _model_lines(run: Run) -> Iterator[tuple[int, int, Contribution]]:
-    """Model contributions that say something; blank ones count as silence."""
+def _model_lines(run: Run, *, spoken: bool = False) -> Iterator[tuple[int, int, Contribution]]:
+    """Model contributions; with ``spoken``, only those that say something.
+
+    Blank or punctuation-only lines count as silence for "who spoke" questions (script,
+    orphaned calls, voice scoring) but still count as model-authored for every other check.
+    """
     for turn in run.turns:
         for position, contribution in enumerate(turn.contributions):
-            if contribution.author == "model" and has_words(contribution.text):
+            if contribution.author == "model" and (not spoken or has_words(contribution.text)):
                 yield turn.turn, position, contribution
 
 
 def _npc_lines(scenario: Scenario, run: Run) -> Iterator[tuple[int, int, Contribution]]:
     directors = set(scenario.director_ids())
-    for turn, position, contribution in _model_lines(run):
+    for turn, position, contribution in _model_lines(run, spoken=True):
         if contribution.speaker_id in directors:
             yield turn, position, contribution
 
@@ -192,7 +196,8 @@ def _script(scenario: Scenario, run: Run) -> Iterator[Finding]:
             yield Finding("script_incomplete", "invariant", "scripted turn is missing", entry.turn,
                           "turn")
             continue
-        spoke = {line.speaker_id for turn, _, line in _model_lines(run) if turn == entry.turn}
+        spoke = {line.speaker_id for turn, _, line in _model_lines(run, spoken=True)
+                 if turn == entry.turn}
         for speaker in entry.speakers:
             if speaker not in spoke:
                 yield Finding("script_incomplete", "invariant", "scripted speaker did not speak",
@@ -203,6 +208,7 @@ def _calls(scenario: Scenario, run: Run) -> Iterator[Finding]:
     calls: dict[str, Call] = {call.call_id: call for call in run.calls}
     directors = set(scenario.director_ids())
     uses: Counter[str] = Counter()
+    spoken = Counter(line.call_id for _, _, line in _model_lines(run, spoken=True))
     for turn, position, line in _model_lines(run):
         call = calls[line.call_id]  # parse_run guarantees the reference
         uses[call.call_id] += 1
@@ -220,7 +226,7 @@ def _calls(scenario: Scenario, run: Run) -> Iterator[Finding]:
             yield Finding("separate_generation", "invariant",
                           f"one call produced {uses[call.call_id]} contributions", call.turn,
                           call.call_id)
-        if call.purpose in RP_PURPOSES and not uses[call.call_id]:
+        if call.purpose in RP_PURPOSES and not spoken[call.call_id]:
             yield Finding("orphan_generation", "invariant",
                           f"{call.purpose} call produced no non-blank contribution", call.turn, call.call_id)
         if call.purpose not in RP_PURPOSES and call.feature_flag not in run.enabled_flags:

@@ -298,3 +298,14 @@ def mutate_pair(bench):
         set_text(2, "npc-oda", "Wren stays at the counter. Balcony's shut."),
         set_text(2, None, "They head for the ballroom instead.")))
     return scenario, run
+
+
+@pytest.mark.parametrize("text", ["...", " — ", ""])
+def test_blank_model_lines_still_count_as_model_authorship(bench, text):
+    scenario, run = bench
+    voiced = mutate(run, lambda r: r["turns"][0]["contributions"].append(
+        {"speaker_id": "pc-wren", "author": "model", "text": text, "call_id": "t1-oda"}))
+    assert checks(findings_for(scenario, voiced)) == {"player_sovereignty", "separate_generation"}
+    shared = mutate(run, lambda r: r["turns"][0]["contributions"].append(
+        {"speaker_id": "npc-oda", "author": "model", "text": text, "call_id": "t1-oda"}))
+    assert checks(findings_for(scenario, shared)) == {"separate_generation"}

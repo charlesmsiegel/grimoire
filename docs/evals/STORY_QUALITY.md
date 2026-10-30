@@ -40,11 +40,13 @@ dangling references and malformed ids are located errors (`run.turns[0].contribu
   `negated`) and informational `judge_scores`.
 
 Markers match whole phrases after normalisation: NFKC, curly quotes and dash variants folded to
-`'`, `"` and `-`, invisible format characters (zero-width space, soft hyphen) removed, casefold.
+`'`, `"` and `-`, zero-width spaces and word joiners read as spaces, other invisible format characters (soft
+hyphen) removed, casefold.
 `duke` does not match `dukedom`; at a marker edge written in a script without spaces between
-words (CJK, kana, Thai, Lao, Khmer, Myanmar, Tibetan) no word boundary is required. Blank or
-punctuation-only model contributions count as silence: their calls are orphaned and their speaker
-has not spoken.
+words (CJK ideographs, kana, Thai, Lao, Khmer, Myanmar, Tibetan), so a CJK marker also
+matches inside a longer compound no word boundary is required. Blank or
+punctuation-only model contributions count as silence for script, orphan-call and voice
+scoring, but remain model-authored for sovereignty and call-attribution checks.
 
 ## Checks
 

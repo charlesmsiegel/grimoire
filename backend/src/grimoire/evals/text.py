@@ -15,10 +15,11 @@ _WORD = re.compile(r"\w")
 _FOLD = str.maketrans({
     "\u2018": "'", "\u2019": "'", "\u201b": "'", "\u02bc": "'", "\u2032": "'",
     "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u2033": '"',
+    "\u200b": " ", "\u2060": " ",  # zero-width space / word joiner separate words
     "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-", "\u2212": "-",
 })
 #: Scripts written without spaces between words: no word-boundary test at a marker edge there.
-_UNSPACED_SCRIPTS = ("CJK", "HIRAGANA", "KATAKANA", "THAI", "LAO", "KHMER", "MYANMAR", "TIBETAN")
+_UNSPACED_SCRIPTS = ("CJK", "IDEOGRAPHIC", "HIRAGANA", "KATAKANA", "THAI", "LAO", "KHMER", "MYANMAR", "TIBETAN")
 
 
 def normalize(text: str) -> str:
