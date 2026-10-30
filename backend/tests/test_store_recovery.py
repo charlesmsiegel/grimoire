@@ -618,3 +618,16 @@ def test_staging_that_vanishes_while_the_target_changes_is_not_success(tmp_path)
         with pytest.raises(CommitIncomplete, match="not written"):
             txn.commit(owner_handle())
     assert target.read_bytes() == HUMAN
+
+
+def test_discard_refuses_a_look_alike_conflicts_folder_instead_of_looping(tmp_path):
+    from grimoire.store import NameCollision
+    locker = ProcessLocker()
+    _library(tmp_path, locker).close()
+    (tmp_path / LIB / ".txn" / "journal.json").write_bytes(b"garbage")
+    (tmp_path / LIB / ".CONFLICTS").mkdir()
+    (tmp_path / LIB / ".CONFLICTS" / "notes.txt").write_text("a human's folder")
+    with pytest.raises(NameCollision):
+        LibraryStore.discard_journal(tmp_path / LIB, locker=locker)
+    assert (tmp_path / LIB / ".txn" / "journal.json").read_bytes() == b"garbage"
+    assert locker.held == set()

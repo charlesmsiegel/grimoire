@@ -186,6 +186,7 @@ def check_entry_paths(access: Access, journal: Journal) -> None:
 
 
 def _replace_journal(access: Access, journal: Journal) -> None:
+    access.check_staging()
     temp = access.ops.make_temp(access.path((TXN,)), prefix="journal", suffix=".new")
     access.ops.write_bytes(temp, journal.render())
     access.ops.replace(temp, access.journal)
@@ -229,6 +230,7 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
     missing temp normally means "already published", and the disk is kept.
     """
     settlement = Settlement()
+    access.check_staging()  # point-in-time checks: repeat them before every phase that mutates
     staged = {name for name in access.ops.list_dir(access.path((TXN,))) if is_staging_name(name)}
 
     def temp_digest(entry: Entry) -> str | None:
@@ -269,6 +271,7 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
 
 def clean_staging(access: Access) -> None:
     """Remove uncommitted staging; only valid while no journal exists."""
+    access.check_staging()
     for name in access.ops.list_dir(access.path((TXN,))):
         if is_staging_name(name):
             access.ops.remove(access.path((TXN, name)))

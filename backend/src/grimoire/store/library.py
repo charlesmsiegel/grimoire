@@ -177,9 +177,13 @@ class LibraryStore:
             access.guard.check_session()
             if not access.journal_exists():
                 return ()
+            if access.presence((CONFLICTS,)) == "mismatch":  # renaming the child can never resolve it
+                raise NameCollision(f"{CONFLICTS} collides with a differently spelled folder")
             number = 1
             while access.presence((CONFLICTS, f"discarded-{number}")) != "absent":
-                number += 1
+                number += 1  # a look-alike child only takes that number
+                if number > 10_000:
+                    raise StoreError("no free discard folder name")
             folder = (CONFLICTS, f"discarded-{number}")
             access.guard.check_write(folder + ("x",), staging_device=None)
             moved = [name for name in ops.list_dir(root / TXN) if is_staging_name(name)] + [access.journal.name]
@@ -348,7 +352,7 @@ class _Commit:
         self._authorize()                                 # 7. authorization
         entries = self._stage(staging)                    # 8. directories and temps
         journal = Journal("commit", entries)
-        self.access.guard.check_session()                 # the root is still ours, just before publishing
+        self._recheck(staging)                            # still ours, just before the commit point
         self._commit_point(journal)                       # 9. journal replace
         try:
             settlement = engine.settle(self.access, journal, live=True)  # 10-12
@@ -426,7 +430,16 @@ class _Commit:
         if self.consumed:
             error.add_note(f"approvals consumed without a write: {', '.join(self.consumed)}")
 
+    def _recheck(self, staging: int) -> None:
+        """Repeat the point-in-time checks just before a phase that mutates (authorization or
+        staging may have taken a while): root, ``.txn`` and every target's path."""
+        self.access.guard.check_session()
+        self.access.check_staging()
+        for put in self.puts:
+            self.access.guard.check_write(put.parts, staging_device=staging)
+
     def _stage(self, staging: int) -> tuple[Entry, ...]:
+        self._recheck(staging)
         access, temps = self.access, []
         try:
             entries = []

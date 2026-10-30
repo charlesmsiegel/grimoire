@@ -185,3 +185,27 @@ def test_the_executor_writes_only_the_resource_it_was_authorized_for(tmp_path):
         with pytest.raises(WriteDenied):
             txn.commit(Elsewhere())
     assert not (tmp_path / "lib" / "campaigns").exists()
+
+
+def test_staging_swapped_for_a_link_during_authorization_is_never_written(tmp_path):
+    v1 = _v1_library(tmp_path / "old")
+    (v1 / "precious.new").write_text("not the store's")
+    lib = tmp_path / "lib"
+    store = LibraryStore.create(lib, locker=ProcessLocker())
+    seed(store)
+    before = snapshot(v1)
+    real = owner_handle()
+
+    class SwapsStaging:  # slow approval, during which `.txn` becomes a link into V1
+        def authorize(self, *args, **kwargs):
+            if not (lib / ".txn").is_symlink():
+                os.rename(lib / ".txn", tmp_path / "txn-moved")
+                make_dir_link(lib / ".txn", v1)
+            return real.authorize(*args, **kwargs)
+
+    txn = store.transaction()
+    txn.put(instance(InstanceRef("c3", "character", "x"), WREN_R1), None)
+    with pytest.raises(LinkRefused):
+        txn.commit(SwapsStaging())
+    store.close()
+    assert snapshot(v1) == before
