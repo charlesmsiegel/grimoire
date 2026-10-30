@@ -20,7 +20,7 @@ To add an operation, a consumer sprint declares three things:
 - its crash, torn-write and error semantics,
 - its shadow-model effect.
 
-Expected additions are `stat` or a content-hash read, exclusive create, and lock acquire/release.
+Expected additions are `stat` or a content-hash read, exclusive create, and lock acquire/release. **Decision (010):** the native store keeps link/identity `lstat` walks and its OS writer lock *outside* the seam. They change no bytes, so they cannot hide an unmediated write, and the lock is injectable (`ProcessLocker` in crash tests). Existence is still decided through the seam's `list_dir`, by exact spelling.
 
 **`RootedFileOps` confines, records, budgets and faults every phase.**
 - *Confinement:* paths must stay inside one root, after realpath. Links and Windows reparse points inside the root are rejected (including `link/../x`), and so are mutations of the root itself.
@@ -90,8 +90,12 @@ The proving scenario for this slice is a crash immediately after one file has be
 | Independently built Wave 1 contracts still meet as documented (intent→contribution, actor ids, evals↔inference vocabulary) | proven by `backend/tests/test_wave1_integration.py::test_only_the_controller_can_turn_a_routed_line_into_their_pcs_contribution`, `backend/tests/test_wave1_integration.py::test_eval_call_purposes_are_inference_stages_or_documented_divergence` |
 | V2 never resolves, opens or targets V1's library: a default launch opens no V1 directory, and every V2 write destination that is, sits inside or contains a V1 library (including Windows aliases and V1 roots that do not exist yet) is refused | proven by `backend/tests/test_library_paths.py::test_default_launch_never_opens_or_lists_v1`, `backend/tests/test_library_paths.py::test_write_destination_refuses_every_v1_location`, `backend/tests/test_library_paths.py::test_windows_spellings_of_the_v1_default_are_refused_before_it_exists`; actual writers must follow the writer obligations (owner: Native File Store (010)) |
 | No stale-identity or by-name substitution in memory: unpinned references follow the declared head, pinned ones keep their revision | proven by `backend/tests/test_index.py::test_unpinned_follows_declared_head_and_pinned_stays`, `backend/tests/test_core.py::test_unpinned_actor_follows_head_and_pinned_actor_stays` |
-| Source-qualified IDs, owners, heads, links and broken references survive persistence | not yet tested — owner: Native File Store (010) |
-| A stale write is rejected; reads come from one revision-consistent view | not yet tested — owners: Native File Store (010), Effective World Snapshots (022) |
+| Source-qualified IDs, owners, heads, links and broken references survive persistence | proven by `backend/tests/test_store_commit.py::test_definition_and_two_instances_round_trip_through_a_reopen`, `backend/tests/test_store_load.py::test_removing_an_add_on_reports_missing_source_and_changes_no_byte`, `backend/tests/test_store_load.py::test_an_add_on_cannot_speak_for_another_source` ([STORAGE](STORAGE.md)) |
+| A world change never rewrites a pinned campaign instance; definition revisions are immutable | proven by `backend/tests/test_store_load.py::test_a_world_change_never_rewrites_a_pinned_instance`, `backend/tests/test_store_commit.py::test_definition_revisions_are_immutable` |
+| The native store's commit is atomic and recoverable at every crash, torn write, I/O error and recovery crash; an edit made while down is kept and never half-published | proven by `backend/tests/test_store_recovery.py::test_commit_survives_every_crash_error_and_recovery_crash`, `backend/tests/test_store_recovery.py::test_an_edit_made_while_down_is_kept_and_never_half_published`, `backend/tests/test_store_recovery.py::test_an_edit_racing_the_pre_publish_guard_aborts_the_whole_commit`; the guard-to-replace window is pinned by `backend/tests/test_store_recovery.py::test_residual_window_between_guard_and_replace_is_pinned` |
+| The native store never writes into or through V1, a link or a swapped root, and never follows a link when reading | proven by `backend/tests/test_store_isolation.py::test_a_link_into_v1_is_never_written_through`, `backend/tests/test_store_isolation.py::test_a_link_swapped_in_while_down_is_never_recovered_through`, `backend/tests/test_store_isolation.py::test_a_root_swapped_after_open_refuses_to_commit`, `backend/tests/test_store_load.py::test_load_never_follows_a_link` |
+| The generic store has no dependency on entity facets | proven by `backend/tests/test_store_boundary.py::test_store_imports_only_identity_paths_and_authority`, `backend/tests/test_store_boundary.py::test_importing_the_store_loads_no_unexpected_grimoire_module` |
+| A stale write is rejected (and keeps its approval); reads refuse while a commit awaits recovery | proven by `backend/tests/test_store_commit.py::test_a_stale_write_is_rejected_and_keeps_its_approval`, `backend/tests/test_store_commit.py::test_reads_refuse_while_a_commit_awaits_recovery`; a read overlapping another process's commit is not isolated (owners: Effective World Snapshots (022), Durable Action Recovery (030)) |
 | Concurrent device edits are preserved as conflicts | not yet tested — owner: Sync Revisions And Conflict Core (019); use `Interleave`/`meddle` with replica roots |
 | One accepted action commits exactly once across crashes | not yet tested — owner: Durable Action Recovery (030); use `explore_crashes(..., recovery_crashes=True)` |
 
@@ -110,12 +114,12 @@ Not simulated:
 | Absent | Owner |
 |---|---|
 | Inference/provider failures, truncated streams, cancellation and stale-run fencing | Model Routing And Budgeting (013), extended by Per-NPC Generation Runtime (027) |
-| Multi-process races and file locks | Native File Store (010), Durable Action Recovery (030) |
+| Multi-process readers overlapping a commit (writers are excluded by an OS lock: `backend/tests/test_store_commit.py::test_the_writer_lock_is_held_across_processes_and_dies_with_its_holder`) | Effective World Snapshots (022), Durable Action Recovery (030) |
 | Network transport faults during sync | App-Managed Device Sync (028) |
-| Real disk-full or permission errors (only simulated via `Fail`) | Native File Store (010) |
-| Malformed authored Markdown/JSON beyond a corrupt journal | Native File Store (010), V1-to-V2 Migration Skill (011) |
+| Real disk-full or permission errors (only simulated via `Fail`; the store's handling of them is proven under `Fail`) | revisit with a device-level test owner |
+| Malformed authored Markdown (malformed JSON records are covered by `backend/tests/test_store_load.py::test_bad_instance_files_are_reported_and_never_rewritten` and `backend/tests/test_store_format.py::test_strict_parse_maps_every_hazard_to_one_error`) | V1-to-V2 Migration Skill (011), a future Markdown payload codec |
 | Property and state-machine generation across forks, retcons and imports | moonshot |
-| A synthetic world/campaign fixture library with expected outcomes | Entity Facets (009), Native File Store (010), once records exist |
+| A synthetic world/campaign fixture library with expected outcomes (the store's synthetic fixtures are in `backend/tests/store_helpers.py`) | Entity Facets (009), joined with the store in Wave 3 |
 | Reducing redundant setups across test modules | revisit when a second family of file-backed writer tests exists |
 
 ## CI gate

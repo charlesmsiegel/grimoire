@@ -55,7 +55,7 @@
   .cache/                             # disposable derived graph, search, embeddings
 ```
 
-The actual file names and graph schema remain subject to the native-storage sprint. Data files must remain usable by humans and external agents. Derived indexes, embeddings and cached actor views are disposable and may not become a second canonical store.
+The native store's accepted first-slice layout (`sources/<segments>/_source/…`, `campaigns/<id>/instances/…`) and its revision, recovery and isolation contract are in [STORAGE.md](STORAGE.md); the graph schema remains open. Data files must remain usable by humans and external agents. Derived indexes, embeddings and cached actor views are disposable and may not become a second canonical store.
 
 ## Wave 2 independent domain and storage contracts (planned)
 
