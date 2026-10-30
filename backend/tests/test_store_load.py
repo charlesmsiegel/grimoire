@@ -268,10 +268,11 @@ def test_noise_reserved_and_empty_entries_are_quiet_and_strangers_are_reported(l
     (root / "campaigns" / "c9" / "instances" / "character").mkdir(parents=True)  # empty: not state
     assert library.load().problems == ()
     _write(root, "notes.md", b"mine")
-    _write(root, "campaigns/C1/instances/character/x.json", b"{}")
+    # no existing look-alike: on a case-insensitive filesystem `C1` would *be* `c1`
+    _write(root, "campaigns/C8/instances/character/x.json", b"{}")
     _write(root, "sources/world/_misc/readme.md", b"x")
     codes = {(p.path, p.code) for p in library.load().problems}
-    assert codes == {("notes.md", "unrecognized"), ("campaigns/C1", "name_mismatch"),
+    assert codes == {("notes.md", "unrecognized"), ("campaigns/C8", "name_mismatch"),
                      ("sources/world/_misc", "unrecognized")}
 
 
