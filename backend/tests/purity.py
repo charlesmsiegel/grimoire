@@ -35,18 +35,21 @@ BANNED_NAMES = frozenset({
     "globals", "locals", "vars", "__builtins__", "builtins", "__loader__", "__spec__",
 })
 
-#: Attributes that open files, import modules or escape to interpreter internals.
+#: Attributes that open files, import modules or escape to interpreter internals,
+#: including through a pure module that happens to hold one (``dataclasses.inspect.os``).
 #: ``compile`` is deliberately absent: ``re.compile`` is pure.
 BANNED_ATTRIBUTES = frozenset({
     "open", "import_module", "__globals__", "__builtins__", "__subclasses__", "__loader__",
+    "os", "sys", "inspect", "importlib", "builtins", "modules",
 })
 
-#: Modules a pure import must never pull in, even transitively.
-CAPABILITY_MODULES = (
-    "socket", "ssl", "select", "selectors", "subprocess", "threading", "http.client",
-    "urllib.request", "sqlite3", "ctypes", "multiprocessing", "asyncio", "tempfile", "shutil",
-    "glob", "grimoire.library", "grimoire.testing",
-)
+#: Modules nothing in a pure package may pull in, even transitively -- its file
+#: edge included (whose ``importlib.resources`` legitimately loads ``tempfile``).
+NETWORK_MODULES = ("socket", "ssl", "select", "selectors", "http.client", "urllib.request",
+                   "subprocess", "multiprocessing", "asyncio", "ctypes", "sqlite3",
+                   "grimoire.library", "grimoire.testing")
+#: ...and what its pure modules must not pull in either.
+CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob")
 
 #: grimoire packages that are adapters or test infrastructure, not pure.
 ADAPTERS = frozenset({"grimoire.library", "grimoire.testing"})
@@ -61,7 +64,7 @@ class PurePackage:
     never_import: tuple[str, ...] = ()
     #: modules (relative to the package) that are its file-reading edge.
     io_modules: frozenset[str] = frozenset()
-    #: standard-library modules only those edge modules may add.
+    #: standard-library modules (dotted prefixes) only those edge modules may add.
     io_stdlib: frozenset[str] = frozenset()
     #: builtins only those edge modules may use (a CLI prints; a loader opens).
     io_names: frozenset[str] = frozenset()
@@ -80,8 +83,8 @@ PURE_PACKAGES = (
     # Offline evaluation: independent of the domain core; only its loader and CLI read files.
     PurePackage("grimoire.evals", ("grimoire.evals",),
                 io_modules=frozenset({"loader.py", "story_quality.py"}),
-                io_stdlib=frozenset({"json", "pathlib", "importlib", "sys", "argparse"}),
-                io_names=frozenset({"print", "open"})),
+                io_stdlib=frozenset({"json", "pathlib", "importlib.resources", "sys", "argparse"}),
+                io_names=frozenset({"print"})),
 )
 
 
@@ -123,14 +126,15 @@ def _imported_names(node: ast.Import | ast.ImportFrom, package: str) -> list[str
 def boundary_problems(source: str, filename: str, package: PurePackage, within: str) -> list[str]:
     """Why `source`, a module of package `within` owned by `package`, is not pure."""
     io = Path(filename).name in package.io_modules
-    allowed_stdlib = PURE_STDLIB | (package.io_stdlib if io else frozenset())
+    io_stdlib = package.io_stdlib if io else frozenset()
     banned_names = BANNED_NAMES - (package.io_names if io else frozenset())
+    banned_attributes = BANNED_ATTRIBUTES - ({"sys"} if "sys" in io_stdlib else set())
     problems = []
     for node in ast.walk(ast.parse(source, filename)):
         where = f"{filename}:{getattr(node, 'lineno', '?')}"
         if isinstance(node, ast.Name) and node.id in banned_names:
             problems.append(f"{where} uses {node.id}")
-        elif isinstance(node, ast.Attribute) and node.attr in BANNED_ATTRIBUTES:
+        elif isinstance(node, ast.Attribute) and node.attr in banned_attributes:
             problems.append(f"{where} uses .{node.attr}")
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             for name in _imported_names(node, within):
@@ -141,6 +145,6 @@ def boundary_problems(source: str, filename: str, package: PurePackage, within: 
                     if (not any(_under(name, p) for p in package.may_import)
                             or any(_under(name, p) for p in package.never_import)):
                         problems.append(f"{where} imports {name}")
-                elif top not in allowed_stdlib:
+                elif top not in PURE_STDLIB and not any(_under(name, m) for m in io_stdlib):
                     problems.append(f"{where} imports {name}")
     return problems

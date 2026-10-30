@@ -12,8 +12,8 @@ import sys
 import pytest
 
 from purity import (
-    ADAPTERS, CAPABILITY_MODULES, GRIMOIRE, PURE_PACKAGES, PurePackage, SRC, boundary_problems,
-    module_package, pure_sources,
+    ADAPTERS, CAPABILITY_MODULES, GRIMOIRE, NETWORK_MODULES, PURE_PACKAGES, PurePackage, SRC,
+    boundary_problems, module_package, pure_sources,
 )
 
 CORE = next(p for p in PURE_PACKAGES if p.name == "grimoire.core")
@@ -31,10 +31,13 @@ def test_pure_packages_respect_their_boundary():
 
 
 def test_every_grimoire_package_is_classified():
-    # A new top-level package must be declared pure (and checked) or an adapter.
-    found = {f"grimoire.{p.name}" for p in GRIMOIRE.iterdir() if (p / "__init__.py").is_file()}
+    # A new package or module must be declared pure (and so checked) or an adapter,
+    # including a namespace package with no __init__.py.
+    found = {".".join(("grimoire", *p.relative_to(GRIMOIRE).parts))
+             for p in GRIMOIRE.iterdir() if p.is_dir() and p.name != "__pycache__" and any(p.rglob("*.py"))}
+    found |= {f"grimoire.{p.stem}" for p in GRIMOIRE.glob("*.py") if p.name != "__init__.py"}
     declared = {p.name for p in PURE_PACKAGES} | ADAPTERS
-    assert found <= declared, f"classify these packages in purity.py: {sorted(found - declared)}"
+    assert found <= declared, f"classify these in purity.py: {sorted(found - declared)}"
 
 
 def _check(source, package=CORE, filename="grimoire/core/sample.py", within="grimoire.core"):
@@ -66,6 +69,8 @@ def _check(source, package=CORE, filename="grimoire/core/sample.py", within="gri
     "f = (lambda: 0).__globals__",
     "subclasses = object.__subclasses__()",
     "m = loader.import_module('os')",
+    "import dataclasses\ndataclasses.inspect.os.system('x')",
+    "import typing\nm = typing.sys.modules",
 ])
 def test_checker_flags_side_effect_spellings(source):
     assert _check(source), source
@@ -92,22 +97,37 @@ def test_relative_imports_resolve_against_the_modules_own_package():
 
 def test_only_the_evals_edge_modules_read_files():
     assert boundary_problems("import json", "loader.py", EVALS, "grimoire.evals") == []
+    assert boundary_problems("from importlib.resources import files", "loader.py", EVALS, "grimoire.evals") == []
+    assert boundary_problems("print('report')", "story_quality.py", EVALS, "grimoire.evals") == []
     assert boundary_problems("import json", "checks.py", EVALS, "grimoire.evals")
+    assert boundary_problems("print('x')", "checks.py", EVALS, "grimoire.evals")
+    assert boundary_problems("from importlib import import_module", "loader.py", EVALS, "grimoire.evals")
+    assert boundary_problems("import importlib.util", "loader.py", EVALS, "grimoire.evals")
+    assert boundary_problems("x = open('f')", "loader.py", EVALS, "grimoire.evals")
     assert boundary_problems("from grimoire.core import SourceRef", "loader.py", EVALS, "grimoire.evals")
 
 
 def _modules_loaded_by(statement: str) -> set[str]:
+    # -S: no site hooks, so a start-up .pth file cannot preload (and hide) a module.
     env = {**os.environ, "PYTHONPATH": str(SRC)}
     script = f"import sys\n{statement}\nprint('\\n'.join(sys.modules))\n"
-    done = subprocess.run([sys.executable, "-c", script],
-                          capture_output=True, text=True, env=env, check=True)
+    done = subprocess.run([sys.executable, "-S", "-c", script], capture_output=True, text=True,
+                          env=env, check=True)
     return set(done.stdout.split())
 
 
-def _pure_module_names(package: PurePackage) -> list[str]:
+def _newly_loaded(statement: str) -> set[str]:
+    return _modules_loaded_by(statement) - _modules_loaded_by("pass")
+
+
+def _reached(loaded: set[str], forbidden) -> list[str]:
+    return sorted(m for m in loaded if any(m == c or m.startswith(c + ".") for c in forbidden))
+
+
+def _module_names(package: PurePackage, *, io: bool) -> list[str]:
     names = []
     for path in sorted(package.directory.rglob("*.py")):
-        if path.name in package.io_modules:
+        if (path.name in package.io_modules) != io:
             continue
         parts = path.relative_to(SRC).with_suffix("").parts
         names.append(".".join(parts[:-1] if parts[-1] == "__init__" else parts))
@@ -116,11 +136,22 @@ def _pure_module_names(package: PurePackage) -> list[str]:
 
 @pytest.mark.parametrize("package", PURE_PACKAGES, ids=lambda p: p.name)
 def test_importing_a_pure_package_loads_no_capability_module(package):
-    baseline = _modules_loaded_by("pass")
-    names = _pure_module_names(package)
-    loaded = _modules_loaded_by("\n".join(f"import {name}" for name in names)) - baseline
-    assert set(names) <= loaded | baseline
-    reached = sorted(m for m in loaded if any(m == c or m.startswith(c + ".") for c in CAPABILITY_MODULES))
-    assert reached == []
+    names = _module_names(package, io=False)
+    loaded = _newly_loaded("\n".join(f"import {name}" for name in names))
+    assert set(names) <= loaded
+    assert _reached(loaded, CAPABILITY_MODULES) == []
     if package is EVALS:
-        assert not any(m == "grimoire.core" or m.startswith("grimoire.core.") for m in loaded)
+        assert _reached(loaded, ["grimoire.core"]) == []
+
+
+def test_the_evals_file_edge_loads_no_network_or_core_module():
+    names = _module_names(EVALS, io=True)
+    assert names
+    loaded = _newly_loaded("\n".join(f"import {name}" for name in names))
+    assert _reached(loaded, NETWORK_MODULES + ("grimoire.core",)) == []
+
+
+def test_closure_check_sees_a_capability_module_loaded_indirectly():
+    # Control: the same measurement catches a module pulled in through another import.
+    loaded = _newly_loaded("import grimoire.core\nimport http.client")
+    assert {"socket", "http.client"} <= set(_reached(loaded, CAPABILITY_MODULES))

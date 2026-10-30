@@ -21,3 +21,10 @@ def test_sentinel_fails_a_test_that_writes_into_home(pytester):
     result = pytester.runpytest_inprocess("-p", "no:cacheprovider")
     result.assert_outcomes(passed=2, errors=1)
     result.stdout.fnmatch_lines(["*redirected home or library directory*leak.txt*"])
+
+
+def test_windows_home_fallbacks_are_removed():
+    # Without USERPROFILE, Windows' expanduser falls back to HOMEDRIVE+HOMEPATH --
+    # the real profile. The sentinel removes them so that fallback cannot leak.
+    import os
+    assert "HOMEDRIVE" not in os.environ and "HOMEPATH" not in os.environ

@@ -347,15 +347,13 @@ def _deny_metadata(directory: Path):
 
     POSIX: mode 0 removes search permission. Windows ignores mode bits, and every
     account may bypass traverse checks, so the current user is denied listing and
-    attribute reads on `directory` *and*, by inheritance, on what is inside it.
+    attribute reads on `directory` *and*, by inheritance, on what is inside it
+    (the CPython stat fallback reads the parent's listing, so both are needed).
     """
     if sys.platform != "win32":
         directory.chmod(0)
         return lambda: directory.chmod(0o700)
-    who = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True,
-                         check=True).stdout
-    sid = who.strip().split(",")[-1].strip('"')
-    assert sid.startswith("S-1-"), who
+    sid = "S-1-1-0"  # Everyone: locale-independent, and no account SID in test output
     subprocess.run(["icacls", str(directory), "/deny", f"*{sid}:(OI)(CI)(RD,RA,REA,X)", "/T", "/C", "/Q"],
                    capture_output=True, check=True)
     return lambda: subprocess.run(["icacls", str(directory), "/remove:d", f"*{sid}", "/T", "/C", "/Q"],
@@ -577,7 +575,7 @@ def test_unlocatable_cwd_for_a_relative_v1_home_fails_closed(home, monkeypatch):
     # The same failure, injected, so it is proven on every OS.
     def vanished():
         raise FileNotFoundError(2, "No such file or directory")
-    monkeypatch.setattr(paths.os, "getcwd", vanished)
+    monkeypatch.setattr(paths, "_working_directory", vanished)
     with pytest.raises(LibraryPathError, match="cannot locate the V1 library"):
         resolve_library(environ={"GRIMOIRE_HOME": "relative-v1"}, home=home)
 
@@ -698,6 +696,19 @@ def test_os_text_rule_on_every_platform(platform, text, usable):
             paths._require_os_text(text, "test", platform=platform)
 
 
+@pytest.mark.parametrize("where", WHERE + ["GRIMOIRE_HOME ~", "home"])
+def test_any_surrogate_is_refused_everywhere_on_windows(home, tmp_path, monkeypatch, where):
+    # The Windows rule, simulated on this OS through every entry point.
+    monkeypatch.setattr(sys, "platform", "win32")
+    with pytest.raises(LibraryPathError, match="cannot be used as a path on this system"):
+        if where == "GRIMOIRE_HOME ~":
+            resolve_library(environ={"GRIMOIRE_HOME": "~/" + ESCAPED_BYTE}, home=home)
+        elif where == "home":
+            resolve_library(environ={}, home=home / ESCAPED_BYTE)
+        else:
+            _resolve_with_path_in(where, home, str(tmp_path / ESCAPED_BYTE))
+
+
 def test_cli_prints_an_undecodable_name_without_crashing(home, tmp_path, capsys):
     if sys.platform == "win32":
         pytest.skip("such a name is refused on Windows; see test_undecodable_posix_bytes_follow_the_platform")
@@ -718,10 +729,10 @@ def test_v1_home_through_a_symlink_then_dotdot_guards_the_physical_parent(home, 
     value = os.path.join("alias", "..", "v1") if relative else str(tmp_path / "alias" / ".." / "v1")
     os.makedirs(os.path.join(value, "worlds", "w"))
     os.mkdir(os.path.join(value, "campaigns"))
-    landed = [d for d in (tmp_path / "actual" / "v1", tmp_path / "v1") if d.is_dir()]
-    assert len(landed) == 1
-    refused(home, landed[0], {"GRIMOIRE_HOME": value}, match="in GRIMOIRE_HOME")
-    refused(home, landed[0] / "v2", {"GRIMOIRE_HOME": value}, match="in GRIMOIRE_HOME")
+    landed = tmp_path / "v1" if sys.platform == "win32" else tmp_path / "actual" / "v1"
+    assert (landed / "campaigns").is_dir()
+    refused(home, landed, {"GRIMOIRE_HOME": value}, match="in GRIMOIRE_HOME")
+    refused(home, landed / "v2", {"GRIMOIRE_HOME": value}, match="in GRIMOIRE_HOME")
 
 
 def test_path_under_a_regular_file_is_unusable(home, tmp_path):
@@ -762,7 +773,9 @@ def test_bind_mount_of_an_inner_directory_hides_no_containment(home, tmp_path, m
 
 @pytest.mark.skipif(sys.platform != "win32", reason="directory junctions are a Windows reparse point")
 def test_junction_to_an_inner_directory_hides_no_containment(home, tmp_path):
-    # Windows' bind-mount analogue: a junction gives an inner directory a second name.
+    # Windows' bind-mount analogue: a junction gives an inner directory a second
+    # name. `realpath` follows junctions, so this proves the lexical path, not the
+    # mount-table logic (which the fake-mountinfo tests prove on every OS).
     import _winapi
     data, junction = tmp_path / "data", tmp_path / "junction"
     (data / "sub").mkdir(parents=True)
@@ -819,3 +832,61 @@ def test_dangling_pointer_link_fails_closed(home, tmp_path):
     (home / ".grimoire.json").symlink_to(tmp_path / "offline" / "grimoire.json")
     with pytest.raises(V1IsolationError, match="target cannot be found"):
         resolve_library(environ={}, home=home)
+
+
+# ---- names a filesystem treats as the same directory ----------------------------
+
+@pytest.mark.parametrize("override", ["~/.grimoire.", "~/.grimoire ./v2", "~/.grimoire. /v2",
+                                      "~/.grimoire::$INDEX_ALLOCATION/v2", "~/.Grimoire:stream"])
+def test_windows_spellings_of_the_v1_default_are_refused_before_it_exists(home, override):
+    # Windows opens (and mkdir creates) each of these as ~/.grimoire, so V2 must
+    # not build its library there while V1's default does not exist yet.
+    assert not (home / ".grimoire").exists()
+    refused(home, override, match="the default V1 library")
+
+
+def test_a_name_of_only_dots_vanishes_like_on_windows(home, tmp_path):
+    # Win32 trims "data\..." to "data", which would contain the V1 library.
+    with pytest.raises(V1IsolationError, match="contains the V1 library in GRIMOIRE_HOME"):
+        check_write_destination(str(tmp_path / "data" / "..."), environ={"GRIMOIRE_HOME": str(tmp_path / "data" / "v1")},
+                                home=home)
+
+
+@pytest.mark.parametrize("prefixed, plain", [
+    (r"\\?\C:\Users\me\.grimoire", r"C:\Users\me\.grimoire"),
+    (r"\\?\UNC\server\share\lib", r"\\server\share\lib"),
+    (r"\\.\C:\Users\me", r"C:\Users\me"),
+    (r"c:/users/ME/.GRIMOIRE.", r"C:\Users\me\.grimoire"),
+])
+def test_windows_prefixes_name_the_same_place(prefixed, plain):
+    from pathlib import PureWindowsPath
+    assert paths._key(PureWindowsPath(prefixed)) == paths._key(PureWindowsPath(plain))
+
+
+def test_ordinary_neighbours_are_not_aliases(home):
+    for name in ("~/.grimoire-v2", "~/.grimoire.d", "~/.grimoires", "~/grimoire"):
+        assert resolve_library(environ={"GRIMOIRE_V2_HOME": name}, home=home).origin == "env"
+
+
+# Identity for roots that do not exist yet: a name reached through an aliased
+# existing directory (a macOS firmlink, a bind mount or hard link) has no inode
+# of its own, so the relation is taken at its nearest existing ancestor.
+
+def test_identity_sees_a_missing_root_through_an_aliased_ancestor(tmp_path):
+    (tmp_path / "real").mkdir()
+    (tmp_path / "alias").symlink_to(tmp_path / "real", target_is_directory=True)
+    root = tmp_path / "real" / ".grimoire"  # not created yet
+    assert paths._lexical_relation(tmp_path / "alias" / ".grimoire" / "v2", root) is None
+    assert paths._identity_relation(tmp_path / "alias" / ".grimoire" / "v2", root) == "is inside"
+    assert paths._identity_relation(tmp_path / "alias" / ".grimoire", root) == "is"
+    assert paths._identity_relation(tmp_path / "alias" / "new", tmp_path / "real" / "new" / "v1") == "contains"
+    assert paths._identity_relation(tmp_path / "alias" / ".grimoire-v2", root) is None
+    with pytest.raises(V1IsolationError, match="is inside the probe"):
+        paths._check_isolation(tmp_path / "alias" / ".grimoire" / "v2", [("the probe", root)])
+
+
+def test_tilde_backslash_expands_on_windows(home, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert paths._expand_tilde("~\\Sync\\grimoire", home, "pointer") == home / "Sync\\grimoire"
+    with pytest.raises(LibraryPathError, match="another user"):
+        paths._expand_tilde("~other\\x", home, "pointer")
