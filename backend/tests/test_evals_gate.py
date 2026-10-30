@@ -261,4 +261,5 @@ def test_no_rejection_is_rescued_by_higher_judge_scores(bench, defect, expected)
         run["judge_scores"] = {"fluency": 0.99, "agency": 1.0}
     report = gate(bench, fluent)
     assert report.baseline.judge_scores["fluency"] == 0.6
+    assert report.candidate.judge_scores["fluency"] == 0.99
     assert not report.passed and expected in checks(report)

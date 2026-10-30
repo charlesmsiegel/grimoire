@@ -357,7 +357,7 @@ def _deny_metadata(directory: Path):
     subprocess.run(["icacls", str(directory), "/deny", f"*{sid}:(OI)(CI)(RD,RA,REA,X)", "/T", "/C", "/Q"],
                    capture_output=True, check=True)
     return lambda: subprocess.run(["icacls", str(directory), "/remove:d", f"*{sid}", "/T", "/C", "/Q"],
-                                  capture_output=True)
+                                  capture_output=True, check=True)
 
 
 @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores permissions")
@@ -836,16 +836,30 @@ def test_dangling_pointer_link_fails_closed(home, tmp_path):
 
 # ---- names a filesystem treats as the same directory ----------------------------
 
+@pytest.fixture
+def windows_names(monkeypatch):
+    """Compare names as on Windows (a no-op there; simulated elsewhere)."""
+    monkeypatch.setattr(sys, "platform", "win32")
+
+
 @pytest.mark.parametrize("override", ["~/.grimoire.", "~/.grimoire ./v2", "~/.grimoire. /v2",
                                       "~/.grimoire::$INDEX_ALLOCATION/v2", "~/.Grimoire:stream"])
-def test_windows_spellings_of_the_v1_default_are_refused_before_it_exists(home, override):
+def test_windows_spellings_of_the_v1_default_are_refused_before_it_exists(home, override, windows_names):
     # Windows opens (and mkdir creates) each of these as ~/.grimoire, so V2 must
     # not build its library there while V1's default does not exist yet.
     assert not (home / ".grimoire").exists()
     refused(home, override, match="the default V1 library")
 
 
-def test_a_name_of_only_dots_vanishes_like_on_windows(home, tmp_path):
+@pytest.mark.skipif(sys.platform == "win32", reason="these are aliases on Windows")
+def test_posix_names_with_colons_or_trailing_dots_are_distinct(home, tmp_path):
+    v1 = tmp_path / "run-10:00"
+    assert check_write_destination(tmp_path / "run-10:30", environ={"GRIMOIRE_HOME": str(v1)},
+                                   home=home) == (tmp_path / "run-10:30").resolve()
+    assert resolve_library(environ={"GRIMOIRE_V2_HOME": "~/.grimoire."}, home=home).origin == "env"
+
+
+def test_a_name_of_only_dots_vanishes_like_on_windows(home, tmp_path, windows_names):
     # Win32 trims "data\..." to "data", which would contain the V1 library.
     with pytest.raises(V1IsolationError, match="contains the V1 library in GRIMOIRE_HOME"):
         check_write_destination(str(tmp_path / "data" / "..."), environ={"GRIMOIRE_HOME": str(tmp_path / "data" / "v1")},
@@ -856,9 +870,10 @@ def test_a_name_of_only_dots_vanishes_like_on_windows(home, tmp_path):
     (r"\\?\C:\Users\me\.grimoire", r"C:\Users\me\.grimoire"),
     (r"\\?\UNC\server\share\lib", r"\\server\share\lib"),
     (r"\\.\C:\Users\me", r"C:\Users\me"),
+    (r"\\.\UNC\server\share\lib", r"\\server\share\lib"),
     (r"c:/users/ME/.GRIMOIRE.", r"C:\Users\me\.grimoire"),
 ])
-def test_windows_prefixes_name_the_same_place(prefixed, plain):
+def test_windows_prefixes_name_the_same_place(prefixed, plain, windows_names):
     from pathlib import PureWindowsPath
     assert paths._key(PureWindowsPath(prefixed)) == paths._key(PureWindowsPath(plain))
 

@@ -10,7 +10,7 @@ Implemented as the read-only resolver and V1-isolation guard `grimoire.library`;
 - no directory creation, and no V1 directory opened during a default launch;
 - the write-destination and migration-pair guards.
 
-They pass on Ubuntu, macOS and Windows CI. Scenarios an OS cannot produce are proven by injection on every OS: FIFOs on Windows, and a vanished working directory. Explicit initialization, the Android private default and a portable location are later milestones; actual writers are [Native File Store](native-file-store-and-revisions.md#inherited-from-wave-1).
+They pass on Ubuntu, macOS and Windows CI. A vanished working directory cannot occur on Windows, so that failure is proven by injection on every OS. Windows has no filesystem FIFOs, so the FIFO-pointer case runs only where FIFOs exist. Explicit initialization, the Android private default and a portable location are later milestones; actual writers are [Native File Store](native-file-store-and-revisions.md#inherited-from-wave-1).
 
 ## Scope and first proof
 Test path resolution, GRIMOIRE_V2_HOME overrides, symlink/case normalization, refusal to use a V1 source as a V2 destination, and no directory creation on an ordinary read.

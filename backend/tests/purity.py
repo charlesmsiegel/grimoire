@@ -26,7 +26,7 @@ GRIMOIRE = SRC / "grimoire"
 PURE_STDLIB = frozenset({
     "__future__", "abc", "bisect", "collections", "copy", "dataclasses", "decimal", "difflib",
     "enum", "fractions", "functools", "hashlib", "heapq", "itertools", "math", "numbers",
-    "operator", "re", "statistics", "string", "textwrap", "types", "typing", "unicodedata",
+    "operator", "re", "string", "textwrap", "types", "typing", "unicodedata",
 })
 
 #: Builtins that read input, write output, run code or reach interpreter state.
@@ -35,13 +35,14 @@ BANNED_NAMES = frozenset({
     "globals", "locals", "vars", "__builtins__", "builtins", "__loader__", "__spec__",
 })
 
-#: Attributes that open files, import modules or escape to interpreter internals,
-#: including through a pure module that happens to hold one (``dataclasses.inspect.os``).
+#: Attributes that open files, import modules or escape to interpreter internals.
 #: ``compile`` is deliberately absent: ``re.compile`` is pure.
 BANNED_ATTRIBUTES = frozenset({
     "open", "import_module", "__globals__", "__builtins__", "__subclasses__", "__loader__",
-    "os", "sys", "inspect", "importlib", "builtins", "modules",
 })
+#: Modules a pure module happens to hold (``dataclasses.inspect.os``, ``typing.sys``).
+#: Reaching them from an imported name is banned; ``self.os`` or ``config.modules`` is not.
+MODULE_ROUTES = frozenset({"os", "sys", "inspect", "importlib", "builtins", "modules"})
 
 #: Modules nothing in a pure package may pull in, even transitively -- its file
 #: edge included (whose ``importlib.resources`` legitimately loads ``tempfile``).
@@ -49,7 +50,8 @@ NETWORK_MODULES = ("socket", "ssl", "select", "selectors", "http.client", "urlli
                    "subprocess", "multiprocessing", "asyncio", "ctypes", "sqlite3",
                    "grimoire.library", "grimoire.testing")
 #: ...and what its pure modules must not pull in either.
-CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob")
+CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob", "random", "time",
+                                         "datetime", "uuid", "secrets")
 
 #: grimoire packages that are adapters or test infrastructure, not pure.
 ADAPTERS = frozenset({"grimoire.library", "grimoire.testing"})
@@ -62,7 +64,7 @@ class PurePackage:
     may_import: tuple[str, ...]
     #: grimoire packages it must not import even though they fall under `may_import`.
     never_import: tuple[str, ...] = ()
-    #: modules (relative to the package) that are its file-reading edge.
+    #: modules (paths relative to the package) that are its file-reading edge.
     io_modules: frozenset[str] = frozenset()
     #: standard-library modules (dotted prefixes) only those edge modules may add.
     io_stdlib: frozenset[str] = frozenset()
@@ -123,20 +125,47 @@ def _imported_names(node: ast.Import | ast.ImportFrom, package: str) -> list[str
     return [module, *(f"{module}.{alias.name}" for alias in node.names if alias.name != "*")]
 
 
+def _root_name(node: ast.expr) -> str | None:
+    while isinstance(node, (ast.Attribute, ast.Call, ast.Subscript)):
+        node = node.func if isinstance(node, ast.Call) else node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _imported_aliases(tree: ast.Module) -> set[str]:
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names |= {(alias.asname or alias.name).split(".")[0] for alias in node.names}
+    return names
+
+
 def boundary_problems(source: str, filename: str, package: PurePackage, within: str) -> list[str]:
-    """Why `source`, a module of package `within` owned by `package`, is not pure."""
-    io = Path(filename).name in package.io_modules
+    """Why `source`, a module of package `within` owned by `package`, is not pure.
+
+    `filename` is the module's path under ``src`` (``grimoire/evals/loader.py``).
+    """
+    edge = package.name.replace(".", "/") + "/"
+    io = any(filename.replace("\\", "/") == edge + module for module in package.io_modules)
     io_stdlib = package.io_stdlib if io else frozenset()
     banned_names = BANNED_NAMES - (package.io_names if io else frozenset())
-    banned_attributes = BANNED_ATTRIBUTES - ({"sys"} if "sys" in io_stdlib else set())
+    banned_attributes = BANNED_ATTRIBUTES
     problems = []
-    for node in ast.walk(ast.parse(source, filename)):
+    tree = ast.parse(source, filename)
+    imported = _imported_aliases(tree)
+    for node in ast.walk(tree):
         where = f"{filename}:{getattr(node, 'lineno', '?')}"
         if isinstance(node, ast.Name) and node.id in banned_names:
             problems.append(f"{where} uses {node.id}")
-        elif isinstance(node, ast.Attribute) and node.attr in banned_attributes:
+        elif isinstance(node, ast.Attribute) and (
+                node.attr in banned_attributes
+                or (node.attr in MODULE_ROUTES and _root_name(node.value) in imported)):
             problems.append(f"{where} uses .{node.attr}")
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            if isinstance(node, ast.ImportFrom) and not node.level and (node.module or "").split(".")[0] != "grimoire":
+                # `from typing import sys`: a module held by an allowed one is still that module.
+                problems += [f"{where} imports {alias.name} through {node.module}" for alias in node.names
+                             if alias.name in sys.stdlib_module_names and alias.name not in PURE_STDLIB
+                             and not any(_under(alias.name, m) for m in io_stdlib)]
             for name in _imported_names(node, within):
                 top = name.split(".")[0]
                 if top == "grimoire":

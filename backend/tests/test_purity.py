@@ -71,6 +71,10 @@ def _check(source, package=CORE, filename="grimoire/core/sample.py", within="gri
     "m = loader.import_module('os')",
     "import dataclasses\ndataclasses.inspect.os.system('x')",
     "import typing\nm = typing.sys.modules",
+    "from typing import sys",
+    "from dataclasses import inspect as i",
+    "from enum import sys as s",
+    "import statistics",
 ])
 def test_checker_flags_side_effect_spellings(source):
     assert _check(source), source
@@ -84,6 +88,9 @@ def test_checker_flags_side_effect_spellings(source):
     "from grimoire.core.identity import SourceRef",
     "import hashlib\nhashlib.sha256(b'x')",
     "class Door:\n    def opened(self):\n        return self.state",
+    "def modules_of(config):\n    return config.modules",
+    "class Shell:\n    def kind(self):\n        return self.os",
+    "from typing import Literal, NamedTuple",
 ])
 def test_checker_accepts_pure_computation(source):
     assert _check(source) == []
@@ -96,15 +103,19 @@ def test_relative_imports_resolve_against_the_modules_own_package():
 
 
 def test_only_the_evals_edge_modules_read_files():
-    assert boundary_problems("import json", "loader.py", EVALS, "grimoire.evals") == []
-    assert boundary_problems("from importlib.resources import files", "loader.py", EVALS, "grimoire.evals") == []
-    assert boundary_problems("print('report')", "story_quality.py", EVALS, "grimoire.evals") == []
-    assert boundary_problems("import json", "checks.py", EVALS, "grimoire.evals")
-    assert boundary_problems("print('x')", "checks.py", EVALS, "grimoire.evals")
-    assert boundary_problems("from importlib import import_module", "loader.py", EVALS, "grimoire.evals")
-    assert boundary_problems("import importlib.util", "loader.py", EVALS, "grimoire.evals")
-    assert boundary_problems("x = open('f')", "loader.py", EVALS, "grimoire.evals")
-    assert boundary_problems("from grimoire.core import SourceRef", "loader.py", EVALS, "grimoire.evals")
+    def check(source, module):
+        return boundary_problems(source, module, EVALS, "grimoire.evals")
+    loader, cli, checks = "grimoire/evals/loader.py", "grimoire/evals/story_quality.py", "grimoire/evals/checks.py"
+    assert check("import json", loader) == []
+    assert check("from importlib.resources import files", loader) == []
+    assert check("import sys\nprint(sys.argv)", cli) == []
+    assert check("import json", checks)
+    assert check("print('x')", checks)
+    assert check("import json", "grimoire/evals/sub/loader.py")  # only the named edge files
+    assert check("from importlib import import_module", loader)
+    assert check("import importlib.util", loader)
+    assert check("x = open('f')", loader)
+    assert check("from grimoire.core import SourceRef", loader)
 
 
 def _modules_loaded_by(statement: str) -> set[str]:

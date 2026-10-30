@@ -26,7 +26,7 @@
 - `GRIMOIRE_V2_HOME` must be absolute; `~` and `~/…` (also `~\…` on Windows) expand against the home directory, `~user`, relative paths and surrounding whitespace are rejected. An empty value means unset. Symlinks are followed; a loop or unreadable component fails closed. A name the OS cannot store is refused the same way everywhere: on POSIX it must encode with `surrogateescape` (an undecodable filename byte is a real name), and on Windows it may contain no surrogate at all.
 - **Guarded V1 roots**, used only to *refuse*, never to resolve: `~/.grimoire`; `GRIMOIRE_HOME` (both as V1 read it, relative to the cwd with `link/..` left to the OS, and `~`-expanded); and the `data_dir` named by V1's bootstrap pointer `~/.grimoire.json`. The pointer is the one V1 file V2 reads, solely so a relocated V1 library is refused; if it exists but cannot be used (including a link whose target is missing), V2 refuses rather than guess.
 - A V2 path that **is, sits inside or contains** a guarded root is refused (`V1IsolationError`). The comparison is made three ways:
-  - **By name.** Path components are NFC-normalized and casefolded. Windows' aliases are folded on every OS: trailing dots and spaces, `:stream` suffixes, names made only of dots, and `\\?\` or `\\.\` prefixes.
+  - **By name.** Path components are NFC-normalized and casefolded on every OS. On Windows, its aliases are folded as well: trailing dots and spaces, `:stream` suffixes, names made only of dots, and `\\?\` or `\\.\` prefixes. On POSIX these are distinct names.
   - **Through Linux bind mounts.** Every name a path has is read from `/proc/self/mountinfo`; on Linux and Android a missing mount table refuses.
   - **By device/inode identity.** This is taken at the nearest *existing* ancestor, so a V1 root that does not exist yet is still seen through an aliased directory (a macOS firmlink, a hard link or a junction).
 
@@ -36,7 +36,7 @@
 - **Writer obligations.** The checks are point-in-time. A writer calls `check_write_destination` immediately before creating a library, creates only the final component (its parent must already exist), re-checks after creating, and records the root's device/inode, re-verifying it at the start of each write session.
 - Known limits:
   - A V1 library nested somewhere *below* a candidate is refused only if it is a guarded root; candidates are not scanned.
-  - A not-yet-existing V1 root spelled through a UNC admin share (`\\localhost\c$\…`) or `\\?\GLOBALROOT` is not recognized by name.
+  - A not-yet-existing V1 root spelled through a UNC admin share (`\\localhost\c$\…`), a volume GUID path (`\\?\Volume{…}`) or `\\?\GLOBALROOT` is not recognized by name.
   - Casefolding approximates, but is not, NTFS's upcase table.
 
   The writer's post-creation re-check is the backstop for these.

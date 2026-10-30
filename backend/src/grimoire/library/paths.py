@@ -345,21 +345,21 @@ def _require_small_file(info: os.stat_result, unusable) -> None:
         raise unusable("is not a small regular file")
 
 
-def _component_key(part: str) -> str:
+def _component_key(part: str, windows: bool) -> str:
     """One name, compared the way the most permissive filesystem would.
 
-    Case- and normalization-blind: refusing ``~/.Grimoire`` on a case-sensitive
-    disk is the safe side of an APFS or NTFS alias. Windows also opens
-    ``.grimoire.``, ``.grimoire `` and ``.grimoire::$INDEX_ALLOCATION`` as
-    ``.grimoire``, so a ``:stream`` suffix and trailing dots and spaces are
-    ignored on every OS (refusing such a name on POSIX is likewise the safe side).
+    Case- and normalization-blind everywhere: refusing ``~/.Grimoire`` on a
+    case-sensitive disk is the safe side of an APFS or NTFS alias. Windows also
+    opens ``.grimoire.``, ``.grimoire `` and ``.grimoire::$INDEX_ALLOCATION`` as
+    ``.grimoire``, so there a ``:stream`` suffix and trailing dots and spaces are
+    ignored. On POSIX those are distinct names (``backup-10:00``), so they stay.
     """
     name = unicodedata.normalize("NFC", part).casefold()
-    return name.split(":", 1)[0].rstrip(" .")
+    return name.split(":", 1)[0].rstrip(" .") if windows else name
 
 
 def _anchor_key(anchor: str) -> str:
-    """A drive or root, without the ``\\\\?\\`` prefix that names the same place."""
+    """A drive or root, without the ``\\\\?\\`` or ``\\\\.\\`` prefix that names the same place."""
     key = anchor.casefold().replace("/", "\\")
     if key.startswith("\\\\?\\unc\\"):
         return "\\\\" + key[len("\\\\?\\unc\\"):]
@@ -370,13 +370,17 @@ def _anchor_key(anchor: str) -> str:
 
 def _tail_key(parts: Iterable[str]) -> tuple[str, ...]:
     # A name that is nothing but dots or spaces vanishes on Windows ("data\\..." is "data").
-    return tuple(key for part in parts if (key := _component_key(part)))
+    windows = _default_platform() == "win32"
+    return tuple(key for part in parts if (key := _component_key(part, windows)))
 
 
 def _key(path: PurePath) -> tuple[str, ...]:
     """Components compared as every supported filesystem might alias them."""
-    rest = path.parts[1:] if path.anchor else path.parts
-    return ((_anchor_key(path.anchor),) if path.anchor else ()) + _tail_key(rest)
+    anchor, rest = path.anchor, path.parts[1:] if path.anchor else path.parts
+    if anchor.casefold().replace("/", "\\") == "\\\\.\\unc\\" and len(rest) >= 2:
+        # pathlib leaves server and share out of a \\.\UNC\ anchor; \\?\UNC\ keeps them.
+        anchor, rest = f"\\\\{rest[0]}\\{rest[1]}\\", rest[2:]
+    return ((_anchor_key(anchor),) if anchor else ()) + _tail_key(rest)
 
 
 def _lexical_relation(path: Path, root: Path) -> str | None:
