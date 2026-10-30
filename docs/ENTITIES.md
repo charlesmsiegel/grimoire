@@ -28,13 +28,13 @@ A facet is a typed, immutable capability contract with invariants. Integers are 
 
 - `FacetBundle`: canonical (sorted by name), hashable, one facet per name, no requirement check. Used for an instance's additions and replacements.
 - `FacetSet`: a bundle in which every known facet's requirements are present as **known** facets. Used for definition traits and effective facets.
-- `UnknownFacet(name, data)`: a facet from another version, kept verbatim. It grants no capability and satisfies no requirement; it cannot use a known facet name or put a `facet` key in its data.
+- `UnknownFacet(name, data)`: a facet from another version, kept verbatim. Its data and every `extras` mapping are `JsonObject`s, whose equality is JSON-type strict (`true`, `1` and `1.0` differ). It grants no capability and satisfies no requirement; it cannot use a known facet name or put a `facet` key in its data.
 - Reserved names `control`, `controller`, `pc`, `npc`, `player` and `director` are refused. This is extra defence: the real guarantee is that no authority or intent module imports facet code (pinned by `test_entity_isolation.py`).
 - `FacetError(ValueError).reason`: `invalid_field`, `duplicate_facet`, `reserved_name`, `known_name_as_unknown`, `missing_requirement`.
 
 ## Definitions and instances
 
-`EntityDefinition(ref, name, nature, traits, description="", extras={})` is one pinned revision. `nature` is `individual` (one particular someone or something) or `template` (a generic kind, such as a species). A definition is never an actor. `extras` holds unknown authored top-level fields verbatim; it takes part in equality and may not use a field or address key.
+`EntityDefinition(ref, name, nature, traits, description="", extras={})` is one pinned revision. Facet and state classes are exact: subclasses are refused, so none can redefine a name or requirement. `nature` is `individual` (one particular someone or something) or `template` (a generic kind, such as a species). A definition is never an actor. `extras` holds unknown authored top-level fields verbatim; it takes part in equality and may not use a field or address key.
 
 `EntityInstance(ref, source=None, local_name=None, added=(), replaced=(), state=(), extras={})`:
 
@@ -70,14 +70,14 @@ In this slice the remedy is to pin the instance to the earlier revision. Reviewe
 
 Authority and intent keep naming an actor by its campaign-local segment (`ControlAssignment.actor_id`, `RoutingContext.active_pc`). **An instance id is unique within a campaign across kinds, and is never reused for a different individual**, so that segment is unambiguous. Enforcing no-reuse across history (tombstones) belongs to the file store and sync sprints (010, 019).
 
-`CampaignRoster(campaign_id, instances)` is the one explicit adapter:
+`CampaignRoster(campaign_id, instances)` is the one explicit adapter. Any repeated instance id, even the same value twice, is an `IdentityConflict`.
 
 | Call | Accepts | Refuses |
 |---|---|---|
 | `ref_for(segment)` | a bare segment | reference text (`ValueError`); an unknown segment (`UnknownInstance`) |
-| `segment_for(ref)` | an `InstanceRef` or strict reference text | another campaign, an unknown id, or the same id under another kind (`UnknownInstance`) |
+| `segment_for(ref)` | an `InstanceRef` or strict reference text | another campaign, an unknown id, or the same id under another kind (`UnknownInstance`); malformed text (`ValueError`); any other type, such as a `SourceRef` (`TypeError`) |
 | `assign_control(ref, controller, index)` | an agent instance | a `SourceRef` or text (`TypeError`); an unknown instance; a non-agent (`AuthorityError`); resolution errors propagate |
-| `check_controls(controls, index)` | | reports `other_campaign`, `unknown_instance`, `unresolved` (with reason) or `not_agent` |
+| `check_controls(controls, index)` | `ControlAssignment`s (anything else: `TypeError`) | reports `other_campaign`, `unknown_instance`, `unresolved` (with reason) or `not_agent` |
 
 Facets never grant control. `assign_control` validates a *new* assignment only. An existing assignment keeps working through the authority policy even if a source change removes `agent`. That case is reported by `check_controls` and never revoked or rewritten, so PC rights do not silently disappear. A control switch (player → director → player) changes no entity value and restores the player's protected domains.
 
@@ -88,18 +88,18 @@ The authority and intent string fields still accept any nonempty string, and an 
 `CharacterDefinition` and `CampaignActor` remain for Wave 1 callers. Two explicit functions convert them:
 
 - `entity_from_character(d)`: an individual with only `agent`. Physicality is not invented.
-- `instance_from_actor(a)`: `campaign:<c>/character/<actor_id>`, keeping the segment so old assignments, observations and beliefs still apply.
+- `instance_from_actor(a)`: `campaign:<c>/character/<actor_id>`, keeping the segment so old assignments, observations and beliefs still apply. A campaign-original actor (no source) gets an added `agent`; a sourced actor's agency comes from its converted definition.
 
-A legacy definition and its conversion cannot share an index, because they have the same ref. `actor_view` accepts either actor type. Whenever the source is an `EntityDefinition`, the actor must be an effective agent, so the legacy type cannot bypass that rule.
+A legacy definition and its conversion cannot share an index, because they have the same ref. `actor_view` accepts either actor type. Every `EntityInstance`, and every legacy actor whose source is an `EntityDefinition`, must be an effective agent, so the legacy type cannot bypass that rule.
 
 ## Provisional payload codec
 
 `grimoire.core.entity_codec` (not exported from `grimoire.core`) converts definitions and instances to and from plain JSON-compatible payloads that the [Native File Store](roadmap/sprints/native-file-store-and-revisions.md) envelope carries opaquely.
 
-- **The envelope owns the address and the schema id** (`grimoire.entity/0`). Both are passed in, and a payload that repeats `ref`, `address`, `source_id`, `campaign_id` or `schema` is refused.
+- **The envelope owns the address and the schema id** (`grimoire.entity/0`). Both are passed in. A payload that repeats an address part (`ref`, `address`, `source_id`, `campaign_id`, `kind`, `entity_id`, `instance_id`, `revision`) or `schema` is refused (`address_in_payload`), so a hand edit can never appear to rebind identity. `extras` may not use these keys either.
 - Facets are encoded as a list of `{"facet": name, …}` objects, so duplicates are detected.
 - **Extension points keep unknowns.** Unknown top-level fields become `extras`, and unknown facet names become `UnknownFacet`.
-- **Inside a known structure, unknowns are refused with a reason.** The reasons are `unknown_facet_field`, `unknown_state`, `unknown_state_field` and `invalid_field`, plus `unsupported_schema` for an unknown schema. Refusing is not losing: the envelope still holds the original payload.
+- **Inside a known structure, unknowns are refused with a reason.** `CodecError` reasons are `unknown_facet_field`, `unknown_state`, `unknown_state_field`, `invalid_field` (including missing required fields), `address_in_payload` and `unsupported_schema`. `FacetError` and `EntityError` reasons (`duplicate_facet`, `reserved_name`, …) propagate unchanged; every refusal is a `ValueError` with `.reason`. Refusing is not losing: the envelope still holds the original payload.
 - Field spellings are provisional; 010 owns serialization and files.
 
 Interoperability is proven against a test-only neutral envelope that imports no grimoire module.

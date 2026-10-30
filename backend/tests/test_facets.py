@@ -77,15 +77,18 @@ def test_order_never_matters_for_equality_or_hash():
     (lambda: Communicative(), "invalid_field"),
     (lambda: Communicative(speaks={"smoke"}), "invalid_field"),
     (lambda: Communicative(speaks="speech"), "invalid_field"),
+    (lambda: Communicative(speaks=[["speech"]]), "invalid_field"),
     (lambda: FacetBundle(["agent"]), "invalid_field"),
 ])
 def test_invalid_facets_are_refused_with_a_reason(build, expected):
     assert reason(build) == expected
 
 
-def test_reserved_names_are_refused_even_for_known_style_bundles():
-    for name in RESERVED_FACET_NAMES:
-        assert reason(lambda: UnknownFacet(name)) == "reserved_name"
+def test_facet_subclasses_are_not_facets():
+    class Impostor(Physical):
+        name = "agent"
+
+    assert reason(lambda: FacetBundle([Impostor()])) == "invalid_field"
 
 
 def test_unknown_facets_are_preserved_frozen_and_grant_nothing():

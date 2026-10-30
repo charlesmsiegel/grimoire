@@ -1,7 +1,5 @@
 """The campaign roster bridges instance references and segment-keyed control (009)."""
 
-from dataclasses import replace
-
 import pytest
 from entity_fixtures import index_of, ogre, plain_sword, vessa
 
@@ -74,14 +72,19 @@ def test_control_switch_keeps_identity_and_restores_pc_rights():
 
 
 def test_facets_never_grant_control():
+    # A facet claiming a player changes nothing: control is only the assignment given.
     awakened = EntityInstance(BLADE, plain_sword().ref,
                               added=FacetBundle([Agent(), UnknownFacet("pc-control", {"player": ALICE})]))
-    roster = CampaignRoster("c1", [awakened])
-    assert controller_of("c1", "blade", ()) is None
+    roster, index = CampaignRoster("c1", [awakened]), index_of(plain_sword())
     line = PlayerContribution("c1", "k1", "s1", "t1", roster.segment_for(BLADE), ALICE, "speech", "Hello.")
     with pytest.raises(AuthorityError):
         submit_contribution(line, ())
-    assert roster.check_controls((), index_of(plain_sword())) == ()
+    bob = (roster.assign_control(BLADE, "human:bob", index),)
+    assert bob == (ControlAssignment("c1", "blade", "human:bob"),)
+    assert controller_of("c1", "blade", bob) == "human:bob"
+    assert roster.check_controls(bob, index) == ()
+    with pytest.raises(AuthorityError):
+        submit_contribution(line, bob)
 
 
 def test_only_agent_instances_can_be_newly_controlled():
@@ -133,6 +136,9 @@ def test_roster_identity_rules():
                               EntityInstance(InstanceRef("c1", "character", "vessa"), None, "Vessa")])
     with pytest.raises(IdentityConflict):
         CampaignRoster("c1", [EntityInstance(VESSA, vessa().ref), EntityInstance(VESSA, vessa().ref)])
+    same = EntityInstance(VESSA, vessa().ref)
+    with pytest.raises(IdentityConflict):
+        CampaignRoster("c1", [same, same])
     with pytest.raises(ValueError):
         CampaignRoster("c1", [EntityInstance(InstanceRef("c2", "item", "vessa"), vessa().ref)])
     with pytest.raises(ValueError):
@@ -152,8 +158,11 @@ def test_segments_and_references_convert_only_exactly():
             roster.segment_for(wrong)
     with pytest.raises(ValueError):
         roster.segment_for("campaign:c1/item/Vessa")
-    with pytest.raises(ValueError):
-        roster.segment_for(vessa().ref)
+    for not_a_reference in (vessa().ref, 3):
+        with pytest.raises(TypeError):
+            roster.segment_for(not_a_reference)
+    with pytest.raises(TypeError):
+        roster.check_controls(["vessa"], index_of(vessa()))
     assert isinstance(UnknownInstance("x"), LookupError)
 
 
@@ -162,4 +171,3 @@ def test_a_roster_is_immutable_and_ordered():
     assert [i.ref for i in roster.instances] == [BLADE, VESSA]
     with pytest.raises(AttributeError):
         roster.campaign_id = "c2"
-    assert replace(roster.instance(VESSA)) == roster.instance(VESSA)

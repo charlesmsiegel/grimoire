@@ -10,7 +10,7 @@ refused rather than coerced.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Union
 
@@ -23,14 +23,20 @@ class JsonValueError(ValueError):
     reason = "invalid_field"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class JsonObject(Mapping):
-    """A frozen, hashable, key-sorted text-keyed mapping of JSON values."""
+    """A frozen, hashable, key-sorted text-keyed mapping of JSON values.
+
+    Equality is JSON-type strict at every depth (``true``, ``1`` and ``1.0``
+    differ), so an authored edit is never mistaken for no change.
+    """
 
     pairs: tuple[tuple[str, JsonValue], ...] = ()
 
     def __post_init__(self) -> None:
         source = self.pairs
+        if isinstance(source, (str, bytes)) or not isinstance(source, Iterable):
+            raise JsonValueError(f"an object needs a mapping or (key, value) pairs, not {source!r}")
         items = source.pairs if isinstance(source, JsonObject) else (
             source.items() if isinstance(source, Mapping) else source)
         pairs: dict[str, JsonValue] = {}
@@ -57,17 +63,43 @@ class JsonObject(Mapping):
     def __len__(self) -> int:
         return len(self.pairs)
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        try:
+            other = other if isinstance(other, JsonObject) else JsonObject(other)
+        except JsonValueError:
+            return False
+        return _typed(self) == _typed(other)
+
+    def __hash__(self) -> int:
+        return hash(_typed(self))
+
+
+def _typed(value: JsonValue) -> tuple:
+    """A comparison key that keeps JSON types apart (``True``, ``1``, ``1.0``)."""
+    if isinstance(value, JsonObject):
+        return ("object", tuple((key, _typed(item)) for key, item in value.pairs))
+    if isinstance(value, tuple):
+        return ("array", tuple(_typed(item) for item in value))
+    return (type(value).__name__, value)
+
 
 def freeze(value: object) -> JsonValue:
     """The immutable form of a JSON-compatible value; already-frozen input is kept."""
-    if value is None or isinstance(value, (bool, str)):
-        return value
+    # Subclasses (an IntEnum, a str subclass) are stored as the plain JSON type.
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        return str.__str__(value)
     if isinstance(value, int):
-        return value
+        return int(value)
     if isinstance(value, float):
         if not math.isfinite(value):
             raise JsonValueError(f"JSON has no non-finite numbers: {value!r}")
-        return value
+        return float(value)
     if isinstance(value, JsonObject):
         return value
     if isinstance(value, Mapping):

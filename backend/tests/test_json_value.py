@@ -29,7 +29,7 @@ def test_json_object_is_a_read_only_mapping():
 
 def test_freeze_is_idempotent():
     frozen = freeze(NESTED)
-    assert freeze(frozen) is frozen or freeze(frozen) == frozen
+    assert freeze(frozen) is frozen
     assert JsonObject(frozen) == frozen
     assert freeze((1, (2, "x"))) == (1, (2, "x"))
 
@@ -47,3 +47,36 @@ def test_freeze_refuses_non_json_values(bad):
 def test_duplicate_keys_in_pairs_are_refused():
     with pytest.raises(JsonValueError):
         JsonObject([("a", 1), ("a", 2)])
+
+
+def test_equality_is_type_strict_at_every_depth():
+    assert JsonObject({"v": 1}) != JsonObject({"v": True})
+    assert JsonObject({"v": 1}) != JsonObject({"v": 1.0})
+    assert JsonObject({"v": [1, {"w": 0}]}) != JsonObject({"v": [1, {"w": False}]})
+    assert len({JsonObject({"v": 1}), JsonObject({"v": True}), JsonObject({"v": 1.0})}) == 3
+    assert JsonObject({"v": [1, 2]}) == JsonObject({"v": (1, 2)})
+
+
+def test_a_json_object_equals_an_equivalent_plain_mapping():
+    assert JsonObject({"a": [1]}) == {"a": [1]} and {"a": [1]} == JsonObject({"a": [1]})
+    assert JsonObject({"a": 1}) != {"a": True} and JsonObject({"a": 1}) != {"a": 1, "b": 2}
+    assert JsonObject({"a": 1}) != {1: "a"} and JsonObject() != [] and JsonObject() != "x"
+
+
+def test_builtin_subclasses_are_stored_as_plain_json_types():
+    import enum
+
+    class Level(enum.IntEnum):
+        HIGH = 3
+
+    class Label(str):
+        pass
+
+    frozen = freeze({"level": Level.HIGH, "label": Label("x")})
+    assert type(frozen["level"]) is int and type(frozen["label"]) is str
+
+
+@pytest.mark.parametrize("bad", [5, None, "ab"])
+def test_a_json_object_needs_a_mapping_or_pairs(bad):
+    with pytest.raises(JsonValueError):
+        JsonObject(bad)

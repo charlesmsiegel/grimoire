@@ -28,7 +28,8 @@ Nature = Literal["individual", "template"]
 Origin = Literal["trait", "replaced", "added"]
 NATURES = frozenset({"individual", "template"})
 #: Keys an ``extras`` mapping may never use: the envelope owns the address and schema.
-ADDRESS_KEYS = frozenset({"ref", "address", "source_id", "campaign_id", "schema"})
+ADDRESS_KEYS = frozenset({"ref", "address", "source_id", "campaign_id", "schema",
+                          "kind", "entity_id", "instance_id", "revision"})
 
 
 class EntityError(ValueError):
@@ -85,7 +86,7 @@ class EntityDefinition:
         if not isinstance(self.ref, SourceRef) or not self.ref.pinned:
             raise _invalid("a definition is one revision: its ref must be a pinned SourceRef")
         _text(self.name, "name")
-        if self.nature not in NATURES:
+        if not isinstance(self.nature, str) or self.nature not in NATURES:
             raise _invalid(f"nature must be one of {sorted(NATURES)}: {self.nature!r}")
         if not isinstance(self.traits, FacetSet):
             raise _invalid("traits must be a FacetSet")
@@ -147,11 +148,12 @@ class EntityInstance:
 def _state(values: object) -> tuple[StateValue, ...]:
     if isinstance(values, (str, bytes)) or not isinstance(values, Iterable):
         raise _invalid("state must be a collection of state values")
+    names = {cls: name for name, cls in STATE_TYPES.items()}
     by_type: dict[str, StateValue] = {}
     for value in values:
-        if not isinstance(value, tuple(STATE_TYPES.values())):
+        name = names.get(type(value))
+        if name is None:
             raise _invalid(f"not a state value: {value!r}")
-        name = type(value).__name__
         if name in by_type:
             raise EntityError(f"two {name} values", "duplicate_state")
         by_type[name] = value
@@ -208,11 +210,11 @@ def effective_entity(instance: EntityInstance, index: DefinitionIndex) -> Effect
         raise TypeError(f"expected an EntityInstance, not {type(instance).__name__}")
     definition = _definition(instance, index)
     facets, origins = _compose(definition.traits if definition else (), instance)
-    durable = facets.get(Durable)
     for value in instance.state:
-        if not facets.has(Durable):
-            raise EntityError(f"{type(value).__name__} needs an effective durable facet",
+        if value.facet not in facets:
+            raise EntityError(f"{type(value).__name__} needs an effective {value.facet} facet",
                               "state_without_facet")
+        durable = facets.get(Durable)
         if value.current > durable.max_integrity:
             raise EntityError(f"integrity {value.current} exceeds {durable.max_integrity}", "invalid_state")
     return EffectiveEntity(
@@ -271,7 +273,7 @@ def propose_damage(instance: EntityInstance, amount: int, index: DefinitionIndex
     return replace(instance, state=(*others, Integrity(max(0, current - amount))))
 
 
-# --- legacy first-slice bridge ----------------------------------------------------
+# --- legacy first-slice bridge -----------------------------------------------
 
 def entity_from_character(definition: CharacterDefinition) -> EntityDefinition:
     """A Wave 1 character as an entity that can act; physicality is not invented."""
@@ -280,5 +282,10 @@ def entity_from_character(definition: CharacterDefinition) -> EntityDefinition:
 
 
 def instance_from_actor(actor: CampaignActor) -> EntityInstance:
-    """A Wave 1 actor as an instance with the same segment, so its control still applies."""
-    return EntityInstance(actor.ref, actor.source, actor.local_name)
+    """A Wave 1 actor as an instance with the same segment, so its control still applies.
+
+    A sourced actor's agency comes from its (converted) definition; a campaign
+    original has no definition, so it is given ``Agent`` here.
+    """
+    added = FacetBundle([Agent()]) if actor.source is None else FacetBundle()
+    return EntityInstance(actor.ref, actor.source, actor.local_name, added)

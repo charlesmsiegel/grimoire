@@ -102,19 +102,6 @@ from .boundaries import (
     rule_themes,
     visible_boundaries,
 )
-from .facets import (
-    Agent,
-    Biological,
-    Communicative,
-    Durable,
-    FacetBundle,
-    FacetError,
-    FacetSet,
-    Physical,
-    Portable,
-    Spatial,
-    UnknownFacet,
-)
 from .entity import (
     EffectiveEntity,
     EntityDefinition,
@@ -131,6 +118,19 @@ from .entity import (
     integrity,
     is_agent,
     propose_damage,
+)
+from .facets import (
+    Agent,
+    Biological,
+    Communicative,
+    Durable,
+    FacetBundle,
+    FacetError,
+    FacetSet,
+    Physical,
+    Portable,
+    Spatial,
+    UnknownFacet,
 )
 from .json_value import JsonObject
 from .roster import CampaignRoster, ControlProblem, UnknownInstance

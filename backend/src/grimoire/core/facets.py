@@ -53,10 +53,10 @@ def _choice(value: object, options: frozenset[str], label: str) -> None:
 def _channels(value: object, label: str) -> frozenset[str]:
     if isinstance(value, (str, bytes)) or not isinstance(value, Iterable):
         raise FacetError(f"{label} must be a collection of channels: {value!r}", "invalid_field")
-    channels = frozenset(value)
+    channels = list(value)
     for channel in channels:
         _choice(channel, CHANNELS, f"{label} channel")
-    return channels
+    return frozenset(channels)
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,7 +188,7 @@ def _normalize_bundle(bundle: FacetBundle) -> None:
         raise FacetError("facets must be a collection of facet values", "invalid_field")
     named: dict[str, Facet] = {}
     for facet in bundle.facets:
-        if not isinstance(facet, _FACET_TYPES):
+        if type(facet) not in _FACET_TYPES:  # a subclass could redefine name or requires
             raise FacetError(f"not a facet: {facet!r}", "invalid_field")
         if facet.name in named:
             raise FacetError(f"facet {facet.name!r} appears twice", "duplicate_facet")

@@ -18,6 +18,8 @@ from grimoire.core.entity_codec import (
 from grimoire.core.facets import Agent, FacetBundle, FacetSet, Physical, Portable, UnknownFacet
 
 HERE = Path(__file__).resolve().parent
+ADDRESS_KEYS = ("ref", "address", "source_id", "campaign_id", "schema", "kind", "entity_id", "instance_id",
+                "revision")
 SWORD = InstanceRef("c1", "item", "vessa")
 
 
@@ -108,11 +110,13 @@ DEFINITION_DEFECTS = [
     ("traits not a list", lambda p: p.update(traits={"facet": "agent"}), "invalid_field"),
     ("reserved facet", lambda p: p["traits"].append({"facet": "pc"}), "reserved_name"),
     ("missing name", lambda p: p.pop("name"), "invalid_field"),
+    ("facet missing a required field", lambda p: facet(p, "durable").pop("max_integrity"), "invalid_field"),
+    ("nature not text", lambda p: p.update(nature=["individual"]), "invalid_field"),
     ("bad nature", lambda p: p.update(nature="species"), "invalid_field"),
     ("non-finite extra", lambda p: p.update({"x-v": float("nan")}), "invalid_field"),
     ("non-text key", lambda p: p.update({1: "x"}), "invalid_field"),
     *[(f"address key {key}", lambda p, key=key: p.update({key: "x"}), "address_in_payload")
-      for key in ("ref", "address", "source_id", "campaign_id", "schema")],
+      for key in ADDRESS_KEYS],
 ]
 
 
@@ -131,8 +135,9 @@ INSTANCE_DEFECTS = [
     ("bad source text", lambda p: p.update(source="Emberfall/Vessa"), "invalid_field"),
     ("source not text", lambda p: p.update(source=3), "invalid_field"),
     ("added not a list", lambda p: p.update(added={}), "invalid_field"),
+    ("state missing a required field", lambda p: p["state"][0].pop("current"), "invalid_field"),
     *[(f"address key {key}", lambda p, key=key: p.update({key: "x"}), "address_in_payload")
-      for key in ("ref", "address", "source_id", "campaign_id", "schema")],
+      for key in ADDRESS_KEYS],
 ]
 
 

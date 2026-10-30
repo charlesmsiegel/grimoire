@@ -3,7 +3,7 @@
 from dataclasses import replace
 
 import pytest
-from entity_fixtures import EMBER, VOICE, grakka, index_of, mara, ogre, plain_sword, ref, vessa
+from entity_fixtures import EMBER, grakka, index_of, mara, ogre, plain_sword, ref, vessa
 
 from grimoire.core import CharacterDefinition, InstanceRef, MissingDefinition, SourceRef
 from grimoire.core.entity import (
@@ -204,6 +204,8 @@ def test_definition_validation():
     assert entity_reason(lambda: EntityDefinition(ref("item", "x").unpinned(), "X", "individual", traits)
                          ) == "invalid_field"
     assert entity_reason(lambda: EntityDefinition(ref("item", "x"), "X", "species", traits)) == "invalid_field"
+    assert entity_reason(lambda: EntityDefinition(ref("item", "x"), "X", ["individual"], traits)
+                         ) == "invalid_field"
     assert entity_reason(lambda: EntityDefinition(ref("item", "x"), " ", "individual", traits)) == "invalid_field"
     assert entity_reason(lambda: EntityDefinition(ref("item", "x"), "X", "individual",
                                                   FacetBundle([Agent()]))) == "invalid_field"
@@ -213,15 +215,17 @@ def test_definition_validation():
     assert defined.extras == JsonObject({"x-art": (1,)}) and hash(defined)
 
 
-@pytest.mark.parametrize("key", ["name", "nature", "traits", "description", "ref", "address",
-                                 "source_id", "campaign_id", "schema"])
+ADDRESS = ["ref", "address", "source_id", "campaign_id", "schema", "kind", "entity_id", "instance_id",
+           "revision"]
+
+
+@pytest.mark.parametrize("key", ["name", "nature", "traits", "description", *ADDRESS])
 def test_definition_extras_cannot_shadow_fields_or_the_address(key):
     assert entity_reason(lambda: EntityDefinition(ref("item", "x"), "X", "individual",
                                                   FacetSet([Agent()]), extras={key: 1})) == "invalid_field"
 
 
-@pytest.mark.parametrize("key", ["source", "local_name", "added", "replaced", "state", "ref",
-                                 "address", "source_id", "campaign_id", "schema"])
+@pytest.mark.parametrize("key", ["source", "local_name", "added", "replaced", "state", *ADDRESS])
 def test_instance_extras_cannot_shadow_fields_or_the_address(key):
     assert entity_reason(lambda: instance("item", "x", vessa().ref, extras={key: 1})) == "invalid_field"
 
@@ -245,5 +249,15 @@ def test_absent_facets_answer_no():
     assert can_be_addressed(listener) and not can_be_heard(listener)
 
 
-def test_voice_fixture_is_shared_not_mutated():
-    assert VOICE == Communicative(speaks={"speech"}, understands={"speech"})
+def test_extras_equality_keeps_json_types_apart():
+    flagged = [EntityDefinition(ref("item", "x"), "X", "individual", FacetSet([Agent()]), extras={"x-flag": v})
+               for v in (True, 1, 1.0)]
+    assert len(set(flagged)) == 3
+
+
+def test_state_subclasses_are_not_state():
+    class Shadow(Integrity):
+        pass
+
+    assert entity_reason(lambda: instance("item", "v", vessa().ref, state=(Integrity(1), Shadow(2)))
+                         ) == "invalid_field"

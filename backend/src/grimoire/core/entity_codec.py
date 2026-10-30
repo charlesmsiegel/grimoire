@@ -16,7 +16,7 @@ original payload, so refusing to interpret it loses nothing.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import fields
+from dataclasses import MISSING, fields
 
 from .entity import ADDRESS_KEYS, STATE_TYPES, EntityDefinition, EntityInstance, StateValue
 from .facets import KNOWN_FACETS, Communicative, Facet, FacetBundle, FacetSet, UnknownFacet
@@ -129,6 +129,7 @@ def _facet(entry: object) -> Facet:
     unknown = sorted(set(data) - known)
     if unknown:
         raise CodecError(f"{entry['facet']} has unknown fields {unknown}", "unknown_facet_field")
+    _require_fields(cls, data, entry["facet"])
     if cls is Communicative:
         data = {key: _channels(value, key) if key in _CHANNEL_FIELDS else value for key, value in data.items()}
     return cls(**data)
@@ -148,7 +149,14 @@ def _state(entry: object) -> StateValue:
     unknown = sorted(set(data) - {item.name for item in fields(cls)})
     if unknown:
         raise CodecError(f"{entry['state']} has unknown fields {unknown}", "unknown_state_field")
+    _require_fields(cls, data, entry["state"])
     return cls(**data)
+
+
+def _require_fields(cls: type, data: Mapping, label: str) -> None:
+    missing = sorted(item.name for item in fields(cls) if item.default is MISSING and item.name not in data)
+    if missing:
+        raise _invalid(f"{label} is missing {missing}")
 
 
 def _extras(rest: dict) -> object:

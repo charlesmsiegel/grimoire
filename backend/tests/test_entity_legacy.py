@@ -12,7 +12,8 @@ from grimoire.core.entity import (
     EntityDefinition, EntityError, EntityInstance, effective_entity, entity_from_character,
     instance_from_actor,
 )
-from grimoire.core.facets import Agent, FacetSet, Physical
+from grimoire.core.facets import Agent, FacetBundle, FacetSet, Physical
+from grimoire.core.roster import CampaignRoster
 
 WREN = CharacterDefinition(ref("character", "wren"), "Wren", "A courier")
 ACTOR = CampaignActor("c1", "pc-1", source=WREN.ref)
@@ -35,8 +36,19 @@ def test_conversion_keeps_identity_and_asserts_only_agency():
     entity = entity_from_character(WREN)
     assert entity == EntityDefinition(WREN.ref, "Wren", "individual", FacetSet([Agent()]), "A courier")
     converted = instance_from_actor(CampaignActor("c1", "pc-1", local_name="Wren"))
-    assert converted == EntityInstance(InstanceRef("c1", "character", "pc-1"), None, "Wren")
-    assert instance_from_actor(ACTOR).source == WREN.ref
+    assert converted == EntityInstance(InstanceRef("c1", "character", "pc-1"), None, "Wren",
+                                       added=FacetBundle([Agent()]))
+    assert instance_from_actor(ACTOR) == EntityInstance(ACTOR.ref, WREN.ref)
+
+
+def test_a_converted_campaign_original_actor_stays_an_agent():
+    original = CampaignActor("c1", "pc-1", local_name="Wren")
+    instance, empty = instance_from_actor(original), index_of()
+    assert actor_view(instance, empty, KNOWS) == actor_view(original, empty, KNOWS)
+    roster = CampaignRoster("c1", [instance])
+    control = roster.assign_control(instance.ref, "human:alice", empty)
+    assert control == ControlAssignment("c1", "pc-1", "human:alice")
+    assert roster.check_controls([control], empty) == ()
 
 
 def test_legacy_actor_end_to_end_keeps_its_view_and_its_player():

@@ -61,11 +61,12 @@ class CampaignRoster:
                 raise ValueError(f"a roster holds EntityInstance values, not {type(instance).__name__}")
             if instance.ref.campaign_id != self.campaign_id:
                 raise ValueError(f"{instance.ref} is not in campaign {self.campaign_id}")
-            earlier = by_id.setdefault(instance.ref.instance_id, instance)
-            if earlier is not instance:
+            if instance.ref.instance_id in by_id:
                 raise IdentityConflict(
-                    f"instance id {instance.ref.instance_id!r} is used by both {earlier.ref} and "
-                    f"{instance.ref}; ids are unique within a campaign across kinds")
+                    f"instance id {instance.ref.instance_id!r} is used by both "
+                    f"{by_id[instance.ref.instance_id].ref} and {instance.ref}; "
+                    "ids are unique within a campaign across kinds")
+            by_id[instance.ref.instance_id] = instance
         object.__setattr__(self, "instances", tuple(by_id[key] for key in sorted(by_id)))
         object.__setattr__(self, "_by_id", by_id)
 
@@ -88,7 +89,7 @@ class CampaignRoster:
         if isinstance(ref, str):
             ref = InstanceRef.parse(ref)
         if not isinstance(ref, InstanceRef):
-            raise ValueError(f"expected an instance reference, not {type(ref).__name__}")
+            raise TypeError(f"expected an instance reference, not {type(ref).__name__}")
         found = self._by_id.get(ref.instance_id) if ref.campaign_id == self.campaign_id else None
         if found is None or found.ref != ref:
             raise UnknownInstance(str(ref))
@@ -108,6 +109,8 @@ class CampaignRoster:
                        index: DefinitionIndex) -> tuple[ControlProblem, ...]:
         problems = []
         for control in controls:
+            if not isinstance(control, ControlAssignment):
+                raise TypeError(f"expected a ControlAssignment, not {type(control).__name__}")
             if control.campaign_id != self.campaign_id:
                 problems.append(ControlProblem(control, "other_campaign"))
                 continue
