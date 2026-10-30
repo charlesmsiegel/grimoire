@@ -209,7 +209,7 @@ class RootedFileOps:
         self.crash_index: int | None = None  # the fired Crash or Fail
         self.fault_timing: str | None = None
         self.interleaved_paths: set[str] = set()
-        self.interleave_error: Exception | None = None
+        self.interleave_error: BaseException | None = None
         self._fired = [False] * len(self.plan)
         self._matches = [0] * len(self.plan)
         self._count = 0
@@ -286,9 +286,9 @@ class RootedFileOps:
         for fault in interleaves:
             before = snapshot(self.root) if self.record else {}
             try:
-                fault.action(RootedFileOps(self.root, phase=f"{self.phase}-interleave", record=False),
-                             Path(self.root))
-            except Exception as error:  # a fixture bug: stop the writer, let the harness re-raise
+                fault.action(RootedFileOps(self.root, phase=f"{self.phase}-interleave",
+                                           max_ops=self.max_ops, record=False), Path(self.root))
+            except (Exception, OperationBudgetExceeded) as error:  # a fixture bug: the harness re-raises it
                 self.interleave_error = error
                 self.dead = True
                 raise SimulatedCrash("interleaved action failed") from error

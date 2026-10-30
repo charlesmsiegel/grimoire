@@ -13,7 +13,8 @@ from pathlib import Path
 import pytest
 
 from grimoire.testing import (
-    Crash, CrashScenario, Fail, Interleave, Invariant, RootedFileOps, SandboxViolation,
+    Crash, CrashScenario, Fail, Interleave, Invariant, OperationBudgetExceeded, RootedFileOps,
+    SandboxViolation,
     SimulatedCrash, Target, atomic_outcome, completes_after, explore_crashes,
     idempotent_recovery, no_residue, preserves_meddle, run_with_fault, untouched,
 )
@@ -418,6 +419,15 @@ def test_a9_interleaved_external_edit_is_lost_and_named(tmp_path):
     assert names(run.violations) == ["external edit preserved"]  # interleaved paths are not the writer's
     assert all(op.path != "a.json" or op.kind != "write_bytes" for op in run.action_trace)
     assert run.point.endswith("@interleave")
+
+
+def test_a9_a_runaway_interleave_is_a_raw_fixture_bug(tmp_path):
+    def runaway(ops, root):
+        while True:
+            ops.exists(root / "a.json")
+
+    with pytest.raises(OperationBudgetExceeded):
+        run_with_fault(scenario(journaled_publish(NEW)), [Interleave(0, runaway)], tmp_path, max_ops=50)
 
 
 @pytest.mark.parametrize("phase", ["action", "recover"])
