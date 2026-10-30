@@ -75,6 +75,11 @@ def _check(source, package=CORE, filename="grimoire/core/sample.py", within="gri
     "from dataclasses import inspect as i",
     "from enum import sys as s",
     "import statistics",
+    "import enum\nenum.bltns.exec('import os')",
+    "import enum\nenum.bltns.__import__('os').system('x')",
+    "import enum as e\nx = e.bltns",
+    "import re\nx = re.enum.bltns",
+    "f = getattr_target.eval",
 ])
 def test_checker_flags_side_effect_spellings(source):
     assert _check(source), source

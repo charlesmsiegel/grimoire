@@ -26,7 +26,7 @@ Infrastructure works with existing role routes; real-time voice may demand tight
 
 ## Inherited from Wave 1
 
-The [Wave 1 audit](../README.md#wave-1--foundational-contracts-isolation-and-cost-baselines) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
 
 **Obligations**
 - Issue a provider request only for a `PlannedCall` of the turn's `TurnInferencePlan`, and book every attempt (failures and route fallbacks included) on its `TurnUsageLedger` as `provider_reported`, with `None` for any count the provider did not report (004, [inference](../../INFERENCE.md)). Usage sums are lower bounds while any count is unreported; reports must say so.

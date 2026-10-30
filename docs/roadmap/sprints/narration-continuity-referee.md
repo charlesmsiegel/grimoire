@@ -24,7 +24,7 @@ Consumes immutable facts from [Scene Physical Continuity](scene-physical-continu
 
 ## Inherited from Wave 1
 
-The [Wave 1 audit](../README.md#wave-1--foundational-contracts-isolation-and-cost-baselines) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
 
 **First-proof additions**
 - Extract atomic claims (domain, subject) from generated prose with a labeller that is not the narrator, and run them through `review_narration` (003). Route possible mislabels to review: a claim given an NPC subject that speaks for a PC, or PC speech bundled into an adjudicated outcome, cannot be struck or flagged through the player's correction flow today ([player sovereignty](../../PLAYER_SOVEREIGNTY.md)).

@@ -20,10 +20,11 @@ A local UI + turn envelope change; does not depend on network collaboration or v
 
 ## Inherited from Wave 1
 
-The [Wave 1 audit](../README.md#wave-1--foundational-contracts-isolation-and-cost-baselines) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
 
 **Obligations**
 - Map routed intents to contributions with the actual speaker as submitter ([intent routing](../../intent-routing.md#handing-a-pc-intent-to-the-authority-policy)), and reconcile authority `controller_id`s with `grimoire.security` principals (003, 007, 008).
+- Record control history, or end delegations explicitly on a control change. Today a delegation revives when its grantor regains control ([player sovereignty](../../PLAYER_SOVEREIGNTY.md)).
 
 ## Open questions
 - Should drafts survive restart?

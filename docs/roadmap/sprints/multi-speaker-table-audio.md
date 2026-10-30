@@ -23,10 +23,10 @@ Works with explicit per-user channels before any diarization model; local multi-
 
 ## Inherited from Wave 1
 
-The [Wave 1 audit](../README.md#wave-1--foundational-contracts-isolation-and-cost-baselines) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
 
 **Obligations**
-- Only the player who asked may confirm a pending destructive command; an unknown or different speaker cannot. Wave 1's confirmation is bound to target and revision but knows no speaker (008).
+- Attribute a spoken "yes" to its speaker so that only the player who asked confirms a pending destructive command; an unknown or different voice cannot. The rule itself is [Collaborative Multiplayer](collaborative-multiplayer.md#inherited-from-wave-1)'s; Wave 1's confirmation knows no speaker (008).
 
 ## Open questions
 - Should identity be assigned by device, channel, manual selection or diarization?

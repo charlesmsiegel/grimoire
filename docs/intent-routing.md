@@ -147,9 +147,10 @@ command's `gate` is a catalog label. An executor must authorize every `ui_comman
 would the same click, through the application's permission path (see
 [Tool authority](TOOL_AUTHORITY.md)), and a `confirm` command additionally needs this
 confirmation. Binding a confirmation to the speaking user or session is not implemented; it needs a
-speaker identity the router does not have (owners: the first executor, [first text
-runner](roadmap/sprints/minimal-text-scene-runner.md); multi-speaker rules,
-[multi-speaker table audio](roadmap/sprints/multi-speaker-table-audio.md)).
+speaker identity the router does not have. Owners: the executor and permission path, the [first
+text runner](roadmap/sprints/minimal-text-scene-runner.md); "only the requester may confirm",
+[collaborative multiplayer](roadmap/sprints/collaborative-multiplayer.md); voice attribution,
+[multi-speaker table audio](roadmap/sprints/multi-speaker-table-audio.md).
 
 ## Handing a PC intent to the authority policy
 

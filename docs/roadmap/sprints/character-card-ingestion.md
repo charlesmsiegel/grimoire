@@ -23,7 +23,7 @@ Standalone import UX against current world record types; optionally uses world C
 
 ## Inherited from Wave 1
 
-The [Wave 1 audit](../README.md#wave-1--foundational-contracts-isolation-and-cost-baselines) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
 
 **Obligations**
 - The importer runs on an untrusted `WorkerHandle` whose grants cover only staging and its target world; it applies only with a human approval bound to the staged bytes. A card's text never gains authority beyond those grants (007, [tool authority](../../TOOL_AUTHORITY.md)).

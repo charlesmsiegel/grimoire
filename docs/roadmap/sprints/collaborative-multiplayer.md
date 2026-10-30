@@ -21,6 +21,14 @@ Two controllers act on one scene; an unauthorized player cannot read a private G
 ## Independence and interfaces
 Starts with ordinary local file-backed campaign and a minimal coordinator; local multi-PC drafts are related but not a prerequisite.
 
+## Inherited from Wave 1
+
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+
+**Obligations**
+- Each human approves only uses of grants they issued (007).
+- Only the player who asked may confirm a pending destructive command, for typed and UI input as well as voice. Wave 1's confirmation is bound to its target and revision but names no speaker (008); voice attribution of who said "yes" is [Multi Speaker Table Audio](multi-speaker-table-audio.md#inherited-from-wave-1).
+
 ## Open questions
 - What conflict model works beyond single-device locks?
 - How is private information isolated?

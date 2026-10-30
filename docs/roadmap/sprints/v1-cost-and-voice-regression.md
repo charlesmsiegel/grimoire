@@ -16,7 +16,7 @@ Four characters are present but two respond; V2 does not pay for four separate b
 
 ## Inherited from Wave 1
 
-The [Wave 1 audit](../README.md#wave-1--foundational-contracts-isolation-and-cost-baselines) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
 
 **Obligations**
 - A run's usage counts as measured only when built from `TurnUsageLedger.summary()` with `provider_reported_only`; a run file's own `"provenance": "measured"` is self-declared, and the gate report says so (004, 005).

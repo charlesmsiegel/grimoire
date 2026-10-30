@@ -1,7 +1,7 @@
 # Player Sovereignty and Narration Authority
 
 **Status:** first slice implemented as a pure authority policy over *labelled* narration claims; see the [player sovereignty contract](../../PLAYER_SOVEREIGNTY.md). The roadmap's first proof (PC intention, voluntary dialogue and interiority stay under human control) is met **at policy level, on synthetic fixtures**:
-- Milestone 1: the forbidden-authorship errors, narration policy and correction flow exist as pure functions; there are no freeform scenes to test them on yet.
+- Milestone 1: the forbidden-authorship errors, narration policy and correction flow exist as pure functions; there are no freeform scenes to test them on yet. The correction flow cannot correct or flag a *misattributed* overreach (a claim labelled with an NPC subject, or PC speech bundled into an outcome). That needs the claim labeller and its mislabel review, owned by [Narration Continuity Referee](narration-continuity-referee.md#inherited-from-wave-1).
 - Milestone 2: turn-submission and narration-acceptance checks exist as pure functions; no turn pipeline calls them.
 - Milestone 3: delegation modes exist as an API, with one synthetic scenario each for ensemble, romance, combat and mystery.
 

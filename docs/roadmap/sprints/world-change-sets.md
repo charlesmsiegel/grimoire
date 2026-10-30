@@ -20,7 +20,7 @@ No autonomous agent required. This edits source records; gameplay effects have d
 
 ## Inherited from Wave 1
 
-The [Wave 1 audit](../README.md#wave-1--foundational-contracts-isolation-and-cost-baselines) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
 
 **Obligations**
 - Its apply/reject decisions are the first approval UI: issue `grimoire.security` approvals only from a direct human action, showing `describe()` and the staged content its digest covers (007).

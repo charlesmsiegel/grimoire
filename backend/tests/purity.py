@@ -39,10 +39,22 @@ BANNED_NAMES = frozenset({
 #: ``compile`` is deliberately absent: ``re.compile`` is pure.
 BANNED_ATTRIBUTES = frozenset({
     "open", "import_module", "__globals__", "__builtins__", "__subclasses__", "__loader__",
+    "exec", "eval", "__import__", "input", "breakpoint",
 })
 #: Modules a pure module happens to hold (``dataclasses.inspect.os``, ``typing.sys``).
 #: Reaching them from an imported name is banned; ``self.os`` or ``config.modules`` is not.
-MODULE_ROUTES = frozenset({"os", "sys", "inspect", "importlib", "builtins", "modules"})
+MODULE_ROUTES = frozenset({"os", "sys", "inspect", "importlib", "builtins", "bltns", "modules"})
+
+
+def _impure_module_attribute(module_name: str, attr: str) -> bool:
+    """Whether `module_name.attr` is a module outside the pure allowlist (``enum.bltns``)."""
+    import importlib
+    import types
+    try:
+        value = getattr(importlib.import_module(module_name), attr, None)
+    except ImportError:
+        return False
+    return isinstance(value, types.ModuleType) and value.__name__.split(".")[0] not in PURE_STDLIB
 
 #: Modules nothing in a pure package may pull in, even transitively -- its file
 #: edge included (whose ``importlib.resources`` legitimately loads ``tempfile``).
@@ -131,12 +143,18 @@ def _root_name(node: ast.expr) -> str | None:
     return node.id if isinstance(node, ast.Name) else None
 
 
-def _imported_aliases(tree: ast.Module) -> set[str]:
-    names = set()
+def _imported_aliases(tree: ast.Module) -> dict[str, str | None]:
+    """Each name an import binds, with the stdlib module it is (None if not a plain module)."""
+    names: dict[str, str | None] = {}
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            names |= {(alias.asname or alias.name).split(".")[0] for alias in node.names}
-    return names
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                names[bound] = alias.name if alias.asname else alias.name.split(".")[0]
+        elif isinstance(node, ast.ImportFrom):
+            names |= {alias.asname or alias.name: None for alias in node.names}
+    return {name: (module if module and module.split(".")[0] in sys.stdlib_module_names else None)
+            for name, module in names.items()}
 
 
 def boundary_problems(source: str, filename: str, package: PurePackage, within: str) -> list[str]:
@@ -158,7 +176,9 @@ def boundary_problems(source: str, filename: str, package: PurePackage, within: 
             problems.append(f"{where} uses {node.id}")
         elif isinstance(node, ast.Attribute) and (
                 node.attr in banned_attributes
-                or (node.attr in MODULE_ROUTES and _root_name(node.value) in imported)):
+                or (node.attr in MODULE_ROUTES and _root_name(node.value) in imported)
+                or (isinstance(node.value, ast.Name) and imported.get(node.value.id)
+                    and _impure_module_attribute(imported[node.value.id], node.attr))):
             problems.append(f"{where} uses .{node.attr}")
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             if isinstance(node, ast.ImportFrom) and not node.level and (node.module or "").split(".")[0] != "grimoire":

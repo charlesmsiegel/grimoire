@@ -16,7 +16,7 @@ A reply respects an NPC's private observations without leaking another actor's d
 
 ## Inherited from Wave 1
 
-The [Wave 1 audit](../README.md#wave-1--foundational-contracts-isolation-and-cost-baselines) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
 
 **Obligations**
 - Generate only from a `TurnInferencePlan`'s `npc_generation` calls, one per speaking NPC; take `player_controlled_ids` from the campaign's control assignments (003), never from caller convenience (004).
