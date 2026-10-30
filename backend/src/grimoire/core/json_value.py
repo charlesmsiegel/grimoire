@@ -48,7 +48,7 @@ class JsonObject(Mapping):
                 raise JsonValueError(f"object keys must be text: {key!r}")
             if key in pairs:
                 raise JsonValueError(f"duplicate object key: {key!r}")
-            pairs[key] = freeze(value)
+            pairs[str.__str__(key)] = freeze(value)
         object.__setattr__(self, "pairs", tuple(sorted(pairs.items())))
 
     def __getitem__(self, key: str) -> JsonValue:
@@ -82,6 +82,8 @@ def _typed(value: JsonValue) -> tuple:
         return ("object", tuple((key, _typed(item)) for key, item in value.pairs))
     if isinstance(value, tuple):
         return ("array", tuple(_typed(item) for item in value))
+    if isinstance(value, float):  # -0.0 == 0.0, but they are different JSON text
+        return ("float", value, math.copysign(1.0, value))
     return (type(value).__name__, value)
 
 
@@ -95,11 +97,11 @@ def freeze(value: object) -> JsonValue:
     if isinstance(value, str):
         return str.__str__(value)
     if isinstance(value, int):
-        return int(value)
+        return int.__int__(value)
     if isinstance(value, float):
         if not math.isfinite(value):
             raise JsonValueError(f"JSON has no non-finite numbers: {value!r}")
-        return float(value)
+        return float.__float__(value)
     if isinstance(value, JsonObject):
         return value
     if isinstance(value, Mapping):

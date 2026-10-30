@@ -121,7 +121,7 @@ def _channels(value: object, label: str) -> frozenset:
 def _facet(entry: object) -> Facet:
     if not isinstance(entry, Mapping) or not isinstance(entry.get("facet"), str):
         raise _invalid(f"a facet entry must be an object with a text 'facet' name: {entry!r}")
-    data = {key: value for key, value in entry.items() if key != "facet"}
+    data = _data(entry, "facet")
     cls = KNOWN_FACETS.get(entry["facet"])
     if cls is None:
         return UnknownFacet(entry["facet"], data)
@@ -145,7 +145,7 @@ def _state(entry: object) -> StateValue:
     cls = STATE_TYPES.get(entry["state"])
     if cls is None:
         raise CodecError(f"unknown state type {entry['state']!r}", "unknown_state")
-    data = {key: value for key, value in entry.items() if key != "state"}
+    data = _data(entry, "state")
     unknown = sorted(set(data) - {item.name for item in fields(cls)})
     if unknown:
         raise CodecError(f"{entry['state']} has unknown fields {unknown}", "unknown_state_field")
@@ -153,8 +153,15 @@ def _state(entry: object) -> StateValue:
     return cls(**data)
 
 
+def _data(entry: Mapping, discriminator: str) -> dict:
+    if any(not isinstance(key, str) for key in entry):
+        raise _invalid(f"{entry[discriminator]} entry keys must be text")
+    return {key: value for key, value in entry.items() if key != discriminator}
+
+
 def _require_fields(cls: type, data: Mapping, label: str) -> None:
-    missing = sorted(item.name for item in fields(cls) if item.default is MISSING and item.name not in data)
+    missing = sorted(item.name for item in fields(cls) if item.name not in data
+                     and item.default is MISSING and item.default_factory is MISSING)
     if missing:
         raise _invalid(f"{label} is missing {missing}")
 

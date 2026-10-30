@@ -80,3 +80,19 @@ def test_builtin_subclasses_are_stored_as_plain_json_types():
 def test_a_json_object_needs_a_mapping_or_pairs(bad):
     with pytest.raises(JsonValueError):
         JsonObject(bad)
+
+
+def test_subclass_overrides_cannot_change_stored_values():
+    class Liar(int):
+        def __int__(self):
+            return 99
+
+    class Key(str):
+        pass
+
+    frozen = freeze({Key("k"): Liar(3)})
+    assert frozen["k"] == 3 and type(frozen["k"]) is int and type(next(iter(frozen))) is str
+
+
+def test_negative_zero_is_kept_apart():
+    assert JsonObject({"v": -0.0}) != JsonObject({"v": 0.0})
