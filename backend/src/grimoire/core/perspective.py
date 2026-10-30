@@ -179,8 +179,8 @@ def _keep_all(_value: object) -> bool:
     return True
 
 
-def _projection(knowledge: Knowledge, actor: InstanceRef, as_of: int,
-                keep_item=_keep_all, keep_proposition=_keep_all) -> ActorKnowledge:
+def _received_and_sent(knowledge: Knowledge, actor: InstanceRef, as_of: int,
+                       keep_item=_keep_all, keep_proposition=_keep_all):
     evidence = sorted(
         (item for item in knowledge.evidence_held_by(actor)
          if item.confirmed and item.moment.sequence <= as_of and keep_item(item)),
@@ -189,15 +189,18 @@ def _projection(knowledge: Knowledge, actor: InstanceRef, as_of: int,
         (report for report in knowledge.reports_sent_by(actor)
          if report.sent_at.sequence <= as_of and keep_proposition(report.proposition_id)),
         key=lambda report: _order(report.sent_at, report.evidence_id))
+    return (tuple(_known_evidence(knowledge, item) for item in evidence),
+            tuple(SentReport(r.evidence_id, r.holder, r.proposition_id,
+                             knowledge.proposition(r.proposition_id).text, r.channel, r.sent_at)
+                  for r in sent))
+
+
+def _projection(knowledge: Knowledge, actor: InstanceRef, as_of: int,
+                keep_item=_keep_all, keep_proposition=_keep_all) -> ActorKnowledge:
+    evidence, sent = _received_and_sent(knowledge, actor, as_of, keep_item, keep_proposition)
     current, history = _beliefs_as_of(knowledge, actor, as_of, keep_proposition)
-    return ActorKnowledge(
-        actor=actor, as_of=as_of,
-        evidence=tuple(_known_evidence(knowledge, item) for item in evidence),
-        sent=tuple(SentReport(r.evidence_id, r.holder, r.proposition_id,
-                              knowledge.proposition(r.proposition_id).text, r.channel, r.sent_at)
-                   for r in sent),
-        current=_known_beliefs(knowledge, current), history=_known_beliefs(knowledge, history),
-    )
+    return ActorKnowledge(actor, as_of, evidence, sent, _known_beliefs(knowledge, current),
+                          _known_beliefs(knowledge, history))
 
 
 def actor_knowledge(knowledge: Knowledge, actor: InstanceRef, *, as_of: int) -> ActorKnowledge:
@@ -215,8 +218,9 @@ def knowledge_about(knowledge: Knowledge, actor: InstanceRef, subject: Subject, 
     """The actor projection restricted to items about ``subject``.
 
     The single consumer contract for graph and retrieval views (017, 031): an
-    actor-scoped view may present only these items, which overtly mention the
-    subject. They never expose the subject's canonical fields, participants or
+    actor-scoped view may present only these items: perceptions of the subject
+    (an event), or reports, sent reports and beliefs whose proposition overtly
+    mentions it. They never expose the subject's canonical fields, participants or
     edges, nor permit expanding from it. The subject is never resolved against
     the ledger, so the answer reveals nothing about whether an unheld subject
     exists.
@@ -314,11 +318,11 @@ def player_knowledge(knowledge: Knowledge, player_id: str,
         if controller_of(knowledge.campaign_id, actor_id, controls) != player_id:
             continue
         ref = InstanceRef(knowledge.campaign_id, "character", actor_id)
-        view = _projection(knowledge, ref, as_of)
+        evidence, sent = _received_and_sent(knowledge, ref, as_of)
         current, history = _beliefs_as_of(knowledge, ref, as_of, _keep_all)
         own_current, inherited = _split_by_author(knowledge, current, player_id)
         own_history, inherited_history = _split_by_author(knowledge, history, player_id)
-        actors.append(ActorKnowledge(view.actor, as_of, view.evidence, view.sent, own_current,
+        actors.append(ActorKnowledge(ref, as_of, evidence, sent, own_current,
                                      own_history, inherited, inherited_history))
     if not actors:
         raise AuthorityError("this player controls no character in the campaign")
@@ -347,7 +351,7 @@ class BeliefAuthorityError(AuthorityError):
         return (type(self), (self.reason,))
 
 
-def admit_belief(belief: Belief, proposition: Proposition,
+def admit_belief(belief: Belief, knowledge: Knowledge,
                  controls: Iterable[ControlAssignment],
                  contribution: PlayerContribution | None = None) -> Belief:
     """Admit a newly authored belief, or refuse it.
@@ -355,18 +359,22 @@ def admit_belief(belief: Belief, proposition: Proposition,
     A director-controlled holder's beliefs are the director's. A
     player-controlled holder's belief must be the controller's, backed by
     their own ``interiority`` contribution from the same scene and turn whose
-    text is the proposition (Wave 1's verbatim rule). Delegated belief
-    authoring is not supported yet and fails closed.
+    text is the ledger's proposition (Wave 1's verbatim rule). The proposition
+    is read from ``knowledge`` (the ledger the belief will join), never taken
+    from the caller. Delegated belief authoring is not supported yet and fails
+    closed.
     """
-    if not isinstance(belief, Belief) or not isinstance(proposition, Proposition):
+    if not isinstance(belief, Belief) or not isinstance(knowledge, Knowledge):
         raise KnowledgeError("invalid_record")
-    if (proposition.proposition_id, proposition.campaign_id) != (belief.proposition_id,
-                                                                 belief.campaign_id):
-        raise KnowledgeError("invalid_record", (f"belief:{belief.belief_id}",
-                                                f"proposition:{proposition.proposition_id}"))
+    if belief.campaign_id != knowledge.campaign_id:
+        raise KnowledgeError("campaign_mismatch", (f"belief:{belief.belief_id}",))
+    proposition = knowledge.proposition(belief.proposition_id)
+    controls = tuple(controls)
+    if not all(isinstance(c, ControlAssignment) for c in controls):
+        raise KnowledgeError("invalid_record")
     if belief.holder.kind != "character":
         raise BeliefAuthorityError("unsupported_holder_kind")
-    controller = controller_of(belief.campaign_id, belief.holder.instance_id, tuple(controls))
+    controller = controller_of(belief.campaign_id, belief.holder.instance_id, controls)
     if controller is None:
         raise BeliefAuthorityError("unknown_control")
     if controller == DIRECTOR:

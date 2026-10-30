@@ -451,8 +451,9 @@ class Knowledge:
                             "proposition")
 
     def subjects_of(self, item: Evidence) -> frozenset[Subject]:
-        if self._index.evidence.get(getattr(item, "evidence_id", None)) is not item:
-            raise KnowledgeError("unknown_evidence", _name("evidence", getattr(item, "evidence_id", None)))
+        evidence_id = getattr(item, "evidence_id", None)
+        if not _is_segment(evidence_id) or self._index.evidence.get(evidence_id) is not item:
+            raise KnowledgeError("unknown_evidence", _name("evidence", evidence_id))
         return _subjects_of(item, self._index.propositions)
 
     def evidence_held_by(self, holder: InstanceRef) -> tuple[Evidence, ...]:

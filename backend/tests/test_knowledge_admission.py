@@ -6,12 +6,13 @@ from dataclasses import replace
 import pytest
 
 from grimoire.core import (
-    DIRECTOR, AuthorityError, Belief, BeliefAuthorityError, ControlAssignment, KnowledgeError,
-    PlayerContribution, Proposition, admit_belief,
+    DIRECTOR, AuthorityError, Belief, BeliefAuthorityError, ControlAssignment, Knowledge,
+    KnowledgeError, PlayerContribution, Proposition, admit_belief,
 )
 from knowledge_fixtures import C, INES, TAVI, actor, at
 
 PROPOSITION = Proposition(C, "orrin-lies", "Orrin is lying about the duke", at(1), "director")
+LEDGER = Knowledge(C, propositions=[PROPOSITION])
 CONTROLS = (ControlAssignment(C, "ines", "player-one"), ControlAssignment(C, "tavi", DIRECTOR))
 CONTRIBUTION = PlayerContribution(C, "c-1", "s1", "t4", "ines", "player-one", "interiority",
                                   "  Orrin is lying about the duke ")
@@ -23,20 +24,20 @@ def pc_belief(**changes) -> Belief:
     return replace(base, **changes)
 
 
-def refusal(belief, contribution=CONTRIBUTION, controls=CONTROLS, proposition=PROPOSITION) -> str:
+def refusal(belief, contribution=CONTRIBUTION, controls=CONTROLS) -> str:
     with pytest.raises(BeliefAuthorityError) as caught:
-        admit_belief(belief, proposition, controls, contribution)
+        admit_belief(belief, LEDGER, controls, contribution)
     return caught.value.reason
 
 
 def test_a_player_authored_belief_backed_by_their_interiority_is_admitted():
     belief = pc_belief()
-    assert admit_belief(belief, PROPOSITION, CONTROLS, CONTRIBUTION) is belief
+    assert admit_belief(belief, LEDGER, CONTROLS, CONTRIBUTION) is belief
 
 
 def test_an_npc_belief_is_the_directors():
     belief = Belief(C, "b-tavi", TAVI, "orrin-lies", "suspected", at(4), DIRECTOR, ("r-1",))
-    assert admit_belief(belief, PROPOSITION, (c for c in CONTROLS)) is belief
+    assert admit_belief(belief, LEDGER, (c for c in CONTROLS)) is belief
 
 
 @pytest.mark.parametrize("belief, reason", [
@@ -90,15 +91,30 @@ def test_unknown_and_unsupported_holders_fail_closed():
 def test_ambiguous_control_fails_closed():
     contested = CONTROLS + (ControlAssignment(C, "ines", "player-two"),)
     with pytest.raises(AuthorityError):
-        admit_belief(pc_belief(), PROPOSITION, contested, CONTRIBUTION)
+        admit_belief(pc_belief(), LEDGER, contested, CONTRIBUTION)
 
 
-def test_the_proposition_must_be_the_beliefs():
-    other = replace(PROPOSITION, proposition_id="other")
+def test_the_proposition_comes_from_the_ledger_never_the_caller():
+    # A writer cannot make the verbatim check pass by fabricating the proposition's text.
+    other_ledger = Knowledge(C, propositions=[replace(PROPOSITION, text="Orrin is honest")])
+    with pytest.raises(BeliefAuthorityError) as caught:
+        admit_belief(pc_belief(), other_ledger, CONTROLS, CONTRIBUTION)
+    assert caught.value.reason == "not_verbatim"
+    for belief, ledger, reason in (
+        (pc_belief(proposition_id="ghost"), LEDGER, "unknown_proposition"),
+        (pc_belief(), Knowledge("campaign-b"), "campaign_mismatch"),
+        (pc_belief(), PROPOSITION, "invalid_record"),
+    ):
+        with pytest.raises(KnowledgeError) as caught:
+            admit_belief(belief, ledger, CONTROLS, CONTRIBUTION)
+        assert caught.value.reason == reason and "lying" not in str(caught.value)
+
+
+@pytest.mark.parametrize("controls", [[object()], ["ines"]])
+def test_malformed_controls_are_refused(controls):
     with pytest.raises(KnowledgeError) as caught:
-        admit_belief(pc_belief(), other, CONTROLS, CONTRIBUTION)
+        admit_belief(pc_belief(), LEDGER, controls, CONTRIBUTION)
     assert caught.value.reason == "invalid_record"
-    assert "lying" not in str(caught.value)
 
 
 def test_refusals_are_authority_errors_not_os_errors_and_carry_no_text():
@@ -107,6 +123,6 @@ def test_refusals_are_authority_errors_not_os_errors_and_carry_no_text():
     copy = pickle.loads(pickle.dumps(error))
     assert (type(copy), copy.reason) == (BeliefAuthorityError, "not_verbatim")
     with pytest.raises(BeliefAuthorityError) as caught:
-        admit_belief(pc_belief(), PROPOSITION, CONTROLS, replace(CONTRIBUTION, text="SECRET-TEXT"))
+        admit_belief(pc_belief(), LEDGER, CONTROLS, replace(CONTRIBUTION, text="SECRET-TEXT"))
     assert "SECRET" not in str(caught.value) and "lying" not in repr(caught.value.args)
     assert caught.value.__context__ is None

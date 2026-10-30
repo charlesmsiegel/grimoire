@@ -6,6 +6,8 @@
 - Field names are a first-slice contract, not a frozen file schema.
 - None of this is app-integrated.
 
+**What is frozen:** the *meaning* of "knows": the actor projection and `knowledge_about`, the standing and stance rules, and the trust boundaries below. Consumers build on these and must not redefine them. The proving scenario ("an unseen NPC cannot mention a private betrayal; told a distorted version, they may believe it without making it canon") is proven at the projection level. Whether generated dialogue actually avoids the mention is milestone 2, owned by per-NPC generation (027).
+
 Four things are kept apart:
 - **what happened** (events);
 - **what an actor perceived or was told** (evidence);
@@ -15,6 +17,11 @@ Four things are kept apart:
 **Access is not truth.** Receiving, repeating or believing a proposition never makes it established. Being a participant, a group member or graph-connected never grants evidence.
 
 ## Vocabulary
+
+The handoff's *claim* is a `Proposition`. *Audience* and *privacy* have no field of their own:
+- an event's actor audience is exactly the holders of confirmed evidence of it;
+- the table's audience is set by `Disclosure`;
+- everything else is director-only by default.
 
 All records are frozen dataclasses that belong to one campaign.
 - IDs use the [identity](IDENTITY.md) segment grammar.
@@ -60,7 +67,7 @@ So the handoff's `established`, `reported` and `unknown` are standings, and `sus
 - Inputs may be any iterables.
 - Fields are tuples sorted by ID, so equal record sets compare equal however they were supplied.
 
-Every input is first type-checked: each family must be an iterable of its record type, else `invalid_record`. Validation then runs family by family (events, propositions, rulings, evidence, beliefs, disclosures). Each family gets an identity pass (campaign, duplicates), then each record's rules in ID order. The belief family closes with its chain checks.
+Every input is first type-checked: each family must be an iterable of its record type, else `invalid_record`. Validation then runs family by family (events, propositions, rulings, evidence, beliefs, disclosures). Each family gets an identity pass (campaign, duplicates), then each record's rules in ID order. Within one belief the checks run in this order: proposition, evidence support, supersession, then contribution reuse. The belief family closes with its chain checks.
 
 The first failure raises `KnowledgeError(ValueError)`. It has `.reason` and `.records`, the offending records named `"<family>:<id>"`, so a store can quarantine them. Messages never contain record text, so they are safe to log.
 
@@ -71,7 +78,7 @@ The first failure raises `KnowledgeError(ValueError)`. It has `.reason` and `.re
 | `duplicate_id` | an ID is unique per family; perceptions and reports share the evidence namespace |
 | `unknown_event` / `unknown_proposition` / `unknown_evidence` / `unknown_belief` | a reference does not resolve. Nothing is rebound by name or dropped: removing evidence that a belief cites names both records |
 | `before_event` | a perception or disclosure is earlier than its event |
-| `about_future_event` | a proposition is about an event later than itself (otherwise holding it would reveal a director-only future event) |
+| `about_future_event` | a proposition is about an event later than itself (otherwise holding it would reveal a director-only future event). Non-event subjects carry no time here; the graph (017) applies its own edge and instance validity |
 | `before_proposition` | a report (including its `sent_at`), belief or ruling is earlier than its proposition |
 | `ungrounded_ruling` / `ruling_cites_future` / `conflicting_rulings` | an established ruling has no ground; it rests on a later event; or one proposition has two rulings at one sequence |
 | `invalid_sent_at` | `sent_at` is given exactly when `addressed` is set, with a sender, and is not later than receipt |
@@ -101,7 +108,7 @@ Every projection names its perspective and takes a keyword `as_of` (a non-negati
 
 ## Belief authorship (player sovereignty)
 
-`belief` is a protected PC domain ([player sovereignty](PLAYER_SOVEREIGNTY.md)). A writer must call `admit_belief(belief, proposition, controls, contribution=None)` when a belief is authored. Refusals raise `BeliefAuthorityError`, an `AuthorityError` (never an `OSError`), with a `.reason`:
+`belief` is a protected PC domain ([player sovereignty](PLAYER_SOVEREIGNTY.md)). A writer must call `admit_belief(belief, knowledge, controls, contribution=None)` when a belief is authored. `knowledge` is the ledger the belief will join, and the proposition is read from it, never supplied by the caller. A fabricated proposition text therefore cannot satisfy the verbatim check. Refusals raise `BeliefAuthorityError`, an `AuthorityError` (never an `OSError`), with a `.reason`:
 
 | reason | rule |
 |---|---|
@@ -112,7 +119,7 @@ Every projection names its perspective and takes a keyword `as_of` (a non-negati
 | `invalid_expression` | the backing `PlayerContribution` is missing, or is not this controller's `interiority` contribution for this actor in the belief's scene and turn with the same contribution id |
 | `not_verbatim` | the proposition text differs from the contribution text after `strip()` (Wave 1's verbatim rule) |
 
-A proposition that is not the belief's raises `KnowledgeError("invalid_record")`. Delegated PC belief authoring fails closed for now (owner: 035, with 003's delegations).
+A proposition missing from the ledger raises `KnowledgeError("unknown_proposition")`. A belief of another campaign raises `campaign_mismatch`, and malformed controls raise `invalid_record`. Delegated PC belief authoring fails closed for now (owner: 035, with 003's delegations).
 
 `Knowledge` cannot re-check authorship, because Wave 1 control has no history; the `inherited` bucket surfaces any non-controller belief instead. Perceptions and reports about a PC are open-domain world facts and need no player authorship.
 
@@ -128,11 +135,11 @@ A proposition that is not the belief's raises `KnowledgeError("invalid_record")`
 
 | Consumer | Must |
 |---|---|
-| [Typed graph](roadmap/sprints/typed-relationship-graph.md) (017) | Gate actor-scoped traversal only through `knowledge_about` and the actor projection. An actor-scoped view may present only those items, which overtly mention the subject. They never expose the subject's canonical fields, participants or edges, and never permit expanding from it. A refuted proposition about X is still only a proposition the actor holds. Never infer knowledge from connectivity |
+| [Typed graph](roadmap/sprints/typed-relationship-graph.md) (017) | Gate actor-scoped traversal only through `knowledge_about` and the actor projection. An actor-scoped view may present only those items: perceptions of the subject (an event), or propositions that overtly mention it. They never expose the subject's canonical fields, participants or edges, and never permit expanding from it. A refuted proposition about X is still only a proposition the actor holds. Never infer knowledge from connectivity |
 | [Event/evidence persistence](roadmap/sprints/durable-event-evidence.md) (020) | Persist these records' meaning in 010 envelopes, quarantine using `KnowledgeError.records`, and own retraction and retcon semantics. Removing cited evidence currently fails loudly rather than silently weakening a belief |
 | [Per-NPC generation](roadmap/sprints/per-npc-generation-runtime.md) (027) | Build each NPC's prompt from that actor's `ActorKnowledge` only. Refuse `ActorView.knowledge is None` rather than read it as unfiltered. Never pass `DirectorKnowledge` or render IDs. Call `admit_belief` before writing a model-proposed NPC belief |
 | [Context retrieval](roadmap/sprints/context-retrieval.md) (031) | Pack only `knowledge_about` and actor-projection items. A rumour is evidence of a report, not of truth |
-| [Diegetic communication](roadmap/sprints/diegetic-communication.md) (032) | Emit `Report`s with honest `addressed`, `sent_at`, `attributed_to` and `confirmed`, and never mark receipt as confirmed without evidence of it |
+| [Diegetic communication](roadmap/sprints/diegetic-communication.md) (032) | Emit `Report`s with honest `sender`, `addressed`, `sent_at`, `attributed_to` and `confirmed`. Never mark receipt as confirmed without evidence of it. An addressed report puts its text in the sender's `sent` (you know what you said), so name a sender only when that actor really asserted it. A prophecy cannot be `about` an event that does not exist yet |
 
 ## Open questions and owners
 

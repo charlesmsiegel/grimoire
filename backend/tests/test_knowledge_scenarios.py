@@ -4,11 +4,13 @@ All synthetic. Distinctive tokens (``evt-q7``, ``SUMMARY-TOKEN``,
 ``TRUTH-TOKEN``) prove absence by substring over ``repr`` and every field.
 """
 
+import random
+
 import pytest
 
 from grimoire.core import (
     DIRECTOR, AuthorityError, ControlAssignment, Event, InstanceRef, Knowledge, KnowledgeError,
-    Proposition, Ruling, Subject, actor_knowledge, director_knowledge, knowledge_about,
+    Proposition, Ruling, Subject, actor_knowledge, admit_belief, director_knowledge, knowledge_about,
     player_knowledge, standing,
 )
 from knowledge_fixtures import (
@@ -83,6 +85,12 @@ def test_b_a_lie_is_believed_but_never_established():
     by_id = {p.proposition.proposition_id: (p.standing, p.ruling_id) for p in director.propositions}
     assert by_id == {"duke-betrayed": ("established", "rule-truth"), "duke-innocent": ("refuted", "rule-lie")}
     assert any(b.belief_id == "b-tavi-1" for b in director.beliefs)
+
+
+def test_b_tavis_belief_in_the_lie_is_admitted_as_the_directors_npc_belief():
+    knowledge = betrayal_knowledge()
+    belief = next(b for b in knowledge.beliefs if b.belief_id == "b-tavi-1")
+    assert admit_belief(belief, knowledge, CONTROLS) is belief
 
 
 def test_b_the_liar_remembers_sending_the_lie():
@@ -237,21 +245,27 @@ def test_l_a_sent_letter_appears_when_sent_and_reveals_nothing_on_delivery():
 
 # --- K: told-about is not traversal ---------------------------------------------------------
 
-def test_k_a_false_membership_is_only_a_held_proposition():
+def _cult_rumour(ruled: bool) -> Knowledge:
     cult = actor("cult", "group")
-    in_cult = Subject("instance", str(cult))
-    knowledge = betrayal_knowledge(
+    return betrayal_knowledge(
         propositions=[Proposition(C, "orrin-in-cult", "Orrin serves the cult", at(3), "director",
-                                  about=(Subject("instance", str(ORRIN)), in_cult))],
-        rulings=[Ruling(C, "rule-cult", "orrin-in-cult", "refuted", at(3), "director")],
+                                  about=(Subject("instance", str(ORRIN)), Subject("instance", str(cult))))],
+        rulings=[Ruling(C, "rule-cult", "orrin-in-cult", "refuted", at(3), "director")] if ruled else [],
         events=[Event(C, "cult-rite", "CULT-SECRET", at(2), "director", participants=(cult, WREN))],
         evidence=[told("r-cult", TAVI, "orrin-in-cult", 3, sender=INES, attributed_to=INES,
                        addressed=True, sent_at=3)],
     )
+
+
+def test_k_a_false_membership_is_only_a_held_proposition():
+    in_cult = Subject("instance", str(actor("cult", "group")))
+    knowledge = _cult_rumour(ruled=True)
     about = knowledge_about(knowledge, TAVI, in_cult, as_of=5)
     assert [e.evidence_id for e in about.evidence] == ["r-cult"]
     assert about.current == about.history == about.sent == ()
     assert leaks(about, "CULT-SECRET", "cult-rite", "refuted", "wren") == []
+    assert standing(knowledge, "orrin-in-cult", as_of=5) == "refuted"
+    assert standing(_cult_rumour(ruled=False), "orrin-in-cult", as_of=5) == "reported"
 
 
 def test_k_unknown_and_unheld_subjects_are_indistinguishable():
@@ -287,6 +301,20 @@ def test_an_actor_projection_depends_only_on_its_own_records():
         disclosures=[disclosure("d-1", 2)],
     )
     assert actor_knowledge(noisy, TAVI, as_of=9) == base
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_projections_are_equal_for_shuffled_inputs(seed):
+    records = betrayal_records()
+    shuffled = {family: random.Random(seed).sample(items, len(items)) for family, items in records.items()}
+    one, two = Knowledge(C, **records), Knowledge(C, **shuffled)
+    for who in CAST:
+        assert actor_knowledge(one, who, as_of=9) == actor_knowledge(two, who, as_of=9)
+        assert knowledge_about(one, who, BETRAYAL, as_of=9) == knowledge_about(two, who, BETRAYAL, as_of=9)
+    assert director_knowledge(one, as_of=9, requested_by=DIRECTOR) == \
+        director_knowledge(two, as_of=9, requested_by=DIRECTOR)
+    assert player_knowledge(one, "player-one", CONTROLS, as_of=9) == \
+        player_knowledge(two, "player-one", CONTROLS, as_of=9)
 
 
 def test_director_records_are_ordered_by_moment_then_id():
