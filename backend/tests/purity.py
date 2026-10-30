@@ -97,6 +97,10 @@ PURE_PACKAGES = (
     PurePackage("grimoire.core.inference", ("grimoire.core.inference",)),
     PurePackage("grimoire.intent", ("grimoire.intent",)),
     PurePackage("grimoire.security", ("grimoire.security",)),
+    # Voice evidence: shares the gate's text matcher so screening and scoring agree.
+    PurePackage("grimoire.voice", ("grimoire.voice", "grimoire.core", "grimoire.evals.text",
+                                   "grimoire.evals.checks"),
+                never_import=("grimoire.core.inference",)),
     # Offline evaluation: independent of the domain core; only its loader and CLI read files.
     PurePackage("grimoire.evals", ("grimoire.evals",),
                 io_modules=frozenset({"loader.py", "story_quality.py"}),
