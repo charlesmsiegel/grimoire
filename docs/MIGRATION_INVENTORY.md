@@ -53,7 +53,7 @@ Parsed files are capped at 16 MiB; a larger one is still hashed but blocks as `t
 
 ## Format contract
 
-V0.2.1 records no layout version, so the scanner asserts the `grimoire-0.2.1` contract (git tag `0.2.1`) and reports deviations. A root needs `worlds/` or `campaigns/`. `inference_format` above `2` in `config.md` or a `campaign.md` is `newer_format` (blocking). A campaign whose `world_copy` is not `overlay` is a legacy full-copy campaign: overlay rules are **not** applied to it, and its inheritance is `unresolved`. Legacy real-date scene names are reported, not renamed. V1's own rules are ported, not approximated:
+V0.2.1 records no layout version, so the scanner asserts the `grimoire-0.2.1` contract (git tag `0.2.1`) and reports deviations. A root needs `worlds/` or `campaigns/`. An `inference_format` other than `1` or `2` in `config.md` or a `campaign.md` is `newer_format` (blocking; V1 only writes `2`, so anything else fails closed). A campaign whose `world_copy` is not `overlay` is a legacy full-copy campaign: overlay rules are **not** applied to it, and its inheritance is `unresolved`. Legacy real-date scene names are reported, not renamed. V1's own rules are ported, not approximated:
 
 - **Frontmatter:** exact port of V1's parser (string scalars, comma lists, CRLF fences, `{}` when unterminated).
 - **Text and hashes:** strict UTF-8 with universal newlines. Every V1 hash (card, persona, flat record, actor directory, sync and appearance bases) is sha256 of that normalized text, so a CRLF copy hashes as V1 hashed it. Invalid UTF-8 or JSON is a finding, never a crash.
@@ -71,7 +71,7 @@ Deterministic JSON: sorted keys and lists, ASCII escapes, no timestamps. Absolut
 | `source_fingerprint` | sha256 of canonical JSON of every non-excluded entry's `[path, disposition, size, sha256]` |
 | `entries` | Every entry: verbatim relative path, `legacy_id` (or null), kind, disposition, layout family, size, sha256, reason |
 | `worlds`, `records`, `actors`, `campaigns`, `scenes` | V1 content by V1 coordinates. Records carry resolved/dangling reference fields, as seen from their scope; a campaign does not see world records it tombstoned or detached. Actors carry portrayals (versions) with label, card spec, greeting count and `v1_hash` (V1's `card_hash` or `version_hash`). Campaigns carry ledgers, appearances and per-record inheritance (below). Scenes carry ordered posts with speaker, role, post id and content digest. |
-| `images` | `objects` (opaque `px1-` ids; pixels never re-verified), `blobs`, `placements` (owner, slot, focus, status), `legacy_images`, `expression_layers`, `collections`, `campaign_layering` (inherited / overridden / focus override / hidden), Markdown `references`, `referenced_objects` |
+| `images` | `objects` (every sidecar, opaque `px1-` ids, pixels never re-verified; `addressable: false` for one outside V1's `objects/<id[4:6]>/` path, which V1 never reads), `blobs`, `placements` (owner, slot, focus, status), `legacy_images`, `expression_layers`, `collections`, `campaign_layering` (inherited / overridden / focus override / hidden), Markdown `references`, `referenced_objects` |
 | `identity_candidates` | Proposed V2 identities, below |
 | `findings` | `{code, severity, paths, detail}` |
 | `losses` | Recognized but unsupported content, with counts where cheap |
@@ -114,7 +114,7 @@ Candidates are **proposals**, never a mapping, and they are unpinned: the import
 **Blocking:**
 - `refused_entry`, `mount_point`, `unreadable`, `too_large`, `uninterpreted`: the walk could not read part of the source faithfully.
 - `case_variant_name`: an unrecognized entry whose path differs only in letter case from a name V1 uses, such as `Deleted.json` or `Image-Refs`. On a case-insensitive filesystem V1 would honour it.
-- `newer_format`: a settings format newer than 0.2.1.
+- `newer_format`: a settings format other than 0.2.1's.
 - `invalid_ledger`: a campaign ledger cannot be trusted.
 - `blob_hash_mismatch`: a blob's bytes do not match its name.
 
