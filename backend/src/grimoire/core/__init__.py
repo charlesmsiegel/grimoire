@@ -133,6 +133,7 @@ from .entity import (
     propose_damage,
 )
 from .json_value import JsonObject
+from .roster import CampaignRoster, ControlProblem, UnknownInstance
 from .resolve import MissingDefinition, actor_view
 
 __all__ = [
@@ -164,4 +165,5 @@ __all__ = [
     "EffectiveEntity", "EntityDefinition", "EntityError", "EntityInstance", "Integrity",
     "can_be_addressed", "can_be_carried", "can_be_damaged", "can_be_heard", "effective_entity",
     "entity_from_character", "instance_from_actor", "integrity", "is_agent", "propose_damage",
+    "CampaignRoster", "ControlProblem", "UnknownInstance",
 ]
