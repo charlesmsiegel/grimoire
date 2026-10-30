@@ -50,6 +50,13 @@ def count(value: object, label: str, minimum: int = 0) -> int:
     return value
 
 
+def identifier(value: object, label: str, error: type[ValueError] = ValueError) -> str:
+    """A nonempty, non-blank string id."""
+    if not isinstance(value, str) or not value.strip():
+        raise error(f"{label} must be a nonempty string, not {value!r}")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class InferencePolicy:
     """Opt-in optional stages and their per-turn call caps.

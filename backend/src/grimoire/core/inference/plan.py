@@ -17,7 +17,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from .policy import InferencePolicy, InferenceStage, coerce_stage, count
+from .policy import InferencePolicy, InferenceStage, coerce_stage, count, identifier
 
 DeclineReason = Literal["disabled", "cap_reached"]
 DECLINE_REASONS: frozenset[str] = frozenset({"disabled", "cap_reached"})
@@ -28,14 +28,8 @@ class InferencePlanError(ValueError):
     """The caller asked for something no plan may contain; nothing was planned."""
 
 
-def _id(value: object, label: str, error: type[ValueError] = ValueError) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise error(f"{label} must be a nonempty string, not {value!r}")
-    return value
-
-
 def _optional_id(value: object, label: str) -> str | None:
-    return None if value is None else _id(value, label)
+    return None if value is None else identifier(value, label)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +46,7 @@ class OptionalRequest:
             raise InferencePlanError(f"{stage} is planned from speakers, not requested")
         object.__setattr__(self, "stage", stage)
         _optional_id(self.actor_id, "actor_id")
-        _id(self.purpose, "purpose")
+        identifier(self.purpose, "purpose")
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +62,7 @@ class CallId:
 
     def __post_init__(self) -> None:
         for label in ("campaign_id", "turn_id", "phase"):
-            _id(getattr(self, label), label)
+            identifier(getattr(self, label), label)
         object.__setattr__(self, "stage", coerce_stage(self.stage))
         _optional_id(self.actor_id, "actor_id")
         count(self.ordinal, "ordinal", minimum=1)
@@ -82,7 +76,7 @@ class PlannedCall:
     def __post_init__(self) -> None:
         if not isinstance(self.call_id, CallId):
             raise ValueError("a planned call needs a CallId")
-        _id(self.purpose, "purpose")
+        identifier(self.purpose, "purpose")
 
     @property
     def stage(self) -> InferenceStage:
@@ -100,7 +94,7 @@ class DeclinedRequest:
     reason: DeclineReason
 
     def __post_init__(self) -> None:
-        _id(self.phase, "phase")
+        identifier(self.phase, "phase")
         if not isinstance(self.request, OptionalRequest):
             raise ValueError("a declined request needs an OptionalRequest")
         if self.reason not in DECLINE_REASONS:
@@ -136,14 +130,14 @@ class TurnInferencePlan:
             raise InferencePlanError(str(error)) from error
 
     def _validate(self) -> None:
-        _id(self.campaign_id, "campaign_id")
-        _id(self.turn_id, "turn_id")
+        identifier(self.campaign_id, "campaign_id")
+        identifier(self.turn_id, "turn_id")
         if not isinstance(self.policy, InferencePolicy):
             raise InferencePlanError("policy must be an InferencePolicy")
         for actor in self.present_actor_ids | self.player_controlled_ids:
-            _id(actor, "actor id")
+            identifier(actor, "actor id")
         for phase in self.phases:
-            _id(phase, "phase")
+            identifier(phase, "phase")
         if len(set(self.phases)) != len(self.phases):
             raise InferencePlanError(f"repeated phase in {self.phases!r}")
         if len(self.call_ids) != len(self.calls):
@@ -235,7 +229,7 @@ class TurnInferencePlan:
         optional_requests: Iterable[OptionalRequest] = (),
     ) -> TurnInferencePlan:
         """Plan another step of this turn under the same policy and caps."""
-        _id(phase, "phase", InferencePlanError)
+        identifier(phase, "phase", InferencePlanError)
         if phase in self.phases:
             raise InferencePlanError(f"phase {phase!r} was already planned")
         speakers = tuple(speaking_npc_ids)
@@ -244,7 +238,7 @@ class TurnInferencePlan:
         # Validate everything before consulting the policy.
         seen: set[str] = set(self.generated_actor_ids)
         for speaker in speakers:
-            _id(speaker, "speaker id", InferencePlanError)
+            identifier(speaker, "speaker id", InferencePlanError)
             if speaker in seen:
                 raise InferencePlanError(f"{speaker!r} already has a contribution this turn")
             seen.add(speaker)

@@ -21,9 +21,22 @@ from .policy import (
     InferenceStage,
     coerce_stage,
 )
+from .usage import (
+    TOKEN_FIELDS,
+    CallAttempt,
+    Measurement,
+    SessionUsage,
+    TokenUsage,
+    TurnUsageLedger,
+    TurnUsageSummary,
+    UnplannedCallError,
+    UsageTotals,
+)
 
 __all__ = [
     "BASELINE_STAGES", "OPTIONAL_STAGES", "InferencePolicy", "InferenceStage",
     "coerce_stage", "CallId", "DeclinedRequest", "InferencePlanError", "OptionalRequest",
-    "PlannedCall", "TurnInferencePlan", "plan_turn",
+    "PlannedCall", "TurnInferencePlan", "plan_turn", "TOKEN_FIELDS", "CallAttempt",
+    "Measurement", "SessionUsage", "TokenUsage", "TurnUsageLedger", "TurnUsageSummary",
+    "UnplannedCallError", "UsageTotals",
 ]
