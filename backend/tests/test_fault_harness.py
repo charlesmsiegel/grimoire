@@ -143,6 +143,10 @@ def test_plan_validation():
         Target("remove", nth=0)
     with pytest.raises(ValueError):
         RootedFileOps(Path("."), plan=[Crash(0), Fail(1)])
+    with pytest.raises(ValueError):
+        Fail(0, error=RuntimeError("not an OSError"))
+    with pytest.raises(ValueError):
+        Interleave(0, action="not callable")
 
 
 def test_descriptors_are_root_relative_and_fixed_format(tmp_path):
@@ -186,10 +190,32 @@ def test_links_inside_root_are_rejected_even_when_dotted_away(tmp_path):
     (root / "sub").mkdir(parents=True)
     _symlink_or_skip(outside / "..", root / "sub" / "link")
     ops = RootedFileOps(root, record=False)
-    for path in ("sub/link/x", "sub/link/../x"):
+    for path in ("sub/link/x", "sub/link/../x", "sub/missing/../link/x"):
         with pytest.raises(SandboxViolation):
             ops.write_bytes(path, b"x")
-    assert not (tmp_path / "x").exists()
+    assert not (tmp_path / "x").exists() and os.listdir(outside) == []
+
+
+def test_exists_through_a_file_and_makedirs_of_root_behave_like_the_os(tmp_path):
+    ops = RootedFileOps(tmp_path)
+    ops.write_bytes("a.json", b"{}")
+    assert ops.exists("a.json/child") is False
+    ops.make_dirs(tmp_path)  # idiomatic and harmless
+    assert ops.sandbox_violation is None and ops.shadow == {"a.json": b"{}"}
+
+
+def test_harness_refuses_to_wipe_a_root_it_did_not_create(tmp_path):
+    (tmp_path / "root").mkdir()
+    (tmp_path / "root" / "precious.txt").write_bytes(b"synthetic")
+    with pytest.raises(ValueError):
+        explore_crashes(scenario(journaled_publish(NEW)), tmp_path)
+    assert (tmp_path / "root" / "precious.txt").exists()
+
+
+def test_torn_target_skips_ineligible_matches(tmp_path):
+    run = run_with_fault(scenario(naive_read_modify_write, discard_staging, invariants=()),
+                         [Crash(Target(path="a.json.*"), "torn")], tmp_path)
+    assert run.fired and run.point.startswith("action:#2 write_bytes a.json.~tmp1.new") and run.violations == ()
 
 
 def test_harness_temp_names_are_deterministic(tmp_path):
@@ -327,7 +353,11 @@ def test_a6_dead_process_cleanup_does_nothing_and_swallowing_is_named(tmp_path):
     converted = run_with_fault(scenario(converts, discard_staging), crash, tmp_path / "converts")
     assert converted.action_outcome == "crashed" and converted.violations == ()
     swallowed = run_with_fault(scenario(swallows, discard_staging), crash, tmp_path / "swallows")
-    assert names(swallowed.violations) == ["simulated crash propagated"]
+    assert [(v.invariant, v.point) for v in swallowed.violations] == [
+        ("simulated crash propagated", "action:#2 replace a.json.~tmp1.new -> a.json @before")]
+    report = explore_crashes(scenario(swallows, discard_staging), tmp_path / "explore")
+    points = [v.point for v in report.violations if v.invariant == "simulated crash propagated"]
+    assert len(points) == len(set(points)) > 1
 
 
 def test_a7_runaway_writer_is_bounded_by_name(tmp_path):
@@ -377,11 +407,12 @@ def test_a9_interleaved_external_edit_is_lost_and_named(tmp_path):
             return "the concurrent external edit was overwritten"
         return None
 
+    invariants = (Invariant("external edit preserved", preserved), atomic_outcome())
     run = run_with_fault(
-        scenario(naive_read_modify_write, discard_staging, invariants=(Invariant("external edit preserved", preserved),)),
+        scenario(naive_read_modify_write, discard_staging, invariants=invariants),
         [Interleave(Target("replace"), external_edit)], tmp_path,
     )
-    assert names(run.violations) == ["external edit preserved"]
+    assert names(run.violations) == ["external edit preserved"]  # interleaved paths are not the writer's
     assert all(op.path != "a.json" or op.kind != "write_bytes" for op in run.action_trace)
     assert run.point.endswith("@interleave")
 
@@ -420,7 +451,8 @@ def test_a11_injected_io_error_must_surface(tmp_path):
             pass
 
     hidden = run_with_fault(scenario(hides_errors), [Fail(COMMIT)], tmp_path)
-    assert names(hidden.violations) == ["failure surfaced"]
+    assert [(v.invariant, v.point) for v in hidden.violations] == [
+        ("failure surfaced", "action:#10 replace journal.~tmp1.new -> .journal @fail")]
 
 
 def test_a12_interrupted_recovery_is_explored(tmp_path):
@@ -454,6 +486,36 @@ def test_a13_writes_that_bypass_the_seam_are_named(tmp_path):
     report = explore_crashes(scenario(bypass, invariants=()), tmp_path)
     assert [(v.invariant, v.point) for v in report.violations] == [("all mutations mediated", "baseline")]
     assert "b.json" in report.violations[0].detail
+
+    def bypass_then_replace(ops, root):
+        with open(root / "a.json.tmp", "wb") as handle:
+            handle.write(NEW["a.json"])
+        ops.replace(root / "a.json.tmp", root / "a.json")
+
+    report = explore_crashes(scenario(bypass_then_replace, invariants=()), tmp_path)
+    assert names(report.violations) == ["all mutations mediated"]
+
+
+def test_baseline_must_complete_and_mutate(tmp_path):
+    def raises(ops, root):
+        ops.write_bytes(root / "a.json", NEW["a.json"])
+        raise RuntimeError("synthetic writer bug")
+
+    def reads_only(ops, root):
+        ops.read_bytes(root / "a.json")
+
+    for action, detail in ((raises, "synthetic writer bug"), (reads_only, "no mutating")):
+        report = explore_crashes(scenario(action, invariants=()), tmp_path)
+        assert [(v.invariant, v.point) for v in report.violations] == [("baseline completes", "baseline")]
+        assert detail in report.violations[0].detail and report.points_explored == 0
+
+
+def test_combined_plan_is_labelled_by_its_crash(tmp_path):
+    plan = [Interleave(0, lambda ops, root: None), Crash(Target("replace", target="*.json"), "after")]
+    run = run_with_fault(scenario(journaled_publish(NEW), rollback_recover,
+                                  invariants=(completes_after(COMMIT),)), plan, tmp_path)
+    assert run.point == "action:#11 replace a.json.~tmp1.new -> a.json @after"
+    assert names(run.violations) == ["completes_after"]
 
 
 def replica_scenario(guarded, meddle=True):

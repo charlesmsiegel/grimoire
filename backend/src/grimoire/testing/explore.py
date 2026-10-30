@@ -17,13 +17,14 @@ from pathlib import Path
 
 from .faults import (
     At, Crash, Fail, Fault, FileOp, OperationBudgetExceeded, RootedFileOps, SimulatedCrash,
-    nth_match,
+    nth_match, validate_plan,
 )
 from .fileops import FileOps, SandboxViolation, Tree, snapshot, wipe
 
 Phase = Callable[[FileOps, Path], object]
 
 _MISSING = object()
+_ROOT_MARKER = ".grimoire-fault-harness-root"
 
 # Harness invariant names (always checked).
 BASELINE_COMPLETES = "baseline completes"
@@ -53,6 +54,7 @@ class CrashOutcome:
     after_action: Tree = field(default_factory=dict)
     after_meddle: Tree = field(default_factory=dict)
     meddled_paths: frozenset[str] = frozenset()
+    interleaved_paths: frozenset[str] = frozenset()
     action_outcome: str = "returned"
     action_index: int | None = None
     action_timing: str | None = None
@@ -137,6 +139,11 @@ def _without(tree: Tree, excluded: frozenset[str]) -> Tree:
     return {key: value for key, value in tree.items() if key not in excluded}
 
 
+def _external(outcome: CrashOutcome) -> frozenset[str]:
+    """Paths edited by a meddle or an interleave: their content is not the writer's."""
+    return outcome.meddled_paths | outcome.interleaved_paths
+
+
 def _difference(actual: Tree, expected: Tree, limit: int = 4) -> str:
     keys = sorted(key for key in set(actual) | set(expected)
                   if actual.get(key, _MISSING) != expected.get(key, _MISSING))
@@ -158,7 +165,7 @@ def _show(value: object) -> str:
 
 def atomic_outcome() -> Invariant:
     def check(outcome: CrashOutcome) -> str | None:
-        excluded = outcome.meddled_paths
+        excluded = _external(outcome)
         recovered = _without(outcome.recovered, excluded)
         before, completed = _without(outcome.before, excluded), _without(outcome.completed, excluded)
         if recovered in (before, completed):
@@ -192,7 +199,7 @@ def completes_after(at: At) -> Invariant:
         index, timing = outcome.action_index, outcome.action_timing
         if index is None or index < commit or (index == commit and timing != "after"):
             return None
-        excluded = outcome.meddled_paths
+        excluded = _external(outcome)
         recovered, completed = _without(outcome.recovered, excluded), _without(outcome.completed, excluded)
         if recovered == completed:
             return None
@@ -285,14 +292,15 @@ class _Run:
             self.flag(SANDBOX, str(error))
             raise _Abort from error
 
-    def run_phase(self, ops: RootedFileOps, function: Phase) -> _Phase:
+    def run_phase(self, ops: RootedFileOps, function: Phase,
+                  relabel: Callable[[], str] | None = None) -> _Phase:
         returned, error = True, None
         try:
             function(ops, Path(self.root))
-        except (SimulatedCrash, OperationBudgetExceeded) as exc:
+        except (SimulatedCrash, OperationBudgetExceeded, Exception) as exc:
             returned, error = False, repr(exc)
-        except Exception as exc:
-            returned, error = False, repr(exc)
+        if relabel is not None:  # name the fault point before flagging anything
+            self.point = relabel()
         if ops.interleave_error is not None:
             raise ops.interleave_error
         if ops.sandbox_violation is not None:
@@ -318,9 +326,13 @@ class _Run:
 
     # the run ---------------------------------------------------------------
     def execute(self) -> FaultRun:
-        root_dir = self.workdir / "root"
+        root_dir, marker = self.workdir / "root", self.workdir / _ROOT_MARKER
+        if os.path.lexists(root_dir) and not marker.exists():
+            raise ValueError(f"refusing to wipe {root_dir}: not created by the fault harness")
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        marker.touch()
         wipe(root_dir)
-        root_dir.mkdir(parents=True)
+        root_dir.mkdir()
         self.root = Path(os.path.realpath(root_dir))
         try:
             self._execute()
@@ -334,8 +346,7 @@ class _Run:
         self.snap("before")
 
         self.action_ops = self.ops("action", self.action_plan)
-        self.action = self.run_phase(self.action_ops, self.scenario.action)
-        self.point = self._point()
+        self.action = self.run_phase(self.action_ops, self.scenario.action, self._point)
         after_action = self.check_mediated(self.action_ops, "after_action")
         self._check_action()
 
@@ -350,13 +361,14 @@ class _Run:
         )
 
         if self.recover_plan:
-            self.recover_ops = self.ops("recover", self.recover_plan)
-            faulted = self.run_phase(self.recover_ops, self.scenario.recover)
-            self.point = f"{self.point} > {self._fault_label(self.recover_ops)}"
-            self._check_fired(self.recover_ops)
-            self._check_deterministic(self.recover_ops, self.expected_recover or ())
-            self.check_mediated(self.recover_ops, "after_faulted_recover")
-            if faulted.outcome != "crashed":
+            recover_ops = self.recover_ops = self.ops("recover", self.recover_plan)
+            action_point = self.point
+            faulted = self.run_phase(recover_ops, self.scenario.recover,
+                                     lambda: f"{action_point} > {self._fault_label(recover_ops)}")
+            self._check_fired(recover_ops)
+            self._check_deterministic(recover_ops, self.expected_recover or ())
+            self.check_mediated(recover_ops, "after_faulted_recover")
+            if faulted.outcome == "raised":
                 self._recovery_failed(faulted)
         else:
             self.recover_ops = self._clean_recover("recovered")
@@ -387,10 +399,11 @@ class _Run:
 
     @staticmethod
     def _fault_label(ops: RootedFileOps) -> str:
-        if ops.fault_index is None:
-            return f"{ops.phase}:(planned fault not reached)"
-        timing = ops.fault_timing or "interleave"
-        return f"{ops.phase}:{ops.trace[ops.fault_index].describe()} @{timing}"
+        if ops.crash_index is not None:
+            return f"{ops.phase}:{ops.trace[ops.crash_index].describe()} @{ops.fault_timing}"
+        if ops.fault_index is not None:
+            return f"{ops.phase}:{ops.trace[ops.fault_index].describe()} @interleave"
+        return f"{ops.phase}:(planned fault not reached)"
 
     def _check_action(self) -> None:
         assert self.action_ops is not None
@@ -435,8 +448,9 @@ class _Run:
             after_action=normalize(self.trees["after_action"]),
             after_meddle=normalize(self.trees["after_meddle"]),
             meddled_paths=self.meddled,
+            interleaved_paths=frozenset(action_ops.interleaved_paths),
             action_outcome=self.action.outcome,
-            action_index=action_ops.fault_index if self.baseline else None,
+            action_index=action_ops.crash_index if self.baseline else None,
             action_timing=action_ops.fault_timing if self.baseline else None,
             baseline_trace=self.baseline.action_trace if self.baseline else tuple(action_ops.trace),
         )
@@ -475,6 +489,7 @@ def _run(scenario: CrashScenario, workdir: Path, *, action_plan: Sequence[Fault]
 def run_with_fault(scenario: CrashScenario, plan: Sequence[Fault], workdir: Path, *,
                    max_ops: int = 10_000) -> FaultRun:
     """Run the baseline, then one run under ``plan``; returns the baseline if it failed."""
+    plan = validate_plan(plan)
     baseline = _run(scenario, workdir, max_ops=max_ops)
     if baseline.violations:
         return baseline

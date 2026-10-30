@@ -33,7 +33,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04]
-        python: ["3.11", "3.12", "3.13"]
+        python: ["3.12", "3.13"]  # 3.11 on Ubuntu is the domain job
         include:
           - os: macos-latest
             python: "3.11"

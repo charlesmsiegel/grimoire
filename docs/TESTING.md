@@ -2,7 +2,7 @@
 
 V2 data is long-lived, local-first and human-editable, so the expensive failures are partial writes, mistaken identity, stale views, private-knowledge leaks and runs that cannot be recovered. This page lists the invariants that protect against those failures and the test that proves each one. It also describes the fault-injection harness and what it does **not** simulate.
 
-Run everything with `python -m pytest backend/tests -q`. CI runs this on Python 3.11 (`domain` job), plus an advisory `compat` matrix: Python 3.11, 3.12 and 3.13 on Ubuntu, and 3.11 on macOS and Windows. A green suite proves these contracts; it does not mean a playable app exists.
+Run everything with `python -m pytest backend/tests -q`. CI runs this on Python 3.11 on Ubuntu (`domain` job), plus an advisory `compat` matrix: Python 3.12 and 3.13 on Ubuntu, and 3.11 on macOS and Windows. A green suite proves these contracts; it does not mean a playable app exists.
 
 ## Fault-injection harness (`grimoire.testing`)
 
@@ -36,7 +36,7 @@ Expected additions are `stat` or a content-hash read, exclusive create, and lock
 4. runs the optional `meddle` (an edit made while the process is down; never in the baseline);
 5. runs `recover` twice, as a fresh process with no shared memory.
 
-`explore_crashes` first runs a fault-free **baseline**. It then crashes each mutating operation `before` and `after`, `torn`-writes each non-empty write, and with `errors=True` injects `Fail`. With `recovery_crashes=True` it also crashes each recovery operation (depth 2). Point names are unique, for example `action:#11 replace a.json.~tmp1.new -> a.json @after > recover:#2 remove .journal @before`. A failure is a `Violation(invariant, point, detail, trace)`, and `CrashReport.assert_ok()` lists every violation by name.
+`explore_crashes` first runs a fault-free **baseline**. It then crashes each mutating operation `before` and `after`, `torn`-writes each non-empty write, and with `errors=True` injects `Fail`. With `recovery_crashes=True` it also crashes each recovery operation (depth 2). A point is named by its Crash/Fail operation (or by the interleaved operation when the plan has no crash). Paths written by an `Interleave` or a `meddle` are excluded from `atomic_outcome` and `completes_after`, because that content is not the writer's. The harness refuses to wipe a pre-existing `<workdir>/root` that it did not create. Point names are unique, for example `action:#11 replace a.json.~tmp1.new -> a.json @after > recover:#2 remove .journal @before`. A failure is a `Violation(invariant, point, detail, trace)`, and `CrashReport.assert_ok()` lists every violation by name.
 
 The harness provides no clocks, randomness or IDs. A consumer must inject seeded ones. `normalize` applies to trees only, so digest determinism stays strict.
 
@@ -44,7 +44,7 @@ The harness provides no clocks, randomness or IDs. A consumer must inject seeded
 
 | Invariant | Meaning | Proven by |
 |---|---|---|
-| `baseline completes` | The fault-free action returns and mutates something. | `backend/tests/test_fault_harness.py::test_a7_runaway_writer_is_bounded_by_name` (baseline point), `backend/tests/test_fault_harness.py::test_a13_writes_that_bypass_the_seam_are_named` |
+| `baseline completes` | The fault-free action returns and mutates something. | `backend/tests/test_fault_harness.py::test_baseline_must_complete_and_mutate` |
 | `planned fault fired` | Every planned fault actually triggered, so there are no false passes. | `backend/tests/test_fault_harness.py::test_a8_a_fault_that_never_fires_fails` |
 | `deterministic action` | The faulted trace prefix, write digests included, equals the baseline. | `backend/tests/test_fault_harness.py::test_a4_exploration_is_repeatable_and_nondeterminism_is_named` |
 | `simulated crash propagated` | The writer does not report success after it died. | `backend/tests/test_fault_harness.py::test_a6_dead_process_cleanup_does_nothing_and_swallowing_is_named` |

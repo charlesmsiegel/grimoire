@@ -23,6 +23,7 @@ from .fileops import (
 Timing = Literal["before", "after", "torn"]
 _TIMINGS = ("before", "after", "torn")
 _UNSAFE_NAME_PARTS = ("/", "\\", "..", ":")
+_ABSENT = object()
 
 
 class SimulatedCrash(BaseException):
@@ -120,6 +121,8 @@ class Fail:
 
     def __post_init__(self) -> None:
         _check_at(self.at)
+        if self.error is not None and not isinstance(self.error, OSError):
+            raise ValueError("Fail.error must be an OSError")
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +134,8 @@ class Interleave:
 
     def __post_init__(self) -> None:
         _check_at(self.at)
+        if not callable(self.action):
+            raise ValueError("Interleave.action must be callable")
 
 
 Fault = Union[Crash, Fail, Interleave]
@@ -200,8 +205,10 @@ class RootedFileOps:
         self.crashed = False
         self.failed = False
         self.dead = False
-        self.fault_index: int | None = None
+        self.fault_index: int | None = None  # earliest fired fault of any kind
+        self.crash_index: int | None = None  # the fired Crash or Fail
         self.fault_timing: str | None = None
+        self.interleaved_paths: set[str] = set()
         self.interleave_error: Exception | None = None
         self._fired = [False] * len(self.plan)
         self._matches = [0] * len(self.plan)
@@ -218,7 +225,7 @@ class RootedFileOps:
         return tuple(fault for fault, fired in zip(self.plan, self._fired) if not fired)
 
     # -- confinement ---------------------------------------------------
-    def _resolve(self, path: PathArg, *, mutating: bool) -> str:
+    def _resolve(self, path: PathArg, *, mutating: bool, allow_root: bool = False) -> str:
         if self.dead:
             raise SimulatedCrash("operation attempted after the simulated process died")
         raw = os.fspath(path)
@@ -229,15 +236,16 @@ class RootedFileOps:
         normalized = os.path.normpath(raw)
         if not self._inside(normalized):
             self._sandbox(f"path escapes test root: {os.fspath(path)!r}")
-        if mutating and os.path.normcase(normalized) == os.path.normcase(self.root):
+        if mutating and not allow_root and os.path.normcase(normalized) == os.path.normcase(self.root):
             self._sandbox("refusing to mutate the test root itself")
-        # Walk the *raw* components so that ``link/../x`` is caught at ``link``.
-        prefix = ""
-        for part in PurePath(raw).parts:
-            prefix = os.path.join(prefix, part) if prefix else part
-            candidate = os.path.normpath(prefix)
-            if self._inside(candidate, strict=True) and is_link(prefix):
-                self._sandbox(f"link inside test root: {self._rel(candidate)}")
+        # The normalized path is what executes; the raw walk also catches ``link/../x``.
+        for spelling in (normalized, raw):
+            prefix = ""
+            for part in PurePath(spelling).parts:
+                prefix = os.path.join(prefix, part) if prefix else part
+                candidate = os.path.normpath(prefix)
+                if self._inside(candidate, strict=True) and is_link(prefix):
+                    self._sandbox(f"link inside test root: {self._rel(candidate)}")
         return normalized
 
     def _inside(self, path: str, *, strict: bool = False) -> bool:
@@ -276,6 +284,7 @@ class RootedFileOps:
             self.trace.append(op)
         interleaves, fatal = self._match(op)
         for fault in interleaves:
+            before = snapshot(self.root) if self.record else {}
             try:
                 fault.action(RootedFileOps(self.root, phase=f"{self.phase}-interleave", record=False),
                              Path(self.root))
@@ -285,6 +294,10 @@ class RootedFileOps:
                 raise SimulatedCrash("interleaved action failed") from error
             if self.record:
                 self.shadow = snapshot(self.root)
+                self.interleaved_paths |= {key for key in set(before) | set(self.shadow)
+                                           if before.get(key, _ABSENT) != self.shadow.get(key, _ABSENT)}
+        if fatal is not None:
+            self.crash_index = op.index
         if isinstance(fatal, Fail):
             self.failed = True
             self.fault_timing = "fail"
@@ -315,6 +328,8 @@ class RootedFileOps:
         for i, fault in enumerate(self.plan):
             if self._fired[i]:
                 continue
+            if not _eligible(fault, op):
+                continue
             if isinstance(fault.at, Target):
                 if not fault.at.matches(op):
                     continue
@@ -322,8 +337,6 @@ class RootedFileOps:
                 if self._matches[i] != fault.at.nth:
                     continue
             elif fault.at != op.index:
-                continue
-            if not _eligible(fault, op):
                 continue
             self._fired[i] = True
             if self.fault_index is None:
@@ -346,12 +359,18 @@ class RootedFileOps:
             assert target is not None
             source, destination = self._rel(path), self._rel(target)
             if source != destination:
-                self.shadow[destination] = self.shadow.pop(source)
+                moved = self.shadow.pop(source, _ABSENT)
+                if moved is _ABSENT:  # source made outside the seam: mediation check reports it
+                    self.shadow.pop(destination, None)
+                else:
+                    self.shadow[destination] = moved
         elif kind == "remove":
             self.shadow.pop(self._rel(path), None)
         elif kind == "make_dirs":
             parts = PurePath(self._rel(path)).parts
             for i in range(1, len(parts) + 1):
+                if parts[:i] == (".",):
+                    continue
                 self.shadow.setdefault(PurePath(*parts[:i]).as_posix(), None)
 
     # -- the FileOps protocol -------------------------------------------
@@ -403,5 +422,5 @@ class RootedFileOps:
         self._op("remove", resolved, execute=lambda: self._os.remove(resolved))
 
     def make_dirs(self, path: PathArg) -> None:
-        resolved = self._resolve(path, mutating=True)
+        resolved = self._resolve(path, mutating=True, allow_root=True)  # makedirs(root) is a no-op
         self._op("make_dirs", resolved, execute=lambda: self._os.make_dirs(resolved))

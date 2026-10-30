@@ -79,7 +79,7 @@ def is_link(path: PathArg) -> bool:
     """True for a symlink or a Windows reparse point such as a junction."""
     try:
         status = os.lstat(path)
-    except FileNotFoundError:
+    except OSError:  # missing, or a path through a regular file
         return False
     if stat.S_ISLNK(status.st_mode):
         return True

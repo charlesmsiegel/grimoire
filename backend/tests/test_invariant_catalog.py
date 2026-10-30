@@ -9,7 +9,7 @@ from grimoire.testing.explore import HARNESS_INVARIANTS
 BACKEND = Path(__file__).resolve().parents[1]
 PACKAGE = BACKEND / "src" / "grimoire"
 CATALOG = BACKEND.parent / "docs" / "TESTING.md"
-CORE_STDLIB = {"__future__", "dataclasses", "typing", "collections", "enum"}
+CORE_STDLIB = {"__future__", "dataclasses", "typing", "collections.abc", "enum"}
 FORBIDDEN_NAMES = {"open", "__import__", "eval", "exec", "compile"}
 BUILT_INS = ("atomic_outcome", "idempotent_recovery", "no_residue", "completes_after", "untouched",
              "preserves_meddle")
@@ -21,7 +21,10 @@ def _imports(tree):
             for alias in node.names:
                 yield 0, alias.name
         elif isinstance(node, ast.ImportFrom):
-            yield node.level, node.module or ""
+            module = node.module or ""
+            yield node.level, module
+            for alias in node.names:  # ``from grimoire import testing``, ``from . import testing``
+                yield node.level, f"{module}.{alias.name}" if module else alias.name
 
 
 def test_core_is_pure():
@@ -29,12 +32,15 @@ def test_core_is_pure():
     for path in sorted((PACKAGE / "core").glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for level, module in _imports(tree):
-            if level == 0 and module.split(".")[0] not in CORE_STDLIB and not module.startswith("grimoire.core"):
+            allowed = module in CORE_STDLIB or any(module.startswith(f"{name}.") for name in CORE_STDLIB)
+            if level == 0 and not allowed and not module.startswith("grimoire.core"):
                 problems.append(f"{path.name} imports {module}")
             if level > 1:
                 problems.append(f"{path.name} imports outside core via relative import")
         problems += [f"{path.name} uses {node.id}" for node in ast.walk(tree)
-                     if isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES]
+                     if isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES | {"builtins"}]
+        problems += [f"{path.name} uses .{node.attr}" for node in ast.walk(tree)
+                     if isinstance(node, ast.Attribute) and node.attr in FORBIDDEN_NAMES]
     assert problems == []
 
 
