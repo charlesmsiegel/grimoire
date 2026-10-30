@@ -10,12 +10,14 @@ from .fragment import (
     DEFAULT_MAX_CHARS, EXAMPLES_HEADER, HEADER, MIN_MAX_CHARS, Omission, SecretFact, SpeakerFragment,
     speaker_fragment,
 )
+from .render import SpeakerRenderer, SpeakerRequest, SpokenLine, render_speakers
 from .profile import (
     ASPECTS, MAX_ANCHOR_CHARS, MAX_EXAMPLE_CHARS, MAX_ITEMS, ImportedVoiceSource, VoiceAnchor,
     VoiceCatalog, VoiceExample, VoiceProfile,
 )
 
 __all__ = [
+    "SpeakerRenderer", "SpeakerRequest", "SpokenLine", "render_speakers",
     "DEFAULT_MAX_CHARS", "EXAMPLES_HEADER", "HEADER", "MIN_MAX_CHARS", "Omission", "SecretFact",
     "SpeakerFragment", "speaker_fragment",
     "ResolvedVoice", "VoiceBinding", "resolve_voice",
