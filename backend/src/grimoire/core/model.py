@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from .identity import InstanceRef, SourceRef, validate_segment
+
 
 def _nonempty(value: str, label: str) -> None:
     if not isinstance(value, str) or not value.strip():
@@ -17,33 +19,21 @@ def _nonempty(value: str, label: str) -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class SourceRef:
-    """Source-qualified identity; names and matching slugs are not identity."""
-
-    source: str
-    kind: str
-    entity_id: str
-    revision: str | None = None
-
-    def __post_init__(self) -> None:
-        for label in ("source", "kind", "entity_id"):
-            _nonempty(getattr(self, label), label)
-        if self.revision is not None:
-            _nonempty(self.revision, "revision")
-
-
-@dataclass(frozen=True, slots=True)
 class CharacterDefinition:
-    """Reusable authoring/portrayal data, not the person's campaign history."""
+    """One revision of reusable authoring/portrayal data, not campaign history.
+
+    Derivation is an explicit ``DefinitionLink``, not a field here.
+    """
 
     ref: SourceRef
     name: str
     description: str = ""
-    derived_from: SourceRef | None = None
 
     def __post_init__(self) -> None:
         if self.ref.kind != "character":
             raise ValueError("a character definition requires kind='character'")
+        if not self.ref.pinned:
+            raise ValueError("a definition is always a specific revision; pin its ref")
         _nonempty(self.name, "name")
 
 
@@ -57,14 +47,18 @@ class CampaignActor:
     local_name: str | None = None
 
     def __post_init__(self) -> None:
-        _nonempty(self.campaign_id, "campaign_id")
-        _nonempty(self.actor_id, "actor_id")
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.actor_id, "actor_id")
         if self.source is not None and self.source.kind != "character":
             raise ValueError("actor source must be a character definition")
         if self.local_name is not None:
             _nonempty(self.local_name, "local_name")
         if self.source is None and self.local_name is None:
             raise ValueError("a campaign-original actor needs a local_name")
+
+    @property
+    def ref(self) -> InstanceRef:
+        return InstanceRef(self.campaign_id, "character", self.actor_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,8 +70,9 @@ class ControlAssignment:
     controller_id: str
 
     def __post_init__(self) -> None:
-        for label in ("campaign_id", "actor_id", "controller_id"):
-            _nonempty(getattr(self, label), label)
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.actor_id, "actor_id")
+        _nonempty(self.controller_id, "controller_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +82,9 @@ class Event:
     campaign_id: str
     event_id: str
     description: str
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +97,10 @@ class Observation:
     channel: str
     perceived: str
 
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.actor_id, "actor_id")
+
 
 @dataclass(frozen=True, slots=True)
 class Belief:
@@ -109,6 +111,10 @@ class Belief:
     proposition: str
     status: Literal["believed", "suspected", "rejected"]
     evidence_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.actor_id, "actor_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,3 +127,4 @@ class ActorView:
     description: str
     observations: tuple[Observation, ...]
     beliefs: tuple[Belief, ...]
+    resolved_source: SourceRef | None = None  # the exact revision this view used
