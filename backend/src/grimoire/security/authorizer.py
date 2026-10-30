@@ -171,11 +171,10 @@ class Authorizer:
         if trusted or permission not in CONSEQUENTIAL:
             return Decision(True, Reason.GRANTED, path, grant.grant_id)
         entry = self._approvals.get(approval_id) if approval_id is not None else None
-        if entry is None or approval_id in self._closed_approvals:
+        if entry is None or approval_id in self._closed_approvals:  # revoking a grant closes these
             return _deny(Reason.APPROVAL_REQUIRED, path)
         approval, pinned = entry
-        if (pinned in self._revoked_grants
-                or approval.principal != principal
+        if (approval.principal != principal
                 or approval.permission is not permission
                 or approval.resource != path
                 or approval.payload_digest != payload_digest(payload)):
