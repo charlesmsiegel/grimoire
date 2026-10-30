@@ -176,9 +176,32 @@ def _parse_user_path(raw: object, home: Path | None, what: str) -> Path:
     return path
 
 
+def _require_os_text(text: str, what: object, *, platform: str | None = None) -> None:
+    """Refuse a name this OS cannot store, the same way on every platform.
+
+    POSIX names are bytes: a name must round-trip ``os.fsencode`` (so Python's
+    surrogate-escaped spelling of an undecodable byte, ``\\udc80``-``\\udcff``,
+    is a real name, but a lone ``\\ud800`` is not). Windows names are UTF-16 and
+    its ``surrogatepass`` encoding would accept a lone surrogate that is not text,
+    so there any surrogate is refused.
+    """
+    platform = _default_platform() if platform is None else platform
+    if platform == "win32":
+        usable = not any("\ud800" <= char <= "\udfff" for char in text)
+    else:
+        try:
+            text.encode("utf-8", "surrogateescape")
+            usable = True
+        except UnicodeEncodeError:
+            usable = False
+    if not usable:
+        raise LibraryPathError(f"{what}: {text!r} cannot be used as a path on this system")
+
+
 def _realpath(path: Path) -> Path:
     """`path` with every existing link followed. Python 3.13's `Path.resolve`
     returns a looping path unchanged, so this asks `realpath` strictly first."""
+    _require_os_text(str(path), path)
     try:
         try:
             return Path(os.path.realpath(path, strict=True))

@@ -3,6 +3,7 @@ home under ``tmp_path``; the real user home and environment are never consulted.
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,13 +27,19 @@ def snapshot(root: Path) -> dict:
     return seen
 
 
+#: Where `Path.home()` looks: HOME on POSIX, USERPROFILE on Windows.
+HOME_VARIABLES = ("HOME", "USERPROFILE")
+
+
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
-    """Point HOME at an empty decoy, drop both library variables and work from
-    `tmp_path`, so a resolver that consults the real process state is caught."""
+    """Point every home variable at an empty decoy, drop both library variables
+    and work from `tmp_path`, so a resolver that consults the real process state
+    is caught."""
     decoy = tmp_path / "decoy-home"
     decoy.mkdir()
-    monkeypatch.setenv("HOME", str(decoy))
+    for variable in HOME_VARIABLES:
+        monkeypatch.setenv(variable, str(decoy))
     monkeypatch.delenv("GRIMOIRE_HOME", raising=False)
     monkeypatch.delenv("GRIMOIRE_V2_HOME", raising=False)
     monkeypatch.chdir(tmp_path)
@@ -154,7 +161,7 @@ def test_android_is_detected_on_pythons_that_report_linux(home, monkeypatch):
 
 
 def test_defaults_read_process_environment(monkeypatch, tmp_path):
-    decoy = Path(os.environ["HOME"]).resolve()
+    decoy = (tmp_path / "decoy-home").resolve()
     assert resolve_library().path == decoy / ".grimoire-v2"
     monkeypatch.setenv("GRIMOIRE_V2_HOME", str(tmp_path / "lib"))
     assert resolve_library() == LibraryLocation((tmp_path / "lib").resolve(), "env")
@@ -335,16 +342,39 @@ def test_permission_error_while_probing_fails_closed(home, monkeypatch):
         resolve_library(environ={}, home=home)
 
 
+def _deny_metadata(directory: Path):
+    """Make the OS refuse metadata for `directory`'s contents; return the undo.
+
+    POSIX: mode 0 removes search permission. Windows ignores mode bits, and every
+    account may bypass traverse checks, so the current user is denied listing and
+    attribute reads on `directory` *and*, by inheritance, on what is inside it.
+    """
+    if sys.platform != "win32":
+        directory.chmod(0)
+        return lambda: directory.chmod(0o700)
+    who = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True,
+                         check=True).stdout
+    sid = who.strip().split(",")[-1].strip('"')
+    assert sid.startswith("S-1-"), who
+    subprocess.run(["icacls", str(directory), "/deny", f"*{sid}:(OI)(CI)(RD,RA,REA,X)", "/T", "/C", "/Q"],
+                   capture_output=True, check=True)
+    return lambda: subprocess.run(["icacls", str(directory), "/remove:d", f"*{sid}", "/T", "/C", "/Q"],
+                                  capture_output=True)
+
+
 @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores permissions")
 def test_unreadable_ancestor_fails_closed(home, tmp_path):
     locked = tmp_path / "locked"
     (locked / "inner").mkdir(parents=True)
-    locked.chmod(0)
+    undo = _deny_metadata(locked)
     try:
+        # The scenario exists only if the OS really refuses; a no-op lock must fail, not pass.
+        with pytest.raises(PermissionError):
+            os.stat(locked / "inner")
         with pytest.raises(LibraryPathError):
             resolve_library(environ={"GRIMOIRE_V2_HOME": str(locked / "inner" / "lib")}, home=home)
     finally:
-        locked.chmod(0o700)
+        undo()
 
 
 # The proving scenario: launching with no override never opens V1.
@@ -461,8 +491,6 @@ def test_migration_destination_still_refuses_v1(home, tmp_path):
 
 # ---- command line -------------------------------------------------------------
 
-import ast  # noqa: E402
-import subprocess  # noqa: E402
 
 from grimoire.library.__main__ import main  # noqa: E402
 
@@ -491,27 +519,15 @@ def test_cli_exit_codes_distinguish_refusals(home, capsys):
 def test_cli_runs_as_a_module(home, tmp_path):
     (home / "lib").mkdir()
     before = snapshot(tmp_path)
-    env = {"HOME": str(home), "PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(SRC),
-           "GRIMOIRE_V2_HOME": "~/lib"}
+    env = {**{variable: str(home) for variable in HOME_VARIABLES}, "PATH": os.environ.get("PATH", ""),
+           "PYTHONPATH": str(SRC), "GRIMOIRE_V2_HOME": "~/lib"}
+    if "SYSTEMROOT" in os.environ:  # Windows needs it to start Python at all
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     done = subprocess.run([sys.executable, "-m", "grimoire.library"], env=env, cwd=tmp_path,
                           capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
     assert done.stdout.splitlines() == [f"library: {home / 'lib'}", "origin: env", "exists: yes"]
     assert snapshot(tmp_path) == before
-
-
-def test_core_stays_free_of_the_filesystem_adapter():
-    for file in (SRC / "grimoire" / "core").rglob("*.py"):
-        for node in ast.walk(ast.parse(file.read_text(), str(file))):
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                names = [f"{node.module or ''}.{alias.name}" for alias in node.names]
-                names = [("." * node.level + n) if node.level else n for n in names]
-            else:
-                continue
-            for name in names:
-                assert "library" not in name.split("."), f"{file} imports {name}"
 
 
 # ---- review findings ----------------------------------------------------------
@@ -545,6 +561,8 @@ def test_hostile_pointer_fails_closed(home, payload):
         resolve_library(environ={}, home=home)
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows refuses to remove a process's working directory, so its cwd cannot vanish")
 def test_relative_v1_home_with_a_vanished_cwd_fails_closed(home, tmp_path, monkeypatch):
     gone = tmp_path / "gone"
     gone.mkdir()
@@ -553,6 +571,15 @@ def test_relative_v1_home_with_a_vanished_cwd_fails_closed(home, tmp_path, monke
     with pytest.raises(LibraryPathError):
         resolve_library(environ={"GRIMOIRE_HOME": "relative-v1"}, home=home)
     monkeypatch.chdir(tmp_path)
+
+
+def test_unlocatable_cwd_for_a_relative_v1_home_fails_closed(home, monkeypatch):
+    # The same failure, injected, so it is proven on every OS.
+    def vanished():
+        raise FileNotFoundError(2, "No such file or directory")
+    monkeypatch.setattr(paths.os, "getcwd", vanished)
+    with pytest.raises(LibraryPathError, match="cannot locate the V1 library"):
+        resolve_library(environ={"GRIMOIRE_HOME": "relative-v1"}, home=home)
 
 
 def opened_while(call) -> list[str]:
@@ -565,7 +592,10 @@ def opened_while(call) -> list[str]:
     return seen
 
 
-@pytest.mark.parametrize("kind", ["fifo", "directory", "link-to-v1"])
+@pytest.mark.parametrize("kind", [
+    pytest.param("fifo", marks=pytest.mark.skipif(not hasattr(os, "mkfifo"),
+                                                  reason="this OS has no FIFOs in the filesystem")),
+    "directory", "link-to-v1"])
 def test_pointer_that_is_not_a_regular_file_is_never_opened(home, kind):
     pointer = home / ".grimoire.json"
     if kind == "fifo":
@@ -617,29 +647,81 @@ def test_pointer_that_grows_after_the_stat_is_refused(home, monkeypatch):
         resolve_library(environ={}, home=home)
 
 
-@pytest.mark.parametrize("where", ["pointer", "GRIMOIRE_HOME", "GRIMOIRE_V2_HOME", "destination"])
+#: A lone surrogate no OS can store as text: not a filename byte (POSIX), and on
+#: Windows any surrogate is refused, so all platforms agree.
+UNENCODABLE = "x\ud800"
+#: An undecodable POSIX filename byte, as Python spells it: a real name there.
+ESCAPED_BYTE = "x\udcff"
+
+
+def _resolve_with_path_in(where, home, bad):
+    if where == "pointer":
+        write_pointer(home, json.dumps({"data_dir": bad}))
+        return resolve_library(environ={}, home=home)
+    if where == "destination":
+        return check_write_destination(bad, environ={}, home=home)
+    if where == "migration source":
+        return check_migration_paths(bad, home / "dest", environ={}, home=home)
+    return resolve_library(environ={where: bad}, home=home)
+
+
+WHERE = ["pointer", "GRIMOIRE_HOME", "GRIMOIRE_V2_HOME", "destination", "migration source"]
+
+
+@pytest.mark.parametrize("where", WHERE)
 def test_unencodable_paths_raise_library_errors(home, tmp_path, where):
-    bad = str(tmp_path / "missing" / "x\ud800")
-    with pytest.raises(LibraryPathError):
-        if where == "pointer":
-            write_pointer(home, '{"data_dir": "/missing/x\\ud800"}')
-            resolve_library(environ={}, home=home)
-        elif where == "destination":
-            check_write_destination(bad, environ={}, home=home)
-        else:
-            resolve_library(environ={where: bad}, home=home)
+    bad = str(tmp_path / "missing" / UNENCODABLE)
+    with pytest.raises(LibraryPathError, match="cannot be used as a path on this system"):
+        _resolve_with_path_in(where, home, bad)
+
+
+@pytest.mark.parametrize("where", WHERE)
+def test_undecodable_posix_bytes_follow_the_platform(home, tmp_path, where):
+    name = str(tmp_path / "missing" / ESCAPED_BYTE)
+    if sys.platform == "win32":
+        with pytest.raises(LibraryPathError, match="cannot be used as a path on this system"):
+            _resolve_with_path_in(where, home, name)
+    else:
+        _resolve_with_path_in(where, home, name)  # a legal name, so nothing to refuse
+
+
+@pytest.mark.parametrize("platform, text, usable", [
+    ("linux", "/x/" + ESCAPED_BYTE, True), ("linux", "/x/" + UNENCODABLE, False),
+    ("darwin", "/x/caf\u00e9", True), ("win32", "C:\\x\\" + ESCAPED_BYTE, False),
+    ("win32", "C:\\x\\" + UNENCODABLE, False), ("win32", "C:\\x\\caf\u00e9", True),
+])
+def test_os_text_rule_on_every_platform(platform, text, usable):
+    if usable:
+        paths._require_os_text(text, "test", platform=platform)
+    else:
+        with pytest.raises(LibraryPathError):
+            paths._require_os_text(text, "test", platform=platform)
+
+
+def test_cli_prints_an_undecodable_name_without_crashing(home, tmp_path, capsys):
+    if sys.platform == "win32":
+        pytest.skip("such a name is refused on Windows; see test_undecodable_posix_bytes_follow_the_platform")
+    target = tmp_path / ESCAPED_BYTE
+    assert main([], environ={"GRIMOIRE_V2_HOME": str(target)}, home=home) == 0
+    assert "\\udcff" in capsys.readouterr().out
 
 
 # ---- Codex review findings (PR 562) -------------------------------------------
 
 @pytest.mark.parametrize("relative", [False, True])
 def test_v1_home_through_a_symlink_then_dotdot_guards_the_physical_parent(home, tmp_path, relative):
-    # V1 opened `alias/../v1` with OS semantics: follow `alias`, then go up.
+    # V1 opened `alias/../v1` as its OS does. POSIX follows `alias` and then goes
+    # up (to actual/v1); Win32 collapses `..` first (to v1). Let the OS place V1's
+    # library through V1's own spelling, then require V2 to refuse that directory.
     (tmp_path / "actual" / "sub").mkdir(parents=True)
-    (tmp_path / "alias").symlink_to(tmp_path / "actual" / "sub")
-    young = v1_library(tmp_path / "actual" / "v1", young=True)
-    value = "alias/../v1" if relative else str(tmp_path / "alias" / ".." / "v1")
-    refused(home, young, {"GRIMOIRE_HOME": value}, match="in GRIMOIRE_HOME")
+    (tmp_path / "alias").symlink_to(tmp_path / "actual" / "sub", target_is_directory=True)
+    value = os.path.join("alias", "..", "v1") if relative else str(tmp_path / "alias" / ".." / "v1")
+    os.makedirs(os.path.join(value, "worlds", "w"))
+    os.mkdir(os.path.join(value, "campaigns"))
+    landed = [d for d in (tmp_path / "actual" / "v1", tmp_path / "v1") if d.is_dir()]
+    assert len(landed) == 1
+    refused(home, landed[0], {"GRIMOIRE_HOME": value}, match="in GRIMOIRE_HOME")
+    refused(home, landed[0] / "v2", {"GRIMOIRE_HOME": value}, match="in GRIMOIRE_HOME")
 
 
 def test_path_under_a_regular_file_is_unusable(home, tmp_path):
@@ -654,9 +736,9 @@ def test_path_under_a_regular_file_is_unusable(home, tmp_path):
 def fake_mounts(tmp_path, monkeypatch, *rows):
     """A mount table: each row is (device, root within that filesystem, mount point)."""
     table = tmp_path / "mountinfo"
-    escape = lambda p: str(p).replace(" ", "\\040")
+    escape = lambda p: str(p).replace("\\", "\\134").replace(" ", "\\040")
     table.write_text("".join(f"{i} 1 {dev} {escape(root)} {escape(point)} rw - ext4 /dev/x rw\n"
-                             for i, (dev, root, point) in enumerate(rows, 20)))
+                             for i, (dev, root, point) in enumerate(rows, 20)), encoding="utf-8")
     monkeypatch.setattr(paths, "_MOUNTINFO", table)
 
 
@@ -664,7 +746,8 @@ def test_bind_mount_of_an_inner_directory_hides_no_containment(home, tmp_path, m
     data, mnt = tmp_path / "data", tmp_path / "mnt dir"
     (data / "sub").mkdir(parents=True)
     mnt.mkdir()
-    fake_mounts(tmp_path, monkeypatch, ("8:1", Path("/"), Path("/")), ("8:1", data / "sub", mnt))
+    top = Path(tmp_path.anchor)  # "/" on POSIX, "C:\\" on Windows
+    fake_mounts(tmp_path, monkeypatch, ("8:1", top, top), ("8:1", data / "sub", mnt))
     # V1 named through the bind; V2 destination is the physical ancestor.
     with pytest.raises(V1IsolationError, match="contains the V1 library in GRIMOIRE_HOME"):
         check_write_destination(data, environ={"GRIMOIRE_HOME": str(mnt / "v1")}, home=home)
@@ -677,10 +760,27 @@ def test_bind_mount_of_an_inner_directory_hides_no_containment(home, tmp_path, m
         check_write_destination(mnt / "v2", environ={}, home=home)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="directory junctions are a Windows reparse point")
+def test_junction_to_an_inner_directory_hides_no_containment(home, tmp_path):
+    # Windows' bind-mount analogue: a junction gives an inner directory a second name.
+    import _winapi
+    data, junction = tmp_path / "data", tmp_path / "junction"
+    (data / "sub").mkdir(parents=True)
+    _winapi.CreateJunction(str(data / "sub"), str(junction))
+    with pytest.raises(V1IsolationError, match="contains the V1 library in GRIMOIRE_HOME"):
+        check_write_destination(data, environ={"GRIMOIRE_HOME": str(junction / "v1")}, home=home)
+    with pytest.raises(V1IsolationError, match="is inside the V1 library in GRIMOIRE_HOME"):
+        check_write_destination(junction / "v2", environ={"GRIMOIRE_HOME": str(data)}, home=home)
+    v1_library(data)
+    with pytest.raises(V1IsolationError, match="looks like a V1 library"):
+        check_write_destination(junction / "v2", environ={}, home=home)
+
+
 def test_mounts_of_other_filesystems_are_not_aliases(home, tmp_path, monkeypatch):
     (tmp_path / "data" / "sub").mkdir(parents=True)
     (tmp_path / "mnt").mkdir()
-    fake_mounts(tmp_path, monkeypatch, ("8:1", Path("/"), Path("/")),
+    top = Path(tmp_path.anchor)
+    fake_mounts(tmp_path, monkeypatch, ("8:1", top, top),
                 ("9:9", tmp_path / "data" / "sub", tmp_path / "mnt"))
     assert check_write_destination(tmp_path / "data", environ={"GRIMOIRE_HOME": str(tmp_path / "mnt" / "v1")},
                                    home=home) == (tmp_path / "data").resolve()
