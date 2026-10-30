@@ -5,7 +5,7 @@
 ## Paths and safety
 
 - **Source:** an explicitly selected frozen V1 **`0.2.1`** library or backup. V1 ordinarily defaults to `~/.grimoire/`. Never read that path implicitly, and never write to its source.
-- **Destination:** V2 desktop default `~/.grimoire-v2/` (V2 override `GRIMOIRE_V2_HOME`) or distinct user-selected location. Android's sandbox has its own default. No automatic `GRIMOIRE_HOME` fallback and no source/destination path aliases.
+- **Destination:** V2 desktop default `~/.grimoire-v2/` (V2 override `GRIMOIRE_V2_HOME`) or distinct user-selected location. Android will default to its app-private area; until then it requires an explicit `GRIMOIRE_V2_HOME`. No automatic `GRIMOIRE_HOME` fallback and no source/destination path aliases.
 - **Authority:** portable native Markdown/JSON, stored scene text, events, typed relations, image placement associations and reviewed mappings. Never import cache, credentials, logs or inferred private details as facts.
 - **Cost:** source scanning, image mapping, graph building and ordinary migration verification do not call paid models. Optional content extraction is explicitly consented and billed.
 
