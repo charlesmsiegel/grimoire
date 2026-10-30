@@ -9,6 +9,7 @@ V2 is a redesign of the **fictional world and actor model**, not a wholesale rep
 - The project's original license and Git history.
 - A pure-Python typed kernel: source-qualified character definitions, independent campaign actors, control assignments, objective events, actor-specific observations/beliefs, and a read-only actor-perspective projection.
 - Small executable tests for source identity, independent campaign continuities, player/NPC role independence and private knowledge boundaries.
+- A deterministic fault-injection test harness (`grimoire.testing`): crash, torn-write, I/O-error and external-edit injection at every file operation of a writer and its recovery, with named invariants. See [docs/TESTING.md](docs/TESTING.md) for the invariant catalog and the fault modes that are not simulated. It is test infrastructure, not a storage implementation.
 - A V2-specific CI workflow for pushes and PRs targeting `v2`.
 - [Architecture](docs/ARCHITECTURE.md), [porting plan](docs/PORTING.md), and [working agreements](AGENTS.md).
 

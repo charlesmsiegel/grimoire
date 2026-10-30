@@ -18,3 +18,5 @@ packages = ["src/grimoire"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# Dumps tracebacks of a hung test; CI job timeouts are the hard stop.
+faulthandler_timeout = 120
