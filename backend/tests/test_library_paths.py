@@ -462,3 +462,58 @@ def test_migration_destination_still_refuses_v1(home, tmp_path):
     v1_library(home / ".grimoire")
     with pytest.raises(V1IsolationError, match="default V1 library"):
         check_migration_paths(source, home / ".grimoire" / "v2", environ={}, home=home)
+
+
+# ---- command line -------------------------------------------------------------
+
+import ast  # noqa: E402
+import subprocess  # noqa: E402
+
+from grimoire.library.__main__ import main  # noqa: E402
+
+SRC = Path(__file__).resolve().parents[1] / "src"
+
+
+def test_cli_reports_location_without_creating_it(home, tmp_path, capsys):
+    before = snapshot(tmp_path)
+    assert main([], environ={}, home=home) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out == [f"library: {home / '.grimoire-v2'}", "origin: default", "exists: no"]
+    assert snapshot(tmp_path) == before
+
+
+def test_cli_exit_codes_distinguish_refusals(home, capsys):
+    assert main([], environ={"GRIMOIRE_V2_HOME": "~/.grimoire"}, home=home) == 3
+    assert "default V1 library" in capsys.readouterr().err
+    assert main([], environ={"GRIMOIRE_V2_HOME": "relative"}, home=home) == 2
+    assert "relative" in capsys.readouterr().err
+    assert main([], environ={}, home=home, platform="android") == 2
+    assert main(["--bogus"], environ={}, home=home) == 2
+    assert main(["--help"], environ={}, home=home) == 0
+    assert "GRIMOIRE_V2_HOME" in capsys.readouterr().out
+
+
+def test_cli_runs_as_a_module(home, tmp_path):
+    (home / "lib").mkdir()
+    before = snapshot(tmp_path)
+    env = {"HOME": str(home), "PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(SRC),
+           "GRIMOIRE_V2_HOME": "~/lib"}
+    done = subprocess.run([sys.executable, "-m", "grimoire.library"], env=env, cwd=tmp_path,
+                          capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == [f"library: {home / 'lib'}", "origin: env", "exists: yes"]
+    assert snapshot(tmp_path) == before
+
+
+def test_core_stays_free_of_the_filesystem_adapter():
+    for file in (SRC / "grimoire" / "core").rglob("*.py"):
+        for node in ast.walk(ast.parse(file.read_text(), str(file))):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [f"{node.module or ''}.{alias.name}" for alias in node.names]
+                names = [("." * node.level + n) if node.level else n for n in names]
+            else:
+                continue
+            for name in names:
+                assert "library" not in name.split("."), f"{file} imports {name}"
