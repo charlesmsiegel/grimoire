@@ -246,3 +246,30 @@ def test_system_exit_keeps_its_code_and_foreign_interrupts_are_not_network_error
             connection.close()
         if expected is SystemExit:
             assert caught.value.code == 3
+
+
+def test_tls_protocol_error_is_terminal_tls():
+    def plaintext(conn, server):
+        conn.recv(4096)
+        conn.sendall(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+        server.release.wait(2)
+    with RawServer(plaintext) as server:
+        with pytest.raises(TransportError) as caught:
+            HttpTransport().connect(_url(server.url("https")), FAST, CancelToken())
+    assert (caught.value.kind, caught.value.phase) == ("tls", "connect")
+
+
+def test_the_deadline_counts_connection_time(monkeypatch):
+    import time as _time
+    real_connect = __import__("http.client").client.HTTPConnection.connect
+
+    def slow_connect(self):
+        _time.sleep(0.4)
+        return real_connect(self)
+    monkeypatch.setattr(__import__("http.client").client.HTTPConnection, "connect", slow_connect)
+    with sse_server(stream(sse_lines())) as server:
+        connection = HttpTransport().connect(_url(base_url(server)),
+                                             Timeouts(connect=2.0, read=2.0, total=0.5), CancelToken())
+        remaining = connection._deadline.interval
+        connection.close()
+    assert remaining <= 0.15

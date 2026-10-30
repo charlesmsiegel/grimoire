@@ -83,7 +83,7 @@ The `approvals(label, attempt, envelope)` callback receives those bytes. Handles
 - **Only before delivery:** they are retried only while no text has reached `on_delta` for this call, and only within `max_attempts_per_call`.
 - **Route choice:** attempt *i* of an execution uses `routes[i]`, then repeats the last route.
 - **`Retry-After`:** honored only as delta-seconds, capped at `max_retry_wait` (30 s), and the wait is cancel-aware.
-- **Terminal kinds:** `auth`, `account_limit`, `bad_request`, `tls`, `peer_not_loopback`, other provider errors, cancellation and consumer exceptions.
+- **Terminal kinds:** `auth`, `account_limit`, `bad_request`, `tls`, `peer_not_loopback`, other provider errors, cancellation and consumer exceptions. `tls` covers certificate failures and TLS protocol errors (such as plaintext on a TLS port); a TLS connection reset is `network`.
 - **After delivery,** any failure ends the call (fail visibly).
 
 **HTTP status mapping:**
@@ -145,7 +145,7 @@ None of the following ever contains prompt text, reply text or a key:
 
 Further rules:
 
-- **Provider error messages** may echo the prompt, so they live only in `ProviderError.diagnostic`. That field is excluded from `str` and `repr`; the key is redacted from the whole message *before* it is truncated to 300 characters. Provider-chosen `error_code`, `error_type` and served model names are restricted to short ASCII identifiers and dropped if they contain the key.
+- **Provider error messages** may echo the prompt, so they live only in `ProviderError.diagnostic`. That field is excluded from `str` and `repr`; the key is redacted from the whole message *before* it is truncated to 300 characters. Provider-chosen `error_code`, `error_type` and served model names are restricted to short ASCII identifiers and dropped if they contain the key. A finish reason that is not a short identifier, or contains the key, is reported as `other` (still finished, never accepted).
 - **Transport and HTTP exceptions** are converted outside their `except` blocks, so tracebacks (even with `capture_locals`) carry neither the Authorization header nor stdlib frames.
 - **CI** uses loopback servers and scripted transports only.
 
@@ -153,7 +153,7 @@ Further rules:
 
 - **Not yet supported:** proxies, Anthropic's native wire shape, async, embeddings, tools, images, prices and session budgets.
 - **DNS** resolution is not bounded by the socket timeouts.
-- **Each attempt has a hard deadline** (`Timeouts.total`): a timer shuts the socket down, so a trickling stream cannot outlive it. The wait for the status line uses the read timeout, not the connect timeout.
+- **Each attempt has a hard deadline** (`Timeouts.total`) that counts connection time: a timer shuts the socket down, so a trickling stream cannot outlive it, and a connection that used up the budget sends nothing (`not_sent`, `timeout`). The wait for the status line uses the read timeout, not the connect timeout.
 - **Cancellation** wakes a blocked read by shutting down the socket. A cancel during `connect()` waits for the connect timeout. On Windows, waking a blocked `recv` is not guaranteed (the test is `xfail` there).
 - **Stale-run fencing** across processes is not covered (owned by 027 and 030).
 

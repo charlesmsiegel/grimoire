@@ -140,7 +140,8 @@ def feed_line(state: StreamState, line: bytes) -> str | None:
         state.usage_block = usage
     reason = choice.get("finish_reason")
     if isinstance(reason, str) and reason:
-        state.finish_reason = reason
+        # Still finished, but an odd provider-chosen reason is never echoed as is.
+        state.finish_reason = reason if label(reason) else "other"
     if not content:
         return None
     state.deltas.append(content)

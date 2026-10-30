@@ -678,3 +678,47 @@ def test_the_adapter_imports_no_same_wave_or_test_code():
                      else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
             for name in names:
                 assert not name.startswith(("grimoire.testing", "grimoire.evals")), (path, name)
+
+
+def test_an_interrupted_close_still_books_the_attempt():
+    class InterruptOnClose(ScriptedTransport):
+        def connect(self, url, timeouts, cancel):
+            connection = super().connect(url, timeouts, cancel)
+
+            def close():
+                raise KeyboardInterrupt
+            connection.close = close
+            return connection
+    world = World([])
+    world.adapter._transport = InterruptOnClose([reply(), reply()])
+    with pytest.raises(KeyboardInterrupt):
+        world.run()
+    assert [a.outcome for a in world.meter.ledger.attempts] == ["completed"]
+    with pytest.raises(CallRefused):
+        world.run()
+    assert len(world.adapter._transport.sends) == 1
+
+
+@pytest.mark.parametrize("finish", [KEY, "weird reason with spaces", "x" * 100])
+def test_finish_reason_is_sanitized_but_still_ends_the_stream(finish):
+    world = World([reply(finish_reason=finish), reply()], attempts=2)
+    result = world.run()
+    assert (result.status, result.finish_reason) == ("incomplete", "other")
+    assert result.attempts[0].finish_reason == "other"
+    assert KEY not in repr(result) and world.transport.remaining == 1
+
+
+def test_connect_that_uses_up_the_deadline_sends_nothing():
+    clock = ScriptedClock()
+
+    class SlowConnect(ScriptedTransport):
+        def connect(self, url, timeouts, cancel):
+            clock.now += 400.0  # connecting took longer than Timeouts.total (300 s)
+            return super().connect(url, timeouts, cancel)
+    world = World([], clock=clock)
+    world.adapter._transport = SlowConnect([reply()])
+    result = world.run()
+    assert (result.status, result.error.kind) == ("failed", "timeout")
+    assert world.adapter._transport.sends == []
+    assert [(a.outcome, a.usage) for a in world.meter.ledger.attempts] == [
+        ("not_sent", TokenUsage(0, 0))]

@@ -94,11 +94,16 @@ def _redact(text: str | None, key: Secret | None) -> str | None:
     return text[:DIAGNOSTIC_LIMIT]
 
 
+def _carries(key: Secret | None, text: str | None) -> bool:
+    """Whether provider-chosen ``text`` contains the key. Kept out of callers'
+    frames, so a traceback's captured locals never hold the revealed key."""
+    return key is not None and text is not None and key.reveal() in text
+
+
 def _sanitize(error: ProviderError, key: Secret | None) -> ProviderError:
     """Provider-chosen fields must not carry the key into ``repr`` or reports."""
-    secret = key.reveal() if key is not None else None
     for name in ("error_code", "error_type"):
-        if secret is not None and secret in (getattr(error, name) or ""):
+        if _carries(key, getattr(error, name)):
             setattr(error, name, None)
     error.diagnostic = _redact(error.diagnostic, key)
     return error
@@ -275,6 +280,9 @@ class ProviderAdapter:
             peer = connection.peer_loopback
             if cancel.cancelled:  # cancelled while connecting: close without sending
                 return attempt
+            if clock() - start >= timeouts.total:  # connecting used up the whole attempt
+                attempt.error = ProviderError("timeout")
+                return attempt
             sent = True  # everything after connect() may have reached the provider
             attempt.outcome = "failed"
             try:
@@ -352,15 +360,19 @@ class ProviderAdapter:
             attempt.error = attempt.error or ProviderError("consumer_error")
             raise
         finally:
-            if key is not None and key.reveal() in (state.served_model or ""):
-                state.served_model = None
-            if connection is not None:
-                try:
-                    connection.close()
-                except Exception:
-                    pass
-            self._book(meter, call, number, label, attempt, sent, peer, delivered,
-                       first_byte, clock() - start)
+            try:
+                if _carries(key, state.served_model):
+                    state.served_model = None
+                if _carries(key, state.finish_reason):
+                    state.finish_reason = "other"
+                if connection is not None:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
+            finally:  # even an interrupt during cleanup must not skip the booking
+                self._book(meter, call, number, label, attempt, sent, peer, delivered,
+                           first_byte, clock() - start)
         return attempt
 
     def _deadline_kind(self, start: float, total: float, kind: str) -> str:

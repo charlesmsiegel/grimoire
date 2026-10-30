@@ -16,6 +16,7 @@ import ipaddress
 import socket
 import ssl
 import threading
+import time
 from collections.abc import Mapping
 from typing import Protocol
 from urllib.parse import urlsplit
@@ -62,6 +63,9 @@ def _kind(error: BaseException) -> str:
         return "truncated"
     if isinstance(error, http.client.HTTPException):
         return "bad_response"
+    if isinstance(error, ssl.SSLError) and not isinstance(
+            error, (ssl.SSLEOFError, ssl.SSLZeroReturnError, ssl.SSLSyscallError)):
+        return "tls"  # a protocol failure (say, plaintext on a TLS port): retrying won't help
     return "network"
 
 
@@ -131,7 +135,8 @@ class _HttpResponse:
 
 class _HttpConnection:
     def __init__(self, connection: http.client.HTTPConnection, path: str, host: str,
-                 peer_loopback: bool, cancel: CancelToken, timeouts: Timeouts) -> None:
+                 peer_loopback: bool, cancel: CancelToken, timeouts: Timeouts,
+                 started: float) -> None:
         self._connection = connection
         self._sock = connection.sock
         self._sock.settimeout(timeouts.read)  # waiting for the status is a read, not a connect
@@ -143,7 +148,8 @@ class _HttpConnection:
         self._cancel = cancel
         # The attempt's hard deadline: however slowly bytes trickle in, the
         # socket is shut down when ``total`` runs out.
-        self._deadline = threading.Timer(timeouts.total, self._shutdown)
+        left = timeouts.total - (time.monotonic() - started)  # connecting counts too
+        self._deadline = threading.Timer(max(left, 0.001), self._shutdown)
         self._deadline.daemon = True
         self._deadline.start()
 
@@ -225,6 +231,7 @@ class HttpTransport:
                 host, port, timeout=timeouts.connect, context=ssl.create_default_context())
         else:
             connection = http.client.HTTPConnection(host, port, timeout=timeouts.connect)
+        started = time.monotonic()
         failure = None
         try:
             connection.connect()
@@ -242,7 +249,7 @@ class HttpTransport:
         if port is not None:
             host_header = f"{host_header}:{port}"
         return _HttpConnection(connection, parts.path or "/", host_header, loopback, cancel,
-                               timeouts)
+                               timeouts, started)
 
     def __repr__(self) -> str:
         return "HttpTransport()"
