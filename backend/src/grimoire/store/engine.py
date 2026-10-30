@@ -77,8 +77,11 @@ class Access:
 
         Decided from directory listings, never by opening a composed path: a
         case-insensitive filesystem would find ``Harbor`` when asked for ``harbor``.
+        An ancestor that is a link is refused (``LinkRefused``) before it is listed.
         """
         for index, part in enumerate(parts):
+            if index and is_link(self.path(parts[:index])):  # never list through a link
+                raise LinkRefused(f"refusing to follow a link inside the library: {self.path(parts[:index])}")
             try:
                 names = self.list_dir(parts[:index])
             except (FileNotFoundError, NotADirectoryError):

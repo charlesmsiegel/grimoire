@@ -475,3 +475,16 @@ def test_identifiers_that_look_like_editor_noise_still_load(library):
     assert view.problems == ()
     assert view.index.resolve(tricky.unpinned()).ref == tricky
     assert InstanceRef("desktop.ini", "character", "x") in view.instances
+
+
+@pytest.mark.parametrize("ref", [WREN_R1, WREN.at("r9")], ids=["existing", "missing-child"])
+def test_reading_never_lists_through_a_linked_ancestor(library, tmp_path, ref):
+    from grimoire.store import LinkRefused
+    source = library.root / HARBOR_DIR
+    shutil.move(str(source), str(tmp_path / "elsewhere"))
+    make_dir_link(source, tmp_path / "elsewhere")
+    ops = RootedFileOps(library.root, record=False)  # raises on any operation through a link
+    with LibraryStore.open(library.root, ops=ops, writable=False) as reader:
+        with pytest.raises(LinkRefused):
+            reader.read(ref)
+    assert ops.sandbox_violation is None
