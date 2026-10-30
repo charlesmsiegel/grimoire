@@ -16,7 +16,8 @@
 - **Delivered:** the `grimoire.testing` harness (confined, recording `FileOps` seam; `Crash`/`Fail`/`Interleave` faults; exhaustive crash, torn-write, I/O-error and recovery-crash exploration with named invariants), the [invariant catalog](../../TESTING.md), a suite-wide privacy sentinel, and an advisory OS/Python CI matrix.
 - **Milestone 1:** catalog started; each invariant is marked proven-by-test or names an owner sprint.
 - **Milestone 2:** **half met.** The file-backed writer harness exists. The inference-run fault harness is deferred until a provider seam exists (owner: Model Routing And Budgeting, then Per-NPC Generation Runtime). The CI policy for inference tests is already written down.
-- **Milestone 3:** the compatibility matrix runs in CI. Adversarial scenarios cover the synthetic reference writers; feature sprints add their own.
+- **Milestone 3:** the compatibility matrix is configured in CI (advisory); its first results arrive with the PR into `v2`. Adversarial scenarios cover the synthetic reference writers; feature sprints add their own.
+- **Open questions:** answered in the catalog's [Policies](../../TESTING.md#policies-answers-to-the-sprints-open-questions) section.
 - **Deferred with owners:** "incorrect identity" and "stale views" invariants (002, 010, 022); a synthetic world/campaign fixture library (009, 010); power-loss and lock fault models (010, 030). See the catalog for the full list.
 
 ## Moonshot

@@ -261,7 +261,10 @@ def test_a1_journaled_writer_survives_every_crash_point(tmp_path):
     assert len(mutating) == 10 and len(writes) == 3
     assert len(action_runs) == 2 * len(mutating) + len(writes) + len(mutating) == 33
     recovery_runs = [run for run in report.runs if " > " in run.point]
-    assert recovery_runs and report.points_explored == len(action_runs) + len(recovery_runs)
+    crashed = [run for run in action_runs if not run.point.endswith("@fail")]
+    predicted = sum(2 * sum(op.mutating for op in run.recover_trace) for run in crashed)
+    assert len(recovery_runs) == predicted == 84  # pinned: catches silently shrinking exploration
+    assert report.points_explored == len(action_runs) + len(recovery_runs)
     points = [run.point for run in report.runs]
     assert len(points) == len(set(points))
     journal = next(op for op in baseline.action_trace if op.kind == "write_bytes" and "journal" in op.path)
@@ -464,6 +467,17 @@ def test_a12_interrupted_recovery_is_explored(tmp_path):
     assert any("recover:#" in step for step in report.violations[0].trace)
 
 
+def test_a12_nondeterministic_recovery_is_named_at_a_recovery_point(tmp_path):
+    def noisy_recover(ops, root):
+        journaled_recover()(ops, root)
+        ops.write_bytes(root / "recovery.log", random.randbytes(8))
+
+    report = explore_crashes(scenario(journaled_publish(NEW), noisy_recover, invariants=()), tmp_path,
+                             torn=False, recovery_crashes=True)
+    flagged = [v for v in report.violations if v.invariant == DETERMINISTIC_NAME]
+    assert flagged and all(" > recover:" in v.point and "recover op #" in v.detail for v in flagged)
+
+
 def test_a12_always_rollback_recovery_breaks_commit_durability(tmp_path):
     invariants = (atomic_outcome(), completes_after(COMMIT))
     report = explore_crashes(scenario(journaled_publish(NEW), rollback_recover, invariants=invariants), tmp_path)
@@ -554,7 +568,11 @@ def test_a14_blind_roll_forward_clobbers_an_edit_made_while_down(tmp_path):
     expected = {point for point in expected if not point.endswith("@fail")}
     assert names(report.violations) == ["preserves_meddle"]
     assert {v.point for v in report.violations} == expected and expected
-    explore_crashes(replica_scenario(guarded=True), tmp_path).assert_ok()
+    guarded = explore_crashes(replica_scenario(guarded=True), tmp_path)
+    guarded.assert_ok()
+    kept = [run for run in guarded.runs if run.point in expected]
+    assert kept and all(run.recovered["phone/rec.json.conflict"] == run.before["desktop/rec.json"]
+                        and run.recovered["phone/rec.json"] == run.after_meddle["phone/rec.json"] for run in kept)
 
 
 def _index(point):

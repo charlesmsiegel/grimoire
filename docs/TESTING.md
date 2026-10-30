@@ -34,9 +34,9 @@ Expected additions are `stat` or a content-hash read, exclusive create, and lock
 2. runs `setup`;
 3. runs `action` under the plan;
 4. runs the optional `meddle` (an edit made while the process is down; never in the baseline);
-5. runs `recover` twice, as a fresh process with no shared memory.
+5. runs `recover` twice, each time with fresh `FileOps` (a "restarted process"; module-level state in the same interpreter is **not** reset, so writers must not keep in-process state across phases).
 
-`explore_crashes` first runs a fault-free **baseline**. It then crashes each mutating operation `before` and `after`, `torn`-writes each non-empty write, and with `errors=True` injects `Fail`. With `recovery_crashes=True` it also crashes each recovery operation (depth 2). A point is named by its Crash/Fail operation (or by the interleaved operation when the plan has no crash). Paths written by an `Interleave` or a `meddle` are excluded from `atomic_outcome` and `completes_after`, because that content is not the writer's. The harness refuses to wipe a pre-existing `<workdir>/root` that it did not create. Point names are unique, for example `action:#11 replace a.json.~tmp1.new -> a.json @after > recover:#2 remove .journal @before`. A failure is a `Violation(invariant, point, detail, trace)`, and `CrashReport.assert_ok()` lists every violation by name.
+`explore_crashes` first runs a fault-free **baseline**. It then crashes each mutating operation `before` and `after`, `torn`-writes each non-empty write, and with `errors=True` injects `Fail`. With `recovery_crashes=True` it also crashes each recovery operation (depth 2). A point is named by its Crash/Fail operation (or by the interleaved operation when the plan has no crash). Paths written by an `Interleave` or a `meddle` are excluded from `atomic_outcome` and `completes_after`, because that content is not the writer's. **Decision:** preserving a *meddled* edit is checked by the built-in `preserves_meddle`; preserving an *interleaved* edit (a lost update during a live race) needs a scenario-specific invariant, as in A9. A `preserves_interleave` built-in is left to the sync sprint (019), which owns concurrent-edit semantics. Exceptions, sandbox escapes and budget overruns inside an `Interleave` or `meddle` are fixture bugs and propagate raw, not as named violations. The harness refuses to wipe a pre-existing `<workdir>/root` that it did not create. Point names are unique; an illustrative depth-2 point is `action:#11 replace a.json.~tmp1.new -> a.json @after > recover:#7 remove .journal @before`. A failure is a `Violation(invariant, point, detail, trace)`, and `CrashReport.assert_ok()` lists every violation by name.
 
 The harness provides no clocks, randomness or IDs. A consumer must inject seeded ones. `normalize` applies to trees only, so digest determinism stays strict.
 
@@ -45,24 +45,24 @@ The harness provides no clocks, randomness or IDs. A consumer must inject seeded
 | Invariant | Meaning | Proven by |
 |---|---|---|
 | `baseline completes` | The fault-free action returns and mutates something. | `backend/tests/test_fault_harness.py::test_baseline_must_complete_and_mutate` |
-| `planned fault fired` | Every planned fault actually triggered, so there are no false passes. | `backend/tests/test_fault_harness.py::test_a8_a_fault_that_never_fires_fails` |
-| `deterministic action` | The faulted trace prefix, write digests included, equals the baseline. | `backend/tests/test_fault_harness.py::test_a4_exploration_is_repeatable_and_nondeterminism_is_named` |
+| `planned fault fired` | Every planned action fault actually triggered, preventing that class of false pass (the recover-phase variant is exercised only indirectly). | `backend/tests/test_fault_harness.py::test_a8_a_fault_that_never_fires_fails` |
+| `deterministic action` | The faulted trace prefix, write digests included, equals the baseline; recovery traces in depth-2 runs equal their depth-1 recovery. | `backend/tests/test_fault_harness.py::test_a4_exploration_is_repeatable_and_nondeterminism_is_named`, `backend/tests/test_fault_harness.py::test_a12_nondeterministic_recovery_is_named_at_a_recovery_point` |
 | `simulated crash propagated` | The writer does not report success after it died. | `backend/tests/test_fault_harness.py::test_a6_dead_process_cleanup_does_nothing_and_swallowing_is_named` |
 | `failure surfaced` | An injected I/O error is not swallowed. | `backend/tests/test_fault_harness.py::test_a11_injected_io_error_must_surface` |
 | `bounded file operations` | A runaway loop of file operations fails by name, not by timeout. | `backend/tests/test_fault_harness.py::test_a7_runaway_writer_is_bounded_by_name` |
 | `all mutations mediated` | The disk matches the shadow model built from recorded ops, so nothing bypassed the seam. | `backend/tests/test_fault_harness.py::test_a13_writes_that_bypass_the_seam_are_named` |
 | `recovery completes` | Recovery does not raise, including after it was itself interrupted or met a corrupt file. | `backend/tests/test_fault_harness.py::test_a12_interrupted_recovery_is_explored`, `backend/tests/test_fault_harness.py::test_a15_corrupt_journal_is_a_named_recovery_failure` |
-| `sandbox` | No phase escapes the test root. | `backend/tests/test_fault_harness.py::test_a10_link_escape_is_a_sandbox_violation_in_any_phase` |
+| `sandbox` | Setup, action and recover phases cannot escape the test root (links are proven where the platform permits creating them; Windows runners may skip). | `backend/tests/test_fault_harness.py::test_a10_link_escape_is_a_sandbox_violation_in_any_phase` |
 
 ### Built-in scenario invariants
 
 | Invariant | Meaning | Proven by |
 |---|---|---|
-| `atomic_outcome` | The recovered state equals either the pre-action or the completed state (paths touched by a meddle excluded). | `backend/tests/test_builtin_invariants.py::test_atomic_outcome`, `backend/tests/test_fault_harness.py::test_a3_naive_writer_violation_names_invariant_and_point` |
+| `atomic_outcome` | The recovered state equals either the pre-action or the completed state (paths touched by a meddle or interleave excluded). | `backend/tests/test_builtin_invariants.py::test_atomic_outcome`, `backend/tests/test_fault_harness.py::test_a3_naive_writer_violation_names_invariant_and_point` |
 | `idempotent_recovery` | A second recovery changes nothing. | `backend/tests/test_builtin_invariants.py::test_idempotent_recovery` |
 | `no_residue` | No staging or journal files remain. | `backend/tests/test_builtin_invariants.py::test_no_residue` |
 | `completes_after` | Once the commit op has executed, recovery finishes the action. | `backend/tests/test_builtin_invariants.py::test_completes_after`, `backend/tests/test_fault_harness.py::test_a12_always_rollback_recovery_breaks_commit_durability` |
-| `untouched` | Source paths, such as a source replica or a V1 library, never change. | `backend/tests/test_builtin_invariants.py::test_untouched`, `backend/tests/test_fault_harness.py::test_a14_replica_copy_is_atomic_and_leaves_the_source_untouched` |
+| `untouched` | Source paths, such as a source replica or a V1 library, never change. The glob matches entries only; `desktop/*` does not cover the `desktop` directory entry itself. | `backend/tests/test_builtin_invariants.py::test_untouched`, `backend/tests/test_fault_harness.py::test_a14_replica_copy_is_atomic_and_leaves_the_source_untouched` |
 | `preserves_meddle` | An edit made while the process was down survives recovery. | `backend/tests/test_builtin_invariants.py::test_preserves_meddle`, `backend/tests/test_fault_harness.py::test_a14_blind_roll_forward_clobbers_an_edit_made_while_down` |
 
 The proving scenario for this slice is a crash immediately after one file has been published, followed by recovery to the completed state: `backend/tests/test_fault_harness.py::test_a2_crash_after_one_publication_is_recovered`. Exhaustive crash, torn-write, I/O-error and recovery-crash coverage of the reference writer is in `backend/tests/test_fault_harness.py::test_a1_journaled_writer_survives_every_crash_point`.
@@ -77,7 +77,7 @@ The proving scenario for this slice is a crash immediately after one file has be
 | Actor views are immutable snapshots | proven by `backend/tests/test_core.py::test_actor_view_is_an_immutable_snapshot` |
 | `grimoire.core` is pure: no I/O, providers or harness imports | proven by `backend/tests/test_invariant_catalog.py::test_core_is_pure` |
 | Production code never imports the test harness | proven by `backend/tests/test_invariant_catalog.py::test_harness_is_test_only` |
-| Tests never write to a real home or a Grimoire library (`HOME`, `USERPROFILE`, `GRIMOIRE_HOME`, `GRIMOIRE_V2_HOME` are redirected to sentinels) | proven by `backend/tests/test_privacy_sentinel.py::test_sentinel_fails_a_test_that_writes_into_home` |
+| Function-scoped tests cannot write to a real home or Grimoire library through `HOME`, `USERPROFILE`, `GRIMOIRE_HOME` or `GRIMOIRE_V2_HOME` (redirected to sentinels; hard-coded absolute paths are not intercepted) | proven by `backend/tests/test_privacy_sentinel.py::test_sentinel_fails_a_test_that_writes_into_home` |
 | This catalog only cites tests that exist | proven by `backend/tests/test_invariant_catalog.py::test_catalog_references_exist` |
 | V2 never writes to V1's `~/.grimoire/` | not yet tested — owner: V2 Library Paths And Isolation (001) |
 | Source-qualified IDs survive persistence; no stale-identity substitution | not yet tested — owners: Source Qualified Identity (002), Native File Store (010) |
@@ -105,11 +105,14 @@ Not simulated:
 | Real disk-full or permission errors (only simulated via `Fail`) | Native File Store (010) |
 | Malformed authored Markdown/JSON beyond a corrupt journal | Native File Store (010), V1-to-V2 Migration Skill (011) |
 | Property and state-machine generation across forks, retcons and imports | moonshot |
+| A synthetic world/campaign fixture library with expected outcomes | Entity Facets (009), Native File Store (010), once records exist |
+| Reducing redundant setups across test modules | revisit when a second family of file-backed writer tests exists |
 
-## Policies
+## Policies (answers to the sprint's open questions)
 
-- **Fixture reuse must not hide failure detection.** Every fault point re-runs `setup` from an empty root. `planned fault fired` and `all mutations mediated` turn a fixture that never exercises the fault into a failure instead of a pass. Built-in invariants have pass/fail unit tests, so they cannot be vacuous.
-- **Nondeterministic inference tests:**
+- **Which fault modes are absent from CI?** See the table above.
+- **Where does fixture reuse hide independent failure detection?** Every fault point re-runs `setup` from an empty root, so state is never shared between points. `planned fault fired` and `all mutations mediated` turn a fixture that never exercises its fault into a failure. Each built-in invariant has unit tests showing it can fail. That does not prove a given scenario exercises it, so scenario tests also assert specific violations (A3, A12, A14).
+- **How should nondeterministic inference tests be bounded?**
   - CI uses no live providers, only scripted or recorded fakes.
   - Runs are seeded, and they are bounded by call and token counts, not wall-clock time.
   - Live-model quality evaluations are opt-in and run outside CI.
