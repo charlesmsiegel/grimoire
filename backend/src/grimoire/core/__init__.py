@@ -79,6 +79,29 @@ from .perspective import (
     player_knowledge,
     standing,
 )
+from .boundaries import (
+    SCOPES,
+    TREATMENTS,
+    Boundary,
+    BoundaryAuthorityError,
+    BoundaryChange,
+    BoundaryContext,
+    BoundaryRequest,
+    CheckInConsent,
+    LimitCheck,
+    NarrationSegment,
+    RequestDecision,
+    SegmentDecision,
+    SessionZero,
+    ThemeRuling,
+    VisibleBoundary,
+    agreed_limits,
+    decide_presentation,
+    decide_request,
+    owner_boundaries,
+    rule_themes,
+    visible_boundaries,
+)
 from .resolve import MissingDefinition, actor_view
 
 __all__ = [
@@ -100,4 +123,9 @@ __all__ = [
     "ActorKnowledge", "BeliefAuthorityError", "DirectorKnowledge", "KnownBelief", "KnownEvidence",
     "PlayerKnowledge", "PropositionStanding", "SentReport", "TableEvent", "actor_knowledge",
     "admit_belief", "director_knowledge", "knowledge_about", "player_knowledge", "standing",
+    "SCOPES", "TREATMENTS", "Boundary", "BoundaryAuthorityError", "BoundaryChange",
+    "BoundaryContext", "BoundaryRequest", "CheckInConsent", "LimitCheck", "NarrationSegment",
+    "RequestDecision", "SegmentDecision", "SessionZero", "ThemeRuling", "VisibleBoundary",
+    "agreed_limits", "decide_presentation", "decide_request", "owner_boundaries",
+    "rule_themes", "visible_boundaries",
 ]
