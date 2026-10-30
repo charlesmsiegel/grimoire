@@ -15,6 +15,7 @@ A voice is **authored evidence about how one portrayal sounds in text**. It is n
 | `ImportedVoiceSource(format, card_version, example_messages, anchor_text, extensions)` | Character Card V3 voice fields kept **exactly**, for loss-aware import/export. **Never rendered.** |
 
 Validation is constructor-enforced and raises `InvalidVoice`:
+- Collections (`anchors`, `examples`, `reveals`, `suppress`, markers, `secrets`, the render batch) must be ordered sequences. Non-iterables, text, sets and mappings fail closed with a typed reason, never a raw `TypeError`. `known` and `controls` may be any non-mapping collection.
 - Ids follow the [identity](IDENTITY.md) segment grammar.
 - Text must contain words. Blank, invisible-only or punctuation-only text is refused.
 - `reveals` must be a list or tuple, so audit subjects keep a stable order. Sets and mappings are refused.

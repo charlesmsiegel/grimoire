@@ -271,3 +271,28 @@ def test_resolved_voice_copies_its_provenance():
 def test_the_speakers_own_name_is_not_screened():
     frag = fragment(resolved((A1,), name="The Duke Sold The Guild"))
     assert frag.text.startswith("Voice of The Duke Sold The Guild.")
+
+
+@pytest.mark.parametrize("kwargs, reason", [
+    ({"known": 5}, "bad_known"),
+    ({"known": None}, "bad_known"),
+    ({"known": {"duke-betrayal": 1}}, "bad_known"),
+    ({"secrets": 5}, "bad_secrets"),
+    ({"secrets": None}, "bad_secrets"),
+])
+def test_non_collection_epistemic_inputs_fail_closed(kwargs, reason):
+    values = {"secrets": (BETRAYAL,), "known": ()} | kwargs
+    with pytest.raises(InvalidVoice) as raised:
+        speaker_fragment(resolved((A1,)), **values)
+    assert raised.value.reason == reason and raised.value.__cause__ is None
+
+
+def test_known_may_be_a_set():
+    assert fragment(resolved((A1,), (SONG,)), known={"duke-betrayal"}).omitted == ()
+
+
+@pytest.mark.parametrize("markers", [5, None])
+def test_non_collection_markers_fail_closed(markers):
+    with pytest.raises(InvalidVoice) as raised:
+        SecretFact("f", markers)
+    assert raised.value.reason == "bad_markers" and raised.value.__cause__ is None

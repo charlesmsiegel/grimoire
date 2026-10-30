@@ -19,7 +19,7 @@ from grimoire.evals.text import has_words
 
 from .errors import InvalidVoice, MissingVoice, VoiceMismatch
 from .profile import (
-    ImportedVoiceSource, VoiceAnchor, VoiceCatalog, VoiceExample, check_id, validate_items,
+    ImportedVoiceSource, VoiceAnchor, VoiceCatalog, VoiceExample, as_tuple, check_id, validate_items,
 )
 
 
@@ -41,9 +41,7 @@ class VoiceBinding:
                 not isinstance(self.portrayal, SourceRef) or self.portrayal.kind != "character"):
             raise InvalidVoice("bad_portrayal", "a bound portrayal must be a character reference")
         anchors, examples = validate_items(self.anchors, self.examples, "binding")
-        if isinstance(self.suppress, str):
-            raise InvalidVoice("bad_suppress", "suppress must be a sequence of item ids")
-        suppress = tuple(self.suppress)
+        suppress = as_tuple(self.suppress, "bad_suppress", "suppress must be a sequence of item ids")
         for item_id in suppress:
             check_id(item_id, "suppressed item id")
         if len(set(suppress)) != len(suppress):

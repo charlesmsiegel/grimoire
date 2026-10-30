@@ -130,3 +130,15 @@ def test_generators_and_empty_batches():
     assert len(lines) == 2 == len(spy.requests)
     assert render_speakers([], spy, CONTROLS) == ()
     assert len(spy.requests) == 2
+
+
+@pytest.mark.parametrize("speakers, controls, reason", [
+    (5, CONTROLS, "bad_speaker"),
+    (None, CONTROLS, "bad_speaker"),
+    ([], 5, "bad_controls"),
+])
+def test_non_collection_render_inputs_fail_closed(speakers, controls, reason):
+    spy = Spy()
+    with pytest.raises(InvalidVoice) as raised:
+        render_speakers(speakers, spy, controls)
+    assert raised.value.reason == reason and raised.value.__cause__ is None and spy.requests == []

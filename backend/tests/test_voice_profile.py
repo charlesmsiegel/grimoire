@@ -208,3 +208,11 @@ def test_extension_nesting_is_capped_with_a_located_error():
     with pytest.raises(InvalidVoice) as raised:
         ImportedVoiceSource("chara_card_v3", extensions={"k": deep})
     assert raised.value.reason == "bad_extension" and "extensions[0]" in str(raised.value)
+
+
+@pytest.mark.parametrize("items", [{"anchors": 5}, {"examples": None}, {"anchors": "a1"},
+                                   {"examples": {example()}}])
+def test_item_collections_must_be_ordered_sequences(items):
+    with pytest.raises(InvalidVoice) as raised:
+        profile(**items)
+    assert raised.value.reason == "bad_items" and raised.value.__cause__ is None

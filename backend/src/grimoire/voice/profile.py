@@ -34,6 +34,16 @@ def check_id(value: object, label: str) -> None:
         raise InvalidVoice("bad_id", f"{label} is not a valid id") from None
 
 
+def as_tuple(value: object, reason: str, message: str) -> tuple:
+    """An ordered collection as a tuple; text, sets, mappings and non-iterables fail closed."""
+    if isinstance(value, (str, bytes, set, frozenset, Mapping)):
+        raise InvalidVoice(reason, message)
+    try:
+        return tuple(value)
+    except TypeError:
+        raise InvalidVoice(reason, message) from None
+
+
 def _text(value: object, label: str, cap: int) -> None:
     if not isinstance(value, str) or not has_words(value):
         raise InvalidVoice("blank_text", f"{label} must contain words")
@@ -95,9 +105,8 @@ VoiceItem = VoiceAnchor | VoiceExample
 def validate_items(anchors: object, examples: object, label: str) -> tuple[tuple[VoiceAnchor, ...],
                                                                          tuple[VoiceExample, ...]]:
     """Typed, capped, uniquely identified anchors and examples; shared by profiles and bindings."""
-    if isinstance(anchors, str) or isinstance(examples, str):
-        raise InvalidVoice("bad_items", f"{label} items must be sequences")
-    anchors, examples = tuple(anchors), tuple(examples)
+    anchors = as_tuple(anchors, "bad_items", f"{label} anchors must be a sequence")
+    examples = as_tuple(examples, "bad_items", f"{label} examples must be a sequence")
     if not all(isinstance(item, VoiceAnchor) for item in anchors):
         raise InvalidVoice("bad_items", f"{label} anchors must be VoiceAnchor values")
     if not all(isinstance(item, VoiceExample) for item in examples):

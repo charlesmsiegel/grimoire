@@ -264,3 +264,10 @@ def test_a_linked_portrayal_without_a_definition_or_a_profile_is_missing():
         resolve_voice(bellamy, unvoiced, index(link(ref("bellamy"), ref("bellamy-masked"))),
                       VoiceBinding("c-ember", "npc-bellamy", portrayal=ref("bellamy-masked")))
     assert missing.value.reason == "no_profile"
+
+
+@pytest.mark.parametrize("suppress", [5, None, "e1", {"e1"}])
+def test_suppress_must_be_an_ordered_sequence(suppress):
+    with pytest.raises(InvalidVoice) as raised:
+        VoiceBinding("c-ember", "npc-oda", suppress=suppress)
+    assert raised.value.reason == "bad_suppress" and raised.value.__cause__ is None

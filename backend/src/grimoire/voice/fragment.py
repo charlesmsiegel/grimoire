@@ -20,7 +20,7 @@ from grimoire.evals.text import contains_marker, has_words
 
 from .binding import ResolvedVoice
 from .errors import InvalidVoice
-from .profile import VoiceAnchor, VoiceExample, check_id
+from .profile import VoiceAnchor, VoiceExample, as_tuple, check_id
 
 DEFAULT_MAX_CHARS = 1200
 MIN_MAX_CHARS = 200
@@ -43,9 +43,7 @@ class SecretFact:
 
     def __post_init__(self) -> None:
         check_id(self.fact_id, "fact_id")
-        if isinstance(self.markers, str):
-            raise InvalidVoice("bad_markers", f"secret {self.fact_id} markers must be a sequence")
-        markers = tuple(self.markers)
+        markers = as_tuple(self.markers, "bad_markers", f"secret {self.fact_id} markers must be a sequence")
         if not markers or not all(isinstance(m, str) and has_words(m) for m in markers):
             raise InvalidVoice("bad_markers", f"secret {self.fact_id} needs nonblank markers")
         if len(set(markers)) != len(markers):
@@ -83,9 +81,12 @@ class SpeakerFragment:
 
 
 def _known_ids(known: Iterable[str]) -> frozenset[str]:
-    if isinstance(known, str):
-        raise InvalidVoice("bad_known", "known must be a collection of fact ids, not one string")
-    known = tuple(known)
+    if isinstance(known, (str, bytes, Mapping)):
+        raise InvalidVoice("bad_known", "known must be a collection of fact ids")
+    try:
+        known = tuple(known)  # a set is fine here: membership only
+    except TypeError:
+        raise InvalidVoice("bad_known", "known must be a collection of fact ids") from None
     for fact_id in known:
         check_id(fact_id, "known fact id")
     return frozenset(known)
@@ -115,9 +116,8 @@ def speaker_fragment(voice: ResolvedVoice, *, secrets: Iterable[SecretFact], kno
         raise InvalidVoice("bad_voice", "speaker_fragment needs a ResolvedVoice")
     if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < MIN_MAX_CHARS:
         raise InvalidVoice("bad_budget", f"max_chars must be an integer of at least {MIN_MAX_CHARS}")
-    if isinstance(secrets, (set, frozenset, Mapping, str)):  # ordered, so audit subjects are stable
-        raise InvalidVoice("bad_secrets", "secrets must be an ordered sequence of SecretFact values")
-    secrets = tuple(secrets)
+    # Ordered, so audit subjects are stable.
+    secrets = as_tuple(secrets, "bad_secrets", "secrets must be an ordered sequence of SecretFact values")
     if not all(isinstance(secret, SecretFact) for secret in secrets):
         raise InvalidVoice("bad_secrets", "secrets must be SecretFact values")
     known_ids = _known_ids(known)

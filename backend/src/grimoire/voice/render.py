@@ -20,6 +20,7 @@ from grimoire.evals.text import has_words
 
 from .errors import InvalidVoice, VoiceMismatch
 from .fragment import SpeakerFragment
+from .profile import as_tuple
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,8 +54,11 @@ def render_speakers(speakers: Iterable[tuple[SpeakerFragment, str]], renderer: S
     nobody controls and ambiguous control are all refused: delegated PC speech
     is out of scope here.
     """
-    batch = tuple(speakers)
-    controls = tuple(controls)
+    batch = as_tuple(speakers, "bad_speaker", "speakers must be a sequence of (fragment, cue) pairs")
+    try:
+        controls = tuple(controls)
+    except TypeError:
+        raise InvalidVoice("bad_controls", "controls must be a collection of ControlAssignment") from None
     seen: set[InstanceRef] = set()
     for entry in batch:
         if not (isinstance(entry, tuple) and len(entry) == 2
