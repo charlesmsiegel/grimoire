@@ -23,7 +23,7 @@ One narrow resolver contract; catalog composition and UI can consume it later. D
 
 ## First-slice status
 
-Milestones 1–2 are implemented in the pure core and documented in [the identity contract](../../IDENTITY.md): strict text forms for definition, campaign-instance and legacy V1 references; a name-safe index where unpinned references follow the declared head and pinned ones keep their revision; explicit links; and attributed conflicts. Milestone 3's fork/import/export round trips wait for those subsystems; only the text-form round trip is proven.
+Milestones 1–2 are implemented in the pure core and documented in [the identity contract](../../IDENTITY.md): strict text forms for definition, campaign-instance and legacy V1 references; a name-safe index where unpinned references follow the declared head and pinned ones keep their revision; explicit links; and attributed conflicts. Milestone 3's fork/import/export round trips wait for those subsystems; only the text-form round trip is proven. Retaining origin, owner and broken-reference information *in human-editable files* is deferred to [Native File Store And Revisions](native-file-store-and-revisions.md); this slice keeps it in memory.
 
 ## Open questions
 - ~~Which identifiers must be pinned by version?~~ Definitions, derivation/override bases and legacy-map targets; unpinned references follow the head.

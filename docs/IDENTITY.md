@@ -9,7 +9,7 @@ A name, a legacy V1 slug or an inherited portrayal is never identity. Two defini
 - **Segment:** `[a-z0-9][a-z0-9._-]*`, at most 128 characters. Lowercase only, so two IDs never differ only by case. This is not a filesystem-path guarantee: mapping IDs to paths belongs to the [native file store](roadmap/sprints/native-file-store-and-revisions.md).
 - **Source:** one or more segments joined by `:`. Sources are **opaque**, and prefixes such as `world:` or `catalog:` are conventions only, so a world can become a reusable library without changing any ID. The first segment may not be a reserved scheme (`v1`, `campaign`).
 - **Kind:** an open, stable namespace (`character`, `item`, `location`, …). Kind is part of identity and does not change when entity facets change. An entity ID is unique within its source across kinds.
-- The grammar is enforced by every constructor, not only by parsing. The whole reference text is at most 512 characters.
+- The grammar is enforced by every constructor, not only by parsing. Definition and instance reference text is at most 512 characters; a legacy V1 path may be up to 4096 characters because it must be kept exactly.
 
 ## Reference families
 
