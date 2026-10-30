@@ -51,11 +51,13 @@ def _deny(reason: Reason, resource: ResourcePath | None = None) -> Decision:
 
 def _well_formed(permission: object, resource: object, payload: object,
                  approval_id: object) -> bool:
-    if not isinstance(permission, Permission) or not isinstance(resource, str):
+    # Exact types only: subclasses could override hashing, equality or methods
+    # between the checks below and the executor's use of the same object.
+    if not isinstance(permission, Permission) or type(resource) is not str:
         return False
-    if payload is not None and not isinstance(payload, bytes):
+    if payload is not None and type(payload) is not bytes:
         return False
-    if approval_id is not None and not isinstance(approval_id, str):
+    if approval_id is not None and type(approval_id) is not str:
         return False
     # Inspection carries no payload; every other permission acts on exact bytes.
     return (payload is None) == (permission is Permission.INSPECT)
@@ -136,23 +138,32 @@ class Authorizer:
                   resource: object, payload: object, approval_id: object) -> Decision:
         try:
             decision = self._decide(principal, trusted, permission, resource, payload, approval_id)
+            self._record(principal, trusted, permission, decision)
         except Exception:
             decision = _deny(Reason.INTERNAL_ERROR)
-        try:
-            self._audit.append(AuditRecord(
-                sequence=len(self._audit) + 1,
-                principal=principal,
-                permission=permission if isinstance(permission, Permission) else None,
-                resource=None if decision.resource is None else str(decision.resource),
-                trusted=trusted,
-                allowed=decision.allowed,
-                reason=decision.reason,
-                grant_id=decision.grant_id,
-                approval_id=decision.approval_id,
-            ))
-        except Exception:
-            pass  # a failed audit write never turns a decision into an exception
+            try:
+                self._record(principal, trusted, permission, decision)
+            except Exception:
+                pass  # still deny; an unauditable request never turns into an exception
+            return decision
+        if decision.approval_id is not None:
+            # Consumed only once the allow is decided and audited.
+            self._closed_approvals.add(decision.approval_id)
         return decision
+
+    def _record(self, principal: str, trusted: bool, permission: object,
+                decision: Decision) -> None:
+        self._audit.append(AuditRecord(
+            sequence=len(self._audit) + 1,
+            principal=principal,
+            permission=permission if isinstance(permission, Permission) else None,
+            resource=None if decision.resource is None else str(decision.resource),
+            trusted=trusted,
+            allowed=decision.allowed,
+            reason=decision.reason,
+            grant_id=decision.grant_id,
+            approval_id=decision.approval_id,
+        ))
 
     def _decide(self, principal: str, trusted: bool, permission: object,
                 resource: object, payload: object, approval_id: object) -> Decision:
@@ -171,15 +182,15 @@ class Authorizer:
         if trusted or permission not in CONSEQUENTIAL:
             return Decision(True, Reason.GRANTED, path, grant.grant_id)
         entry = self._approvals.get(approval_id) if approval_id is not None else None
-        if entry is None or approval_id in self._closed_approvals:  # revoking a grant closes these
+        if entry is None:
             return _deny(Reason.APPROVAL_REQUIRED, path)
         approval, pinned = entry
-        if (approval.principal != principal
+        if (approval.approval_id in self._closed_approvals  # revoking a grant closes these
+                or approval.principal != principal
                 or approval.permission is not permission
                 or approval.resource != path
                 or approval.payload_digest != payload_digest(payload)):
             return _deny(Reason.APPROVAL_REQUIRED, path)
-        self._closed_approvals.add(approval.approval_id)  # consumed last, only on allow
         return Decision(True, Reason.APPROVED, path, pinned, approval.approval_id)
 
 
@@ -189,9 +200,15 @@ class WorkerHandle:
     __slots__ = ("_authority", "_principal", "_trusted")
 
     def __init__(self, authority: Authorizer, principal: str, trusted: bool) -> None:
-        self._authority = authority
-        self._principal = principal
-        self._trusted = trusted
+        object.__setattr__(self, "_authority", authority)
+        object.__setattr__(self, "_principal", principal)
+        object.__setattr__(self, "_trusted", trusted)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("a worker handle's principal and origin are fixed")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("a worker handle's principal and origin are fixed")
 
     @property
     def principal(self) -> str:
@@ -202,6 +219,6 @@ class WorkerHandle:
         return self._trusted
 
     def authorize(self, permission, resource, payload=None, approval_id=None) -> Decision:
-        """Decide one request; never raises and never allows on error."""
+        """Decide one request; never raises for its arguments, never allows on error."""
         return self._authority._evaluate(
             self._principal, self._trusted, permission, resource, payload, approval_id)

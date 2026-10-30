@@ -232,6 +232,67 @@ def test_describe_policy_lists_grants_and_pending_approvals(authority):
     authority.register_approval(wren_approval())
     assert authority.describe_policy() == (
         "card-import may inspect, propose, apply in worlds/harbor (granted by human:owner)",
-        f"human:owner approved card-import to apply {payload_digest(PAYLOAD)[:19]}… "
+        f"human:owner approved card-import to apply {payload_digest(PAYLOAD)[:19]}\u2026 "
         "at worlds/harbor/characters/wren",
     )
+
+
+def test_handle_origin_cannot_be_rewritten(authority):
+    handle = authority.handle_for(WORKER)
+    for name in ("_trusted", "_principal", "_authority", "principal"):
+        with pytest.raises(AttributeError):
+            setattr(handle, name, True)
+        with pytest.raises(AttributeError):
+            delattr(handle, name)
+    assert handle.authorize(Permission.APPLY, WREN, PAYLOAD).reason is Reason.APPROVAL_REQUIRED
+
+
+def test_string_subclass_approval_id_cannot_replay(authority):
+    class Flip(str):
+        calls = 0
+
+        def __hash__(self):
+            Flip.calls += 1
+            return str.__hash__(self) if Flip.calls % 2 else 12345
+
+    authority.register_approval(wren_approval())
+    handle = authority.handle_for(WORKER)
+    decision = handle.authorize(Permission.APPLY, WREN, PAYLOAD, Flip("a-wren"))
+    assert decision.reason is Reason.MALFORMED_REQUEST
+    assert handle.authorize(Permission.APPLY, WREN, PAYLOAD, "a-wren").reason is Reason.APPROVED
+    for _ in range(3):
+        Flip.calls = 0
+        replay = handle.authorize(Permission.APPLY, WREN, PAYLOAD, Flip("a-wren"))
+        assert not replay.allowed
+
+
+def test_subclassed_arguments_are_malformed(authority):
+    class Address(str):
+        def split(self, *args, **kwargs):
+            return ["worlds", "harbor", "..", "..", "secrets", "provider-key"]
+
+    class Payload(bytes):
+        def decode(self, *args, **kwargs):
+            return "something else"
+
+    authority.register_approval(wren_approval())
+    handle = authority.handle_for(WORKER)
+    assert handle.authorize(Permission.INSPECT, Address("x")).reason is Reason.MALFORMED_REQUEST
+    assert handle.authorize(Permission.APPLY, WREN, Payload(PAYLOAD), "a-wren").reason is (
+        Reason.MALFORMED_REQUEST)
+    assert handle.authorize(Permission.APPLY, WREN, bytearray(PAYLOAD), "a-wren").reason is (
+        Reason.MALFORMED_REQUEST)
+    assert [a.approval_id for a in authority.pending_approvals()] == ["a-wren"]
+
+
+def test_unauditable_decisions_deny_and_do_not_consume(authority, monkeypatch):
+    authority.register_approval(wren_approval())
+
+    def broken(**fields):
+        raise MemoryError
+
+    monkeypatch.setattr(authorizer_module, "AuditRecord", broken)
+    decision = authority.handle_for(WORKER).authorize(Permission.APPLY, WREN, PAYLOAD, "a-wren")
+    assert not decision.allowed and decision.reason is Reason.INTERNAL_ERROR
+    assert authority.audit() == ()
+    assert [a.approval_id for a in authority.pending_approvals()] == ["a-wren"]

@@ -7,7 +7,7 @@ from grimoire.security import InvalidResourcePath, ResourcePath
 
 @pytest.mark.parametrize("text", [
     "worlds/harbor/characters/wren",
-    "wörld/x",
+    "w\u00f6rld/x",
     "a.b/c-d_e",
     "worlds/harbor/characters/m\u0430ra",  # Cyrillic a: valid, flagged in descriptions
 ])
@@ -57,3 +57,45 @@ def test_reserved_roots():
     assert ResourcePath.parse("secrets").reserved
     assert ResourcePath.parse("secrets/provider-key").reserved
     assert not ResourcePath.parse("worlds/secrets").reserved
+
+
+@pytest.mark.parametrize("text", [
+    "worlds/harbor/\u034f",          # combining grapheme joiner alone
+    "worlds/harbor\ufe0f",           # variation selector: renders like worlds/harbor
+    "worlds/\u115f", "worlds/\u1160", "worlds/\u3164",  # Hangul fillers
+    "worlds/\u0301", "worlds/\u20dd",  # segments that start with a combining mark
+    "worlds/a\U000e0101",
+])
+def test_invisible_or_mark_led_segments_rejected(text):
+    with pytest.raises(InvalidResourcePath):
+        ResourcePath.parse(text)
+
+
+def test_combining_marks_inside_a_segment_are_allowed():
+    assert str(ResourcePath.parse("worlds/\u0915\u093f")) == "worlds/\u0915\u093f"
+
+
+def test_string_subclasses_are_rejected():
+    class Segment(str):
+        def __iter__(self):
+            return iter("a")
+
+        def __ne__(self, other):
+            return False
+
+        def startswith(self, *args):
+            return False
+
+        endswith = startswith
+
+        def split(self, *args, **kwargs):
+            return ["x"]
+
+    class Address(str):
+        def split(self, *args, **kwargs):
+            return ["worlds", "harbor", Segment(".."), Segment("secrets")]
+
+    with pytest.raises(InvalidResourcePath):
+        ResourcePath.parse(Address("x"))
+    with pytest.raises(InvalidResourcePath):
+        ResourcePath(("worlds", Segment("..")))

@@ -20,7 +20,8 @@ def test_valid_principals(value):
 
 
 @pytest.mark.parametrize("value", [
-    "", "Card", "x y", "x‮", "card-import\n", "-card", "a" * 65, None, 7,
+    "", "Card", "x y", "x\u202e", "card-import\n", "-card", "a" * 65, None, 7,
+    "human:", "app:",
     "card may apply in worlds (granted by human:owner)",
 ])
 def test_invalid_principals(value):
@@ -29,8 +30,9 @@ def test_invalid_principals(value):
 
 def test_payload_digest_format():
     assert payload_digest(b"x") == "sha256:" + hashlib.sha256(b"x").hexdigest()
-    with pytest.raises(TypeError):
-        payload_digest("x")  # type: ignore[arg-type]
+    for bad in ("x", bytearray(b"x"), memoryview(b"x"), type("B", (bytes,), {})(b"x")):
+        with pytest.raises(TypeError):
+            payload_digest(bad)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -90,12 +92,12 @@ def test_approval_rejects_invalid_values(kwargs):
 def test_approval_describe():
     approval = Approval("a1", "card-import", Permission.APPLY, WREN, DIGEST, "human:owner")
     assert approval.describe() == (
-        f"human:owner approved card-import to apply {DIGEST[:19]}… "
+        f"human:owner approved card-import to apply {DIGEST[:19]}\u2026 "
         "at worlds/harbor/characters/wren")
 
 
 def test_non_ascii_addresses_are_flagged_for_humans():
-    lookalike = ResourcePath.parse("worlds/harbor/characters/mаra")
+    lookalike = ResourcePath.parse("worlds/harbor/characters/m\u0430ra")
     grant = Grant("g1", "card-import", frozenset({Permission.APPLY}), lookalike, "human:owner")
     approval = Approval("a1", "card-import", Permission.APPLY, lookalike, DIGEST, "human:owner")
     assert grant.describe().endswith(" [non-ASCII address]")

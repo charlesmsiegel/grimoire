@@ -44,7 +44,8 @@ CONSEQUENTIAL = frozenset({Permission.APPLY, Permission.EXECUTE})
 
 
 def is_valid_principal(value: object) -> bool:
-    return isinstance(value, str) and _PRINCIPAL.fullmatch(value) is not None
+    return (type(value) is str and _PRINCIPAL.fullmatch(value) is not None
+            and not value.endswith(":"))
 
 
 def is_human(principal: str) -> bool:
@@ -52,7 +53,7 @@ def is_human(principal: str) -> bool:
 
 
 def payload_digest(payload: bytes) -> str:
-    if not isinstance(payload, bytes):
+    if type(payload) is not bytes:
         raise TypeError("payload must be bytes")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
@@ -63,7 +64,7 @@ def _require_principal(value: object, label: str) -> None:
 
 
 def _require_id(value: object, label: str) -> None:
-    if not isinstance(value, str) or not value.strip():
+    if type(value) is not str or not value.strip():
         raise ValueError(f"{label} must be a nonempty string")
 
 
@@ -125,7 +126,7 @@ class Approval:
         if not isinstance(self.permission, Permission) or self.permission not in CONSEQUENTIAL:
             raise ValueError("only apply or execute requests need approval")
         _require_address(self.resource, "resource")
-        if not isinstance(self.payload_digest, str) or not _DIGEST.fullmatch(self.payload_digest):
+        if type(self.payload_digest) is not str or not _DIGEST.fullmatch(self.payload_digest):
             raise ValueError("payload_digest must be 'sha256:' and 64 lowercase hex digits")
         if not is_human(self.approved_by):
             raise ValueError("approvals must be issued by a human principal")
