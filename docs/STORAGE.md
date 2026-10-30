@@ -16,6 +16,7 @@ Not in this slice:
   sources/<segs>/_source/records/<kind>/<entity_id>/<revision>.json   # one definition revision
   campaigns/<campaign_id>/instances/<kind>/<instance_id>.json     # one campaign instance
   .txn/lock, .txn/journal.json, .txn/*.new                        # writer lock, journal, staging
+  .txn/discard.json                                               # an unfinished discard_journal
   .conflicts/<hash16>/<name>~<digest12>[.N]                       # preserved versions awaiting a human
   .conflicts/discarded-<N>/…                                      # output of discard_journal (first unused N)
 ```
@@ -147,6 +148,7 @@ A preserved version is named by the digest of its *actual* bytes. If that name a
 - it takes the writer lock;
 - it does **not** interpret the journal's paths;
 - it moves the journal and all staging into the first unused `.conflicts/discarded-<N>/`, so an earlier discard is never overwritten.
+- it first records its intent durably (`.txn/discard.json` names the folder). Until the discard finishes, recovery refuses to publish anything (`RecoveryFailed`) and reads raise `PendingRecovery`; running `discard_journal` again resumes into the same folder. An interrupted discard can never resume as a publishing commit.
 
 Anything already published stays published, and `load` reports what is inconsistent.
 

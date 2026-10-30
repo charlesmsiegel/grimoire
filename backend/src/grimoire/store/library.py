@@ -11,6 +11,7 @@ guarded decision table (see ``engine``). See ``docs/STORAGE.md``.
 from __future__ import annotations
 
 import os
+import re
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -29,17 +30,20 @@ from .envelope import (
 )
 from .errors import (
     CommitIncomplete, ImmutableRevision, InvalidEnvelope, InvalidSourceState, NameCollision, NotALibrary,
-    PendingRecovery, RecoveryBlocked, StaleWrite, StoreError, WriteConflict, WriteDenied,
+    PendingRecovery, RecoveryBlocked, RecoveryFailed, StaleWrite, StoreError, WriteConflict, WriteDenied,
 )
 from .guard import Guard, Limits, RootIdentity
 from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import JsonError, etag, is_etag, parse_strict, render
 from .layout import (
-    CONFLICTS, LIBRARY_FORMAT, LOCK, MARKER, TXN, Parts, address_parts, conflict_parts, definition_parts,
-    instance_parts, logical, manifest_parts,
+    CONFLICTS, DISCARD_MARKER, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER, TXN, Parts, address_parts,
+    conflict_parts, definition_parts, instance_parts, logical, manifest_parts,
 )
 from .loader import LibraryView, StoredRecord, StoredSource
 from .lock import Locker, OsLocker
+
+DISCARD_FORMAT = "grimoire.discard/1"
+DISCARD_PREFIX = "discard"  # staging names the store gives a marker before it is committed
 
 
 @dataclass(frozen=True)
@@ -164,8 +168,10 @@ class LibraryStore:
         Takes the writer lock and, without opening or interpreting the journal (it may
         be a FIFO or garbage), moves it and every staged file into the first unused
         ``.conflicts/discarded-<N>/``, so an earlier discard is never overwritten.
-        Anything already published stays published, and ``load`` reports what is
-        inconsistent.
+        The intent is made durable first (``.txn/discard.json`` names the folder):
+        until the discard finishes, recovery refuses to publish anything, and running
+        this again resumes into the same folder. Anything already published stays
+        published, and ``load`` reports what is inconsistent.
         """
         ops = ops or DiskOps()
         locker = locker or OsLocker()
@@ -175,24 +181,56 @@ class LibraryStore:
         lock = cls._lock(access, locker)
         try:
             access.guard.check_session()
-            if not access.journal_exists():
-                return ()
             if access.presence((CONFLICTS,)) == "mismatch":  # renaming the child can never resolve it
                 raise NameCollision(f"{CONFLICTS} collides with a differently spelled folder")
-            number = 1
-            while access.presence((CONFLICTS, f"discarded-{number}")) != "absent":
-                number += 1  # a look-alike child only takes that number
-                if number > 10_000:
-                    raise StoreError("no free discard folder name")
-            folder = (CONFLICTS, f"discarded-{number}")
+            marker = root / TXN / DISCARD_MARKER
+            if access.discard_pending():  # resume an interrupted discard into its own folder
+                folder = cls._discard_folder(access, marker)
+            elif access.journal_exists():
+                folder = cls._new_discard_folder(access)
+                access.guard.check_write(folder + ("x",), staging_device=None)
+                temp = ops.make_temp(root / TXN, prefix=DISCARD_PREFIX, suffix=".new")
+                ops.write_bytes(temp, render({"format": DISCARD_FORMAT, "folder": folder[-1]}))
+                ops.replace(temp, marker)  # durable intent: from here on nothing publishes
+            else:
+                return ()
             access.guard.check_write(folder + ("x",), staging_device=None)
-            moved = [name for name in ops.list_dir(root / TXN) if is_staging_name(name)] + [access.journal.name]
-            ops.make_dirs(access.path(folder))
-            for name in moved:
-                ops.replace(root / TXN / name, access.path(folder + (name,)))
-            return tuple("/".join(folder + (name,)) for name in moved)
+            if access.presence(folder) != "present":
+                ops.make_dirs(access.path(folder))
+            moved = []
+            for name in ops.list_dir(root / TXN):
+                if name.startswith(DISCARD_PREFIX) and is_staging_name(name):
+                    ops.remove(root / TXN / name)  # a marker that was never committed
+                elif name == JOURNAL or is_staging_name(name):
+                    ops.replace(root / TXN / name, access.path(folder + (name,)))
+                    moved.append("/".join(folder + (name,)))
+            ops.remove(marker)
+            return tuple(moved)
         finally:
             locker.release(lock)
+
+    @staticmethod
+    def _new_discard_folder(access: Access) -> Parts:
+        number = 1
+        while access.presence((CONFLICTS, f"discarded-{number}")) != "absent":
+            number += 1  # a look-alike child only takes that number
+            if number > 10_000:
+                raise StoreError("no free discard folder name")
+        return (CONFLICTS, f"discarded-{number}")
+
+    @staticmethod
+    def _discard_folder(access: Access, marker: Path) -> Parts:
+        """The folder an interrupted discard chose; the marker is validated, never trusted."""
+        access.check_staged_file(DISCARD_MARKER)
+        try:
+            document = parse_strict(access.ops.read_bytes(marker))
+        except JsonError as error:
+            raise RecoveryFailed(f"the discard marker is unreadable: {error}") from None
+        folder = document.get("folder")
+        if (document.get("format") != DISCARD_FORMAT or type(folder) is not str
+                or not re.fullmatch(r"discarded-[1-9][0-9]{0,8}", folder)):
+            raise RecoveryFailed("the discard marker does not name a discard folder")
+        return (CONFLICTS, folder)
 
     # -- lifecycle ------------------------------------------------------------
     def close(self) -> None:
@@ -222,8 +260,8 @@ class LibraryStore:
 
     def _require_consistent(self) -> None:
         self._require_open()
-        if self._access.journal_exists():
-            raise PendingRecovery("a commit awaits recovery; reopen the library writable to finish it")
+        if self._access.journal_exists() or self._access.discard_pending():
+            raise PendingRecovery("a commit or discard awaits recovery; reopen the library writable to finish it")
 
     def recover(self) -> RecoveryReport:
         """Finish or preserve an interrupted commit. Persistent I/O errors are ``RecoveryBlocked``."""

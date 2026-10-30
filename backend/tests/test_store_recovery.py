@@ -631,3 +631,66 @@ def test_discard_refuses_a_look_alike_conflicts_folder_instead_of_looping(tmp_pa
         LibraryStore.discard_journal(tmp_path / LIB, locker=locker)
     assert (tmp_path / LIB / ".txn" / "journal.json").read_bytes() == b"garbage"
     assert locker.held == set()
+
+
+def _pending_head_move(locker):
+    """Setup: the seeded library with A2's commit stopped just after its commit point."""
+    def setup(ops, root):
+        _setup(locker)(ops, root)
+        crashed = RootedFileOps(root, plan=[Crash(JOURNAL, "after")], record=False)
+        try:
+            head_move(crashed, root, locker)
+        except BaseException:
+            pass
+    return setup
+
+
+def test_an_interrupted_discard_never_resumes_as_a_publish(tmp_path):
+    locker = ProcessLocker()
+    root = tmp_path / "root"
+    root.mkdir()
+    _pending_head_move(locker)(RootedFileOps(root, record=False), root)
+    before = {name: (root / name).read_bytes() for name in (MANIFEST,)}
+    failing = RootedFileOps(root, plan=[Fail(Target("replace", target="lib/.conflicts/*", nth=2))], record=False)
+    with pytest.raises(OSError):
+        LibraryStore.discard_journal(root / LIB, ops=failing, locker=locker)
+    with pytest.raises(RecoveryFailed, match="discard was interrupted"):
+        LibraryStore.open(root / LIB, locker=locker)
+    with LibraryStore.open(root / LIB, locker=locker, writable=False) as reader:
+        with pytest.raises(PendingRecovery):
+            reader.load()
+    moved = LibraryStore.discard_journal(root / LIB, locker=locker)  # resumes into the same folder
+    assert moved and all(path.startswith(".conflicts/discarded-1/") for path in moved)
+    with LibraryStore.open(root / LIB, locker=locker) as store:
+        assert not store.last_recovery.published
+        assert {name: (root / name).read_bytes() for name in (MANIFEST,)} == before
+        assert not (root / R2).exists()
+        names = {path.rsplit("/", 1)[1] for path in store.conflicts()}
+        assert "journal.json" in names and len([n for n in names if n.startswith("rec")]) == 2
+
+
+def _never_published(outcome):
+    for key in (MANIFEST, R2):
+        if outcome.recovered.get(key) != outcome.before.get(key):
+            return f"{key} changed: a discarded commit was published"
+    discarded = [key for key, value in outcome.recovered.items()
+                 if key.startswith("lib/.conflicts/discarded-") and value is not None]
+    if len({key.split("/")[2] for key in discarded}) != 1 or len(discarded) != 3:
+        return f"the journal and both staged files must end up in one discard folder: {discarded}"
+    return None
+
+
+def test_discard_survives_every_crash_and_never_publishes(tmp_path):
+    locker = ProcessLocker()
+
+    def recover(ops, root):  # the human re-runs the discard, then opens the library
+        LibraryStore.discard_journal(root / LIB, ops=ops, locker=locker)
+        LibraryStore.open(root / LIB, ops=ops, locker=locker).close()
+
+    sc = CrashScenario(
+        "discard", _pending_head_move(locker),
+        lambda ops, root: LibraryStore.discard_journal(root / LIB, ops=ops, locker=locker), recover,
+        (Invariant("never_published", _never_published), idempotent_recovery(),
+         no_residue("lib/.txn/*.new", "lib/.txn/journal.json", "lib/.txn/discard.json")),
+        normalize=drop_empty_dirs)
+    explore_crashes(sc, tmp_path, errors=True).assert_ok()

@@ -35,7 +35,7 @@ from .errors import LinkRefused, NameCollision, RecoveryFailed, StoreError, Unst
 from .guard import Guard
 from .journal import Entry, Journal, is_staging_name, parse
 from .jsonfmt import MAX_FILE_BYTES, etag
-from .layout import JOURNAL, TXN, Parts, conflict_parts, name_key
+from .layout import DISCARD_MARKER, JOURNAL, TXN, Parts, conflict_parts, name_key
 
 Presence = Literal["absent", "present", "mismatch"]
 #: Distinct versions kept beside one conflict name before giving up (a backstop, never reached).
@@ -149,6 +149,11 @@ class Access:
     def journal_exists(self) -> bool:
         self.check_staging()  # never look through a linked staging directory
         return self.ops.exists(self.journal)
+
+    def discard_pending(self) -> bool:
+        """An interrupted ``discard_journal``: nothing may publish until it is finished."""
+        self.check_staging()
+        return self.ops.exists(self.path((TXN, DISCARD_MARKER)))
 
     def make_parent(self, parts: Parts) -> None:
         if self.presence(parts[:-1]) != "present":
@@ -282,6 +287,8 @@ def recover(access: Access) -> Settlement:
     try:
         access.guard.check_session()  # even with no journal: cleanup must not follow a swapped root
         access.check_staging()
+        if access.discard_pending():
+            raise RecoveryFailed("a discard was interrupted; run LibraryStore.discard_journal again to finish it")
         if access.journal_exists():
             access.check_staged_file(JOURNAL)
     except (StoreError, ValueError) as error:  # LibraryPathError is a ValueError

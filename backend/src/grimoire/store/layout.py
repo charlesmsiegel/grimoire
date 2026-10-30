@@ -30,6 +30,7 @@ TXN = ".txn"
 CONFLICTS = ".conflicts"
 LOCK = "lock"
 JOURNAL = "journal.json"
+DISCARD_MARKER = "discard.json"  # an interrupted discard_journal: never publish, finish the discard
 SOURCE_DIR = "_source"
 MANIFEST = "manifest.json"
 RECORDS = "records"
