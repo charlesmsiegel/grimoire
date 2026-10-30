@@ -76,6 +76,7 @@ def test_facets_never_grant_control():
     awakened = EntityInstance(BLADE, plain_sword().ref,
                               added=FacetBundle([Agent(), UnknownFacet("pc-control", {"player": ALICE})]))
     roster, index = CampaignRoster("c1", [awakened]), index_of(plain_sword())
+    assert controller_of("c1", "blade", ()) is None
     line = PlayerContribution("c1", "k1", "s1", "t1", roster.segment_for(BLADE), ALICE, "speech", "Hello.")
     with pytest.raises(AuthorityError):
         submit_contribution(line, ())

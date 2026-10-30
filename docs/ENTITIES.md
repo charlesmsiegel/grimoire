@@ -2,7 +2,7 @@
 
 **Status:** first slice of [Entity Facets And Instance Model](roadmap/sprints/entity-facets-and-instance-model.md), implemented as pure in-memory values in `grimoire.core` (`facets.py`, `entity.py`, `roster.py`, `json_value.py`, and the provisional `entity_codec.py`). Nothing is persisted; there is no store, importer, runner or UI. The scenarios are synthetic.
 
-V2 has no exclusive Character, PC, Creature, Item or Location record type. A person, a species, a particular monster and a sentient sword are all `EntityDefinition`s with different **facets**. Three things stay separate:
+The entity model has no exclusive Character, PC, Creature, Item or Location record type (the Wave 1 character types remain only as [legacy types](#legacy-first-slice-types)). A person, a species, a particular monster and a sentient sword are all `EntityDefinition`s with different **facets**. Three things stay separate:
 
 | Concept | Value | Identity |
 |---|---|---|
@@ -85,7 +85,7 @@ The authority and intent string fields still accept any nonempty string, and an 
 
 ## Legacy first-slice types
 
-`CharacterDefinition` and `CampaignActor` remain for Wave 1 callers. Two explicit functions convert them:
+`CharacterDefinition` and `CampaignActor` remain for Wave 1 callers and stay character-only; an actor of any other kind (a sentient sword, a ship) is an `EntityInstance`, which chooses its kind explicitly. Two explicit functions convert them:
 
 - `entity_from_character(d)`: an individual with only `agent`. Physicality is not invented.
 - `instance_from_actor(a)`: `campaign:<c>/character/<actor_id>`, keeping the segment so old assignments, observations and beliefs still apply. A campaign-original actor (no source) gets an added `agent`; a sourced actor's agency comes from its converted definition.
@@ -100,7 +100,7 @@ A legacy definition and its conversion cannot share an index, because they have 
 - Facets are encoded as a list of `{"facet": name, …}` objects, so duplicates are detected.
 - **Extension points keep unknowns.** Unknown top-level fields become `extras`, and unknown facet names become `UnknownFacet`.
 - **Inside a known structure, unknowns are refused with a reason.** `CodecError` reasons are `unknown_facet_field`, `unknown_state`, `unknown_state_field`, `invalid_field` (including missing required fields), `address_in_payload` and `unsupported_schema`. `FacetError` and `EntityError` reasons (`duplicate_facet`, `reserved_name`, …) propagate unchanged; every refusal is a `ValueError` with `.reason`. Refusing is not losing: the envelope still holds the original payload.
-- Field spellings are provisional; 010 owns serialization and files.
+- Field spellings are provisional; 010 owns serialization and files. Re-encoding is canonical: explicit nulls and defaults (`"material": null`, `"description": ""`, `"added": []`) are omitted, and the decoded values stay equal. A known field of the *other* record type (such as `traits` in an instance payload) is just an unknown field there and is kept in `extras`.
 
 Interoperability is proven against a test-only neutral envelope that imports no grimoire module.
 

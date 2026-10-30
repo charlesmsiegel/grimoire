@@ -186,7 +186,8 @@ def test_source_drift_breaks_unpinned_instances_with_named_reasons_and_pinning_r
     cases = [
         (gains_agent, {"added": FacetBundle([Agent()])}, "added_shadows_trait"),
         (weaker, {"state": (Integrity(8),)}, "invalid_state"),
-        # Dropping Physical strands an added facet that requires it.
+        # Dropping Physical strands an added facet that requires it (Biological here, because the
+        # plain sword already has Portable as a trait, so it cannot be added).
         (intangible, {"added": FacetBundle([Biological()])}, "missing_requirement"),
     ]
     for r2, fields, expected in cases:
