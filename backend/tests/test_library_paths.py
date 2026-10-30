@@ -10,6 +10,7 @@ import pytest
 
 from grimoire.library import (
     DEFAULT_DIRNAME, LibraryLocation, LibraryPathError, V1IsolationError,
+    check_migration_paths, check_write_destination,
     resolve_library,
 )
 
@@ -391,3 +392,73 @@ def test_default_launch_never_opens_or_lists_v1(home, tmp_path):
     assert touches(seen, v1) == []
     assert seen == [str(home / ".grimoire.json")]   # the pointer is the only file read
     assert snapshot(tmp_path) == before
+
+
+# ---- write destination --------------------------------------------------------
+
+def test_write_destination_accepts_a_fresh_path_without_creating_it(home, tmp_path):
+    before = snapshot(tmp_path)
+    target = tmp_path / "new" / "library"
+    assert check_write_destination(target, environ={}, home=home) == target.resolve()
+    assert check_write_destination("~/lib", environ={}, home=home) == home / "lib"
+    assert snapshot(tmp_path) == before
+
+
+def test_write_destination_refuses_a_file(home, tmp_path):
+    (tmp_path / "file").write_text("x")
+    with pytest.raises(LibraryPathError, match="not a directory"):
+        check_write_destination(tmp_path / "file", environ={}, home=home)
+
+
+@pytest.mark.parametrize("raw", ["", "relative", "~other/x", " /x"])
+def test_write_destination_refuses_malformed_paths(home, raw):
+    with pytest.raises(LibraryPathError):
+        check_write_destination(raw, environ={}, home=home)
+
+
+def test_write_destination_refuses_every_v1_location(home, tmp_path):
+    v1_library(home / ".grimoire")
+    pointed = v1_library(tmp_path / "pointed", young=True)
+    write_pointer(home, {"data_dir": str(pointed)})
+    env_v1 = tmp_path / "env-v1"
+    copied = v1_library(tmp_path / "copied")
+    for target in (home / ".grimoire", home / ".grimoire" / "x", pointed, env_v1 / "x", copied, home):
+        with pytest.raises(V1IsolationError):
+            check_write_destination(target, environ={"GRIMOIRE_HOME": str(env_v1)}, home=home)
+
+
+# ---- migration pair -----------------------------------------------------------
+
+@pytest.mark.parametrize("source", [None, ""])
+def test_migration_needs_an_explicit_source(home, tmp_path, source):
+    with pytest.raises(LibraryPathError, match="explicitly chosen source"):
+        check_migration_paths(source, tmp_path / "dest", environ={}, home=home)
+
+
+def test_migration_accepts_v1_source_and_distinct_destination(home, tmp_path):
+    v1 = v1_library(home / ".grimoire")
+    backup = tmp_path / "backup.zip"  # the source's kind is the migration sprint's concern
+    backup.write_bytes(b"PK")
+    before = snapshot(tmp_path)
+    assert check_migration_paths("~/.grimoire", "~/.grimoire-v2", environ={}, home=home) == (
+        v1, home / ".grimoire-v2")
+    assert check_migration_paths(backup, tmp_path / "dest", environ={}, home=home)[0] == backup.resolve()
+    assert snapshot(tmp_path) == before
+
+
+def test_migration_refuses_overlapping_paths(home, tmp_path):
+    area = tmp_path / "area"
+    source = area / "frozen"
+    (source / "inner").mkdir(parents=True)
+    (tmp_path / "link").symlink_to(source)
+    for destination, relation in ((source, "is"), (source / "inner", "is inside"),
+                                  (area, "contains"), (tmp_path / "link" / "v2", "is inside")):
+        with pytest.raises(V1IsolationError, match=f"it {relation} the migration source"):
+            check_migration_paths(source, destination, environ={}, home=home)
+
+
+def test_migration_destination_still_refuses_v1(home, tmp_path):
+    source = v1_library(tmp_path / "frozen-copy")
+    v1_library(home / ".grimoire")
+    with pytest.raises(V1IsolationError, match="default V1 library"):
+        check_migration_paths(source, home / ".grimoire" / "v2", environ={}, home=home)
