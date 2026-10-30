@@ -183,9 +183,11 @@ def boundary_problems(source: str, filename: str, package: PurePackage, within: 
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             if isinstance(node, ast.ImportFrom) and not node.level and (node.module or "").split(".")[0] != "grimoire":
                 # `from typing import sys`: a module held by an allowed one is still that module.
+                # So is one held under another name (`from enum import bltns`).
                 problems += [f"{where} imports {alias.name} through {node.module}" for alias in node.names
-                             if alias.name in sys.stdlib_module_names and alias.name not in PURE_STDLIB
-                             and not any(_under(alias.name, m) for m in io_stdlib)]
+                             if (alias.name in sys.stdlib_module_names and alias.name not in PURE_STDLIB
+                                 and not any(_under(alias.name, m) for m in io_stdlib))
+                             or _impure_module_attribute(node.module, alias.name)]
             for name in _imported_names(node, within):
                 top = name.split(".")[0]
                 if top == "grimoire":

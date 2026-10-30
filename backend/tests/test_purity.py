@@ -78,6 +78,7 @@ def _check(source, package=CORE, filename="grimoire/core/sample.py", within="gri
     "import enum\nenum.bltns.exec('import os')",
     "import enum\nenum.bltns.__import__('os').system('x')",
     "import enum as e\nx = e.bltns",
+    "from enum import bltns as b\nf = b.getattr(b, 'op' + 'en')",
     "import re\nx = re.enum.bltns",
     "f = getattr_target.eval",
 ])
