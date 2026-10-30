@@ -8,6 +8,7 @@ V2 is a redesign of the **fictional world and actor model**, not a wholesale rep
 
 - The project's original license and Git history.
 - A pure-Python typed kernel: source-qualified character definitions, independent campaign actors, control assignments, objective events, actor-specific observations/beliefs, and a read-only actor-perspective projection.
+- An offline [story-quality gate](docs/evals/STORY_QUALITY.md) (`python -m grimoire.evals.story_quality`) that rejects recorded runs with knowledge leaks, negated player choices, PC authorship, merged NPC generation calls, voice or cost regressions against a **synthetic** V0.2.1-shaped baseline. It invokes no model.
 - Small executable tests for source identity, independent campaign continuities, player/NPC role independence and private knowledge boundaries.
 - A V2-specific CI workflow for pushes and PRs targeting `v2`.
 - [Architecture](docs/ARCHITECTURE.md), [porting plan](docs/PORTING.md), and [working agreements](AGENTS.md).
