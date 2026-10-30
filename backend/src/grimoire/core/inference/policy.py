@@ -8,9 +8,10 @@ policy names it with a per-turn cap, so extra inference is opt-in and bounded.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
-from types import MappingProxyType
+
+from ._values import FrozenMap, count
 
 
 class InferenceStage(StrEnum):
@@ -43,20 +44,6 @@ def coerce_stage(value: InferenceStage | str) -> InferenceStage:
         raise ValueError(f"unknown inference stage: {value!r}") from None
 
 
-def count(value: object, label: str, minimum: int = 0) -> int:
-    """An int of at least ``minimum``; ``bool`` is not a count."""
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise ValueError(f"{label} must be an int >= {minimum}, not {value!r}")
-    return value
-
-
-def identifier(value: object, label: str, error: type[ValueError] = ValueError) -> str:
-    """A nonempty, non-blank string id."""
-    if not isinstance(value, str) or not value.strip():
-        raise error(f"{label} must be a nonempty string, not {value!r}")
-    return value
-
-
 @dataclass(frozen=True, slots=True)
 class InferencePolicy:
     """Opt-in optional stages and their per-turn call caps.
@@ -68,9 +55,8 @@ class InferencePolicy:
     call, baseline included.
     """
 
-    per_turn_call_caps: Mapping[InferenceStage | str, int] | tuple[tuple[InferenceStage, int], ...] = (
-        field(default=())
-    )
+    # Accepts a Mapping[InferenceStage | str, int]; always this tuple after init.
+    per_turn_call_caps: tuple[tuple[InferenceStage, int], ...] = ()
     max_attempts_per_call: int = 1
 
     def __post_init__(self) -> None:
@@ -96,10 +82,10 @@ class InferencePolicy:
 
     @property
     def caps(self) -> Mapping[InferenceStage, int]:
-        return MappingProxyType(dict(self.per_turn_call_caps))
+        return FrozenMap(self.per_turn_call_caps)
 
     def cap_for(self, stage: InferenceStage | str) -> int | None:
-        return self.caps.get(coerce_stage(stage))
+        return dict(self.per_turn_call_caps).get(coerce_stage(stage))
 
     def enabled(self, stage: InferenceStage | str) -> bool:
         return self.cap_for(stage) is not None

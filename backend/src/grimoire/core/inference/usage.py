@@ -12,11 +12,11 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from types import MappingProxyType
 from typing import Literal
 
-from .plan import CallId, DeclinedRequest, TurnInferencePlan
-from .policy import InferenceStage, count, identifier
+from ._values import FrozenMap, collection, count, identifier
+from .plan import CallId, DeclinedRequest, OptionalRequest, TurnInferencePlan
+from .policy import InferenceStage
 
 TOKEN_FIELDS = (
     "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
@@ -82,14 +82,10 @@ class CallAttempt:
         count(self.attempt, "attempt", minimum=1)
         if not isinstance(self.usage, TokenUsage):
             raise ValueError("an attempt needs a TokenUsage")
-        if not isinstance(self.measurement, str):
-            raise ValueError(f"unknown measurement: {self.measurement!r}")
-        try:
-            object.__setattr__(self, "measurement", Measurement(self.measurement))
-        except ValueError:
-            raise ValueError(f"unknown measurement: {self.measurement!r}") from None
-        if self.outcome not in OUTCOMES:
+        object.__setattr__(self, "measurement", _measurement(self.measurement))
+        if not isinstance(self.outcome, str) or self.outcome not in OUTCOMES:
             raise ValueError(f"unknown outcome: {self.outcome!r}")
+        object.__setattr__(self, "outcome", str(self.outcome))
         if self.route is not None:
             identifier(self.route, "route")
         if self.outcome == "not_sent":
@@ -99,14 +95,44 @@ class CallAttempt:
                 raise ValueError("an attempt that was never sent used no tokens")
 
 
+def _measurement(value: object) -> Measurement:
+    if isinstance(value, str):
+        try:
+            return Measurement(value)
+        except ValueError:
+            pass
+    raise ValueError(f"unknown measurement: {value!r}")
+
+
 @dataclass(frozen=True, slots=True)
 class UsageTotals:
-    """Sums of reported counts, and how many attempts left each count unreported."""
+    """Sums of reported counts, and how many attempts left each count unreported.
+
+    ``measurements`` covers attempts that were sent; a ``not_sent`` attempt
+    used nothing, so how it was measured says nothing about the totals.
+    """
 
     attempts: int
     sums: Mapping[str, int]
     unreported: Mapping[str, int]
     measurements: frozenset[Measurement]
+
+    def __post_init__(self) -> None:
+        count(self.attempts, "attempts")
+        for name in ("sums", "unreported"):
+            values = getattr(self, name)
+            if not isinstance(values, Mapping) or set(values) != set(TOKEN_FIELDS):
+                raise ValueError(f"{name} must count exactly {TOKEN_FIELDS}")
+            for field_name in TOKEN_FIELDS:
+                count(values[field_name], f"{name}[{field_name}]")
+            object.__setattr__(self, name, FrozenMap(values))
+        if any(n > self.attempts for n in self.unreported.values()):
+            raise ValueError("more unreported counts than attempts")
+        measurements = frozenset(_measurement(m) for m in collection(
+            self.measurements, "measurements"))
+        if self.attempts == 0 and measurements:
+            raise ValueError("no attempts, so nothing was measured")
+        object.__setattr__(self, "measurements", measurements)
 
     @classmethod
     def of(cls, attempts: Iterable[CallAttempt]) -> UsageTotals:
@@ -120,14 +146,14 @@ class UsageTotals:
                     unreported[name] += 1
                 else:
                     sums[name] += value
-        return cls(len(attempts), MappingProxyType(sums), MappingProxyType(unreported),
-                   frozenset(each.measurement for each in attempts))
+        return cls(len(attempts), sums, unreported, frozenset(
+            each.measurement for each in attempts if each.outcome != "not_sent"))
 
     def __add__(self, other: UsageTotals) -> UsageTotals:
         return UsageTotals(
             self.attempts + other.attempts,
-            MappingProxyType({n: self.sums[n] + other.sums[n] for n in TOKEN_FIELDS}),
-            MappingProxyType({n: self.unreported[n] + other.unreported[n] for n in TOKEN_FIELDS}),
+            {n: self.sums[n] + other.sums[n] for n in TOKEN_FIELDS},
+            {n: self.unreported[n] + other.unreported[n] for n in TOKEN_FIELDS},
             self.measurements | other.measurements,
         )
 
@@ -140,6 +166,10 @@ class UsageTotals:
 EMPTY_TOTALS = UsageTotals.of(())
 
 
+def _sum(parts: Iterable[UsageTotals]) -> UsageTotals:
+    return sum(parts, EMPTY_TOTALS)
+
+
 def _provider_reported_only(complete: bool, measurements: frozenset[Measurement]) -> bool:
     return complete and measurements == {Measurement.PROVIDER_REPORTED}
 
@@ -148,8 +178,9 @@ def _provider_reported_only(complete: bool, measurements: frozenset[Measurement]
 class TurnUsageSummary:
     """A turn's usage by stage and actor, with its missing data called out.
 
-    ``complete`` and ``provider_reported_only`` are derived, so a summary
-    cannot claim completeness its own figures contradict.
+    Validated on construction (the breakdowns must add up to the total), and
+    ``complete`` and ``provider_reported_only`` are derived, so a summary cannot
+    claim completeness its own figures contradict.
     """
 
     campaign_id: str
@@ -162,6 +193,30 @@ class TurnUsageSummary:
     by_actor: Mapping[str | None, UsageTotals]
     unmetered_call_ids: frozenset[CallId]
     declined: tuple[DeclinedRequest, ...]
+
+    def __post_init__(self) -> None:
+        identifier(self.campaign_id, "campaign_id")
+        identifier(self.turn_id, "turn_id")
+        object.__setattr__(self, "phases", collection(self.phases, "phases"))
+        object.__setattr__(self, "declined", collection(self.declined, "declined"))
+        object.__setattr__(self, "unmetered_call_ids",
+                           frozenset(collection(self.unmetered_call_ids, "unmetered_call_ids")))
+        for name in ("by_stage", "by_actor"):
+            if not isinstance(getattr(self, name), Mapping):
+                raise ValueError(f"{name} must be a mapping")
+            object.__setattr__(self, name, FrozenMap(getattr(self, name)))
+        for name in ("total", "baseline", "optional"):
+            if not isinstance(getattr(self, name), UsageTotals):
+                raise ValueError(f"{name} must be UsageTotals")
+        for label, parts in (("baseline + optional", (self.baseline, self.optional)),
+                             ("by_stage", self.by_stage.values()),
+                             ("by_actor", self.by_actor.values())):
+            if _sum(parts) != self.total:
+                raise ValueError(f"{label} does not add up to the total")
+        for cid in self.unmetered_call_ids:
+            if not isinstance(cid, CallId) or (cid.campaign_id, cid.turn_id) != (
+                    self.campaign_id, self.turn_id):
+                raise ValueError(f"unmetered call {cid!r} is not from this turn")
 
     @property
     def complete(self) -> bool:
@@ -180,8 +235,9 @@ class TurnUsageSummary:
 class TurnUsageLedger:
     """Attempts booked against one turn's plan.
 
-    Bind the ledger to the turn's final plan (``extend`` after ``add_phase``)
-    before summarising, or the later phases' calls are not accounted for.
+    A summary accounts only for the plan the ledger is bound to. Add later
+    phases through ``add_phase`` here (or ``extend`` to the turn's final plan)
+    so their calls are counted, unmetered or not.
     """
 
     plan: TurnInferencePlan
@@ -190,7 +246,7 @@ class TurnUsageLedger:
     def __post_init__(self) -> None:
         if not isinstance(self.plan, TurnInferencePlan):
             raise ValueError("a ledger needs a TurnInferencePlan")
-        attempts = tuple(self.attempts)
+        attempts = collection(self.attempts, "attempts")
         object.__setattr__(self, "attempts", attempts)
         for index, each in enumerate(attempts):
             self._check(each, attempts[:index])
@@ -213,17 +269,34 @@ class TurnUsageLedger:
         self._check(attempt, self.attempts)
         return TurnUsageLedger(self.plan, self.attempts + (attempt,))
 
+    def add_phase(
+        self,
+        phase: str,
+        *,
+        speaking_npc_ids: Iterable[str] = (),
+        optional_requests: Iterable[OptionalRequest] = (),
+    ) -> TurnUsageLedger:
+        """Plan another phase of this turn and keep accounting for all of it."""
+        return self.extend(self.plan.add_phase(
+            phase, speaking_npc_ids=speaking_npc_ids, optional_requests=optional_requests))
+
     def extend(self, plan: TurnInferencePlan) -> TurnUsageLedger:
-        """Rebind to this turn's plan after later phases were added to it."""
+        """Rebind to this turn's plan after one or more later phases were added."""
         old = self.plan
-        if not isinstance(plan, TurnInferencePlan) or (
-                (plan.campaign_id, plan.turn_id, plan.policy, plan.present_actor_ids,
-                 plan.player_controlled_ids)
+        if not isinstance(plan, TurnInferencePlan):
+            raise ValueError("a ledger extends only to a TurnInferencePlan")
+        new_phases = plan.phases[len(old.phases):]
+        if ((plan.campaign_id, plan.turn_id, plan.policy, plan.present_actor_ids,
+             plan.player_controlled_ids)
                 != (old.campaign_id, old.turn_id, old.policy, old.present_actor_ids,
                     old.player_controlled_ids)
-                or plan.phases[:len(old.phases)] != old.phases
+                or plan.phases[:len(old.phases)] != old.phases or not new_phases
                 or plan.calls[:len(old.calls)] != old.calls
-                or plan.declined[:len(old.declined)] != old.declined):
+                or plan.declined[:len(old.declined)] != old.declined
+                or any(call.call_id.phase not in new_phases
+                       for call in plan.calls[len(old.calls):])
+                or any(declined.phase not in new_phases
+                       for declined in plan.declined[len(old.declined):])):
             raise ValueError("a ledger extends only to a later phase of the same turn plan")
         return TurnUsageLedger(plan, self.attempts)
 
@@ -242,12 +315,10 @@ class TurnUsageLedger:
             total=totals(lambda cid: True),
             baseline=totals(lambda cid: stage_of[cid].is_baseline),
             optional=totals(lambda cid: not stage_of[cid].is_baseline),
-            by_stage=MappingProxyType({
-                stage: totals(lambda cid, stage=stage: cid.stage is stage)
-                for stage in dict.fromkeys(call.stage for call in plan.calls)}),
-            by_actor=MappingProxyType({
-                actor: totals(lambda cid, actor=actor: cid.actor_id == actor)
-                for actor in dict.fromkeys(call.actor_id for call in plan.calls)}),
+            by_stage={stage: totals(lambda cid, stage=stage: cid.stage is stage)
+                      for stage in dict.fromkeys(call.stage for call in plan.calls)},
+            by_actor={actor: totals(lambda cid, actor=actor: cid.actor_id == actor)
+                      for actor in dict.fromkeys(call.actor_id for call in plan.calls)},
             unmetered_call_ids=plan.call_ids - attempted,
             declined=plan.declined,
         )
@@ -258,7 +329,7 @@ def _merge(parts: Iterable[Mapping]) -> Mapping:
     for part in parts:
         for key, value in part.items():
             merged[key] = merged[key] + value if key in merged else value
-    return MappingProxyType(merged)
+    return FrozenMap(merged)
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,7 +341,7 @@ class SessionUsage:
 
     def __post_init__(self) -> None:
         identifier(self.campaign_id, "campaign_id")
-        summaries = tuple(self.summaries)
+        summaries = collection(self.summaries, "summaries")
         object.__setattr__(self, "summaries", summaries)
         turns: set[str] = set()
         for summary in summaries:
@@ -285,20 +356,17 @@ class SessionUsage:
     def add(self, summary: TurnUsageSummary) -> SessionUsage:
         return SessionUsage(self.campaign_id, self.summaries + (summary,))
 
-    def _sum(self, name: str) -> UsageTotals:
-        return sum((getattr(s, name) for s in self.summaries), EMPTY_TOTALS)
-
     @property
     def total(self) -> UsageTotals:
-        return self._sum("total")
+        return _sum(s.total for s in self.summaries)
 
     @property
     def baseline(self) -> UsageTotals:
-        return self._sum("baseline")
+        return _sum(s.baseline for s in self.summaries)
 
     @property
     def optional(self) -> UsageTotals:
-        return self._sum("optional")
+        return _sum(s.optional for s in self.summaries)
 
     @property
     def by_stage(self) -> Mapping[InferenceStage, UsageTotals]:
@@ -313,9 +381,13 @@ class SessionUsage:
         return frozenset().union(*(s.unmetered_call_ids for s in self.summaries))
 
     @property
+    def measurements(self) -> frozenset[Measurement]:
+        return self.total.measurements
+
+    @property
     def complete(self) -> bool:
         return all(s.complete for s in self.summaries)
 
     @property
     def provider_reported_only(self) -> bool:
-        return _provider_reported_only(self.complete, self.total.measurements)
+        return _provider_reported_only(self.complete, self.measurements)

@@ -17,7 +17,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from .policy import InferencePolicy, InferenceStage, coerce_stage, count, identifier
+from ._values import collection, count, identifier
+from .policy import InferencePolicy, InferenceStage, coerce_stage
 
 DeclineReason = Literal["disabled", "cap_reached"]
 DECLINE_REASONS: frozenset[str] = frozenset({"disabled", "cap_reached"})
@@ -28,8 +29,9 @@ class InferencePlanError(ValueError):
     """The caller asked for something no plan may contain; nothing was planned."""
 
 
-def _optional_id(value: object, label: str) -> str | None:
-    return None if value is None else identifier(value, label)
+def _check_optional_id(value: object, label: str) -> None:
+    if value is not None:
+        identifier(value, label)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +47,7 @@ class OptionalRequest:
         if stage.is_baseline:
             raise InferencePlanError(f"{stage} is planned from speakers, not requested")
         object.__setattr__(self, "stage", stage)
-        _optional_id(self.actor_id, "actor_id")
+        _check_optional_id(self.actor_id, "actor_id")
         identifier(self.purpose, "purpose")
 
 
@@ -64,7 +66,7 @@ class CallId:
         for label in ("campaign_id", "turn_id", "phase"):
             identifier(getattr(self, label), label)
         object.__setattr__(self, "stage", coerce_stage(self.stage))
-        _optional_id(self.actor_id, "actor_id")
+        _check_optional_id(self.actor_id, "actor_id")
         count(self.ordinal, "ordinal", minimum=1)
 
 
@@ -97,7 +99,7 @@ class DeclinedRequest:
         identifier(self.phase, "phase")
         if not isinstance(self.request, OptionalRequest):
             raise ValueError("a declined request needs an OptionalRequest")
-        if self.reason not in DECLINE_REASONS:
+        if not isinstance(self.reason, str) or self.reason not in DECLINE_REASONS:
             raise ValueError(f"unknown decline reason: {self.reason!r}")
 
 
@@ -105,8 +107,9 @@ class DeclinedRequest:
 class TurnInferencePlan:
     """Every model call one turn may make, and the optional ones it declined.
 
-    Validated on construction, so a hand-built plan cannot hold a call that
-    ``plan_turn``/``add_phase`` would have refused or declined.
+    Validated on construction: a hand-built plan cannot hold a call the
+    planner would refuse or decline, a decline the policy contradicts, or
+    calls and declines out of phase order.
     """
 
     campaign_id: str
@@ -119,14 +122,15 @@ class TurnInferencePlan:
     declined: tuple[DeclinedRequest, ...] = ()
 
     def __post_init__(self) -> None:
-        for name, kind in (("present_actor_ids", frozenset), ("player_controlled_ids", frozenset),
-                           ("phases", tuple), ("calls", tuple), ("declined", tuple)):
-            object.__setattr__(self, name, kind(getattr(self, name)))
         try:
+            for name, kind in (("present_actor_ids", frozenset),
+                               ("player_controlled_ids", frozenset), ("phases", tuple),
+                               ("calls", tuple), ("declined", tuple)):
+                object.__setattr__(self, name, kind(collection(getattr(self, name), name)))
             self._validate()
         except InferencePlanError:
             raise
-        except ValueError as error:
+        except (TypeError, ValueError) as error:
             raise InferencePlanError(str(error)) from error
 
     def _validate(self) -> None:
@@ -143,16 +147,21 @@ class TurnInferencePlan:
         if len(self.call_ids) != len(self.calls):
             raise InferencePlanError("duplicate call id")
 
+        position = {phase: index for index, phase in enumerate(self.phases)}
         ordinals: Counter[tuple[str, InferenceStage, str | None]] = Counter()
         generated: set[str] = set()
+        reached = 0
         for call in self.calls:
             if not isinstance(call, PlannedCall):
                 raise InferencePlanError(f"not a planned call: {call!r}")
             cid = call.call_id
             if (cid.campaign_id, cid.turn_id) != (self.campaign_id, self.turn_id):
                 raise InferencePlanError(f"{cid!r} belongs to another turn")
-            if cid.phase not in self.phases:
+            if cid.phase not in position:
                 raise InferencePlanError(f"{cid!r} names an unlisted phase")
+            if position[cid.phase] < reached:
+                raise InferencePlanError(f"{cid!r} is out of phase order")
+            reached = position[cid.phase]
             key = (cid.phase, cid.stage, cid.actor_id)
             ordinals[key] += 1
             if cid.ordinal != ordinals[key]:
@@ -172,19 +181,26 @@ class TurnInferencePlan:
             if calls > self.policy.caps[stage]:
                 raise InferencePlanError(f"{calls} {stage} calls exceed the turn cap")
 
+        reached = 0
         for declined in self.declined:
             if not isinstance(declined, DeclinedRequest):
                 raise InferencePlanError(f"not a declined request: {declined!r}")
-            if declined.phase not in self.phases:
+            if declined.phase not in position:
                 raise InferencePlanError(f"decline names an unlisted phase: {declined!r}")
+            if position[declined.phase] < reached:
+                raise InferencePlanError(f"{declined!r} is out of phase order")
+            reached = position[declined.phase]
             request = declined.request
             if request.actor_id is not None:
                 self._check_actor(request.actor_id)
             cap = self.policy.cap_for(request.stage)
             if declined.reason == "disabled" and cap is not None:
                 raise InferencePlanError(f"{request.stage} is enabled, not disabled")
-            if declined.reason == "cap_reached" and (cap is None or used[request.stage] < cap):
-                raise InferencePlanError(f"{request.stage} has turn capacity left")
+            if declined.reason == "cap_reached":
+                used_by_then = sum(1 for call in self.calls if call.stage is request.stage
+                                   and position[call.call_id.phase] <= reached)
+                if cap is None or used_by_then < cap:
+                    raise InferencePlanError(f"{request.stage} had turn capacity left")
 
     def _check_actor(self, actor_id: str) -> None:
         if actor_id not in self.present_actor_ids:
@@ -232,8 +248,8 @@ class TurnInferencePlan:
         identifier(phase, "phase", InferencePlanError)
         if phase in self.phases:
             raise InferencePlanError(f"phase {phase!r} was already planned")
-        speakers = tuple(speaking_npc_ids)
-        requests = tuple(optional_requests)
+        speakers = collection(speaking_npc_ids, "speaking_npc_ids", InferencePlanError)
+        requests = collection(optional_requests, "optional_requests", InferencePlanError)
 
         # Validate everything before consulting the policy.
         seen: set[str] = set(self.generated_actor_ids)
@@ -291,12 +307,13 @@ def plan_turn(
     Speakers are decided by the player, director or scene rules (or by a
     planned ``decision`` call in an earlier phase), never by this function.
     """
-    present = tuple(present_actor_ids)
+    present = collection(present_actor_ids, "present_actor_ids", InferencePlanError)
     if len(set(present)) != len(present):
         raise InferencePlanError(f"duplicate present actor in {present!r}")
+    controlled = collection(player_controlled_ids, "player_controlled_ids", InferencePlanError)
     empty = TurnInferencePlan(
         campaign_id, turn_id, policy if policy is not None else InferencePolicy(),
-        frozenset(present), frozenset(player_controlled_ids),
+        frozenset(present), frozenset(controlled),
     )
     return empty.add_phase(phase, speaking_npc_ids=speaking_npc_ids,
                            optional_requests=optional_requests)

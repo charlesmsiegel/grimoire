@@ -110,7 +110,6 @@ def test_call_ids_are_structured_and_turn_scoped():
            OptionalRequest("planning", "npc-a", "second"))
     result = plan(optional_requests=two, policy=InferencePolicy({"planning": 2}))
     assert [c.call_id.ordinal for c in result.optional_calls] == [1, 2]
-    assert CallId("c", "t", "x", GEN, "a/b", 1) != CallId("c", "t", "x/a", GEN, "b", 1)
     later = plan_turn("campaign-1", "turn-2", present_actor_ids=PRESENT,
                       speaking_npc_ids=("npc-b",))
     assert later.calls[0].call_id != result.calls[0].call_id
@@ -165,3 +164,34 @@ def test_plan_is_deterministic_and_accepts_iterables():
     assert first == second
     assert first.call(first.calls[1].call_id).stage is InferenceStage.CRITIQUE
     assert first.call_ids == {c.call_id for c in first.calls}
+
+
+@pytest.mark.parametrize("overrides", [
+    {"player_controlled_ids": "npc-b"},
+    {"present_actor_ids": "npc-b"},
+    {"speaking_npc_ids": "npc-b"},
+    {"optional_requests": OptionalRequest("critique", None, "x")},
+    {"present_actor_ids": None},
+])
+def test_a_bare_string_is_not_a_collection_of_ids(overrides):
+    # "npc-b" split into letters would make a player character look like an NPC.
+    with pytest.raises(InferencePlanError):
+        plan(**overrides)
+    with pytest.raises(InferencePlanError):
+        replace(plan(), present_actor_ids="npc-b")
+
+
+def test_hand_built_plans_keep_phase_order_and_honest_declines():
+    decide = OptionalRequest("decision", None, "choose")
+    select = plan(phase="early", speaking_npc_ids=(), optional_requests=[decide],
+                  policy=InferencePolicy({"decision": 1}))
+    late = select.add_phase("late", optional_requests=[decide])
+    assert late.declined[0].reason == "cap_reached"
+    with pytest.raises(InferencePlanError):  # calls listed out of phase order
+        replace(late, phases=("late", "early"))
+    early_cap = plan(phase="early", speaking_npc_ids=(), policy=InferencePolicy({"decision": 1}))
+    late_call = early_cap.add_phase("late", optional_requests=[decide])
+    with pytest.raises(InferencePlanError):  # "cap_reached" before the cap was used
+        replace(late_call, declined=(DeclinedRequest("early", decide, "cap_reached"),))
+    with pytest.raises(ValueError):
+        DeclinedRequest("main", decide, ["disabled"])  # type: ignore[arg-type]

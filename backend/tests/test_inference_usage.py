@@ -1,12 +1,13 @@
 """Usage is booked only against planned calls; missing data never reads as zero."""
 
-from dataclasses import fields
+from dataclasses import fields, replace
 
 import pytest
 
 from grimoire.core.inference import (
-    CallAttempt, CallId, InferencePolicy, InferenceStage, Measurement, OptionalRequest,
-    SessionUsage, TokenUsage, TurnUsageLedger, UnplannedCallError, plan_turn,
+    TOKEN_FIELDS, CallAttempt, CallId, InferencePolicy, InferenceStage, Measurement,
+    OptionalRequest, SessionUsage, TokenUsage, TurnUsageLedger, UnplannedCallError,
+    UsageTotals, plan_turn,
 )
 
 PRESENT = ("npc-a", "npc-b", "npc-c", "npc-d")
@@ -270,3 +271,63 @@ def test_empty_session_is_complete_but_not_provider_reported():
     session = SessionUsage("campaign-1")
     assert session.complete and not session.provider_reported_only
     assert session.total.attempts == 0
+
+
+def test_ledger_extends_only_to_a_later_phase():
+    plan = two_speakers(speaking_npc_ids=("npc-b",))
+    ledger = booked(plan, attempt(plan.calls[0], 1, 1))
+    with pytest.raises(ValueError):  # same plan again: not a later phase
+        ledger.extend(plan)
+    replanned = plan_turn("campaign-1", "turn-1", present_actor_ids=PRESENT,
+                          speaking_npc_ids=("npc-b", "npc-d"))
+    with pytest.raises(ValueError):  # re-planned "main", not a new phase
+        ledger.extend(replanned)
+    later = ledger.add_phase("after", speaking_npc_ids=("npc-d",))
+    assert later.plan.phases == ("main", "after")
+    assert later.summary().unmetered_call_ids == {later.plan.calls[1].call_id}
+
+
+def test_usage_values_are_hashable_and_do_not_alias_inputs():
+    plan = two_speakers()
+    summary = booked(plan, attempt(plan.calls[0], 1, 1), attempt(plan.calls[1], 2, 2)).summary()
+    session = SessionUsage("campaign-1").add(summary)
+    assert len({summary, summary}) == 1 and hash(session) == hash(session)
+    sums = {name: 0 for name in TOKEN_FIELDS}
+    unreported = dict(sums)
+    totals = UsageTotals(1, sums, unreported, {SYNTHETIC})
+    unreported["input_tokens"] = 1
+    assert totals.fully_reported
+    with pytest.raises(TypeError):
+        totals.sums["input_tokens"] = 5  # type: ignore[index]
+
+
+def test_hand_built_totals_and_summaries_are_validated():
+    zeros = {name: 0 for name in TOKEN_FIELDS}
+    for bad in ((0, {"input_tokens": -5}, zeros, ()),  # missing and negative counts
+                (1, zeros, {**zeros, "input_tokens": 2}, ()),  # more unreported than attempts
+                (0, zeros, zeros, {PROVIDER}),  # measured nothing
+                (1, zeros, zeros, {"guessed"})):
+        with pytest.raises(ValueError):
+            UsageTotals(*bad)
+    plan = two_speakers()
+    real = booked(plan, attempt(plan.calls[0], 5, 5, measurement=PROVIDER)).summary()
+    inflated = UsageTotals(3, zeros, zeros, {PROVIDER})
+    with pytest.raises(ValueError):  # breakdowns no longer add up to the total
+        replace(real, total=inflated)
+    with pytest.raises(ValueError):  # unmetered calls from another turn
+        replace(real, unmetered_call_ids=frozenset(two_speakers("turn-2").call_ids))
+    assert not real.complete  # npc-d is unmetered, whatever the summary is told
+
+
+def test_unsent_attempts_do_not_taint_measurements():
+    plan = two_speakers(policy=InferencePolicy(max_attempts_per_call=2))
+    summary = booked(
+        plan,
+        attempt(plan.calls[0], 0, 0, outcome="not_sent", measurement=SYNTHETIC),
+        attempt(plan.calls[0], 10, 2, n=2, measurement=PROVIDER),
+        attempt(plan.calls[1], 10, 2, measurement=PROVIDER),
+    ).summary()
+    assert summary.total.attempts == 3
+    assert summary.provider_reported_only
+    session = SessionUsage("campaign-1").add(summary)
+    assert session.measurements == {PROVIDER} and session.provider_reported_only

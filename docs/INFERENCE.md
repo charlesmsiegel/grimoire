@@ -44,7 +44,15 @@ These raise `InferencePlanError` before anything is planned:
 - an optional request about an absent or player-controlled actor;
 - a blank id, or a repeated phase.
 
-**One plan per turn.** A turn that needs a step before generation calls `plan.add_phase(...)` on the same plan. For example, a `"select"` phase holds a `decision` call that chooses who answers, and then `"main"` generates the answers. The added phase shares the turn's policy, caps and one-contribution-per-NPC rule. Re-planning a turn is not supported; use a new turn id. Plans validate every invariant on construction, so a hand-built plan cannot hold a call the planner would refuse.
+**One plan per turn.** A turn that needs a step before generation calls `plan.add_phase(...)` on the same plan. For example, a `"select"` phase holds a `decision` call that chooses who answers, and then `"main"` generates the answers. The added phase shares the turn's policy, caps and one-contribution-per-NPC rule. Re-planning a turn is not supported; use a new turn id.
+
+Plans validate their invariants on construction. A hand-built plan cannot hold any of these:
+
+- a call the planner would refuse or decline;
+- a decline the policy contradicts;
+- calls or declines out of phase order.
+
+Id collections must be real collections: a bare string such as `"npc-a"` is refused rather than split into letters.
 
 ## Booking usage
 
@@ -62,7 +70,7 @@ Each attempt at a planned call is a `CallAttempt` containing:
 - **Unplanned call:** `UnplannedCallError`. This covers fabricated ids, declined requests and another turn's calls.
 - **Bad attempt sequence:** an attempt over the limit, out of order, duplicated, or recorded after a completed attempt.
 
-After `add_phase`, rebind the ledger with `ledger.extend(new_plan)` before summarising.
+A summary accounts only for the plan its ledger is bound to. Add later phases through the ledger (`ledger.add_phase(...)`), or rebind it with `ledger.extend(final_plan)`. `extend` accepts only a continuation of the same turn that has at least one new phase.
 
 Token semantics follow the lessons of V0.2.1's usage ledger:
 
@@ -70,6 +78,7 @@ Token semantics follow the lessons of V0.2.1's usage ledger:
 - `input_tokens` is the whole prompt, *including* cached tokens. Adapters normalise providers that report only the uncached part.
 - Cache reads/writes are slices of input, and reasoning is a slice of output. They are never additions.
 - Every attempt is summed, including failed retries.
+- A `not_sent` attempt used nothing, so its measurement does not affect `provider_reported_only`.
 
 A ledger's `summary()` breaks usage down into `total`, `baseline`, `optional`, `by_stage` and `by_actor` (key `None` for scene-level calls). Each breakdown gives sums and also counts how many attempts left each field unreported. The summary also exposes:
 
@@ -77,7 +86,9 @@ A ledger's `summary()` breaks usage down into `total`, `baseline`, `optional`, `
 - `complete`: no unmetered call, and every attempt reported input and output.
 - `provider_reported_only`: `complete`, and every count was provider-reported. It is never true for an empty ledger.
 
-`SessionUsage(campaign_id)` aggregates turn summaries, counts each turn once and carries the same breakdowns and flags.
+Summaries are validated: their breakdowns must add up to their total, and the flags are derived from their own figures.
+
+`SessionUsage(campaign_id)` aggregates turn summaries and counts each turn once. It carries the same totals and breakdowns (`total`, `baseline`, `optional`, `by_stage`, `by_actor`) and the same flags (`unmetered_call_ids`, `measurements`, `complete`, `provider_reported_only`). Usage values are immutable and hashable.
 
 ## Binding obligation on later sprints
 
