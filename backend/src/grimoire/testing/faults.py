@@ -209,6 +209,7 @@ class RootedFileOps:
         self.crash_index: int | None = None  # the fired Crash or Fail
         self.fault_timing: str | None = None
         self.interleaved_paths: set[str] = set()
+        self.mediation_gap: str | None = None  # shadow vs disk mismatch seen before an interleave
         self.interleave_error: BaseException | None = None
         self._fired = [False] * len(self.plan)
         self._matches = [0] * len(self.plan)
@@ -285,6 +286,10 @@ class RootedFileOps:
         interleaves, fatal = self._match(op)
         for fault in interleaves:
             before = snapshot(self.root) if self.record else {}
+            if self.record and before != self.shadow and self.mediation_gap is None:
+                self.mediation_gap = ", ".join(sorted(
+                    key for key in set(before) | set(self.shadow or {})
+                    if before.get(key, _ABSENT) != (self.shadow or {}).get(key, _ABSENT)))
             try:
                 fault.action(RootedFileOps(self.root, phase=f"{self.phase}-interleave",
                                            max_ops=self.max_ops, record=False), Path(self.root))
@@ -292,10 +297,17 @@ class RootedFileOps:
                 self.interleave_error = error
                 self.dead = True
                 raise SimulatedCrash("interleaved action failed") from error
-            if self.record:
-                self.shadow = snapshot(self.root)
-                self.interleaved_paths |= {key for key in set(before) | set(self.shadow)
-                                           if before.get(key, _ABSENT) != self.shadow.get(key, _ABSENT)}
+            if self.record and self.shadow is not None:
+                # Apply only the interleave's own changes, so earlier unmediated writes stay visible.
+                after = snapshot(self.root)
+                changed = {key for key in set(before) | set(after)
+                           if before.get(key, _ABSENT) != after.get(key, _ABSENT)}
+                for key in changed:
+                    if key in after:
+                        self.shadow[key] = after[key]
+                    else:
+                        self.shadow.pop(key, None)
+                self.interleaved_paths |= changed
         if fatal is not None:
             self.crash_index = op.index
         if isinstance(fatal, Fail):

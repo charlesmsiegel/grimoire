@@ -59,6 +59,7 @@ class CrashOutcome:
     action_index: int | None = None
     action_timing: str | None = None
     baseline_trace: tuple[FileOp, ...] = ()
+    action_trace: tuple[FileOp, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -193,11 +194,14 @@ def no_residue(*globs: str) -> Invariant:
 def completes_after(at: At) -> Invariant:
     """Once the commit operation has executed, recovery must finish the action."""
     def check(outcome: CrashOutcome) -> str | None:
-        commit = nth_match(outcome.baseline_trace, at)
-        if commit is None:
+        if nth_match(outcome.baseline_trace, at) is None:
             return f"commit operation {at!r} not found in the baseline trace"
         index, timing = outcome.action_index, outcome.action_timing
-        if index is None or index < commit or (index == commit and timing != "after"):
+        if index is None:
+            return None
+        # Resolve against the faulted run: an interleave may have shifted operation indices.
+        commit = nth_match(outcome.action_trace or outcome.baseline_trace, at)
+        if commit is None or index < commit or (index == commit and timing != "after"):
             return None
         excluded = _external(outcome)
         recovered, completed = _without(outcome.recovered, excluded), _without(outcome.completed, excluded)
@@ -319,6 +323,9 @@ class _Run:
 
     def check_mediated(self, ops: RootedFileOps, label: str) -> Tree:
         actual = self.snap(label)
+        if ops.mediation_gap is not None:
+            self.flag(MEDIATED, f"{ops.phase} changed files outside the FileOps seam before an "
+                      f"interleave: {ops.mediation_gap}")
         if ops.shadow is not None and ops.shadow != actual:
             self.flag(MEDIATED, f"{ops.phase} changed files outside the FileOps seam: "
                       + _difference(actual, ops.shadow))
@@ -453,6 +460,7 @@ class _Run:
             action_index=action_ops.crash_index if self.baseline else None,
             action_timing=action_ops.fault_timing if self.baseline else None,
             baseline_trace=self.baseline.action_trace if self.baseline else tuple(action_ops.trace),
+            action_trace=tuple(action_ops.trace),
         )
         for invariant in self.scenario.invariants:
             detail = invariant.check(outcome)
@@ -517,7 +525,10 @@ def explore_crashes(scenario: CrashScenario, workdir: Path, *, torn: bool = True
                     for recover_op in run.recover_trace:
                         if not recover_op.mutating:
                             continue
-                        for timing in ("before", "after"):
+                        timings = ["before", "after"]
+                        if torn and recover_op.kind == "write_bytes" and recover_op.size:
+                            timings.append("torn")
+                        for timing in timings:
                             runs.append(_run(
                                 scenario, workdir, action_plan=[fault],
                                 recover_plan=[Crash(recover_op.index, timing)], meddle=True,

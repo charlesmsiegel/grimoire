@@ -263,7 +263,9 @@ def test_a1_journaled_writer_survives_every_crash_point(tmp_path):
     assert len(action_runs) == 2 * len(mutating) + len(writes) + len(mutating) == 33
     recovery_runs = [run for run in report.runs if " > " in run.point]
     crashed = [run for run in action_runs if not run.point.endswith("@fail")]
-    predicted = sum(2 * sum(op.mutating for op in run.recover_trace) for run in crashed)
+    predicted = sum(2 * sum(op.mutating for op in run.recover_trace)
+                    + sum(op.kind == "write_bytes" and bool(op.size) for op in run.recover_trace)
+                    for run in crashed)
     assert len(recovery_runs) == predicted == 84  # pinned: catches silently shrinking exploration
     assert report.points_explored == len(action_runs) + len(recovery_runs)
     points = [run.point for run in report.runs]
@@ -520,6 +522,20 @@ def test_a13_writes_that_bypass_the_seam_are_named(tmp_path):
     assert names(report.violations) == ["all mutations mediated"]
 
 
+def test_a13_bypass_before_an_interleave_is_not_absorbed(tmp_path):
+    def conditional_bypass(ops, root):
+        ops.write_bytes(root / "a.json", NEW["a.json"])
+        if ops.exists(root / "ext.json"):
+            (root / "b.json").write_bytes(NEW["b.json"])  # bypasses the seam
+        ops.write_bytes(root / "c.json", b"c")
+
+    plan = [Interleave(1, lambda ops, root: ops.write_bytes(root / "ext.json", b"external")),
+            Interleave(Target("write_bytes", "c.json"), lambda ops, root: None)]
+    run = run_with_fault(scenario(conditional_bypass, invariants=()), plan, tmp_path)
+    flagged = [v for v in run.violations if v.invariant == "all mutations mediated"]
+    assert flagged and any("b.json" in v.detail for v in flagged)
+
+
 def test_baseline_must_complete_and_mutate(tmp_path):
     def raises(ops, root):
         ops.write_bytes(root / "a.json", NEW["a.json"])
@@ -532,6 +548,39 @@ def test_baseline_must_complete_and_mutate(tmp_path):
         report = explore_crashes(scenario(action, invariants=()), tmp_path)
         assert [(v.invariant, v.point) for v in report.violations] == [("baseline completes", "baseline")]
         assert detail in report.violations[0].detail and report.points_explored == 0
+
+
+def test_commit_point_is_resolved_in_the_faulted_trace(tmp_path):
+    def reacts_to_external_file(ops, root):
+        if ops.exists(root / "ext.json"):
+            ops.read_bytes(root / "ext.json")  # an interleave shifts later operation indices
+        temp = ops.make_temp(root, prefix="data.", suffix=".new")
+        ops.write_bytes(temp, b"new")
+        ops.replace(temp, root / "data")
+
+    commit = Target("replace", target="data")
+    plan = [Interleave(0, lambda ops, root: ops.write_bytes(root / "ext.json", b"external")),
+            Crash(commit, "before")]
+    run = run_with_fault(scenario(reacts_to_external_file, discard_staging, invariants=(completes_after(commit),),
+                                  setup=write_files({"data": b"old"})), plan, tmp_path)
+    assert run.point.startswith("action:#4 replace") and run.violations == ()
+
+
+def test_a12_torn_recovery_writes_are_explored(tmp_path):
+    def in_place_recover(ops, root):
+        if ops.exists(root / ".journal"):
+            for name, entry in json.loads(ops.read_bytes(root / ".journal")).items():
+                current = _sha(ops.read_bytes(root / name))
+                if ops.exists(entry["temp"]) and current == entry["old"]:
+                    ops.write_bytes(root / name, ops.read_bytes(entry["temp"]))  # not atomic
+            ops.remove(root / ".journal")
+        discard_staging(ops, root)
+
+    fragile = scenario(journaled_publish(NEW), in_place_recover)
+    assert explore_crashes(fragile, tmp_path, torn=False, recovery_crashes=True).violations == ()
+    report = explore_crashes(fragile, tmp_path, recovery_crashes=True)
+    assert names(report.violations) == ["atomic_outcome"]
+    assert all(" > recover:" in v.point and v.point.endswith("@torn") for v in report.violations)
 
 
 def test_combined_plan_is_labelled_by_its_crash(tmp_path):
