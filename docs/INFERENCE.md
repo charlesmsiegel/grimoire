@@ -105,14 +105,14 @@ Cost comparisons with V0.2.1 (015) must use `provider_reported_only` data.
 - It refuses any `PlannedCall` its turn's plan lacks.
 - It books every attempt, including retries and fallbacks, through one `TurnMeter` per turn.
 - **An attempt begins at `connect()`.** A refusal before that (authorization, key, cancel) sends nothing and is not booked, so the call stays unmetered and the meter records status `refused`.
-- **Evidence rule:** a `complete` summary only says every planned call was metered. For cost comparisons a turn needs `provider_reported_only` **and** `TurnMeter.all_accepted`.
+- **Evidence rule:** a `complete` summary only says every planned call was metered. For cost comparisons a turn needs `TurnMeter.cost_evidence`: provider-reported counts, every call accepted, no poisoned booking, and no loopback peer.
 
 ## Deferred
 
 The following are not part of this slice:
 
-- prices and currencies (the [provider adapter](PROVIDERS.md) exists; latency lives in its attempt reports, not in `CallAttempt`);
-- latency;
+- prices and currencies (the [provider adapter](PROVIDERS.md) now exists);
+- ledger- and task-level latency aggregation (per-attempt latency is in the adapter's reports);
 - session caps and guardrails that stop a turn;
 - job-scoped (non-turn) ledgers;
 - embeddings, which structurally have no output tokens;

@@ -14,6 +14,7 @@ import json
 import re
 import threading
 import time
+import weakref
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
@@ -127,6 +128,8 @@ class ProviderAdapter:
         self._wait = wait
         self._limits = limits
         self._authorize_lock = threading.Lock()  # approval consumption is not thread-safe
+        # One meter per turn: a second meter would let a call be issued twice.
+        self._meters: dict[tuple[str, str], weakref.ref[TurnMeter]] = {}
 
     def __repr__(self) -> str:
         return f"ProviderAdapter({self._registry!r}, transport={type(self._transport).__name__})"
@@ -166,6 +169,13 @@ class ProviderAdapter:
                 raise ValueError(f"unknown provider {route.provider_id!r}")
         if type(handle) is not WorkerHandle or not self._authorizer.issued(handle):
             raise CallRefused("handle")
+        plan = meter.ledger.plan
+        turn = (plan.campaign_id, plan.turn_id)
+        known = self._meters.get(turn)
+        if known is not None and known() is not None and known() is not meter:
+            raise CallRefused("second meter for this turn")
+        self._meters = {key: ref for key, ref in self._meters.items() if ref() is not None}
+        self._meters[turn] = weakref.ref(meter)
         cancel = cancel if cancel is not None else CancelToken()
         digest = request_digest(request)
         booked_before = len(meter.ledger.attempts)

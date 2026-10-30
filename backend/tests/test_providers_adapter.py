@@ -629,3 +629,52 @@ def test_cancel_landing_after_connect_sends_nothing():
     assert world.adapter._transport.sends == []
     assert [(a.outcome, a.usage) for a in world.meter.ledger.attempts] == [
         ("not_sent", TokenUsage(0, 0))]
+
+
+def test_a_second_meter_for_the_same_turn_is_refused():
+    world = World([reply(), reply()])
+    assert world.run().status == "accepted"
+    twin = TurnMeter(TurnUsageLedger(world.plan))
+    with pytest.raises(CallRefused, match="meter"):
+        world.adapter.execute(twin, world.call, request(), [PRIMARY], world.handle)
+    assert len(world.transport.connects) == 1
+
+
+def test_a_changed_request_is_refused_after_an_attempt():
+    world = World([Status(401), reply()], attempts=2)
+    world.adapter.execute(world.meter, world.call, request(), [PRIMARY], world.handle,
+                          on_delta=None)
+    with pytest.raises(CallRefused, match="request_changed"):
+        world.adapter.execute(world.meter, world.call, request("another prompt"), [PRIMARY],
+                              world.handle)
+
+
+def test_oversized_stream_is_bad_response():
+    from grimoire.providers import AdapterLimits
+    world = World([Reply(deltas=("x" * 300,) * 10), reply()], attempts=2)
+    world.adapter._limits = AdapterLimits(max_stream_bytes=1000)
+    result = world.run()
+    assert result.attempts[0].error_kind == "bad_response" and result.status == "accepted"
+
+
+def test_interrupt_inside_on_delta_is_booked_before_it_propagates():
+    world = World([reply(), reply()], attempts=2)
+
+    def interrupt(delta):
+        raise KeyboardInterrupt
+    with pytest.raises(KeyboardInterrupt):
+        world.run(on_delta=interrupt)
+    assert [a.outcome for a in world.meter.ledger.attempts] == ["failed"]
+    assert world.meter.delivered(world.call.call_id)
+
+
+def test_the_adapter_imports_no_same_wave_or_test_code():
+    import ast
+    import pathlib
+    import grimoire.providers as package
+    for path in pathlib.Path(package.__file__).parent.glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            names = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                     else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
+            for name in names:
+                assert not name.startswith(("grimoire.testing", "grimoire.evals")), (path, name)

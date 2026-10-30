@@ -200,3 +200,30 @@ def test_phases_cannot_be_added_while_a_call_runs():
         meter.add_phase("later", speaking_npc_ids=["c"])
     meter._end(plan.calls[0].call_id, "refused")
     meter.add_phase("later", speaking_npc_ids=["c"])
+
+
+def _book_reported(meter, call, n, loopback):
+    def build():
+        attempt = CallAttempt(call.call_id, n, TokenUsage(10, 2), Measurement.PROVIDER_REPORTED,
+                              "completed", "p@h/m")
+        return attempt, AttemptReport(call.call_id, n, "p@h/m", "completed", TokenUsage(10, 2),
+                                      Measurement.PROVIDER_REPORTED, peer_loopback=loopback)
+    meter._book(call.call_id, n, "p@h/m", sent=True, measurement=Measurement.PROVIDER_REPORTED,
+                error_kind=None, build=build)
+
+
+def test_cost_evidence_needs_hosted_provider_reported_accepted_unpoisoned_calls():
+    for loopback, expected in ((False, True), (True, False), (None, False)):
+        meter, plan = _meter()
+        for call in plan.calls:
+            meter._begin(call, DIGEST, False, 1)
+            _book_reported(meter, call, 1, loopback)
+            meter._end(call.call_id, "accepted")
+        assert meter.summary().provider_reported_only and meter.all_accepted
+        assert meter.cost_evidence is expected
+    meter, plan = _meter(_fail_booking=lambda stage: True)
+    meter._begin(plan.calls[0], DIGEST, False, 1)
+    _book(meter, plan.calls[0], 1)
+    meter._end(plan.calls[0].call_id, "failed")
+    assert meter.poisoned_call_ids == frozenset({plan.calls[0].call_id})
+    assert meter.cost_evidence is False

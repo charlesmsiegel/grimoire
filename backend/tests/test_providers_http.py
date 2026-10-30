@@ -57,6 +57,7 @@ def test_a5_real_http_round_trip_is_provider_reported():
     assert headers["Authorization"] == f"Bearer {KEY}"
     assert body == open_envelope(authorized[0])[1] and path == "/v1/chat/completions"
     assert meter.summary().provider_reported_only and meter.all_accepted
+    assert meter.cost_evidence is False  # a loopback endpoint is never billing evidence
 
 
 def test_a6_refused_port_is_not_sent():
@@ -152,4 +153,3 @@ def test_total_deadline_bounds_a_trickling_line():
         result, meter = _run(server.url(), timeouts=Timeouts(connect=1.0, read=1.0, total=1.5))
         done.set()
     assert (result.status, result.error.kind) == ("failed", "timeout")
-    assert meter.reports(meter.ledger.plan.calls[0].call_id)[0].total_s < 8

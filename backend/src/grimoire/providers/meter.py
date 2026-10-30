@@ -99,6 +99,26 @@ class TurnMeter:
         """Every planned call ended with an accepted reply (015's evidence rule)."""
         return all(self.status(call.call_id) == "accepted" for call in self._ledger.plan.calls)
 
+    @property
+    def poisoned_call_ids(self) -> frozenset[CallId]:
+        """Calls whose booking failed: an attempt may have been sent but not recorded."""
+        return frozenset(cid for cid, state in self._calls.items() if state.poisoned)
+
+    @property
+    def cost_evidence(self) -> bool:
+        """Whether this turn may be compared as billed usage (015's evidence rule).
+
+        Every count is provider-reported, every planned call was accepted, no
+        booking failed, and every sent attempt reached a non-loopback peer: a
+        local test or self-hosted server is never hosted-billing evidence.
+        """
+        if not (self._ledger.summary().provider_reported_only and self.all_accepted
+                and not self.poisoned_call_ids):
+            return False
+        return all(report.peer_loopback is False
+                   for state in self._calls.values() for report in state.reports
+                   if report.outcome != "not_sent")
+
     def next_attempt(self, call_id: CallId) -> int:
         return 1 + sum(1 for each in self._ledger.attempts if each.call_id == call_id)
 

@@ -25,7 +25,7 @@ A green test suite here does not mean an app exists.
 | `RouteChoice(provider_id, model)` | What a caller chooses: primary first, then fallbacks. |
 | `Credentials` | Trusted code that knows the keys. Keys are wrapped in a `Secret` (printable ASCII, redacted `repr`). `EnvironmentCredentials` stands in for keys under the reserved `secrets/` root until the native file store (010) exists. |
 | `ModelRequest` | Opaque messages plus a **required** `max_output_tokens`, so every call is bounded. |
-| `TurnMeter` | One per turn and the **only booking path**. It holds the current ledger value and, for each call, its reports, status, delivery flag and fixed request digest. It is single-threaded: concurrent or re-entrant use is refused (`busy`). |
+| `TurnMeter` | One per turn and the **only booking path**. An adapter refuses a second live meter for the same campaign and turn; this guard is in-process only, and cross-process fencing belongs to 027 and 030. It holds the current ledger value and, for each call, its reports, status, delivery flag and fixed request digest. It is single-threaded: concurrent or re-entrant use is refused (`busy`). |
 | `ProviderAdapter.execute(meter, call, request, routes, handle, …)` | Runs one planned call and returns a `CallResult`. |
 | `HttpTransport` | `http.client` over TLS (or loopback HTTP). It has no proxy support and no injection seams. |
 | `grimoire.testing.providers` | Test-only: `ScriptedTransport`, `ScriptedClock` and `explore_provider_faults`. |
@@ -64,7 +64,9 @@ The `approvals(label, attempt, envelope)` callback receives those bytes. Handles
 
 - Each attempt is booked in a `finally` that covers `BaseException`.
 - If the precise attempt cannot be built or recorded, a fallback with unknown usage is booked, and the call ends without a reply.
-- If even the fallback fails, or an interrupt lands mid-booking, the call is **poisoned**: it stays write-ahead marked and every later `execute` of it is refused.
+- If even the fallback fails, or an interrupt lands mid-booking, the call is **poisoned**: it stays write-ahead marked and every later `execute` of it is refused. A poisoned call may hide a sent attempt, so the summary's `complete` flag is unreliable for that turn; `meter.poisoned_call_ids` lists such calls, and `cost_evidence` excludes the turn.
+
+**`on_delta` text is provisional.** Deltas reach the consumer before the attempt ends, and may come from an attempt that later fails, truncates or is cancelled. A consumer may display them, but must commit nothing unless `CallResult.status == "accepted"`, and then only `CallResult.reply`.
 
 **Completion and acceptance.** A `finish_reason` counts only when it is a non-null, non-empty string. Real streams send `null` on every content chunk.
 
@@ -124,7 +126,13 @@ The adapter alone chooses `Measurement`:
 
 The route label `<id>@<host[:port]>/<model>` and `AttemptReport.peer_loopback` show whether that endpoint was local. Latency (`first_byte_s`, `total_s`) is `measured` only over `HttpTransport` with the real monotonic clock.
 
-**Evidence rule for cost comparisons (015):** use a turn only when `meter.summary().provider_reported_only` **and** `meter.all_accepted`, and treat loopback routes as local providers, not hosted billing.
+**Evidence rule for cost comparisons (015):** use a turn only when `meter.cost_evidence` is true. That requires all of the following:
+- every count is provider-reported;
+- every planned call was accepted;
+- no call is poisoned (`meter.poisoned_call_ids`);
+- every sent attempt reached a non-loopback peer.
+
+A loopback test or self-hosted server is therefore never hosted-billing evidence, even though its counts are `provider_reported`.
 
 ## Privacy
 
