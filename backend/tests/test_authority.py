@@ -364,6 +364,20 @@ def test_presets_are_frozen_and_exclude_intent_belief_and_commitment():
 
 def test_duplicate_ids_fail_loudly():
     reach = contribution("k1", "action", "I reach.")
+    twice = Delegation(CAMPAIGN, "d", "ash", P1, {"belief"}, "campaign", "custom")
+    with pytest.raises(ValueError):
+        narration_policy(CTX, "ash", CONTROLS, [twice, twice])
+    # another campaign's records with the same ids are irrelevant, not errors
+    foreign = PlayerContribution("campaign-b", "k1", "scene-1", "turn-1", "ash", P1, "speech", "x")
+    foreign_fear = ImposedCondition("campaign-b", "fear-1", "ash", "rule", "r", "x", False, False)
+    result = review([claim("a", "voluntary_action", "I reach.", expresses="k1"),
+                     claim("f", "involuntary_reaction", "You freeze.", condition_id="fear-1")],
+                    contributions=[foreign, reach], conditions=[foreign_fear, fear()])
+    assert bases(result) == {"a": "player:k1", "f": "condition:fear-1"}
+    grant = Delegation(CAMPAIGN, "d", "ash", P1, {"belief"}, "campaign", "custom")
+    kept = review([claim("b", "belief", "x")], delegations=[grant],
+                  revocations=[Revocation("campaign-b", "d", P1)])
+    assert bases(kept) == {"b": "delegation:d"}
     with pytest.raises(ValueError):
         review([], contributions=[reach, contribution("k1", "speech", '"Hi."')])
     with pytest.raises(ValueError):
@@ -484,6 +498,9 @@ def test_corrections():
         ("missing", "unknown_claim"), ("fact", "not_controller"), ("own", "unknown_claim"),
     ]
     assert len(original.accepted) == 7 and original.disputed == ()  # inputs untouched
+    contested = CONTROLS + (ControlAssignment(CAMPAIGN, "ash", P2),)
+    with pytest.raises(AuthorityError):
+        apply_corrections(original, [Correction(CAMPAIGN, "wound", P1)], contested)
     # Unresolved outcomes can be flagged, never vetoed.
     unresolved = review([claim("u", "outcome", "x", attempt_id="k-reach", result="failure")],
                         contributions=[reach])

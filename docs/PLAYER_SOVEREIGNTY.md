@@ -51,7 +51,7 @@ Each error below is rejected and pinned by tests in `backend/tests/test_authorit
 
 1. Invented PC dialogue, a paraphrased quote, or an escalated action presented as the player's own (`pc_authorship`, `not_verbatim`).
 2. A PC feeling, belief, trust decision, deduction, intention or promise the player did not author (`pc_authorship`).
-3. A contribution used to back a domain it does not cover. Examples: a wary feeling relabelled as trust, an action used as a belief, a directorial request used as PC interiority. Also a contribution from another turn, scene, actor or submitter (`invalid_expression`).
+3. A contribution used to back a domain it does not cover. Examples: speech used as interiority, an action used as a belief, a directorial request used as PC interiority. Also a contribution from another turn, scene, actor or submitter (`invalid_expression`).
 4. A failed attempt narrated as success, or the reverse; conflicting rulings (`contradicts_resolution`, `conflicting_resolutions`, `unknown_attempt`).
 5. Fear or compulsion without an active condition, or with one that is undisclosed or outside agreed limits (`missing_condition`, `undisclosed_condition`, `outside_agreed_limits`).
 6. Authority creep: a delegation used for a different PC, scene, turn, domain or contribution, after a control change or revocation, or one granted by a non-controller.
@@ -62,14 +62,14 @@ The default is strict: no delegation. Every delegation is explicit and scoped (`
 
 | Mode | Grants |
 |---|---|
-| `auto_complete(contribution)` | The director may phrase one submitted action (`voluntary_action`). Keeping that phrasing to the one action is the labeller's job. |
+| `auto_complete(contribution)` | The director may phrase one submitted action (`voluntary_action`), such as a shorthand "I head to the stables". Keeping that phrasing to the one action is the labeller's job. |
 | `incidental_dialogue` | voluntary action and speech |
 | `characterization` | voluntary action, speech and interiority |
 | `custom` | any explicit protected set, including intent, belief or commitment; these three are never in a preset |
 
 Presets are frozen into explicit domains at grant time. Redefining a preset later never widens an existing grant.
 
-`narration_policy` states, per actor and moment, which domains the director may narrate and which are reserved. A future prompt renderer consumes it. It shares one code path with `review_narration`, and tests check that the two agree.
+`narration_policy` states, per actor and moment, which domains the director may narrate and which are reserved. A future prompt renderer consumes it. It shares the delegation-validity helper with `review_narration`, and a test checks that their conclusions agree for every domain.
 
 ## Correction flow
 
@@ -78,7 +78,7 @@ Presets are frozen into explicit domains at grant time. Redefining a preset late
 - **Protected claims about the player's own PC are struck** (`player_correction`). This applies even when the claim was delegated or expressed the player's own contribution.
 - **Other claims about the player's PC are only flagged** and stay accepted (`review.disputed`). This covers sensations, external effects, unresolved outcomes and subjectless world facts; any player with an actor in the campaign may flag the last. A flag is a possible-mislabel report for a later referee, never a veto of harm or failure.
 - **Resolved outcomes and disclosed condition reactions are refused** (`not_player_authority`). Content limits belong to Session Zero.
-- **Corrections by anyone other than the subject's controller are refused** (`not_controller`).
+- **Corrections by anyone other than the subject's controller are refused** (`not_controller`). Ambiguous control of the subject raises `AuthorityError`.
 
 A correction does not revoke a delegation. The player revokes it separately so the overreach does not recur.
 
