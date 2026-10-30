@@ -6,7 +6,9 @@ are never a source of that path; they are consulted only to *refuse* a V2 path
 that is, sits inside or contains a V1 library. Resolving is read-only: nothing
 is created, and no V1 directory is opened or listed -- only ``stat``/``lstat``
 metadata, plus the one small pointer file, whose ``data_dir`` names a relocated
-V1 library that would otherwise be undetectable while it is still young.
+V1 library that would otherwise be undetectable while it is still young. On
+Linux the OS mount table is read too, so a bind mount cannot give a path a
+second name that hides containment.
 
 Probing fails closed. Only "no such file" means absent; a permission error,
 symlink loop or unreadable pointer refuses, because it leaves V2 unable to show
@@ -32,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import sys
 import unicodedata
@@ -196,10 +199,16 @@ def _probe(path: Path, *, follow: bool = True) -> os.stat_result | None:
 
 
 def _usable_directory(path: Path) -> Path:
+    """`path` resolved; it, or failing that its nearest existing ancestor, must be a directory."""
     resolved = _realpath(path)
-    info = _probe(resolved)
-    if info is not None and not stat.S_ISDIR(info.st_mode):
-        raise LibraryPathError(f"{resolved} exists but is not a directory")
+    for ancestor in _lineage(resolved):
+        info = _probe(ancestor)
+        if info is None:
+            continue
+        if not stat.S_ISDIR(info.st_mode):
+            where = "exists" if ancestor == resolved else f"is under {ancestor}, which exists"
+            raise LibraryPathError(f"{resolved} {where} but is not a directory")
+        break
     return resolved
 
 
@@ -216,7 +225,9 @@ def _guarded_roots(environ: Mapping[str, str], home: Path | None) -> list[tuple[
     if v1_home:
         # V1 read it as `Path(env)`: relative to its cwd and with no `~` expansion.
         try:
-            literal = Path(os.path.abspath(v1_home))
+            # Joined, not `abspath`ed: collapsing "link/.." by name would guard a
+            # different directory from the one V1's OS calls reached.
+            literal = Path(v1_home) if os.path.isabs(v1_home) else Path(os.getcwd(), v1_home)
         except (OSError, ValueError) as error:  # a vanished cwd, an embedded NUL
             raise LibraryPathError(f"cannot locate the V1 library in {V1_HOME_ENV}: {error}") from error
         roots.append((f"the V1 library in {V1_HOME_ENV}", literal))
@@ -314,6 +325,58 @@ def _lexical_relation(path: Path, root: Path) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class _Mount:
+    device: str   # major:minor
+    root: Path    # the directory of that filesystem mounted here
+    point: Path   # where it is mounted
+
+
+#: Linux's mount table; absent elsewhere, where there are no bind mounts to see.
+_MOUNTINFO = Path("/proc/self/mountinfo")
+
+
+def _unescape(field: str) -> str:
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
+
+
+def _mounts() -> list[_Mount]:
+    try:
+        text = _MOUNTINFO.read_text(encoding="utf-8", errors="surrogateescape")
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    except OSError as error:
+        raise LibraryPathError(f"cannot read the mount table {_MOUNTINFO}: {error}") from error
+    mounts = []
+    for line in text.splitlines():
+        fields = line.split(" ")
+        if len(fields) > 4:
+            mounts.append(_Mount(fields[2], Path(_unescape(fields[3])), Path(_unescape(fields[4]))))
+    return mounts
+
+
+def _under(path: Path, top: Path) -> bool:
+    return path.parts[:len(top.parts)] == top.parts
+
+
+def _aliases(path: Path, mounts: list[_Mount]) -> set[Path]:
+    """Every name `path` has through the mount table. A bind mount of an inner
+    directory gives what sits below it a second name whose ancestors are not
+    its physical ancestors, so neither names nor inodes reveal containment."""
+    names = {path}
+    holder = None
+    for mount in mounts:  # the visible mount is the deepest, and among stacked ones the last
+        if _under(path, mount.point) and (holder is None or len(mount.point.parts) >= len(holder.point.parts)):
+            holder = mount
+    if holder is None:
+        return names
+    physical = holder.root.joinpath(*path.parts[len(holder.point.parts):])
+    for mount in mounts:
+        if mount.device == holder.device and _under(physical, mount.root):
+            names.add(mount.point.joinpath(*physical.parts[len(mount.root.parts):]))
+    return names
+
+
 def _same_file(a: os.stat_result, b: os.stat_result) -> bool:
     return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
 
@@ -350,12 +413,19 @@ def _looks_like_v1(directory: Path) -> bool:
 
 
 def _check_isolation(path: Path, roots: list[tuple[str, Path]], *, fingerprint: bool = True) -> None:
+    mounts = _mounts()
+    names = _aliases(path, mounts)
     for label, root in roots:
-        relation = _lexical_relation(path, root) or _identity_relation(path, root)
+        root_names = _aliases(root, mounts)
+        relation = next((r for name in names for root_name in root_names
+                         if (r := _lexical_relation(name, root_name))), None)
+        relation = relation or _identity_relation(path, root)
         if relation is not None:
             raise V1IsolationError(f"refusing {path}: it {relation} {label} ({root})")
     if fingerprint:
-        for ancestor in _lineage(path):
-            if _looks_like_v1(ancestor):
-                where = "is" if ancestor == path else "is inside"
-                raise V1IsolationError(f"refusing {path}: it {where} what looks like a V1 library ({ancestor})")
+        for name in names:
+            for ancestor in _lineage(name):
+                if _looks_like_v1(ancestor):
+                    where = "is" if ancestor == name else "is inside"
+                    raise V1IsolationError(
+                        f"refusing {path}: it {where} what looks like a V1 library ({ancestor})")

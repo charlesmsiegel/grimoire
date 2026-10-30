@@ -384,7 +384,8 @@ def test_default_launch_never_opens_or_lists_v1(home, tmp_path):
         _AUDITED = None
     assert location.path == home / ".grimoire-v2"
     assert touches(seen, v1) == []
-    assert seen == [str(home / ".grimoire.json")]   # the pointer is the only file read
+    # The pointer is the only V1 file read; the mount table is the OS's.
+    assert [p for p in seen if p != os.path.realpath(paths._MOUNTINFO)] == [str(home / ".grimoire.json")]
     assert snapshot(tmp_path) == before
 
 
@@ -627,3 +628,77 @@ def test_unencodable_paths_raise_library_errors(home, tmp_path, where):
             check_write_destination(bad, environ={}, home=home)
         else:
             resolve_library(environ={where: bad}, home=home)
+
+
+# ---- Codex review findings (PR 562) -------------------------------------------
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_v1_home_through_a_symlink_then_dotdot_guards_the_physical_parent(home, tmp_path, relative):
+    # V1 opened `alias/../v1` with OS semantics: follow `alias`, then go up.
+    (tmp_path / "actual" / "sub").mkdir(parents=True)
+    (tmp_path / "alias").symlink_to(tmp_path / "actual" / "sub")
+    young = v1_library(tmp_path / "actual" / "v1", young=True)
+    value = "alias/../v1" if relative else str(tmp_path / "alias" / ".." / "v1")
+    refused(home, young, {"GRIMOIRE_HOME": value}, match="in GRIMOIRE_HOME")
+
+
+def test_path_under_a_regular_file_is_unusable(home, tmp_path):
+    (tmp_path / "file").write_text("x")
+    for call in (lambda: resolve_library(environ={"GRIMOIRE_V2_HOME": str(tmp_path / "file" / "child")}, home=home),
+                 lambda: check_write_destination(tmp_path / "file" / "a" / "b", environ={}, home=home)):
+        with pytest.raises(LibraryPathError, match="not a directory") as error:
+            call()
+        assert not isinstance(error.value, V1IsolationError)
+
+
+def fake_mounts(tmp_path, monkeypatch, *rows):
+    """A mount table: each row is (device, root within that filesystem, mount point)."""
+    table = tmp_path / "mountinfo"
+    escape = lambda p: str(p).replace(" ", "\\040")
+    table.write_text("".join(f"{i} 1 {dev} {escape(root)} {escape(point)} rw - ext4 /dev/x rw\n"
+                             for i, (dev, root, point) in enumerate(rows, 20)))
+    monkeypatch.setattr(paths, "_MOUNTINFO", table)
+
+
+def test_bind_mount_of_an_inner_directory_hides_no_containment(home, tmp_path, monkeypatch):
+    data, mnt = tmp_path / "data", tmp_path / "mnt dir"
+    (data / "sub").mkdir(parents=True)
+    mnt.mkdir()
+    fake_mounts(tmp_path, monkeypatch, ("8:1", Path("/"), Path("/")), ("8:1", data / "sub", mnt))
+    # V1 named through the bind; V2 destination is the physical ancestor.
+    with pytest.raises(V1IsolationError, match="contains the V1 library in GRIMOIRE_HOME"):
+        check_write_destination(data, environ={"GRIMOIRE_HOME": str(mnt / "v1")}, home=home)
+    # ...and the reverse: V2 through the bind, inside a physically named V1 root.
+    with pytest.raises(V1IsolationError, match="is inside the V1 library in GRIMOIRE_HOME"):
+        check_write_destination(mnt / "v2", environ={"GRIMOIRE_HOME": str(data)}, home=home)
+    # A V1 layout above the bind is seen through it.
+    v1_library(data)
+    with pytest.raises(V1IsolationError, match="looks like a V1 library"):
+        check_write_destination(mnt / "v2", environ={}, home=home)
+
+
+def test_mounts_of_other_filesystems_are_not_aliases(home, tmp_path, monkeypatch):
+    (tmp_path / "data" / "sub").mkdir(parents=True)
+    (tmp_path / "mnt").mkdir()
+    fake_mounts(tmp_path, monkeypatch, ("8:1", Path("/"), Path("/")),
+                ("9:9", tmp_path / "data" / "sub", tmp_path / "mnt"))
+    assert check_write_destination(tmp_path / "data", environ={"GRIMOIRE_HOME": str(tmp_path / "mnt" / "v1")},
+                                   home=home) == (tmp_path / "data").resolve()
+
+
+def test_missing_mount_table_means_no_aliases(home, tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "_MOUNTINFO", tmp_path / "no-such-table")
+    assert resolve_library(environ={}, home=home).origin == "default"
+
+
+def test_real_bind_mount(home, tmp_path):
+    data, mnt = tmp_path / "data", tmp_path / "mnt"
+    (data / "sub" / "v1").mkdir(parents=True)
+    mnt.mkdir()
+    if subprocess.run(["mount", "--bind", str(data / "sub"), str(mnt)], capture_output=True).returncode:
+        pytest.skip("bind mounts need privileges this run lacks")
+    try:
+        with pytest.raises(V1IsolationError, match="contains"):
+            check_write_destination(data, environ={"GRIMOIRE_HOME": str(mnt / "v1")}, home=home)
+    finally:
+        subprocess.run(["umount", str(mnt)], check=True)
