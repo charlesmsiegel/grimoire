@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from grimoire.core import (
-    Belief, CampaignActor, CharacterDefinition, ControlAssignment, Event,
+    Belief, CampaignActor, CharacterDefinition, ControlAssignment, Event, InstanceRef,
     MissingDefinition, Observation, SourceRef, actor_view,
 )
 
@@ -63,3 +63,32 @@ def test_source_and_actor_validation():
         CampaignActor("campaign-a", "anonymous")
     with pytest.raises(ValueError):
         CharacterDefinition(SourceRef("world:a", "item", "ring"), "Ring")
+
+
+def test_definitions_are_always_pinned():
+    with pytest.raises(ValueError):
+        CharacterDefinition(SourceRef("world:emberfall", "character", "vessa"), "Vessa")
+
+
+@pytest.mark.parametrize("build", [
+    lambda: CampaignActor("Campaign A", "vessa", local_name="Vessa"),
+    lambda: CampaignActor("campaign-a", "Vessa", local_name="Vessa"),
+    lambda: ControlAssignment("campaign a", "vessa", "director"),
+    lambda: Observation("campaign-a", "Vessa", "e1", "sight", "A door opened"),
+    lambda: Belief("campaign-a", "vessa ", "The door is open", "believed"),
+    lambda: Event("", "e1", "A door opened"),
+])
+def test_campaign_and_actor_ids_obey_identity_grammar(build):
+    with pytest.raises(ValueError):
+        build()
+
+
+def test_campaign_actor_has_an_instance_ref():
+    actor = CampaignActor("campaign-a", "vessa-a", local_name="Vessa")
+    assert actor.ref == InstanceRef("campaign-a", "character", "vessa-a")
+    assert str(actor.ref) == "campaign:campaign-a/character/vessa-a"
+
+
+def test_model_reexports_the_identity_source_ref():
+    from grimoire.core import identity, model
+    assert model.SourceRef is identity.SourceRef
