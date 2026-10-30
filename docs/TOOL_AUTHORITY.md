@@ -10,6 +10,7 @@ Imported Markdown, character cards (including extensions and greetings), rules s
 
 - Trusted application code owns the `Authorizer`: grants, approvals, policy and audit.
 - Each worker gets only a `WorkerHandle` from `authorizer.handle_for(principal, trusted=False)`. The handle fixes the principal and origin and exposes only `authorize(permission, resource, payload=None, approval_id=None)`. Its API offers no way to add grants, register approvals, pick an identity or claim trust, and it refuses attribute writes. Arguments must be exact `str`/`bytes` instances; subclasses that could override hashing, equality or methods are `malformed_request`.
+- `authorizer.issued(handle)` tells trusted code (such as the provider adapter) whether that authorizer's `handle_for` made a handle; a hand-built `WorkerHandle(...)` or one from another authorizer is not issued.
 - Only `human:` and `app:` principals may hold a trusted handle. **Any code path that parses imported content or model output must use an untrusted handle, whatever its principal namespace.** For example, an `app:` importer must not be trusted.
 - An `Authorizer` and its handles are single-threaded; callers that share one across threads must serialize access (approval consumption is not locked).
 - This is an API boundary enforced by tests and review. It is not an in-process sandbox: Python code that deliberately reaches into private attributes, closures or other modules can subvert any in-process check; isolating community scripts remains the sprint's moonshot.
