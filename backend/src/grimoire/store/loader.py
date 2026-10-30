@@ -174,7 +174,9 @@ def _listing(access: Access, parts: Parts, problems: list[LoadProblem], source: 
         problems.append(LoadProblem(_text(parts), "unreadable", f"cannot list: {error}", source))
         return []
     for name in listed:
-        if is_noise(name):
+        # Every file the store writes ends in ".json", so only a directory can be both
+        # a noise name and a real identifier (a source `test.swp`, a campaign `desktop.ini`).
+        if is_noise(name) and not (_valid_segment(name) and _is_dir(access, parts + (name,))):
             continue
         if is_link(access.path(parts + (name,))):
             problems.append(LoadProblem(_text(parts + (name,)), "link", "links are never followed", source))

@@ -464,3 +464,14 @@ def test_links_of_a_source_excluded_for_a_foreign_record_do_not_block_a_commit(l
     assert "world:a" in library.load().excluded
     _commit(library, (SourceManifest("world:b", OWNER, links=(LinkSpec(str(b), "derived_variant", str(a)),)),
                       library.read_source("world:b").etag))
+
+
+def test_identifiers_that_look_like_editor_noise_still_load(library):
+    tricky = SourceRef("test.swp", "k", "e", "r1")
+    _commit(library, (SourceManifest("test.swp", OWNER), None), (RecordEnvelope(tricky, {}), None),
+            (instance(InstanceRef("desktop.ini", "character", "x"), WREN), None))
+    (library.root / "campaigns" / "c1" / "desktop.ini").write_text("[.ShellClassInfo]")  # real noise: a file
+    view = library.load()
+    assert view.problems == ()
+    assert view.index.resolve(tricky.unpinned()).ref == tricky
+    assert InstanceRef("desktop.ini", "character", "x") in view.instances
