@@ -42,7 +42,7 @@ def first_word(text: str) -> str:
 
 
 def _double_wrapped(normalised: str) -> bool:
-    return len(normalised) > 4 and normalised.startswith("((") and normalised.endswith("))")
+    return len(normalised) >= 4 and normalised.startswith("((") and normalised.endswith("))")
 
 
 def marker_of(text: str) -> tuple[Lane | None, bool]:
@@ -65,12 +65,12 @@ def strip_marker(text: str) -> str:
 
 
 def wrapped(text: str, open_: str, close: str) -> str | None:
-    """Inner text when the whole utterance is one wrapped span, else None."""
+    """Inner text (possibly empty) when the whole utterance is one wrapped span, else None."""
     trimmed = straighten(text.strip())
     if len(trimmed) < 2 or not (trimmed.startswith(open_) and trimmed.endswith(close)):
         return None
     inner = trimmed[len(open_):-len(close)]
-    if open_ in inner or close in inner or not inner.strip():
+    if open_ in inner or close in inner:
         return None
     return inner.strip()
 

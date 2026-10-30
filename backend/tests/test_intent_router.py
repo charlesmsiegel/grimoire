@@ -215,3 +215,36 @@ def test_feedback_names_lane():
     assert "Not sure" in r("Delete everything").feedback
     assert "Ignored" in r("").feedback
     assert "inventory" in r("Open the inventory").feedback
+
+
+@pytest.mark.parametrize("text", ["Grimoire,pause", "grimoire:pause", "Grimoire,delete the scene"])
+def test_wake_word_without_space_is_a_command(text):
+    intent = r(text)
+    assert (intent.kind, intent.reason) == ("ui_command", "wake_word")
+
+
+@pytest.mark.parametrize("text", ["Grimoire;pause", "Grimoire—pause", "Grimoire...pause",
+                                  "Grimoire… pause"])
+def test_wake_word_with_odd_punctuation_never_becomes_speech(text):
+    intent = r(text)
+    assert intent.kind in ("ui_command", "uncertain")
+    assert intent.command in (None, Command("pause"))
+
+
+@pytest.mark.parametrize("text, mode", [
+    ('""', "auto"), ("“”", "auto"), ('" "', "auto"), ("**", "auto"), ("* *", "auto"),
+    ("(())", "auto"), ("(( ))", "auto"), ('""', "speech"), ("**", "action"), ("(())", "director"),
+])
+def test_empty_wrappers_are_empty(text, mode):
+    intent = r(text, mode)
+    assert (intent.kind, intent.reason) == ("reject", "empty")
+
+
+@pytest.mark.parametrize("text", ["Director", "ooc", "gm", "director ", "Director.", "Director!"])
+def test_lone_unseparated_marker_offers_no_empty_director_note(text):
+    intent = r(text)
+    assert intent.kind == "uncertain"
+    assert all(c.kind != "director_instruction" for c in intent.candidates)
+    for candidate in intent.candidates:
+        again = r(candidate.text, MODE[candidate.kind])
+        assert (again.kind, again.command) == (candidate.kind, candidate.command)

@@ -92,3 +92,8 @@ def test_voice_confirmation_needs_confidence_and_agreement():
 def test_validation(build):
     with pytest.raises(ValueError):
         build()
+
+
+@pytest.mark.parametrize("text", ["Yes?", "yes ?", "Confirm?", "do it?"])
+def test_questioning_yes_is_not_consent(text):
+    assert answer(text).status == "unclear"

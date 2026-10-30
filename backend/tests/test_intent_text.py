@@ -49,7 +49,8 @@ def test_wrapped():
     assert wrapped('"a" "b"', '"', '"') is None
     assert wrapped("*draws sword*", "*", "*") == "draws sword"
     assert wrapped("*a* *b*", "*", "*") is None
-    assert wrapped('""', '"', '"') is None
+    assert wrapped('""', '"', '"') == ""
+    assert wrapped('* *', '*', '*') == ""
     assert wrapped("Run", '"', '"') is None
 
 

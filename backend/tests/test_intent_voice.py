@@ -97,3 +97,10 @@ def test_voice_reject_and_uncertain_passthrough():
     assert (mixed.kind, mixed.reason) == ("uncertain", "polite_command")
     assert [c.kind for c in mixed.candidates] == ["ui_command", "pc_speech", "pc_speech"]
     assert v("Hello there", 0.95, "Hello there", mode="command").reason == "unknown_command"
+
+
+def test_voice_never_offers_empty_director_note():
+    intent = v("hello", 0.9, "Director")
+    assert intent.kind == "uncertain"
+    assert all(c.text.strip() for c in intent.candidates)
+    assert all(c.kind != "director_instruction" for c in intent.candidates)

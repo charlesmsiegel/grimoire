@@ -43,7 +43,8 @@ words.
 ## Auto mode rules (first match wins)
 
 1. Empty → `reject`.
-2. Whole text in double quotes → speech; whole text in `*…*` → action. Quoting is the escape
+2. Whole text in double quotes → speech; whole text in `*…*` → action (empty `""`, `**`, `(())`
+   are `reject`/`empty`). Quoting is the escape
    hatch, so it's checked before any marker.
 3. **Mixed lanes** → `uncertain`: a non-leading `Grimoire` followed by `,`/`:` or a command verb;
    a later sentence starting with a separated marker of a different lane; or a later sentence
@@ -126,8 +127,9 @@ The caller holds `pending`, and each resolution consumes it. Checks run in this 
 2. A different target or revision → `stale`.
 3. Speech, action or director mode → `unclear`.
 4. "no", "cancel", "never mind", "stop" or "no thanks" → `declined`.
-5. "yes", "confirm", "do it" or "yes, delete it" → `confirmed`. For voice, this also needs
-   confidence at or above the threshold, and every alternative must be a yes.
+5. "yes", "confirm", "do it" or "yes, delete it" → `confirmed`. A questioning "Yes?" isn't
+   consent and gives `unclear`. For voice, a yes also needs confidence at or above the
+   threshold, and every alternative must be a yes.
 6. Anything else → `unclear`.
 
 Only `confirmed` returns the command and the target. The caller must execute against that exact

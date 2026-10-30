@@ -13,7 +13,7 @@ from typing import Literal, get_args
 
 from .commands import COMMANDS, Command
 from .model import Intent, RoutingContext, Utterance
-from .text import grammar_form
+from .text import grammar_form, straighten
 
 ConfirmationStatus = Literal["confirmed", "declined", "expired", "stale", "unclear"]
 
@@ -93,6 +93,7 @@ def resolve_confirmation(pending: PendingConfirmation, utterance: Utterance, *, 
     answer = grammar_form(utterance.text)
     if answer in _DECLINE:
         return ConfirmationResult("declined")
-    if answer in _CONFIRM and _confident_yes(utterance, context):
+    questioning = straighten(utterance.text).strip().endswith("?")
+    if answer in _CONFIRM and not questioning and _confident_yes(utterance, context):
         return ConfirmationResult("confirmed", pending.command, pending.target)
     return ConfirmationResult("unclear")

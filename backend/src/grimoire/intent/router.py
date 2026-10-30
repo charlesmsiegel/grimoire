@@ -87,7 +87,7 @@ def _uncertain(text: str, reason: str, readings: list[tuple[IntentKind, str, Com
     for kind, payload, command in readings:
         if command is not None and command.gate == "confirm":
             continue
-        if _allowed(kind, context):
+        if _allowed(kind, context) or not grammar_form(payload):
             continue
         actor = context.active_pc if kind in PC_KINDS else None
         candidates.append(_intent(kind, payload, "explicit_mode", command, actor))
@@ -159,7 +159,8 @@ def _route_auto(text: str, context: RoutingContext) -> Intent:
     sentences = split_sentences(text)
     if _is_mixed(text, sentences):
         return _uncertain(text, "mixed_utterance", [], context)
-    if first_word(text) == "grimoire":
+    lane, separated = marker_of(text)
+    if lane == "command":
         remainder = strip_marker(text)
         command = parse_command(remainder)
         if command is None:
@@ -167,7 +168,6 @@ def _route_auto(text: str, context: RoutingContext) -> Intent:
         return _command(command, remainder, "wake_word")
     if (repeated := _repeated(text, sentences)) is not None:
         return repeated
-    lane, separated = marker_of(text)
     if lane == "director":
         if separated:
             return _lane("director_instruction", strip_marker(text), "director_marker", text, context)
@@ -185,6 +185,11 @@ def _route_auto(text: str, context: RoutingContext) -> Intent:
     return _lane("pc_speech", text, "default_speech", text, context)
 
 
+def _unwrap(text: str, mark: str) -> str:
+    inner = wrapped(text, mark, mark)
+    return text if inner is None else inner
+
+
 def _route_explicit(text: str, mode: str, context: RoutingContext) -> Intent:
     lane, separated = marker_of(text)
     if lane is not None and separated and lane != _MODE_LANE[mode]:
@@ -196,9 +201,9 @@ def _route_explicit(text: str, mode: str, context: RoutingContext) -> Intent:
             return _uncertain(text, "unknown_command", [], context)
         return _command(command, remainder, "explicit_mode")
     if mode == "speech":
-        return _lane("pc_speech", wrapped(text, '"', '"') or text, "explicit_mode", text, context)
+        return _lane("pc_speech", _unwrap(text, '"'), "explicit_mode", text, context)
     if mode == "action":
-        return _lane("pc_action", wrapped(text, "*", "*") or text, "explicit_mode", text, context)
+        return _lane("pc_action", _unwrap(text, "*"), "explicit_mode", text, context)
     payload = strip_marker(text) if lane == "director" else text
     return _lane("director_instruction", payload, "explicit_mode", text, context)
 
