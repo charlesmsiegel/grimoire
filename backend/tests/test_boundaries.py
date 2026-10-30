@@ -103,16 +103,16 @@ def test_session_zero_stores_tuple_and_hides_contents_in_repr():
 
 def test_apply_set_replace_withdraw():
     original = config()
-    one = original.apply(set_(player("gore", "fade_to_black")))
+    one = original.apply(set_(player("gore", "fade_to_black")), CTX)
     assert original.boundaries == ()
-    two = one.apply(set_(player("gore", "skip")))
+    two = one.apply(set_(player("gore", "skip")), CTX)
     assert [b.treatment for b in two.boundaries] == ["skip"]
-    assert two.apply(BoundaryChange("withdraw", P1, boundary_id="b-human:p1-gore")).boundaries == ()
+    assert two.apply(BoundaryChange("withdraw", P1, boundary_id="b-human:p1-gore"), CTX).boundaries == ()
 
 
 def test_replace_keeps_position():
     zero = config(player("gore", "avoid"), player("spiders", "skip"))
-    replaced = zero.apply(set_(player("gore", "fade_to_black")))
+    replaced = zero.apply(set_(player("gore", "fade_to_black")), CTX)
     assert [(b.theme, b.treatment) for b in replaced.boundaries] == [
         ("gore", "fade_to_black"), ("spiders", "skip")]
 
@@ -132,7 +132,7 @@ def test_apply_refusals_are_indistinguishable():
     ]
     for change in attempts:
         with pytest.raises(BoundaryAuthorityError) as error:
-            zero.apply(change)
+            zero.apply(change, CTX)
         assert str(error.value) == "not your boundary"
     assert not isinstance(BoundaryAuthorityError(), OSError)
 
@@ -141,37 +141,60 @@ def test_non_owner_shape_change_is_authority_error():
     zero = config(player("gore", "avoid"))
     moved = Boundary("b-human:p1-gore", "player", P2, "spiders", "allow", P2)
     with pytest.raises(BoundaryAuthorityError):
-        zero.apply(set_(moved))
+        zero.apply(set_(moved), CTX)
 
 
 def test_replace_cannot_move_scope_or_theme():
     zero = config(player("gore", "avoid"))
     with pytest.raises(ValueError):
-        zero.apply(set_(player("spiders", "avoid", boundary_id="b-human:p1-gore")))
+        zero.apply(set_(player("spiders", "avoid", boundary_id="b-human:p1-gore")), CTX)
 
 
 def test_p2_cannot_agree_for_p1():
     with pytest.raises(ValueError):
-        config().apply(set_(group("fear", "allow", agreed_by=frozenset({P1}))))
+        config().apply(set_(group("fear", "allow", agreed_by=frozenset({P1}))), CTX)
     zero = config(group("fear", "allow"))
     with pytest.raises(ValueError):
-        zero.apply(set_(group("fear", "allow", agreed_by=frozenset({P1}))))
+        zero.apply(set_(group("fear", "allow", agreed_by=frozenset({P1}))), CTX)
 
 
 def test_agree_unagree_self_only():
     zero = config(group("fear", "allow"))
-    agreed = zero.apply(BoundaryChange("agree", P1, boundary_id="g-campaign-fear"))
+    agreed = zero.apply(BoundaryChange("agree", P1, boundary_id="g-campaign-fear"), CTX)
     assert agreed.boundaries[0].agreed_by == frozenset({P1, P2})
-    left = agreed.apply(BoundaryChange("unagree", P1, boundary_id="g-campaign-fear"))
+    left = agreed.apply(BoundaryChange("unagree", P1, boundary_id="g-campaign-fear"), CTX)
     assert left.boundaries[0].agreed_by == frozenset({P2})
 
 
 def test_treatment_change_resets_agreement():
     zero = config(group("fear", "fade_to_black", agreed_by=frozenset({P1})))
-    same = zero.apply(set_(group("fear", "fade_to_black", private_note="x")))
+    same = zero.apply(set_(group("fear", "fade_to_black", private_note="x")), CTX)
     assert same.boundaries[0].agreed_by == frozenset({P1, P2})
-    changed = zero.apply(set_(group("fear", "allow")))
+    changed = zero.apply(set_(group("fear", "allow")), CTX)
     assert changed.boundaries[0].agreed_by == frozenset({P2})
+
+
+def test_apply_is_bound_to_its_context():
+    outsider = BoundaryChange("set", P3, boundary=player("gore", "avoid", owner=P3))
+    with pytest.raises(BoundaryAuthorityError):
+        config().apply(outsider, CTX)
+    for foreign in (group("rain", "allow", scope="world", scope_id="some-world"),
+                    group("rain", "allow", scope_id="other-campaign")):
+        with pytest.raises(ValueError):
+            config().apply(set_(foreign), CTX)
+    in_world = BoundaryContext(CAMPAIGN, frozenset({P1, P2}), world_id="w1")
+    world = config().apply(set_(group("rain", "allow", scope="world", scope_id="w1")), in_world)
+    with pytest.raises(BoundaryAuthorityError):
+        world.apply(BoundaryChange("agree", P1, boundary_id="g-world-rain"),
+                    BoundaryContext(CAMPAIGN, frozenset({P1}), world_id="w2"))
+    with pytest.raises(ValueError):
+        config().apply(set_(player("gore", "avoid")), "not a context")
+
+
+def test_unagree_requires_membership():
+    with pytest.raises(BoundaryAuthorityError):
+        config(group("fear", "allow")).apply(
+            BoundaryChange("unagree", P1, boundary_id="g-campaign-fear"), CTX)
 
 
 def test_change_validation():
@@ -188,7 +211,7 @@ def test_change_validation():
 # --- context, rulings and projections --------------------------------------------
 
 def test_context_validation():
-    for audience in (frozenset(), frozenset({DIRECTOR}), P1, frozenset({" "})):
+    for audience in (frozenset(), frozenset({DIRECTOR}), P1, frozenset({" "}), [["x"]]):
         with pytest.raises(ValueError):
             BoundaryContext(CAMPAIGN, audience)
     with pytest.raises(ValueError):
@@ -252,9 +275,10 @@ def test_same_player_two_treatments():
     assert ruling.treatment == "skip" and ruling.conflict
 
 
-def test_unattributed_group_boundary_hides_owner():
+def test_unattributed_group_boundary_hides_owner_but_not_its_handle():
     (shown,) = visible_boundaries(config(group("gore", "allow")), CTX)
-    assert (shown.scope_id, shown.set_by, shown.boundary_id) == (CAMPAIGN, None, None)
+    assert (shown.scope_id, shown.set_by, shown.boundary_id) == (
+        CAMPAIGN, None, "g-campaign-gore")
 
 
 def test_attributed_shows_owner():
@@ -305,11 +329,16 @@ def test_segment_validation(kwargs):
         NarrationSegment(**{**base, **kwargs})
 
 
-def test_consent_validation():
+@pytest.mark.parametrize("kwargs", [
+    dict(given_by=DIRECTOR), dict(theme="Gore"), dict(target_kind="scene"),
+    dict(content_digest=None), dict(content_digest="abc"),
+    dict(target_kind="condition"),  # a condition consent carries no digest
+])
+def test_consent_validation(kwargs):
+    base = dict(campaign_id=CAMPAIGN, target_kind="segment", target_id="s1", theme="gore",
+                given_by=P1, content_digest="0" * 64)
     with pytest.raises(ValueError):
-        CheckInConsent(CAMPAIGN, "s1", "gore", DIRECTOR)
-    with pytest.raises(ValueError):
-        CheckInConsent(CAMPAIGN, "s1", "Gore", P1)
+        CheckInConsent(**{**base, **kwargs})
 
 
 @pytest.mark.parametrize("treatment, status, action, notices", [
@@ -361,16 +390,21 @@ def test_mixed_unset_and_allowed():
 
 def test_check_in_cleared_only_by_whole_audience():
     zero = config(player("romance", "check_in"))
-    seg = [segment("s1", {"romance"}, "proposed")]
+    seg = segment("s1", {"romance"}, "proposed")
+    other = segment("s2", {"romance"}, "proposed")
+    rephrased = NarrationSegment(CAMPAIGN, "s1", "entirely different text",
+                                 frozenset({"romance"}), "proposed")
 
-    def decide(*givers, target="s1", theme="romance"):
-        consents = [CheckInConsent(CAMPAIGN, target, theme, who) for who in givers]
-        (decision,) = decide_presentation(zero, CTX, seg, consents)
+    def decide(*givers, consented=seg, shown=seg, theme="romance"):
+        consents = [CheckInConsent.for_segment(consented, theme, who) for who in givers]
+        (decision,) = decide_presentation(zero, CTX, [shown], consents)
         return decision
 
     assert decide(P1).action == "check_in"
     assert decide(P1, P3).action == "check_in"  # outsider's consent is ignored
-    assert decide(P1, P2, target="s2").action == "check_in"
+    assert decide(P1, P2, consented=other).action == "check_in"
+    assert decide(P1, P2, shown=rephrased).action == "check_in"  # consent was to other text
+    assert decide(P1, P2, theme="gore").action == "check_in"
     cleared = decide(P1, P2)
     assert (cleared.action, cleared.notices) == ("present", ("check_in_cleared",))
     assert cleared.rulings[0].treatment == "check_in"
@@ -382,7 +416,20 @@ def test_presentation_rejects_cross_campaign_and_duplicates():
     with pytest.raises(ValueError):
         decide_presentation(config(), CTX, [segment("s1", ()), segment("s1", ())])
     with pytest.raises(ValueError):
-        decide_presentation(config(), CTX, [], [CheckInConsent("other", "s1", "gore", P1)])
+        decide_presentation(config(), CTX, [], [CheckInConsent.for_segment(
+            segment("s1", (), campaign="other"), "gore", P1)])
+
+
+def test_inputs_must_be_typed_values():
+    from types import SimpleNamespace
+    fake = SimpleNamespace(campaign_id=CAMPAIGN, segment_id="s1", themes=None, status="accepted",
+                           event_id="e1", text="t")
+    with pytest.raises(ValueError):
+        decide_presentation(config(), CTX, [fake])
+    with pytest.raises(ValueError):
+        decide_request(request("skip", "s1"), CTX, [fake])
+    with pytest.raises(ValueError):
+        group("gore", "allow", agreed_by=[["x"]])
 
 
 def test_decision_has_no_canon_edit_fields():
@@ -489,7 +536,7 @@ def test_agreed_limits_validation():
     with pytest.raises(ValueError):
         limits(config(), "fear", controller=None)
     with pytest.raises(ValueError):
-        limits(config(), "fear", consents=[CheckInConsent("other", "c1", "fear", P1)])
+        limits(config(), "fear", consents=[CheckInConsent.for_condition("other", "c1", "fear", P1)])
 
 
 def test_director_controlled_is_npc():
@@ -505,7 +552,7 @@ def test_own_allow_is_agreed():
 def test_group_allow_needs_controller_in_agreed_by():
     assert limits(config(group("fear", "allow")), "fear") == LimitCheck(False, "not_agreed")
     zero = config(group("fear", "allow")).apply(
-        BoundaryChange("agree", P1, boundary_id="g-campaign-fear"))
+        BoundaryChange("agree", P1, boundary_id="g-campaign-fear"), CTX)
     assert limits(zero, "fear").within
 
 
@@ -530,11 +577,18 @@ def test_fade_and_skip_limit_depiction_not_occurrence(treatment):
 def test_check_in_needs_controller_consent():
     zero = config(player("fear", "check_in"))
     assert limits(zero, "fear").reason == "needs_check_in"
-    assert limits(zero, "fear", consents=[CheckInConsent(CAMPAIGN, "c1", "fear", P2)]).reason \
+    assert limits(zero, "fear", consents=[CheckInConsent.for_condition(CAMPAIGN, "c1", "fear", P2)]).reason \
         == "needs_check_in"
-    assert limits(zero, "fear", consents=[CheckInConsent(CAMPAIGN, "c2", "fear", P1)]).reason \
+    assert limits(zero, "fear", consents=[CheckInConsent.for_condition(CAMPAIGN, "c2", "fear", P1)]).reason \
         == "needs_check_in"
-    assert limits(zero, "fear", consents=[CheckInConsent(CAMPAIGN, "c1", "fear", P1)]).within
+    assert limits(zero, "fear", consents=[CheckInConsent.for_condition(CAMPAIGN, "c1", "fear", P1)]).within
+
+
+def test_segment_consent_does_not_satisfy_a_condition():
+    zero = config(player("fear", "check_in"))
+    seg = NarrationSegment(CAMPAIGN, "c1", "text", frozenset({"fear"}), "proposed")
+    assert limits(zero, "fear", consents=[CheckInConsent.for_segment(seg, "fear", P1)]).reason \
+        == "needs_check_in"
 
 
 def test_reason_precedence_is_worst_across_themes():
@@ -548,7 +602,7 @@ def test_reason_precedence_is_worst_across_themes():
 def test_recomputation_after_tightening():
     zero = config(player("fear", "allow"))
     assert limits(zero, "fear").within
-    tightened = zero.apply(set_(player("fear", "avoid")))
+    tightened = zero.apply(set_(player("fear", "avoid")), CTX)
     assert limits(tightened, "fear") == LimitCheck(False, "avoided")
 
 

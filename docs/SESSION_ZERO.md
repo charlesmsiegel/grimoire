@@ -34,25 +34,28 @@ Applicability:
 
 - A campaign, world or setting boundary applies when its `scope_id` matches the context.
 - A player boundary applies while that player is in the `audience`.
-- If the configuration holds world or setting boundaries and the context lacks `world_id` or `setting_id`, every function raises `ValueError` rather than silently dropping them.
+- If the configuration holds world or setting boundaries and the context lacks `world_id` or `setting_id`, `rule_themes`, `visible_boundaries`, `decide_presentation` and `agreed_limits` raise `ValueError` rather than silently dropping them.
 
 ### Changes and ownership
 
-`SessionZero.apply(BoundaryChange)` returns a new configuration and checks ownership before anything else:
+`SessionZero.apply(change, context)` returns a new configuration. It is bound to its context: the requester must be in the authenticated `audience`, and a group boundary must belong to the context's campaign, world or setting. That stops one player planting a boundary for another campaign, or a world boundary that would make every world-less call fail. Ownership is checked before any shape check:
 
 - **`set`:** add a new boundary or replace your own. A replacement may change only treatment, attribution and note; to change scope, scope id or theme, withdraw and set a new one. Changing the treatment resets group agreement to the setter alone.
 - **`withdraw`:** remove your own boundary.
-- **`agree` / `unagree`:** add or remove *yourself* in a group boundary's `agreed_by`. You can never record agreement for someone else, and the setter cannot unagree.
+- **`agree` / `unagree`:** add or remove *yourself* in the `agreed_by` of a group boundary in force in this context. You can never record agreement for someone else. Only a current member may unagree, and the setter cannot.
 
 All refusals raise the same `BoundaryAuthorityError("not your boundary")`, so a refusal does not confirm that a hidden id exists. A fresh `set` of a taken id is still refused, so ids must be opaque. Because the most protective treatment wins, adding a laxer boundary never weakens another player's.
 
 ## Privacy
 
 - **Effects are visible to everyone.** `visible_boundaries` and `ThemeRuling.sources` return `VisibleBoundary` values carrying scope, theme and treatment.
-- **The owner is hidden by default.** Unless the owner opted into `attributed`, `set_by` and `boundary_id` are `None`. `scope_id` is also hidden for player boundaries, because it is the player.
+- **The owner is hidden by default.** Unless the owner opted into `attributed`, `set_by` is `None`, and so are a player boundary's `scope_id` and `boundary_id`, because they identify the player. A group boundary's id is shown as an opaque handle so participants can `agree` to it.
 - **Ordering uses only visible fields.**
 - **Private notes and group agreement stay with the owner.** `private_note` and `agreed_by` appear only in `owner_boundaries(config, viewer)`. `private_note` is excluded from `repr`, `SessionZero`'s `repr` shows only a count, and no error message names an owner or a boundary id.
-- **Some inference cannot be prevented.** In a two-player table, everyone can still tell whose effect it is.
+- **Some inference cannot be prevented.**
+  - In a two-player table, everyone can still tell whose effect it is.
+  - `agreed_limits` applies an absent controller's own boundaries to protect their PC, so a `within=False` result with `avoided` can reveal that player's limit to whoever sees the result. Show the reason only to that player and the director tooling.
+  - `request_id` must be opaque, and `direction` is free text that may identify its author.
 
 ## Presentation decisions
 
@@ -75,7 +78,7 @@ All refusals raise the same `BoundaryAuthorityError("not your boundary")`, so a 
 
 - **A skipped or avoided proposal is withheld,** so it can never become canon unseen. The director re-proposes it, for example as a transition summary, and the new proposal goes back through the labeller, `review_narration` and this function.
 - **Accepted canon is never changed.** An accepted segment always reports its `preserved_event_id`, and `SegmentDecision` has no field that could edit canon. A boundary added after an event was recorded changes only how that event is shown from then on.
-- **A check-in is cleared** for one segment and theme only when **every audience member** has given a matching `CheckInConsent`. The ruling still reads `check_in`, and the decision carries the notice `check_in_cleared`. Collecting consent is 035's job.
+- **A check-in is cleared** for one segment and theme only when **every audience member** has given a matching `CheckInConsent.for_segment(segment, theme, player)`. A consent is bound to the segment's exact text (`NarrationSegment.digest`), so a rephrased segment needs fresh consent even under the same id. The ruling still reads `check_in`, and the decision carries the notice `check_in_cleared`. Collecting consent is 035's job.
 
 ## Mid-session requests
 
@@ -93,7 +96,7 @@ All refusals raise the same `BoundaryAuthorityError("not your boundary")`, so a 
 | `rephrase` | ≥1 | all → `rerender`, with `direction` |
 
 - **Ids:** `skip_presentation`, `withdrawn_proposals` and `rerender` hold segment ids; `preserved_events` holds the event ids of accepted targets.
-- **Rephrasing is a new proposal for the same canon.** It goes back through `review_narration`, which still enforces recorded resolutions and PC authorship (pinned by `test_rephrase_cannot_launder_outcome_or_pc_speech`).
+- **Rephrasing is a new proposal for the same canon.** The re-rendered text must go back through `review_narration` (which still enforces recorded resolutions and PC authorship) and `decide_presentation`. That is a composition duty for 035, which `test_rephrase_cannot_launder_outcome_or_pc_speech` demonstrates; this module cannot enforce it on its own.
 - **Refusals change nothing.** They are checked in this order: `cross_campaign`, `not_participant`, `unknown_segment`.
 
 ## Agreed limits for imposed conditions
@@ -103,7 +106,7 @@ All refusals raise the same `BoundaryAuthorityError("not your boundary")`, so a 
 - **`DIRECTOR`** gives `npc` (within). **`None`** raises.
 - **The controller's own player boundaries always apply**, even when the controller is not in the audience.
 - **A theme counts as agreed** when its strictest treatment is `allow`, `fade_to_black` or `skip` (these limit depiction, not occurrence) **and** the controller agreed to it. Agreement means either the controller's own boundary for the theme, or membership in `agreed_by` of an applicable group boundary. A campaign `allow` that another player set does not count.
-- **A `check_in` theme** is agreed only through the controller's own consent for this `target_id`.
+- **A `check_in` theme** is agreed only through the controller's own `CheckInConsent.for_condition(campaign_id, condition_id, theme, controller)` for this `target_id`. A segment consent never counts for a condition.
 - **Failures** are reported as the worst one across all themes: `avoided` > `needs_check_in` > `unset` > `not_agreed`.
 
 Nothing caches the result. Callers recompute it on every review, so a tightened boundary applies on the next turn.

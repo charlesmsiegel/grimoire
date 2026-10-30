@@ -32,11 +32,11 @@ def session_zero():
     """Campaign keeps high-stakes conflict; P1 privately asks for graphic violence to fade."""
     zero = SessionZero()
     zero = zero.apply(BoundaryChange("set", P2, boundary=Boundary(
-        "campaign-violence", "campaign", CAMPAIGN, "violence", "allow", P2)))
-    zero = zero.apply(BoundaryChange("agree", P1, boundary_id="campaign-violence"))
+        "campaign-violence", "campaign", CAMPAIGN, "violence", "allow", P2)), TABLE)
+    zero = zero.apply(BoundaryChange("agree", P1, boundary_id="campaign-violence"), TABLE)
     return zero.apply(BoundaryChange("set", P1, boundary=Boundary(
         "ines-gore", "player", P1, "graphic_violence", "fade_to_black", P1,
-        private_note=NOTE)))
+        private_note=NOTE)), TABLE)
 
 
 def test_proving_scenario_fade_preserves_duel():
@@ -51,7 +51,7 @@ def test_proving_scenario_fade_preserves_duel():
 
     # Easy correction: P1 tightens their own boundary; the outcome still stands.
     tighter = zero.apply(BoundaryChange("set", P1, boundary=Boundary(
-        "ines-gore", "player", P1, "graphic_violence", "skip", P1, private_note=NOTE)))
+        "ines-gore", "player", P1, "graphic_violence", "skip", P1, private_note=NOTE)), TABLE)
     (duel,) = decide_presentation(tighter, TABLE, [DUEL])
     assert (duel.action, duel.preserved_event_id) == ("skip", "e-duel")
 
@@ -79,7 +79,7 @@ def test_private_data_never_leaves_owner_view():
                    BoundaryChange("set", P2, boundary=Boundary(
                        "ines-gore", "player", P2, "graphic_violence", "allow", P2))):
         with pytest.raises(BoundaryAuthorityError) as error:
-            zero.apply(change)
+            zero.apply(change, TABLE)
         errors.append(str(error.value))
     with pytest.raises(ValueError) as error:
         SessionZero((*zero.boundaries, zero.boundaries[-1]))
@@ -153,29 +153,39 @@ def test_check_in_cleared_by_whole_audience():
     zero = SessionZero((Boundary("oto-romance", "player", P2, "romance", "check_in", P2),))
     kiss = NarrationSegment(CAMPAIGN, "seg-kiss", "The duelist leans closer.",
                             frozenset({"romance"}), "proposed")
-    consents = [CheckInConsent(CAMPAIGN, "seg-kiss", "romance", P2)]
+    consents = [CheckInConsent.for_segment(kiss, "romance", P2)]
     assert decide_presentation(zero, TABLE, [kiss], consents)[0].action == "check_in"
-    consents.append(CheckInConsent(CAMPAIGN, "seg-kiss", "romance", P1))
+    consents.append(CheckInConsent.for_segment(kiss, "romance", P1))
     assert decide_presentation(zero, TABLE, [kiss], consents)[0].action == "present"
 
 
 def test_rephrase_cannot_launder_outcome_or_pc_speech():
+    """A rephrase only re-renders; the replacement passes review_narration again."""
     decision = decide_request(BoundaryRequest(CAMPAIGN, "r1", P1, "rephrase", ("seg-duel",),
                                               "make the attack land instead"), TABLE, [DUEL])
     assert (decision.rerender, decision.preserved_events) == (("seg-duel",), ("e-duel",))
+    assert decision.withdrawn_proposals == decision.skip_presentation == ()
 
     lunge = PlayerContribution(CAMPAIGN, "act-lunge", "scene-1", "turn-1", "pc-ines", P1,
                                "action", "I lunge at the duelist")
-    rerendered = [
-        NarrationClaim(CAMPAIGN, "c-hit", "outcome", "Ines's lunge lands.",
-                       subject_id="pc-ines", attempt_id="act-lunge", result="hit"),
-        NarrationClaim(CAMPAIGN, "c-yield", "voluntary_speech", '"I yield," Ines says.',
-                       subject_id="pc-ines"),
-        NarrationClaim(CAMPAIGN, "c-miss", "outcome", "The duelist turns the lunge aside.",
-                       subject_id="pc-ines", attempt_id="act-lunge", result="miss"),
-    ]
-    review = review_narration(NARRATION, rerendered, CONTROLS, contributions=[lunge],
-                              resolutions=[Resolution(CAMPAIGN, "act-lunge", "miss")])
-    assert {r.claim.claim_id: r.reason for r in review.rejected} == {
-        "c-hit": "contradicts_resolution", "c-yield": "pc_authorship"}
-    assert [a.claim.claim_id for a in review.accepted] == ["c-miss"]
+    resolution = Resolution(CAMPAIGN, "act-lunge", "miss")
+    for segment_id in decision.rerender:
+        replacement = [
+            NarrationClaim(CAMPAIGN, f"{segment_id}/hit", "outcome", "Ines's lunge lands.",
+                           subject_id="pc-ines", attempt_id="act-lunge", result="hit"),
+            NarrationClaim(CAMPAIGN, f"{segment_id}/yield", "voluntary_speech",
+                           '"I yield," Ines says.', subject_id="pc-ines"),
+            NarrationClaim(CAMPAIGN, f"{segment_id}/miss", "outcome",
+                           "The duelist turns the lunge aside.", subject_id="pc-ines",
+                           attempt_id="act-lunge", result="miss"),
+        ]
+        review = review_narration(NARRATION, replacement, CONTROLS, contributions=[lunge],
+                                  resolutions=[resolution])
+        assert {r.claim.claim_id: r.reason for r in review.rejected} == {
+            f"{segment_id}/hit": "contradicts_resolution",
+            f"{segment_id}/yield": "pc_authorship"}
+        assert [a.claim.claim_id for a in review.accepted] == [f"{segment_id}/miss"]
+        # The rephrased text is a new depiction: earlier check-in consent doesn't carry over.
+        rephrased = NarrationSegment(CAMPAIGN, segment_id, "The duelist turns the lunge aside.",
+                                     DUEL.themes, "accepted", "e-duel")
+        assert rephrased.digest != DUEL.digest

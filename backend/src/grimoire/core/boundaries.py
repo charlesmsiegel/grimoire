@@ -13,6 +13,7 @@ the authenticated scene audience and viewer.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
@@ -24,10 +25,12 @@ TREATMENTS = ("allow", "check_in", "fade_to_black", "skip", "avoid")  # ascendin
 SCOPES = ("setting", "world", "campaign", "player")
 UNSET = "unset"
 CHANGE_KINDS = ("set", "withdraw", "agree", "unagree")
+CONSENT_TARGETS = ("segment", "condition")
 SEGMENT_STATUSES = ("proposed", "accepted")
 REQUEST_KINDS = ("pause", "skip", "redirect", "rephrase")
 
 _THEME = re.compile(r"[a-z0-9]+(?:[_-][a-z0-9]+)*")
+_DIGEST = re.compile(r"[0-9a-f]{64}")
 _RANK = {treatment: rank for rank, treatment in enumerate(TREATMENTS)}
 _PROPOSED_ACTION = {"allow": "present", "check_in": "check_in", "fade_to_black": "fade_to_black",
                     "skip": "withhold_proposal", "avoid": "withhold_proposal"}
@@ -53,10 +56,17 @@ def _theme(value: object, label: str = "theme") -> None:
         raise ValueError(f"{label} must be a lowercase slug")
 
 
-def _themes(values: Iterable[str], label: str = "theme") -> frozenset[str]:
+def _frozen(values: Iterable, label: str) -> frozenset:
     if isinstance(values, str):
-        raise ValueError(f"{label}s must be a collection, not a string")
-    values = frozenset(values)
+        raise ValueError(f"{label} must be a collection, not a string")
+    try:
+        return frozenset(values)
+    except TypeError:
+        raise ValueError(f"{label} must be a collection of strings") from None
+
+
+def _themes(values: Iterable[str], label: str = "theme") -> frozenset[str]:
+    values = _frozen(values, f"{label}s")
     for value in values:
         _theme(value, label)
     return values
@@ -69,12 +79,17 @@ def _person(value: object, label: str) -> None:
 
 
 def _people(values: Iterable[str], label: str) -> frozenset[str]:
-    if isinstance(values, str):
-        raise ValueError(f"{label} must be a collection, not a string")
-    values = frozenset(values)
+    values = _frozen(values, label)
     for value in values:
         _person(value, label)
     return values
+
+
+def _all(items: Iterable, kind: type, label: str) -> tuple:
+    items = tuple(items)
+    if not all(isinstance(item, kind) for item in items):
+        raise ValueError(f"{label} must be {kind.__name__} values")
+    return items
 
 
 def _strictest(treatments: Iterable[str], default: str = UNSET) -> str:
@@ -157,11 +172,18 @@ class SessionZero:
     def __repr__(self) -> str:
         return f"SessionZero({len(self.boundaries)} boundaries)"
 
-    def apply(self, change: BoundaryChange) -> SessionZero:
-        """Return the configuration after one player's change; ownership is checked first."""
-        if not isinstance(change, BoundaryChange):
-            raise ValueError("expected a BoundaryChange")
+    def apply(self, change: BoundaryChange, context: BoundaryContext) -> SessionZero:
+        """Return the configuration after one participant's change in `context`.
+
+        The requester must be in the authenticated audience, and group
+        boundaries must belong to this context's campaign, world or setting.
+        Ownership is checked before any shape check.
+        """
+        if not isinstance(change, BoundaryChange) or not isinstance(context, BoundaryContext):
+            raise ValueError("expected a BoundaryChange and a BoundaryContext")
         who = change.requested_by
+        if who not in context.audience:
+            raise BoundaryAuthorityError()
         items = list(self.boundaries)
         key = change.boundary.boundary_id if change.kind == "set" else change.boundary_id
         index = next((i for i, b in enumerate(items) if b.boundary_id == key), None)
@@ -173,6 +195,8 @@ class SessionZero:
                 raise BoundaryAuthorityError()
             if new.agreed_by - {who}:
                 raise ValueError("only the setter's own agreement can be recorded")
+            if new.scope != "player" and not _scope_matches(new, context):
+                raise ValueError("a group boundary must belong to this context")
             if old is None:
                 return SessionZero((*items, new))
             if (new.scope, new.scope_id, new.theme) != (old.scope, old.scope_id, old.theme):
@@ -185,8 +209,9 @@ class SessionZero:
                 raise BoundaryAuthorityError()
             del items[index]
         else:
-            if old is None or old.scope == "player" or (
-                    change.kind == "unagree" and old.set_by == who):
+            if (old is None or old.scope == "player" or not _scope_matches(old, context)
+                    or (change.kind == "unagree"
+                        and (old.set_by == who or who not in old.agreed_by))):
                 raise BoundaryAuthorityError()
             agreed = old.agreed_by | {who} if change.kind == "agree" else old.agreed_by - {who}
             items[index] = replace(old, agreed_by=agreed)
@@ -214,18 +239,24 @@ class BoundaryContext:
             _nonempty(self.setting_id, "setting_id")
 
 
+def _scope_matches(b: Boundary, context: BoundaryContext) -> bool:
+    """Whether a group boundary belongs to this campaign, world or setting."""
+    return b.scope_id == {"setting": context.setting_id, "world": context.world_id,
+                          "campaign": context.campaign_id}[b.scope]
+
+
 def _applicable(config: SessionZero, context: BoundaryContext,
                 players: frozenset[str] = frozenset()) -> tuple[Boundary, ...]:
     """Boundaries in force here; unresolvable world/setting scopes fail closed."""
-    scoped = {"setting": context.setting_id, "world": context.world_id,
-              "campaign": context.campaign_id}
-    for scope in ("world", "setting"):
-        if scoped[scope] is None and any(b.scope == scope for b in config.boundaries):
+    if not isinstance(config, SessionZero) or not isinstance(context, BoundaryContext):
+        raise ValueError("expected a SessionZero and a BoundaryContext")
+    for scope, scope_id in (("world", context.world_id), ("setting", context.setting_id)):
+        if scope_id is None and any(b.scope == scope for b in config.boundaries):
             raise ValueError(f"context has no {scope}_id but {scope} boundaries exist")
     players = context.audience | players
     return tuple(b for b in config.boundaries
                  if (b.scope_id in players if b.scope == "player"
-                     else b.scope_id == scoped[b.scope]))
+                     else _scope_matches(b, context)))
 
 
 def _same_campaign(items: tuple, campaign_id: str, label: str) -> None:
@@ -237,7 +268,10 @@ def _same_campaign(items: tuple, campaign_id: str, label: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class VisibleBoundary:
-    """What any participant sees. Owner fields are None unless attributed."""
+    """What any participant sees. `set_by` is None unless attributed; so are a
+    player boundary's `scope_id` and `boundary_id`, since they identify the player.
+    Group boundary ids are shown so participants can agree to them (ids are opaque).
+    """
 
     scope: str
     theme: str
@@ -258,10 +292,11 @@ class ThemeRuling:
 
 
 def _visible(b: Boundary) -> VisibleBoundary:
-    shown = b.attributed
+    identified = b.attributed or b.scope != "player"
     return VisibleBoundary(b.scope, b.theme, b.treatment,
-                           b.scope_id if shown or b.scope != "player" else None,
-                           b.set_by if shown else None, b.boundary_id if shown else None)
+                           b.scope_id if identified else None,
+                           b.set_by if b.attributed else None,
+                           b.boundary_id if identified else None)
 
 
 def _order(v: VisibleBoundary) -> tuple:
@@ -321,21 +356,45 @@ class NarrationSegment:
         if self.event_id is not None:
             _nonempty(self.event_id, "event_id")
 
+    @property
+    def digest(self) -> str:
+        """Identifies the exact text; a rephrased segment needs fresh consent."""
+        return hashlib.sha256(self.text.encode("utf-8")).hexdigest()
+
 
 @dataclass(frozen=True, slots=True)
 class CheckInConsent:
-    """One participant's consent to depict `theme` for one segment or condition."""
+    """One participant's consent to `theme` for one segment's exact text, or one condition."""
 
     campaign_id: str
+    target_kind: str
     target_id: str
     theme: str
     given_by: str
+    content_digest: str | None = None
 
     def __post_init__(self) -> None:
         _nonempty(self.campaign_id, "campaign_id")
+        _choice(self.target_kind, CONSENT_TARGETS, "consent target kind")
         _nonempty(self.target_id, "target_id")
         _theme(self.theme)
         _person(self.given_by, "given_by")
+        if self.target_kind == "segment":
+            if not isinstance(self.content_digest, str) or not _DIGEST.fullmatch(
+                    self.content_digest):
+                raise ValueError("a segment consent names the segment's content digest")
+        elif self.content_digest is not None:
+            raise ValueError("a condition consent has no content digest")
+
+    @classmethod
+    def for_segment(cls, segment: NarrationSegment, theme: str, given_by: str) -> CheckInConsent:
+        return cls(segment.campaign_id, "segment", segment.segment_id, theme, given_by,
+                   segment.digest)
+
+    @classmethod
+    def for_condition(cls, campaign_id: str, condition_id: str, theme: str,
+                      given_by: str) -> CheckInConsent:
+        return cls(campaign_id, "condition", condition_id, theme, given_by)
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,7 +412,8 @@ def decide_presentation(config: SessionZero, context: BoundaryContext,
                         segments: Iterable[NarrationSegment],
                         consents: Iterable[CheckInConsent] = ()) -> tuple[SegmentDecision, ...]:
     """Most protective treatment per segment; accepted canon is only ever re-presented."""
-    segments, consents = tuple(segments), tuple(consents)
+    segments = _all(segments, NarrationSegment, "segments")
+    consents = _all(consents, CheckInConsent, "consents")
     applicable = _applicable(config, context)
     _same_campaign(segments, context.campaign_id, "segment")
     _same_campaign(consents, context.campaign_id, "consent")
@@ -373,7 +433,8 @@ def decide_presentation(config: SessionZero, context: BoundaryContext,
             treatment = "allow" if ruling.treatment == UNSET else ruling.treatment
             if treatment == "check_in" and context.audience <= {
                     c.given_by for c in consents
-                    if c.target_id == s.segment_id and c.theme == ruling.theme}:
+                    if c.target_kind == "segment" and c.target_id == s.segment_id
+                    and c.content_digest == s.digest and c.theme == ruling.theme}:
                 treatment = "allow"
                 notices.append("check_in_cleared")
             effective.append(treatment)
@@ -441,7 +502,9 @@ class RequestDecision:
 def decide_request(request: BoundaryRequest, context: BoundaryContext,
                    segments: Iterable[NarrationSegment]) -> RequestDecision:
     """The same answer for any participant; withdrawals touch proposals only."""
-    segments = tuple(segments)
+    if not isinstance(request, BoundaryRequest) or not isinstance(context, BoundaryContext):
+        raise ValueError("expected a BoundaryRequest and a BoundaryContext")
+    segments = _all(segments, NarrationSegment, "segments")
     _same_campaign(segments, context.campaign_id, "segment")
     found = {s.segment_id: s for s in segments}
     if len(found) != len(segments):
@@ -492,7 +555,8 @@ def agreed_limits(themes: Iterable[str], config: SessionZero, context: BoundaryC
     The rule/effect writer passes `within` into `ImposedCondition`. Nothing is
     cached: recompute on every review so a tightened boundary applies at once.
     """
-    themes, consents = _themes(themes), tuple(consents)
+    themes = _themes(themes)
+    consents = _all(consents, CheckInConsent, "consents")
     if not themes:
         raise ValueError("a condition is labelled with at least one theme")
     _nonempty(target_id, "target_id")
@@ -503,8 +567,8 @@ def agreed_limits(themes: Iterable[str], config: SessionZero, context: BoundaryC
     if controller == DIRECTOR:
         return LimitCheck(True, "npc")
     _person(controller, "controller")
-    consented = {c.theme for c in consents
-                 if c.target_id == target_id and c.given_by == controller}
+    consented = {c.theme for c in consents if c.target_kind == "condition"
+                 and c.target_id == target_id and c.given_by == controller}
 
     def failure(theme: str) -> str | None:
         relevant = [b for b in applicable if b.theme == theme]
