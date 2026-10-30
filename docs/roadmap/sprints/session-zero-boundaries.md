@@ -1,5 +1,7 @@
 # Session Zero, Narrative Boundaries and Consent Controls
 
+**Status:** milestone 1's headless policy is implemented; see [the session-zero contract](../../SESSION_ZERO.md). Executing pause/skip/redirect in play belongs to 035.
+
 **Outcome:** Give players and groups explicit control over narrative themes, sensitive content, character relationships and permitted storytelling intensity.
 
 ## Scope and ownership
