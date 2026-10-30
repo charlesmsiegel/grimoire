@@ -1,0 +1,210 @@
+{
+  "format": "grimoire.story-quality/1",
+  "run_id": "guild-betrayal-synthetic-0.2.1",
+  "scenario_id": "guild-betrayal",
+  "label": "Synthetic V0.2.1-shaped baseline: one RP call per speaking NPC plus narration",
+  "provenance": "synthetic",
+  "conditions": {
+    "model": "synthetic-rp-model",
+    "budget": "standard"
+  },
+  "enabled_flags": [],
+  "turns": [
+    {
+      "turn": 1,
+      "contributions": [
+        {
+          "speaker_id": "pc-wren",
+          "author": "player",
+          "text": "I slide a silver coin across the counter and ask Oda for the guest ledger.",
+          "call_id": null
+        },
+        {
+          "speaker_id": "npc-oda",
+          "author": "model",
+          "text": "Coin's good. Guest ledger's on the hook. Read it here.",
+          "call_id": "t1-oda"
+        },
+        {
+          "speaker_id": "npc-bellamy",
+          "author": "model",
+          "text": "Oh, darling Wren, a ledger! How deliciously bureaucratic of you, truly marvellous!",
+          "call_id": "t1-bellamy"
+        },
+        {
+          "speaker_id": null,
+          "author": "model",
+          "text": "Oda pushes the guest ledger across the counter. Behind him the sealed vault door gleams.",
+          "call_id": "t1-narration"
+        }
+      ]
+    },
+    {
+      "turn": 2,
+      "contributions": [
+        {
+          "speaker_id": "pc-wren",
+          "author": "player",
+          "text": "I follow Bellamy out to the balcony.",
+          "call_id": null
+        },
+        {
+          "speaker_id": "npc-oda",
+          "author": "model",
+          "text": "Balcony's shut after dark. Go if you must. Quickly.",
+          "call_id": "t2-oda"
+        },
+        {
+          "speaker_id": "npc-bellamy",
+          "author": "model",
+          "text": "Come, come, to the balcony, my dear! Hush now, darling, the voices below are simply dripping with intrigue!",
+          "call_id": "t2-bellamy"
+        },
+        {
+          "speaker_id": null,
+          "author": "model",
+          "text": "On the balcony, voices drift up from the courtyard, too faint for Wren to make out.",
+          "call_id": "t2-narration"
+        }
+      ]
+    },
+    {
+      "turn": 3,
+      "contributions": [
+        {
+          "speaker_id": "pc-wren",
+          "author": "player",
+          "text": "I ask Bellamy to sing what was overheard.",
+          "call_id": null
+        },
+        {
+          "speaker_id": "npc-oda",
+          "author": "model",
+          "text": "Singing. In my hall. Fine. Rules are rules, so keep it short.",
+          "call_id": "t3-oda"
+        },
+        {
+          "speaker_id": "npc-bellamy",
+          "author": "model",
+          "text": "Oh, my darling, it is a dreadful song: the duke sold the guild to the river barons, every last splendid brick!",
+          "call_id": "t3-bellamy"
+        },
+        {
+          "speaker_id": null,
+          "author": "model",
+          "text": "Bellamy sings softly, and the tune echoes off the sealed vault door.",
+          "call_id": "t3-narration"
+        }
+      ]
+    }
+  ],
+  "calls": [
+    {
+      "call_id": "t1-oda",
+      "turn": 1,
+      "purpose": "npc_generation",
+      "actor_id": "npc-oda",
+      "feature_flag": null,
+      "input_tokens": 1200,
+      "cached_input_tokens": 400,
+      "output_tokens": 40,
+      "latency_ms": 850
+    },
+    {
+      "call_id": "t1-bellamy",
+      "turn": 1,
+      "purpose": "npc_generation",
+      "actor_id": "npc-bellamy",
+      "feature_flag": null,
+      "input_tokens": 1300,
+      "cached_input_tokens": 400,
+      "output_tokens": 80,
+      "latency_ms": 1150
+    },
+    {
+      "call_id": "t1-narration",
+      "turn": 1,
+      "purpose": "narration",
+      "actor_id": null,
+      "feature_flag": null,
+      "input_tokens": 1500,
+      "cached_input_tokens": 600,
+      "output_tokens": 60,
+      "latency_ms": 900
+    },
+    {
+      "call_id": "t2-oda",
+      "turn": 2,
+      "purpose": "npc_generation",
+      "actor_id": "npc-oda",
+      "feature_flag": null,
+      "input_tokens": 1300,
+      "cached_input_tokens": 400,
+      "output_tokens": 40,
+      "latency_ms": 850
+    },
+    {
+      "call_id": "t2-bellamy",
+      "turn": 2,
+      "purpose": "npc_generation",
+      "actor_id": "npc-bellamy",
+      "feature_flag": null,
+      "input_tokens": 1400,
+      "cached_input_tokens": 400,
+      "output_tokens": 80,
+      "latency_ms": 1150
+    },
+    {
+      "call_id": "t2-narration",
+      "turn": 2,
+      "purpose": "narration",
+      "actor_id": null,
+      "feature_flag": null,
+      "input_tokens": 1600,
+      "cached_input_tokens": 600,
+      "output_tokens": 60,
+      "latency_ms": 900
+    },
+    {
+      "call_id": "t3-oda",
+      "turn": 3,
+      "purpose": "npc_generation",
+      "actor_id": "npc-oda",
+      "feature_flag": null,
+      "input_tokens": 1400,
+      "cached_input_tokens": 400,
+      "output_tokens": 40,
+      "latency_ms": 850
+    },
+    {
+      "call_id": "t3-bellamy",
+      "turn": 3,
+      "purpose": "npc_generation",
+      "actor_id": "npc-bellamy",
+      "feature_flag": null,
+      "input_tokens": 1500,
+      "cached_input_tokens": 400,
+      "output_tokens": 80,
+      "latency_ms": 1150
+    },
+    {
+      "call_id": "t3-narration",
+      "turn": 3,
+      "purpose": "narration",
+      "actor_id": null,
+      "feature_flag": null,
+      "input_tokens": 1700,
+      "cached_input_tokens": 600,
+      "output_tokens": 60,
+      "latency_ms": 900
+    }
+  ],
+  "choice_outcomes": {
+    "ask-ledger": "honored",
+    "follow-bellamy": "honored",
+    "ask-song": "complicated"
+  },
+  "judge_scores": {
+    "fluency": 0.6
+  }
+}
