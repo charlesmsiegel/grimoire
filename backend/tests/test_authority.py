@@ -107,8 +107,15 @@ def test_records_validate_and_are_immutable():
         Delegation(CAMPAIGN, "d", "ash", P1, {"voluntary_action"}, "campaign", "auto_complete")
     with pytest.raises(ValueError):
         Delegation(CAMPAIGN, "d", "ash", P1, {"belief"}, "campaign", "trust-me")
+    with pytest.raises(ValueError):  # presets never apply to a single contribution
+        Delegation(CAMPAIGN, "d", "ash", P1, {"voluntary_action", "voluntary_speech"},
+                   "contribution", "incidental_dialogue", contribution_id="k1")
     with pytest.raises(ValueError):
         ImposedCondition(CAMPAIGN, "f", "ash", "narration", "x", "y")
+    with pytest.raises(ValueError):  # flags fail closed: a string is not a bool
+        ImposedCondition(CAMPAIGN, "f", "ash", "rule", "r", "fear", "no", True)
+    with pytest.raises(ValueError):
+        ImposedCondition(CAMPAIGN, "f", "ash", "rule", "r", "fear", True, 1)
     with pytest.raises(ValueError):
         Resolution(CAMPAIGN, "a1", "")
     d = Delegation(CAMPAIGN, "d", "ash", P1, ["interiority"], "campaign", "custom")
@@ -308,6 +315,10 @@ def test_delegation_does_not_creep():
     assert reasons(stale) == {"c": "pc_authorship"}
     with pytest.raises(ValueError):
         review([feeling], delegations=[grant("d"), grant("d", scope="scene", scene_id="scene-1")])
+    # the same id in another campaign is irrelevant, not an error
+    elsewhere = Delegation("campaign-b", "d", "ash", P1, {"interiority"}, "campaign", "custom")
+    assert bases(review([feeling], delegations=[elsewhere, grant("d")])) == {"c": "delegation:d"}
+    assert narration_policy(CTX, "ash", CONTROLS, [elsewhere, grant("d")]).delegation_ids == ("d",)
 
 
 def test_auto_complete_is_bounded_to_one_submitted_action():
@@ -325,6 +336,11 @@ def test_auto_complete_is_bounded_to_one_submitted_action():
     # Atomicity (no second action smuggled into "phrased") is the labeller's duty.
     assert bases(result) == {"phrased": "delegation:d-auto"}
     assert reasons(result) == {"unrelated": "pc_authorship", "speech": "invalid_expression"}
+    # consent to one action does not cover another submitted action
+    other = contribution("k-sit", "action", "I sit down.")
+    reused = review([claim("x", "voluntary_action", "You sink into a chair.", expresses="k-sit")],
+                    contributions=[reach, other], delegations=[consent])
+    assert reasons(reused) == {"x": "not_verbatim"}
     with pytest.raises(ValueError):
         auto_complete(contribution("k-s", "speech", '"Hi"'), "d")
     with pytest.raises(ValueError):  # contribution scope is only for explicit consent
@@ -344,6 +360,16 @@ def test_presets_are_frozen_and_exclude_intent_belief_and_commitment():
     with pytest.raises(ValueError):
         delegate("autopilot", campaign_id=CAMPAIGN, delegation_id="d", actor_id="ash",
                  granted_by=P1, scope="campaign")
+
+
+def test_duplicate_ids_fail_loudly():
+    reach = contribution("k1", "action", "I reach.")
+    with pytest.raises(ValueError):
+        review([], contributions=[reach, contribution("k1", "speech", '"Hi."')])
+    with pytest.raises(ValueError):
+        review([], conditions=[fear(disclosed=False), fear()])
+    with pytest.raises(ValueError):
+        narration_policy(CTX, "ash", CONTROLS, conditions=[fear(disclosed=False), fear()])
 
 
 def test_cross_campaign_and_duplicate_claims():

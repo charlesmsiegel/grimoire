@@ -117,8 +117,10 @@ class Delegation:
             elif value is not None:
                 raise ValueError(f"{self.scope!r} scope does not take {label}")
         _choice(self.mode, {*PRESET_DOMAINS, "auto_complete", "custom"}, "delegation mode")
-        if self.mode in PRESET_DOMAINS and self.domains != PRESET_DOMAINS[self.mode]:
-            raise ValueError(f"{self.mode!r} must carry exactly its preset domains")
+        if self.mode in PRESET_DOMAINS and (
+                self.domains != PRESET_DOMAINS[self.mode] or self.scope == "contribution"):
+            raise ValueError(f"{self.mode!r} carries exactly its preset domains, never "
+                             "for a single contribution")
         if self.mode == "auto_complete" and (
                 self.scope != "contribution" or self.domains != _AUTO_COMPLETE):
             raise ValueError("auto_complete is contribution-scoped voluntary_action only")
@@ -156,6 +158,9 @@ class ImposedCondition:
         for label in ("campaign_id", "condition_id", "actor_id", "origin_id", "description"):
             _nonempty(getattr(self, label), label)
         _choice(self.source, {"rule", "effect"}, "condition source")
+        for label in ("disclosed", "within_agreed_limits"):
+            if not isinstance(getattr(self, label), bool):
+                raise ValueError(f"{label} must be a bool")  # "false" must not read as true
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,7 +325,8 @@ def auto_complete(contribution: PlayerContribution, delegation_id: str) -> Deleg
 # --- shared authority path -----------------------------------------------------
 
 def _unique(items: tuple, key: str, label: str) -> None:
-    ids = [getattr(item, key) for item in items]
+    """Ids are unique per campaign; another campaign's record is merely irrelevant."""
+    ids = [(item.campaign_id, getattr(item, key)) for item in items]
     if len(ids) != len(set(ids)):
         raise ValueError(f"duplicate {label} ids")
 
@@ -361,7 +367,9 @@ def narration_policy(context: NarrationContext, actor_id: str,
                      conditions: Iterable[ImposedCondition] = ()) -> NarrationPolicy:
     """Deterministic prompt-ready statement of the director's authority."""
     delegations, revocations = tuple(delegations), tuple(revocations)
+    conditions = tuple(conditions)
     _unique(delegations, "delegation_id", "delegation")
+    _unique(conditions, "condition_id", "condition")
     controller = controller_of(context.campaign_id, actor_id, controls)
     if controller is None:
         raise AuthorityError(f"no control assignment for {actor_id!r}")
@@ -391,8 +399,11 @@ def review_narration(context: NarrationContext, claims: Iterable[NarrationClaim]
     """Accept each claim with its authority basis, or reject it with a reason."""
     claims, controls, delegations = tuple(claims), tuple(controls), tuple(delegations)
     revocations, conditions = tuple(revocations), tuple(conditions)
+    contributions = tuple(contributions)
     _unique(claims, "claim_id", "claim")
     _unique(delegations, "delegation_id", "delegation")
+    _unique(conditions, "condition_id", "condition")
+    _unique(contributions, "contribution_id", "contribution")
     found = {c.contribution_id: c for c in contributions if c.campaign_id == context.campaign_id}
     results: dict[str, set[str]] = {}
     for r in resolutions:
