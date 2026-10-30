@@ -36,6 +36,7 @@ def finding_key(finding: Finding) -> tuple:
 
 @dataclass(frozen=True, slots=True)
 class Scorecard:
+    provenance: str
     npc_lines: int
     leak_lines: int
     leak_rate: Fraction | None
@@ -295,6 +296,7 @@ def scorecard(scenario: Scenario, run: Run, policy: GatePolicy) -> Scorecard:
         if call.feature_flag is not None:
             cost_by_flag[call.feature_flag] = cost_by_flag.get(call.feature_flag, Fraction(0)) + cost
     return Scorecard(
+        provenance=run.provenance,
         npc_lines=npc_lines,
         leak_lines=len(leaking),
         leak_rate=Fraction(len(leaking), npc_lines) if npc_lines else None,

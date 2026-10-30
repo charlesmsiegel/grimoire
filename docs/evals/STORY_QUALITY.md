@@ -39,14 +39,23 @@ dangling references and malformed ids are located errors (`run.turns[0].contribu
   input/cached-input/output tokens, latency), `choice_outcomes` (`honored`, `complicated`,
   `negated`) and informational `judge_scores`.
 
-Markers match whole phrases after normalisation: NFKC, curly quotes and dash variants folded to
-`'`, `"` and `-`, zero-width spaces and word joiners read as spaces, other invisible format characters (soft
-hyphen) removed, casefold.
-`duke` does not match `dukedom`; at a marker edge written in a script without spaces between
-words (CJK ideographs, kana, Thai, Lao, Khmer, Myanmar, Tibetan), so a CJK marker also
-matches inside a longer compound no word boundary is required. Blank or
-punctuation-only model contributions count as silence for script, orphan-call and voice
+Markers match whole phrases after normalisation: NFKC; curly quotes and dash variants folded to
+`'`, `"` and `-`; zero-width spaces and word joiners read as spaces; other invisible format
+characters (soft hyphen) removed; casefold. `duke` does not match `dukedom`. No word boundary is
+required at a marker edge written in a script without spaces between words (CJK ideographs, kana,
+Thai, Lao, Khmer, Myanmar, Tibetan), so a CJK marker also matches inside a longer compound. Blank
+or punctuation-only model contributions count as silence for script, orphan-call and voice
 scoring, but remain model-authored for sovereignty and call-attribution checks.
+
+Optional keys and their defaults: choice `negation_markers` (`[]`) and `window` (`0`); run
+`enabled_flags` (`[]`) and `judge_scores` (`{}`); contribution `call_id` and call `actor_id` /
+`feature_flag` (`null`). Every default fails closed (a missing `call_id` on a model line is still a
+format error). Every call's `turn` must be a turn present in the run, so a truncated recording that
+keeps the calls of a dropped turn is invalid input (exit 2), while one that drops both is a gate
+failure (`script_incomplete`, exit 1).
+
+In the shipped benchmark Wren hears the secret in Bellamy's turn-3 song (`known_from` turn 3), so
+narration may mention it on turn 3 but not on turns 1–2.
 
 ## Checks
 

@@ -25,6 +25,7 @@ def _mapping(values) -> str:
 
 def _rows(card: Scorecard) -> list[tuple[str, str]]:
     return [
+        ("provenance", card.provenance),
         ("NPC lines", _fmt(card.npc_lines)),
         ("leak rate (NPC lines)", _fmt(card.leak_rate)),
         ("choices negated by label", _fmt(card.negated_by_label)),
