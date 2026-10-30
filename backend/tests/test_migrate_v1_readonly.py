@@ -24,6 +24,7 @@ import json, os, sys
 from pathlib import Path
 
 ALLOW = os.environ.get("REPORT_TEMP_PREFIX")
+ALLOW_DIR = os.environ.get("REPORT_DIR")
 WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
 MUTATIONS = {"os.remove", "os.rmdir", "os.mkdir", "os.chmod", "os.chown", "os.utime", "os.truncate",
              "os.link", "os.symlink", "os.rename", "os.chflags", "os.lchflags", "os.lchmod",
@@ -32,7 +33,11 @@ SPAWNS = ("subprocess.", "socket.", "shutil.", "os.exec", "os.spawn", "os.posix_
 violations = []
 
 def allowed(path):
-    return ALLOW is not None and os.path.basename(os.fsdecode(path)).startswith(ALLOW)
+    # Only the report's exclusive temp file, in the report's own directory (or by dir_fd).
+    path = os.fsdecode(path)
+    where = os.path.dirname(path)
+    return (ALLOW is not None and os.path.basename(path).startswith(ALLOW)
+            and (where == "" or os.path.realpath(where) == os.path.realpath(ALLOW_DIR)))
 
 def hook(event, args):
     if event == "open":
@@ -50,16 +55,17 @@ sys.addaudithook(hook)
 from grimoire.migrate_v1.__main__ import main
 code = main(sys.argv[2:], environ={}, home=Path(sys.argv[1]))
 network = sorted(m for m in sys.modules
-                 if m in ("socket", "_socket", "ssl", "http.client", "urllib.request", "subprocess"))
+                 if m.split(".")[0] in ("socket", "_socket", "ssl", "http", "subprocess")
+                 or m == "urllib.request")
 print("AUDIT " + json.dumps({"code": code, "violations": violations, "network": network}), file=sys.stderr)
 """
 
 
-def run_hooked(home, args, *, temp_prefix=None):
+def run_hooked(home, args, *, temp_prefix=None, report_dir=None):
     env = {k: v for k, v in os.environ.items() if not k.startswith("GRIMOIRE")}
     env.update(PYTHONPATH=str(SRC), HOME=str(home), USERPROFILE=str(home), PYTHONDONTWRITEBYTECODE="1")
     if temp_prefix:
-        env["REPORT_TEMP_PREFIX"] = temp_prefix
+        env["REPORT_TEMP_PREFIX"], env["REPORT_DIR"] = temp_prefix, str(report_dir)
     done = subprocess.run([sys.executable, "-B", "-S", "-c", HOOKED, str(home), "scan", *args],
                           capture_output=True, text=True, env=env, timeout=120)
     line = next(l for l in done.stderr.splitlines() if l.startswith("AUDIT "))
@@ -90,7 +96,7 @@ def test_a_report_run_writes_only_its_temp_and_report(setup, tmp_path):
     report = tmp_path / "inventory.json"
     audit = run_hooked(home, ["--source", str(library), "--archive-id", "fixture",
                               "--destination", str(tmp_path / "v2"), "--report", str(report)],
-                       temp_prefix=".inventory.json.")
+                       temp_prefix=".inventory.json.", report_dir=tmp_path)
     assert audit == {"code": 0, "violations": [], "network": []}
     assert tree_digest(library) == before
     assert json.loads(report.read_text(encoding="ascii"))["status"] == "ready_for_review"

@@ -165,6 +165,9 @@ def read_actors(ctx: Context, lib: Library) -> None:
     for actor in lib.actors.values():
         if not _text.safe_id(actor.id):
             ctx.finding("invalid_v1_id", actor.path, detail=actor.base)
+        for vid, version in actor.versions.items():
+            if not _text.safe_id(vid):
+                ctx.finding("invalid_v1_id", version.path, detail="version")
         if actor.meta_path is None:
             ctx.finding("unknown_fields", actor.path, detail="actor directory without its metadata file")
         listed = sorted(v for v in actor.versions if _text.safe_id(v))
@@ -288,6 +291,8 @@ def record_rows(ctx: Context, lib: Library,
                 if record.meta.get(field_name):
                     refs.append(_ref_row(ctx, lib, record, world, hidden, field_name,
                                          f"{kind}:{record.meta[field_name]}", (kind,)))
+            if record.meta.get("version") and record.meta.get("character"):
+                refs.append(_version_row(ctx, lib, record, world, hidden))
             for member in _text.split_list(record.meta.get("present", "")):
                 refs.append(_ref_row(ctx, lib, record, world, hidden, "present", f"characters:{member}",
                                      ("characters",)))
@@ -308,6 +313,21 @@ def _ref_row(ctx, lib, record, world, hidden, field_name, value, kinds) -> dict:
     if status != "resolved":
         ctx.finding("dangling_ref", record.path, detail=f"{field_name}={value}")
     return {"field": field_name, "target": value, "status": status}
+
+
+def _version_row(ctx, lib, record, world, hidden) -> dict:
+    """A greeting's `version` names a portrayal of its own `character`, seen from its scope."""
+    cid, vid = record.meta["character"], record.meta["version"]
+    inherits = record.scope == "campaign" and world and f"characters/{cid}" not in hidden
+    status = "dangling"
+    for scope, sid in [(record.scope, record.scope_id)] + ([("world", world)] if inherits else []):
+        actor = lib.actors.get((scope, sid, "characters", cid))
+        if actor is not None and actor.meta_path is not None:
+            status = "resolved" if vid in actor.versions else "dangling"
+            break
+    if status != "resolved":
+        ctx.finding("dangling_ref", record.path, detail=f"version={cid}/{vid}")
+    return {"field": "version", "target": f"characters:{cid}/{vid}", "status": status}
 
 
 def actor_rows(lib: Library) -> list[dict]:

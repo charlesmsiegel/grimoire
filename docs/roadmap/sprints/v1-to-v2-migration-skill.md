@@ -48,6 +48,8 @@ Failure tests cover links, junctions, FIFOs, sockets, mount points, unreadable a
 
 `grimoire.library.check_report_destination` was added so the report can never land in, or under, a source, destination or V1 library.
 
+The fixture deliberately crops the inherited avatar campaign-side, so acceptance F reports that avatar as `focus_override` rather than `inherited`. The `inherited`, `overridden` and library-hide states are each tested separately.
+
 ## Open questions
 - ~~What user-visible review, failure and rollback flows must the implementation spec prove?~~ Review: summary + manifest with `findings`, `losses`, `unresolved` and `status`; nothing to roll back because nothing is written except the user-chosen report (published atomically, 0600). Failure: exit codes 2–5; a blocked inventory must be refused by the importer.
 - ~~Which optional later integrations can stay outside the first slice?~~ Pixel-id re-verification, full-copy campaign reconstruction, ledger semantics (knowledge, relationships, chronicle), reroll/response-variant contents, VN presentation history, sheets/modules and zip input; see the contract's known limits.

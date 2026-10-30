@@ -526,3 +526,9 @@ def test_a_campaign_reference_to_a_tombstoned_world_record_dangles(library, home
                                      encoding="utf-8")
     [row] = [r for r in run(library, home)["records"] if r["scope"] == "campaign"]
     assert row["refs"] == [{"field": "headquarters", "target": "locations:tidewatch-keep", "status": "dangling"}]
+
+
+@pytest.mark.skipif(not POSIX, reason="Windows cannot store these names")
+def test_a_version_name_v1_would_not_list_is_reported(library, home):
+    (library / MARA / "odd .json").write_text(card("Mara"), encoding="utf-8")
+    assert ("invalid_v1_id", (f"{MARA}/odd .json",)) in codes(run(library, home))

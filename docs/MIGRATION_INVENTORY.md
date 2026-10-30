@@ -105,6 +105,18 @@ Candidates are **proposals**, never a mapping, and they are unpinned: the import
 - Campaign actors propose `campaign:<campaign>/character/<actor>` instances, with `control` (`player` or `director`) from the V1 role and `derives_from` naming the portrayal they were locked to. Instance collisions are withheld the same way.
 - Same-named records in different worlds are listed as review groups with `relation: none`.
 
+### Status vocabularies
+
+| Field | Values |
+|---|---|
+| placement `status` | `resolved` (object and intact blob present), `focus_only` (a crop override, not a picture), `dangling_object`, `unarrived_blob`, `invalid`, `not_addressable` (a name V1 cannot address, such as a conflict copy) |
+| definition `status` | `proposed`, `collision` (withheld; `withheld` names the claim), `no_id_candidate`, `unresolved` (the file could not be parsed), `campaign_copy` (a campaign copy of a world record), `campaign_origin` |
+| instance `status` | `proposed`, `collision`, `no_id_candidate`, `unresolved` |
+| `portrayal_groups` | One per world actor: the actor file's legacy id, its `default_version`, and the legacy ids of its portrayals |
+| reference `status` | `resolved`, `unresolved`, `missing` (collection member), `listed` (a route to an image collection: recorded, membership not checked), `not_fetched` (external URL) |
+| expression layer `status` | `available`, `unavailable` (with `reason`) |
+| object `blob` | `present`, `unarrived`, `hash_mismatch` |
+
 ### Status and the importer contract
 
 `blocked` means the importer must refuse until the source is fixed and rescanned. Any item listed in `unresolved` must not be applied without an explicit user decision. Before applying, the importer re-verifies each entry's sha256 and the `source_fingerprint` against the source; it never performs a second, hidden scan.
@@ -141,3 +153,4 @@ A report names the user's records and paths: keep it private, and never commit i
 - **A seated player's malformed card:** V1 falls back to the actor id as the display name when a card's `data` is not an object. The scanner instead marks that scene's authorship `unresolved`, because a fallback name could misattribute posts.
 - **Not interpreted:** full-copy campaigns are inventoried raw. Knowledge, relationships, chronicle, tracker, reroll and response-variant contents, VN presentation history, sheets and mechanics modules are listed only, as losses.
 - **Backup archives:** zip input is not read; extract the backup to a directory first.
+- **Collection routes in Markdown:** a Markdown image link to an image-collection route is recorded as `listed`, without checking the collection or member it names. The collections themselves are resolved.
