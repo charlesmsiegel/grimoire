@@ -303,3 +303,26 @@ def test_handle_cannot_be_reinitialized(authority):
     with pytest.raises(AttributeError):
         handle.__init__(authority, WORKER, True)
     assert handle.trusted is False
+
+
+def test_spoofed_permission_objects_are_malformed():
+    authority = Authorizer([OWNER])
+    authority.add_grant(harbor_grant(permissions=(Permission.APPLY,)))
+
+    class Impostor:
+        hashes = 0
+
+        @property
+        def __class__(self):
+            return Permission
+
+        def __eq__(self, other):
+            return other is Permission.APPLY
+
+        def __hash__(self):
+            Impostor.hashes += 1
+            return hash(Permission.APPLY if Impostor.hashes == 1 else Permission.INSPECT)
+
+    decision = authority.handle_for(WORKER).authorize(Impostor(), WREN, PAYLOAD)
+    assert not decision.allowed and decision.reason is Reason.MALFORMED_REQUEST
+    assert authority.audit()[-1].permission is None

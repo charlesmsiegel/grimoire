@@ -93,7 +93,7 @@ class Grant:
         _require_id(self.grant_id, "grant_id")
         _require_principal(self.principal, "principal")
         if (not isinstance(self.permissions, frozenset) or not self.permissions
-                or not all(isinstance(p, Permission) for p in self.permissions)):
+                or not all(type(p) is Permission for p in self.permissions)):
             raise ValueError("permissions must be a nonempty frozenset of Permission")
         _require_address(self.scope, "scope")
         if not is_human(self.granted_by):
@@ -123,7 +123,7 @@ class Approval:
     def __post_init__(self) -> None:
         _require_id(self.approval_id, "approval_id")
         _require_principal(self.principal, "principal")
-        if not isinstance(self.permission, Permission) or self.permission not in CONSEQUENTIAL:
+        if type(self.permission) is not Permission or self.permission not in CONSEQUENTIAL:
             raise ValueError("only apply or execute requests need approval")
         _require_address(self.resource, "resource")
         if type(self.payload_digest) is not str or not _DIGEST.fullmatch(self.payload_digest):

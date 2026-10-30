@@ -53,7 +53,7 @@ def _well_formed(permission: object, resource: object, payload: object,
                  approval_id: object) -> bool:
     # Exact types only: subclasses could override hashing, equality or methods
     # between the checks below and the executor's use of the same object.
-    if not isinstance(permission, Permission) or type(resource) is not str:
+    if type(permission) is not Permission or type(resource) is not str:
         return False
     if payload is not None and type(payload) is not bytes:
         return False
@@ -156,7 +156,7 @@ class Authorizer:
         self._audit.append(AuditRecord(
             sequence=len(self._audit) + 1,
             principal=principal,
-            permission=permission if isinstance(permission, Permission) else None,
+            permission=permission if type(permission) is Permission else None,
             resource=None if decision.resource is None else str(decision.resource),
             trusted=trusted,
             allowed=decision.allowed,
