@@ -35,10 +35,11 @@ FAILURE_SURFACED = "failure surfaced"
 BOUNDED = "bounded file operations"
 MEDIATED = "all mutations mediated"
 RECOVERY_COMPLETES = "recovery completes"
+RECOVERY_PRESERVES = "recovery preserves completion"
 SANDBOX = "sandbox"
 HARNESS_INVARIANTS = (
     BASELINE_COMPLETES, FAULT_FIRED, DETERMINISTIC, CRASH_PROPAGATED, FAILURE_SURFACED,
-    BOUNDED, MEDIATED, RECOVERY_COMPLETES, SANDBOX,
+    BOUNDED, MEDIATED, RECOVERY_COMPLETES, RECOVERY_PRESERVES, SANDBOX,
 )
 
 
@@ -443,6 +444,13 @@ class _Run:
 
     def _check_invariants(self) -> None:
         normalize = self.scenario.normalize or (lambda tree: tree)
+        if self.baseline is None:
+            # The baseline's recovered tree is every later run's oracle; it must equal what the
+            # successful action itself produced, or a broken recovery would define "completed".
+            produced, recovered = normalize(self.trees["after_action"]), normalize(self.trees["recovered"])
+            if recovered != produced:
+                self.flag(RECOVERY_PRESERVES, "recovery after a successful action changed its result: "
+                          + _difference(recovered, produced))
         completed = self.baseline.recovered if self.baseline else self.trees["recovered"]
         action_ops = self.action_ops
         assert action_ops is not None

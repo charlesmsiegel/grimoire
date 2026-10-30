@@ -481,8 +481,10 @@ def test_a12_interrupted_recovery_is_explored(tmp_path):
 
 def test_a12_nondeterministic_recovery_is_named_at_a_recovery_point(tmp_path):
     def noisy_recover(ops, root):
+        recovering = ops.exists(root / ".journal")
         journaled_recover()(ops, root)
-        ops.write_bytes(root / "recovery.log", random.randbytes(8))
+        if recovering:
+            ops.write_bytes(root / "recovery.log", random.randbytes(8))
 
     report = explore_crashes(scenario(journaled_publish(NEW), noisy_recover, invariants=()), tmp_path,
                              torn=False, recovery_crashes=True)
@@ -583,6 +585,23 @@ def test_a12_torn_recovery_writes_are_explored(tmp_path):
     assert all(" > recover:" in v.point and v.point.endswith("@torn") for v in report.violations)
 
 
+def test_recovery_cannot_redefine_the_completed_state(tmp_path):
+    def publish(ops, root):
+        temp = ops.make_temp(root, prefix="data.", suffix=".new")
+        ops.write_bytes(temp, b"new")
+        ops.replace(temp, root / "data")
+
+    def restores_old(ops, root):
+        discard_staging(ops, root)
+        ops.write_bytes(root / "data", b"old")
+
+    invariants = (atomic_outcome(), idempotent_recovery(), completes_after(Target("replace", target="data")))
+    report = explore_crashes(scenario(publish, restores_old, invariants=invariants,
+                                      setup=write_files({"data": b"old"})), tmp_path, recovery_crashes=True)
+    assert [(v.invariant, v.point) for v in report.violations] == [("recovery preserves completion", "baseline")]
+    assert report.points_explored == 0
+
+
 def test_combined_plan_is_labelled_by_its_crash(tmp_path):
     plan = [Interleave(0, lambda ops, root: None), Crash(Target("replace", target="*.json"), "after")]
     run = run_with_fault(scenario(journaled_publish(NEW), rollback_recover,
@@ -652,5 +671,5 @@ def test_harness_invariant_names_are_stable():
     assert HARNESS_INVARIANTS == (
         "baseline completes", "planned fault fired", "deterministic action",
         "simulated crash propagated", "failure surfaced", "bounded file operations",
-        "all mutations mediated", "recovery completes", "sandbox",
+        "all mutations mediated", "recovery completes", "recovery preserves completion", "sandbox",
     )
