@@ -3,6 +3,8 @@
 > **V2 scope correction:** Scope pairing keys, sync transport and migration agents explicitly; imported cards must never execute instructions, expose provider secrets or write into the V1 library. See the [V2 ordered roadmap](../README.md) for hard prerequisites and delivery wave; older references to existing V1 systems are porting targets, not the V2 starting baseline.
 
 
+> **First slice status:** the pure authorization kernel `grimoire.security` landed with the contract in [Tool authority](../../TOOL_AUTHORITY.md). The proving scenario is **simulated** with a synthetic compromised card-import worker; no real tool workflow, importer, file store or approval UI is integrated yet.
+
 **Outcome:** Keep imported worlds, model outputs and autonomous tools from acquiring authority they were not granted.
 
 ## Scope
