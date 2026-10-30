@@ -18,6 +18,35 @@ from .model import (
     Event,
     Observation,
 )
+from .authority import (
+    ADJUDICATED_DOMAINS,
+    ALL_DOMAINS,
+    CONDITIONAL_DOMAINS,
+    DIRECTOR,
+    OPEN_DOMAINS,
+    PROTECTED_DOMAINS,
+    AcceptedClaim,
+    AuthorityError,
+    Correction,
+    CorrectionRefusal,
+    Delegation,
+    ImposedCondition,
+    NarrationClaim,
+    NarrationContext,
+    NarrationPolicy,
+    NarrationReview,
+    PlayerContribution,
+    RejectedClaim,
+    Resolution,
+    Revocation,
+    apply_corrections,
+    auto_complete,
+    controller_of,
+    delegate,
+    narration_policy,
+    review_narration,
+    submit_contribution,
+)
 from .resolve import MissingDefinition, actor_view
 
 __all__ = [
@@ -27,4 +56,11 @@ __all__ = [
     "BrokenReference", "DefinitionIndex", "DefinitionLink", "LegacyIdMap",
     "SourceDescriptor", "UnmappedLegacyId",
     "MissingDefinition", "actor_view",
+    "ADJUDICATED_DOMAINS", "ALL_DOMAINS", "CONDITIONAL_DOMAINS", "DIRECTOR",
+    "OPEN_DOMAINS", "PROTECTED_DOMAINS", "AcceptedClaim", "AuthorityError",
+    "Correction", "CorrectionRefusal", "Delegation", "ImposedCondition",
+    "NarrationClaim", "NarrationContext", "NarrationPolicy", "NarrationReview",
+    "PlayerContribution", "RejectedClaim", "Resolution", "Revocation",
+    "apply_corrections", "auto_complete", "controller_of", "delegate",
+    "narration_policy", "review_narration", "submit_contribution",
 ]

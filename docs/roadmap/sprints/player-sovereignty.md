@@ -1,5 +1,7 @@
 # Player Sovereignty and Narration Authority
 
+**Status:** first slice implemented as a pure authority policy over *labelled* narration claims. See the [player sovereignty contract](../../PLAYER_SOVEREIGNTY.md). It covers all three milestones as deterministic tests over synthetic fixtures. No prose narrator is constrained yet, there is no freeform scene runner, and player trust has not been evaluated with people or models.
+
 **Outcome:** The player retains meaningful control of their PC's intent, voluntary speech, choices and interior experience; Grimoire narrates a responsive world without stealing agency.
 
 ## Scope and ownership
