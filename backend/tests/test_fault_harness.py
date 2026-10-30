@@ -598,8 +598,29 @@ def test_recovery_cannot_redefine_the_completed_state(tmp_path):
     invariants = (atomic_outcome(), idempotent_recovery(), completes_after(Target("replace", target="data")))
     report = explore_crashes(scenario(publish, restores_old, invariants=invariants,
                                       setup=write_files({"data": b"old"})), tmp_path, recovery_crashes=True)
-    assert [(v.invariant, v.point) for v in report.violations] == [("recovery preserves completion", "baseline")]
+    assert [(v.invariant, v.point) for v in report.violations] == [
+        ("recovery preserves completion", "baseline"), ("completes_after", "baseline")]
     assert report.points_explored == 0
+
+
+def test_interleave_only_runs_still_check_commit_durability(tmp_path):
+    def publish(ops, root):
+        temp = ops.make_temp(root, prefix="data.", suffix=".new")
+        ops.write_bytes(temp, b"new")
+        ops.replace(temp, root / "data")
+
+    def rolls_back_if_marked(ops, root):
+        discard_staging(ops, root)
+        if ops.exists(root / "marker"):
+            ops.write_bytes(root / "data", b"old")
+
+    commit = Target("replace", target="data")
+    invariants = (atomic_outcome(), idempotent_recovery(), completes_after(commit))
+    run = run_with_fault(scenario(publish, rolls_back_if_marked, invariants=invariants,
+                                  setup=write_files({"data": b"old"})),
+                         [Interleave(0, lambda ops, root: ops.write_bytes(root / "marker", b"x"))], tmp_path)
+    assert names(run.violations) == ["completes_after"]
+    assert "undid a committed" in run.violations[0].detail
 
 
 def test_combined_plan_is_labelled_by_its_crash(tmp_path):

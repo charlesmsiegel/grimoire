@@ -198,13 +198,20 @@ def completes_after(at: At) -> Invariant:
         if nth_match(outcome.baseline_trace, at) is None:
             return f"commit operation {at!r} not found in the baseline trace"
         index, timing = outcome.action_index, outcome.action_timing
-        if index is None:
-            return None
         # Resolve against the faulted run: an interleave may have shifted operation indices.
         commit = nth_match(outcome.action_trace or outcome.baseline_trace, at)
+        excluded = _external(outcome)
+        if index is None:
+            # No crash or failure: if the action committed and returned, recovery must keep the
+            # result this run produced (an interleave may legitimately change that result).
+            if commit is None or outcome.action_outcome != "returned":
+                return None
+            recovered, produced = _without(outcome.recovered, excluded), _without(outcome.after_action, excluded)
+            if recovered == produced:
+                return None
+            return "recovery undid a committed, successful action: " + _difference(recovered, produced)
         if commit is None or index < commit or (index == commit and timing != "after"):
             return None
-        excluded = _external(outcome)
         recovered, completed = _without(outcome.recovered, excluded), _without(outcome.completed, excluded)
         if recovered == completed:
             return None

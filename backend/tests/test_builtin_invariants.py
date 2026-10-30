@@ -48,6 +48,12 @@ def test_completes_after():
     assert "not rolled forward" in check(outcome(BEFORE, index=1, timing="after"))
     assert "not rolled forward" in check(outcome(MIXED, index=2, timing="before"))
     assert "not found" in completes_after(Target("remove")).check(outcome(DONE, index=2, timing="after"))
+    # no crash: a committed, returned action must survive recovery
+    returned = CrashOutcome(point="test", before=BEFORE, completed=DONE, recovered=BEFORE,
+                            recovered_twice=BEFORE, after_action=DONE, baseline_trace=TRACE, action_trace=TRACE)
+    assert "undid" in check(returned)
+    assert check(CrashOutcome(point="test", before=BEFORE, completed=DONE, recovered=DONE, recovered_twice=DONE,
+                              after_action=DONE, baseline_trace=TRACE, action_trace=TRACE)) is None
 
 
 def test_untouched():
