@@ -319,12 +319,6 @@ def test_unusable_pointer_fails_closed(home, payload):
         resolve_library(environ={}, home=home)
 
 
-def test_pointer_that_is_not_a_regular_file_is_never_opened(home):
-    os.mkfifo(home / ".grimoire.json")  # opening a FIFO would block forever
-    with pytest.raises(V1IsolationError, match="not a small regular file"):
-        resolve_library(environ={}, home=home)
-
-
 # Fail closed when the filesystem will not answer.
 
 def test_permission_error_while_probing_fails_closed(home, monkeypatch):
@@ -558,3 +552,54 @@ def test_relative_v1_home_with_a_vanished_cwd_fails_closed(home, tmp_path, monke
     with pytest.raises(LibraryPathError):
         resolve_library(environ={"GRIMOIRE_HOME": "relative-v1"}, home=home)
     monkeypatch.chdir(tmp_path)
+
+
+def opened_while(call) -> list[str]:
+    global _AUDITED
+    _AUDITED = []
+    try:
+        call()
+    finally:
+        seen, _AUDITED = _AUDITED, None
+    return seen
+
+
+@pytest.mark.parametrize("kind", ["fifo", "directory", "link-to-v1"])
+def test_pointer_that_is_not_a_regular_file_is_never_opened(home, kind):
+    pointer = home / ".grimoire.json"
+    if kind == "fifo":
+        os.mkfifo(pointer)  # opening a FIFO could block, or wake a writer
+    elif kind == "directory":
+        pointer.mkdir()
+    else:
+        pointer.symlink_to(v1_library(home / ".grimoire"))
+
+    def call():
+        with pytest.raises(V1IsolationError, match="not a small regular file"):
+            resolve_library(environ={}, home=home)
+    assert touches(opened_while(call), pointer) == []
+    assert touches(opened_while(call), home / ".grimoire") == []
+
+
+def test_pointer_read_failure_fails_closed(home, monkeypatch):
+    write_pointer(home, {"data_dir": "/x"})
+
+    real_fstat, calls = os.fstat, []
+
+    def broken(fd):
+        calls.append(fd)
+        if len(calls) == 1:  # ours; later callers (pytest's capture) get the real one
+            raise OSError(5, "Input/output error")
+        return real_fstat(fd)
+    monkeypatch.setattr(paths.os, "fstat", broken)
+    with pytest.raises(V1IsolationError, match="cannot be read"):
+        resolve_library(environ={}, home=home)
+
+
+def test_non_path_values_raise_library_errors(home, tmp_path):
+    with pytest.raises(LibraryPathError):
+        check_migration_paths(5, tmp_path / "d", environ={}, home=home)
+    with pytest.raises(LibraryPathError):
+        check_write_destination(None, environ={}, home=home)
+    with pytest.raises(LibraryPathError):
+        resolve_library(environ={"GRIMOIRE_HOME": b"/x"}, home=home)

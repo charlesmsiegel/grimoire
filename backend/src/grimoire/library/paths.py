@@ -100,7 +100,7 @@ def check_write_destination(path: str | os.PathLike[str], *, environ: Mapping[st
     """`path` resolved, if V2 may create or write a library there. Creates nothing."""
     environ = os.environ if environ is None else environ
     home = _known_home(home)
-    resolved = _usable_directory(_parse_user_path(os.fspath(path), home, "destination"))
+    resolved = _usable_directory(_parse_user_path(_fspath(path), home, "destination"))
     _check_isolation(resolved, _guarded_roots(environ, home))
     return resolved
 
@@ -114,11 +114,11 @@ def check_migration_paths(source: str | os.PathLike[str] | None, destination: st
     format and the user's approval belong to the migration sprints. The source
     may well be a V1 library -- it is never written, and nothing here reads it.
     """
-    if source is None or not os.fspath(source):
+    if source is None or not _fspath(source):
         raise LibraryPathError("a migration needs an explicitly chosen source; there is no default")
     environ = os.environ if environ is None else environ
     known = _known_home(home)
-    src = _realpath(_parse_user_path(os.fspath(source), known, "migration source"))
+    src = _realpath(_parse_user_path(_fspath(source), known, "migration source"))
     dst = check_write_destination(destination, environ=environ, home=home)
     _check_isolation(dst, [("the migration source", src)], fingerprint=False)
     return src, dst
@@ -129,6 +129,13 @@ def check_migration_paths(source: str | os.PathLike[str] | None, destination: st
 def _default_platform() -> str:
     # Before 3.13, CPython on Android reports "linux"; the API-level probe does not lie.
     return "android" if hasattr(sys, "getandroidapilevel") else sys.platform
+
+
+def _fspath(path: object) -> object:
+    try:
+        return os.fspath(path)
+    except TypeError as error:
+        raise LibraryPathError(f"{path!r} is not a path") from error
 
 
 def _known_home(home: Path | None) -> Path | None:
@@ -203,6 +210,8 @@ def _guarded_roots(environ: Mapping[str, str], home: Path | None) -> list[tuple[
     if home is not None:
         roots.append(("the default V1 library", home / V1_DEFAULT_DIRNAME))
     v1_home = environ.get(V1_HOME_ENV, "")
+    if v1_home and not isinstance(v1_home, str):
+        raise LibraryPathError(f"{V1_HOME_ENV}: {v1_home!r} is not a text path")
     if v1_home:
         # V1 read it as `Path(env)`: relative to its cwd and with no `~` expansion.
         try:
@@ -232,21 +241,32 @@ def _pointer_library(home: Path) -> Path | None:
             f"is; fix or remove that file")
 
     try:
-        # Non-blocking, and typed by the open descriptor: a FIFO swapped in after
-        # a separate stat would otherwise block this open forever.
-        fd = os.open(pointer, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        info = os.stat(pointer)
     except (FileNotFoundError, NotADirectoryError):
+        return None
+    except (OSError, ValueError) as error:
+        raise unusable(f"cannot be inspected ({error})") from error
+    _require_small_file(info, unusable)
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(pointer, flags)
+    except FileNotFoundError:
         return None
     except OSError as error:
         raise unusable(f"cannot be opened ({error})") from error
-    with os.fdopen(fd, "rb") as handle:
-        info = os.fstat(handle.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_size > _POINTER_MAX_BYTES:
-            raise unusable("is not a small regular file")
-        try:
-            text = handle.read(_POINTER_MAX_BYTES + 1)
-        except OSError as error:
-            raise unusable(f"cannot be read ({error})") from error
+    try:
+        # Typed again by the open descriptor: something swapped in after the
+        # stat is refused before it is read (and the non-blocking open means a
+        # swapped-in FIFO cannot hang us first).
+        _require_small_file(os.fstat(fd), unusable)
+        chunks = []
+        while chunk := os.read(fd, _POINTER_MAX_BYTES + 1):
+            chunks.append(chunk)
+        text = b"".join(chunks)
+    except OSError as error:
+        raise unusable(f"cannot be read ({error})") from error
+    finally:
+        os.close(fd)
     try:
         data = json.loads(text.decode("utf-8"))
     except (ValueError, RecursionError) as error:  # bad UTF-8, bad JSON, absurd nesting
@@ -266,6 +286,11 @@ def _pointer_library(home: Path) -> Path | None:
     if not Path(raw).is_absolute():
         raise unusable("has a relative data_dir")
     return Path(raw)
+
+
+def _require_small_file(info: os.stat_result, unusable) -> None:
+    if not stat.S_ISREG(info.st_mode) or info.st_size > _POINTER_MAX_BYTES:
+        raise unusable("is not a small regular file")
 
 
 def _key(path: Path) -> tuple[str, ...]:
