@@ -1,5 +1,7 @@
 # Hands-Free Controls and Spoken Intent Routing
 
+**Status:** first slice implemented as the headless `grimoire.intent` router (typed/fake transcripts, gated commands, target-bound confirmation); see [intent routing contract](../../intent-routing.md). No audio capture, speech recognition, UI or execution yet; milestones 2–3 remain open.
+
 **Outcome:** Control Grimoire by voice while clearly distinguishing application commands, out-of-character direction, PC speech and narrated action.
 
 ## Scope
