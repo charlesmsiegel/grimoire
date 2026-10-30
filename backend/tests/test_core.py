@@ -5,8 +5,9 @@ from dataclasses import replace
 import pytest
 
 from grimoire.core import (
-    Belief, CampaignActor, CharacterDefinition, ControlAssignment, DefinitionIndex, Event,
-    InstanceRef, MissingDefinition, Observation, SourceDescriptor, SourceRef, actor_view,
+    DIRECTOR, Belief, CampaignActor, CharacterDefinition, ControlAssignment, DefinitionIndex, Event,
+    InstanceRef, Knowledge, KnowledgeError, MissingDefinition, Moment, Perception, SourceDescriptor,
+    SourceRef, actor_knowledge, actor_view, director_knowledge,
 )
 
 
@@ -20,23 +21,28 @@ def index_of(*definitions, heads=None):
 EMPTY = DefinitionIndex([], [])
 
 
+def _witnessed(campaign_id, actor_id, evidence_id, percept, sequence=1):
+    holder = InstanceRef(campaign_id, "character", actor_id)
+    return Perception(campaign_id, evidence_id, holder, "secret-1", "overheard", percept,
+                      Moment(sequence), "director", confirmed=True)
+
+
 def test_same_definition_has_independent_campaign_instances_and_knowledge():
     root = SourceRef("catalog:fiction", "character", "mara", "revision-1")
     definition = CharacterDefinition(root, "Mara", "An observant negotiator")
     a = CampaignActor("campaign-a", "mara-a", source=root)
     b = CampaignActor("campaign-b", "mara-b", source=root)
-    event = Event("campaign-a", "secret-1", "The duke secretly betrayed the guild")
-    observation = Observation("campaign-a", a.actor_id, event.event_id,
-                              "overheard", "The duke was named in a private accusation")
-    mistaken = Belief("campaign-a", a.actor_id,
-                     "The accused duke must be guilty", "suspected", (event.event_id,))
+    event = Event("campaign-a", "secret-1", "The duke secretly betrayed the guild", Moment(1), "director")
+    knowledge = Knowledge("campaign-a", events=[event], evidence=[
+        _witnessed("campaign-a", a.actor_id, "heard", "The duke was named in a private accusation")])
     lookup = index_of(definition)
-    a_view = actor_view(a, lookup, [observation], [mistaken])
-    b_view = actor_view(b, lookup, [observation], [mistaken])
-    assert a_view.name == b_view.name == "Mara"
-    assert len(a_view.observations) == len(a_view.beliefs) == 1
-    assert b_view.observations == b_view.beliefs == ()
-    assert event.description not in repr(a_view)  # subjective evidence, not director truth
+    a_view = actor_view(a, lookup, actor_knowledge(knowledge, a.ref, as_of=1))
+    assert a_view.name == actor_view(b, lookup).name == "Mara"
+    assert len(a_view.knowledge.evidence) == 1
+    with pytest.raises(KnowledgeError) as caught:  # campaign A's ledger has nothing for campaign B
+        actor_knowledge(knowledge, b.ref, as_of=1)
+    assert caught.value.reason == "campaign_mismatch"
+    assert event.summary not in repr(a_view)  # subjective evidence, not director truth
 
 
 def test_world_variants_cannot_be_matched_by_name():
@@ -60,11 +66,29 @@ def test_control_changes_without_changing_actor_identity_or_history():
 
 def test_actor_view_is_an_immutable_snapshot():
     actor = CampaignActor("campaign-a", "mara", local_name="Mara")
-    observations = [Observation("campaign-a", "mara", "e1", "sight", "The door opened")]
-    view = actor_view(actor, EMPTY, observations)
-    observations.append(Observation("campaign-a", "mara", "e2", "sight", "Someone entered"))
-    assert len(view.observations) == 1
-    assert len(actor_view(actor, EMPTY, observations).observations) == 2
+    event = Event("campaign-a", "secret-1", "A door opened", Moment(0), "director")
+    evidence = [_witnessed("campaign-a", "mara", "e1", "The door opened")]
+    knowledge = Knowledge("campaign-a", events=[event], evidence=evidence)
+    view = actor_view(actor, EMPTY, actor_knowledge(knowledge, actor.ref, as_of=1))
+    evidence.append(_witnessed("campaign-a", "mara", "e2", "Someone entered"))
+    assert len(view.knowledge.evidence) == 1
+    grown = Knowledge("campaign-a", events=[event], evidence=evidence)
+    assert len(actor_view(actor, EMPTY, actor_knowledge(grown, actor.ref, as_of=1)).knowledge.evidence) == 2
+
+
+def test_actor_view_accepts_only_this_actors_projection():
+    mara = CampaignActor("campaign-a", "mara", local_name="Mara")
+    wren = CampaignActor("campaign-a", "wren", local_name="Wren")
+    knowledge = Knowledge("campaign-a")
+    for wrong, reason in (
+        (director_knowledge(knowledge, as_of=0, requested_by=DIRECTOR), "not_actor_knowledge"),
+        ({"evidence": ()}, "not_actor_knowledge"),
+        (actor_knowledge(knowledge, wren.ref, as_of=0), "actor_mismatch"),
+    ):
+        with pytest.raises(KnowledgeError) as caught:
+            actor_view(mara, EMPTY, wrong)
+        assert caught.value.reason == reason
+    assert actor_view(mara, EMPTY).knowledge is None  # none supplied, never "unfiltered"
 
 
 def test_source_and_actor_validation():
@@ -85,9 +109,9 @@ def test_definitions_are_always_pinned():
     lambda: CampaignActor("Campaign A", "vessa", local_name="Vessa"),
     lambda: CampaignActor("campaign-a", "Vessa", local_name="Vessa"),
     lambda: ControlAssignment("campaign a", "vessa", "director"),
-    lambda: Observation("campaign-a", "Vessa", "e1", "sight", "A door opened"),
-    lambda: Belief("campaign-a", "vessa ", "The door is open", "believed"),
-    lambda: Event("", "e1", "A door opened"),
+    lambda: Belief("campaign-a", "b1", InstanceRef("campaign-a", "character", "vessa"), "p", "believed",
+                   Moment(0), "director", ("e",), supersedes="Vessa"),
+    lambda: Event("", "e1", "A door opened", Moment(0), "director"),
 ])
 def test_campaign_and_actor_ids_obey_identity_grammar(build):
     with pytest.raises(ValueError):
