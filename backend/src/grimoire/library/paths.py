@@ -254,17 +254,18 @@ def _pointer_library(home: Path) -> Path | None:
 
     try:
         info = os.stat(pointer)
-    except (FileNotFoundError, NotADirectoryError):
-        return None
+    except (FileNotFoundError, NotADirectoryError) as error:
+        if _probe(pointer, follow=False) is None:
+            return None
+        # A link to an offline volume, say: V1's library is somewhere unknown.
+        raise unusable("is a link whose target cannot be found") from error
     except (OSError, ValueError) as error:
         raise unusable(f"cannot be inspected ({error})") from error
     _require_small_file(info, unusable)
     flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0)
     try:
         fd = os.open(pointer, flags)
-    except FileNotFoundError:
-        return None
-    except OSError as error:
+    except OSError as error:  # including a pointer that vanished since the stat
         raise unusable(f"cannot be opened ({error})") from error
     try:
         # Typed again by the open descriptor: something swapped in after the
@@ -332,8 +333,12 @@ class _Mount:
     point: Path   # where it is mounted
 
 
-#: Linux's mount table; absent elsewhere, where there are no bind mounts to see.
+#: Linux's (and Android's) mount table. Other platforms have no bind mounts to see.
 _MOUNTINFO = Path("/proc/self/mountinfo")
+
+
+def _has_mount_table() -> bool:
+    return _default_platform() == "android" or sys.platform.startswith("linux")
 
 
 def _unescape(field: str) -> str:
@@ -343,8 +348,11 @@ def _unescape(field: str) -> str:
 def _mounts() -> list[_Mount]:
     try:
         text = _MOUNTINFO.read_text(encoding="utf-8", errors="surrogateescape")
-    except (FileNotFoundError, NotADirectoryError):
-        return []
+    except (FileNotFoundError, NotADirectoryError) as error:
+        if not _has_mount_table():
+            return []
+        # Without /proc, bind mounts still exist; we just cannot see them.
+        raise LibraryPathError(f"cannot read the mount table {_MOUNTINFO} (is /proc mounted?): {error}") from error
     except OSError as error:
         raise LibraryPathError(f"cannot read the mount table {_MOUNTINFO}: {error}") from error
     mounts = []

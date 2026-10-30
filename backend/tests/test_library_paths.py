@@ -686,9 +686,19 @@ def test_mounts_of_other_filesystems_are_not_aliases(home, tmp_path, monkeypatch
                                    home=home) == (tmp_path / "data").resolve()
 
 
-def test_missing_mount_table_means_no_aliases(home, tmp_path, monkeypatch):
+def test_platform_without_a_mount_table_has_no_aliases(home, tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "_MOUNTINFO", tmp_path / "no-such-table")
+    monkeypatch.setattr(sys, "platform", "darwin")
     assert resolve_library(environ={}, home=home).origin == "default"
+
+
+@pytest.mark.parametrize("platform", ["linux", "android"])
+def test_linux_without_its_mount_table_fails_closed(home, tmp_path, monkeypatch, platform):
+    # Bind mounts still exist when /proc is not mounted; we just cannot see them.
+    monkeypatch.setattr(paths, "_MOUNTINFO", tmp_path / "no-such-table")
+    monkeypatch.setattr(sys, "platform", platform)
+    with pytest.raises(LibraryPathError, match="mount table"):
+        resolve_library(environ={"GRIMOIRE_V2_HOME": str(tmp_path / "lib")}, home=home)
 
 
 def test_real_bind_mount(home, tmp_path):
@@ -702,3 +712,10 @@ def test_real_bind_mount(home, tmp_path):
             check_write_destination(data, environ={"GRIMOIRE_HOME": str(mnt / "v1")}, home=home)
     finally:
         subprocess.run(["umount", str(mnt)], check=True)
+
+
+def test_dangling_pointer_link_fails_closed(home, tmp_path):
+    # e.g. the pointer lives on a volume that is offline: V1's root is unknown.
+    (home / ".grimoire.json").symlink_to(tmp_path / "offline" / "grimoire.json")
+    with pytest.raises(V1IsolationError, match="target cannot be found"):
+        resolve_library(environ={}, home=home)
