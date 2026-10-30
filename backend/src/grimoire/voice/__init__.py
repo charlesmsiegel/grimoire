@@ -6,12 +6,18 @@ docs/VOICE.md for the accepted contract.
 
 from .binding import ResolvedVoice, VoiceBinding, resolve_voice
 from .errors import InvalidVoice, MissingVoice, VoiceMismatch
+from .fragment import (
+    DEFAULT_MAX_CHARS, EXAMPLES_HEADER, HEADER, MIN_MAX_CHARS, Omission, SecretFact, SpeakerFragment,
+    speaker_fragment,
+)
 from .profile import (
     ASPECTS, MAX_ANCHOR_CHARS, MAX_EXAMPLE_CHARS, MAX_ITEMS, ImportedVoiceSource, VoiceAnchor,
     VoiceCatalog, VoiceExample, VoiceProfile,
 )
 
 __all__ = [
+    "DEFAULT_MAX_CHARS", "EXAMPLES_HEADER", "HEADER", "MIN_MAX_CHARS", "Omission", "SecretFact",
+    "SpeakerFragment", "speaker_fragment",
     "ResolvedVoice", "VoiceBinding", "resolve_voice",
     "InvalidVoice", "MissingVoice", "VoiceMismatch",
     "ASPECTS", "MAX_ANCHOR_CHARS", "MAX_EXAMPLE_CHARS", "MAX_ITEMS", "ImportedVoiceSource",
