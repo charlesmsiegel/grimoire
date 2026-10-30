@@ -23,6 +23,8 @@ Imported Markdown, character cards (including extensions and greetings), rules s
 | `apply` | commit a change to canonical state | a covering grant **and** a matching approval |
 | `execute` | invoke an external tool, provider or network endpoint (e.g. `providers/<name>`) | a covering grant **and** a matching approval |
 
+A trusted `human:` or `app:` handle needs only a covering grant for any permission.
+
 No permission implies another. `execute` is only an authorization decision until provider adapters exist; those adapters must call through it.
 
 ## Logical addresses
@@ -48,7 +50,7 @@ These rules reject traversal, absolute paths, separators, whitespace, control/fo
 
 ## Decisions and audit
 
-`authorize` never raises for its arguments and never allows on error. It denies with the first matching reason: `malformed_request`, `invalid_path`, `reserved_resource`, `not_granted`, `approval_required`. Any unexpected failure is `internal_error`. Allows are `granted` or `approved`. Every decision is appended to the audit log before it takes effect (an allow that cannot be audited becomes an `internal_error` denial, and its approval is not consumed), with its principal, permission, canonical address (when valid), origin, outcome, reason, grant and consumed approval. Payload bytes and caller-supplied approval IDs are never recorded. Addresses chosen by content are recorded because they are the attempted target.
+`authorize` never raises for its arguments and never allows on error. It denies with the first matching reason: `malformed_request`, `invalid_path`, `reserved_resource`, `not_granted`, `approval_required`. Any unexpected failure is `internal_error`. Allows are `granted` or `approved`. Every decision is recorded in the audit log before it takes effect; if recording fails, the request is denied as `internal_error` (possibly unrecorded) and no approval is consumed. Each record holds its principal, permission, canonical address (when valid), origin, outcome, reason, grant and consumed approval. Payload bytes and caller-supplied approval IDs are never recorded. Addresses chosen by content are recorded because they are the attempted target.
 
 ## Requirements on later sprints
 
