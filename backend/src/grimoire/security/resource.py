@@ -15,7 +15,14 @@ MAX_ADDRESS_CHARS = 1024
 MAX_SEGMENTS = 32
 MAX_SEGMENT_CHARS = 128
 MAX_SEGMENT_BYTES = 255
-RESERVED_ROOTS = frozenset({"secrets"})
+#: Root entries only a V1 (0.2.1) library has (``grimoire.library.V1_ROOT_MARKERS``,
+#: duplicated because this kernel is pure). A V2 root holding one beside ``worlds``
+#: would read as a V1 library and be refused, so nothing may create them.
+V1_MARKER_ROOTS = frozenset({
+    "llm_connections", "sampler_presets", "response_presets", ".world-staging",
+    ".module-staging", ".char_macros_baked", "prompt_layout.json", "regex.json", "chores.json",
+})
+RESERVED_ROOTS = frozenset({"secrets"}) | V1_MARKER_ROOTS
 
 _PUNCTUATION = frozenset("-_.")
 # Default_Ignorable_Code_Point ranges (Unicode DerivedCoreProperties). Most are

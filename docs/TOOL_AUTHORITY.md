@@ -38,7 +38,7 @@ Requests name **logical addresses** inside one V2 library, such as `worlds/harbo
 
 These rules reject traversal, absolute paths, separators, whitespace, control/format/surrogate/private/unassigned characters, uppercase and compatibility aliases. Scope containment compares whole segments, so `worlds/harbor2` is not inside `worlds/harbor`. Some words cannot appear verbatim (`straße`, final sigma); display names belong in record content. Validation follows the running Python's Unicode tables, so a newer address may be rejected by an older runtime. That fails closed.
 
-**Reserved roots:** `secrets`. No grant or approval can name a reserved address, and every request for one is denied.
+**Reserved roots:** `secrets`, and the V1-only root entries (`llm_connections`, `sampler_presets`, `response_presets`, `prompt_layout.json`, `regex.json`, `chores.json`; the dotted V1 names are not valid addresses at all), because a V2 library root holding one beside `worlds/` reads as a V1 library and is refused ([library isolation](ARCHITECTURE.md#library-location-and-v1-isolation-implemented-grimoirelibrary)). Only the first segment is reserved: `worlds/w/regex.json` stays an ordinary address. No grant or approval can name a reserved address, and every request for one is denied.
 
 ## Grants, approvals and readable policy
 

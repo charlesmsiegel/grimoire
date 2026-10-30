@@ -20,11 +20,28 @@ speaking NPC plus narration), not a measurement of V0.2.1. A pass against a synt
 "no regression against a synthetic baseline — not a cost/quality certification". Measured V0.2.1
 billed-token capture is sprint 015.
 
+## Divergence from the inference contract
+
+`grimoire.evals` deliberately does not import `grimoire.core`, so these known differences from
+[the inference contract](../INFERENCE.md) are pinned by `backend/tests/test_wave1_integration.py`
+instead:
+
+| Item | Evals format | `core.inference` | Owner |
+|---|---|---|---|
+| narration purpose | `narration` is an unflagged RP purpose; the synthetic baseline spends about a third of its weighted tokens on it | no `narration` stage; a turn must not issue one | per-npc-generation-runtime (027) decides its stage before narration is generated |
+| provenance vocabulary | `synthetic` / `measured` (self-declared; the report says so) | `provider_reported` / `estimated` / `synthetic` per attempt | v1-cost-and-voice-regression (015) |
+| token fields | integer `input_tokens`, `cached_input_tokens`, `output_tokens`; an unreported count cannot be recorded | `None` means unreported; cache read/write and reasoning tokens separate | v1-cost-and-voice-regression (015) |
+| optional calls | `actor_id` only on `npc_generation`; free-form `feature_flag` names | every optional stage is an `InferenceStage`, with an optional actor | v1-cost-and-voice-regression (015) |
+
+`npc_generation` means the same in both. The shipped benchmark's other purposes and flags must be
+`InferenceStage` values.
+
 ## Format `grimoire.story-quality/1`
 
-This is an **eval-only interchange format**, not V2 library storage. It will follow the
-authorship (sprint 003) and call-accounting/flag (sprint 004) contracts with a version bump when
-those land. Parsing is strict: unknown or duplicate keys, `NaN`/`Infinity`, booleans as numbers,
+This is an **eval-only interchange format**, not V2 library storage. The authorship (sprint 003)
+and call-accounting/flag (sprint 004) contracts have landed; this format does not yet follow them
+everywhere (see [Divergence from the inference contract](#divergence-from-the-inference-contract)).
+Reconciling them is a `/2` format bump. Parsing is strict: unknown or duplicate keys, `NaN`/`Infinity`, booleans as numbers,
 dangling references and malformed ids are located errors (`run.turns[0].contributions[1].call_id:
 ...`).
 

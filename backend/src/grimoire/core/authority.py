@@ -48,8 +48,12 @@ _SCOPE_IDS = {
 }
 
 
-class AuthorityError(PermissionError):
-    """Control is ambiguous, unknown, or held by someone else: fail closed."""
+class AuthorityError(Exception):
+    """Control is ambiguous, unknown, or held by someone else: fail closed.
+
+    Deliberately not a `PermissionError`: that is an `OSError`, and a storage
+    adapter's ``except OSError`` must never swallow an authority denial.
+    """
 
 
 def _choice(value: str, options, label: str) -> None:

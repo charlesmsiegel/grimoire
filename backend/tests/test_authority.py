@@ -509,3 +509,8 @@ def test_corrections():
     # Revocation, a separate input, keeps a struck delegated overreach from recurring.
     again = review([claims[0]], delegations=[char], revocations=[Revocation(CAMPAIGN, "d", P1)])
     assert reasons(again) == {"love": "pc_authorship"}
+
+
+def test_authority_denials_are_not_os_errors():
+    # A file adapter's `except OSError` (retry, "file busy") must not swallow one.
+    assert not issubclass(AuthorityError, OSError)

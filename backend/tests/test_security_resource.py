@@ -56,6 +56,9 @@ def test_is_within_is_segmentwise():
 def test_reserved_roots():
     assert ResourcePath.parse("secrets").reserved
     assert ResourcePath.parse("secrets/provider-key").reserved
+    assert ResourcePath.parse("chores.json").reserved
+    assert ResourcePath.parse("llm_connections/default").reserved
+    assert not ResourcePath.parse("worlds/w/regex.json").reserved
     assert not ResourcePath.parse("worlds/secrets").reserved
 
 

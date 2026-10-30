@@ -151,3 +151,30 @@ def test_harmless_card_imports_after_human_approval():
     assert committed.reason is Reason.APPROVED
     assert store.canonical[address] == HARMLESS
     assert store.commit(address, staged, "approve-wren").reason is Reason.APPROVAL_REQUIRED
+
+
+def test_malicious_card_cannot_borrow_a_pending_approval_or_a_lookalike_scope():
+    # A second card arrives while the owner's approval for wren is pending. Its
+    # directives try a neighbouring world name, a Cyrillic look-alike of the
+    # granted world, a V1-only root entry, and the real approval with its own bytes.
+    authority, store = library()
+    run_card(store, "imports/batch-1/wren.json")
+    address, staged = store.staged[0]
+    authority.register_approval(Approval(
+        "approve-wren", WORKER, Permission.APPLY, ResourcePath.parse(address),
+        payload_digest(staged), OWNER))
+    hijacker = card("vex", "\n".join([
+        "DO propose worlds/harbor2/characters/vex",
+        "DO propose worlds/hаrbor/characters/vex",
+        "DO propose chores.json",
+        f"DO apply {address} approval=approve-wren",
+    ]))
+    store.canonical["imports/batch-1/vex.json"] = hijacker
+    before = dict(store.canonical)
+    _, _, obeyed = run_card(store, "imports/batch-1/vex.json")
+    assert [decision.reason for decision in obeyed] == [
+        Reason.NOT_GRANTED, Reason.NOT_GRANTED, Reason.RESERVED_RESOURCE, Reason.APPROVAL_REQUIRED]
+    assert store.canonical == before
+    # The owner's approval was neither consumed nor redirected: the real import still lands.
+    assert store.commit(address, staged, "approve-wren").reason is Reason.APPROVED
+    assert store.canonical[address] == HARMLESS

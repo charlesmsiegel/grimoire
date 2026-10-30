@@ -9,7 +9,7 @@ from grimoire.evals.format import parse_run
 from grimoire.evals.gate import compare
 from grimoire.evals.loader import benchmark_file
 from grimoire.evals.policy import GatePolicy
-from grimoire.evals.report import SYNTHETIC_NOTICE, render
+from grimoire.evals.report import SELF_DECLARED_NOTICE, SYNTHETIC_NOTICE, render
 from grimoire.evals.story_quality import main
 
 SECRET = "the duke sold the guild"
@@ -35,6 +35,15 @@ def test_shipped_baseline_passes_with_synthetic_notice(capsys):
     assert main([shipped("scenario.json"), shipped("baseline.json"), shipped("baseline.json")]) == 0
     out = capsys.readouterr().out
     assert out.startswith("story-quality gate: PASS") and SYNTHETIC_NOTICE in out
+
+
+def test_a_measured_label_is_reported_as_self_declared(tmp_path, capsys):
+    # Relabelling the synthetic baseline "measured" must not read as a certification.
+    _, baseline = load_benchmark()
+    relabelled = write(tmp_path, "measured.json", mutate(baseline, lambda run: run.update(provenance="measured")))
+    assert main([shipped("scenario.json"), relabelled, relabelled]) == 0
+    out = capsys.readouterr().out
+    assert SELF_DECLARED_NOTICE in out and SYNTHETIC_NOTICE not in out
 
 
 def test_failing_candidate_exits_1_without_echoing_text(tmp_path, capsys):
