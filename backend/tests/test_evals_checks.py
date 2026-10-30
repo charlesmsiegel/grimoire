@@ -251,3 +251,50 @@ def test_scorecard_token_categories_and_weighted_cost(bench):
     assert card.latency_ms == 8700 and card.leak_rate == 0 and card.npc_lines == 6
     full_weight = scorecard(scenario, run, GatePolicy(cached_input_weight=1.0))
     assert full_weight.weighted_cost == 8700 + 4200 + 540
+
+
+def test_duplicated_scripted_player_line_is_unscripted_input(bench):
+    scenario, run = bench
+    doubled = mutate(run, lambda r: r["turns"][0]["contributions"].insert(
+        1, dict(r["turns"][0]["contributions"][0])))
+    found = findings_for(scenario, doubled)
+    assert checks(found) == {"player_input_altered"}
+    assert found[0].message == "unscripted player contribution 1"  # real contribution index
+
+
+def test_blank_model_lines_are_silence(bench):
+    scenario, run = bench
+    assert checks(findings_for(scenario, mutate(run, set_text(1, None, "  ")))) == {
+        "orphan_generation"}
+    assert checks(findings_for(scenario, mutate(run, set_text(2, "npc-oda", "...")))) == {
+        "orphan_generation", "script_incomplete"}
+
+
+def test_narration_copying_a_voice_sample_is_caught(bench):
+    scenario, run = bench
+    sample = "Darling, every song needs a villain, and tonight the hall is simply brimming"
+    found = findings_for(scenario, mutate(run, set_text(3, None, f"Bellamy sings: {sample}.")))
+    assert checks(found) == {"voice_sample_copy"} and found[0].subject == "narration"
+
+
+def test_curly_apostrophe_leak_is_caught(bench):
+    scenario, run = bench
+    changed = mutate(run, set_text(1, "npc-bellamy", "Oh, darling, the duke’s betrayal!"))
+    assert checks(findings_for(scenario, changed)) == {"knowledge_leak"}
+
+
+def test_negation_counts_are_per_choice(bench):
+    scenario, run = parsed(*mutate_pair(bench))
+    card = scorecard(scenario, run, GatePolicy())
+    assert (card.negated_by_label, card.negated_by_evidence, card.unrealized) == (1, 1, 0)
+
+
+def mutate_pair(bench):
+    scenario, run = bench
+    scenario = mutate(scenario, lambda s: s["choices"][1].update(
+        negation_markers=["wren stays at the counter", "ballroom instead"]))
+    run = mutate(run, both(
+        lambda r: r["choice_outcomes"].update({"follow-bellamy": "negated"}),
+        set_text(2, "npc-oda", "Wren stays at the counter. Balcony's shut."),
+        set_text(2, None, "They head for the ballroom instead.")))
+    return scenario, run

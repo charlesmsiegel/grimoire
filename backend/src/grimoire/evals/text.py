@@ -10,18 +10,41 @@ from difflib import SequenceMatcher
 from functools import lru_cache
 
 _SPACE = re.compile(r"\s+")
+_WORD = re.compile(r"\w")
+#: Typographic variants NFKC keeps distinct, folded so ``duke’s`` matches ``duke's``.
+_FOLD = str.maketrans({
+    "\u2018": "'", "\u2019": "'", "\u201b": "'", "\u02bc": "'", "\u2032": "'",
+    "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u2033": '"',
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-", "\u2212": "-",
+})
+#: Scripts written without spaces between words: no word-boundary test at a marker edge there.
+_UNSPACED_SCRIPTS = ("CJK", "HIRAGANA", "KATAKANA", "THAI", "LAO", "KHMER", "MYANMAR", "TIBETAN")
 
 
 def normalize(text: str) -> str:
-    """NFKC, casefold, NFKC again, collapse whitespace."""
-    folded = unicodedata.normalize("NFKC", unicodedata.normalize("NFKC", text).casefold())
+    """NFKC, fold quote/dash variants, drop format characters, casefold, NFKC, collapse spaces."""
+    text = unicodedata.normalize("NFKC", text).translate(_FOLD)
+    text = "".join(char for char in text if unicodedata.category(char) != "Cf")
+    folded = unicodedata.normalize("NFKC", text.casefold())
     return _SPACE.sub(" ", folded).strip()
+
+
+def has_words(text: str) -> bool:
+    """Whether ``text`` says anything: blank or punctuation-only text does not."""
+    return _WORD.search(normalize(text)) is not None
+
+
+def _unspaced(char: str) -> bool:
+    return unicodedata.name(char, "").startswith(_UNSPACED_SCRIPTS)
 
 
 @lru_cache(maxsize=1024)
 def _marker_pattern(marker: str) -> re.Pattern[str]:
-    tokens = normalize(marker).split(" ")
-    return re.compile(r"(?<!\w)" + r"\s+".join(re.escape(token) for token in tokens) + r"(?!\w)")
+    normalized = normalize(marker)
+    body = r"\s+".join(re.escape(token) for token in normalized.split(" "))
+    start = "" if _unspaced(normalized[0]) else r"(?<!\w)"
+    end = "" if _unspaced(normalized[-1]) else r"(?!\w)"
+    return re.compile(start + body + end)
 
 
 def contains_marker(text: str, marker: str) -> bool:

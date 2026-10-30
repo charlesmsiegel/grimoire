@@ -39,7 +39,12 @@ dangling references and malformed ids are located errors (`run.turns[0].contribu
   input/cached-input/output tokens, latency), `choice_outcomes` (`honored`, `complicated`,
   `negated`) and informational `judge_scores`.
 
-Markers match whole phrases after NFKC + casefold normalisation (`duke` does not match `dukedom`).
+Markers match whole phrases after normalisation: NFKC, curly quotes and dash variants folded to
+`'`, `"` and `-`, invisible format characters (zero-width space, soft hyphen) removed, casefold.
+`duke` does not match `dukedom`; at a marker edge written in a script without spaces between
+words (CJK, kana, Thai, Lao, Khmer, Myanmar, Tibetan) no word boundary is required. Blank or
+punctuation-only model contributions count as silence: their calls are orphaned and their speaker
+has not spoken.
 
 ## Checks
 
@@ -49,14 +54,14 @@ Hard invariants (the candidate fails on any; a baseline that has one is `baselin
 |---|---|
 | `knowledge_leak` | an NPC line states a fact before that NPC's `known_from` turn; narration states a fact no player character knows yet |
 | `player_sovereignty` | the model authors a player character's contribution, or any model text contains a PC authorship marker |
-| `player_input_altered` | player contributions differ from the scripted choice text, are missing, or are added |
+| `player_input_altered` | each scripted choice is not played exactly once, verbatim, or other player contributions appear |
 | `choice_negated` | the outcome label is `negated`; model text in the window has a negation marker; or no model text after the player's line (and in the window) has an effect marker (`unrealized`) |
 | `continuity_contradiction` | model text contradicts an established fact from its turn on |
 | `script_incomplete` | a scripted turn is missing or a scripted speaker did not speak |
 | `separate_generation` | an NPC line is not from its own `npc_generation` call, narration is not from a `narration` call, or one call produced several contributions |
 | `orphan_generation` | an `npc_generation`/`narration` call produced nothing (paying for a silent NPC) |
 | `unflagged_inference` | any other call is not behind a flag listed in the run's `enabled_flags` |
-| `voice_sample_copy` | an NPC line shares 24+ contiguous normalised characters with a voice sample |
+| `voice_sample_copy` | any model line (NPC or narration) shares 24+ contiguous normalised characters with a voice sample |
 
 Comparisons with the baseline: `incomparable` (any `conditions` value differs),
 `flag_not_allowed` (candidate enables a flag the baseline didn't and the gate did not allow),

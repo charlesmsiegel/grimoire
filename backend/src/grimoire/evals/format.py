@@ -8,13 +8,12 @@ unknown keys, wrong types, non-finite numbers and dangling references raise
 from __future__ import annotations
 
 import math
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal
 
-from .text import normalize
+from .text import has_words
 
 FORMAT = "grimoire.story-quality/1"
 CONTROLS = ("player", "director")
@@ -24,8 +23,6 @@ OUTCOMES = ("honored", "complicated", "negated")
 REQUIRED_CONDITIONS = ("model", "budget")
 NPC_GENERATION = "npc_generation"
 NARRATION = "narration"
-
-_WORD = re.compile(r"\w")
 
 
 class BenchmarkFormatError(ValueError):
@@ -211,7 +208,7 @@ def _markers(value: object, location: str, *, required: bool) -> tuple[str, ...]
     result = []
     for index, marker in enumerate(markers):
         marker = _str(marker, f"{location}[{index}]")
-        if not _WORD.search(normalize(marker)):
+        if not has_words(marker):
             raise _fail(f"{location}[{index}]", "marker has no word characters to match")
         result.append(marker)
     return tuple(result)

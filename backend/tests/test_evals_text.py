@@ -33,3 +33,16 @@ def test_cosine_bounds():
 def test_longest_shared_run_uses_normalised_text():
     assert longest_shared_run("THE VAULT stays shut", "the  vault stays shut") == len("the vault stays shut")
     assert longest_shared_run("abc", "xyz") == 0
+
+
+def test_typographic_quotes_dashes_and_invisible_characters_cannot_hide_a_marker():
+    assert contains_marker("The duke’s betrayal is known", "duke's betrayal")
+    assert contains_marker("a well‑known secret", "well-known")
+    assert contains_marker("the hidden​key", "hiddenkey")
+    assert contains_marker("the hid­den key", "hidden key")
+
+
+def test_markers_in_unspaced_scripts_match_inside_running_text():
+    assert contains_marker("秘密は公爵が裏切った", "公爵")
+    assert contains_marker("ฉันรู้ความลับของดยุค", "ความลับ")
+    assert not contains_marker("The dukedom fell.", "duke")  # spaced scripts keep boundaries

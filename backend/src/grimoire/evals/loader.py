@@ -29,6 +29,8 @@ def loads_strict(text: str, source: str) -> object:
         return json.loads(text, object_pairs_hook=_no_duplicates, parse_constant=_no_constants)
     except ValueError as error:  # JSONDecodeError is a ValueError
         raise BenchmarkFormatError(f"{source}: invalid JSON: {error}") from None
+    except RecursionError:
+        raise BenchmarkFormatError(f"{source}: invalid JSON: nested too deeply") from None
 
 
 def load_json(path: str | Path | Traversable) -> object:

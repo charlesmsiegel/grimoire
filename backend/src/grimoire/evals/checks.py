@@ -10,7 +10,7 @@ from types import MappingProxyType
 
 from .format import NARRATION, NPC_GENERATION, Call, Contribution, Run, Scenario
 from .policy import GatePolicy
-from .text import cosine, first_marker, longest_shared_run, trigram_counts
+from .text import cosine, first_marker, has_words, longest_shared_run, trigram_counts
 
 #: A model NPC line sharing this many contiguous normalised characters with a voice sample is a copy.
 SAMPLE_COPY_CHARS = 24
@@ -57,9 +57,10 @@ class Scorecard:
 # --- traversal helpers --------------------------------------------------------------------------
 
 def _model_lines(run: Run) -> Iterator[tuple[int, int, Contribution]]:
+    """Model contributions that say something; blank ones count as silence."""
     for turn in run.turns:
         for position, contribution in enumerate(turn.contributions):
-            if contribution.author == "model":
+            if contribution.author == "model" and has_words(contribution.text):
                 yield turn.turn, position, contribution
 
 
@@ -114,19 +115,26 @@ def _sovereignty(scenario: Scenario, run: Run) -> Iterator[Finding]:
 
 
 def _player_input(scenario: Scenario, run: Run) -> Iterator[Finding]:
-    actual = {turn.turn: [(c.speaker_id, c.text) for c in turn.contributions if c.author == "player"]
-              for turn in run.turns}
+    """Each scripted choice is played exactly once, verbatim; nothing else is player input."""
+    unplayed = Counter((choice.turn, choice.actor_id, choice.text) for choice in scenario.choices)
+    for turn in run.turns:
+        for position, line in enumerate(turn.contributions):
+            if line.author != "player":
+                continue
+            key = (turn.turn, line.speaker_id, line.text)
+            if unplayed[key]:
+                unplayed[key] -= 1
+            else:
+                yield Finding("player_input_altered", "invariant",
+                              f"unscripted player contribution {position}", turn.turn,
+                              line.speaker_id)
     for choice in scenario.choices:
-        if (choice.actor_id, choice.text) not in actual.get(choice.turn, []):
+        key = (choice.turn, choice.actor_id, choice.text)
+        if unplayed[key]:
+            unplayed[key] -= 1
             yield Finding("player_input_altered", "invariant",
                           "scripted player choice is missing or altered", choice.turn,
                           choice.choice_id)
-    expected = {(choice.turn, choice.actor_id, choice.text) for choice in scenario.choices}
-    for turn, entries in actual.items():
-        for position, (speaker, text) in enumerate(entries):
-            if (turn, speaker, text) not in expected:
-                yield Finding("player_input_altered", "invariant",
-                              f"unscripted player contribution {position}", turn, speaker)
 
 
 def _evidence_text(run: Run, choice_turn: int, actor_id: str, text: str, window: int) -> list[str]:
@@ -184,7 +192,7 @@ def _script(scenario: Scenario, run: Run) -> Iterator[Finding]:
             yield Finding("script_incomplete", "invariant", "scripted turn is missing", entry.turn,
                           "turn")
             continue
-        spoke = {c.speaker_id for c in turns[entry.turn].contributions if c.author == "model"}
+        spoke = {line.speaker_id for turn, _, line in _model_lines(run) if turn == entry.turn}
         for speaker in entry.speakers:
             if speaker not in spoke:
                 yield Finding("script_incomplete", "invariant", "scripted speaker did not speak",
@@ -214,7 +222,7 @@ def _calls(scenario: Scenario, run: Run) -> Iterator[Finding]:
                           call.call_id)
         if call.purpose in RP_PURPOSES and not uses[call.call_id]:
             yield Finding("orphan_generation", "invariant",
-                          f"{call.purpose} call produced no contribution", call.turn, call.call_id)
+                          f"{call.purpose} call produced no non-blank contribution", call.turn, call.call_id)
         if call.purpose not in RP_PURPOSES and call.feature_flag not in run.enabled_flags:
             yield Finding("unflagged_inference", "invariant",
                           f"extra {call.purpose!r} call is not behind an enabled feature flag",
@@ -224,12 +232,12 @@ def _calls(scenario: Scenario, run: Run) -> Iterator[Finding]:
 def _sample_copies(scenario: Scenario, run: Run) -> Iterator[Finding]:
     samples = [(actor.actor_id, index, sample) for actor in scenario.actors
                if actor.control == "director" for index, sample in enumerate(actor.voice_samples)]
-    for turn, position, line in _npc_lines(scenario, run):
+    for turn, position, line in _model_lines(run):
         for actor_id, index, sample in samples:
             if longest_shared_run(line.text, sample) >= SAMPLE_COPY_CHARS:
                 yield Finding("voice_sample_copy", "invariant",
-                              f"NPC contribution {position} copies a voice sample", turn,
-                              line.speaker_id, f"{actor_id}#sample{index}")
+                              f"model contribution {position} copies a voice sample", turn,
+                              _who(line), f"{actor_id}#sample{index}")
 
 
 def hard_findings(scenario: Scenario, run: Run) -> tuple[Finding, ...]:
@@ -284,10 +292,10 @@ def scorecard(scenario: Scenario, run: Run, policy: GatePolicy) -> Scorecard:
         npc_lines=npc_lines,
         leak_lines=len(leaking),
         leak_rate=Fraction(len(leaking), npc_lines) if npc_lines else None,
-        negated_by_label=sum(f.basis == "label" for f in choice_findings),
-        negated_by_evidence=sum(f.evidence != "unrealized" and f.basis == "evidence"
-                                for f in choice_findings),
-        unrealized=sum(f.evidence == "unrealized" for f in choice_findings),
+        negated_by_label=len({f.subject for f in choice_findings if f.basis == "label"}),
+        negated_by_evidence=len({f.subject for f in choice_findings
+                                 if f.basis == "evidence" and f.evidence != "unrealized"}),
+        unrealized=len({f.subject for f in choice_findings if f.evidence == "unrealized"}),
         distinguishability=distinguishability(scenario, run),
         calls_by_purpose=MappingProxyType(dict(sorted(by_purpose.items()))),
         uncached_input=sum(c.input_tokens - c.cached_input_tokens for c in run.calls),

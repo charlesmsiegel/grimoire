@@ -96,3 +96,9 @@ def test_render_shows_policy_costs_and_separate_negation_counts():
     assert label.split()[-1] == "1" and unrealized.split()[-1] == "1"
     assert "cost by purpose" in text and "npc_generation=6300" in text
     assert "note: at least one run is synthetic" in text  # synthetic baseline, measured candidate
+
+
+def test_deeply_nested_json_is_invalid_input(tmp_path, capsys):
+    candidate = write(tmp_path, "candidate.json", "[" * 200000)
+    assert main([shipped("scenario.json"), shipped("baseline.json"), candidate]) == 2
+    assert "nested too deeply" in capsys.readouterr().err
