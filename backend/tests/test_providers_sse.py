@@ -126,7 +126,7 @@ def test_in_stream_error_code_classification(code, kind):
         feed(chunk("a"), data({"error": {"code": code, "message": "upstream said no " * 40}}))
     assert caught.value.kind == kind
     assert "upstream" not in str(caught.value) and "upstream" not in repr(caught.value)
-    assert len(caught.value.diagnostic) <= 300
+    assert caught.value.diagnostic.startswith("upstream")
 
 
 def test_json_error_first_line_is_classified():
@@ -142,3 +142,17 @@ def test_served_model_recorded():
     assert state.served_model == "vendor/model-2024"
     state, _ = feed(chunk("a", model=7))
     assert state.served_model is None
+
+
+def test_non_ascii_digit_codes_do_not_crash():
+    with pytest.raises(ProviderError) as caught:
+        feed(data({"error": {"code": "²"}}))
+    assert caught.value.kind == "provider_error"
+    assert classify_non_sse(b'{"error": {"code": "\\u0663"}}').kind == "provider_error"
+
+
+def test_a_bad_delta_beside_a_finish_reason_is_rejected_before_the_finish_counts():
+    state = StreamState()
+    with pytest.raises(ProviderError):
+        feed_line(state, chunk(5, "stop"))
+    assert not finished(state)

@@ -129,12 +129,17 @@ def test_incomplete_chunk_is_truncated_read_error():
 
 
 def test_reset_mid_stream_is_a_read_error():
+    first_read = threading.Event()
+
     def reset_mid_stream(conn, server):
         server.read_request(conn)
         conn.sendall(STREAM_HEAD + raw_chunk(b"data: {}\n\n"))
+        first_read.wait(5)  # reset only after the client consumed the line (Windows drops it)
         reset(conn)
     with RawServer(reset_mid_stream) as server:
         connection, response = _open(server.url())
+        assert response.read_line(2**20, 2.0) == b"data: {}\n"
+        first_read.set()
         with pytest.raises(TransportError) as caught:
             _lines(response)
         connection.close()
@@ -222,3 +227,22 @@ def test_cross_thread_cancel_wakes_a_blocked_read():
         timer.join()
         connection.close()
     assert released_by == ["client"]
+
+
+def test_system_exit_keeps_its_code_and_foreign_interrupts_are_not_network_errors(monkeypatch):
+    import http.client
+
+    class Cancelled(BaseException):
+        pass
+    for raised, expected in ((SystemExit(3), SystemExit), (Cancelled(), Cancelled)):
+        def boom(self, data, raised=raised):
+            raise raised
+        with sse_server(stream(sse_lines())) as server:
+            connection = HttpTransport().connect(_url(base_url(server)), FAST, CancelToken())
+            monkeypatch.setattr(http.client.HTTPConnection, "send", boom)
+            with pytest.raises(expected) as caught:
+                connection.send(b"{}", {}, Secret(KEY))
+            monkeypatch.undo()
+            connection.close()
+        if expected is SystemExit:
+            assert caught.value.code == 3

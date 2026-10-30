@@ -125,7 +125,7 @@ class Send:
 
 class _Response:
     def __init__(self, status: int, headers: Mapping[str, str], lines: Sequence[bytes],
-                 fault: Step | None, cancel: CancelToken, key: Secret | None) -> None:
+                 fault: Step | None, cancel: CancelToken) -> None:
         self.status = status
         self.headers = dict(headers)
         self._lines = list(lines)
@@ -187,10 +187,10 @@ class _Connection:
             if step.retry_after is not None:
                 headers_out["retry-after"] = step.retry_after
             return _Response(step.code, headers_out, step.body.splitlines(keepends=True) or [],
-                             None, self._cancel, key)
+                             None, self._cancel)
         reply = step if isinstance(step, Reply) else step.reply
         return _Response(200, {"content-type": "text/event-stream"}, reply.lines(),
-                         None if isinstance(step, Reply) else step, self._cancel, key)
+                         None if isinstance(step, Reply) else step, self._cancel)
 
     def close(self) -> None:
         self.closed = True

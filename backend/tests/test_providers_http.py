@@ -124,3 +124,32 @@ def test_retry_over_http_after_a_server_error():
         result, meter = _run(base_url(server), attempts=2)
     assert result.status == "accepted"
     assert [a.outcome for a in meter.ledger.attempts] == ["failed", "completed"]
+
+
+def test_slow_status_line_uses_the_read_timeout_not_the_connect_timeout():
+    import time
+
+    def slow(handler):
+        time.sleep(1.5)
+        stream(sse_lines(usage=USAGE))(handler)
+    with sse_server(slow) as server:
+        result, meter = _run(base_url(server), timeouts=Timeouts(connect=1.0, read=10.0, total=20.0))
+    assert result.status == "accepted"
+
+
+def test_total_deadline_bounds_a_trickling_line():
+    import threading as _threading
+
+    def trickle(conn, server):
+        server.read_request(conn)
+        conn.sendall(STREAM_HEAD + b"40\r\n")
+        for _ in range(200):
+            if server.release.wait(0.05):
+                return
+            conn.sendall(b"x")
+    done = _threading.Event()
+    with RawServer(trickle) as server:
+        result, meter = _run(server.url(), timeouts=Timeouts(connect=1.0, read=1.0, total=1.5))
+        done.set()
+    assert (result.status, result.error.kind) == ("failed", "timeout")
+    assert meter.reports(meter.ledger.plan.calls[0].call_id)[0].total_s < 8

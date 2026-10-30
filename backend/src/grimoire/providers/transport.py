@@ -15,6 +15,7 @@ import http.client
 import ipaddress
 import socket
 import ssl
+import threading
 from collections.abc import Mapping
 from typing import Protocol
 from urllib.parse import urlsplit
@@ -49,9 +50,6 @@ class Transport(Protocol):
         """Open a connection. Raises ``TransportError(kind, "connect")``: nothing was sent."""
 
 
-_INTERRUPTS = (KeyboardInterrupt, SystemExit, GeneratorExit)
-
-
 def _kind(error: BaseException) -> str:
     """Classify a socket/HTTP failure. Order matters: several classes overlap."""
     if isinstance(error, ssl.SSLCertVerificationError):
@@ -67,18 +65,31 @@ def _kind(error: BaseException) -> str:
     return "network"
 
 
-def _failure(error: BaseException) -> type[BaseException] | str:
-    """What to raise once outside the ``except`` block: an interrupt class, or a kind."""
-    for interrupt in _INTERRUPTS:
-        if isinstance(error, interrupt):
-            return interrupt
-    return _kind(error)
+def _failure(error: BaseException) -> object:
+    """What to raise once outside the ``except`` block.
+
+    An ordinary error becomes a transport kind. Anything else (an interrupt, a
+    cancellation from another framework) is re-raised as a fresh instance of
+    its own class, without the message or frames that could hold a header.
+    """
+    if isinstance(error, Exception):
+        return _kind(error)
+    if isinstance(error, SystemExit):
+        code = error.code
+        return SystemExit(code if code is None or isinstance(code, int) else 1)
+    return type(error)
 
 
-def _raise(failure: type[BaseException] | str, phase: str):
+def _raise(failure: object, phase: str):
     if isinstance(failure, str):
         raise TransportError(failure, phase) from None
-    raise failure() from None
+    if isinstance(failure, BaseException):
+        raise failure from None
+    try:
+        fresh = failure()
+    except Exception:
+        fresh = failure.__new__(failure)
+    raise fresh from None
 
 
 def _is_loopback(address: object) -> bool:
@@ -120,15 +131,21 @@ class _HttpResponse:
 
 class _HttpConnection:
     def __init__(self, connection: http.client.HTTPConnection, path: str, host: str,
-                 peer_loopback: bool, cancel: CancelToken) -> None:
+                 peer_loopback: bool, cancel: CancelToken, timeouts: Timeouts) -> None:
         self._connection = connection
         self._sock = connection.sock
+        self._sock.settimeout(timeouts.read)  # waiting for the status is a read, not a connect
         self._path = path
         self._host = host
         self.peer_loopback = peer_loopback
         self._response: http.client.HTTPResponse | None = None
         self._hook = cancel._on_cancel(self._shutdown)
         self._cancel = cancel
+        # The attempt's hard deadline: however slowly bytes trickle in, the
+        # socket is shut down when ``total`` runs out.
+        self._deadline = threading.Timer(timeouts.total, self._shutdown)
+        self._deadline.daemon = True
+        self._deadline.start()
 
     def _shutdown(self) -> None:
         """Wake a read blocked in another thread; closing stays with the owner."""
@@ -152,6 +169,7 @@ class _HttpConnection:
         return _HttpResponse(self._response, self._sock)
 
     def close(self) -> None:
+        self._deadline.cancel()
         self._cancel._clear(self._hook)
         for closeable in (self._response, self._connection):
             if closeable is not None:
@@ -223,7 +241,8 @@ class HttpTransport:
         host_header = f"[{host}]" if ":" in host else host
         if port is not None:
             host_header = f"{host_header}:{port}"
-        return _HttpConnection(connection, parts.path or "/", host_header, loopback, cancel)
+        return _HttpConnection(connection, parts.path or "/", host_header, loopback, cancel,
+                               timeouts)
 
     def __repr__(self) -> str:
         return "HttpTransport()"

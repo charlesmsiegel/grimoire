@@ -10,6 +10,7 @@ queued.
 from __future__ import annotations
 
 import threading
+from contextlib import contextmanager
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Literal
@@ -102,12 +103,23 @@ class TurnMeter:
         return 1 + sum(1 for each in self._ledger.attempts if each.call_id == call_id)
 
     def extend(self, plan: TurnInferencePlan) -> None:
-        self._ledger = self._ledger.extend(plan)
+        with self._idle():
+            self._ledger = self._ledger.extend(plan)
 
     def add_phase(self, phase: str, *, speaking_npc_ids: Iterable[str] = (),
                   optional_requests: Iterable[OptionalRequest] = ()) -> None:
-        self._ledger = self._ledger.add_phase(
-            phase, speaking_npc_ids=speaking_npc_ids, optional_requests=optional_requests)
+        with self._idle():
+            self._ledger = self._ledger.add_phase(
+                phase, speaking_npc_ids=speaking_npc_ids, optional_requests=optional_requests)
+
+    @contextmanager
+    def _idle(self):
+        if not self._busy.acquire(blocking=False):
+            raise CallRefused("busy")
+        try:
+            yield
+        finally:
+            self._busy.release()
 
     def __repr__(self) -> str:
         plan = self._ledger.plan
@@ -135,15 +147,14 @@ class TurnMeter:
                 raise CallRefused("exhausted")
             if state.request_digest is not None and state.request_digest != request_digest:
                 raise CallRefused("request_changed")
-            if state.delivered:
-                if not redo_after_delivery:
-                    raise CallRefused("delivered")
-                state.delivered = False
+            if state.delivered and not redo_after_delivery:
+                raise CallRefused("delivered")
             if routes_count > remaining:
                 raise ValueError(f"{routes_count} routes but only {remaining} attempts left")
         except BaseException:
             self._busy.release()
             raise
+        state.delivered = False  # every check passed: an explicit redo starts undelivered
         self._pending_digest = request_digest
         return remaining
 

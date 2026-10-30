@@ -110,8 +110,9 @@ class ProviderEndpoint:
 
     def __post_init__(self) -> None:
         provider_resource(self.provider_id)
-        if type(self.base_url) is not str or not self.base_url.isascii():
-            raise ValueError("base_url must be an ASCII string")
+        if type(self.base_url) is not str or not all(
+                0x21 <= ord(char) <= 0x7E for char in self.base_url):
+            raise ValueError("base_url must be printable ASCII without spaces")
         parts = urlsplit(self.base_url)
         if parts.scheme not in ("https", "http") or not parts.hostname:
             raise ValueError("base_url must be an https (or loopback http) URL")
@@ -130,17 +131,8 @@ class ProviderEndpoint:
         object.__setattr__(self, "base_url", self.base_url.rstrip("/"))
 
     @property
-    def scheme(self) -> str:
-        return urlsplit(self.base_url).scheme
-
-    @property
     def host(self) -> str:
         return urlsplit(self.base_url).hostname or ""
-
-    @property
-    def port(self) -> int:
-        parts = urlsplit(self.base_url)
-        return parts.port or (443 if parts.scheme == "https" else 80)
 
     @property
     def host_label(self) -> str:

@@ -177,4 +177,26 @@ def test_add_phase_keeps_attempts_and_reports():
     assert len(meter.ledger.plan.calls) == 3 and len(meter.ledger.attempts) == 1
     assert len(meter.reports(plan.calls[0].call_id)) == 1
     assert meter.all_accepted is False
-    assert "camp" in repr(meter) and "DIGEST" not in repr(meter)
+    assert "camp" in repr(meter) and DIGEST not in repr(meter)
+
+
+def test_a_refused_redo_keeps_the_delivered_gate():
+    meter, plan = _meter(attempts=3)
+    call = plan.calls[0]
+    meter._begin(call, DIGEST, False, 1)
+    meter._delivered(call.call_id)
+    _book(meter, call, 1)
+    meter._end(call.call_id, "failed")
+    with pytest.raises(ValueError):
+        meter._begin(call, DIGEST, True, 3)  # too many routes: refused before any change
+    with pytest.raises(CallRefused, match="delivered"):
+        meter._begin(call, DIGEST, False, 1)
+
+
+def test_phases_cannot_be_added_while_a_call_runs():
+    meter, plan = _meter()
+    meter._begin(plan.calls[0], DIGEST, False, 1)
+    with pytest.raises(CallRefused, match="busy"):
+        meter.add_phase("later", speaking_npc_ids=["c"])
+    meter._end(plan.calls[0].call_id, "refused")
+    meter.add_phase("later", speaking_npc_ids=["c"])

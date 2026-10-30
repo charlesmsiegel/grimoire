@@ -576,3 +576,56 @@ def test_secret_absent_from_results_reprs_audit_and_tracebacks():
         caught.value, capture_locals=True).format())
     assert KEY not in formatted
     assert all(KEY not in repr(record) for record in world.authz.audit())
+
+
+def test_provider_error_fields_cannot_carry_the_key():
+    body = json.dumps({"error": {"code": KEY, "type": KEY, "message": "x" * 290 + KEY}})
+    world = World([Status(401, body.encode())])
+    result = world.run()
+    error = result.error
+    assert KEY not in repr(result) and KEY not in repr(error)
+    assert error.error_code is None and error.error_type is None
+    assert "sk-" not in error.diagnostic and len(error.diagnostic) <= 300
+    world = World([Status(401, json.dumps({"error": {"code": "x" * 500, "type": "a b\n"}}).encode())])
+    error = world.run().error
+    assert error.error_code is None and error.error_type is None
+
+
+def test_served_model_is_bounded_and_never_the_key():
+    world = World([reply(model=KEY)])
+    assert world.run().attempts[0].served_model is None
+    world = World([reply(model="m" * 500)])
+    assert world.run().attempts[0].served_model is None
+
+
+def test_finish_with_malformed_delta_is_not_a_silent_failure():
+    world = World([Status(200, b'data: {"choices":[{"delta":{"content":5},"finish_reason":"stop"}]}\n'),
+                   reply()], attempts=2)
+    result = world.run()
+    assert result.attempts[0].error_kind == "bad_response"
+    assert result.status == "accepted"
+
+
+def test_done_without_finish_is_truncated_immediately():
+    world = World([Status(200, b'data: {"choices":[{"delta":{"content":"a"},"finish_reason":null}]}\n'
+                                b"data: [DONE]\n"), reply()], attempts=2)
+    result = world.run()
+    assert result.attempts[0].error_kind == "truncated" and result.status == "accepted"
+
+
+def test_cancel_landing_after_connect_sends_nothing():
+    from grimoire.providers import CancelToken
+    token = CancelToken()
+
+    class CancelOnConnect(ScriptedTransport):
+        def connect(self, url, timeouts, cancel):
+            connection = super().connect(url, timeouts, cancel)
+            token.cancel()
+            return connection
+    world = World([])
+    world.adapter._transport = CancelOnConnect([reply()])
+    result = world.run(cancel=token)
+    assert result.status == "cancelled"
+    assert world.adapter._transport.sends == []
+    assert [(a.outcome, a.usage) for a in world.meter.ledger.attempts] == [
+        ("not_sent", TokenUsage(0, 0))]

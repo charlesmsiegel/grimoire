@@ -85,11 +85,22 @@ def _retry_after(value: str | None) -> int | None:
 
 
 def _redact(text: str | None, key: Secret | None) -> str | None:
+    """Redact the key from the whole text, then truncate (never the other way round)."""
     if text is None:
         return None
     if key is not None:
         text = text.replace(key.reveal(), "<redacted>")
     return text[:DIAGNOSTIC_LIMIT]
+
+
+def _sanitize(error: ProviderError, key: Secret | None) -> ProviderError:
+    """Provider-chosen fields must not carry the key into ``repr`` or reports."""
+    secret = key.reveal() if key is not None else None
+    for name in ("error_code", "error_type"):
+        if secret is not None and secret in (getattr(error, name) or ""):
+            setattr(error, name, None)
+    error.diagnostic = _redact(error.diagnostic, key)
+    return error
 
 
 def _default_wait(token: CancelToken, seconds: float) -> bool:
@@ -156,9 +167,10 @@ class ProviderAdapter:
         if type(handle) is not WorkerHandle or not self._authorizer.issued(handle):
             raise CallRefused("handle")
         cancel = cancel if cancel is not None else CancelToken()
-        remaining = meter._begin(call, request_digest(request), redo_after_delivery, len(routes))
+        digest = request_digest(request)
         booked_before = len(meter.ledger.attempts)
         status: CallStatus | None = None
+        remaining = meter._begin(call, digest, redo_after_delivery, len(routes))
         try:
             result = self._run(meter, call, request, routes, handle, approvals, on_delta,
                                cancel, remaining)
@@ -251,13 +263,16 @@ class ProviderAdapter:
                 attempt.error = ProviderError(error.kind)
                 return attempt
             peer = connection.peer_loopback
+            if cancel.cancelled:  # cancelled while connecting: close without sending
+                return attempt
             sent = True  # everything after connect() may have reached the provider
             attempt.outcome = "failed"
             try:
                 response = connection.send(body, {"Content-Type": "application/json",
                                                   "Accept": "text/event-stream"}, key)
             except TransportError as error:
-                attempt.error = ProviderError(error.kind)
+                attempt.error = ProviderError(
+                    self._deadline_kind(start, timeouts.total, error.kind))
                 if cancel.cancelled:
                     attempt.outcome = "cancelled"
                 return attempt
@@ -285,8 +300,12 @@ class ProviderAdapter:
                     line = response.read_line(limits.max_line_bytes, timeout)
                 except TransportError as error:
                     if not finished(state):
-                        attempt.error = ProviderError(error.kind)
+                        attempt.error = ProviderError(
+                    self._deadline_kind(start, timeouts.total, error.kind))
                         attempt.outcome = "cancelled" if cancel.cancelled else "failed"
+                    break
+                if not finished(state) and clock() - start >= timeouts.total:
+                    attempt.error = ProviderError("timeout")  # the deadline cut this line short
                     break
                 if not line:
                     if not finished(state):
@@ -305,21 +324,26 @@ class ProviderAdapter:
                     if not finished(state):
                         if error.error_type == "not_sse" and not state.saw_sse:
                             error = classify_non_sse(line + response.error_body(ERROR_BODY_LIMIT))
-                        error.diagnostic = _redact(error.diagnostic, key)
-                        attempt.error = error
+                        attempt.error = _sanitize(error, key)
                     break
                 if delta is not None and on_delta is not None:
                     meter._delivered(call.call_id)
                     delivered = True
                     on_delta(delta)
+                if state.done and not finished(state):
+                    attempt.error = ProviderError("truncated")  # [DONE] with no finish reason
+                    break
         except BaseException:
             if attempt.outcome != "completed" and not finished(state):
                 attempt.outcome = "failed" if sent else "not_sent"
             elif finished(state):
                 attempt.outcome = "completed"
+            # A consumer callback (or a broken transport) raised; it is re-raised below.
             attempt.error = attempt.error or ProviderError("consumer_error")
             raise
         finally:
+            if key is not None and key.reveal() in (state.served_model or ""):
+                state.served_model = None
             if connection is not None:
                 try:
                     connection.close()
@@ -329,13 +353,17 @@ class ProviderAdapter:
                        first_byte, clock() - start)
         return attempt
 
+    def _deadline_kind(self, start: float, total: float, kind: str) -> str:
+        """A read cut short by the attempt's hard deadline is a timeout."""
+        return "timeout" if self._clock() - start >= total else kind
+
     def _status_error(self, response, key: Secret | None) -> ProviderError:
         kind = _status_kind(response.status)
         detail = error_from_object(_json_error(response.error_body(ERROR_BODY_LIMIT)))
-        return ProviderError(kind, status=response.status,
-                             retry_after=response.headers.get("retry-after"),
-                             error_type=detail.error_type, error_code=detail.error_code,
-                             diagnostic=_redact(detail.diagnostic, key))
+        return _sanitize(ProviderError(kind, status=response.status,
+                                       retry_after=response.headers.get("retry-after"),
+                                       error_type=detail.error_type, error_code=detail.error_code,
+                                       diagnostic=detail.diagnostic), key)
 
     def _book(self, meter: TurnMeter, call: PlannedCall, number: int, label: str,
               attempt: _Attempt, sent: bool, peer: bool | None, delivered: bool,

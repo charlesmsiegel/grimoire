@@ -55,7 +55,8 @@ The `approvals(label, attempt, envelope)` callback receives those bytes. Handles
 
 | What happened | Booked as | Usage |
 |---|---|---|
-| Refusal before `connect()`: authorization denied, missing or bad key, cancelled first | **not booked** | none. The call stays unmetered in the summary; meter status is `refused` or `cancelled`. |
+| Refusal before `connect()`: authorization denied, missing or bad key, cancelled first | **not booked** | none. If no attempt was ever booked, the call stays unmetered in the summary. The meter status is that of the latest execution (`refused` or `cancelled`), even when an earlier attempt was booked `failed`; the reports keep every booked attempt. |
+| Cancelled while `connect()` was completing | `not_sent` | `0/0`; the connection is closed without writing. |
 | `connect()` failed: refused, DNS, connect timeout, TLS | `not_sent` | `0/0`, measurement `estimated` |
 | Anything after `connect()` returned | `failed`, `cancelled` or `completed` | counts the endpoint reported, else `None` |
 
@@ -136,7 +137,7 @@ None of the following ever contains prompt text, reply text or a key:
 
 Further rules:
 
-- **Provider error messages** may echo the prompt, so they live only in `ProviderError.diagnostic`. That field is excluded from `str` and `repr`, truncated to 300 characters, and has the key redacted.
+- **Provider error messages** may echo the prompt, so they live only in `ProviderError.diagnostic`. That field is excluded from `str` and `repr`; the key is redacted from the whole message *before* it is truncated to 300 characters. Provider-chosen `error_code`, `error_type` and served model names are restricted to short ASCII identifiers and dropped if they contain the key.
 - **Transport and HTTP exceptions** are converted outside their `except` blocks, so tracebacks (even with `capture_locals`) carry neither the Authorization header nor stdlib frames.
 - **CI** uses loopback servers and scripted transports only.
 
@@ -144,6 +145,7 @@ Further rules:
 
 - **Not yet supported:** proxies, Anthropic's native wire shape, async, embeddings, tools, images, prices and session budgets.
 - **DNS** resolution is not bounded by the socket timeouts.
+- **Each attempt has a hard deadline** (`Timeouts.total`): a timer shuts the socket down, so a trickling stream cannot outlive it. The wait for the status line uses the read timeout, not the connect timeout.
 - **Cancellation** wakes a blocked read by shutting down the socket. A cancel during `connect()` waits for the connect timeout. On Windows, waking a blocked `recv` is not guaranteed (the test is `xfail` there).
 - **Stale-run fencing** across processes is not covered (owned by 027 and 030).
 

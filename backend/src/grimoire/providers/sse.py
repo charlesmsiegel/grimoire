@@ -10,6 +10,7 @@ cache reads and reasoning are slices, and anything unreported is ``None``.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 
 from grimoire.core.inference import TokenUsage
@@ -41,6 +42,21 @@ def finished(state: StreamState) -> bool:
     return bool(state.finish_reason)
 
 
+def label(value: object) -> str | None:
+    """A short provider-chosen identifier (error code or type), or None."""
+    if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", value):
+        return value
+    return None
+
+
+def model_name(value: object) -> str | None:
+    """A served model name: short printable ASCII, or None."""
+    if isinstance(value, str) and 0 < len(value) <= 128 and all(
+            0x21 <= ord(char) <= 0x7E for char in value):
+        return value
+    return None
+
+
 def _bad(error_type: str) -> ProviderError:
     return ProviderError("bad_response", error_type=error_type)
 
@@ -51,7 +67,7 @@ def error_from_object(error: object) -> ProviderError:
     message = error.get("message") if isinstance(error, dict) else None
     kind_of = error.get("type") if isinstance(error, dict) else None
     number = code if isinstance(code, int) and not isinstance(code, bool) else (
-        int(code) if isinstance(code, str) and code.isdigit() and len(code) <= 3 else None)
+        int(code) if isinstance(code, str) and re.fullmatch(r"[0-9]{1,3}", code) else None)
     if number == 429:
         kind = "rate_limit"
     elif number is not None and 500 <= number <= 599:
@@ -60,10 +76,11 @@ def error_from_object(error: object) -> ProviderError:
         kind = "provider_error"
     return ProviderError(
         kind,
-        error_type=kind_of if isinstance(kind_of, str) else None,
-        error_code=str(code)[:64] if isinstance(code, (int, str)) and not isinstance(
-            code, bool) else None,
-        diagnostic=message[:DIAGNOSTIC_LIMIT] if isinstance(message, str) else None,
+        error_type=label(kind_of),
+        error_code=label(str(code) if isinstance(code, int) and not isinstance(code, bool)
+                         else code),
+        # Untruncated, so the adapter can redact a key before truncating it.
+        diagnostic=message if isinstance(message, str) else None,
     )
 
 
@@ -104,31 +121,26 @@ def feed_line(state: StreamState, line: bytes) -> str | None:
         raise _bad("chunk_not_object")
     if "error" in chunk:
         raise error_from_object(chunk["error"])
-    model = chunk.get("model")
-    if isinstance(model, str) and model:
+    choices = chunk.get("choices", [])
+    if not isinstance(choices, list) or not all(isinstance(c, dict) for c in choices):
+        raise _bad("bad_choices")
+    choice = choices[0] if choices else {}
+    delta = choice.get("delta")
+    if delta is not None and not isinstance(delta, dict):
+        raise _bad("bad_delta")
+    content = delta.get("content") if delta else None
+    if content is not None and not isinstance(content, str):
+        raise _bad("bad_content")
+    # The chunk is well formed: only now does anything in it count.
+    model = model_name(chunk.get("model"))
+    if model is not None:
         state.served_model = model
     usage = chunk.get("usage")
     if isinstance(usage, dict):
         state.usage_block = usage
-    choices = chunk.get("choices", [])
-    if not isinstance(choices, list) or not all(isinstance(c, dict) for c in choices):
-        raise _bad("bad_choices")
-    if not choices:
-        return None
-    choice = choices[0]
     reason = choice.get("finish_reason")
     if isinstance(reason, str) and reason:
         state.finish_reason = reason
-    delta = choice.get("delta")
-    if delta is None:
-        return None
-    if not isinstance(delta, dict):
-        raise _bad("bad_delta")
-    content = delta.get("content")
-    if content is None:
-        return None
-    if not isinstance(content, str):
-        raise _bad("bad_content")
     if not content:
         return None
     state.deltas.append(content)

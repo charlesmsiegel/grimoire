@@ -175,3 +175,10 @@ def test_cancel_callbacks_may_touch_the_token():
     token._on_cancel(lambda: token._on_cancel(lambda: None))
     token.cancel()
     assert token.cancelled
+
+
+@pytest.mark.parametrize("url", ["https://openrouter.ai/api/v1/a b", "https://openrouter.ai/v1\x00",
+                                 "https://openrouter.ai/v1\t", "https://openrouter.ai/v\x7f1"])
+def test_base_url_with_spaces_or_controls_is_refused(url):
+    with pytest.raises(ValueError):
+        ProviderEndpoint("x", url)
