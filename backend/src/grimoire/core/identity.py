@@ -16,6 +16,9 @@ from dataclasses import dataclass
 SEGMENT_MAX = 128
 TEXT_MAX = 512
 LEGACY_PATH_MAX = 4096
+# Control, surrogate, format (e.g. zero-width) and line/paragraph separators
+# would make a path unwritable, invisible-different or line-breaking.
+_UNSAFE_PATH_CATEGORIES = frozenset({"Cc", "Cs", "Cf", "Zl", "Zp"})
 RESERVED_SCHEMES = frozenset({"v1", "campaign"})
 
 _SEGMENT = r"[a-z0-9][a-z0-9._-]*"
@@ -36,6 +39,9 @@ class IdentityConflict(ValueError):
     def __init__(self, message: str, sources: tuple[str, ...] | list[str] = ()) -> None:
         super().__init__(message)
         self.sources: tuple[str, ...] = tuple(sorted(set(sources)))
+
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self), (str(self), self.sources))
 
 
 def validate_segment(value: object, label: str) -> None:
@@ -155,8 +161,8 @@ class LegacyId:
             raise ValueError("legacy path must be nonempty text")
         if len(path) > LEGACY_PATH_MAX:
             raise ValueError(f"legacy path is longer than {LEGACY_PATH_MAX} characters")
-        if "\\" in path or any(unicodedata.category(char) == "Cc" for char in path):
-            raise ValueError(f"legacy path has a backslash or control character: {path!r}")
+        if "\\" in path or any(unicodedata.category(char) in _UNSAFE_PATH_CATEGORIES for char in path):
+            raise ValueError(f"legacy path has a backslash or unsafe character: {path!r}")
         if any(part in ("", ".", "..") for part in path.split("/")):
             raise ValueError(f"legacy path must be relative with no empty, '.' or '..' parts: {path!r}")
 

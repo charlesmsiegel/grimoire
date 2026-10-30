@@ -44,6 +44,9 @@ class MissingDefinition(LookupError):
         self.ref = ref
         self.reason = reason
 
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self), (self.ref, self.reason))
+
 
 @dataclass(frozen=True, slots=True)
 class BrokenReference:
@@ -85,18 +88,21 @@ class DefinitionLink:
     def __post_init__(self) -> None:
         _require_ref(self.subject, "link subject")
         _require_ref(self.object, "link object")
-        if self.relation not in SYMMETRIC_RELATIONS | DIRECTED_RELATIONS:
+        if not isinstance(self.relation, str) or self.relation not in SYMMETRIC_RELATIONS | DIRECTED_RELATIONS:
             raise ValueError(f"unknown definition relation: {self.relation!r}")
         validate_source_id(self.declared_by, "declared_by")
-        if self.relation in DIRECTED_RELATIONS and not self.object.pinned:
+        if self.relation in DIRECTED_RELATIONS and not (self.subject.pinned and self.object.pinned):
             raise IdentityConflict(
-                f"{self.relation} must pin the revision it came from: {self.object}",
+                f"{self.relation} must pin both the derived revision and its base: {self}",
                 (self.declared_by,),
             )
 
+    def __str__(self) -> str:
+        return f"{self.subject} {self.relation} {self.object} (declared by {self.declared_by})"
+
     @property
     def identity(self) -> tuple[object, ...]:
-        """Two links with equal identity are duplicates."""
+        """Links with equal identity state the same relation."""
         if self.relation in SYMMETRIC_RELATIONS:
             return (self.relation, frozenset({self.subject.entity_key, self.object.entity_key}))
         return (self.relation, self.subject, self.object)
@@ -142,7 +148,7 @@ class DefinitionIndex:
     def _register_definitions(self, definitions: Iterable[Definition]) -> None:
         kinds: dict[tuple[str, str], str] = {}
         for definition in definitions:
-            ref = _require_ref(definition.ref, "definition ref")
+            ref = _require_ref(getattr(definition, "ref", None), "definition ref")
             if ref.source not in self._sources:
                 raise IdentityConflict(f"definition from unregistered source: {ref}", (ref.source,))
             if not ref.pinned:
@@ -153,6 +159,8 @@ class DefinitionIndex:
                     f"{ref.source} uses entity id {ref.entity_id} for both {kind} and {ref.kind}",
                     (ref.source,),
                 )
+            if not isinstance(getattr(definition, "name", None), str):
+                raise IdentityConflict(f"definition {ref} has no text name", (ref.source,))
             revisions = self._revisions.setdefault(ref.entity_key, {})
             if ref.revision in revisions:
                 raise IdentityConflict(f"definition registered twice: {ref}", (ref.source,))
@@ -168,7 +176,7 @@ class DefinitionIndex:
             revisions = self._revisions.get(key_ref.entity_key)
             if revisions is None:
                 raise IdentityConflict(f"head declared for unknown entity: {key_ref}", (key_ref.source,))
-            if revision not in revisions:
+            if not isinstance(revision, str) or revision not in revisions:
                 raise IdentityConflict(
                     f"head of {key_ref} names unregistered revision {revision!r}", (key_ref.source,)
                 )
@@ -184,7 +192,8 @@ class DefinitionIndex:
         return heads
 
     def _register_links(self, links: Iterable[DefinitionLink]) -> tuple[DefinitionLink, ...]:
-        accepted: dict[tuple[object, ...], DefinitionLink] = {}
+        accepted: list[DefinitionLink] = []
+        seen: set[tuple[object, ...]] = set()
         for link in links:
             if not isinstance(link, DefinitionLink):
                 raise ValueError("links must be DefinitionLink values")
@@ -192,47 +201,33 @@ class DefinitionIndex:
                 raise IdentityConflict(f"link declared by unregistered source: {link}", (link.declared_by,))
             if link.subject.entity_key == link.object.entity_key:
                 raise IdentityConflict(f"a definition cannot be linked to itself: {link}", (link.declared_by,))
-            earlier = accepted.get(link.identity)
-            if earlier is not None:
-                raise IdentityConflict(
-                    f"duplicate link: {link}", (earlier.declared_by, link.declared_by)
-                )
-            accepted[link.identity] = link
-        result = tuple(accepted.values())
-        self._reject_derivation_cycles(result)
-        return result
+            # Another source stating the same relation is agreement, kept as provenance.
+            claim = (link.identity, link.declared_by)
+            if claim in seen:
+                raise IdentityConflict(f"duplicate link: {link}", (link.declared_by,))
+            seen.add(claim)
+            accepted.append(link)
+        self._reject_derivation_cycles([link for link in accepted if link.relation in DIRECTED_RELATIONS])
+        return tuple(accepted)
 
     @staticmethod
-    def _reject_derivation_cycles(links: tuple[DefinitionLink, ...]) -> None:
-        edges: dict[EntityKey, list[DefinitionLink]] = {}
-        for link in links:
-            if link.relation in DIRECTED_RELATIONS:
-                edges.setdefault(link.subject.entity_key, []).append(link)
-        done: set[EntityKey] = set()
-        path: list[DefinitionLink] = []
-        on_path: set[EntityKey] = set()
+    def _reject_derivation_cycles(directed: list[DefinitionLink]) -> None:
+        """Blame only the link, in registration order, that first closes a cycle.
 
-        def visit(key: EntityKey) -> None:
-            on_path.add(key)
-            for link in edges.get(key, ()):
-                target = link.object.entity_key
-                path.append(link)
-                if target in on_path:
-                    start = next(i for i, step in enumerate(path) if step.subject.entity_key == target)
-                    cycle = path[start:]
-                    raise IdentityConflict(
-                        "derivation cycle: " + ", ".join(str(step.subject) for step in cycle),
-                        tuple(step.declared_by for step in cycle),
-                    )
-                if target not in done:
-                    visit(target)
-                path.pop()
-            on_path.discard(key)
-            done.add(key)
-
-        for key in list(edges):
-            if key not in done:
-                visit(key)
+        Nodes are pinned revisions, so forks that sync across revisions are
+        not a cycle. A binary search over prefixes keeps this O(n log n).
+        """
+        if not _has_cycle(directed):
+            return
+        low, high = 1, len(directed)  # smallest prefix length containing a cycle
+        while low < high:
+            middle = (low + high) // 2
+            if _has_cycle(directed[:middle]):
+                high = middle
+            else:
+                low = middle + 1
+        closing = directed[low - 1]
+        raise IdentityConflict(f"derivation cycle closed by: {closing}", (closing.declared_by,))
 
     @property
     def sources(self) -> tuple[SourceDescriptor, ...]:
@@ -286,12 +281,35 @@ class DefinitionIndex:
         )
 
 
+def _has_cycle(directed: list[DefinitionLink]) -> bool:
+    """Kahn's algorithm over pinned-revision nodes; iterative, so no recursion limit."""
+    targets: dict[SourceRef, list[SourceRef]] = {}
+    incoming: dict[SourceRef, int] = {}
+    for link in directed:
+        targets.setdefault(link.subject, []).append(link.object)
+        incoming.setdefault(link.subject, 0)
+        incoming[link.object] = incoming.get(link.object, 0) + 1
+    ready = [node for node, count in incoming.items() if count == 0]
+    removed = 0
+    while ready:
+        node = ready.pop()
+        removed += 1
+        for target in targets.get(node, ()):
+            incoming[target] -= 1
+            if incoming[target] == 0:
+                ready.append(target)
+    return removed < len(incoming)
+
+
 class UnmappedLegacyId(LookupError):
     """No reviewed mapping exists; never guess from a slug or name."""
 
     def __init__(self, legacy_id: LegacyId) -> None:
         super().__init__(f"no V2 mapping for {legacy_id}")
         self.legacy_id = legacy_id
+
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self), (self.legacy_id,))
 
 
 class LegacyIdMap:
@@ -309,9 +327,8 @@ class LegacyIdMap:
                 )
             earlier = self._targets.setdefault(legacy_id, target)
             if earlier != target:
-                raise IdentityConflict(
-                    f"{legacy_id} maps to both {earlier} and {target}", (earlier.source, target.source)
-                )
+                # The reviewed mapping is at fault, not either target source.
+                raise IdentityConflict(f"{legacy_id} maps to both {earlier} and {target}")
 
     def resolve(self, legacy_id: LegacyId) -> SourceRef:
         try:

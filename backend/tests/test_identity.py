@@ -76,7 +76,8 @@ MALFORMED = [
     "a" * 129 + "/character/x", ":".join(["s" * 100] * 5) + "/character/x",
     "v1:arch", "v1:arch:", "v1:arch:/abs", "v1:arch:a/../b", "v1:arch:./a",
     "v1:arch:a//b", "v1:arch:a\\b", "v1:arch:a/", "v1:arch:a\x00b",
-    "v1:arch:a\nb", "v1:arch:a\x7fb", "v1:Arch:a", "v1::a",
+    "v1:arch:a\nb", "v1:arch:a\x7fb", "v1:arch:a\ud800b", "v1:arch:a\u2028b",
+    "v1:arch:a\u200bb", "v1:Arch:a", "v1::a",
     None, 5,
 ]
 
@@ -123,3 +124,11 @@ def test_identity_conflict_is_value_error_with_sources():
     error = IdentityConflict("clash", ("world:b", "world:a"))
     assert isinstance(error, ValueError)
     assert error.sources == ("world:a", "world:b")
+
+
+def test_reference_text_length_boundary():
+    kind_and_id = "/character/x"
+    source = ":".join(["s" * 100] * 4) + ":" + "t" * (512 - len(kind_and_id) - 404)
+    assert len(str(SourceRef(source, "character", "x"))) == 512
+    with pytest.raises(ValueError):
+        SourceRef(source + "t", "character", "x")

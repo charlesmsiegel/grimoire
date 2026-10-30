@@ -220,19 +220,28 @@ CONFLICTS = {
             DefinitionLink(ref(LANTERN, "vessa"), "same_individual", ref(EMBER, "vessa", "r1"), LANTERN),
         ],
     ), (LANTERN,)),
-    "reversed symmetric duplicate by two sources": (with_parts(
-        sources=descriptors(LANTERN, FANS),
+    "reversed symmetric duplicate by one source": (with_parts(
+        sources=descriptors(LANTERN),
         links=[
             DefinitionLink(ref(LANTERN, "vessa"), "alternate_portrayal", ref(EMBER, "vessa"), LANTERN),
-            DefinitionLink(ref(EMBER, "vessa"), "alternate_portrayal", ref(LANTERN, "vessa"), FANS),
+            DefinitionLink(ref(EMBER, "vessa"), "alternate_portrayal", ref(LANTERN, "vessa"), LANTERN),
         ],
-    ), (FANS, LANTERN)),
+    ), (LANTERN,)),
+    "definition with a non-text name": (with_parts(
+        sources=descriptors(LANTERN),
+        definitions=[_Def(ref(LANTERN, "vessa", "v1"), None)],
+    ), (LANTERN,)),
+    "head naming a malformed revision": (with_parts(
+        sources=descriptors(LANTERN),
+        definitions=[define(LANTERN, "vessa", "v1", "Vessa")],
+        heads={ref(LANTERN, "vessa"): ["v1"]},
+    ), (LANTERN,)),
     "derivation cycle": (with_parts(
         sources=descriptors(LANTERN),
         definitions=[define(LANTERN, "a", "v1", "A"), define(LANTERN, "b", "v1", "B")],
         links=[
-            DefinitionLink(ref(LANTERN, "a"), "derived_variant", ref(LANTERN, "b", "v1"), LANTERN),
-            DefinitionLink(ref(LANTERN, "b"), "overrides", ref(LANTERN, "a", "v1"), LANTERN),
+            DefinitionLink(ref(LANTERN, "a", "v1"), "derived_variant", ref(LANTERN, "b", "v1"), LANTERN),
+            DefinitionLink(ref(LANTERN, "b", "v1"), "overrides", ref(LANTERN, "a", "v1"), LANTERN),
         ],
     ), (LANTERN,)),
 }
@@ -257,15 +266,78 @@ def test_duplicate_source_id_names_both_owners():
     assert "user" in str(caught.value) and "creator:lanternworks" in str(caught.value)
 
 
-def test_unpinned_derivation_base_is_rejected_at_the_link():
+@pytest.mark.parametrize("subject, base", [
+    (ref(LANTERN, "vessa", "v1"), ref(EMBER, "vessa")),
+    (ref(LANTERN, "vessa"), ref(EMBER, "vessa", "r1")),
+])
+def test_derivation_pins_both_the_revision_and_its_base(subject, base):
     with pytest.raises(IdentityConflict) as caught:
-        DefinitionLink(ref(LANTERN, "vessa"), "derived_variant", ref(EMBER, "vessa"), LANTERN)
+        DefinitionLink(subject, "derived_variant", base, LANTERN)
     assert caught.value.sources == (LANTERN,)
-    assert DefinitionIndex(**with_parts(sources=descriptors(LANTERN))).check(ref(EMBER, "vessa")) is None
+    pinned = DefinitionLink(subject.at("v1"), "derived_variant", base.at("r1"), LANTERN)
+    index = DefinitionIndex(**with_parts(sources=descriptors(LANTERN), links=[pinned]))
+    assert index.links_for(ref(EMBER, "vessa")) == (pinned,)
+
+
+def test_two_sources_declaring_the_same_link_agree_rather_than_conflict():
+    ember_says = DefinitionLink(ref(EMBER, "vessa"), "alternate_portrayal", ref(LANTERN, "vessa"), EMBER)
+    lantern_says = DefinitionLink(ref(LANTERN, "vessa"), "alternate_portrayal", ref(EMBER, "vessa"), LANTERN)
+    index = DefinitionIndex(**with_parts(sources=descriptors(LANTERN), links=[ember_says, lantern_says]))
+    assert index.links_for(ref(EMBER, "vessa")) == (ember_says, lantern_says)
+
+
+def test_a_cycle_blames_only_the_link_that_closes_it():
+    parts = with_parts(
+        sources=descriptors(LANTERN),
+        links=[
+            DefinitionLink(ref(EMBER, "vessa", "r2"), "derived_variant", ref(LANTERN, "base", "v1"), EMBER),
+            DefinitionLink(ref(LANTERN, "base", "v1"), "overrides", ref(EMBER, "vessa", "r2"), LANTERN),
+        ],
+    )
+    with pytest.raises(IdentityConflict) as caught:
+        DefinitionIndex(**parts)
+    assert caught.value.sources == (LANTERN,)
+    assert _rebuild_without(caught.value.sources, parts).links_for(ref(EMBER, "vessa"))
+
+
+def test_forks_syncing_across_revisions_are_not_a_cycle():
+    index = DefinitionIndex(**with_parts(
+        sources=descriptors(LANTERN),
+        links=[
+            DefinitionLink(ref(LANTERN, "vessa", "v1"), "derived_variant", ref(EMBER, "vessa", "r1"), LANTERN),
+            DefinitionLink(ref(EMBER, "vessa", "r2"), "derived_variant", ref(LANTERN, "vessa", "v1"), EMBER),
+        ],
+    ))
+    assert len(index.links_for(ref(EMBER, "vessa"))) == 2
+
+
+def test_long_derivation_chains_do_not_exhaust_the_stack():
+    chain = [
+        DefinitionLink(ref(LANTERN, f"e{i}", "v1"), "derived_variant", ref(LANTERN, f"e{i + 1}", "v1"), LANTERN)
+        for i in range(5000)
+    ]
+    closing = DefinitionLink(ref(LANTERN, "e5000", "v1"), "overrides", ref(LANTERN, "e0", "v1"), LANTERN)
+    assert DefinitionIndex(**with_parts(sources=descriptors(LANTERN), links=chain))
+    with pytest.raises(IdentityConflict):
+        DefinitionIndex(**with_parts(sources=descriptors(LANTERN), links=[*chain, closing]))
+
+
+def test_lookup_errors_survive_copy_and_pickle():
+    import copy
+    import pickle
+    for error in (
+        MissingDefinition(ref(EMBER, "vessa"), "missing_entity"),
+        UnmappedLegacyId(LegacyId("arch-a", "a.md")),
+        IdentityConflict("clash", (LANTERN,)),
+    ):
+        for clone in (copy.copy(error), pickle.loads(pickle.dumps(error))):
+            assert type(clone) is type(error) and str(clone) == str(error)
+            assert vars(clone) == vars(error)
 
 
 @pytest.mark.parametrize("args", [
     (ref(EMBER, "a"), "related", ref(EMBER, "b"), EMBER),
+    (ref(EMBER, "a"), ["same_individual"], ref(EMBER, "b"), EMBER),
     (ref(EMBER, "a"), "same_individual", ref(EMBER, "b"), "Not A Source"),
     ("world:emberfall/character/a", "same_individual", ref(EMBER, "b"), EMBER),
 ])
@@ -274,9 +346,10 @@ def test_malformed_links_rejected(args):
         DefinitionLink(*args)
 
 
-def test_non_source_ref_definition_rejected():
+@pytest.mark.parametrize("bad", [_Def("world:emberfall/character/x@r1", "X"), object()])
+def test_malformed_definitions_rejected(bad):
     with pytest.raises(ValueError):
-        DefinitionIndex(**with_parts(definitions=[_Def("world:emberfall/character/x@r1", "X")]))
+        DefinitionIndex(**with_parts(definitions=[bad]))
 
 
 def test_source_descriptor_requires_owner():
@@ -342,4 +415,4 @@ def test_legacy_map_rejects_unpinned_targets_and_one_to_many():
             (LegacyId("arch-a", "a.md"), ref(EMBER, "vessa", "r1")),
             (LegacyId("arch-a", "a.md"), ref(LANTERN, "vessa", "v1")),
         ])
-    assert caught.value.sources == (LANTERN, EMBER)
+    assert caught.value.sources == ()  # the migration mapping is at fault, not either source

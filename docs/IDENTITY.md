@@ -45,8 +45,8 @@ The scheme makes the three forms mutually unambiguous. `parse_ref` dispatches on
   - an entity ID reused across kinds;
   - a definition or link from an unregistered source;
   - an unpinned definition;
-  - a missing or unknown head;
-  - an invalid, duplicate or cyclic link.
+  - a missing or unknown head (heads are the entity's own source's declaration, so its source is blamed);
+  - an invalid, duplicate or cyclic link (blaming the declarer of the offending link only).
 
   Excluding the named sources lets the rest build, so a broken add-on cannot make a user's world unresolvable. The one exception is two packages claiming the same source ID: no reference can tell them apart, and one must be renamed.
 
@@ -54,17 +54,19 @@ The scheme makes the three forms mutually unambiguous. `parse_ref` dispatches on
 
 `DefinitionLink(subject, relation, object, declared_by)` takes `declared_by`, a registered source, as provenance.
 
-| Relation | Direction | Object |
+| Relation | Direction | Endpoints |
 |---|---|---|
 | `same_individual` | symmetric | pinned or unpinned |
 | `alternate_portrayal` | symmetric | pinned or unpinned |
-| `derived_variant` | subject derived from object | **pinned** (the base) |
-| `overrides` | subject overrides object | **pinned** |
+| `derived_variant` | subject derived from object | **both pinned**: this revision, and its base |
+| `overrides` | subject overrides object | **both pinned** |
+
+Each derived revision states its own base, so a re-derivation is a new subject revision with a new base. A revision may list several bases.
 
 The following are rejected:
 - self-links;
-- duplicates: symmetric links are compared by unordered entity pair, directed links by their exact refs, so a re-derivation pins a new subject revision;
-- cycles among directed links.
+- the same link declared twice by one source. Symmetric links are compared by unordered entity pair, directed links by their exact refs. When *different* sources state the same link, that is agreement: both are kept as provenance;
+- cycles among directed links, checked between pinned revisions. Forks that sync across revisions (`b@v1` from `a@r1`, then `a@r2` from `b@v1`) are not a cycle. Only the link that first closes a cycle, in registration order, is blamed.
 
 Links join definitions only. Instance relations belong to the [typed relationship graph](roadmap/sprints/typed-relationship-graph.md).
 
@@ -72,12 +74,12 @@ Links join definitions only. Instance relations belong to the [typed relationshi
 
 A `LegacyId` is an explicit archive ID plus an exact source-relative POSIX path, with case and Unicode form kept. The following paths are rejected rather than normalized:
 - absolute paths;
-- paths containing `\` or control characters;
+- paths containing `\`, control, surrogate, format (e.g. zero-width) or line/paragraph-separator characters;
 - paths with empty, `.` or `..` parts, or a trailing `/`.
 
 `LegacyIdMap` maps legacy IDs to **pinned** V2 refs, the imported revision. The rules:
 - many-to-one mappings and identical repeats are allowed;
-- mapping one legacy ID to two refs is an `IdentityConflict`;
+- mapping one legacy ID to two refs is an `IdentityConflict` that blames no source, because the mapping itself is at fault;
 - an unmapped ID raises `UnmappedLegacyId`;
 - there is no lookup by slug or name.
 
