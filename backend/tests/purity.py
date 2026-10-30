@@ -43,7 +43,10 @@ BANNED_ATTRIBUTES = frozenset({
 })
 #: Modules a pure module happens to hold (``dataclasses.inspect.os``, ``typing.sys``).
 #: Reaching them from an imported name is banned; ``self.os`` or ``config.modules`` is not.
-MODULE_ROUTES = frozenset({"os", "sys", "inspect", "importlib", "builtins", "bltns", "modules"})
+MODULE_ROUTES = frozenset({"os", "sys", "inspect", "importlib", "builtins", "bltns", "modules",
+                           "__dict__"})
+#: Reflection that reaches an attribute by its name.
+REFLECTION = frozenset({"getattr", "setattr", "delattr", "hasattr"})
 
 
 def _impure_module_attribute(module_name: str, attr: str) -> bool:
@@ -137,6 +140,32 @@ def _imported_names(node: ast.Import | ast.ImportFrom, package: str) -> list[str
     return [module, *(f"{module}.{alias.name}" for alias in node.names if alias.name != "*")]
 
 
+def _chain(node: ast.Attribute) -> tuple[str | None, list[str]]:
+    """``a.b.c`` as ("a", ["b", "c"]); the root is None unless it is a plain name."""
+    attrs = []
+    while isinstance(node, ast.Attribute):
+        attrs.append(node.attr)
+        node = node.value
+    return (node.id if isinstance(node, ast.Name) else None), attrs[::-1]
+
+
+def _reaches_impure_module(module_name: str, attrs: list[str]) -> bool:
+    """Whether ``module_name.attrs...`` passes through a module outside the allowlist."""
+    import importlib
+    import types
+    try:
+        value = importlib.import_module(module_name)
+    except ImportError:
+        return False
+    for attr in attrs:
+        value = getattr(value, attr, None)
+        if value is None:
+            return False
+        if isinstance(value, types.ModuleType) and value.__name__.split(".")[0] not in PURE_STDLIB:
+            return True
+    return False
+
+
 def _root_name(node: ast.expr) -> str | None:
     while isinstance(node, (ast.Attribute, ast.Call, ast.Subscript)):
         node = node.func if isinstance(node, ast.Call) else node.value
@@ -170,15 +199,29 @@ def boundary_problems(source: str, filename: str, package: PurePackage, within: 
     problems = []
     tree = ast.parse(source, filename)
     imported = _imported_aliases(tree)
+    modules = {name for name, module in imported.items() if module}
+    # A module object may only be used to reach its own attributes: assigned or passed
+    # around (`helper = dataclasses`, `getattr(dataclasses, ...)`) it hides what is reached.
+    attribute_roots = {id(node.value) for node in ast.walk(tree)
+                       if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)}
+    io_edge = [f"{package.name}.{Path(m).with_suffix('').as_posix().replace('/', '.')}"
+               for m in package.io_modules] if not io else []
     for node in ast.walk(tree):
         where = f"{filename}:{getattr(node, 'lineno', '?')}"
         if isinstance(node, ast.Name) and node.id in banned_names:
             problems.append(f"{where} uses {node.id}")
+        elif (isinstance(node, ast.Name) and node.id in modules and isinstance(node.ctx, ast.Load)
+              and id(node) not in attribute_roots):
+            problems.append(f"{where} uses module {node.id} as a value")
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in REFLECTION
+              and len(node.args) > 1 and isinstance(node.args[1], ast.Constant)
+              and node.args[1].value in MODULE_ROUTES | BANNED_ATTRIBUTES):
+            problems.append(f"{where} reaches .{node.args[1].value} by name")
         elif isinstance(node, ast.Attribute) and (
                 node.attr in banned_attributes
                 or (node.attr in MODULE_ROUTES and _root_name(node.value) in imported)
-                or (isinstance(node.value, ast.Name) and imported.get(node.value.id)
-                    and _impure_module_attribute(imported[node.value.id], node.attr))):
+                or ((root := _chain(node))[0] in modules
+                    and _reaches_impure_module(imported[root[0]], root[1]))):
             problems.append(f"{where} uses .{node.attr}")
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             if isinstance(node, ast.ImportFrom) and not node.level and (node.module or "").split(".")[0] != "grimoire":
@@ -189,6 +232,9 @@ def boundary_problems(source: str, filename: str, package: PurePackage, within: 
                                  and not any(_under(alias.name, m) for m in io_stdlib))
                              or _impure_module_attribute(node.module, alias.name)]
             for name in _imported_names(node, within):
+                if any(_under(name, edge) for edge in io_edge):
+                    problems.append(f"{where} imports the file edge {name}")
+                    continue
                 top = name.split(".")[0]
                 if top == "grimoire":
                     if name == "grimoire":

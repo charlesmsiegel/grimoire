@@ -79,6 +79,11 @@ def _check(source, package=CORE, filename="grimoire/core/sample.py", within="gri
     "import enum\nenum.bltns.__import__('os').system('x')",
     "import enum as e\nx = e.bltns",
     "from enum import bltns as b\nf = b.getattr(b, 'op' + 'en')",
+    "import dataclasses\nhelper = dataclasses\ndef f():\n    return helper.inspect.os.getenv('HOME')",
+    "import dataclasses\nx = getattr(dataclasses, 'inspect')",
+    "import dataclasses\nx = dataclasses.__dict__['inspect']",
+    "import re\nmodules = [re]",
+    "def f(x):\n    return getattr(x, '__globals__')",
     "import re\nx = re.enum.bltns",
     "f = getattr_target.eval",
 ])
@@ -97,6 +102,8 @@ def test_checker_flags_side_effect_spellings(source):
     "def modules_of(config):\n    return config.modules",
     "class Shell:\n    def kind(self):\n        return self.os",
     "from typing import Literal, NamedTuple",
+    "import re\nPATTERN = re.compile('x')\nMATCH = re.match",
+    "def f(self, label):\n    return getattr(self, label)",
 ])
 def test_checker_accepts_pure_computation(source):
     assert _check(source) == []
@@ -122,6 +129,11 @@ def test_only_the_evals_edge_modules_read_files():
     assert check("import importlib.util", loader)
     assert check("x = open('f')", loader)
     assert check("from grimoire.core import SourceRef", loader)
+    # A pure module cannot borrow the edge's I/O, even by a deferred import.
+    assert check("def read_file(path):\n    from .loader import load_json\n    return load_json(path)", checks)
+    assert check("from grimoire.evals.loader import load_json", checks)
+    assert check("from . import loader", checks)
+    assert check("from .loader import load_json", cli) == []
 
 
 def _modules_loaded_by(statement: str) -> set[str]:
