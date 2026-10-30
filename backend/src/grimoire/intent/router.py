@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import re
 
-from .commands import CATALOG_VERBS, COMMANDS, Command, parse_command
-from .model import PC_KINDS, Intent, IntentKind, RoutingContext, Utterance
+from .commands import CATALOG_VERBS, COMMANDS, SAFE_STOP_COMMANDS, Command, parse_command
+from .model import PC_KINDS, Intent, IntentKind, RoutingContext, Utterance, signature
 from .text import (
     first_word, grammar_form, marker_of, norm, split_sentences, straighten, strip_marker,
     wrapped,
@@ -213,6 +213,42 @@ def _route_text(text: str, mode: str, context: RoutingContext) -> Intent:
     return _route_explicit(text, mode, context)
 
 
+def _readings(intent: Intent) -> tuple[Intent, ...]:
+    """Actionable readings: an uncertain hypothesis contributes its candidates."""
+    if intent.kind == "uncertain":
+        return intent.candidates
+    if intent.kind == "reject" or (intent.command and intent.command.gate == "confirm"):
+        return ()
+    return (intent,)
+
+
+def _hedge(top: Intent, alternatives: list[Intent], reason: str) -> Intent:
+    """`top` downgraded to uncertain, offering each distinct reading once."""
+    candidates: dict[tuple, Intent] = {}
+    for reading in (top, *alternatives):
+        for candidate in _readings(reading):
+            candidates.setdefault(signature(candidate), candidate)
+    return _intent("uncertain", top.text, reason, candidates=tuple(candidates.values()))
+
+
+def _route_voice(utterance: Utterance, context: RoutingContext) -> Intent:
+    top = _route_text(utterance.text, utterance.mode, context)
+    if top.kind == "reject":
+        return top
+    if top.kind == "ui_command" and top.command.name in SAFE_STOP_COMMANDS:
+        return top
+    alternatives = [_route_text(text, utterance.mode, context) for text in utterance.alternatives]
+    if top.kind == "uncertain":
+        return _hedge(top, alternatives, top.reason)
+    if any(signature(alternative) != signature(top) for alternative in alternatives):
+        return _hedge(top, alternatives, "asr_disagreement")
+    if utterance.confidence is None or utterance.confidence < context.min_confidence:
+        return _hedge(top, [], "low_confidence")
+    return top
+
+
 def route(utterance: Utterance, context: RoutingContext) -> Intent:
     """Classify one utterance. Never executes, navigates or commits anything."""
+    if utterance.origin == "voice":
+        return _route_voice(utterance, context)
     return _route_text(utterance.text, utterance.mode, context)
