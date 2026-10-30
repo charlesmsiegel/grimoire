@@ -146,7 +146,11 @@ def _read_sync(ctx: Context, campaign: Campaign, entry, family: str) -> None:
     if text is None:
         _invalid_ledger(ctx, campaign, entry.path, "unreadable")
         return
-    meta = _text.parse_frontmatter(text)[0]
+    meta, body = _text.parse_frontmatter(text)
+    if text.strip() and (not meta and body == text):
+        # V1 reads an unfenced or unterminated ledger as empty, discarding every base it held.
+        _invalid_ledger(ctx, campaign, entry.path, "not a fenced frontmatter block")
+        return
     for ref, base in meta.items():
         if base != "" and not _text.SHA256.match(base):
             ctx.finding("invalid_ledger_entry", entry.path, detail=ref)

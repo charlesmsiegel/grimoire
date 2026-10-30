@@ -4,7 +4,7 @@ The CLI runs in a fresh interpreter (``-B``: no bytecode writes; ``-S``: no site
 hooks preloading modules) with a synthetic home. The hook records every write-mode
 open, every filesystem mutation, process spawn and socket operation. A dry run
 may do none of them; a run with ``--report`` may only create its exclusive temp
-file and rename it onto the report.
+file and publish it onto the report (a no-clobber link and unlink, or a rename).
 """
 
 import json
@@ -46,7 +46,7 @@ def hook(event, args):
         if write and not allowed(path):
             violations.append(f"open {path!r} {mode!r} {flags!r}")
     elif event in MUTATIONS:
-        if not (event == "os.rename" and allowed(args[0])):
+        if not (event in ("os.rename", "os.link", "os.remove") and allowed(args[0])):
             violations.append(f"{event} {args[:2]!r}")
     elif event.startswith(SPAWNS):
         violations.append(event)
@@ -108,4 +108,4 @@ def test_the_hook_does_see_writes(setup, tmp_path):
     audit = run_hooked(home, ["--source", str(library), "--archive-id", "fixture",
                               "--destination", str(tmp_path / "v2"), "--report", str(tmp_path / "r.json")])
     assert any(v.startswith("open") for v in audit["violations"])
-    assert any(v.startswith("os.rename") for v in audit["violations"])
+    assert any(v.startswith(("os.rename", "os.link")) for v in audit["violations"])

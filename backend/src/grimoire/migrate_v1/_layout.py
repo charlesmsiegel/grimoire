@@ -28,6 +28,7 @@ UNSUPPORTED_ROOT_DIRS = frozenset({"sampler_presets", "response_presets", "style
 UNSUPPORTED_ROOT_FILES = frozenset({"pricing.json", "chores.json", "regex.json", "prompt_layout.json",
                                     "inference-retired.json", ".char_macros_baked",
                                     ".synthetic-library", ".synth-library.json"})
+_EXCLUDED_FOLDED = frozenset(name.casefold() for name in EXCLUDED_ROOT)
 OS_LITTER = frozenset({".ds_store", "thumbs.db", "desktop.ini"})
 FLAT_KINDS = ("locations", "lore", "items", "groups", "creatures", "greetings")
 ACTOR_BASES = ("characters", "pcs")
@@ -95,7 +96,8 @@ def _interpreted(family: str, **coords) -> Layout:
 def classify(parts: tuple[str, ...], is_dir: bool) -> Layout:
     """The layout of the entry at source-relative `parts`."""
     top = parts[0]
-    if len(parts) == 1 and top in EXCLUDED_ROOT:
+    if len(parts) == 1 and top.casefold() in _EXCLUDED_FOLDED:
+        # Case-folded: on a case-insensitive filesystem V1 kept its credentials in `LLM_Connections`.
         return Layout(EXCLUDED, "excluded")
     if is_dir:
         return _DIR

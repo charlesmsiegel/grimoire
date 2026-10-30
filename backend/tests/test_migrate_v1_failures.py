@@ -532,3 +532,53 @@ def test_a_campaign_reference_to_a_tombstoned_world_record_dangles(library, home
 def test_a_version_name_v1_would_not_list_is_reported(library, home):
     (library / MARA / "odd .json").write_text(card("Mara"), encoding="utf-8")
     assert ("invalid_v1_id", (f"{MARA}/odd .json",)) in codes(run(library, home))
+
+
+# ---- regressions from the Codex review --------------------------------------------------------
+
+def test_a_non_text_blob_extension_is_an_invalid_object(library, home):
+    from v1_fixture import RED_ID
+    path = _object_path(library, RED_ID)
+    path.write_text(path.read_text(encoding="utf-8").replace('"ext": "png"', '"ext": []'), encoding="utf-8")
+    [red] = [o for o in run(library, home)["images"]["objects"] if o["id"] == RED_ID]
+    assert red["valid"] is False and "blob.ext" in red["problems"]
+
+
+def test_an_unterminated_sync_ledger_is_invalid_not_empty(library, home):
+    (library / CAMPAIGN / "sync.md").write_text(f"---\nlore/the-salt-pact: {'a' * 64}\n", encoding="utf-8")
+    manifest = run(library, home)
+    assert ("invalid_ledger", (f"{CAMPAIGN}/sync.md",)) in codes(manifest, "blocking")
+    assert manifest["campaigns"][0]["semantics"] == "unresolved"
+
+
+def test_a_case_variant_credential_directory_is_never_read(library, home):
+    folder = library / "LLM_Connections"
+    folder.mkdir()
+    (folder / "provider.md").write_text("api_key: SENTINEL-SECRET-3", encoding="utf-8")
+    manifest = run(library, home)
+    assert entry(manifest, "LLM_Connections")["disposition"] == "excluded"
+    assert not [e for e in manifest["entries"] if e["path"].startswith("LLM_Connections/")]
+    assert "SENTINEL-SECRET-3" not in render_json(manifest).decode()
+
+
+def test_an_instance_never_derives_from_a_withheld_portrayal(library, home):
+    pcs = library / "worlds" / "saltmarch" / "pcs" / "mara"
+    pcs.mkdir()
+    (pcs / "pc.md").write_text(frontmatter([("name", "Mara"), ("default_version", "default")]), encoding="utf-8")
+    (pcs / "default.md").write_text(frontmatter([("name", "Mara")], "A namesake."), encoding="utf-8")
+    manifest = run(library, home)
+    [mara] = [i for i in manifest["identity_candidates"]["instances"] if i["v1_ref"] == "characters/mara"]
+    assert mara["derives_from"] is None and mara["derives_from_unresolved"] is True
+    assert any(u["what"] == "instance_derivation" for u in manifest["unresolved"])
+
+
+def test_campaign_card_image_links_resolve_through_the_campaign_overlay(library, home):
+    url = "/api/campaigns/the-drowned-ledger/characters/mara/versions/default/images/avatar"
+    hidden = "/api/worlds/saltmarch/characters/mara/versions/default/images/gallery_1"
+    copy = library / CAMPAIGN / "characters" / "mara" / "default.json"
+    data = json.loads(copy.read_text(encoding="utf-8"))
+    data["data"]["description"] = f"![a]({url}) ![g]({hidden})"
+    copy.write_text(json.dumps(data), encoding="utf-8")
+    refs = {r["slot"]["name"]: r["status"] for r in run(library, home)["images"]["references"]
+            if r["source"] == f"{CAMPAIGN}/characters/mara/default.json"}
+    assert refs == {"avatar": "resolved", "gallery_1": "unresolved"}

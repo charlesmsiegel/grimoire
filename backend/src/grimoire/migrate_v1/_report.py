@@ -152,6 +152,25 @@ def parent_identity(target: Path) -> tuple[int, int]:
     return info.st_dev, info.st_ino
 
 
+def _publish(temp: str, target: Path, dfd: int | None, *, overwrite: bool) -> None:
+    """Move the finished temp onto `target`. Without `overwrite` this must not clobber a
+    file created meanwhile: a hard link fails if the name exists (Windows' rename does too)."""
+    src = temp if dfd is not None else target.parent / temp
+    dst = target.name if dfd is not None else target
+    fds = {"src_dir_fd": dfd, "dst_dir_fd": dfd} if dfd is not None else {}
+    if overwrite:
+        os.replace(src, dst, **fds)
+        return
+    if os.name == "nt":
+        os.rename(src, dst)  # refuses an existing destination
+        return
+    try:
+        os.link(src, dst, follow_symlinks=False, **fds)
+    except FileExistsError:
+        raise ReportWriteError(f"{target} appeared before writing; nothing was replaced") from None
+    os.unlink(src, dir_fd=dfd) if dfd is not None else os.unlink(src)
+
+
 def write_report(target: Path, data: bytes, expected_parent: tuple[int, int], *, overwrite: bool) -> None:
     """Publish `data` at `target` atomically: an exclusive 0600 temp beside it, then a rename."""
     temp = f".{target.name}.{os.getpid()}.tmp"
@@ -184,10 +203,7 @@ def write_report(target: Path, data: bytes, expected_parent: tuple[int, int], *,
             existing = None
         if existing is not None and not (overwrite and stat.S_ISREG(existing.st_mode)):
             raise ReportWriteError(f"{target} appeared or changed before writing; nothing was replaced")
-        if use_fd:
-            os.replace(temp, target.name, src_dir_fd=dfd, dst_dir_fd=dfd)
-        else:
-            os.replace(target.parent / temp, target)
+        _publish(temp, target, dfd, overwrite=overwrite)
         created = False
     except OSError as error:
         if created:

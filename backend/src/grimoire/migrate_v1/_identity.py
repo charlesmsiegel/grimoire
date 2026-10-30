@@ -101,7 +101,8 @@ def identity_section(ctx: Context, lib: Library, campaigns: dict[str, Campaign],
         "definitions": sorted(rows, key=lambda r: r["path"]),
         "portrayal_groups": sorted(groups, key=lambda g: g["path"]),
         "proposed_links": sorted(links, key=lambda l: (l["subject"], l["object"])),
-        "instances": _instances(ctx, lib, campaigns),
+        "instances": _instances(ctx, lib, campaigns, {
+            r["candidate"]["text"] for r in rows if r["status"] == "proposed" and r["candidate"]}),
         "same_name_groups": _same_names(lib),
     }
 
@@ -158,7 +159,8 @@ def _withhold_collisions(ctx: Context, rows: list[dict]) -> None:
             row["status"], row["withheld"], row["candidate"] = "collision", row["candidate"]["text"], None
 
 
-def _instances(ctx: Context, lib: Library, campaigns: dict[str, Campaign]) -> list[dict]:
+def _instances(ctx: Context, lib: Library, campaigns: dict[str, Campaign], proposed: set[str]) -> list[dict]:
+    """Campaign instances; `derives_from` names only a definition candidate still proposed."""
     rows = []
     for cid in sorted(campaigns):
         campaign = campaigns[cid]
@@ -180,7 +182,12 @@ def _instances(ctx: Context, lib: Library, campaigns: dict[str, Campaign]) -> li
             if (world_actor is not None and world_actor.meta_path is not None
                     and ref not in campaign.detached and appearance is not None and appearance["valid"]):
                 derived = _candidate(_source(campaign.world), "character", f"{aid}.{appearance['version']}")
-                row["derives_from"] = str(derived) if derived is not None else None
+                if derived is not None and str(derived) in proposed:
+                    row["derives_from"] = str(derived)
+                else:
+                    row["derives_from_unresolved"] = True
+                    ctx.unresolve("instance_derivation", f"{campaign.path}/{ref}",
+                                  "the portrayal it was locked to has no proposed identity")
             try:
                 candidate = InstanceRef(cid, "character", aid)
             except ValueError:

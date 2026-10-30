@@ -93,7 +93,7 @@ def _object(ctx: Context, out: Placements, entry) -> None:
     sha, ext, size = blob.get("sha256"), blob.get("ext"), _count(blob.get("size"))
     if not (isinstance(sha, str) and _text.SHA256.match(sha)):
         problems.append("blob.sha256")
-    if ext not in BLOB_EXTS:
+    if not isinstance(ext, str) or ext not in BLOB_EXTS:
         problems.append("blob.ext")
     if size is None:
         problems.append("blob.size")
@@ -469,14 +469,19 @@ def _visible(out: Placements, owner: tuple, name: str, campaign: Campaign | None
 
 
 def reference_rows(ctx: Context, lib: Library, out: Placements, campaigns: dict[str, Campaign]) -> list[dict]:
+    def owner(scope: str, scope_id: str) -> Campaign | None:
+        """Campaign-scoped text resolves through that campaign's overlay, as its scenes do."""
+        return campaigns.get(scope_id) if scope == "campaign" else None
+
     sources: list[tuple[str, str, Campaign | None]] = []
     for key in sorted(lib.records):
         record = lib.records[key]
         if record.kind == "greetings":
-            sources.append((record.path, record.body, None))
+            sources.append((record.path, record.body, owner(record.scope, record.scope_id)))
     for key in sorted(lib.actors):
-        for vid, version in sorted(lib.actors[key].versions.items()):
-            sources += [(version.path, text, None) for text in version.texts]
+        actor = lib.actors[key]
+        for vid, version in sorted(actor.versions.items()):
+            sources += [(version.path, text, owner(actor.scope, actor.scope_id)) for text in version.texts]
     for cid in sorted(campaigns):
         for sid, texts in sorted(campaigns[cid].scene_texts.items()):
             path = f"{campaigns[cid].path}/scenes/{sid}.md"
@@ -497,6 +502,9 @@ def reference_rows(ctx: Context, lib: Library, out: Placements, campaigns: dict[
             scope, sid, base, record, version, name = route
             if base == "collection":
                 status = "listed"
+            elif campaign is not None and not campaign.overlay_ok:
+                status = "unresolved"  # the campaign's overlay itself cannot be trusted
+                ctx.unresolve("image_reference", path, "campaign overlay unresolved")
             else:
                 names = _text.decoded_names(name)
                 status = "resolved" if any(

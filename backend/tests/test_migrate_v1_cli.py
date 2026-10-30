@@ -119,12 +119,15 @@ def test_f7_a_live_source_exits_5_without_a_report(library, home, tmp_path, monk
     assert not report.exists()
 
 
-def test_a_failed_publication_leaves_no_partial_report(library, home, tmp_path, monkeypatch):
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_a_failed_publication_leaves_no_partial_report(library, home, tmp_path, monkeypatch, overwrite):
     def broken(*args, **kwargs):
         raise OSError(28, "No space left on device")
-    monkeypatch.setattr(os, "replace", broken)
+    for name in ("replace", "link", "rename"):
+        monkeypatch.setattr(os, name, broken)
     report = tmp_path / "inventory.json"
-    assert main(home, *scan_args(library, tmp_path, "--report", str(report))) == 2
+    extra = ["--overwrite"] if overwrite else []
+    assert main(home, *scan_args(library, tmp_path, "--report", str(report), *extra)) == 2
     assert not report.exists()
     assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
 
@@ -133,6 +136,22 @@ def test_counts_summary_names_nothing(library, home, tmp_path, capsys):
     assert main(home, *scan_args(library, tmp_path, "--summary", "counts")) == 0
     out = capsys.readouterr().out
     assert "saltmarch" not in out and str(tmp_path) not in out
+
+
+def test_a_report_created_at_the_last_moment_is_not_replaced(library, home, tmp_path, monkeypatch):
+    from grimoire.migrate_v1 import _report
+    report = tmp_path / "inventory.json"
+    real_link = os.link
+
+    def racing_link(*args, **kwargs):
+        report.write_text("someone else's", encoding="utf-8")
+        return real_link(*args, **kwargs)
+    monkeypatch.setattr(_report.os, "link", racing_link)
+    if os.name == "nt":
+        pytest.skip("Windows publishes with a rename that already refuses an existing name")
+    assert main(home, *scan_args(library, tmp_path, "--report", str(report))) == 2
+    assert report.read_text(encoding="utf-8") == "someone else's"
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
 
 
 def test_a_report_that_appears_during_the_scan_is_not_replaced(library, home, tmp_path, monkeypatch):
