@@ -47,7 +47,8 @@ words.
    are `reject`/`empty`). Quoting is the escape
    hatch, so it's checked before any marker.
 3. **Mixed lanes** → `uncertain`: a non-leading `Grimoire` followed by `,`/`:` or a command verb;
-   a later sentence starting with a separated marker of a different lane; or a later sentence
+   a later sentence starting with a marker of a different lane, with or without punctuation
+   ("I wave. Director make it rain."); or a later sentence
    that is a different full command ("Hello there. Delete the scene.").
 4. Leading `Grimoire` (with or without punctuation) → command; unknown remainder is `uncertain`.
 5. The same command repeated ("stop. stop!", "stop stop") → that command.
@@ -127,7 +128,7 @@ The caller holds `pending`, and each resolution consumes it. Checks run in this 
 2. A different target or revision → `stale`.
 3. Speech, action or director mode → `unclear`.
 4. "no", "cancel", "never mind", "stop" or "no thanks" → `declined`.
-5. "yes", "confirm", "do it" or "yes, delete it" → `confirmed`. A questioning "Yes?" isn't
+5. "yes", "confirm", "yes, confirm", "do it", "yes, do it" or "yes, delete it" → `confirmed`. A questioning "Yes?" isn't
    consent and gives `unclear`. For voice, a yes also needs confidence at or above the
    threshold, and every alternative must be a yes.
 6. Anything else → `unclear`.
@@ -147,6 +148,10 @@ target.
   - "I love you, Mara" reads as an action.
   - "Director, you're late." typed with a comma reads as direction.
   - "I read the grimoire, open on the table" reads as mixed.
+- Only `Director,`/`GM:`/`Narrator,`/`OOC:` and `((…))` mark direction: "(OOC: …)" and
+  "[OOC] …" read as speech. Use director mode for them.
+- A line break is not a sentence break: "Hello there⏎Delete the scene" is one line of speech.
+- Only one leading "please" is ignored: "please please delete the scene" reads as speech.
 - Some repeats are deliberately conservative:
   - "Grimoire, pause. Grimoire, pause." is `uncertain` (mixed-lane detection runs first).
   - "Delete the scene. Delete the scene." is one `delete_scene` that still needs confirmation.

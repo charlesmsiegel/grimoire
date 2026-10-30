@@ -101,8 +101,8 @@ def _first_units(original: str, normalised_unit: str) -> str:
 
 
 def _sentence_lane(sentence: str) -> str:
-    lane, separated = marker_of(sentence)
-    return lane if lane and separated else "fiction"
+    lane, _ = marker_of(sentence)
+    return lane or "fiction"
 
 
 def _is_mixed(text: str, sentences: list[str]) -> bool:
@@ -116,8 +116,7 @@ def _is_mixed(text: str, sentences: list[str]) -> bool:
     first_lane = _sentence_lane(sentences[0])
     first_command = parse_command(sentences[0])
     for sentence in sentences[1:]:
-        lane, separated = marker_of(sentence)
-        if lane and separated and lane != first_lane:
+        if _sentence_lane(sentence) not in ("fiction", first_lane):
             return True
         command = parse_command(sentence)
         if command is not None and command != first_command:

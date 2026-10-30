@@ -113,6 +113,8 @@ def test_quotes_and_asterisks():
     "Hello there. Delete the scene.", "Grimoire, pause. Director, slow down.",
     "Director, slow down. Grimoire, pause.", "I wave. Director, make it rain.",
     'I say "hi". Grimoire, stop.',
+    "I open the chest. Director make this tense.", "I wave. GM make it rain.",
+    "Hello. OOC make it rain", "I wave. Grimoire help us.", "I wave. Director Vance arrives.",
 ])
 def test_mixed_utterances(text):
     intent = r(text)
