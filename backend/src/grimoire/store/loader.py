@@ -279,7 +279,7 @@ def scan_source(access: Access, source_id: str) -> SourceScan:
     return scan
 
 
-def _contained_scan(access: Access, source_id: str) -> SourceScan:
+def contained_scan(access: Access, source_id: str) -> SourceScan:
     """``scan_source``, with any I/O or link failure excluding only this source."""
     try:
         return scan_source(access, source_id)
@@ -482,7 +482,7 @@ def _load(access: Access) -> LibraryView:
             continue
         _unrecognized(access, (name,), problems, None)
 
-    scans = {source_id: _contained_scan(access, source_id) for source_id in
+    scans = {source_id: contained_scan(access, source_id) for source_id in
              (discover_sources(access, problems) if SOURCES in roots else [])}
     excluded: set[str] = set()
     for source_id, scan in scans.items():

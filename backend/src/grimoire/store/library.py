@@ -25,7 +25,7 @@ from . import engine, loader
 from .diskops import DiskOps, FileOps, is_link, lstat_or_none
 from .engine import Access, Settlement
 from .envelope import (
-    EnvelopeError, link_problem, RecordEnvelope, SourceManifest, parse_record, parse_source, record_document, source_document,
+    EnvelopeError, RecordEnvelope, SourceManifest, parse_record, parse_source, record_document, source_document,
 )
 from .errors import (
     CommitIncomplete, ImmutableRevision, InvalidEnvelope, InvalidSourceState, NameCollision, NotALibrary,
@@ -161,9 +161,11 @@ class LibraryStore:
                         locker: Locker | None = None) -> tuple[str, ...]:
         """A human's explicit way out of ``RecoveryBlocked`` or an unreadable journal.
 
-        Takes the writer lock and, without interpreting the journal, moves it and
-        every staged file into ``.conflicts/discarded-<digest>/``. Anything already
-        published stays published, and ``load`` reports what is inconsistent.
+        Takes the writer lock and, without opening or interpreting the journal (it may
+        be a FIFO or garbage), moves it and every staged file into the first unused
+        ``.conflicts/discarded-<N>/``, so an earlier discard is never overwritten.
+        Anything already published stays published, and ``load`` reports what is
+        inconsistent.
         """
         ops = ops or DiskOps()
         locker = locker or OsLocker()
@@ -175,12 +177,13 @@ class LibraryStore:
             access.guard.check_session()
             if not access.journal_exists():
                 return ()
-            digest = etag(ops.read_bytes(access.journal)).removeprefix("sha256:")[:12]
-            folder = (CONFLICTS, f"discarded-{digest}")
+            number = 1
+            while access.presence((CONFLICTS, f"discarded-{number}")) != "absent":
+                number += 1
+            folder = (CONFLICTS, f"discarded-{number}")
             access.guard.check_write(folder + ("x",), staging_device=None)
             moved = [name for name in ops.list_dir(root / TXN) if is_staging_name(name)] + [access.journal.name]
-            if access.presence(folder) != "present":
-                ops.make_dirs(access.path(folder))
+            ops.make_dirs(access.path(folder))
             for name in moved:
                 ops.replace(root / TXN / name, access.path(folder + (name,)))
             return tuple("/".join(folder + (name,)) for name in moved)
@@ -348,7 +351,7 @@ class _Commit:
         self.access.guard.check_session()                 # the root is still ours, just before publishing
         self._commit_point(journal)                       # 9. journal replace
         try:
-            settlement = engine.settle(self.access, journal)  # 10-12
+            settlement = engine.settle(self.access, journal, live=True)  # 10-12
         except (OSError, StoreError, ValueError) as error:
             raise CommitIncomplete(f"failed after the commit point; recovery will finish it: {error}") from error
         if settlement.preserved:
@@ -522,15 +525,10 @@ def _validate_links(access: Access, source_id: str, before: SourceManifest | Non
         for other in loader.discover_sources(access):
             if other == source_id or other in proposed:
                 continue
-            try:
-                manifest = loader.read_source(access, other).manifest
-                manifest.head_refs()
-            except (StoreError, ValueError):
-                continue  # an unreadable source declares nothing the loader would register
-            if any(found is not None and found[0] == "ownership"
-                   for found in (link_problem(link, other) for link in manifest.links)):
-                continue  # excluded by the loader, so its links are never registered
-            others.append(manifest)
+            scan = loader.contained_scan(access, other)  # the loader's own exclusion rules
+            if scan.excluded_by or scan.stored is None:
+                continue  # an excluded source's links are never registered
+            others.append(scan.stored.manifest)
     where = {manifest.source: manifest.source for manifest in [*others, after]}
 
     def dropped(own: SourceManifest | None) -> list[str]:

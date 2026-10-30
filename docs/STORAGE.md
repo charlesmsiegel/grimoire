@@ -17,7 +17,7 @@ Not in this slice:
   campaigns/<campaign_id>/instances/<kind>/<instance_id>.json     # one campaign instance
   .txn/lock, .txn/journal.json, .txn/*.new                        # writer lock, journal, staging
   .conflicts/<hash16>/<name>~<digest12>[.N]                       # preserved versions awaiting a human
-  .conflicts/discarded-<digest12>/…                               # output of discard_journal
+  .conflicts/discarded-<N>/…                                      # output of discard_journal (first unused N)
 ```
 
 - **One directory per source segment; a source's own files live under its own `_source/`.** An ID segment can never start with `_`, so `_source` never collides with a sub-source. `world:harbor:dlc` lives at `sources/world/harbor/dlc/_source/`, a *sibling* of harbor's `_source/`.
@@ -146,7 +146,7 @@ A preserved version is named by the digest of its *actual* bytes. If that name a
 **Recovery blocked.** A persistent I/O error makes a writable `open` raise `RecoveryBlocked` and release the lock. A read-only open still works, but its reads raise `PendingRecovery`. The explicit human way out is `LibraryStore.discard_journal(path)`:
 - it takes the writer lock;
 - it does **not** interpret the journal's paths;
-- it moves the journal and all staging into `.conflicts/discarded-<digest>/`.
+- it moves the journal and all staging into the first unused `.conflicts/discarded-<N>/`, so an earlier discard is never overwritten.
 
 Anything already published stays published, and `load` reports what is inconsistent.
 

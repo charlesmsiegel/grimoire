@@ -220,8 +220,14 @@ def _publish(access: Access, entry: Entry, settlement: Settlement) -> None:
     settlement.published.append((_text(entry.target), entry.new))
 
 
-def settle(access: Access, journal: Journal) -> Settlement:
-    """Finish or preserve a committed journal, then remove it and any leftover staging."""
+def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlement:
+    """Finish or preserve a committed journal, then remove it and any leftover staging.
+
+    ``live`` is the committing process itself, right after the commit point: none
+    of its staging can have been published yet, so a missing staged file is
+    incomplete unless the target already holds the new bytes. In recovery a
+    missing temp normally means "already published", and the disk is kept.
+    """
     settlement = Settlement()
     staged = {name for name in access.ops.list_dir(access.path((TXN,))) if is_staging_name(name)}
 
@@ -239,7 +245,9 @@ def settle(access: Access, journal: Journal) -> Settlement:
                 break
     for entry in journal.entries:
         if entry.temp not in staged:
-            if journal.state == "commit" and entry.old != entry.new and access.etag_of(entry.target) == entry.old:
+            current = access.etag_of(entry.target)
+            vanished = current != entry.new if live else (entry.old != entry.new and current == entry.old)
+            if journal.state == "commit" and vanished:
                 settlement.incomplete.append(_text(entry.target))
             continue
         digest = temp_digest(entry)

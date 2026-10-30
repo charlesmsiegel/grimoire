@@ -573,3 +573,48 @@ def test_a_look_alike_conflicts_folder_is_refused_not_retried_forever(tmp_path):
         LibraryStore.open(root / LIB, locker=locker)
     assert (root / LIB / ".txn" / "journal.json").exists()  # nothing settled
     assert locker.held == set()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs here")
+def test_discarding_a_fifo_journal_never_opens_it(tmp_path):
+    locker = ProcessLocker()
+    _library(tmp_path, locker).close()
+    os.mkfifo(tmp_path / LIB / ".txn" / "journal.json")  # reading this would block forever
+    moved = LibraryStore.discard_journal(tmp_path / LIB, locker=locker)
+    assert moved == (".conflicts/discarded-1/journal.json",)
+    assert locker.held == set()
+
+
+def test_discards_never_overwrite_an_earlier_discard(tmp_path):
+    locker = ProcessLocker()
+    _library(tmp_path, locker).close()
+    txn = tmp_path / LIB / ".txn"
+    for staged in (b"first version", b"second version"):
+        (txn / "journal.json").write_bytes(b"garbage")  # identical journals both times
+        (txn / "rec1.new").write_bytes(staged)
+        LibraryStore.discard_journal(tmp_path / LIB, locker=locker)
+    conflicts = tmp_path / LIB / ".conflicts"
+    assert (conflicts / "discarded-1" / "rec1.new").read_bytes() == b"first version"
+    assert (conflicts / "discarded-2" / "rec1.new").read_bytes() == b"second version"
+
+
+def test_staging_that_vanishes_while_the_target_changes_is_not_success(tmp_path):
+    locker = ProcessLocker()
+    root = tmp_path / "root"
+    root.mkdir()
+    _setup(locker)(RootedFileOps(root, record=False), root)
+    target = root / LIB / "campaigns" / "other" / "instances" / "character" / "x.json"
+
+    def another_program(ops, root):  # removes staging and writes the target itself
+        for name in ops.list_dir(root / LIB / ".txn"):
+            if name.startswith("rec"):
+                ops.remove(root / LIB / ".txn" / name)
+        ops.write_bytes(target, HUMAN)
+
+    ops = RootedFileOps(root, plan=[Interleave(JOURNAL, another_program)], record=False)
+    with LibraryStore.open(root / LIB, ops=ops, locker=locker) as store:
+        txn = store.transaction()
+        txn.put(RecordEnvelope(InstanceRef("other", "character", "x"), {"n": 1}), None)
+        with pytest.raises(CommitIncomplete, match="not written"):
+            txn.commit(owner_handle())
+    assert target.read_bytes() == HUMAN

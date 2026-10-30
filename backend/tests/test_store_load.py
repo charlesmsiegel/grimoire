@@ -453,3 +453,14 @@ def test_links_are_validated_against_every_manifest_in_the_transaction(library):
                 (SourceManifest("world:a", OWNER, links=(LinkSpec(str(a), "derived_variant", str(b)),)), None),
                 (SourceManifest("world:b", OWNER, links=(LinkSpec(str(b), "derived_variant", str(a)),)), None),
                 (RecordEnvelope(a, {}), None), (RecordEnvelope(b, {}), None))
+
+
+def test_links_of_a_source_excluded_for_a_foreign_record_do_not_block_a_commit(library):
+    a, b = SourceRef("world:a", "k", "x", "r1"), SourceRef("world:b", "k", "y", "r1")
+    _commit(library, (SourceManifest("world:a", OWNER, links=(LinkSpec(str(a), "derived_variant", str(b)),)), None),
+            (RecordEnvelope(a, {}), None), (SourceManifest("world:b", OWNER), None), (RecordEnvelope(b, {}), None))
+    forged = {"format": "grimoire.record/1", "address": str(WREN.at("r9")), "payload": {}}
+    _write(library.root, "sources/world/a/_source/records/k/z/r1.json", forged)  # claims harbor's entity
+    assert "world:a" in library.load().excluded
+    _commit(library, (SourceManifest("world:b", OWNER, links=(LinkSpec(str(b), "derived_variant", str(a)),)),
+                      library.read_source("world:b").etag))
