@@ -11,7 +11,7 @@
 - Use actor/version, mood, relationships and existing dialogue as evidence, not fixed caricature presets.
 
 ## Milestones
-1. Create synthetic tests for recognizable multi-character dialogue.
+1. Define a **portrayal-scoped voice evidence contract** and synthetic, individually addressed NPC prompt fixtures demonstrating distinguishable dialogue and no borrowed secret knowledge. Build a repeatable comparison independent of an LLM provider.
 2. Provide author-editable style and characterization anchors.
 3. Support long-term development of voice, emotional state and contextual code-switching.
 
@@ -23,6 +23,16 @@ Four NPCs discussing a betrayal remain distinguishable without labels while none
 
 ## Independence and interfaces
 Improves current prompting and evaluation without requiring TTS, audio, rulesets or a new world schema.
+
+## Wave 2 portrayal and voice handoff
+
+- Keep voice anchors, cadence, preferred diction and dialogue **examples** linked to an authored portrayal/definition revision. Do not confuse a voice with a campaign individual's evolving emotions, knowledge or relationship history. A campaign instance can override/pin a portrayal without editing the source or copying the whole character card.
+- Define a compact prompt-input fragment for *one* NPC speaker and demonstrate two distinctly authored characters against the Wave 1 [offline quality gate](../../evals/STORY_QUALITY.md). No default ensemble-generation call may impersonate multiple speakers.
+- Include negative tests for quoted voice samples being reproduced verbatim, mismatched portrayal/actor assignment, hidden facts included in a voice example, and generic/flattened voices. No actual LLM or independent NPC decision loop is necessary for the first proof.
+- Preserve the fields required for future **loss-aware CC V3 import** (example messages, imported anchors, selected versions and unknown extensions), but do not create a new card-native persistent schema or V1 UI.
+- **Parallelism:** test with supplied source-qualified identities and synthetic portrayal data. 014 must not require 009's facet implementation, 010's file writer or 013's live adapter; 027 later composes voices with actor-specific evidence and separate provider calls.
+
+See [Wave 2 handoffs](../WAVE2_HANDOFFS.md#providervoicequality-boundaries-013--014--015--027).
 
 ## Open questions
 - Which stylistic anchors are stable versus situational?

@@ -9,7 +9,7 @@
 - Handle negotiated boundaries in prompts, scenarios, voice and exports with privacy-preserving defaults and transparent conflicts.
 
 ## Milestones
-1. Provide a small optional session-zero configuration and a direct 'skip/redirect' action in text play.
+1. Define and test an **immutable, typed, optional session-zero configuration and a safe pause/skip/redirect intent contract** against synthetic proposed narration. Do not claim an executable text-play action until the Wave 5 runner consumes it.
 2. Test enforcement with difficult genre situations and conflicting group boundaries, preserving player control.
 3. Support revisable, per-participant confidential preferences and automatic safe staging decisions in multimodal play.
 
@@ -21,6 +21,16 @@ A player excludes graphic violence, keeps high-stakes conflict and requests a fa
 
 ## Interfaces and independence
 Owns **content and participation boundaries**; [Player Sovereignty](player-sovereignty.md) owns PC actions and internal experiences. Can start as isolated campaign settings and prompt configuration.
+
+## Wave 2 configuration and later execution boundary
+
+- Define optional setting/world/campaign/player-scoped content preferences: avoid, fade-to-black, skip, pause/redirect, themes and private notes as appropriate. Missing configuration is explicitly *unset*, not a presumption about content or player motives; privacy is enforced by access policy.
+- Keep content/participation boundaries independent of **PC sovereignty** (who may author choices and thoughts) and **adjudicated truth** (what happened). Changing the rendered depiction of graphic violence must not retroactively change the accepted attack's result or secretly create an action.
+- First proof is **in-memory typed policy and pure intent decisions** using fake scene/narration records, including conflicting preferences, private note exclusion, explicit redirect requests, and rules distinguishing presentation changes from proposed canonical edits. No file writer, UI, model call or real player interaction is part of 016's first slice.
+- The generic file store (010) can hold an opaque preference record without importing 016. The V0.2.1 importer (026) preserves only actual existing preferences; unknown/missing fields stay unknown, never auto-generated.
+- **035 Minimal Text Scene Runner owns the first working text pause/skip/redirect execution.** It consumes 016's policy, the Wave 1 intent router and player authority, preserves already accepted outcomes, and provides a visible correction. Audio, cooperative private settings and full interactive UI come later.
+
+See [Wave 2 handoffs](../WAVE2_HANDOFFS.md#session-zero-boundary-016--026--035).
 
 ## Open questions
 - What is private versus visible to other players/GM?

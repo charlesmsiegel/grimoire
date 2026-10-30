@@ -21,6 +21,10 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 **Obligations**
 - Pairing keys and device credentials live under reserved `grimoire.security` roots, and a peer device is a non-owner principal that cannot issue approvals for this library (007, [tool authority](../../TOOL_AUTHORITY.md#requirements-on-later-sprints)).
 
+## Wave 2 handoff: revision-safe transfers
+
+Consume 010's guarded record-envelope API and 019's device ancestry and conflict protocol; the input stream may contain images, but it must not infer image ownership from a raw blob hash. Authentication is independent of content-sourced permissions. The first peer transfer can use a testable reachable transport; synchronization completeness is reported only after the staged revision and all referenced blobs/placements are verified. Offline conflict preservation is guaranteed by 019; Wave 7 owns semantic resolution. No hidden dependency on a particular sync vendor, always-on server or V1 library.
+
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove?
 - Which optional later integrations can stay outside the first slice?

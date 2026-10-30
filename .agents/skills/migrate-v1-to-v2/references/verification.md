@@ -1,5 +1,23 @@
 # Migration preview, acceptance and recovery tests
 
+## Wave 2 read-only inventory acceptance
+
+**This gate is prior to and independent of Wave 4's canonical import apply.** A complete skill document does not satisfy it; Sprint 011 must ship runnable source inspection and a versioned machine-readable report.
+
+Use a synthetic, frozen V0.2.1-format library containing two same-named records in distinct source scopes, a Character Card V3 with two versions, a PC, a group/lore item, a scene with explicit authorship, one image object referenced by *two different slots* (avatar and outfit/expression), an independently placed gallery image, one hidden/inherited placement, a dangling reference, and an ambiguous legacy path.
+
+Pass conditions for the Wave 2 scanner:
+
+1. Runs using an **explicit V1 source** without configuring V2 to point at it; validates source/destination separation with `check_migration_paths`. Neither source nor default destination gains a file, directory, cache or modified timestamp because of scanning.
+2. Produces deterministic, schema-versioned manifest + understandable review output, with exact V1 relative paths, proposed `LegacyId`→source-qualified mapping, unsupported fields and alias/name collisions.
+3. Records each image **blob**, decoded picture **object**, and **placement occurrence** separately (including role, name, focus, subject, version, scope, gallery, expression/outfit and hide/override state). Two placements can reference one picture object; neither becomes an image-path string pasted onto the wrong actor.
+4. Preserves source-private evidence and exact scene text without promoting a transcript mention into an actor's actual knowledge.
+5. Reports invalid/ambiguous paths (including Unicode normalization collisions and rejected zero-width characters) and broken/dangling image references without guessing a replacement.
+6. Refuses external symlink traversal, corrupt records and unsupported formats safely; rerunning is idempotent and source input hashes remain unchanged.
+7. Makes **zero network/model requests** and no paid inference calls; if a future optional analyzer is proposed, it is a separate opt-in operation with a visible budget and reviewable output.
+
+**This preview must not call the V2 canonical writer.** Wave 4 owns staged asset copying, approval, apply, crash recovery and rendering verification. The skill remains merely a specification until the runnable scanner has passed the above tests.
+
 ## Before any apply
 
 - Confirm V1 source snapshot is idle and consistent, and V2 target is separate; the original source must remain read-only throughout.

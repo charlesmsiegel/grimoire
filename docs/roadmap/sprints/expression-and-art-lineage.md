@@ -21,6 +21,10 @@ A goblin individual's custom outfit does not alter its species or another indivi
 ## Independence and interfaces
 Uses present asset management; image generation is a separate optional producer and VN is a separate consumer.
 
+## Wave 2 handoff: imported art traceability
+
+Consume 018's image-object/placement contract, 022's source/instance effective view and **026's verified V1 import receipts**. The first proof must be a source-backed portrait plus multiple expression/outfit placements that retain their **per-version crop, logical role, provenance and override/hide state**. A missing picture must remain an explicit unresolved placement, not a different actor's file found by name. No additional copy of an identical image blob is required and no implicit remote downloads or image-generation calls occur.
+
 ## Open questions
 - Which variants are inherited by default?
 - What asset format and scale constraints suit Android?

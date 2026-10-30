@@ -24,6 +24,10 @@ A character gives away a key mid-scene: the next reply knows it is gone; wrap-up
 ## Independence and interfaces
 Owns timing and acceptance policy, not file journaling internals or mechanics legality; can use current local records before generalized transactions.
 
+## Wave 2 handoff: accepted state versus narration
+
+Consume generic 010 record revisions and the Wave 1 PC-authority decision policy. Do not reinterpret 012's witnessed claims as committed physical events. An effect must have a stable accepted operation/event identity, preconditions and one-time publication; speculative narrator prose and a proposed player action cannot write canonical state. Durable event receipts become compatible with 020's independent evidence persistence after Wave 3 interfaces land; 030 owns cross-file exactly-once crash recovery. The first step must not require a V1 wrap-up API (none exists on V2).
+
 ## Open questions
 - Which narrations imply immediate accepted truth, and which require player review?
 - What is the undo contract for rewinding an earlier turn?

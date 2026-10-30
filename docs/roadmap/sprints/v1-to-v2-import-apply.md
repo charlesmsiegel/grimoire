@@ -22,6 +22,14 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 - Workers that parse V0.2.1 content get untrusted handles; the V1 library is an explicit, read-only source with no address in the V2 namespace, and the destination passes `check_migration_paths` (001, 007).
 - Imported links keep their V0.2.1 origin through `LegacyIdMap`, and a fork/import round trip preserves source-qualified references in the identity text forms (002 milestone 3).
 
+## Wave 2 handoff: consume the executable inventory
+
+Input to 026 is the **reviewed, versioned, deterministic manifest produced by 011's executable read-only V0.2.1 scanner**, not ad-hoc traversal or a second set of character/scene/image parsers. Explicit approval maps each `LegacyId` to a source-qualified authored definition/portrayal and an independent campaign instance; ambiguous or unsupported assets remain unresolved. 010 provides the only canonical record writer, 017 typed relations, 018 image objects/placements, 020 accepted events/evidence, 022 effective resolution and 016 optional content-boundary preservation. 026 must not invent a campaign's private beliefs from transcript presence.
+
+The first **apply** proof uses one synthetic V1 world with two NPCs, one PC, a short scene, alternate portrayal and an image object reused by an avatar and expression slot. It stages bytes and metadata, verifies object hashes and per-placement crop/outfit/hidden semantics (or explicitly flags unsupported parts), writes only to an isolated V2 destination, and records a recoverable source→destination identity/revision receipt. Running it twice makes no duplicate actors, events, images or graph links; existing V2 edits and the immutable V1 source remain unchanged. No automatic paid model interpretation or remote image fetch.
+
+No Wave 2 sprint is allowed to write V2 canonical import state: 011 produces a **report only**. This sprint is its first authorized apply consumer. See [Wave 2 handoffs](../WAVE2_HANDOFFS.md#wave-2-exit-gate-two-independent-proofs).
+
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove?
 - Which optional later integrations can stay outside the first slice?

@@ -29,6 +29,10 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 **First-proof additions**
 - Extract atomic claims (domain, subject) from generated prose with a labeller that is not the narrator, and run them through `review_narration` (003). Route possible mislabels to review: a claim given an NPC subject that speaks for a PC, or PC speech bundled into an adjudicated outcome, cannot be struck or flagged through the player's correction flow today ([player sovereignty](../../PLAYER_SOVEREIGNTY.md)).
 
+## Wave 2 handoff: verify output, do not own state
+
+The first 047 claim labeller is **independent of the NPC/narrator generation call**. It consumes the Wave 1 player-sovereignty claim checker, 012's epistemic policy, 017's relation graph and accepted effects, distinguishing PC authorship overreach from a reported false claim or narrator metaphor. Return source-anchored findings to the player/referee rather than silently changing text or replaying an effect. A review **cannot grant** a hidden NPC fact or a new PC commitment. Additional billed critique is opt-in and transparently metered; deterministic contradiction checks come first.
+
 ## Open questions
 - When may a repair be automatic?
 - What confidence threshold avoids ruining deliberate ambiguity?

@@ -11,7 +11,7 @@
 - Filter prompt and retrieval inputs without leaking a secret through another cast member.
 
 ## Milestones
-1. Model one event witnessed by only two of several characters.
+1. Define and test a typed in-memory evidence contract for a private event, two actual observers, a bystander and a distorted report; produce actor- and director-specific read projections.
 2. Respect perspective in prompt selection and dialogue.
 3. Represent conflicting evidence, unreliable narration and later revelations.
 
@@ -23,6 +23,18 @@ An unseen NPC cannot mention a private betrayal; after being told a distorted ve
 
 ## Independence and interfaces
 The evidence schema is owned here; Context Retrieval and Relationships consume it. An initial source-aware event audience is enough.
+
+## Wave 2 evidence contract and boundaries
+
+Produce an immutable evidence/claim vocabulary (the exact dataclass/wire spelling is this sprint's choice) that can express: stable event/claim/evidence IDs; originating source; actual observer or communication recipient; delivery/witness confirmation; channel (e.g. witnessed, overheard, reported, written, telepathic); time and scene/turn ordering; audience/privacy; assertion status; evidence provenance; and an actor's uncertain or false **belief** distinct from canonical event truth.
+
+- Test at least: a private betrayal witnessed by two actors, an absent actor who cannot reference it, a third actor **told a false version** who may believe the claim without making it true, and subsequent corrected/rejected beliefs. Merely being in an organization or connected by graph edges must not give secret knowledge.
+- An **access rule** is not a **truth rule**. Sharing an artifact of evidence need not disclose all underlying facts. One narrator/GM query may read established truth, while an actor query sees only authorized perceptions and supported beliefs. Use explicitly authorized perspective parameters, not ad-hoc filtering after a global read.
+- The first proof is **deterministic, in-memory and provider-free**. No new per-actor LLM call is needed to decide simple witnessed/recipient visibility, and there is no persistence in 012.
+- Provide a frozen consumer contract for 017 graph visibility, 020 evidence persistence, 027 per-NPC context, 031 bounded retrieval and 032 private messages. These consumers must not invent a rival definition of "knows" or infer it from connectivity.
+- A scene transcript has text and speakers but does **not** automatically prove who heard an off-stage, private or telepathic line.
+
+See [Wave 2 handoffs](../WAVE2_HANDOFFS.md#observationevidence-boundary-012--017--020).
 
 ## Open questions
 - How explicit must belief and uncertainty be?
