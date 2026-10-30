@@ -21,7 +21,7 @@ A name, a legacy V1 slug or an inherited portrayal is never identity. Two defini
 
 The scheme makes the three forms mutually unambiguous. `parse_ref` dispatches on it. Parsing **rejects rather than normalizes**: whitespace, uppercase, non-ASCII, empty segments and stray separators are all errors. So `parse(str(x)) == x` exactly.
 
-`CampaignActor.ref` is the actor's `InstanceRef`. Campaign and actor IDs on actors, control assignments, events, observations and beliefs obey the segment grammar.
+`CampaignActor.ref` is the actor's `InstanceRef`. Campaign and actor IDs on actors and control assignments obey the segment grammar, as do all [knowledge](KNOWLEDGE.md) record IDs; evidence holders and other actors there are `InstanceRef`s.
 
 ## Revisions, pins and portrayals
 
