@@ -84,6 +84,7 @@ A `LegacyId` is an explicit archive ID plus an exact source-relative POSIX path,
 - there is no lookup by slug or name.
 
 Known review hazards for the migration sprints, none of them resolved automatically:
+- V1 file names containing format characters (zero-width joiners in emoji, direction marks, soft hyphens) cannot get a `LegacyId` in this slice; the importer must list them for review instead of guessing;
 - NFC and NFD spellings of one V1 path produce two IDs;
 - the same slug can appear under `pcs/` and under `worlds/<w>/characters/`;
 - campaign overlay copies of world records;
