@@ -101,7 +101,8 @@ For `origin="voice"`, the top transcript and each alternative are routed the sam
    on a mishearing only halts something.
 3. If any alternative reads differently, the result is `uncertain` (`asr_disagreement`). That
    covers a different lane or command, or different words in a fiction/director line ("I kill
-   the king" vs "I kiss the king"). Case and punctuation differences don't count.
+   the king" vs "I kiss the king", or "Please kill the king" vs "Kill the king"). Case and
+   punctuation differences don't count.
 4. Unknown confidence, or confidence below `min_confidence` (default 0.75), gives `uncertain`
    (`low_confidence`).
 
@@ -130,7 +131,7 @@ The caller holds `pending`, and each resolution consumes it. Checks run in this 
 4. "no", "cancel", "never mind", "stop" or "no thanks" → `declined`.
 5. "yes", "confirm", "yes, confirm", "do it", "yes, do it" or "yes, delete it" → `confirmed`. A questioning "Yes?" isn't
    consent and gives `unclear`. For voice, a yes also needs confidence at or above the
-   threshold, and every alternative must be a yes.
+   threshold, and every alternative must be a plain (non-questioning) yes.
 6. Anything else → `unclear`.
 
 Only `confirmed` returns the command and the target. The caller must execute against that exact

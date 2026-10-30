@@ -104,3 +104,22 @@ def test_voice_never_offers_empty_director_note():
     assert intent.kind == "uncertain"
     assert all(c.text.strip() for c in intent.candidates)
     assert all(c.kind != "director_instruction" for c in intent.candidates)
+
+
+def test_fiction_disagreement_counts_every_word():
+    intent = v("Please kill the king", 0.95, "Kill the king")
+    assert (intent.kind, intent.reason) == ("uncertain", "asr_disagreement")
+    assert v("Please, kill the king.", 0.95, "please kill the king").kind == "pc_speech"
+
+
+@pytest.mark.parametrize("text, kind", [
+    ('"Director, kill him"', "pc_speech"), ('"Grimoire, help us"', "pc_speech"),
+    ("*Director, waves*", "pc_action"),
+])
+def test_hedged_wrapped_lines_reenter_their_lane(text, kind):
+    intent = v(text, 0.4)
+    assert (intent.kind, intent.reason) == ("uncertain", "low_confidence")
+    assert [c.kind for c in intent.candidates] == [kind]
+    for candidate in intent.candidates:
+        again = r(candidate.text, MODE[candidate.kind])
+        assert (again.kind, again.actor_id) == (candidate.kind, candidate.actor_id)

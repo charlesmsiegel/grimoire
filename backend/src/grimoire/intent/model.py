@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Literal, get_args
 
 from .commands import Command
-from .text import grammar_form
+from .text import word_form
 
 InputMode = Literal["auto", "command", "speech", "action", "director"]
 Origin = Literal["keyboard", "voice"]
@@ -116,5 +116,5 @@ def signature(intent: Intent) -> tuple[str, str | None, str | None, str | None]:
         intent.kind,
         command.name if command else None,
         command.argument.lower() if command and command.argument else None,
-        grammar_form(intent.text) if intent.kind in _TEXT_SIGNED_KINDS else None,
+        word_form(intent.text) if intent.kind in _TEXT_SIGNED_KINDS else None,
     )

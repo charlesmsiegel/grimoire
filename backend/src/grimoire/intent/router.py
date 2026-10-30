@@ -226,12 +226,27 @@ def _readings(intent: Intent) -> tuple[Intent, ...]:
     return (intent,)
 
 
+_REENTRY_WRAP = {"pc_speech": ('"', '"'), "pc_action": ("*", "*"),
+                 "director_instruction": ("Director, ", "")}
+_KIND_LANE = {"pc_speech": None, "pc_action": None, "director_instruction": "director"}
+
+
+def _reentrant(reading: Intent) -> Intent:
+    """Wrap a reading whose text starts with another lane's marker, so it re-enters."""
+    lane, separated = marker_of(reading.text)
+    if reading.kind not in _KIND_LANE or not separated or lane == _KIND_LANE[reading.kind]:
+        return reading
+    open_, close = _REENTRY_WRAP[reading.kind]
+    return _intent(reading.kind, f"{open_}{reading.text}{close}", reading.reason,
+                   actor_id=reading.actor_id)
+
+
 def _hedge(top: Intent, alternatives: list[Intent], reason: str) -> Intent:
     """`top` downgraded to uncertain, offering each distinct reading once."""
     candidates: dict[tuple, Intent] = {}
     for reading in (top, *alternatives):
         for candidate in _readings(reading):
-            candidates.setdefault(signature(candidate), candidate)
+            candidates.setdefault(signature(candidate), _reentrant(candidate))
     return _intent("uncertain", top.text, reason, candidates=tuple(candidates.values()))
 
 

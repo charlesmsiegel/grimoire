@@ -97,3 +97,8 @@ def test_validation(build):
 @pytest.mark.parametrize("text", ["Yes?", "yes ?", "Confirm?", "do it?"])
 def test_questioning_yes_is_not_consent(text):
     assert answer(text).status == "unclear"
+
+
+def test_questioning_alternative_is_not_consent():
+    result = answer("yes", origin="voice", confidence=0.95, alternatives=("Yes?",))
+    assert result.status == "unclear"

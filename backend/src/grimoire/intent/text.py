@@ -31,9 +31,14 @@ def norm(text: str) -> str:
     return _SPACE.sub(" ", straighten(text).lower()).strip()
 
 
+def word_form(text: str) -> str:
+    """Every word, ignoring case and punctuation: compares fiction readings."""
+    return _SPACE.sub(" ", _GRAMMAR_PUNCT.sub("", norm(text))).strip()
+
+
 def grammar_form(text: str) -> str:
-    form = _SPACE.sub(" ", _GRAMMAR_PUNCT.sub("", norm(text))).strip()
-    return form.removeprefix("please ")
+    """`word_form` without a leading polite "please": matches commands."""
+    return word_form(text).removeprefix("please ")
 
 
 def first_word(text: str) -> str:

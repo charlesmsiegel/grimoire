@@ -72,12 +72,17 @@ def request_confirmation(intent: Intent, *, target: str, now: float,
                                f"{label.capitalize()}? Say 'yes' to confirm or 'no' to cancel.")
 
 
+def _consents(text: str) -> bool:
+    """A plain yes; a questioning "Yes?" isn't consent."""
+    return grammar_form(text) in _CONFIRM and not straighten(text).strip().endswith("?")
+
+
 def _confident_yes(utterance: Utterance, context: RoutingContext) -> bool:
     if utterance.origin == "keyboard":
         return True
     return (utterance.confidence is not None
             and utterance.confidence >= context.min_confidence
-            and all(grammar_form(text) in _CONFIRM for text in utterance.alternatives))
+            and all(_consents(text) for text in utterance.alternatives))
 
 
 def resolve_confirmation(pending: PendingConfirmation, utterance: Utterance, *, now: float,
@@ -90,10 +95,8 @@ def resolve_confirmation(pending: PendingConfirmation, utterance: Utterance, *, 
         return ConfirmationResult("stale")
     if utterance.mode not in ("auto", "command"):
         return ConfirmationResult("unclear")
-    answer = grammar_form(utterance.text)
-    if answer in _DECLINE:
+    if grammar_form(utterance.text) in _DECLINE:
         return ConfirmationResult("declined")
-    questioning = straighten(utterance.text).strip().endswith("?")
-    if answer in _CONFIRM and not questioning and _confident_yes(utterance, context):
+    if _consents(utterance.text) and _confident_yes(utterance, context):
         return ConfirmationResult("confirmed", pending.command, pending.target)
     return ConfirmationResult("unclear")
