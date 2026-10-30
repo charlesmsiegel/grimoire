@@ -177,10 +177,11 @@ def _realpath(path: Path) -> Path:
     """`path` with every existing link followed. Python 3.13's `Path.resolve`
     returns a looping path unchanged, so this asks `realpath` strictly first."""
     try:
-        return Path(os.path.realpath(path, strict=True))
-    except (FileNotFoundError, NotADirectoryError):
-        return Path(os.path.realpath(path))
-    except (OSError, RuntimeError, ValueError) as error:  # ValueError: an embedded NUL
+        try:
+            return Path(os.path.realpath(path, strict=True))
+        except (FileNotFoundError, NotADirectoryError):
+            return Path(os.path.realpath(path))
+    except (OSError, RuntimeError, ValueError) as error:  # ValueError: a NUL or unencodable name
         raise LibraryPathError(f"cannot resolve {path}: {error}") from error
 
 
@@ -259,9 +260,12 @@ def _pointer_library(home: Path) -> Path | None:
         # stat is refused before it is read (and the non-blocking open means a
         # swapped-in FIFO cannot hang us first).
         _require_small_file(os.fstat(fd), unusable)
-        chunks = []
-        while chunk := os.read(fd, _POINTER_MAX_BYTES + 1):
+        chunks, size = [], 0
+        while size <= _POINTER_MAX_BYTES and (chunk := os.read(fd, _POINTER_MAX_BYTES + 1 - size)):
             chunks.append(chunk)
+            size += len(chunk)
+        if size > _POINTER_MAX_BYTES:  # it grew after the stat
+            raise unusable("is not a small regular file")
         text = b"".join(chunks)
     except OSError as error:
         raise unusable(f"cannot be read ({error})") from error

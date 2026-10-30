@@ -603,3 +603,27 @@ def test_non_path_values_raise_library_errors(home, tmp_path):
         check_write_destination(None, environ={}, home=home)
     with pytest.raises(LibraryPathError):
         resolve_library(environ={"GRIMOIRE_HOME": b"/x"}, home=home)
+
+
+def test_pointer_that_grows_after_the_stat_is_refused(home, monkeypatch):
+    write_pointer(home, {"data_dir": "/x"})
+    real_read = os.read
+
+    def endless(fd, n):  # another process appending as fast as we read
+        return b" " * n if n else real_read(fd, n)
+    monkeypatch.setattr(paths.os, "read", endless)
+    with pytest.raises(V1IsolationError, match="not a small regular file"):
+        resolve_library(environ={}, home=home)
+
+
+@pytest.mark.parametrize("where", ["pointer", "GRIMOIRE_HOME", "GRIMOIRE_V2_HOME", "destination"])
+def test_unencodable_paths_raise_library_errors(home, tmp_path, where):
+    bad = str(tmp_path / "missing" / "x\ud800")
+    with pytest.raises(LibraryPathError):
+        if where == "pointer":
+            write_pointer(home, '{"data_dir": "/missing/x\\ud800"}')
+            resolve_library(environ={}, home=home)
+        elif where == "destination":
+            check_write_destination(bad, environ={}, home=home)
+        else:
+            resolve_library(environ={where: bad}, home=home)
