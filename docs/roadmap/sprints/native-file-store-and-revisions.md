@@ -3,7 +3,7 @@
 **Outcome:** Native canonical Markdown/JSON records support definitions and campaign instances independently, with stable references and safe revisioned writes.
 
 ## Scope and first proof
-Persist one definition and two divergent campaign instances; reopen them; preserve unknown authored fields; reject a stale write.
+Implement a **facet-agnostic** Markdown/JSON record-envelope reader/writer for one authored definition and two independent campaign instances. Round-trip stable source-qualified addresses, owner/source-head/link metadata and unknown authored fields; detect stale expected revisions, broken references and conflicting writes; prove recovery with the Wave 1 fault harness.
 
 ## Subsequent milestones and moonshot
 Versioned snapshots and change journals, atomic replacement, external edit handling and guarded cross-file mutations.
@@ -28,6 +28,20 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 **First-proof additions**
 - Persist source owners, declared heads and links (with `declared_by`); reopening after an add-on is removed keeps its references byte-identical and reports `missing_source` (002's "retain origin, version, owner and broken-reference information in human-editable files").
 - Prove the writer with the [fault harness](../../TESTING.md) (`explore_crashes(..., errors=True, recovery_crashes=True)`), replacing the harness's synthetic reference writers (006).
+
+## Wave 2 generic envelope and ownership rules
+
+The file writer is generic: a validated Wave 1 `SourceRef` or `InstanceRef` address, namespace/scope and owner, format/schema version, content revision, expected write revision, opaque authored payload, and lossless unknown-field preservation. Source heads, source-declared links and broken references must retain attribution and exact spelling after reopening. `010` owns the concrete file schema and its revision/write API, but **must not import 009's entity facet classes** or decide whether a record is a Character, PC, Creature or Item. No character-card field becomes a compulsory low-level store column.
+
+**The first-slice implementation must also:**
+
+- Reject V1 path and symlink/junction traversal **at the write boundary** using `grimoire.library`, including a V2 `worlds` directory that is a link to V1. Revalidate the selected root and every resolved descendant at session start and before publishing. Preserve direct-edit conflict evidence rather than auto-overwriting an authored file.
+- Enforce source ownership on import: a source may declare heads/links for its own source only; invalid `declared_by` cannot smuggle another owner's revisions.
+- Provide narrow persistence of security grants/approvals/audit and PC delegations/corrections **without** implementing the later permission UI, scene executor or model writer. Use explicit authorization and audit preconditions for mutating operations.
+- Run the **actual writer** under `grimoire.testing.explore_crashes` with I/O errors, recovery crashes and adversarial external edits. Test old/new record visibility, missing head, stale compare-and-swap, crash after publication, no V1 write, unknown-field round trip and two divergent campaign instances.
+- Define the source-base/revision retention needed later by 019 device sync, 022 snapshots and 042 selective rebase. Do not make sync's vector/concurrent-edit protocol a hidden 010 dependency.
+
+**Parallelism:** 010 accepts opaque payloads and has no dependency on the unfinished 009 data model. 009 independently validates domain facets; Wave 3 consumers join the two through codecs. See [Wave 2 handoffs](../WAVE2_HANDOFFS.md#generic-record-envelope-boundary-009--010).
 
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove?

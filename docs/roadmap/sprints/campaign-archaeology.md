@@ -32,6 +32,10 @@ Two same-named actors and a telepathic private exchange occur in one imported tr
 
 Consumes first [V1 import/apply](v1-to-v2-import-apply.md), native files and scene evidence. Owns historical transcript reconstruction, not image conversion or basic V1 source reading.
 
+## Wave 2 handoff: evidence-aware reconstruction
+
+Accept 011's exact V1 source inventory and 026's approved identity/scene mapping. Use 012's access-versus-belief distinction: an old transcript line is evidence that the narrator **wrote** it, not proof that every named character observed it. Preserve original passages and provenance; proposed historical belief/relationship edges remain reviewable suggestions until accepted. Do not rescan images using a new ID scheme or run the V1 absorb pipeline to fabricate extra prose.
+
 ## Open questions
 
 - What can safely be inferred from an unstructured transcript?

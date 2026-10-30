@@ -21,6 +21,10 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 **First-proof additions**
 - Prove keep-both conflicts under `explore_crashes` with `Interleave`/`meddle` on replica roots, and add the `preserves_interleave` built-in invariant. Wave 1's "repeatable faults for native record and sync writes" delivered only a synthetic replica copy (006).
 
+## Wave 2 handoff: stable revision and source metadata
+
+Use 010's generic revisioned envelopes and compare-and-swap, **not** 009's entity-specific serializer and not 042's semantic source-rebase implementation. Device synchronization must distinguish *device edit ancestry* from *world/campaign source inheritance*. Keep deleted records/tombstones and missing ancestors as named conflicts; clocks/timestamps cannot decide a winner. Exercise the first transport-free divergent-copy scenario and keep-both behavior with 006's fault harness and 010's actual writer. Do not claim two-device network transport is complete here (028 owns it).
+
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove?
 - Which optional later integrations can stay outside the first slice?

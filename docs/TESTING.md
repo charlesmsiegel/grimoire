@@ -120,6 +120,8 @@ Not simulated:
 
 ## CI gate
 
+**Wave 2 entry rule:** require a completed green integration-head check for **all** configured jobs before another PR is merged into `v2`. Without a GitHub-side required-checks rule and up-to-date branch enforcement (or a merge queue), individually passing PRs are not enough: rebase or test their exact merged combination against the current `v2` first. **Repository owner action is still needed** to configure protection; adding these words does not enable a branch rule. See [Wave 2 handoffs](roadmap/WAVE2_HANDOFFS.md#wave-2-entry-gate).
+
 Every job in `.github/workflows/ci.yml` is meant to be required, and `v2` must be green at every commit. Wave 1 showed why: eight PRs each passed against an older `v2` and merged within minutes, and their combination was red. Windows first ran Sprint 001's tests when Sprint 006 added the matrix, and then every OS rejected Sprint 002's code under Sprint 006's purity allowlist. Because `v2` has no branch protection, red checks did not block later merges. The repository owner should configure `v2` to require every `domain` and `compat` check, with either "require branches to be up to date before merging" or a merge queue (the workflow already listens for `merge_group`). Then a PR is tested against the `v2` it will actually join.
 
 ## Policies (answers to the sprint's open questions)

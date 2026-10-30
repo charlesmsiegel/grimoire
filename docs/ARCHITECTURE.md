@@ -57,6 +57,18 @@
 
 The actual file names and graph schema remain subject to the native-storage sprint. Data files must remain usable by humans and external agents. Derived indexes, embeddings and cached actor views are disposable and may not become a second canonical store.
 
+## Wave 2 independent domain and storage contracts (planned)
+
+The authoritative first-slice ownership and acceptance rules are in [Wave 2 handoffs](roadmap/WAVE2_HANDOFFS.md). This section is a design decision, **not** an assertion that the V2 headless runtime already implements it.
+
+- **Entity type versus persistence:** `009` owns native typed, compositional entity definitions/instances and the mapping from actor control roles to `InstanceRef`; the low-level store `010` reads/writes **generic source-qualified record envelopes** with revision preconditions and opaque authored payloads. It is intentionally not a `CharacterCardRecord`, a special `PC` writer or a universal graph database. Both sprints independently consume Wave 1 identity and can develop concurrently; 022 joins their interfaces in Wave 3.
+- **Read-only legacy inspection:** `011` must be a **runnable V0.2.1 inventory scanner** with a deterministic, source-faithful manifest separating legacy picture objects, bytes and occurrence-specific art placements. It does not write canonical V2 records and does not wait for 009/010. The migration skill is currently procedural only; 026 owns the first reviewed apply.
+- **Knowledge meaning:** `012` owns the typed, in-memory *actual event versus communicated evidence versus private belief* distinction, including who could perceive/receive something, when, by which channel and from what source. A reachable graph edge **never** grants access. 017 consumes this policy for graph traversal; 020 makes it persistent; 032 owns delivery.
+- **Inference economics:** `013` ports an executable, planned-call/authorized provider adapter and a fault fake; `014` owns portrayal-specific voice evidence without a provider dependency; `015` measures actual V0.2.1 provider-reported cost using synthetic inputs and establishes a compatible `story-quality/2` format. These run in parallel, then 027 composes individually generated NPC responses in Wave 4. Optional analysis calls remain off by default.
+- **Content boundaries:** `016` supplies optional typed content/participation policy and *safe intents* to pause, skip or redirect; actual text-play execution belongs to the Wave 5 runner `035`. Changing presentation cannot change an already adjudicated outcome.
+
+Wave 2's independent exit proofs are both **native revisioned storage with typed definitions/instances** and a **working, read-only V0.2.1 asset inventory**. Model/provider and narrative contracts have additional first-slice tests; none makes V2 playable before Wave 5.
+
 ## Root change, world adaptation and campaign evolution
 
 A world may directly define a character or explicitly adapt a catalog definition. Each campaign instance retains its source relation, retained common-ancestor revision and independently accumulated state. Possible policies: **follow compatible fields, review/merge, pin revision, detach, promote selected authored changes upstream**. A three-way merge needs actual base content, not just hash equality. A correction to a source's childhood story cannot rewrite accepted campaign history; changes to one campaign never automatically import another's private memories or bonds.

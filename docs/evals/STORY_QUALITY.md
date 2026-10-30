@@ -18,7 +18,7 @@ The shipped benchmark lives in `backend/src/grimoire/evals/benchmarks/guild_betr
 baseline is a **synthetic, hand-authored imitation of V0.2.1's call shape** (one RP call per
 speaking NPC plus narration), not a measurement of V0.2.1. A pass against a synthetic run prints
 "no regression against a synthetic baseline — not a cost/quality certification". Measured V0.2.1
-billed-token capture is sprint 015.
+billed-token capture is sprint 015. Its **first proof must include a runnable, explicitly opted-in real V0.2.1 capture**, not just synthetic fixtures. Ordinary CI never invokes a paid provider, and synthetic fixtures can never be relabeled measured.
 
 ## Divergence from the inference contract
 
@@ -41,7 +41,7 @@ instead:
 This is an **eval-only interchange format**, not V2 library storage. The authorship (sprint 003)
 and call-accounting/flag (sprint 004) contracts have landed; this format does not yet follow them
 everywhere (see [Divergence from the inference contract](#divergence-from-the-inference-contract)).
-Reconciling them is a `/2` format bump. Parsing is strict: unknown or duplicate keys, `NaN`/`Infinity`, booleans as numbers,
+Reconciling them is a `/2` format bump. **Wave 2's Sprint 015 owns that interchange upgrade** using the accepted Wave 1 inference policy and ledger. The upgrade must make missing usage distinguishable from zero and verified receipts distinguishable from self-declared `"measured"`. Preserve the ability to recognize `/1` without silently changing its meaning; narration stage semantics are agreed explicitly with 027 before actual runtime calls. Parsing is strict: unknown or duplicate keys, `NaN`/`Infinity`, booleans as numbers,
 dangling references and malformed ids are located errors (`run.turns[0].contributions[1].call_id:
 ...`).
 

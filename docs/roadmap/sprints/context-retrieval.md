@@ -21,6 +21,12 @@ A scene with six NPCs receives pertinent lore but not a forgotten continent's en
 ## Independence and interfaces
 Consumes existing indexed search and context assembly; advanced knowledge provenance helps, but can be introduced incrementally.
 
+## Wave 2 handoff: graph + evidence + effective world
+
+Consume 012's actor visibility/claim evidence, 017's bounded typed graph queries and 022's revision-consistent effective world. A connection in the graph does not give an NPC the connected node's secrets; a rumor is evidence of a report, not of truth. Assemble per-actor compact context deterministically, with provenance and token budget. Optional embeddings or reasoning require explicit provider policy and usage accounting.
+
+**Parallelism in Wave 4:** 027 owns minimally sufficient actor context and actual separate NPC calls; 031 owns optional richer retrieval/prompt packing through a stable extension interface. Do not make 027's first useful slice depend on completing 031 in the same wave.
+
 ## Open questions
 - What relevance signals beat full-text/embedding baselines?
 - How should context budget be divided?

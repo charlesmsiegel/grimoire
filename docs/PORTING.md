@@ -9,18 +9,24 @@
 - **Authority:** portable native Markdown/JSON, stored scene text, events, typed relations, image placement associations and reviewed mappings. Never import cache, credentials, logs or inferred private details as facts.
 - **Cost:** source scanning, image mapping, graph building and ordinary migration verification do not call paid models. Optional content extraction is explicitly consented and billed.
 
-The repository includes an *early migration skill specification*, [`migrate-v1-to-v2`](../.agents/skills/migrate-v1-to-v2/SKILL.md), with [V1 file mapping](../.agents/skills/migrate-v1-to-v2/references/v1-layout.md), [art/expressions](../.agents/skills/migrate-v1-to-v2/references/images.md) and [verification](../.agents/skills/migrate-v1-to-v2/references/verification.md). It is **not yet an implemented importer**.
+The repository includes an *early migration skill specification*, [`migrate-v1-to-v2`](../.agents/skills/migrate-v1-to-v2/SKILL.md), with [V1 file mapping](../.agents/skills/migrate-v1-to-v2/references/v1-layout.md), [art/expressions](../.agents/skills/migrate-v1-to-v2/references/images.md) and [verification](../.agents/skills/migrate-v1-to-v2/references/verification.md). **Neither executable scanning nor import/apply is implemented at this baseline.** Wave 2 must deliver the executable read-only scanner, while the canonical writer and guarded import/apply are separately owned by 010 and 026. See [Wave 2 handoffs](roadmap/WAVE2_HANDOFFS.md).
 
 ## Migration milestones in delivery order
 
 | Gate | Deliverable |
 |---|---|
 | Wave 1 | V2 library-path resolver, source-qualified IDs and cost/authority contracts |
-| Wave 2 | Composable entity/instance model, canonical file revisions and a read-only **V1 inventory plan** |
+| Wave 2 | Composable entity/instance model, generic revisioned files and an **executable V1 read-only inventory scanner** with source-ID, scene, image-object/placement and loss reports |
 | Wave 3 | Typed graph/event evidence, shared images/placements and device conflict-safe revisions |
 | Wave 4 | Reviewed **import/apply** of a V1 world plus character/PC versions, images, expressions and an accepted scene; separate per-NPC model generation; app-managed transport |
 | Wave 5 | **Playable desktop text loop** using the imported V1 scenario, with stable persistence and actual token accounting |
 | Wave 6 | **Playable phone client with actual sync/handoff** of scene, picture and actor knowledge to desktop |
+
+## Why early Wave 2 scans matter
+
+The migration agent should be able to inspect a **frozen synthetic V0.2.1 library and output an actual preview** before the V2 relation graph and image writer are finished. The scanner must preserve a source-fidelity manifest (including exact legacy path spellings, ambiguous aliases, card extensions, scene chronology and separate pixel-image objects versus logical placements) without touching V1 or writing destination state. Once the V2 file and media contracts land, sprint 026 reviews/applies this manifest rather than performing a second hidden scan.
+
+The first **interactive** migration test still belongs to Wave 5: import the reviewed actors/art, start a scene, produce **separately generated NPC dialogue**, save and resume. The session-zero content-boundary contract from 016 supplies **optional pause/skip/redirect intents** to 035; it must never rewrite already accepted world events.
 
 ## Port selectively, only behind V2 contracts
 
