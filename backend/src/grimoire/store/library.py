@@ -337,10 +337,11 @@ class _Commit:
 
     def run(self) -> CommitResult:
         self.store._require_consistent()                 # 1. no pending journal
-        staging = self._check_paths()                     # 3. root, links, V1, preflight
-        self._check_revisions()                           # 4. compare-and-swap
-        self._check_names()                               # 5. collisions
-        self._check_sources()                             # 6. loader-consistent sources
+        with self.access.cached_listings():               # steps 3-6 only read
+            staging = self._check_paths()                 # 3. root, links, V1, preflight
+            self._check_revisions()                       # 4. compare-and-swap
+            self._check_names()                           # 5. collisions
+            self._check_sources()                         # 6. loader-consistent sources
         self._authorize()                                 # 7. authorization
         entries = self._stage(staging)                    # 8. directories and temps
         journal = Journal("commit", entries)

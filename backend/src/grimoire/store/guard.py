@@ -76,9 +76,15 @@ class Guard:
         self.root = root
         self.identity = identity
         self.limits = limits or default_limits
+        self._isolated: set[Path] = set()  # directories checked against V1 this session
 
     def check_session(self) -> None:
-        """The root is unchanged and still not, inside or around a V1 library."""
+        """The root is unchanged and still not, inside or around a V1 library.
+
+        Also starts a new check session: every directory is checked against V1
+        again (once) after this call.
+        """
+        self._isolated.clear()
         if is_link(self.root):
             raise LinkRefused(f"library root {self.root} became a link")
         try:
@@ -117,7 +123,9 @@ class Guard:
                 deepest = path
             elif not final:
                 raise UnstorableIdentifier(f"{path} exists but is not a directory")
-        check_write_destination(deepest)  # sees bind mounts that give a V1 directory a name here
+        if deepest not in self._isolated:  # sees bind mounts that give a V1 directory a name here
+            check_write_destination(deepest)
+            self._isolated.add(deepest)
         if staging_device is not None and _stat(deepest).st_dev != staging_device:  # type: ignore[union-attr]
             raise CrossDevice(f"{path} is on a different filesystem from the staging directory")
         target = self.root.joinpath(*parts)

@@ -244,14 +244,16 @@ def test_deterministic_refusals_happen_before_authorization(tmp_path, monkeypatc
         expected = InvalidSourceState
     elif failure == "cross-device":
         txn.put(SourceManifest("world:harbor2", OWNER), None)
-        real = os.lstat
+        from grimoire.store import guard
+        real = guard._stat
+        world = tmp_path / "lib" / "sources" / "world"
 
-        def other_device(path, *args, **kwargs):
-            info = real(path, *args, **kwargs)
-            if str(path).endswith(os.path.join("lib", "sources", "world")):
+        def other_device(path):  # only the guard's view: the target's directory is on another device
+            info = real(path)
+            if info is not None and Path(path) == world:
                 return os.stat_result((info.st_mode, info.st_ino, info.st_dev + 1, *tuple(info)[3:]))
             return info
-        monkeypatch.setattr(os, "lstat", other_device)
+        monkeypatch.setattr(guard, "_stat", other_device)
         expected = CrossDevice
     else:
         store.close()

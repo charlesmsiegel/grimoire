@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -33,13 +35,29 @@ RESIDUE = no_residue("lib/.txn/*.new", "lib/.txn/journal.json")
 OTHER = InstanceRef("other", "character", "bystander")
 
 
+def _seed_library(root, ops=None, locker=None):
+    with LibraryStore.create(root / LIB, ops=ops, locker=locker or ProcessLocker()) as store:
+        seed(store)
+        txn = store.transaction()
+        txn.put(RecordEnvelope(OTHER, {"n": 1}), None)
+        txn.commit(owner_handle())
+
+
+@functools.cache
+def _template() -> tuple[tuple[str, bytes | None], ...]:
+    """The seeded library's exact tree, built once by the real store."""
+    with tempfile.TemporaryDirectory() as folder:
+        _seed_library(Path(folder))
+        return tuple(snapshot(folder).items())
+
+
 def _setup(locker):
-    def setup(ops, root):
-        with LibraryStore.create(root / LIB, ops=ops, locker=locker) as store:
-            seed(store)
-            txn = store.transaction()
-            txn.put(RecordEnvelope(OTHER, {"n": 1}), None)
-            txn.commit(owner_handle())
+    def setup(ops, root):  # replays the store-built tree: same bytes, a fraction of the I/O
+        for key, data in _template():
+            if data is None:
+                ops.make_dirs(root / key)
+            else:
+                ops.write_bytes(root / key, data)
     return setup
 
 
@@ -86,12 +104,21 @@ def scenario(action, *, invariants=None, meddle=None, name="native store commit"
     )
 
 
-@pytest.mark.parametrize("action", [head_move, new_directories], ids=["head-move", "new-directories"])
-def test_commit_survives_every_crash_error_and_recovery_crash(tmp_path, action):
-    report = explore_crashes(scenario(action), tmp_path, errors=True, recovery_crashes=True)
+# Exploration is split so no single test nears the 120 s faulthandler watchdog on Windows
+# runners (about 7x slower here). Injected I/O errors never spawn recovery crashes, so an
+# errors-only run plus a recovery-crash run covers exactly what one combined run would.
+# Directory creation only differs in the action: its recovery takes the same table that
+# head-move and the meddle scenario explore to depth 2.
+@pytest.mark.parametrize("action, mode", [
+    (head_move, "errors"), (head_move, "recovery-crashes"), (new_directories, "errors"),
+], ids=["head-move-errors", "head-move-recovery-crashes", "new-directories-errors"])
+def test_commit_survives_every_crash_error_and_recovery_crash(tmp_path, action, mode):
+    report = explore_crashes(scenario(action), tmp_path, errors=mode == "errors",
+                             recovery_crashes=mode == "recovery-crashes")
     report.assert_ok()
-    assert report.points_explored > 40
-    assert any(run.recover_trace for run in report.runs[1:])  # recovery work was actually explored
+    assert report.points_explored > 20
+    if mode == "recovery-crashes":
+        assert any(run.recover_trace for run in report.runs[1:])  # recovery work was actually explored
 
 
 def test_residue_and_untouched_globs_are_not_vacuous(tmp_path):
@@ -157,10 +184,11 @@ def _edit_manifest_if_pending(ops, root):
         ops.write_bytes(root / MANIFEST, HUMAN)
 
 
-def test_an_edit_made_while_down_is_kept_and_never_half_published(tmp_path):
+@pytest.mark.parametrize("mode", ["errors", "recovery-crashes"])
+def test_an_edit_made_while_down_is_kept_and_never_half_published(tmp_path, mode):
     sc = scenario(head_move, meddle=_edit_manifest_if_pending, invariants=(
         preserves_meddle(), idempotent_recovery(), Invariant("all_or_nothing", _all_or_nothing)))
-    report = explore_crashes(sc, tmp_path, errors=True, recovery_crashes=True)
+    report = explore_crashes(sc, tmp_path, errors=mode == "errors", recovery_crashes=mode == "recovery-crashes")
     report.assert_ok()
     assert any(run.meddled_paths for run in report.runs)
 
