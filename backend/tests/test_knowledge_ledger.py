@@ -68,6 +68,9 @@ def test_inputs_are_copied_and_order_independent():
      ("evidence:p-orrin",)),
     (dict(propositions=[Proposition(C, "px", "x", at(0), "d", about=(Subject("event", "ghost"),))]),
      "unknown_event", ("proposition:px",)),
+    (dict(events=[Event(C, "later", "later", at(9), "d")],
+          propositions=[Proposition(C, "px", "x", at(3), "d", about=(Subject("event", "later"),))]),
+     "about_future_event", ("proposition:px",)),
     (dict(rulings=[Ruling(C, "r9", "ghost", "unknown", at(3), "director")]),
      "unknown_proposition", ("ruling:r9",)),
     (dict(rulings=[Ruling(C, "r9", "duke-innocent", "unknown", at(1), "director")]),
@@ -161,6 +164,7 @@ def test_removing_cited_evidence_names_both_records_and_never_drops_the_belief()
 def test_first_error_is_independent_of_input_order():
     records = betrayal_records()
     records["rulings"].append(Ruling(C, "r9", "ghost", "unknown", at(3), "director"))
+    records["rulings"].append(Ruling(C, "r-aa", "duke-innocent", "unknown", at(1), "director"))
     records["beliefs"].append(believes("b-a", TAVI, "duke-betrayed", "believed", 5, ["ghost"]))
     records["beliefs"].append(Belief("campaign-b", "b-z", InstanceRef("campaign-b", "character", "x"),
                                      "p", "believed", at(1), "director", ("e",)))
@@ -170,7 +174,7 @@ def test_first_error_is_independent_of_input_order():
         shuffled = {f: random.Random(seed).sample(items, len(items)) for f, items in records.items()}
         error = build_failure(shuffled)
         errors.add((error.reason, error.records))
-    assert errors == {("unknown_proposition", ("ruling:r9",))}
+    assert errors == {("before_proposition", ("ruling:r-aa",))}  # same family: lowest id wins
 
 
 def test_non_records_are_refused():
@@ -201,3 +205,30 @@ def test_propositions_and_rulings_may_rest_on_non_event_subjects():
 def test_about_and_grounds_events_are_kept_but_never_imply_access():
     knowledge = betrayal_knowledge()
     assert BETRAYAL in knowledge.propositions[0].about and ABOUT == knowledge.propositions[0].about
+
+
+@pytest.mark.parametrize("supplied", [None, 3, "evt-q7", RAIN])
+def test_a_family_must_be_an_iterable_of_records(supplied):
+    with pytest.raises(KnowledgeError) as caught:
+        Knowledge(C, events=supplied)
+    assert caught.value.reason == "invalid_record"
+
+
+def test_lookups_fail_as_knowledge_errors_without_echoing_ids():
+    knowledge = betrayal_knowledge()
+    for call, reason in ((lambda: knowledge.event("ghost"), "unknown_event"),
+                         (lambda: knowledge.proposition(TRUTH), "unknown_proposition"),
+                         (lambda: knowledge.proposition(["x"]), "unknown_proposition"),
+                         (lambda: knowledge.subjects_of(TAVI_RAIN), "unknown_evidence")):
+        with pytest.raises(KnowledgeError) as caught:
+            call()
+        assert caught.value.reason == reason and TRUTH not in str(caught.value)
+
+
+def test_a_ledger_pickles_and_copies_to_an_equal_working_ledger():
+    import copy
+    import pickle
+    knowledge = betrayal_knowledge()
+    for clone in (pickle.loads(pickle.dumps(knowledge)), copy.deepcopy(knowledge)):
+        assert clone == knowledge
+        assert clone.event("evt-q7") == knowledge.event("evt-q7")

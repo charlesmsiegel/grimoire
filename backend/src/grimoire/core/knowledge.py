@@ -18,7 +18,6 @@ from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Union
 
 from .identity import InstanceRef, SourceRef, validate_segment
 from .model import _nonempty
@@ -69,11 +68,10 @@ def _guarded(record: object, family: str, record_id: object, check) -> None:
     except KnowledgeError:
         raise
     except (ValueError, TypeError):
-        failed = True
+        pass
     else:
-        failed = False
-    if failed:
-        raise KnowledgeError("invalid_record", _name(family, record_id))
+        return
+    raise KnowledgeError("invalid_record", _name(family, record_id))
 
 
 def _strict_bool(value: object) -> None:
@@ -104,6 +102,8 @@ def _actor(value: object, campaign_id: str, name: tuple[str, ...]) -> None:
 
 
 def _segments(owner: object, label: str) -> None:
+    if isinstance(getattr(owner, label), str):
+        raise ValueError(f"{label} must be a collection of ids, not one string")
     values = tuple(getattr(owner, label))
     for value in values:
         validate_segment(value, label)
@@ -131,7 +131,7 @@ class Moment:
 
 @dataclass(frozen=True, slots=True)
 class Subject:
-    """A typed canonical thing a proposition is about; director-side linkage only.
+    """A typed canonical thing: what a proposition overtly refers to, or a ruling rests on.
 
     ``event`` and ``relation`` refs are ID segments (relations belong to the
     typed graph, 017); ``instance`` and ``definition`` refs are exact
@@ -201,7 +201,12 @@ class Event:
 
 @dataclass(frozen=True, slots=True)
 class Proposition:
-    """Something that may be asserted or believed; it carries no truth value."""
+    """Something that may be asserted or believed; it carries no truth value.
+
+    ``about`` lists only what the text *overtly* refers to, recognisably to
+    anyone who holds it ("the masked man" is not ``instance:duke``): it decides
+    what a holder's items are about and which evidence is related support.
+    """
 
     campaign_id: str
     proposition_id: str
@@ -313,7 +318,7 @@ class Report:
         _guarded(self, "evidence", self.evidence_id, check)
 
 
-Evidence = Union[Perception, Report]
+Evidence = Perception | Report
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,12 +394,12 @@ class _Index:
 
 
 _FAMILIES = (
-    ("events", "event", Event, "event_id"),
-    ("propositions", "proposition", Proposition, "proposition_id"),
-    ("rulings", "ruling", Ruling, "ruling_id"),
-    ("evidence", "evidence", (Perception, Report), "evidence_id"),
-    ("beliefs", "belief", Belief, "belief_id"),
-    ("disclosures", "disclosure", Disclosure, "disclosure_id"),
+    ("events", Event, "event_id"),
+    ("propositions", Proposition, "proposition_id"),
+    ("rulings", Ruling, "ruling_id"),
+    ("evidence", (Perception, Report), "evidence_id"),
+    ("beliefs", Belief, "belief_id"),
+    ("disclosures", Disclosure, "disclosure_id"),
 )
 
 
@@ -406,7 +411,8 @@ class Knowledge:
     they were supplied. Validation runs family by family (events,
     propositions, rulings, evidence, beliefs, disclosures): an identity pass
     (campaign, duplicates), then each record's rules in ID order, then the
-    belief chain checks. The first failure is raised, independent of input order.
+    belief chain checks closing the belief family. A type check of every input
+    precedes all of it. The first failure is raised, independent of input order.
     """
 
     campaign_id: str
@@ -421,23 +427,58 @@ class Knowledge:
     def __post_init__(self) -> None:
         if not _is_segment(self.campaign_id):
             raise KnowledgeError("invalid_record")
-        for attribute, _family, kinds, id_field in _FAMILIES:
-            records = tuple(getattr(self, attribute))
+        for attribute, kinds, id_field in _FAMILIES:
+            supplied = getattr(self, attribute)
+            if isinstance(supplied, (str, bytes)) or not isinstance(supplied, Iterable):
+                raise KnowledgeError("invalid_record")
+            records = tuple(supplied)
             if not all(isinstance(record, kinds) for record in records):
                 raise KnowledgeError("invalid_record")
             object.__setattr__(self, attribute,
                                tuple(sorted(records, key=lambda r, f=id_field: getattr(r, f))))
         object.__setattr__(self, "_index", _validate(self))
 
-    # Lookups for projections; consumers use ``perspective``, not these.
+    def __reduce__(self) -> tuple[object, ...]:
+        return (Knowledge, (self.campaign_id, self.events, self.propositions, self.rulings,
+                            self.evidence, self.beliefs, self.disclosures))
+
+    # Lookups for ``perspective``. Actor-facing consumers read projections, not these.
     def event(self, event_id: str) -> Event:
-        return self._index.events[event_id]
+        return self._lookup(self._index.events, event_id, "unknown_event", "event")
 
     def proposition(self, proposition_id: str) -> Proposition:
-        return self._index.propositions[proposition_id]
+        return self._lookup(self._index.propositions, proposition_id, "unknown_proposition",
+                            "proposition")
 
     def subjects_of(self, item: Evidence) -> frozenset[Subject]:
+        if self._index.evidence.get(getattr(item, "evidence_id", None)) is not item:
+            raise KnowledgeError("unknown_evidence", _name("evidence", getattr(item, "evidence_id", None)))
         return _subjects_of(item, self._index.propositions)
+
+    def evidence_held_by(self, holder: InstanceRef) -> tuple[Evidence, ...]:
+        return self._index.evidence_by_holder.get(holder, ())
+
+    def beliefs_held_by(self, holder: InstanceRef) -> tuple[Belief, ...]:
+        return self._index.beliefs_by_holder.get(holder, ())
+
+    def reports_sent_by(self, sender: InstanceRef) -> tuple[Report, ...]:
+        """Addressed reports only: what the sender knowingly sent."""
+        return self._index.sent_by.get(sender, ())
+
+    def rulings_on(self, proposition_id: str) -> tuple[Ruling, ...]:
+        return self._index.rulings_by_proposition.get(proposition_id, ())
+
+    def reports_of(self, proposition_id: str) -> tuple[Report, ...]:
+        return self._index.reports_by_proposition.get(proposition_id, ())
+
+    def successor_of(self, belief_id: str) -> Belief | None:
+        return self._index.superseded_by.get(belief_id)
+
+    @staticmethod
+    def _lookup(table, record_id: object, reason: str, family: str):
+        if not _is_segment(record_id) or record_id not in table:
+            raise KnowledgeError(reason, _name(family, record_id))
+        return table[record_id]
 
 
 def _subjects_of(item: Evidence, propositions) -> frozenset[Subject]:
@@ -476,7 +517,10 @@ def _validate(knowledge: Knowledge) -> _Index:
 
     propositions = _identity_pass(knowledge, "propositions", "proposition", "proposition_id")
     for proposition in knowledge.propositions:
-        _event_subjects(proposition.about, events, f"proposition:{proposition.proposition_id}")
+        name = f"proposition:{proposition.proposition_id}"
+        _event_subjects(proposition.about, events, name)
+        _require(all(events[s.ref].moment.sequence <= proposition.moment.sequence
+                     for s in proposition.about if s.kind == "event"), "about_future_event", name)
 
     _identity_pass(knowledge, "rulings", "ruling", "ruling_id")
     rulings_by_proposition: dict = defaultdict(list)
@@ -551,13 +595,13 @@ def _check_belief(belief: Belief, propositions: dict, evidence: dict,
         item = evidence.get(evidence_id)
         _require(item is not None, "unknown_evidence", name, f"evidence:{evidence_id}")
         cited.append(item)
-    for check, reason in (
-        (lambda item: item.holder == belief.holder, "foreign_evidence"),
-        (lambda item: item.confirmed, "unconfirmed_support"),
-        (lambda item: item.moment.sequence <= belief.moment.sequence, "future_evidence"),
-    ):
-        for item in cited:
-            _require(check(item), reason, name, f"evidence:{item.evidence_id}")
+    for item in cited:
+        _require(item.holder == belief.holder, "foreign_evidence", name, f"evidence:{item.evidence_id}")
+    for item in cited:
+        _require(item.confirmed, "unconfirmed_support", name, f"evidence:{item.evidence_id}")
+    for item in cited:
+        _require(item.moment.sequence <= belief.moment.sequence, "future_evidence", name,
+                 f"evidence:{item.evidence_id}")
     about = set(proposition.about)
     _require(any((isinstance(item, Report) and item.proposition_id == belief.proposition_id)
                  or _subjects_of(item, propositions) & about
@@ -581,8 +625,9 @@ def _check_chains(beliefs: tuple[Belief, ...]) -> dict:
         if belief.supersedes is None:
             continue
         earlier = superseded_by.get(belief.supersedes)
-        _require(earlier is None, "forked_supersession",
-                 *sorted((f"belief:{getattr(earlier, 'belief_id', '')}", f"belief:{belief.belief_id}")))
+        if earlier is not None:
+            raise KnowledgeError("forked_supersession",
+                                 sorted((f"belief:{earlier.belief_id}", f"belief:{belief.belief_id}")))
         superseded_by[belief.supersedes] = belief
     roots: dict = defaultdict(list)
     for belief in beliefs:

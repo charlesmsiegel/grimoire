@@ -60,7 +60,6 @@ class KnownBelief:
     moment: Moment
     evidence_ids: tuple[str, ...]
     supersedes: str | None
-    authored_by: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,8 +67,10 @@ class ActorKnowledge:
     """Disposable perspective for one actor at one moment, not a canonical record.
 
     ``history`` holds the actor's superseded beliefs, still theirs to recall.
-    ``inherited`` is ``None`` when not computed; ``player_knowledge`` fills it
-    with current beliefs the present controller did not author.
+    ``inherited`` and ``inherited_history`` are ``None`` when not computed;
+    ``player_knowledge`` moves current and superseded beliefs the present
+    controller did not author into them. Authorship and control are never
+    shown here.
     """
 
     actor: InstanceRef
@@ -79,6 +80,7 @@ class ActorKnowledge:
     current: tuple[KnownBelief, ...]
     history: tuple[KnownBelief, ...]
     inherited: tuple[KnownBelief, ...] | None = None
+    inherited_history: tuple[KnownBelief, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,8 +129,8 @@ def _check_as_of(as_of: object) -> int:
     return as_of
 
 
-def _check_actor(knowledge: Knowledge, actor: object) -> InstanceRef:
-    if not isinstance(actor, InstanceRef):
+def _check_actor(knowledge: object, actor: object) -> InstanceRef:
+    if not isinstance(knowledge, Knowledge) or not isinstance(actor, InstanceRef):
         raise KnowledgeError("invalid_record")
     if actor.campaign_id != knowledge.campaign_id:
         raise KnowledgeError("campaign_mismatch")
@@ -150,38 +152,51 @@ def _known_evidence(knowledge: Knowledge, item: Evidence) -> KnownEvidence:
 def _known_belief(knowledge: Knowledge, belief: Belief) -> KnownBelief:
     return KnownBelief(belief.belief_id, belief.proposition_id,
                        knowledge.proposition(belief.proposition_id).text, belief.stance,
-                       belief.moment, belief.evidence_ids, belief.supersedes, belief.authored_by)
+                       belief.moment, belief.evidence_ids, belief.supersedes)
+
+
+def _known_beliefs(knowledge: Knowledge, beliefs: Iterable[Belief]) -> tuple[KnownBelief, ...]:
+    ordered = sorted(beliefs, key=lambda b: _order(b.moment, b.belief_id))
+    return tuple(_known_belief(knowledge, belief) for belief in ordered)
+
+
+def _beliefs_as_of(knowledge: Knowledge, actor: InstanceRef, as_of: int,
+                   keep_proposition) -> tuple[list[Belief], list[Belief]]:
+    """The actor's beliefs as of ``as_of``, split into current and superseded."""
+    current, history = [], []
+    for belief in knowledge.beliefs_held_by(actor):
+        if belief.moment.sequence > as_of or not keep_proposition(belief.proposition_id):
+            continue
+        successor = knowledge.successor_of(belief.belief_id)
+        if successor is not None and successor.moment.sequence <= as_of:
+            history.append(belief)
+        else:
+            current.append(belief)
+    return current, history
+
+
+def _keep_all(_value: object) -> bool:
+    return True
 
 
 def _projection(knowledge: Knowledge, actor: InstanceRef, as_of: int,
-                evidence_filter=None, proposition_filter=None) -> ActorKnowledge:
-    index = knowledge._index
-    keep_item = evidence_filter or (lambda item: True)
-    keep_proposition = proposition_filter or (lambda proposition_id: True)
+                keep_item=_keep_all, keep_proposition=_keep_all) -> ActorKnowledge:
     evidence = sorted(
-        (item for item in index.evidence_by_holder.get(actor, ())
+        (item for item in knowledge.evidence_held_by(actor)
          if item.confirmed and item.moment.sequence <= as_of and keep_item(item)),
         key=lambda item: _order(item.moment, item.evidence_id))
     sent = sorted(
-        (report for report in index.sent_by.get(actor, ())
+        (report for report in knowledge.reports_sent_by(actor)
          if report.sent_at.sequence <= as_of and keep_proposition(report.proposition_id)),
         key=lambda report: _order(report.sent_at, report.evidence_id))
-    current, history = [], []
-    for belief in index.beliefs_by_holder.get(actor, ()):
-        if belief.moment.sequence > as_of or not keep_proposition(belief.proposition_id):
-            continue
-        successor = index.superseded_by.get(belief.belief_id)
-        superseded = successor is not None and successor.moment.sequence <= as_of
-        (history if superseded else current).append(belief)
-    ordered = lambda beliefs: tuple(_known_belief(knowledge, b) for b in
-                                    sorted(beliefs, key=lambda b: _order(b.moment, b.belief_id)))
+    current, history = _beliefs_as_of(knowledge, actor, as_of, keep_proposition)
     return ActorKnowledge(
         actor=actor, as_of=as_of,
         evidence=tuple(_known_evidence(knowledge, item) for item in evidence),
         sent=tuple(SentReport(r.evidence_id, r.holder, r.proposition_id,
                               knowledge.proposition(r.proposition_id).text, r.channel, r.sent_at)
                    for r in sent),
-        current=ordered(current), history=ordered(history),
+        current=_known_beliefs(knowledge, current), history=_known_beliefs(knowledge, history),
     )
 
 
@@ -200,11 +215,11 @@ def knowledge_about(knowledge: Knowledge, actor: InstanceRef, subject: Subject, 
     """The actor projection restricted to items about ``subject``.
 
     The single consumer contract for graph and retrieval views (017, 031): an
-    actor-scoped view may present only these items. Holding them licenses
-    referring to the subject; it never exposes the subject's canonical fields,
-    participants or edges, nor permits expanding from it. The subject is never
-    resolved against the ledger, so the answer reveals nothing about whether
-    an unheld subject exists.
+    actor-scoped view may present only these items, which overtly mention the
+    subject. They never expose the subject's canonical fields, participants or
+    edges, nor permit expanding from it. The subject is never resolved against
+    the ledger, so the answer reveals nothing about whether an unheld subject
+    exists.
     """
     actor = _check_actor(knowledge, actor)
     as_of = _check_as_of(as_of)
@@ -214,20 +229,17 @@ def knowledge_about(knowledge: Knowledge, actor: InstanceRef, subject: Subject, 
         raise KnowledgeError("campaign_mismatch")
     return _projection(
         knowledge, actor, as_of,
-        evidence_filter=lambda item: subject in knowledge.subjects_of(item),
-        proposition_filter=lambda proposition_id: subject in knowledge.proposition(proposition_id).about,
+        keep_item=lambda item: subject in knowledge.subjects_of(item),
+        keep_proposition=lambda proposition_id: subject in knowledge.proposition(proposition_id).about,
     )
 
 
 def _standing(knowledge: Knowledge, proposition_id: str, as_of: int) -> tuple[str, str | None]:
-    index = knowledge._index
-    rulings = [r for r in index.rulings_by_proposition.get(proposition_id, ())
-               if r.moment.sequence <= as_of]
+    rulings = [r for r in knowledge.rulings_on(proposition_id) if r.moment.sequence <= as_of]
     if rulings:
         latest = max(rulings, key=lambda r: r.moment.sequence)
         return latest.standing, latest.ruling_id
-    if any(report.moment.sequence <= as_of
-           for report in index.reports_by_proposition.get(proposition_id, ())):
+    if any(report.moment.sequence <= as_of for report in knowledge.reports_of(proposition_id)):
         return "reported", None
     return "unasserted", None
 
@@ -236,8 +248,9 @@ def standing(knowledge: Knowledge, proposition_id: str, *, as_of: int) -> str:
     """Canonical standing: the latest ruling; else ``reported`` once any report is
     received (confirmed or not); else ``unasserted``. Belief never changes it."""
     as_of = _check_as_of(as_of)
-    if proposition_id not in knowledge._index.propositions:
-        raise KnowledgeError("unknown_proposition", (f"proposition:{proposition_id}",))
+    if not isinstance(knowledge, Knowledge):
+        raise KnowledgeError("invalid_record")
+    knowledge.proposition(proposition_id)  # unknown or malformed ids fail without echoing text
     return _standing(knowledge, proposition_id, as_of)[0]
 
 
@@ -245,45 +258,68 @@ def director_knowledge(knowledge: Knowledge, *, as_of: int, requested_by: str) -
     """The truth projection. ``requested_by=DIRECTOR`` keeps call sites explicit
     and auditable; it is not authorization, which belongs to the executor."""
     as_of = _check_as_of(as_of)
+    if not isinstance(knowledge, Knowledge):
+        raise KnowledgeError("invalid_record")
     if requested_by != DIRECTOR:
         raise AuthorityError("director knowledge is only for the director perspective")
-    upto = lambda moment: moment.sequence <= as_of
+
+    def shown(records, moment_of, id_of) -> tuple:
+        visible = [r for r in records if moment_of(r).sequence <= as_of]
+        return tuple(sorted(visible, key=lambda r: _order(moment_of(r), id_of(r))))
+
+    def when_known(item: Evidence) -> Moment:  # a sent report exists from when it was sent
+        return item.sent_at if isinstance(item, Report) and item.sent_at else item.moment
+
     return DirectorKnowledge(
         campaign_id=knowledge.campaign_id, as_of=as_of,
-        events=tuple(e for e in knowledge.events if upto(e.moment)),
+        events=shown(knowledge.events, lambda e: e.moment, lambda e: e.event_id),
         propositions=tuple(PropositionStanding(p, *_standing(knowledge, p.proposition_id, as_of))
-                           for p in knowledge.propositions if upto(p.moment)),
-        rulings=tuple(r for r in knowledge.rulings if upto(r.moment)),
-        evidence=tuple(e for e in knowledge.evidence
-                       if upto(e.sent_at if isinstance(e, Report) and e.sent_at else e.moment)),
-        beliefs=tuple(b for b in knowledge.beliefs if upto(b.moment)),
-        disclosures=tuple(d for d in knowledge.disclosures if upto(d.moment)),
+                           for p in shown(knowledge.propositions, lambda p: p.moment,
+                                          lambda p: p.proposition_id)),
+        rulings=shown(knowledge.rulings, lambda r: r.moment, lambda r: r.ruling_id),
+        evidence=shown(knowledge.evidence, when_known, lambda e: e.evidence_id),
+        beliefs=shown(knowledge.beliefs, lambda b: b.moment, lambda b: b.belief_id),
+        disclosures=shown(knowledge.disclosures, lambda d: d.moment, lambda d: d.disclosure_id),
     )
+
+
+def _split_by_author(knowledge: Knowledge, beliefs: list[Belief],
+                     author: str) -> tuple[tuple[KnownBelief, ...], tuple[KnownBelief, ...]]:
+    own = [belief for belief in beliefs if belief.authored_by == author]
+    other = [belief for belief in beliefs if belief.authored_by != author]
+    return _known_beliefs(knowledge, own), _known_beliefs(knowledge, other)
 
 
 def player_knowledge(knowledge: Knowledge, player_id: str,
                      controls: Iterable[ControlAssignment], *, as_of: int) -> PlayerKnowledge:
     """What a player may see: their characters' projections and table disclosures.
 
-    Current beliefs of a controlled actor that its present controller did not
-    author (an NPC-era belief, say) are moved to ``inherited``, never shown as
-    the PC's own. Control is confirmed per actor; ambiguity fails closed.
+    Beliefs of a controlled actor that its present controller did not author
+    (an NPC-era belief, say) are moved to ``inherited`` / ``inherited_history``,
+    never shown as the PC's own. Control is confirmed per actor; ambiguity
+    fails closed.
     """
     as_of = _check_as_of(as_of)
+    if not isinstance(knowledge, Knowledge):
+        raise KnowledgeError("invalid_record")
     if player_id == DIRECTOR:
         raise AuthorityError("the director is not a player")
     controls = tuple(controls)
+    if not all(isinstance(c, ControlAssignment) for c in controls):
+        raise KnowledgeError("invalid_record")
     candidates = sorted({c.actor_id for c in controls
                          if c.campaign_id == knowledge.campaign_id and c.controller_id == player_id})
     actors = []
     for actor_id in candidates:
         if controller_of(knowledge.campaign_id, actor_id, controls) != player_id:
             continue
-        view = _projection(knowledge, InstanceRef(knowledge.campaign_id, "character", actor_id), as_of)
-        own = tuple(b for b in view.current if b.authored_by == player_id)
-        inherited = tuple(b for b in view.current if b.authored_by != player_id)
-        actors.append(ActorKnowledge(view.actor, as_of, view.evidence, view.sent, own,
-                                     view.history, inherited))
+        ref = InstanceRef(knowledge.campaign_id, "character", actor_id)
+        view = _projection(knowledge, ref, as_of)
+        current, history = _beliefs_as_of(knowledge, ref, as_of, _keep_all)
+        own_current, inherited = _split_by_author(knowledge, current, player_id)
+        own_history, inherited_history = _split_by_author(knowledge, history, player_id)
+        actors.append(ActorKnowledge(view.actor, as_of, view.evidence, view.sent, own_current,
+                                     own_history, inherited, inherited_history))
     if not actors:
         raise AuthorityError("this player controls no character in the campaign")
     first_shown: dict = {}

@@ -289,14 +289,35 @@ def test_an_actor_projection_depends_only_on_its_own_records():
     assert actor_knowledge(noisy, TAVI, as_of=9) == base
 
 
-def test_projections_are_deterministic_and_input_order_free():
-    records = betrayal_records()
-    reversed_records = {family: list(reversed(items)) for family, items in records.items()}
-    one, two = Knowledge(C, **records), Knowledge(C, **reversed_records)
-    for who in CAST:
-        assert actor_knowledge(one, who, as_of=9) == actor_knowledge(two, who, as_of=9)
-    assert director_knowledge(one, as_of=9, requested_by=DIRECTOR) == \
-        director_knowledge(two, as_of=9, requested_by=DIRECTOR)
+def test_director_records_are_ordered_by_moment_then_id():
+    director = director_knowledge(betrayal_knowledge(), as_of=9, requested_by=DIRECTOR)
+    assert [e.evidence_id for e in director.evidence] == ["p-ines", "p-orrin", "r-orrin-tavi", "r-ines-tavi"]
+    assert [b.belief_id for b in director.beliefs] == ["b-tavi-1", "b-tavi-2", "b-tavi-3"]
+
+
+def test_beliefs_never_show_authorship_or_control_to_the_actor():
+    knowledge = betrayal_knowledge(beliefs=[believes("b-ines", INES, "duke-betrayed", "believed", 1,
+                                                     ["p-ines"], authored_by="player-one")])
+    view = actor_knowledge(knowledge, INES, as_of=9)  # Ines is an NPC again; her PC era is not hers to see
+    assert view.current and leaks(view, "player-one", DIRECTOR) == []
+    assert not hasattr(view.current[0], "authored_by")
+
+
+def test_f_superseded_npc_era_beliefs_are_inherited_history():
+    knowledge = betrayal_knowledge(beliefs=[
+        believes("b-ines-1", INES, "duke-betrayed", "suspected", 1, ["p-ines"]),
+        believes("b-ines-2", INES, "duke-betrayed", "believed", 3, ["p-ines"], supersedes="b-ines-1",
+                 authored_by="player-one"),
+    ])
+    view = player_knowledge(knowledge, "player-one", CONTROLS, as_of=5).actors[0]
+    assert [b.belief_id for b in view.current] == ["b-ines-2"] and view.history == ()
+    assert view.inherited == () and [b.belief_id for b in view.inherited_history] == ["b-ines-1"]
+
+
+def test_f_a_twice_disclosed_event_shows_its_earliest_disclosure():
+    knowledge = betrayal_knowledge(disclosures=[disclosure("d-b", 7), disclosure("d-a", 3), disclosure("d-c", 5)])
+    table = player_knowledge(knowledge, "player-one", CONTROLS, as_of=9).table_events
+    assert [(t.event_id, t.moment) for t in table] == [("evt-q7", at(3))]
 
 
 @pytest.mark.parametrize("as_of", [True, -1, 1.5, None, "3"])
@@ -310,6 +331,17 @@ def test_every_projection_validates_as_of(as_of):
         with pytest.raises(KnowledgeError) as caught:
             call()
         assert caught.value.reason == "invalid_as_of"
+
+
+def test_projections_refuse_malformed_inputs_as_knowledge_errors():
+    knowledge = betrayal_knowledge()
+    for call in (lambda: actor_knowledge(None, TAVI, as_of=1),
+                 lambda: standing(knowledge, f"{TRUTH} as an id", as_of=1),
+                 lambda: standing(knowledge, ["x"], as_of=1),
+                 lambda: player_knowledge(knowledge, "player-one", [object()], as_of=1)):
+        with pytest.raises(KnowledgeError) as caught:
+            call()
+        assert TRUTH not in str(caught.value)
 
 
 def test_projections_refuse_other_campaigns_and_unknown_propositions():

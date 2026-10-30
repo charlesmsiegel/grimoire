@@ -84,6 +84,7 @@ def test_holders_and_refs_must_be_in_the_record_campaign():
     lambda: Belief(C, "b", TAVI, "p", "believed", at(1), "", ("e",)),
     lambda: Belief(C, "b", TAVI, "p", "believed", at(1), "director", ("e", "e")),
     lambda: Belief(C, "b", TAVI, "p", "believed", at(1), "director", ("e",), supersedes="b"),
+    lambda: Belief(C, "b", TAVI, "p", "believed", at(1), "director", "rx"),  # one string, not ids
     lambda: Event(C, "E1", "x", at(0), "director"),
     lambda: Event(C, "e1", "", at(0), "director"),
     lambda: Event(C, "e1", "x", 0, "director"),
