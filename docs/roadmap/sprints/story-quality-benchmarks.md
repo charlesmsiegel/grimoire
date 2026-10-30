@@ -3,6 +3,8 @@
 > **V2 scope correction:** Build a synthetic 0.2.1 baseline with separately generated NPC contributions; measure character-voice fidelity, agency, leak rate, billed tokens and latency. Do not certify cheaper V2 prompts unless actual quality and cost are compared. See the [V2 ordered roadmap](../README.md) for prerequisites, waves and current first-slice proof. Older references to shipped V1 APIs describe behavior to *port*, not V2 capabilities.
 
 
+> **First slice status:** the automatic offline gate is implemented — see [Story-quality gate](../../evals/STORY_QUALITY.md). It scores recorded runs against a synthetic baseline; blinded human comparison, long-horizon branching and NPC agency evaluation remain open milestones.
+
 **Outcome:** Measure whether changes make Grimoire a better roleplay partner, not merely a system that passes technical tests.
 
 ## Scope

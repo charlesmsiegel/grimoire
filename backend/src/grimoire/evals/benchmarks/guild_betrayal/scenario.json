@@ -1,0 +1,143 @@
+{
+  "format": "grimoire.story-quality/1",
+  "scenario_id": "guild-betrayal",
+  "actors": [
+    {
+      "actor_id": "pc-wren",
+      "name": "Wren",
+      "control": "player",
+      "voice_samples": []
+    },
+    {
+      "actor_id": "npc-oda",
+      "name": "Oda",
+      "control": "director",
+      "voice_samples": [
+        "Ledger's closed. Come back at dawn.",
+        "No. Doors stay locked. Rules are rules.",
+        "Speak plainly. I have counts to finish.",
+        "Counts first. Talk later. Coin goes on the counter."
+      ]
+    },
+    {
+      "actor_id": "npc-bellamy",
+      "name": "Bellamy",
+      "control": "director",
+      "voice_samples": [
+        "Oh, my dear friend, what a splendid catastrophe this evening promises to be!",
+        "Darling, every song needs a villain, and tonight the hall is simply brimming with candidates!",
+        "Marvellous, marvellous! Pour the wine and let the gossip flow like honeyed rivers!"
+      ]
+    },
+    {
+      "actor_id": "npc-quill",
+      "name": "Quill",
+      "control": "director",
+      "voice_samples": [
+        "Hm. Noted. Filed under pending."
+      ]
+    },
+    {
+      "actor_id": "npc-hask",
+      "name": "Hask",
+      "control": "director",
+      "voice_samples": [
+        "Halt. State your business at the gate."
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "fact_id": "duke-betrayal",
+      "markers": [
+        "duke sold the guild",
+        "duke's betrayal"
+      ],
+      "known_from": {
+        "npc-bellamy": 2,
+        "pc-wren": 3
+      }
+    }
+  ],
+  "established_facts": [
+    {
+      "fact_id": "vault-sealed",
+      "from_turn": 1,
+      "contradiction_markers": [
+        "vault stands open",
+        "vault was never sealed"
+      ]
+    }
+  ],
+  "choices": [
+    {
+      "choice_id": "ask-ledger",
+      "turn": 1,
+      "actor_id": "pc-wren",
+      "text": "I slide a silver coin across the counter and ask Oda for the guest ledger.",
+      "effect_markers": [
+        "guest ledger"
+      ],
+      "negation_markers": [
+        "never offered a coin",
+        "coin vanishes"
+      ],
+      "window": 0
+    },
+    {
+      "choice_id": "follow-bellamy",
+      "turn": 2,
+      "actor_id": "pc-wren",
+      "text": "I follow Bellamy out to the balcony.",
+      "effect_markers": [
+        "balcony"
+      ],
+      "negation_markers": [
+        "wren stays at the counter"
+      ],
+      "window": 0
+    },
+    {
+      "choice_id": "ask-song",
+      "turn": 3,
+      "actor_id": "pc-wren",
+      "text": "I ask Bellamy to sing what was overheard.",
+      "effect_markers": [
+        "sings",
+        "song"
+      ],
+      "negation_markers": [
+        "refuses to sing"
+      ],
+      "window": 0
+    }
+  ],
+  "script": [
+    {
+      "turn": 1,
+      "speakers": [
+        "npc-oda",
+        "npc-bellamy"
+      ]
+    },
+    {
+      "turn": 2,
+      "speakers": [
+        "npc-oda",
+        "npc-bellamy"
+      ]
+    },
+    {
+      "turn": 3,
+      "speakers": [
+        "npc-oda",
+        "npc-bellamy"
+      ]
+    }
+  ],
+  "pc_authorship_markers": [
+    "wren confesses",
+    "wren feels",
+    "wren decides"
+  ]
+}
