@@ -101,11 +101,17 @@ A pure module cannot stop code elsewhere from calling a model, so the provider a
 
 Cost comparisons with V0.2.1 (015) must use `provider_reported_only` data.
 
+**Status (Wave 2):** [`grimoire.providers`](PROVIDERS.md) meets this obligation for model calls:
+- It refuses any `PlannedCall` its turn's plan lacks.
+- It books every attempt, including retries and fallbacks, through one `TurnMeter` per turn.
+- **An attempt begins at `connect()`.** A refusal before that (authorization, key, cancel) sends nothing and is not booked, so the call stays unmetered and the meter records status `refused`.
+- **Evidence rule:** a `complete` summary only says every planned call was metered. For cost comparisons a turn needs `provider_reported_only` **and** `TurnMeter.all_accepted`.
+
 ## Deferred
 
 The following are not part of this slice:
 
-- provider adapters, prices and currencies;
+- prices and currencies (the [provider adapter](PROVIDERS.md) exists; latency lives in its attempt reports, not in `CallAttempt`);
 - latency;
 - session caps and guardrails that stop a turn;
 - job-scoped (non-turn) ledgers;

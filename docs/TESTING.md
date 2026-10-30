@@ -68,6 +68,29 @@ The harness provides no clocks, randomness or IDs. A consumer must inject seeded
 
 The proving scenario for this slice is a crash immediately after one file has been published, followed by recovery to the completed state: `backend/tests/test_fault_harness.py::test_a2_crash_after_one_publication_is_recovered`. Exhaustive crash, torn-write, I/O-error and recovery-crash coverage of the reference writer is in `backend/tests/test_fault_harness.py::test_a1_journaled_writer_survives_every_crash_point`.
 
+## Provider fault invariants (`grimoire.testing.providers`)
+
+`explore_provider_faults` drives the real `ProviderAdapter` and SSE parser through `ScriptedTransport` at the HTTP/SSE byte level. It enumerates every point **exhaustively and deterministically** (718 points). The `seed` only shuffles the run order and is recorded. The points are:
+- every fault kind at every stream line, with and without a consumer;
+- depth-2 sequences after a retryable first fault, including a denial on attempt 2;
+- forced booking failures;
+- `Retry-After` values.
+
+Each point runs twice, and is bounded by a run count, sends and scripted output tokens. Each invariant has a mutant adapter or transport that the explorer must catch: `backend/tests/test_providers_faults.py::test_explorer_detects_each_invariant`.
+
+| Invariant | Meaning | Proven by |
+|---|---|---|
+| `no unaccepted reply` | A reply is returned only from a booked `completed` attempt whose finish reason is `stop`. | `backend/tests/test_providers_faults.py::test_adapter_survives_every_fault_point`, `backend/tests/test_providers_adapter.py::test_f5_truncated_stream_never_accepted` |
+| `every send booked` | Transport connects equal booked attempts, and sends equal booked attempts that were not `not_sent`. | `backend/tests/test_providers_faults.py::test_adapter_survives_every_fault_point`, `backend/tests/test_providers_adapter.py::test_f11_consumer_exception_and_keyboardinterrupt_are_booked` |
+| `single acceptance` | Re-executing an accepted call connects nothing. | `backend/tests/test_providers_adapter.py::test_a4_completed_call_is_never_redone` |
+| `bounded attempts` | Connects per call never exceed `max_attempts_per_call`. | `backend/tests/test_providers_faults.py::test_adapter_survives_every_fault_point` |
+| `no retry after delivery` | Once text reached a consumer, a failure ends the call. | `backend/tests/test_providers_adapter.py::test_f4_timeouts_before_and_after_delivery` |
+| `unknown is not zero` | A count the provider did not report is `None`, never `0`. | `backend/tests/test_providers_sse.py::test_bad_counts_are_none_not_zero` |
+| `secret never leaks` | The key is absent from results, reports, errors (including formatted tracebacks with locals), ledgers and the audit. | `backend/tests/test_providers_adapter.py::test_secret_absent_from_results_reprs_audit_and_tracebacks`, `backend/tests/test_providers_transport.py::test_keyboardinterrupt_inside_send_leaks_no_key` |
+| `deterministic` | Rerunning a point yields the same trace. | `backend/tests/test_providers_faults.py::test_explorer_is_deterministic` |
+| `no resend after poisoning` | A call whose booking failed is never sent again. | `backend/tests/test_providers_meter.py::test_fallback_failure_poisons` |
+| `bounded exploration` | Exploration stays within its run, send and token bounds. | `backend/tests/test_providers_faults.py::test_explorer_detects_each_invariant` |
+
 ## V2 domain invariants
 
 | Invariant | Status |
@@ -106,6 +129,7 @@ The proving scenario for this slice is a crash immediately after one file has be
 | Source-qualified IDs, owners, heads, links and broken references survive persistence | not yet tested — owner: Native File Store (010) |
 | A stale write is rejected; reads come from one revision-consistent view | not yet tested — owners: Native File Store (010), Effective World Snapshots (022) |
 | Concurrent device edits are preserved as conflicts | not yet tested — owner: Sync Revisions And Conflict Core (019); use `Interleave`/`meddle` with replica roots |
+| A planned model call is issued only through the turn plan and an `execute` authorization covering its destination; every attempt is booked | proven by `backend/tests/test_providers_adapter.py::test_f2_unplanned_call_sends_nothing`, `backend/tests/test_providers_adapter.py::test_f1_approval_for_another_url_or_body_is_refused`, `backend/tests/test_providers_adapter.py::test_a2_outage_falls_back_visibly` |
 | One accepted action commits exactly once across crashes | not yet tested — owner: Durable Action Recovery (030); use `explore_crashes(..., recovery_crashes=True)` |
 
 ## Fault model and fidelity limits
@@ -122,7 +146,7 @@ Not simulated:
 
 | Absent | Owner |
 |---|---|
-| Inference/provider failures, truncated streams, cancellation and stale-run fencing | Model Routing And Budgeting (013), extended by Per-NPC Generation Runtime (027) |
+| Stale-run fencing of model calls across processes (provider failures, truncated streams and cancellation are covered by the provider fault invariants above) | Per-NPC Generation Runtime (027), Durable Action Recovery (030) |
 | Multi-process races and file locks | Native File Store (010), Durable Action Recovery (030) |
 | Network transport faults during sync | App-Managed Device Sync (028) |
 | Real disk-full or permission errors (only simulated via `Fail`) | Native File Store (010) |

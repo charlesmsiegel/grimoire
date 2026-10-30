@@ -58,7 +58,12 @@ These rules reject traversal, absolute paths, separators, whitespace, control/fo
 - **Native file store:** map a validated address to an OS path only by joining its segments under the library root, never follow symlinks out of the library, and refuse to create a name that collides case- or normalization-insensitively with an existing differently spelled entry.
 - **Approval UI ([World Change Sets](roadmap/sprints/world-change-sets.md), [Character Card Ingestion](roadmap/sprints/character-card-ingestion.md) preview):** issue approvals only from a direct human action. Show `describe()` text, including the non-ASCII flag and the staged content the digest refers to.
 - **Durable audit ([Native File Store](roadmap/sprints/native-file-store-and-revisions.md), surfaced by [Durable Action Recovery](roadmap/sprints/durable-action-recovery.md)):** persist decisions and also audit grant/approval lifecycle, which this slice exposes only through `describe_policy()`.
-- **Provider adapters and network ([Model Routing And Budgeting](roadmap/sprints/model-routing-and-budgeting.md)):** route every call through `execute`. Secrets stay under reserved roots and are read only by trusted adapter code, never through a worker grant.
+- **Provider adapters and network ([Model Routing And Budgeting](roadmap/sprints/model-routing-and-budgeting.md)):** route every call through `execute`. Secrets stay under reserved roots and are read only by trusted adapter code, never through a worker grant. **Met by [`grimoire.providers`](PROVIDERS.md):**
+  - The authorized payload is an envelope binding the destination URL and the exact body.
+  - Handles must be `issued` by the adapter's authorizer.
+  - Keys are read only after an allow. They come from the environment until 010 provides `secrets/`.
+
+  Whether a generation runtime that parses model output may hold a trusted `app:` handle is an open question for 027. It is not decided here, and this rule is unchanged.
 - **Device sync (028):** pairing keys and device credentials live under reserved roots, and peer devices are non-owner principals.
 - **Multiplayer (102):** each human approves only uses of grants they issued.
 - **V1 migration ([V1 To V2 Import Apply](roadmap/sprints/v1-to-v2-import-apply.md)):** V1 libraries have no address in the V2 namespace. A future read-only migration source must be an explicit, separate root.
