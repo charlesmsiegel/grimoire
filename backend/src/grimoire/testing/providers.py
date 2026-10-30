@@ -237,3 +237,253 @@ class ScriptedClock:
         self.waits.append(seconds)
         self.now += seconds
         return token.cancelled
+
+
+# -- exhaustive fault exploration ---------------------------------------------
+
+#: The provider fault invariants (catalogued in docs/TESTING.md).
+PROVIDER_INVARIANTS = (
+    "no unaccepted reply", "every send booked", "single acceptance", "bounded attempts",
+    "no retry after delivery", "unknown is not zero", "secret never leaks", "deterministic",
+    "no resend after poisoning", "bounded exploration",
+)
+#: The fake key every explored world uses; it must never surface anywhere.
+EXPLORER_KEY = "sk-explorer-SECRET-0000"
+
+_INDEXED = {
+    "read_timeout": lambda k: ReadFail(k, "timeout"),
+    "read_reset": lambda k: ReadFail(k, "network"),
+    "truncate": Truncate,
+    "cancel": CancelAt,
+    "garbage": Garbage,
+    "interrupt": Interrupt,
+}
+_UNINDEXED = {
+    "connect_timeout": ConnectFail("timeout"),
+    "connect_refused": ConnectFail("network"),
+    "write_fail": WriteFail(),
+    "status_401": Status(401),
+    "status_429": Status(429),
+    "status_503": Status(503),
+    "finish_length": Reply(finish_reason="length"),
+    "no_usage": Reply(usage=None),
+}
+_FIRSTS = ("connect_timeout", "read_timeout@0", "truncate@0", "status_503", "status_429",
+           "garbage@0")
+_RETRY_AFTER = ("2", "9999", "-1", "soon")
+
+
+def _faults() -> dict[str, Step]:
+    faults: dict[str, Step] = {}
+    for name, make in _INDEXED.items():
+        for index in range(len(REFERENCE_REPLY.lines()) + 1):
+            faults[f"{name}@{index}"] = make(index)
+    faults.update(_UNINDEXED)
+    return faults
+
+
+@dataclass(frozen=True)
+class _Point:
+    name: str
+    steps: tuple[Step, ...]
+    attempts: int
+    consumer: bool = False
+    approve: frozenset[int] | None = None  # None: a trusted handle needing no approval
+    fail_booking: tuple[str, ...] = ()
+
+
+def _points() -> list[_Point]:
+    faults = _faults()
+    points = []
+    for name, fault in faults.items():
+        for consumer in (True, False):
+            mode = "consumer" if consumer else "no_consumer"
+            points.append(_Point(f"d1:{name}:{mode}", (fault, REFERENCE_REPLY), 2, consumer))
+    for first in _FIRSTS:
+        for second in [*faults, "deny"]:
+            for consumer in (True, False):
+                mode = "consumer" if consumer else "no_consumer"
+                if second == "deny":
+                    steps, approve = (faults[first], REFERENCE_REPLY), frozenset({1})
+                else:
+                    steps, approve = (faults[first], faults[second], REFERENCE_REPLY), \
+                        frozenset({1, 2, 3})
+                points.append(_Point(f"d2:{first}>{second}:{mode}", steps, 3, consumer, approve))
+    points.append(_Point("booking:precise", (REFERENCE_REPLY,), 2, fail_booking=("precise",)))
+    points.append(_Point("booking:fallback", (REFERENCE_REPLY,), 2,
+                         fail_booking=("precise", "fallback")))
+    for value in _RETRY_AFTER:
+        points.append(_Point(f"retry_after:{value}", (Status(429, retry_after=value),
+                                                      REFERENCE_REPLY), 2))
+    return points
+
+
+@dataclass(frozen=True)
+class ProviderFaultReport:
+    seed: int
+    runs: int
+    points: tuple[str, ...]
+    traces: Mapping[str, tuple]
+    violations: tuple
+
+    def assert_ok(self) -> None:
+        if self.violations:
+            raise AssertionError("\n".join(v.format() for v in self.violations))
+
+
+def _world(point: _Point, adapter_factory, transport_factory):
+    from grimoire.core.inference import InferencePolicy, TurnUsageLedger, plan_turn
+    from grimoire.providers import (
+        ChatMessage, ModelRequest, ProviderEndpoint, ProviderRegistry, RouteChoice,
+        StaticCredentials,
+    )
+    from grimoire.providers.adapter import ProviderAdapter
+    from grimoire.providers.meter import TurnMeter
+    from grimoire.security import (
+        Approval, Authorizer, Grant, Permission, ResourcePath, payload_digest,
+    )
+
+    authz = Authorizer({"human:owner"})
+    principal = "app:runtime" if point.approve is None else "app:worker"
+    authz.add_grant(Grant("g", principal, frozenset({Permission.EXECUTE}),
+                          ResourcePath(("providers",)), "human:owner"))
+    handle = authz.handle_for(principal, trusted=point.approve is None)
+
+    def approvals(label: str, attempt: int, payload: bytes) -> str | None:
+        if point.approve is None or attempt not in point.approve:
+            return None
+        provider = label.split("@", 1)[0]
+        authz.register_approval(Approval(f"ap-{attempt}", principal, Permission.EXECUTE,
+                                         ResourcePath(("providers", provider)),
+                                         payload_digest(payload), "human:owner"))
+        return f"ap-{attempt}"
+
+    transport = (transport_factory or ScriptedTransport)(list(point.steps) + [REFERENCE_REPLY])
+    clock = ScriptedClock()
+    registry = ProviderRegistry([ProviderEndpoint("primary", "https://primary.example/v1"),
+                                 ProviderEndpoint("backup", "https://backup.example/v1")])
+    adapter = (adapter_factory or ProviderAdapter)(
+        registry, StaticCredentials({"primary": EXPLORER_KEY, "backup": EXPLORER_KEY}), authz,
+        transport, clock=clock, wait=clock.wait)
+    plan = plan_turn("explore", "turn", present_actor_ids=["npc"], speaking_npc_ids=["npc"],
+                     policy=InferencePolicy(max_attempts_per_call=point.attempts))
+    meter = TurnMeter(TurnUsageLedger(plan),
+                      _fail_booking=(lambda stage: stage in point.fail_booking)
+                      if point.fail_booking else None)
+    routes = (RouteChoice("primary", "model-a"), RouteChoice("backup", "model-b"))[:point.attempts]
+    request = ModelRequest([ChatMessage("user", "explore")], max_output_tokens=16)
+
+    def execute():
+        return adapter.execute(meter, plan.calls[0], request, routes, handle,
+                               approvals=approvals if point.approve is not None else None,
+                               on_delta=(lambda delta: None) if point.consumer else None)
+    return adapter, transport, clock, meter, authz, execute
+
+
+def _run_point(point: _Point, adapter_factory, transport_factory, max_sends: int,
+               max_output_tokens: int):
+    import traceback
+
+    from grimoire.providers import CallRefused
+    from grimoire.testing.explore import Violation
+
+    adapter, transport, clock, meter, authz, execute = _world(
+        point, adapter_factory, transport_factory)
+    result, raised, leaked_text = None, None, ""
+    try:
+        result = execute()
+    except BaseException as error:  # an Interrupt step, or a broken adapter
+        raised = type(error).__name__
+        leaked_text = "".join(traceback.TracebackException.from_exception(
+            error, capture_locals=True).format())
+    connects = len(transport.connects)
+    sends = len(transport.sends)
+    reports = meter.reports(meter.ledger.plan.calls[0].call_id)
+    status = meter.status(meter.ledger.plan.calls[0].call_id)
+    again = None
+    if (result is not None and result.status == "accepted") or status == "poisoned":
+        before = len(transport.connects)
+        try:
+            execute()
+            again = "executed"
+        except CallRefused:
+            again = "refused"
+        except BaseException as error:
+            again = type(error).__name__
+        again = (again, len(transport.connects) - before)
+
+    trace = (tuple(transport.connects), tuple(s.body_digest for s in transport.sends),
+             tuple((r.attempt, r.outcome, r.error_kind, r.usage) for r in reports),
+             None if result is None else result.status, tuple(clock.waits), raised, again)
+    violations = []
+
+    def fail(invariant: str, detail: str) -> None:
+        violations.append(Violation(invariant, point.name, detail,
+                                    tuple(str(part) for part in trace[2])))
+
+    booked = meter.ledger.attempts
+    if result is not None and result.reply is not None:
+        last = reports[-1] if reports else None
+        if (result.status != "accepted" or last is None or last.outcome != "completed"
+                or last.finish_reason != "stop"):
+            fail("no unaccepted reply", f"reply returned with status {result.status}")
+    if status != "poisoned":
+        if sends != sum(1 for a in booked if a.outcome != "not_sent") or connects != len(booked):
+            fail("every send booked", f"{connects} connects, {sends} sends, {len(booked)} booked")
+    if again is not None:
+        if status == "poisoned" and again[1]:
+            fail("no resend after poisoning", f"re-execute after poisoning connected {again[1]}x")
+        elif status != "poisoned" and again[1]:
+            fail("single acceptance", f"re-execute after acceptance connected {again[1]}x")
+    if connects > point.attempts:
+        fail("bounded attempts", f"{connects} connects for {point.attempts} attempts")
+    if any(r.delivered for r in reports[:-1]):
+        fail("no retry after delivery", "an attempt followed one that delivered text")
+    for attempt in booked:
+        if attempt.outcome != "not_sent" and 0 in (attempt.usage.input_tokens,
+                                                   attempt.usage.output_tokens):
+            fail("unknown is not zero", f"attempt {attempt.attempt} booked a zero count")
+    texts = [repr(result), str(getattr(result, "error", None)), repr(meter),
+             repr(meter.summary()), repr(meter.ledger), repr(authz.audit()), repr(reports),
+             repr(adapter), repr(transport.sends), leaked_text]
+    if any(EXPLORER_KEY in text for text in texts):
+        fail("secret never leaks", "the provider key appeared in a result, report or error")
+    consumed = point.steps[:connects]
+    tokens = sum(step.output_tokens() for step in consumed if isinstance(step, Reply))
+    if sends > max_sends or tokens > max_output_tokens:
+        fail("bounded exploration", f"{sends} sends, {tokens} scripted output tokens")
+    return trace, violations
+
+
+def explore_provider_faults(*, seed: int = 0, max_runs: int = 2000, max_sends: int = 4,
+                            max_output_tokens: int = 64, adapter_factory=None,
+                            transport_factory=None) -> ProviderFaultReport:
+    """Run every point (each twice, for determinism) and check every invariant.
+
+    Deterministic: the seed only shuffles the run order, and is recorded.
+    """
+    import random
+
+    from grimoire.testing.explore import Violation
+
+    points = _points()
+    random.Random(seed).shuffle(points)
+    traces: dict[str, tuple] = {}
+    violations: list = []
+    runs = 0
+    for point in points:
+        if runs >= max_runs:
+            violations.append(Violation("bounded exploration", point.name,
+                                        f"more than max_runs={max_runs} points"))
+            break
+        runs += 1
+        trace, found = _run_point(point, adapter_factory, transport_factory, max_sends,
+                                  max_output_tokens)
+        repeat, _ = _run_point(point, adapter_factory, transport_factory, max_sends,
+                               max_output_tokens)
+        if repeat != trace:
+            found.append(Violation("deterministic", point.name, "a rerun produced another trace"))
+        traces[point.name] = trace
+        violations.extend(found)
+    return ProviderFaultReport(seed, runs, tuple(p.name for p in points[:runs]), traces,
+                               tuple(violations))
