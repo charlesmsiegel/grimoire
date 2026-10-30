@@ -21,6 +21,13 @@ An imported character mentions a guild and city; Grimoire suggests existing grou
 ## Independence and interfaces
 Standalone import UX against current world record types; optionally uses world Change Sets for multi-record adoption.
 
+## Inherited from Wave 1
+
+The [Wave 1 audit](../README.md#wave-1--foundational-contracts-isolation-and-cost-baselines) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+
+**Obligations**
+- The importer runs on an untrusted `WorkerHandle` whose grants cover only staging and its target world; it applies only with a human approval bound to the staged bytes. A card's text never gains authority beyond those grants (007, [tool authority](../../TOOL_AUTHORITY.md)).
+
 ## Open questions
 - Which card fields are ever canonical?
 - How are portrayals and instructions disambiguated?

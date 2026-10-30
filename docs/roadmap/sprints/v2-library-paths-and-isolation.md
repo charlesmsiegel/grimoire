@@ -2,6 +2,16 @@
 
 **Outcome:** V2 defaults to ~/.grimoire-v2/ rather than ~/.grimoire/; no implicit V1 reads or writes.
 
+## First-slice status
+
+Implemented as the read-only resolver and V1-isolation guard `grimoire.library`; the contract is in [Architecture](../../ARCHITECTURE.md#library-location-and-v1-isolation-implemented-grimoirelibrary). Tests cover:
+- the default and the override;
+- V1 isolation, including symlinks, case and normalization, Windows name aliases and not-yet-existing V1 roots;
+- no directory creation, and no V1 directory opened during a default launch;
+- the write-destination and migration-pair guards.
+
+They pass on Ubuntu, macOS and Windows CI. Scenarios an OS cannot produce are proven by injection on every OS: FIFOs on Windows, and a vanished working directory. Explicit initialization, the Android private default and a portable location are later milestones; actual writers are [Native File Store](native-file-store-and-revisions.md#inherited-from-wave-1).
+
 ## Scope and first proof
 Test path resolution, GRIMOIRE_V2_HOME overrides, symlink/case normalization, refusal to use a V1 source as a V2 destination, and no directory creation on an ordinary read.
 

@@ -50,6 +50,8 @@ The scheme makes the three forms mutually unambiguous. `parse_ref` dispatches on
 
   Excluding the named sources lets the rest build, so a broken add-on cannot make a user's world unresolvable. The one exception is two packages claiming the same source ID: no reference can tell them apart, and one must be renamed.
 
+  **This holds only if the loader admits each package under its own source id.** The index trusts the `source`, `declared_by` and heads it is given. An add-on that ships a `world:faerun/...` revision or head would otherwise be blamed on, or redirect, Faerûn's own references. The loader obligation belongs to the [Native File Store](roadmap/sprints/native-file-store-and-revisions.md#inherited-from-wave-1).
+
 ## Explicit links
 
 `DefinitionLink(subject, relation, object, declared_by)` takes `declared_by`, a registered source, as provenance.

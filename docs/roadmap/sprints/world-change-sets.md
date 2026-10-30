@@ -18,6 +18,13 @@ Add a location and update an existing guild link; a conflicting edit aborts or r
 ## Independence and interfaces
 No autonomous agent required. This edits source records; gameplay effects have different domain rules and need not share an event type.
 
+## Inherited from Wave 1
+
+The [Wave 1 audit](../README.md#wave-1--foundational-contracts-isolation-and-cost-baselines) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+
+**Obligations**
+- Its apply/reject decisions are the first approval UI: issue `grimoire.security` approvals only from a direct human action, showing `describe()` and the staged content its digest covers (007).
+
 ## Open questions
 - All-or-nothing or recoverable staged edits?
 - Who may approve auto-apply exceptions?

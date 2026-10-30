@@ -24,6 +24,17 @@ A model outage falls back or fails visibly; an accepted roll/effect is never sil
 ## Independence and interfaces
 Infrastructure works with existing role routes; real-time voice may demand tighter budgets but is not required.
 
+## Inherited from Wave 1
+
+The [Wave 1 audit](../README.md#wave-1--foundational-contracts-isolation-and-cost-baselines) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+
+**Obligations**
+- Issue a provider request only for a `PlannedCall` of the turn's `TurnInferencePlan`, and book every attempt (failures and route fallbacks included) on its `TurnUsageLedger` as `provider_reported`, with `None` for any count the provider did not report (004, [inference](../../INFERENCE.md)). Usage sums are lower bounds while any count is unreported; reports must say so.
+- Authorize every provider call as `execute` on `providers/<name>`; keys live under reserved roots and are read only by trusted adapter code (007, [tool authority](../../TOOL_AUTHORITY.md)).
+
+**First-proof additions**
+- A scripted provider fake with injectable timeout, error, truncated-stream and cancellation faults: a failed call never yields accepted state, and violations are named, seeded and bounded by call/token counts (006 milestone 2, the inference-run half of its fault harness).
+
 ## Open questions
 - How are token accounting discrepancies handled?
 - What objective signals trigger more expensive models?

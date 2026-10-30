@@ -21,6 +21,13 @@ One player says 'I attack' while another says 'wait'; no NPC action is committed
 ## Independence and interfaces
 Works with explicit per-user channels before any diarization model; local multi-PC text and multiplayer networking are optional integrations.
 
+## Inherited from Wave 1
+
+The [Wave 1 audit](../README.md#wave-1--foundational-contracts-isolation-and-cost-baselines) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+
+**Obligations**
+- Only the player who asked may confirm a pending destructive command; an unknown or different speaker cannot. Wave 1's confirmation is bound to target and revision but knows no speaker (008).
+
 ## Open questions
 - Should identity be assigned by device, channel, manual selection or diarization?
 - How is cross-talk handled?

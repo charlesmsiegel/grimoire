@@ -78,9 +78,17 @@ Presets are frozen into explicit domains at grant time. Redefining a preset late
 - **Protected claims about the player's own PC are struck** (`player_correction`). This applies even when the claim was delegated or expressed the player's own contribution.
 - **Other claims about the player's PC are only flagged** and stay accepted (`review.disputed`). This covers sensations, external effects, unresolved outcomes and subjectless world facts; any player with an actor in the campaign may flag the last. A flag is a possible-mislabel report for a later referee, never a veto of harm or failure.
 - **Resolved outcomes and disclosed condition reactions are refused** (`not_player_authority`). Content limits belong to Session Zero.
-- **Corrections by anyone other than the subject's controller are refused** (`not_controller`). Ambiguous control of the subject raises `AuthorityError`.
+- **Corrections by anyone other than the subject's controller are refused** (`not_controller`). Ambiguous control of the subject raises `AuthorityError` (an `Exception`, deliberately not an `OSError`).
 
 A correction does not revoke a delegation. The player revokes it separately so the overreach does not recur.
+
+**Known limits of the correction flow** (owner: [Narration Continuity Referee](roadmap/sprints/narration-continuity-referee.md#inherited-from-wave-1)). A misattributed claim cannot be corrected or flagged by the PC's player. Two shapes do this:
+- a claim whose subject is an NPC but which speaks for the PC (refused `not_controller`);
+- PC speech bundled into a resolved outcome (refused `not_player_authority`).
+
+Both are labelling errors, so the remedy is a labeller and a mislabel-review path, not a wider correction right that could strike claims about other actors.
+
+**Delegations and control changes.** Control assignments are a snapshot, with no history. A delegation is therefore honored whenever its grantor controls the PC again: one granted by P1 is suspended while P2 controls the PC, and it applies again when control returns to P1. Ending it for good takes a revocation by the grantor. Owners for control history: [Native File Store](roadmap/sprints/native-file-store-and-revisions.md) and [Local Multi PC](roadmap/sprints/local-multi-pc.md).
 
 ## Deferred
 

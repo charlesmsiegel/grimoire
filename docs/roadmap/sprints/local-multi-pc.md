@@ -18,6 +18,13 @@ Two PCs speak, the narrator responds once, and each post retains the correct aut
 ## Independence and interfaces
 A local UI + turn envelope change; does not depend on network collaboration or voice diarization.
 
+## Inherited from Wave 1
+
+The [Wave 1 audit](../README.md#wave-1--foundational-contracts-isolation-and-cost-baselines) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+
+**Obligations**
+- Map routed intents to contributions with the actual speaker as submitter ([intent routing](../../intent-routing.md#handing-a-pc-intent-to-the-authority-policy)), and reconcile authority `controller_id`s with `grimoire.security` principals (003, 007, 008).
+
 ## Open questions
 - Should drafts survive restart?
 - How is ordering determined?

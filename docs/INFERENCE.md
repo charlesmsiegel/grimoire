@@ -82,7 +82,7 @@ Token semantics follow the lessons of V0.2.1's usage ledger:
 - Every attempt is summed, including failed retries.
 - A `not_sent` attempt used nothing, so its measurement does not affect `provider_reported_only`.
 
-A ledger's `summary()` breaks usage down into `total`, `baseline`, `optional`, `by_stage` and `by_actor` (key `None` for scene-level calls). Each breakdown gives sums and also counts how many attempts left each field unreported. The summary also exposes:
+A ledger's `summary()` breaks usage down into `total`, `baseline`, `optional`, `by_stage` and `by_actor` (key `None` for scene-level calls). Each breakdown gives sums and also counts how many attempts left each field unreported. A sum covers reported counts only, so it is a lower bound whenever its field has any unreported attempts; a report must show the two together, never the sum alone. The summary also exposes:
 
 - `unmetered_call_ids`: planned calls with no recorded attempt. These are missing data, not free calls.
 - `complete`: no unmetered call, and every attempt reported input and output.
