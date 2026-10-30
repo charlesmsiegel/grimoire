@@ -23,6 +23,13 @@ A malformed module cannot bind; a successful edit affects new checks without cha
 ## Independence and interfaces
 Authoring tools can evolve using the existing module schema; full gameplay support for every rules family is not a prerequisite.
 
+## Inherited from Wave 1
+
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+
+**Obligations**
+- Rule scripts from imported or community modules never run in-process with library authority. Until real isolation exists they run, if at all, as untrusted workers bounded by `grimoire.security` grants (007; process sandboxing is that sprint's moonshot).
+
 ## Open questions
 - Which hook language is acceptably safe?
 - Which rule validations can be static?

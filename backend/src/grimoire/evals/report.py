@@ -9,6 +9,10 @@ from .gate import GateReport
 
 SYNTHETIC_NOTICE = ("no regression against a synthetic baseline — not a cost/quality "
                     "certification")
+#: "measured" is what the run file says about itself. Until measured runs carry
+#: provider-ledger evidence (sprint 015), the report must not present them as verified.
+SELF_DECLARED_NOTICE = ("provenance \"measured\" is self-declared by the run file; no provider "
+                        "usage ledger backs it yet")
 
 
 def _fmt(value: object) -> str:
@@ -51,6 +55,8 @@ def render(report: GateReport) -> str:
         lines.append(f"note: {SYNTHETIC_NOTICE}")
     elif report.synthetic:
         lines.append("note: at least one run is synthetic")
+    if "measured" in (report.baseline.provenance, report.candidate.provenance):
+        lines.append(f"note: {SELF_DECLARED_NOTICE}")
     loosened = report.policy.non_defaults()
     if loosened:
         lines.append(f"policy (non-default): {_mapping(loosened)}")

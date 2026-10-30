@@ -204,3 +204,62 @@ def test_a_baseline_without_npc_lines_cannot_certify_voice():
     report = compare(scenario, baseline, candidate)
     assert checks(report) == {"baseline_invalid"}
     assert report.findings[0].subject == "no_npc_contributions"
+
+
+def _leak(run):
+    contribution(run, 1, "npc-bellamy")["text"] += f" Also, {SECRET}."
+
+
+def _pc_authored(run):
+    contribution(run, 2, None)["text"] += " Wren decides to trust Bellamy."
+
+
+def _negate_every_choice(run):
+    for turn, marker in ((1, "Oda says Wren never offered a coin."),
+                         (2, "Wren stays at the counter."), (3, "Bellamy refuses to sing.")):
+        contribution(run, turn, None)["text"] += f" {marker}"
+
+
+def _merge_npc_calls(run):
+    for turn in (1, 2, 3):
+        bellamy = contribution(run, turn, "npc-bellamy")
+        run["calls"].remove(call(run, bellamy["call_id"]))
+        bellamy["call_id"] = f"t{turn}-oda"
+
+
+def _copy_voices(run):
+    for turn in (1, 2, 3):
+        contribution(run, turn, "npc-bellamy")["text"] = contribution(run, turn, "npc-oda")["text"]
+
+
+def _pay_a_silent_npc(run):
+    run["calls"].append({"call_id": "t1-quill", "turn": 1, "purpose": "npc_generation",
+                         "actor_id": "npc-quill", "feature_flag": None, "input_tokens": 50,
+                         "cached_input_tokens": 0, "output_tokens": 5, "latency_ms": 10})
+
+
+def _background_planner(run):
+    run["calls"].append({"call_id": "t1-plan", "turn": 1, "purpose": "planning", "actor_id": None,
+                         "feature_flag": None, "input_tokens": 50, "cached_input_tokens": 0,
+                         "output_tokens": 5, "latency_ms": 10})
+
+
+@pytest.mark.parametrize(("defect", "expected"), [
+    (_leak, "knowledge_leak"),
+    (_pc_authored, "player_sovereignty"),
+    (_negate_every_choice, "choice_negated"),
+    (_merge_npc_calls, "separate_generation"),
+    (_copy_voices, "voice_regression"),
+    (scale_tokens(3), "cost_regression"),
+    (_pay_a_silent_npc, "orphan_generation"),
+    (_background_planner, "unflagged_inference"),
+], ids=lambda value: getattr(value, "__name__", value))
+def test_no_rejection_is_rescued_by_higher_judge_scores(bench, defect, expected):
+    # The baseline's prose fluency is 0.6; every candidate here reads better (0.99).
+    def fluent(run):
+        defect(run)
+        run["judge_scores"] = {"fluency": 0.99, "agency": 1.0}
+    report = gate(bench, fluent)
+    assert report.baseline.judge_scores["fluency"] == 0.6
+    assert report.candidate.judge_scores["fluency"] == 0.99
+    assert not report.passed and expected in checks(report)

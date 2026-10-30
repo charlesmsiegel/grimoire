@@ -1,6 +1,11 @@
 # Player Sovereignty and Narration Authority
 
-**Status:** first slice implemented as a pure authority policy over *labelled* narration claims. See the [player sovereignty contract](../../PLAYER_SOVEREIGNTY.md). It covers all three milestones as deterministic tests over synthetic fixtures. No prose narrator is constrained yet, there is no freeform scene runner, and player trust has not been evaluated with people or models.
+**Status:** first slice implemented as a pure authority policy over *labelled* narration claims; see the [player sovereignty contract](../../PLAYER_SOVEREIGNTY.md). The roadmap's first proof (PC intention, voluntary dialogue and interiority stay under human control) is met **at policy level, on synthetic fixtures**:
+- Milestone 1: the forbidden-authorship errors, narration policy and correction flow exist as pure functions; there are no freeform scenes to test them on yet. The correction flow cannot correct or flag a *misattributed* overreach (a claim labelled with an NPC subject, or PC speech bundled into an outcome). That needs the claim labeller and its mislabel review, owned by [Narration Continuity Referee](narration-continuity-referee.md#inherited-from-wave-1).
+- Milestone 2: turn-submission and narration-acceptance checks exist as pure functions; no turn pipeline calls them.
+- Milestone 3: delegation modes exist as an API, with one synthetic scenario each for ensemble, romance, combat and mystery.
+
+Nothing constrains generated prose, no UI exposes delegation or correction, and player trust has not been evaluated. Owners: claim labelling, [Narration Continuity Referee](narration-continuity-referee.md); turn submission and narration acceptance, [Minimal Text Scene Runner](minimal-text-scene-runner.md); player-trust evaluation, [Story Quality Benchmarks](story-quality-benchmarks.md) milestone 3.
 
 **Outcome:** The player retains meaningful control of their PC's intent, voluntary speech, choices and interior experience; Grimoire narrates a responsive world without stealing agency.
 

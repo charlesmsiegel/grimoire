@@ -21,6 +21,13 @@ An exported creator add-on installs into a second library with provenance intact
 ## Independence and interfaces
 Needs only a minimal source manifest; marketplace hosting, commercial policy and auto-updaters remain optional.
 
+## Inherited from Wave 1
+
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+
+**Obligations**
+- Export and re-import preserve source-qualified references byte-identically in the [identity](../../IDENTITY.md) text forms, including pins, links and broken references (002 milestone 3).
+
 ## Open questions
 - What is the smallest useful package manifest?
 - How are licensed/restricted assets represented?

@@ -20,6 +20,14 @@ used, and a path overlapping a V1 library is refused. Nothing is created.
 """
 
 
+def _say(text: str, stream=None) -> None:
+    """Print `text`, escaping what the stream cannot encode (an undecodable POSIX
+    filename byte, say) instead of crashing after the path was resolved."""
+    stream = sys.stdout if stream is None else stream
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    print(text.encode(encoding, "backslashreplace").decode(encoding), file=stream)
+
+
 def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None = None,
          home: Path | None = None, platform: str | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
@@ -32,12 +40,12 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
     try:
         location = resolve_library(environ=environ, home=home, platform=platform)
     except V1IsolationError as error:
-        print(f"error: {error}", file=sys.stderr)
+        _say(f"error: {error}", sys.stderr)
         return 3
     except LibraryPathError as error:
-        print(f"error: {error}", file=sys.stderr)
+        _say(f"error: {error}", sys.stderr)
         return 2
-    print(f"library: {location.path}")
+    _say(f"library: {location.path}")
     print(f"origin: {location.origin}")
     print(f"exists: {'yes' if location.path.is_dir() else 'no'}")
     return 0

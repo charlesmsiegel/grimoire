@@ -4,6 +4,12 @@
 
 
 > **First slice status:** the pure authorization kernel `grimoire.security` landed with the contract in [Tool authority](../../TOOL_AUTHORITY.md). The proving scenario is **simulated** with a synthetic compromised card-import worker; no real tool workflow, importer, file store or approval UI is integrated yet.
+>
+> Two scope lines are read this way:
+> - "Imported cards must never execute instructions" means instructions in imported content never gain authority beyond the importer's grants. The kernel bounds authority, not what a worker chooses to attempt.
+> - Milestone 2's "one existing tool workflow" is the first V2 worker interface (card import), because V2 has no existing tools yet.
+>
+> Integration owners are listed in [Tool authority](../../TOOL_AUTHORITY.md#requirements-on-later-sprints).
 
 **Outcome:** Keep imported worlds, model outputs and autonomous tools from acquiring authority they were not granted.
 

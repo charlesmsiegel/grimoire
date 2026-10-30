@@ -118,12 +118,16 @@ uncertain "delete the scene" must be said or clicked again unambiguously.
 ## Confirmation
 
 ```python
-pending = request_confirmation(intent, target="scene:s1@rev7", now=now)        # ttl 30 s
-result = resolve_confirmation(pending, Utterance("yes"), now=later,
-                              current_target="scene:s1@rev7", context=context)
+pending = request_confirmation(intent, target="scene:s1", revision="rev7", now=now)  # ttl 30 s
+result = resolve_confirmation(pending, Utterance("yes"), now=later, current_target="scene:s1",
+                              current_revision="rev7", context=context)
 ```
 
-The caller holds `pending`, and each resolution consumes it. Checks run in this order:
+`resolve_confirmation` is a **pure check**: it consumes nothing and does not know who is speaking.
+The caller holds `pending` and discards it after any terminal result (`confirmed`, `declined`,
+`expired`, `stale`). Single use comes from the executor: it acts on the exact target and revision a
+`confirmed` result names and advances that revision, so a replayed "yes" is then `stale`. Checks
+run in this order:
 
 1. Expired (or not yet issued) → `expired`.
 2. A different target or revision → `stale`.
@@ -134,8 +138,38 @@ The caller holds `pending`, and each resolution consumes it. Checks run in this 
    threshold, and every alternative must be a plain (non-questioning) yes.
 6. Anything else → `unclear`.
 
-Only `confirmed` returns the command and the target. The caller must execute against that exact
-target.
+Only `confirmed` returns the command, target and revision. The caller must execute against that
+exact target revision.
+
+**A confirmation is not an authorization.** It names no principal, grant or approval, and the
+router has no permission input: `RoutingContext` gates only the PC and director lanes, and a
+command's `gate` is a catalog label. An executor must authorize every `ui_command` exactly as it
+would the same click, through the application's permission path (see
+[Tool authority](TOOL_AUTHORITY.md)), and a `confirm` command additionally needs this
+confirmation. Binding a confirmation to the speaking user or session is not implemented; it needs a
+speaker identity the router does not have. Owners: the executor and permission path, the [first
+text runner](roadmap/sprints/minimal-text-scene-runner.md); "only the requester may confirm",
+[collaborative multiplayer](roadmap/sprints/collaborative-multiplayer.md); voice attribution,
+[multi-speaker table audio](roadmap/sprints/multi-speaker-table-audio.md).
+
+## Handing a PC intent to the authority policy
+
+Routing classifies text; it does not decide who may speak for a PC. `RoutingContext.active_pc`
+is the caller's claim, and an `Intent` names no speaker. A caller turns a PC or director intent into
+a [player-sovereignty](PLAYER_SOVEREIGNTY.md) `PlayerContribution` with the **real submitter** and
+this kind, and `submit_contribution` then refuses anyone who does not control that actor:
+
+| Intent kind | Contribution kind |
+|---|---|
+| `pc_speech` | `speech` |
+| `pc_action` | `action` |
+| `director_instruction` | `directorial_request` |
+
+No lane yields an `interiority` or `commitment` contribution: "I promise to return at dawn" routes
+to `pc_action`, so a narration claim that the PC committed to something is refused rather than
+authorized. Actor ids here are campaign-local segments (`CampaignActor.actor_id`), not reference
+texts. Pinned by `backend/tests/test_wave1_integration.py`; owners: the first text runner (turn
+submission) and [Local multi-PC](roadmap/sprints/local-multi-pc.md) (who is speaking).
 
 ## Known limitations
 

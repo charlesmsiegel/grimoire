@@ -2,7 +2,7 @@
 
 V2 data is long-lived, local-first and human-editable, so the expensive failures are partial writes, mistaken identity, stale views, private-knowledge leaks and runs that cannot be recovered. This page lists the invariants that protect against those failures and the test that proves each one. It also describes the fault-injection harness and what it does **not** simulate.
 
-Run everything with `python -m pytest backend/tests -q`. CI runs this on Python 3.11 on Ubuntu (`domain` job), plus an advisory `compat` matrix: Python 3.12 and 3.13 on Ubuntu, and 3.11 on macOS and Windows. A green suite proves these contracts; it does not mean a playable app exists.
+Run everything with `python -m pytest backend/tests -q`. CI runs this on Python 3.11 on Ubuntu (`domain` job) and a `compat` matrix: Python 3.12 and 3.13 on Ubuntu, and 3.11 on macOS and Windows. Every job must pass; see [CI gate](#ci-gate). A green suite proves these contracts; it does not mean a playable app exists.
 
 ## Fault-injection harness (`grimoire.testing`)
 
@@ -76,12 +76,21 @@ The proving scenario for this slice is a crash immediately after one file has be
 | One definition yields independent campaign instances and knowledge | proven by `backend/tests/test_core.py::test_same_definition_has_independent_campaign_instances_and_knowledge` |
 | PC/NPC control is a role, not identity | proven by `backend/tests/test_core.py::test_control_changes_without_changing_actor_identity_or_history` |
 | Actor views are immutable snapshots | proven by `backend/tests/test_core.py::test_actor_view_is_an_immutable_snapshot` |
-| `grimoire.core` is pure: no I/O, providers or harness imports | proven by `backend/tests/test_invariant_catalog.py::test_core_is_pure` |
+| Pure packages (`grimoire.core`, `core.inference`, `intent`, `security`, and `evals` outside its loader/CLI) have no side effects: they import only allowlisted pure standard-library modules and their declared grimoire packages, use no I/O or dynamic-code builtins, and load no capability module even transitively. One table, `backend/tests/purity.py`, declares the rules | proven by `backend/tests/test_purity.py::test_pure_packages_respect_their_boundary`, `backend/tests/test_purity.py::test_importing_a_pure_package_loads_no_capability_module`, `backend/tests/test_purity.py::test_checker_flags_side_effect_spellings` |
 | Production code never imports the test harness | proven by `backend/tests/test_invariant_catalog.py::test_harness_is_test_only` |
-| Function-scoped tests cannot write to a real home or Grimoire library through `HOME`, `USERPROFILE`, `GRIMOIRE_HOME` or `GRIMOIRE_V2_HOME` (redirected to sentinels; hard-coded absolute paths are not intercepted) | proven by `backend/tests/test_privacy_sentinel.py::test_sentinel_fails_a_test_that_writes_into_home` |
+| Function-scoped tests cannot write to a real home or Grimoire library through `HOME`, `USERPROFILE`, `GRIMOIRE_HOME` or `GRIMOIRE_V2_HOME` (redirected to sentinels), nor through Windows' `HOMEDRIVE`/`HOMEPATH` fallback (removed); hard-coded absolute paths are not intercepted | proven by `backend/tests/test_privacy_sentinel.py::test_sentinel_fails_a_test_that_writes_into_home`, `backend/tests/test_privacy_sentinel.py::test_windows_home_fallbacks_are_removed` |
 | This catalog only cites tests that exist | proven by `backend/tests/test_invariant_catalog.py::test_catalog_references_exist` |
-| V2 never writes to V1's `~/.grimoire/` | not yet tested — owner: V2 Library Paths And Isolation (001) |
-| Source-qualified IDs survive persistence; no stale-identity substitution | not yet tested — owners: Source Qualified Identity (002), Native File Store (010) |
+| A narrator cannot author a PC's intent, speech, interiority, belief or commitment; a failed attempt stays failed | proven (labelled claims, synthetic) by `backend/tests/test_sovereignty_scenarios.py::test_proving_scenario_reach_for_her_hand`; generated prose is not yet constrained (owners: 035, 047) |
+| An authority denial is never an `OSError` a file adapter could swallow | proven by `backend/tests/test_authority.py::test_authority_denials_are_not_os_errors` |
+| Four present NPCs, two speaking: exactly two separately planned NPC generation calls, no optional calls by default, and missing usage is never zero | proven by `backend/tests/test_inference_plan.py::test_four_present_two_speaking_npcs_cost_two_generation_calls`, `backend/tests/test_inference_policy.py::test_default_policy_disables_every_optional_stage`, `backend/tests/test_inference_usage.py::test_missing_usage_is_not_zero` |
+| A story-quality candidate with a hard-check defect is rejected however fluent it is | proven by `backend/tests/test_evals_gate.py::test_no_rejection_is_rescued_by_higher_judge_scores` |
+| A malicious imported card gains no authority beyond the importer's grants, and cannot use or consume a pending human approval | proven (simulated worker) by `backend/tests/test_security_card_import.py::test_malicious_card_cannot_escape_its_grants`, `backend/tests/test_security_card_import.py::test_malicious_card_cannot_borrow_a_pending_approval_or_a_lookalike_scope` |
+| No worker can create a V1-only root entry, so a V2 library never reads as V1 | proven by `backend/tests/test_wave1_integration.py::test_no_worker_can_create_a_v1_root_entry_in_a_v2_library` |
+| UI command, PC speech, PC action and direction are distinguished; uncertain speech does nothing destructive; a destructive command needs a yes for its exact target revision | proven by `backend/tests/test_intent_router.py::test_proving_scenario`, `backend/tests/test_intent_confirm.py::test_a_replayed_yes_after_the_command_ran_is_stale`; authorization and speaker binding belong to the executor (035, 104) |
+| Independently built Wave 1 contracts still meet as documented (intent→contribution, actor ids, evals↔inference vocabulary) | proven by `backend/tests/test_wave1_integration.py::test_only_the_controller_can_turn_a_routed_line_into_their_pcs_contribution`, `backend/tests/test_wave1_integration.py::test_eval_call_purposes_are_inference_stages_or_documented_divergence` |
+| V2 never resolves, opens or targets V1's library: a default launch opens no V1 directory, and every V2 write destination that is, sits inside or contains a V1 library (including Windows aliases and V1 roots that do not exist yet) is refused | proven by `backend/tests/test_library_paths.py::test_default_launch_never_opens_or_lists_v1`, `backend/tests/test_library_paths.py::test_write_destination_refuses_every_v1_location`, `backend/tests/test_library_paths.py::test_windows_spellings_of_the_v1_default_are_refused_before_it_exists`; actual writers must follow the writer obligations (owner: Native File Store (010)) |
+| No stale-identity or by-name substitution in memory: unpinned references follow the declared head, pinned ones keep their revision | proven by `backend/tests/test_index.py::test_unpinned_follows_declared_head_and_pinned_stays`, `backend/tests/test_core.py::test_unpinned_actor_follows_head_and_pinned_actor_stays` |
+| Source-qualified IDs, owners, heads, links and broken references survive persistence | not yet tested — owner: Native File Store (010) |
 | A stale write is rejected; reads come from one revision-consistent view | not yet tested — owners: Native File Store (010), Effective World Snapshots (022) |
 | Concurrent device edits are preserved as conflicts | not yet tested — owner: Sync Revisions And Conflict Core (019); use `Interleave`/`meddle` with replica roots |
 | One accepted action commits exactly once across crashes | not yet tested — owner: Durable Action Recovery (030); use `explore_crashes(..., recovery_crashes=True)` |
@@ -108,6 +117,10 @@ Not simulated:
 | Property and state-machine generation across forks, retcons and imports | moonshot |
 | A synthetic world/campaign fixture library with expected outcomes | Entity Facets (009), Native File Store (010), once records exist |
 | Reducing redundant setups across test modules | revisit when a second family of file-backed writer tests exists |
+
+## CI gate
+
+Every job in `.github/workflows/ci.yml` is meant to be required, and `v2` must be green at every commit. Wave 1 showed why: eight PRs each passed against an older `v2` and merged within minutes, and their combination was red. Windows first ran Sprint 001's tests when Sprint 006 added the matrix, and then every OS rejected Sprint 002's code under Sprint 006's purity allowlist. Because `v2` has no branch protection, red checks did not block later merges. The repository owner should configure `v2` to require every `domain` and `compat` check, with either "require branches to be up to date before merging" or a merge queue (the workflow already listens for `merge_group`). Then a PR is tested against the `v2` it will actually join.
 
 ## Policies (answers to the sprint's open questions)
 

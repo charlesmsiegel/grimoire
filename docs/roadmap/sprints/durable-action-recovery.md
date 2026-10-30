@@ -18,6 +18,13 @@ A process crashes after decrementing a capture device but before registering a c
 ## Independence and interfaces
 Uses existing atomic file writes and locks; authored world Change Sets are a separate semantic caller, not forced into gameplay Effects.
 
+## Inherited from Wave 1
+
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+
+**Obligations**
+- Surface the persisted `grimoire.security` decision audit, including the lifecycle of grants and approvals, as part of "expose audit/undo"; a decision is recorded before it takes effect (007).
+
 ## Open questions
 - What is the smallest durable file-backed operation record?
 - How do manual edits interact with retries?

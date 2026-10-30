@@ -14,6 +14,14 @@ Owns V1 source interpretation and preview; target writers are owned by the impor
 ## Proving scenario
 A source avatar and an expression sprite both reference one image object and remain distinct placements in the preview.
 
+## Inherited from Wave 1
+
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+
+**Obligations**
+- Choose the V0.2.1 source explicitly and check the pair with `check_migration_paths`; the source is never written (001).
+- List, for review, every V1 path a `LegacyId` refuses (format characters such as ZWJ) and every pair of paths that differ only by Unicode normalization; never normalize them silently (002, [identity](../../IDENTITY.md)).
+
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove?
 - Which optional later integrations can stay outside the first slice?

@@ -22,6 +22,13 @@ A model has an NPC reach through a locked door, reference a secret they were nev
 ## Interfaces and independence
 Consumes immutable facts from [Scene Physical Continuity](scene-physical-continuity.md), [Knowledge and Perspective](knowledge-and-perspective.md) and accepted actions; owns detection/repair only, **not** state mutation or adjudication.
 
+## Inherited from Wave 1
+
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+
+**First-proof additions**
+- Extract atomic claims (domain, subject) from generated prose with a labeller that is not the narrator, and run them through `review_narration` (003). Route possible mislabels to review: a claim given an NPC subject that speaks for a PC, or PC speech bundled into an adjudicated outcome, cannot be struck or flagged through the player's correction flow today ([player sovereignty](../../PLAYER_SOVEREIGNTY.md)).
+
 ## Open questions
 - When may a repair be automatic?
 - What confidence threshold avoids ruining deliberate ambiguity?

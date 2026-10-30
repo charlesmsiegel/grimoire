@@ -13,6 +13,10 @@ _REDIRECTED = ("HOME", "USERPROFILE", "GRIMOIRE_HOME", "GRIMOIRE_V2_HOME")
 def _private_home_sentinel(tmp_path_factory, monkeypatch):
     """Point home and library variables at empty sentinels and fail if one is written."""
     sentinels = {}
+    # Windows falls back to HOMEDRIVE+HOMEPATH when USERPROFILE is unset, so a test
+    # that deletes USERPROFILE must not reach the real profile through them.
+    for variable in ("HOMEDRIVE", "HOMEPATH"):
+        monkeypatch.delenv(variable, raising=False)
     for variable in _REDIRECTED:
         sentinel = tmp_path_factory.mktemp(f"sentinel-{variable.lower()}")
         monkeypatch.setenv(variable, str(sentinel))

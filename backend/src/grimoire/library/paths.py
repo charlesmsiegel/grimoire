@@ -38,9 +38,9 @@ import re
 import stat
 import sys
 import unicodedata
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Literal
 
 V2_HOME_ENV = "GRIMOIRE_V2_HOME"
@@ -141,6 +141,11 @@ def _fspath(path: object) -> object:
         raise LibraryPathError(f"{path!r} is not a path") from error
 
 
+def _working_directory() -> str:
+    """The cwd V1 resolved a relative ``GRIMOIRE_HOME`` against (a seam for tests)."""
+    return os.getcwd()
+
+
 def _known_home(home: Path | None) -> Path | None:
     """The injected or process home; None when the process has none."""
     if home is None:
@@ -149,19 +154,23 @@ def _known_home(home: Path | None) -> Path | None:
         except (RuntimeError, KeyError, OSError):
             return None
     home = Path(home)
+    _require_os_text(str(home), "the home directory")
     if not home.is_absolute():
         raise LibraryPathError(f"the home directory {str(home)!r} is not absolute")
     return home
 
 
 def _expand_tilde(raw: str, home: Path | None, what: str) -> Path:
-    """``~`` and ``~/...`` against `home` -- never the process HOME, never ``~user``."""
-    head, sep, rest = raw.partition("/")
+    """``~`` and ``~/...`` against `home` -- never the process HOME, never ``~user``.
+    On Windows ``~\\...`` is the same, as ``expanduser`` reads it there."""
+    separators = "/\\" if _default_platform() == "win32" else "/"
+    cut = next((i for i, char in enumerate(raw) if char in separators), len(raw))
+    head, rest = raw[:cut], raw[cut + 1:]
     if head != "~":
         raise LibraryPathError(f"{what}: {raw!r} names another user's home; spell the path out")
     if home is None:
         raise LibraryPathError(f"{what}: cannot expand {raw!r} without a home directory")
-    rest = rest.lstrip("/")  # V1's `expanduser` reads "~//x" as $HOME/x; joining "/x" would drop home
+    rest = rest.lstrip(separators)  # V1's `expanduser` reads "~//x" as $HOME/x; joining "/x" would drop home
     return home / rest if rest else home
 
 
@@ -176,16 +185,43 @@ def _parse_user_path(raw: object, home: Path | None, what: str) -> Path:
     return path
 
 
+def _require_os_text(text: str, what: object, *, platform: str | None = None) -> None:
+    """Refuse a name this OS cannot store, the same way on every platform.
+
+    POSIX names are bytes: a name must encode with ``surrogateescape`` (so Python's
+    surrogate-escaped spelling of an undecodable byte, ``\\udc80``-``\\udcff``,
+    is a real name, but a lone ``\\ud800`` is not). Windows names are UTF-16 and
+    its ``surrogatepass`` encoding would accept a lone surrogate that is not text,
+    so there any surrogate is refused. (On a POSIX system whose filesystem
+    encoding is not UTF-8, a name this accepts may still fail to resolve; that
+    failure is a `LibraryPathError` too.)
+    """
+    platform = _default_platform() if platform is None else platform
+    if platform == "win32":
+        usable = not any("\ud800" <= char <= "\udfff" for char in text)
+    else:
+        try:
+            text.encode("utf-8", "surrogateescape")
+            usable = True
+        except UnicodeEncodeError:
+            usable = False
+    if not usable:
+        raise LibraryPathError(f"{what}: {text!r} cannot be used as a path on this system")
+
+
 def _realpath(path: Path) -> Path:
     """`path` with every existing link followed. Python 3.13's `Path.resolve`
     returns a looping path unchanged, so this asks `realpath` strictly first."""
+    _require_os_text(str(path), path)
     try:
         try:
-            return Path(os.path.realpath(path, strict=True))
+            resolved = Path(os.path.realpath(path, strict=True))
         except (FileNotFoundError, NotADirectoryError):
-            return Path(os.path.realpath(path))
+            resolved = Path(os.path.realpath(path))
     except (OSError, RuntimeError, ValueError) as error:  # ValueError: a NUL or unencodable name
         raise LibraryPathError(f"cannot resolve {path}: {error}") from error
+    _require_os_text(str(resolved), path)  # a link may lead to a name NTFS stores but is not text
+    return resolved
 
 
 def _probe(path: Path, *, follow: bool = True) -> os.stat_result | None:
@@ -227,7 +263,7 @@ def _guarded_roots(environ: Mapping[str, str], home: Path | None) -> list[tuple[
         try:
             # Joined, not `abspath`ed: collapsing "link/.." by name would guard a
             # different directory from the one V1's OS calls reached.
-            literal = Path(v1_home) if os.path.isabs(v1_home) else Path(os.getcwd(), v1_home)
+            literal = Path(v1_home) if os.path.isabs(v1_home) else Path(_working_directory(), v1_home)
         except (OSError, ValueError) as error:  # a vanished cwd, an embedded NUL
             raise LibraryPathError(f"cannot locate the V1 library in {V1_HOME_ENV}: {error}") from error
         roots.append((f"the V1 library in {V1_HOME_ENV}", literal))
@@ -309,10 +345,42 @@ def _require_small_file(info: os.stat_result, unusable) -> None:
         raise unusable("is not a small regular file")
 
 
-def _key(path: Path) -> tuple[str, ...]:
-    """Components compared case- and normalization-blind: refusing ``~/.Grimoire``
-    on a case-sensitive disk is the safe side of an APFS or NTFS alias."""
-    return tuple(unicodedata.normalize("NFC", part).casefold() for part in path.parts)
+def _component_key(part: str, windows: bool) -> str:
+    """One name, compared the way the most permissive filesystem would.
+
+    Case- and normalization-blind everywhere: refusing ``~/.Grimoire`` on a
+    case-sensitive disk is the safe side of an APFS or NTFS alias. Windows also
+    opens ``.grimoire.``, ``.grimoire `` and ``.grimoire::$INDEX_ALLOCATION`` as
+    ``.grimoire``, so there a ``:stream`` suffix and trailing dots and spaces are
+    ignored. On POSIX those are distinct names (``backup-10:00``), so they stay.
+    """
+    name = unicodedata.normalize("NFC", part).casefold()
+    return name.split(":", 1)[0].rstrip(" .") if windows else name
+
+
+def _anchor_key(anchor: str) -> str:
+    """A drive or root, without the ``\\\\?\\`` or ``\\\\.\\`` prefix that names the same place."""
+    key = anchor.casefold().replace("/", "\\")
+    if key.startswith("\\\\?\\unc\\"):
+        return "\\\\" + key[len("\\\\?\\unc\\"):]
+    if key.startswith(("\\\\?\\", "\\\\.\\")):
+        return key[len("\\\\?\\"):]
+    return key
+
+
+def _tail_key(parts: Iterable[str]) -> tuple[str, ...]:
+    # A name that is nothing but dots or spaces vanishes on Windows ("data\\..." is "data").
+    windows = _default_platform() == "win32"
+    return tuple(key for part in parts if (key := _component_key(part, windows)))
+
+
+def _key(path: PurePath) -> tuple[str, ...]:
+    """Components compared as every supported filesystem might alias them."""
+    anchor, rest = path.anchor, path.parts[1:] if path.anchor else path.parts
+    if anchor.casefold().replace("/", "\\") == "\\\\.\\unc\\" and len(rest) >= 2:
+        # pathlib leaves server and share out of a \\.\UNC\ anchor; \\?\UNC\ keeps them.
+        anchor, rest = f"\\\\{rest[0]}\\{rest[1]}\\", rest[2:]
+    return ((_anchor_key(anchor),) if anchor else ()) + _tail_key(rest)
 
 
 def _lexical_relation(path: Path, root: Path) -> str | None:
@@ -394,22 +462,48 @@ def _lineage(path: Path) -> Iterator[Path]:
     yield from path.parents
 
 
+def _nearest_existing(path: Path) -> tuple[os.stat_result, tuple[str, ...]] | None:
+    """The deepest existing ancestor's identity, and the keyed names below it."""
+    for ancestor in _lineage(path):
+        info = _probe(ancestor)
+        if info is not None:
+            return info, _tail_key(path.parts[len(ancestor.parts):])
+    return None
+
+
+def _anchored_relation(path: Path, root: Path) -> str | None:
+    """Whether `path` is, is inside or contains `root` once they meet at `root`'s
+    nearest existing ancestor -- which also covers a root that does not exist
+    yet but lives under a directory `path` reaches by another name."""
+    anchor = _nearest_existing(root)
+    if anchor is None:
+        return None
+    root_info, root_tail = anchor
+    for ancestor in _lineage(path):
+        info = _probe(ancestor)
+        if info is None or not _same_file(info, root_info):
+            continue
+        tail = _tail_key(path.parts[len(ancestor.parts):])
+        if tail == root_tail:
+            return "is"
+        if tail[:len(root_tail)] == root_tail:
+            return "is inside"
+        if root_tail[:len(tail)] == tail:
+            return "contains"
+    return None
+
+
+_CONVERSE = {"is": "is", "is inside": "contains", "contains": "is inside"}
+
+
 def _identity_relation(path: Path, root: Path) -> str | None:
     """The relation by device and inode, which sees aliases names do not:
-    case-insensitive filesystems, bind mounts, hard-linked directories."""
-    root_info = _probe(root)
-    if root_info is not None:
-        for ancestor in _lineage(path):
-            info = _probe(ancestor)
-            if info is not None and _same_file(info, root_info):
-                return "is" if ancestor == path else "is inside"
-    path_info = _probe(path)
-    if path_info is not None:  # a missing path cannot contain anything
-        for ancestor in _lineage(root):
-            info = _probe(ancestor)
-            if info is not None and _same_file(info, path_info):
-                return "is" if ancestor == root else "contains"
-    return None
+    case-insensitive filesystems, bind mounts, hard-linked directories, macOS
+    firmlinks -- also for a root (or path) that does not exist yet."""
+    relation = _anchored_relation(path, root)
+    if relation is None and (converse := _anchored_relation(root, path)) is not None:
+        relation = _CONVERSE[converse]
+    return relation
 
 
 def _looks_like_v1(directory: Path) -> bool:

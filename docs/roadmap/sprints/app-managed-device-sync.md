@@ -14,6 +14,13 @@ Owns transfer, pairing and sync status; depends on sync revision core and permis
 ## Proving scenario
 Offline changes transfer safely once devices connect. When neither device is reachable, sync needs a relay/server or user-provided remote endpoint.
 
+## Inherited from Wave 1
+
+The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obligations* are contracts it must not violate; *first-proof additions* enlarge its first slice and are listed in the roadmap row.
+
+**Obligations**
+- Pairing keys and device credentials live under reserved `grimoire.security` roots, and a peer device is a non-owner principal that cannot issue approvals for this library (007, [tool authority](../../TOOL_AUTHORITY.md#requirements-on-later-sprints)).
+
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove?
 - Which optional later integrations can stay outside the first slice?
