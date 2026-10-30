@@ -247,6 +247,7 @@ def test_resolved_voices_are_validated():
         lambda: ResolvedVoice(ACTOR, "N", None, None, (), (Duck(),), provenance),
         lambda: ResolvedVoice("npc-bellamy", "N", None, None, (), (E1,), provenance),
         lambda: ResolvedVoice(ACTOR, " ", None, None, (), (E1,), provenance),
+        lambda: ResolvedVoice(ACTOR, "\u200b", None, None, (), (E1,), provenance),
         lambda: ResolvedVoice(ACTOR, "N", PORTRAYAL.unpinned(), None, (), (E1,), provenance),
         lambda: ResolvedVoice(ACTOR, "N", None, None, (), (E1,), MappingProxyType({})),
         lambda: ResolvedVoice(ACTOR, "N", None, None, (), (E1,), MappingProxyType({"e1": "elsewhere"})),

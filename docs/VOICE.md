@@ -65,7 +65,7 @@ How V1 `mes_example` and `voice_anchor.md` content becomes native examples and a
 
 `speaker_fragment(voice, *, secrets, known, max_chars=1200) -> SpeakerFragment`. The epistemic inputs `secrets` and `known` have **no defaults**: forgetting them is a `TypeError`, not an unscreened brief.
 
-`secrets` must be an ordered sequence (sets are refused), and each marker must contain words.
+`secrets` must be an ordered sequence (set and mapping containers are refused; the caller keeps any other iterable's order stable), and each marker must contain words.
 
 1. **Tag allowlist.** An example is included only if **every** id in `reveals` is in `known`. Otherwise the omission reason is `unknown_fact`, which covers facts that appear in neither `secrets` nor `known`.
 2. **Marker denylist.** An anchor or example whose text states a marker of any `SecretFact` not in `known` is omitted as `secret_marker`. Matching uses `grimoire.evals.text.contains_marker`, which is the [story-quality gate](evals/STORY_QUALITY.md)'s normaliser and whole-phrase matcher: curly quotes, zero-width spaces and case all fold, and `duke` does not match `dukedom`.

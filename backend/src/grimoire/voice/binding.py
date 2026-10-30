@@ -15,6 +15,7 @@ from types import MappingProxyType
 from grimoire.core.identity import InstanceRef, SourceRef
 from grimoire.core.index import DefinitionIndex, MissingDefinition
 from grimoire.core.model import CampaignActor
+from grimoire.evals.text import has_words
 
 from .errors import InvalidVoice, MissingVoice, VoiceMismatch
 from .profile import (
@@ -70,7 +71,7 @@ class ResolvedVoice:
     def __post_init__(self) -> None:
         if not isinstance(self.actor, InstanceRef):
             raise InvalidVoice("bad_actor", "a resolved voice belongs to an InstanceRef")
-        if not isinstance(self.name, str) or not self.name.strip():
+        if not isinstance(self.name, str) or not has_words(self.name):
             raise InvalidVoice("bad_name", f"{self.actor} needs a nonblank name")
         for revision in (self.actor_revision, self.portrayal):
             if revision is not None and not (isinstance(revision, SourceRef) and revision.pinned):
