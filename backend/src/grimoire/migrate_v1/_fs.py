@@ -8,7 +8,8 @@ a link after it was listed is never followed. Windows has no descriptor-relative
 walk, so there each step is a path ``lstat`` before and an ``fstat`` identity
 check after; the quiescence pass is the backstop there.
 
-Every regular file that is not excluded is hashed during the walk. An
+Every regular file that is not excluded or ignored OS litter is hashed during
+the walk. An
 interpreter that wants the bytes calls `Snapshot.read`, which re-opens the
 file, and the bytes it returns must hash to the walk's digest: what is parsed
 is what is reported.
@@ -203,8 +204,10 @@ class Snapshot:
                 with os.scandir(dfd) as listing:
                     names = sorted(item.name for item in listing)
             else:
+                self._same_directory(parts)
                 with os.scandir(self._path(parts)) as listing:
                     names = sorted(item.name for item in listing)
+                self._same_directory(parts)
         except SourceChanged:
             if dfd is not None:
                 os.close(dfd)
@@ -222,6 +225,13 @@ class Snapshot:
         finally:
             if dfd is not None and dfd != self._root_fd:
                 os.close(dfd)
+
+    def _same_directory(self, parts: tuple[str, ...]) -> None:
+        """Path walk only: the directory is still the one recorded (not swapped for a junction)."""
+        info = os.lstat(self._path(parts))
+        expected = self._root_identity if not parts else self.entries["/".join(parts)].identity
+        if _is_reparse(info) or not stat.S_ISDIR(info.st_mode) or (info.st_dev, info.st_ino) != expected:
+            raise SourceChanged(f"{'/'.join(parts) or 'the source root'} changed during the scan")
 
     def _path(self, parts: tuple[str, ...]) -> str:
         return os.path.join(self.root, *parts)

@@ -50,6 +50,8 @@ class Version:
     malformed: bool = False
     text: str | None = None
     texts: list[str] = field(default_factory=list)
+    spec: str | None = None
+    greetings: int | None = None
 
 
 @dataclass
@@ -107,13 +109,9 @@ def read_config(ctx: Context, lib: Library) -> dict:
         for key in ("inference_format", "inference_retired"):
             if key in meta:
                 lib.markers[key] = meta[key]
-        if _newer(meta.get("inference_format")):
-            ctx.finding("newer_format", entry.path, detail=f"inference_format {meta['inference_format']}")
+        if _text.newer_format(meta.get("inference_format")):
+            ctx.finding("newer_format", entry.path, detail="inference_format")
     return dict(lib.markers)
-
-
-def _newer(value: str | None) -> bool:
-    return value is not None and value.isdigit() and int(value) > 2
 
 
 def read_worlds(ctx: Context, lib: Library) -> list[dict]:
@@ -148,7 +146,7 @@ def read_actors(ctx: Context, lib: Library) -> None:
     for entry in ctx.snap.files("actor_meta"):
         actor = _actor(lib, entry.layout.coords)
         actor.meta_path = entry.path
-        text = ctx.read_text(entry)
+        text = ctx.read_text(entry)  # unreadable text is already listed as unresolved
         actor.meta_text = text
         meta = _text.parse_frontmatter(text)[0] if text is not None else {}
         actor.name = meta.get("name") or actor.id
@@ -197,6 +195,7 @@ def _card(ctx: Context, entry, actor: Actor) -> Version:
     card, problem = _text.load_json(text.encode("utf-8"))
     if problem is not None or not isinstance(card, dict):
         ctx.finding("malformed_card", entry.path, detail="not a JSON object")
+        ctx.unresolve("portrayal", entry.path, "malformed card")
         version.malformed = True
         return version
     spec = card.get("spec")
@@ -204,8 +203,10 @@ def _card(ctx: Context, entry, actor: Actor) -> Version:
         ctx.finding("card_spec", entry.path, detail=str(spec)[:40])
     data = card.get("data")
     unknown = sorted(k for k in card if k not in CARD_TOP_KEYS)
+    version.spec = spec if isinstance(spec, str) else None
     if not isinstance(data, dict):
         ctx.finding("malformed_card", entry.path, detail="data is not an object")
+        ctx.unresolve("portrayal", entry.path, "card data is not an object")
         version.malformed = True
         data = {}
     unknown += sorted(f"data.{k}" for k in data if k not in CARD_DATA_KEYS)
@@ -224,6 +225,8 @@ def _card(ctx: Context, entry, actor: Actor) -> Version:
     greetings = data.get("alternate_greetings")
     if isinstance(greetings, list):
         version.texts += [g for g in greetings if isinstance(g, str)]
+    version.greetings = (1 if isinstance(data.get("first_mes"), str) and data["first_mes"] else 0) + (
+        sum(1 for g in greetings if isinstance(g, str)) if isinstance(greetings, list) else 0)
     return version
 
 
@@ -242,9 +245,12 @@ def _persona(ctx: Context, entry, actor: Actor) -> Version:
     return version
 
 
-def resolve_ref(lib: Library, scope: str, scope_id: str, world: str | None, kind: str, rid: str) -> bool:
-    """Whether `<kind>:<rid>` names a record visible from this scope (campaigns see their world)."""
-    scopes = [(scope, scope_id)] + ([("world", world)] if scope == "campaign" and world else [])
+def resolve_ref(lib: Library, scope: str, scope_id: str, world: str | None, kind: str, rid: str,
+                hidden: frozenset[str] = frozenset()) -> bool:
+    """Whether `<kind>:<rid>` names a record visible from this scope. A campaign sees its
+    world's record unless it tombstoned or detached that id (`hidden`)."""
+    inherits = scope == "campaign" and world and f"{kind}/{rid}" not in hidden
+    scopes = [(scope, scope_id)] + ([("world", world)] if inherits else [])
     for s, sid in scopes:
         if kind in ("characters", "pcs"):
             actor = lib.actors.get((s, sid, kind, rid))
@@ -255,12 +261,17 @@ def resolve_ref(lib: Library, scope: str, scope_id: str, world: str | None, kind
     return False
 
 
-def record_rows(ctx: Context, lib: Library, world_of: dict[str, str | None]) -> list[dict]:
-    """Report rows for flat records, with reference fields resolved (never rebound by name)."""
+def record_rows(ctx: Context, lib: Library,
+                views: dict[str, tuple[str | None, frozenset[str]]]) -> list[dict]:
+    """Report rows for flat records, with reference fields resolved (never rebound by name).
+
+    `views` gives each campaign the world it inherits from (None when it inherits
+    nothing V1 would show) and the record ids it hides."""
     rows = []
     for key in sorted(lib.records):
         record = lib.records[key]
-        world = world_of.get(record.scope_id) if record.scope == "campaign" else None
+        world, hidden = views.get(record.scope_id, (None, frozenset())) if record.scope == "campaign" \
+            else (None, frozenset())
         if record.kind == "greetings":
             known = GREETING_KEYS
         else:
@@ -271,14 +282,14 @@ def record_rows(ctx: Context, lib: Library, world_of: dict[str, str | None]) -> 
                 continue
             values = _text.split_list(record.meta[field_name]) if many else [record.meta[field_name]]
             for value in values:
-                refs.append(_ref_row(ctx, lib, record, world, field_name, value, kinds))
+                refs.append(_ref_row(ctx, lib, record, world, hidden, field_name, value, kinds))
         if record.kind == "greetings":
             for field_name, kind in (("character", "characters"), ("location", "locations")):
                 if record.meta.get(field_name):
-                    refs.append(_ref_row(ctx, lib, record, world, field_name,
+                    refs.append(_ref_row(ctx, lib, record, world, hidden, field_name,
                                          f"{kind}:{record.meta[field_name]}", (kind,)))
             for member in _text.split_list(record.meta.get("present", "")):
-                refs.append(_ref_row(ctx, lib, record, world, "present", f"characters:{member}",
+                refs.append(_ref_row(ctx, lib, record, world, hidden, "present", f"characters:{member}",
                                      ("characters",)))
         rows.append({"scope": record.scope, "scope_id": record.scope_id, "kind": record.kind,
                      "id": record.id, "path": record.path, "name": record.name,
@@ -287,12 +298,13 @@ def record_rows(ctx: Context, lib: Library, world_of: dict[str, str | None]) -> 
     return rows
 
 
-def _ref_row(ctx, lib, record, world, field_name, value, kinds) -> dict:
+def _ref_row(ctx, lib, record, world, hidden, field_name, value, kinds) -> dict:
     kind, sep, rid = value.partition(":")
     if not sep or not rid or (kinds is not None and kind not in kinds):
         status = "malformed"
     else:
-        status = "resolved" if resolve_ref(lib, record.scope, record.scope_id, world, kind, rid) else "dangling"
+        status = ("resolved" if resolve_ref(lib, record.scope, record.scope_id, world, kind, rid, hidden)
+                  else "dangling")
     if status != "resolved":
         ctx.finding("dangling_ref", record.path, detail=f"{field_name}={value}")
     return {"field": field_name, "target": value, "status": status}
@@ -308,7 +320,8 @@ def actor_rows(lib: Library) -> list[dict]:
             "default_version": actor.default_version, "v1_listed": _text.safe_id(actor.id),
             "sidecars": sorted(actor.sidecars),
             "versions": [{"id": v.id, "path": v.path, "label": v.label, "display_name": v.display_name,
-                          "v1_hash": v.v1_hash, "malformed": v.malformed}
+                          "v1_hash": v.v1_hash, "malformed": v.malformed, "card_spec": v.spec,
+                          "greetings": v.greetings}
                          for _, v in sorted(actor.versions.items())],
         })
     return rows

@@ -133,3 +133,23 @@ def test_counts_summary_names_nothing(library, home, tmp_path, capsys):
     assert main(home, *scan_args(library, tmp_path, "--summary", "counts")) == 0
     out = capsys.readouterr().out
     assert "saltmarch" not in out and str(tmp_path) not in out
+
+
+def test_a_report_that_appears_during_the_scan_is_not_replaced(library, home, tmp_path, monkeypatch):
+    from grimoire.migrate_v1 import _report
+    report = tmp_path / "inventory.json"
+    original = _report.write_report
+
+    def racing(target, data, parent, *, overwrite):
+        report.write_text("someone else's", encoding="utf-8")
+        original(target, data, parent, overwrite=overwrite)
+    monkeypatch.setattr(cli, "write_report", racing)
+    monkeypatch.setattr(cli, "check_report_destination", lambda *a, **k: report)
+    assert main(home, *scan_args(library, tmp_path, "--report", str(report))) == 2
+    assert report.read_text(encoding="utf-8") == "someone else's"
+
+
+def test_a_relative_report_path_is_taken_from_the_working_directory(library, home, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert main(home, *scan_args(library, tmp_path, "--report", "inventory.json")) == 0
+    assert (tmp_path / "inventory.json").exists()

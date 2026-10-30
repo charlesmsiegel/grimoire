@@ -54,6 +54,25 @@ SCENE_SIDECARS = {".alts.json": "scene_alts", ".review.json": "scene_review",
                   ".steering.json": "scene_steering"}
 
 
+#: Names the layout recognizes. On a case-insensitive filesystem V1 opens ``Deleted.json``
+#: or ``Image-Refs`` as these, so an unrecognized case variant can hide real semantics.
+STRUCTURAL_NAMES = frozenset({
+    "worlds", "campaigns", "assets", "image-store", "blobs", "objects", "characters", "pcs", "scenes",
+    "image-refs", "expressions", "revisions", "images", "image-collections", "world.md", "campaign.md",
+    "character.md", "pc.md", "config.md", "manifest.json", "focus.json", "descriptions.json",
+    "subjects.json", *FLAT_KINDS, *CAMPAIGN_LEDGERS}) | EXCLUDED_ROOT
+_FOLDED_NAMES = {name.casefold(): name for name in STRUCTURAL_NAMES}
+
+
+def case_variant(parts: tuple[str, ...]) -> str | None:
+    """The first part that is a different-case spelling of a recognized name, if any."""
+    for part in parts:
+        known = _FOLDED_NAMES.get(part.casefold())
+        if known is not None and known != part:
+            return part
+    return None
+
+
 @dataclass(frozen=True)
 class Layout:
     disposition: str

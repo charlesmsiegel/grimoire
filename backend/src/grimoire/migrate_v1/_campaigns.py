@@ -33,7 +33,6 @@ class Campaign:
     detached: set[str] = field(default_factory=set)
     sync: dict[str, str] = field(default_factory=dict)
     appearances: dict[str, dict] = field(default_factory=dict)
-    appearances_ok: bool = True
     unreadable_scene_membership: bool = False
     scene_texts: dict[str, list[str]] = field(default_factory=dict)
     shown_meta: dict[str, str] = field(default_factory=dict)
@@ -88,6 +87,9 @@ def read_campaigns(ctx: Context, lib: Library) -> dict[str, Campaign]:
             ctx.finding("world_missing", entry.path, detail="campaign names no world")
         elif world in lib.worlds and lib.worlds[world]["v1_listed"]:
             campaign.world_status = "resolved"
+        elif world in lib.worlds:
+            campaign.world_status = "not_found"  # present, but V1 never lists that id
+            ctx.finding("world_missing", entry.path, detail="world id V1 does not list")
         elif len(folded.get(world.casefold(), [])) == 1:
             campaign.world_status = "case_variant"
             ctx.finding("world_case_variant", entry.path, detail=world)
@@ -99,8 +101,8 @@ def read_campaigns(ctx: Context, lib: Library) -> dict[str, Campaign]:
             campaign.layout = "legacy_full_copy"
             ctx.finding("legacy_full_copy_campaign", entry.path)
             ctx.unresolve("campaign_inheritance", entry.path, "pre-overlay full-copy campaign")
-        if (fmt := meta.get("inference_format")) is not None and fmt.isdigit() and int(fmt) > 2:
-            ctx.finding("newer_format", entry.path, detail=f"inference_format {fmt}")
+        if _text.newer_format(meta.get("inference_format")):
+            ctx.finding("newer_format", entry.path, detail="inference_format")
         campaign.shown_meta = {k: meta[k] for k in CAMPAIGN_KEYS_SHOWN if k in meta}
         campaign.settings_fields = sorted(k for k in meta if k not in CAMPAIGN_KEYS_SHOWN
                                           and k not in ("created", "updated"))
@@ -148,6 +150,7 @@ def _read_sync(ctx: Context, campaign: Campaign, entry, family: str) -> None:
     for ref, base in meta.items():
         if base != "" and not _text.SHA256.match(base):
             ctx.finding("invalid_ledger_entry", entry.path, detail=ref)
+            ctx.unresolve("sync_base", f"{campaign.path}/{ref}", "invalid sync base")
             base = None
         campaign.sync[ref] = base
 
@@ -155,7 +158,6 @@ def _read_sync(ctx: Context, campaign: Campaign, entry, family: str) -> None:
 def _read_appearances(ctx: Context, campaign: Campaign, entry, family: str) -> None:
     value, ok = ctx.read_json(entry)
     if not ok or not isinstance(value, dict):
-        campaign.appearances_ok = False
         _invalid_ledger(ctx, campaign, entry.path, "not a JSON object" if ok else "unreadable")
         return
     for ref in sorted(value):
@@ -310,9 +312,12 @@ def inheritance_rows(ctx: Context, lib: Library, campaign: Campaign) -> list[dic
             elif world_hash is None:
                 row["sync"] = "unresolved"
             else:
-                row["sync"] = "in_sync" if world_hash == base else "world_changed"
+                row["sync"] = "in_sync" if world_hash == base else "diverged"
             row["local_edit"] = (None if locked or base in (None, "missing", "") or copy_hash is None
                                  else copy_hash != base)
+        elif in_campaign and campaign.sync.get(ref):
+            # Copied from a world record that is gone: V1 now reads it as the campaign's own.
+            row["state"], row["sync"] = "materialized", "world_missing"
         elif in_campaign:
             row["state"] = "campaign_origin"
         elif in_world:
@@ -327,7 +332,7 @@ def inheritance_rows(ctx: Context, lib: Library, campaign: Campaign) -> list[dic
 
 def _players(lib: Library, campaign: Campaign, sid: str) -> tuple[list[str], bool]:
     """(player display names for this scene, whether the cast is fully known)."""
-    if campaign.unreadable_scene_membership or not campaign.appearances_ok:
+    if campaign.unreadable_scene_membership or not campaign.ledgers_ok:
         return [], False
     names, known = [], True
     for ref, row in sorted(campaign.appearances.items()):

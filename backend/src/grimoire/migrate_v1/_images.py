@@ -19,13 +19,15 @@ from ._context import Context
 from ._records import Library
 
 BLOB_EXTS = frozenset({"png", "jpg", "gif", "webp"})
-OUTFIT_META_KEYS = frozenset({"label", "clothing_aliases", "fallback_expression", "presentation"})
 RECORD_ROUTE_KINDS = frozenset({"greetings", "locations", "lore", "items", "groups", "creatures"})
 
 
 @dataclass
 class Placements:
+    #: Addressable objects by id: only a valid sidecar at V1's own path for that id.
     objects: dict[str, dict] = field(default_factory=dict)
+    #: Every sidecar file, addressable or not, for the report.
+    object_rows: list[dict] = field(default_factory=list)
     blobs: dict[str, dict] = field(default_factory=dict)
     rows: list[dict] = field(default_factory=list)
     by_slot: dict[tuple, dict] = field(default_factory=dict)
@@ -58,19 +60,27 @@ def read_store(ctx: Context, out: Placements) -> None:
             ctx.finding("orphan_blob", blob["path"])
 
 
+def _count(value: object) -> int | None:
+    """V1 ``image_store._int_or_none``: a non-negative int that is not a bool."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
 def _object(ctx: Context, out: Placements, entry) -> None:
+    """One sidecar, validated as V1 ``image_store._parse`` validates it."""
     c = entry.layout.coords
     stem = c["object"]
     value, ok = ctx.read_json(entry)
     problems = []
     if not _text.IMAGE_ID.match(stem):
         problems.append("name")
-    elif c["shard"] != stem[4:6]:
+    addressable = c["shard"] == stem[4:6]
+    if not addressable:
+        # V1 reads only objects/<id[4:6]>/<id>.json: a copy elsewhere is never the object.
         ctx.finding("object_shard_mismatch", entry.path)
     if not ok or not isinstance(value, dict):
         problems.append("json")
         value = {}
-    if type(value.get("format")) is not int or value.get("format") != 1:
+    if value.get("format") != 1:
         problems.append("format")
     if value.get("id") != stem:
         problems.append("id")
@@ -80,30 +90,36 @@ def _object(ctx: Context, out: Placements, entry) -> None:
     if not isinstance(blob, dict):
         problems.append("blob")
         blob = {}
-    sha, ext, size = blob.get("sha256"), blob.get("ext"), blob.get("size")
+    sha, ext, size = blob.get("sha256"), blob.get("ext"), _count(blob.get("size"))
     if not (isinstance(sha, str) and _text.SHA256.match(sha)):
         problems.append("blob.sha256")
     if ext not in BLOB_EXTS:
         problems.append("blob.ext")
-    if type(size) is not int or size < 0:
+    if size is None:
         problems.append("blob.size")
-    if "animated" in blob and not isinstance(blob["animated"], bool):
+    if not isinstance(blob.get("animated", False), bool):
         problems.append("blob.animated")
-    row = {"id": stem, "path": entry.path, "valid": not problems}
+    row = {"id": stem, "path": entry.path, "valid": not problems, "addressable": addressable}
+    out.object_rows.append(row)
     if problems:
         ctx.finding("invalid_object", entry.path, detail=",".join(problems))
+        ctx.unresolve("image_object", entry.path, ",".join(problems))
         row["problems"] = problems
-        out.objects[stem] = row
+        if addressable:
+            out.objects[stem] = row
+        return
+    if not addressable:
         return
     description = value.get("description")
     associations = value.get("associations")
     row.update({
         "identity": value["identity"], "blob_sha256": sha, "ext": ext, "size": size,
-        "width": blob.get("width") if type(blob.get("width")) is int else None,
-        "height": blob.get("height") if type(blob.get("height")) is int else None,
+        "width": _count(blob.get("width")),
+        "height": _count(blob.get("height")),
         "animated": blob.get("animated") is True,
         "has_description": isinstance(description, str) and bool(description),
-        "description_sha256": _text.sha256(description.encode("utf-8")) if isinstance(description, str) else None,
+        "description_sha256": (_text.sha256(description.encode("utf-8", "surrogatepass"))
+                               if isinstance(description, str) else None),
         "subjects": sorted(_association(a) for a in associations if isinstance(a, dict))
         if isinstance(associations, list) else [],
         "sources": len(value["sources"]) if isinstance(value.get("sources"), list) else 0,
@@ -194,13 +210,17 @@ def read_placements(ctx: Context, out: Placements) -> None:
 
 
 def _ids_in(value) -> list[str]:
-    if isinstance(value, str):
-        return [value] if _text.IMAGE_ID.match(value) else []
-    if isinstance(value, dict):
-        return [i for v in value.values() for i in _ids_in(v)]
-    if isinstance(value, list):
-        return [i for v in value for i in _ids_in(v)]
-    return []
+    """Every image id anywhere in a JSON value (iterative: nesting depth is the file's choice)."""
+    found, stack = [], [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str) and _text.IMAGE_ID.match(item):
+            found.append(item)
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return found
 
 
 def legacy_rows(ctx: Context, out: Placements) -> list[dict]:
@@ -243,18 +263,16 @@ def _validate_manifest(m) -> str | None:
     if not isinstance(outfits, dict):
         return "outfits"
     for outfit, meta in outfits.items():
-        if not _text.SLUG.match(outfit) or not isinstance(meta, dict) or set(meta) - OUTFIT_META_KEYS:
+        if not _text.slug(outfit) or not _text.outfit_metadata(meta):
             return f"outfit {outfit!r}"
-    if m.get("default_outfit") is not None and not (
-            isinstance(m["default_outfit"], str) and _text.SLUG.match(m["default_outfit"])):
+    if m.get("default_outfit") is not None and not _text.slug(m["default_outfit"]):
         return "default_outfit"
     hidden = m.get("hidden_outfits")
-    if not isinstance(hidden, list) or not all(isinstance(x, str) and _text.SLUG.match(x) for x in hidden):
+    if not isinstance(hidden, list) or not all(_text.slug(x) for x in hidden):
         return "hidden_outfits"
     hidden_x = m.get("hidden_expressions")
     if not isinstance(hidden_x, dict) or not all(
-            _text.SLUG.match(k) and isinstance(v, list) and all(isinstance(x, str) and _text.SLUG.match(x)
-                                                                 for x in v)
+            _text.slug(k) and isinstance(v, list) and all(_text.slug(x) for x in v)
             for k, v in hidden_x.items()):
         return "hidden_expressions"
     if not isinstance(m.get("content_digest"), str):
@@ -280,7 +298,7 @@ def expression_layers(ctx: Context, out: Placements) -> dict[tuple, dict]:
             live = [r for r in mine if r["revision"] == revision]
             placements = {}
             for r in live:
-                if not _text.SLUG.match(r["outfit"]) or not _text.SLUG.match(r["name"]):
+                if not _text.slug(r["outfit"]) or not _text.slug(r["name"]):
                     problem = f"placement name {r['outfit']}/{r['name']}"
                 elif r["outfit"] not in value["outfits"]:
                     problem = f"undeclared outfit {r['outfit']}"
@@ -337,11 +355,14 @@ def collection_rows(ctx: Context, out: Placements) -> list[dict]:
         owner = ("world", c["scope_id"], "library", None, None)
         for member in value["members"]:
             if not isinstance(member, str):
+                ctx.finding("unresolved_image_ref", entry.path, detail="non-text member")
                 row["members"].append({"member": None, "status": "invalid"})
                 continue
             if value["format"] == 2:
-                status = picture(out, member) if _text.IMAGE_ID.match(member) else "invalid"
-                out.referenced.add(member)
+                status = "invalid"
+                if _text.IMAGE_ID.match(member):
+                    status = picture(out, member)
+                    out.referenced.add(member)
             else:
                 status = "resolved" if slot_exists(out, owner, member) else "missing"
             if status not in ("resolved",):

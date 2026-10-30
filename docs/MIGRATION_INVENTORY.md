@@ -70,13 +70,30 @@ Deterministic JSON: sorted keys and lists, ASCII escapes, no timestamps. Absolut
 | `schema`, `archive_id`, `source_format`, `unicode_version`, `roots`, `inference` | Header. `inference.provider_calls` is always `0`. |
 | `source_fingerprint` | sha256 of canonical JSON of every non-excluded entry's `[path, disposition, size, sha256]` |
 | `entries` | Every entry: verbatim relative path, `legacy_id` (or null), kind, disposition, layout family, size, sha256, reason |
-| `worlds`, `records`, `actors`, `campaigns`, `scenes` | V1 content by V1 coordinates. Records carry resolved/dangling reference fields. Actors carry portrayals (versions) with labels and V1 hashes. Campaigns carry ledgers, appearances (`control`, plus the separate `provenance` and `sync` axes) and per-record inheritance state. Scenes carry ordered posts with speaker, role, post id and content digest. |
+| `worlds`, `records`, `actors`, `campaigns`, `scenes` | V1 content by V1 coordinates. Records carry resolved/dangling reference fields, as seen from their scope; a campaign does not see world records it tombstoned or detached. Actors carry portrayals (versions) with label, card spec, greeting count and `v1_hash` (V1's `card_hash` or `version_hash`). Campaigns carry ledgers, appearances and per-record inheritance (below). Scenes carry ordered posts with speaker, role, post id and content digest. |
 | `images` | `objects` (opaque `px1-` ids; pixels never re-verified), `blobs`, `placements` (owner, slot, focus, status), `legacy_images`, `expression_layers`, `collections`, `campaign_layering` (inherited / overridden / focus override / hidden), Markdown `references`, `referenced_objects` |
 | `identity_candidates` | Proposed V2 identities, below |
 | `findings` | `{code, severity, paths, detail}` |
 | `losses` | Recognized but unsupported content, with counts where cheap |
 | `unresolved` | Everything an importer must not apply without an explicit user decision |
 | `counts`, `status` | `ready_for_review` or `blocked` |
+
+### Campaign states
+
+- **Appearances** have two axes, as V1's `actor_source` keeps them apart:
+  - `provenance`: `library` when the campaign copy still hashes to the lock's `base`; `override` when it does not, or the copy is missing; `emergent` when the actor is detached or has no world original.
+  - `sync`: the world's current version against `base`. Values are `current`, `world_changed`, `world_missing` or `not_applicable`.
+  - `control` is `player` or `director`, from V1's `role`. An invalid record is `unresolved` on both axes.
+- **Inheritance**, per record of an inherited kind:
+  - `state` is `inherited`, `materialized`, `campaign_origin`, `detached`, `detached_absent` or `tombstoned`.
+  - A materialized record has a `sync` of:
+    - `in_sync`: the world is unchanged since the copy;
+    - `diverged`: the world changed since the copy;
+    - `world_missing`: copied from a world record that is gone;
+    - `no_base`: no base recorded;
+    - `locked_by_appearance`: an appearance lock governs it instead;
+    - `unresolved`: the base is invalid.
+  - `local_edit` says whether the campaign copy differs from its base.
 
 ### Identity candidates
 
@@ -96,6 +113,7 @@ Candidates are **proposals**, never a mapping, and they are unpinned: the import
 
 **Blocking:**
 - `refused_entry`, `mount_point`, `unreadable`, `too_large`, `uninterpreted`: the walk could not read part of the source faithfully.
+- `case_variant_name`: an unrecognized entry whose path differs only in letter case from a name V1 uses, such as `Deleted.json` or `Image-Refs`. On a case-insensitive filesystem V1 would honour it.
 - `newer_format`: a settings format newer than 0.2.1.
 - `invalid_ledger`: a campaign ledger cannot be trusted.
 - `blob_hash_mismatch`: a blob's bytes do not match its name.
@@ -119,6 +137,7 @@ A report names the user's records and paths: keep it private, and never commit i
 
 - **Pixel ids not re-verified:** `px1-` object ids come from V1's pixel canonicalizer and are taken as declared keys; only blob bytes are hash-checked.
 - **Mount points:** only devices are compared. A same-device bind mount inside the source is not detected.
-- **Quiescence on Windows:** without descriptor-relative opens, path-based identity checks and the second walk are the only protection against a concurrently swapped entry.
+- **Quiescence on Windows:** without descriptor-relative opens, path-based identity checks (before and after each listing) and the second walk are the only protection against a concurrently swapped entry. Every reparse point is refused, including cloud-sync placeholders (OneDrive "files on demand"): make the backup fully local first.
+- **A seated player's malformed card:** V1 falls back to the actor id as the display name when a card's `data` is not an object. The scanner instead marks that scene's authorship `unresolved`, because a fallback name could misattribute posts.
 - **Not interpreted:** full-copy campaigns are inventoried raw. Knowledge, relationships, chronicle, tracker, reroll and response-variant contents, VN presentation history, sheets and mechanics modules are listed only, as losses.
 - **Backup archives:** zip input is not read; extract the backup to a directory first.

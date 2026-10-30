@@ -48,24 +48,28 @@ def migration_roots(source, destination=None, *, environ=None, home=None) -> tup
 
 
 def _given_is_link(source, home: Path | None) -> bool:
+    """Whether the final component the user named was a link (its target was scanned)."""
     raw = os.fspath(source)
-    if raw.startswith("~"):
-        base = home if home is not None else Path.home()
-        raw = os.path.join(base, raw[2:]) if raw.startswith("~/") else str(base)
-    return os.path.islink(raw.rstrip("/\\") or raw)
+    if raw == "~" or raw[:2] in ("~/", "~" + os.sep):
+        raw = os.path.join(home if home is not None else Path.home(), raw[2:])
+    return os.path.islink(raw.rstrip("/" + os.sep) or raw)
 
 
 def scan(source, *, archive_id: str, destination=None, environ=None, home: Path | None = None,
-         _options: Options | None = None) -> ScanResult:
-    """Inventory the V1 library at `source`. Writes nothing; raises on unusable input."""
+         _options: Options | None = None, _roots: tuple[Path, Path] | None = None) -> ScanResult:
+    """Inventory the V1 library at `source`. Writes nothing; raises on unusable input.
+
+    `_roots` is the pair a caller already checked with `migration_roots` for
+    these same arguments, so its report guard and the scan agree on them."""
     validate_segment(archive_id, "archive_id")
-    src, dst = migration_roots(source, destination, environ=environ, home=home)
+    src, dst = _roots or migration_roots(source, destination, environ=environ, home=home)
     try:
         snap = Snapshot.take(str(src), _options)
     except NotADirectory:
         raise NotAV1Library(f"{src} is not a directory") from None
     try:
-        if not any(snap.is_dir(name) for name in ("worlds", "campaigns")):
+        if not any(snap.is_dir(name) or name in snap.entries and snap.entries[name].disposition == "refused"
+                   for name in ("worlds", "campaigns")):
             raise NotAV1Library(f"{src} has no worlds/ or campaigns/ directory")
         manifest = _interpret(Context(snap, archive_id))
         snap.verify_unchanged()
@@ -85,8 +89,9 @@ def _interpret(ctx: Context) -> dict:
     campaigns = _campaigns.read_campaigns(ctx, lib)
     scenes = _campaigns.scene_rows(ctx, lib, campaigns)
     _campaigns.count_unsupported(ctx)
-    world_of = {cid: c.world for cid, c in campaigns.items()}
-    records = _records.record_rows(ctx, lib, world_of)
+    views = {cid: (c.world if c.inherits else None, frozenset(c.deleted | c.detached))
+             for cid, c in campaigns.items()}
+    records = _records.record_rows(ctx, lib, views)
     campaign_rows = _campaigns.campaign_rows(ctx, lib, campaigns)
 
     pictures = _images.Placements()
@@ -95,7 +100,7 @@ def _interpret(ctx: Context) -> dict:
     layers = _images.expression_layers(ctx, pictures)
     _images.expression_layering(layers, campaigns, lib)
     images = {
-        "objects": [pictures.objects[k] for k in sorted(pictures.objects)],
+        "objects": sorted(pictures.object_rows, key=lambda r: r["path"]),
         "blobs": [pictures.blobs[k] for k in sorted(pictures.blobs)],
         "legacy_images": _images.legacy_rows(ctx, pictures),
         "expression_layers": [layers[k] for k in sorted(layers, key=repr)],

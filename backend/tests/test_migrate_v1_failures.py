@@ -412,3 +412,117 @@ def test_the_source_is_unchanged_after_a_blocked_scan(library, home):
     before = tree_digest(library)
     run(library, home)
     assert tree_digest(library) == before
+
+
+# ---- regressions from the implementation review ------------------------------------------------
+
+def _object_path(library, image_id):
+    return library / "assets" / "image-store" / "objects" / image_id[4:6] / f"{image_id}.json"
+
+
+def test_a_lone_surrogate_in_a_description_is_hashed_not_a_crash(library, home):
+    from v1_fixture import RED_ID
+    path = _object_path(library, RED_ID)
+    path.write_text(path.read_text(encoding="utf-8")[:-2] + ', "description": "\\ud800"}\n', encoding="utf-8")
+    [red] = [o for o in run(library, home)["images"]["objects"] if o["id"] == RED_ID]
+    assert red["has_description"] and red["description_sha256"]
+
+
+@pytest.mark.parametrize("value", ["\u00b2", "9" * 5000, "abc"])
+def test_unrecognized_settings_formats_fail_closed_without_crashing(library, home, value):
+    (library / "config.md").write_text(f"---\ninference_format: {value}\n---\n", encoding="utf-8")
+    assert ("newer_format", ("config.md",)) in codes(run(library, home), "blocking")
+
+
+def test_a_deeply_nested_promotion_journal_is_walked_not_recursed(library, home):
+    from v1_fixture import RED_ID
+    deep = "[" * 5000 + f'"{RED_ID}"' + "]" * 5000
+    (library / MARA / "assets" / "default" / "image-refs" / ".promote.json").write_text(deep, encoding="utf-8")
+    manifest = run(library, home)
+    assert manifest["status"] == "ready_for_review" or ("malformed_json", (
+        f"{MARA}/assets/default/image-refs/.promote.json",)) in codes(manifest)
+
+
+def test_an_object_outside_its_shard_is_not_the_object(library, home):
+    from v1_fixture import RED_ID
+    path = _object_path(library, RED_ID)
+    moved = path.parent.parent / "zz"
+    moved.mkdir()
+    path.rename(moved / path.name)
+    manifest = run(library, home)
+    assert {p["status"] for p in manifest["images"]["placements"] if p["image"] == RED_ID} == {"dangling_object"}
+    assert [o["addressable"] for o in manifest["images"]["objects"] if o["id"] == RED_ID] == [False]
+
+
+@pytest.mark.parametrize("outfit, meta", [("con", {"label": "Console"}), ("casual", {"label": 7}),
+                                          ("casual", {"presentation": {"scale": 9}}),
+                                          ("casual", {"fallback_expression": "Neutral"})])
+def test_expression_metadata_is_validated_as_v1_validates_it(library, home, outfit, meta):
+    from v1_fixture import EXPRESSIONS, NEUTRAL, REV, expression_manifest
+    expressions = library / MARA / "assets" / "older" / "expressions"
+    if outfit != "casual":
+        (expressions / "revisions" / REV / "casual").rename(expressions / "revisions" / REV / outfit)
+    value = {**EXPRESSIONS, "default_outfit": outfit, "outfits": {outfit: meta}}
+    (expressions / "manifest.json").write_bytes(
+        expression_manifest(value, {f"{outfit}/image-refs/neutral.json": NEUTRAL}))
+    [layer] = run(library, home)["images"]["expression_layers"]
+    assert layer["status"] == "unavailable"
+
+
+def test_an_unparseable_version_is_unresolved_and_gets_no_candidate(library, home):
+    (library / "worlds" / "realm" / "characters" / "mara" / "default.json").write_text("[]", encoding="utf-8")
+    (library / "worlds" / "saltmarch" / "lore" / "the-salt-pact.md").write_bytes(b"\xff\xfe")
+    manifest = run(library, home)
+    rows = {r["path"]: r for r in manifest["identity_candidates"]["definitions"]}
+    for path in ("worlds/realm/characters/mara/default.json", "worlds/saltmarch/lore/the-salt-pact.md"):
+        assert (rows[path]["status"], rows[path]["candidate"]) == ("unresolved", None)
+        assert path in {u["path"] for u in manifest["unresolved"]}
+
+
+def test_a_corrupt_tombstone_ledger_also_unresolves_scene_authorship(library, home):
+    (library / CAMPAIGN / "deleted.json").write_text("{corrupt", encoding="utf-8")
+    assert run(library, home)["scenes"][0]["authorship"] == "unresolved"
+
+
+def test_a_copy_whose_world_record_is_gone_is_materialized_with_world_missing(library, home):
+    keep = library / CAMPAIGN / "lore"
+    keep.mkdir()
+    (keep / "old-oath.md").write_text("---\nname: Old Oath\n---\n", encoding="utf-8")
+    (library / CAMPAIGN / "sync.md").write_text(f"---\nlore/old-oath: {'a' * 64}\n---\n\n", encoding="utf-8")
+    rows = {r["ref"]: r for r in run(library, home)["campaigns"][0]["inheritance"]}
+    assert (rows["lore/old-oath"]["state"], rows["lore/old-oath"]["sync"]) == ("materialized", "world_missing")
+
+
+def test_a_player_not_seated_in_this_scene_speaks_as_an_npc(library, home):
+    scene = library / CAMPAIGN / "scenes" / "002--alone.md"
+    scene.write_text(frontmatter([("title", "Alone"), ("identity", "0" * 31 + "2")], "**Winifred:** Hello.\n"),
+                     encoding="utf-8")
+    [alone] = [s for s in run(library, home)["scenes"] if s["sid"] == "002--alone"]
+    assert [(p["speaker"], p["role"]) for p in alone["posts"]] == [("Winifred", "assistant")]
+
+
+def test_a_case_variant_ledger_name_blocks(library, home):
+    (library / CAMPAIGN / "Detached.json").write_text("[]\n", encoding="utf-8")
+    if (library / CAMPAIGN / "detached.json").exists():
+        pytest.skip("this filesystem folds case")
+    assert ("case_variant_name", (f"{CAMPAIGN}/Detached.json",)) in codes(run(library, home), "blocking")
+
+
+def test_a_linked_worlds_directory_blocks_instead_of_failing(library, home, tmp_path):
+    import shutil
+    shutil.move(str(library / "worlds"), str(tmp_path / "real-worlds"))
+    symlink(library / "worlds", tmp_path / "real-worlds", directory=True)
+    manifest = run(library, home)
+    assert entry(manifest, "worlds")["disposition"] == "refused"
+    assert manifest["status"] == "blocked"
+
+
+def test_a_campaign_reference_to_a_tombstoned_world_record_dangles(library, home):
+    (library / CAMPAIGN / "deleted.json").write_text(json.dumps(
+        ["assets/characters/mara/default/gallery_1", "locations/tidewatch-keep"]), encoding="utf-8")
+    groups = library / CAMPAIGN / "groups"
+    groups.mkdir()
+    (groups / "watch.md").write_text("---\nname: Watch\nheadquarters: 'locations:tidewatch-keep'\n---\n",
+                                     encoding="utf-8")
+    [row] = [r for r in run(library, home)["records"] if r["scope"] == "campaign"]
+    assert row["refs"] == [{"field": "headquarters", "target": "locations:tidewatch-keep", "status": "dangling"}]

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import unicodedata
 from collections.abc import Iterable
@@ -113,8 +114,46 @@ def valid_image_name(name: object) -> bool:
 IMAGE_ID = re.compile(r"px1-[0-9a-f]{64}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 HEX32 = re.compile(r"[0-9a-f]{32}\Z")
-#: Outfit and expression slugs (V1 expression_library.contracts).
-SLUG = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
+_SLUG = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
+_DEVICE = re.compile(r"(?:com|lpt)[1-9]\Z")
+
+
+def slug(value: object) -> bool:
+    """An outfit or expression slug (V1 ``expression_library.contracts.slug``)."""
+    return (isinstance(value, str) and bool(_SLUG.match(value))
+            and value not in {"con", "prn", "aux", "nul", "clock$"} and not _DEVICE.match(value))
+
+
+def outfit_metadata(meta: object) -> bool:
+    """V1 ``contracts.metadata``: sparse outfit metadata with checked values."""
+    if not isinstance(meta, dict) or set(meta) - {"label", "clothing_aliases", "fallback_expression",
+                                                    "presentation"}:
+        return False
+    label = meta.get("label", "x")
+    if not isinstance(label, str) or not label.strip() or len(label) > 200:
+        return False
+    aliases = meta.get("clothing_aliases", [])
+    if not isinstance(aliases, list) or len(aliases) > 64 or any(
+            not isinstance(a, str) or len(a) > 200 for a in aliases):
+        return False
+    if "fallback_expression" in meta and not slug(meta["fallback_expression"]):
+        return False
+    presentation = meta.get("presentation", {})
+    if not isinstance(presentation, dict) or set(presentation) - {"scale", "offset_x", "offset_y", "anchor"}:
+        return False
+    for key, value in presentation.items():
+        if key == "anchor":
+            if value != "bottom-center":
+                return False
+        elif (type(value) not in (int, float) or not math.isfinite(value)
+              or not ((0.1 <= value <= 4) if key == "scale" else (-1 <= value <= 1))):
+            return False
+    return True
+
+
+def newer_format(value: str | None) -> bool:
+    """A settings ``inference_format`` other than 0.2.1's ``1`` or ``2``: fail closed."""
+    return value is not None and value not in ("1", "2")
 
 
 # ---- path hazards ----------------------------------------------------------------------
@@ -192,7 +231,7 @@ def escape(text: str) -> str:
         if char == "\\":
             out.append("\\\\")
         elif unicodedata.category(char) in _SHOWN_CATEGORIES:
-            out.append(f"\\u{ord(char):04x}")
+            out.append(f"\\u{ord(char):04x}" if ord(char) <= 0xFFFF else f"\\U{ord(char):08x}")
         else:
             out.append(char)
     return "".join(out)

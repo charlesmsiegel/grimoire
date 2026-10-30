@@ -39,8 +39,9 @@ def path_findings(ctx: Context) -> None:
     for path, entry in ctx.snap.entries.items():
         if entry.disposition == _layout.UNKNOWN:
             ctx.finding("unknown_entry", path)
-        if (entry.disposition == _layout.INTERPRETED and path not in ctx.snap.read_paths
-                and path not in ctx.declined):
+            if (variant := _layout.case_variant(tuple(path.split("/")))) is not None:
+                ctx.finding("case_variant_name", path, detail=variant)
+        if entry.disposition == _layout.INTERPRETED and path not in ctx.snap.read_paths:
             ctx.finding("uninterpreted", path)
     normal, case = _text.collision_groups(ctx.snap.entries)
     for group in normal:
@@ -151,7 +152,7 @@ def parent_identity(target: Path) -> tuple[int, int]:
     return info.st_dev, info.st_ino
 
 
-def write_report(target: Path, data: bytes, expected_parent: tuple[int, int]) -> None:
+def write_report(target: Path, data: bytes, expected_parent: tuple[int, int], *, overwrite: bool) -> None:
     """Publish `data` at `target` atomically: an exclusive 0600 temp beside it, then a rename."""
     temp = f".{target.name}.{os.getpid()}.tmp"
     flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
@@ -181,8 +182,8 @@ def write_report(target: Path, data: bytes, expected_parent: tuple[int, int]) ->
                         else os.lstat(target))
         except FileNotFoundError:
             existing = None
-        if existing is not None and not stat.S_ISREG(existing.st_mode):
-            raise ReportWriteError(f"{target} is no longer a regular file")
+        if existing is not None and not (overwrite and stat.S_ISREG(existing.st_mode)):
+            raise ReportWriteError(f"{target} appeared or changed before writing; nothing was replaced")
         if use_fd:
             os.replace(temp, target.name, src_dir_fd=dfd, dst_dir_fd=dfd)
         else:

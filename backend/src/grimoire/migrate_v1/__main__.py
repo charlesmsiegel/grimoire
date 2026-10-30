@@ -9,6 +9,7 @@ would touch V1, 4 when the inventory is blocked (the report is still written),
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -53,9 +54,10 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
         return EXIT_USAGE
     target = expected_parent = None
     if args.report:
+        report = args.report if args.report.startswith("~") else os.path.abspath(args.report)
         try:
             target = check_report_destination(
-                args.report, protected=[("the migration source", source), ("the V2 destination", destination)],
+                report, protected=[("the migration source", source), ("the V2 destination", destination)],
                 overwrite=args.overwrite, environ=environ, home=home)
             expected_parent = parent_identity(target)
         except (LibraryPathError, OSError) as error:
@@ -63,7 +65,7 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
             return EXIT_USAGE
     try:
         result = scan(args.source, archive_id=args.archive_id, destination=args.destination,
-                      environ=environ, home=home)
+                      environ=environ, home=home, _roots=(source, destination))
     except V1IsolationError as error:
         _say(f"refused: {error}\n", sys.stderr)
         return EXIT_ISOLATION
@@ -82,7 +84,7 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
             check_report_destination(
                 target, protected=[("the migration source", source), ("the V2 destination", destination)],
                 overwrite=args.overwrite, environ=environ, home=home)
-            write_report(target, render_json(result.manifest), expected_parent)
+            write_report(target, render_json(result.manifest), expected_parent, overwrite=args.overwrite)
         except (LibraryPathError, ReportWriteError) as error:
             _say(f"refused report path: {error}\n", sys.stderr)
             return EXIT_USAGE

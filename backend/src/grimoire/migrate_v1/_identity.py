@@ -69,7 +69,8 @@ def identity_section(ctx: Context, lib: Library, campaigns: dict[str, Campaign],
     for key in sorted(lib.records):
         record = lib.records[key]
         rows.append(_definition_row(ctx, lib, campaigns, legacy, record.scope, record.scope_id,
-                                    record.kind, record.id, record.path, record.id, None))
+                                    record.kind, record.id, record.path, record.id, None,
+                                    readable=record.v1_hash is not None))
     for key in sorted(lib.actors):
         actor = lib.actors[key]
         if actor.meta_path is None:
@@ -78,7 +79,8 @@ def identity_section(ctx: Context, lib: Library, campaigns: dict[str, Campaign],
         for vid in sorted(actor.versions):
             version = actor.versions[vid]
             row = _definition_row(ctx, lib, campaigns, legacy, actor.scope, actor.scope_id, actor.base,
-                                  actor.id, version.path, f"{actor.id}.{vid}", vid)
+                                  actor.id, version.path, f"{actor.id}.{vid}", vid,
+                                  readable=not version.malformed)
             rows.append(row)
             members.append(row)
         if actor.scope == "world":
@@ -104,7 +106,8 @@ def identity_section(ctx: Context, lib: Library, campaigns: dict[str, Campaign],
     }
 
 
-def _definition_row(ctx, lib, campaigns, legacy, scope, scope_id, base, rid, path, entity_id, vid) -> dict:
+def _definition_row(ctx, lib, campaigns, legacy, scope, scope_id, base, rid, path, entity_id, vid, *,
+                    readable: bool) -> dict:
     v1 = {"world" if scope == "world" else "campaign": scope_id, "base": base, "record": rid}
     if vid is not None:
         v1["version"] = vid
@@ -118,6 +121,9 @@ def _definition_row(ctx, lib, campaigns, legacy, scope, scope_id, base, rid, pat
         row["status"] = "campaign_copy" if world_has else "campaign_origin"
         if not world_has:
             ctx.finding("no_id_candidate", path, detail="campaign_origin")
+        return row
+    if not readable:
+        row["status"] = "unresolved"  # the file could not be parsed; Context listed why
         return row
     if not (_text.safe_id(rid) and (vid is None or _text.safe_id(vid))):
         row["status"] = "no_id_candidate"

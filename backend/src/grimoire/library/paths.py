@@ -562,12 +562,13 @@ def _check_isolation(path: Path, roots: list[tuple[str, Path]], *, fingerprint: 
     names = _aliases(path, mounts)
     for label, root in roots:
         root_names = _aliases(root, mounts)
-        relations = [r for name in names for root_name in root_names
-                     if (r := _lexical_relation(name, root_name))]
-        relations.append(_identity_relation(path, root))
-        refused = [r for r in relations if r is not None and (refuse_contains or r != "contains")]
-        if refused:
-            raise V1IsolationError(f"refusing {path}: it {refused[0]} {label} ({root})")
+        refusable = lambda r: r is not None and (refuse_contains or r != "contains")  # noqa: E731
+        relation = next((r for name in names for root_name in root_names
+                         if refusable(r := _lexical_relation(name, root_name))), None)
+        if relation is None and refusable(identity := _identity_relation(path, root)):
+            relation = identity
+        if relation is not None:
+            raise V1IsolationError(f"refusing {path}: it {relation} {label} ({root})")
     if fingerprint:
         for name in names:
             for ancestor in _lineage(name):
