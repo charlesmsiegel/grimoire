@@ -60,6 +60,7 @@ Then **import this scenario from a `0.2.1`-format library** using a source-prese
 ## Constraints and still-open choices
 
 - No source ID substitution, implicit knowledge leak, forced PC narrative, or silent state write.
+- Imported content and model output never acquire authority: workers act only through least-privilege handles, and apply/execute from untrusted workers need a bound human approval ([tool authority](TOOL_AUTHORITY.md)).
 - No model-priced graph traversals by default and no hidden NPC inference jobs.
 - Quiescent V1 source and distinct V2 destination; import requires explicit preview and approval, with loss-aware source/image records.
 - Keep storage revisions and sync conflict ancestry compatible with editable file-authoritative records.
