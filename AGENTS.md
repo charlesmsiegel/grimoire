@@ -18,7 +18,7 @@ Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [the ordered V2 roadmap](docs
 - Preserve character-specific epistemic boundaries and player control. Director-only events are not a character's memories.
 - No user worlds, campaigns, transcripts, provider secrets, names or aggregate facts about private libraries may enter the public repository or CI artifacts. Use synthetic fixtures.
 - Before implementing a feature, specify an acceptance scenario and failures, run tests, and review the independent domain theory. Reuse proven V1 utilities **only after** checking their dependencies and contracts.
-- Python baseline: 3.11+. Test with `python -m pytest backend/tests -q`. The first branch is not a playable app, and its green CI must not be described as an app-integrated test.
+- Python baseline: 3.11+. Test with `python -m pytest backend/tests -q`. See [docs/TESTING.md](docs/TESTING.md) for the invariant catalog and the `grimoire.testing` fault harness, recommended for crash-exploring file-backed writers; production code never imports `grimoire.testing`. The first branch is not a playable app, and its green CI must not be described as an app-integrated test.
 
 
 ## Mandatory V2 development and pull-request workflow
