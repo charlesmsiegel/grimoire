@@ -186,8 +186,9 @@ class TurnMeter:
         state.poisoned = False
         return result
 
-    def _end(self, call_id: CallId, status: CallStatus) -> None:
+    def _end(self, call_id: CallId, status: CallStatus | None) -> None:
+        """Release the meter; ``None`` leaves the call's status as it was."""
         state = self._calls.setdefault(call_id, _CallState())
-        if not state.poisoned:
+        if status is not None and not state.poisoned:
             state.status = status
         self._busy.release()
