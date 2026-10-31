@@ -24,7 +24,7 @@ import sys
 import tempfile
 import threading
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from grimoire.evals.format import BenchmarkFormatError, Scenario
@@ -32,7 +32,9 @@ from grimoire.evals.format2 import parse_run_v2
 from grimoire.evals.gate2 import compare_v2
 from grimoire.evals.loader import benchmark_file, evidence_digest, load_json, load_scenario, loads_strict
 from grimoire.evals.report import render_v2
-from grimoire.evals.v021 import PINNED_V021_COMMIT, PROVIDER_KINDS, convert, verify_evidence
+from grimoire.evals.v021 import (
+    PINNED_V021_COMMIT, PROVIDER_KINDS, convert, partial_ledger, verify_evidence,
+)
 from grimoire.library import (
     DEFAULT_DIRNAME, V1_DEFAULT_DIRNAME, V1_HOME_ENV, V2_HOME_ENV, LibraryPathError,
     check_write_destination,
@@ -254,7 +256,11 @@ def _outputs(options: CaptureOptions, scenario: Scenario, stdout: str) -> dict[s
                       label=f"0.2.1 two-call capture ({options.mode}, {options.provider})")
         run = parse_run_v2(raw, scenario)
     except ValueError as error:
-        raise CaptureFailed(f"the capture cannot be converted: {error}") from None
+        # The calls were made (and, live, billed) even though the run is unusable: say what
+        # they cost, as ids and counts only.
+        spent = json.dumps(partial_ledger(bundle.get("usage_rows")))
+        raise CaptureFailed(f"the capture cannot be converted: {error}\n"
+                            f"partial ledger (counts only): {spent}") from None
     evidence = verify_evidence(run, bundle, digest, scenario)
     report = compare_v2(scenario, run, run, baseline_evidence=evidence,
                         candidate_evidence=evidence)
@@ -299,6 +305,9 @@ def run_capture(options: CaptureOptions) -> Path:
         key = os.environ.get(options.api_key_env) or None
         if key is None:
             raise CaptureRefused(f"the environment variable {options.api_key_env} is not set")
+    # Absolute but not resolved: the child runs in a temporary directory, and a virtual
+    # environment's interpreter must keep its own (symlinked) path to find its packages.
+    options = replace(options, v1_python=Path(os.path.abspath(options.v1_python)))
     scenario, setup = _scenario_and_setup(options.scenario)
     checkout = Path(options.v1_checkout).resolve()
     verify_checkout(checkout)

@@ -276,3 +276,9 @@ def test_verification_covers_judge_scores():
     scored = parse_run_v2({**raw, "judge_scores": {"fluency": 0.9}}, SCENARIO)
     check = verify_evidence(scored, data, evidence_digest(data), SCENARIO)
     assert not check.ok and "judge_scores" in check.reason
+
+
+def test_standalone_continuation_row_is_refused():
+    # The two-call profile has no continuations; one without its chat row hides the first call.
+    refused(live_bundle(usage_rows=[v021_row("r-1", task="continuation")]),
+            "multi_call_contribution")

@@ -435,3 +435,34 @@ def test_main_works_off_the_main_thread(checkout, scratch_tmp, scenario_files, t
     worker.start()
     worker.join(60)
     assert result == [0]
+
+
+def test_relative_v1_python_still_starts(checkout, scratch_tmp, scenario_files, tmp_path,
+                                         monkeypatch):
+    # The documented commands pass `../v021-venv/bin/python`; the child runs in a temp cwd.
+    fake_driver(tmp_path, monkeypatch, PRINT)
+    link = tmp_path / "bin" / "python"
+    link.parent.mkdir()
+    link.symlink_to(sys.executable)  # a venv's python is a symlink: keep it, don't resolve it
+    monkeypatch.chdir(tmp_path)
+    args = ["--scenario", "mini", "--v1-checkout", str(checkout), "--v1-python",
+            os.path.join("bin", "python"), "--out", str(tmp_path / "out"), "--dry-run",
+            "--provider", "openrouter"]
+    assert capture.main(args) == 0
+
+
+def test_rejected_conversion_still_reports_what_was_spent(checkout, scratch_tmp, scenario_files,
+                                                          tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TEST_KEY", KEY)
+    fake_driver(tmp_path, monkeypatch, textwrap.dedent("""
+        bundle['mode'] = 'live'
+        bundle['choice_outcomes'] = {'c1': 'unlabelled'}
+        bundle['usage_rows'][0]['model'] = 'some-fallback-model'
+        bundle['usage_rows'][0]['cost_usd'] = 0.0042
+    """) + PRINT)
+    out = tmp_path / "out"
+    assert capture.main(argv(checkout, out, "--live", "--provider", "openrouter", "--model", "m",
+                             "--api-key-env", "TEST_KEY", "--confirm-billing")) == 1
+    err = capsys.readouterr().err
+    assert "model_mismatch" in err and "partial ledger" in err and "0.0042" in err
+    assert "You knock" not in err and KEY not in err and not out.exists()

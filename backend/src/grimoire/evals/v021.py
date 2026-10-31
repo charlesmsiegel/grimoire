@@ -28,7 +28,12 @@ PROVIDER_KINDS = ("openrouter", "anthropic")
 MODES = ("dry_run", "live")
 #: 0.2.1's narrator speaker (``routes/character_turns/_state.py``). The profile excludes it.
 NARRATOR_REF = "grimoire"
-GENERATION_TASKS = ("chat", "continuation")
+#: The task of an NPC's one generation. A ``continuation`` (a roll's second call) is never part of
+#: the two-call profile, with or without its first call.
+GENERATION_TASK = "chat"
+CONTINUATION_TASK = "continuation"
+PARTIAL_FIELDS = ("prompt_tokens", "completion_tokens", "cache_read_tokens",
+                  "cache_write_tokens", "cost_usd")
 GENERATION_PURPOSE = "speaking NPC contribution"
 BUNDLE_KEYS = ("format", "scenario_id", "mode", "provider_kind", "v1_commit", "profile",
                "llm_retries", "model", "budget", "campaign", "scene", "actor_map",
@@ -219,7 +224,11 @@ def _convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
         if row.get("kind") == "rename":
             continue
         response_id = row.get("response_id")
-        if (row.get("kind") != "llm" or row.get("task") not in GENERATION_TASKS
+        if row.get("kind") == "llm" and row.get("task") == CONTINUATION_TASK:
+            raise CaptureConversionError("multi_call_contribution",
+                                         f"usage row {index} is a continuation: a contribution "
+                                         "took more than one call")
+        if (row.get("kind") != "llm" or row.get("task") != GENERATION_TASK
                 or not response_id or row.get("campaign") != bundle["campaign"]
                 or row.get("scene") != bundle["scene"]):
             raise CaptureConversionError(
@@ -263,6 +272,16 @@ def _convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
         "calls": calls,
         "choice_outcomes": dict(bundle["choice_outcomes"]),
     }
+
+
+def partial_ledger(rows: object) -> list[dict]:
+    """What a capture's 0.2.1 rows say was spent, as ids and counts only (never text)."""
+    if not isinstance(rows, list):
+        return []
+    return [{"task": row.get("task"), "response_id": row.get("response_id"),
+             "attempts": row.get("attempts", 1), "status": row.get("status"),
+             **{name: row.get(name) for name in PARTIAL_FIELDS}}
+            for row in rows if isinstance(row, Mapping) and row.get("kind") == "llm"]
 
 
 def verify_evidence(run: RunV2, bundle: Mapping, digest: str, scenario: Scenario) -> EvidenceCheck:
