@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import json
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -447,7 +448,7 @@ def test_a_load_in_another_thread_does_not_poison_a_write(library):
     def list_dir(*args, **kwargs):
         if threading.current_thread() is not threading.main_thread() and not inside.is_set():
             inside.set()
-            release.wait(2)  # the main thread writes meanwhile (or waits on the lock until this times out)
+            release.wait(0.3)  # loads hold the lock, so the write waits for this to time out
         return real(*args, **kwargs)
     store._access.ops.list_dir = list_dir
     reader = threading.Thread(target=store.load)
@@ -559,3 +560,46 @@ def test_a_linked_or_special_security_ledger_is_refused(tmp_path, swap):
         open_authority(store)
     store.close()
     assert snapshot(outside) == before
+
+
+@pytest.mark.parametrize("reads", ["accessors", "load"])
+def test_readers_in_other_threads_see_whole_states(library, reads):
+    store, authority, locker = library
+    grant_importer(authority, permissions=(Permission.EXECUTE,), scope="campaigns")
+    interval = sys.getswitchinterval()
+    failures, done = [], threading.Event()
+
+    def read_loop():
+        while not done.is_set():
+            try:
+                if reads == "accessors":
+                    authority.pending_approvals()
+                    authority.describe_policy()
+                else:
+                    store.load()  # would see a flush's journal unless reads wait for commits
+            except Exception as error:  # noqa: BLE001
+                failures.append(error)
+                return
+    sys.setswitchinterval(1e-6)  # interleave as often as possible
+    try:
+        reader = threading.Thread(target=read_loop)
+        reader.start()
+        for number in range(150):  # each registration is a commit that grows the approvals
+            approve(authority, b"%d" % number, aid=f"a{number}", permission=Permission.EXECUTE)
+            if failures:
+                break
+        done.set()
+        reader.join(10)
+    finally:
+        sys.setswitchinterval(interval)
+    assert failures == [] and not authority.poisoned
+
+
+def test_a_deliberate_exit_still_flushes(library):
+    store, authority, locker = library
+    grant_importer(authority)
+    with pytest.raises(SystemExit):
+        with authority:
+            authority.handle_for(IMPORTER).authorize(Permission.INSPECT, "campaigns/c1")
+            raise SystemExit(0)
+    assert _decisions_on_disk(store.root)[-1]["permission"] == "inspect"

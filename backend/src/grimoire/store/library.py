@@ -386,8 +386,9 @@ class LibraryStore:
             return self._capability
 
     def read_ledger(self, name: str) -> Ledger:
-        self._require_consistent()
-        return read_ledger(self._access, name)
+        with self.lock:  # never overlaps this process's commits
+            self._require_consistent()
+            return read_ledger(self._access, name)
 
     def ledger_writer(self, name: str, *, capability: object | None = None) -> LedgerWriter:
         """The only writer of ledger ``name`` for this session (trusted code only)."""
@@ -424,18 +425,21 @@ class LibraryStore:
     # -- reading -----------------------------------------------------------------
     def read(self, ref: SourceRef | InstanceRef) -> StoredRecord:
         """One record by exact address (a definition must be pinned)."""
-        self._require_consistent()
         if isinstance(ref, SourceRef) and not ref.pinned:
             raise ValueError("read a pinned revision; resolve unpinned references with load().index")
-        return loader.read_record(self._access, address_parts(ref))
+        with self.lock:  # reads wait for this process's commits, so they never see one half-done
+            self._require_consistent()
+            return loader.read_record(self._access, address_parts(ref))
 
     def read_source(self, source_id: str) -> StoredSource:
-        self._require_consistent()
-        return loader.read_source(self._access, source_id)
+        with self.lock:
+            self._require_consistent()
+            return loader.read_source(self._access, source_id)
 
     def load(self) -> LibraryView:
-        self._require_consistent()
-        return loader.load(self._access)
+        with self.lock:
+            self._require_consistent()
+            return loader.load(self._access)
 
     def conflicts(self) -> tuple[str, ...]:
         """Preserved versions awaiting a human, as root-relative paths (files only)."""

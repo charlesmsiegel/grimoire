@@ -95,16 +95,20 @@ class DurableAuthority:
         return self._kernel.issued(handle)
 
     def active_grants(self) -> tuple[Grant, ...]:
-        return self._kernel.active_grants()
+        with self.lock:
+            return self._kernel.active_grants()
 
     def pending_approvals(self) -> tuple[Approval, ...]:
-        return self._kernel.pending_approvals()
+        with self.lock:
+            return self._kernel.pending_approvals()
 
     def audit(self) -> tuple[AuditRecord, ...]:
-        return self._kernel.audit()
+        with self.lock:
+            return self._kernel.audit()
 
     def describe_policy(self) -> tuple[str, ...]:
-        return self._kernel.describe_policy()
+        with self.lock:
+            return self._kernel.describe_policy()
 
     @property
     def poisoned(self) -> bool:
@@ -224,9 +228,9 @@ class DurableAuthority:
             self._require_usable()
             return self._store.read_ledger(name)
 
-    def append(self, name: str, entries: list[dict[str, object]], expected_head: Head | None) -> Head:
-        """Durably append to another ``authority/`` ledger after ``expected_head`` (the head the
-        caller replayed). ``ValueError`` for an entry no batch could hold, changing nothing; any
+    def _append(self, name: str, entries: list[dict[str, object]], expected_head: Head | None) -> Head:
+        """For ``SovereigntyLedger`` only, which checks provenance first: durably append to another
+        ``authority/`` ledger after ``expected_head`` (the head it replayed). ``ValueError`` for an entry no batch could hold, changing nothing; any
         failure to write, including a head that moved, poisons the authority."""
         if name == SECURITY:
             raise ValueError("the security ledger is written only by the authority itself")
@@ -265,8 +269,8 @@ class DurableAuthority:
         return self
 
     def __exit__(self, exc_type: object, *exc_info: object) -> None:
-        if exc_type is not None and not issubclass(exc_type, Exception):  # type: ignore[arg-type]
-            self._closed = True  # a crash or interrupt: no further I/O, writers stay with the store
+        if exc_type is not None and not issubclass(exc_type, (Exception, SystemExit)):  # type: ignore[arg-type]
+            self._closed = True  # an interrupt or crash: no further I/O; the store's writers stay unusable
             return
         self.close()
 

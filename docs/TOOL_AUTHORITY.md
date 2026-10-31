@@ -11,7 +11,7 @@ Imported Markdown, character cards (including extensions and greetings), rules s
 - Trusted application code owns the `Authorizer`: grants, approvals, policy and audit.
 - Each worker gets only a `WorkerHandle` from `authorizer.handle_for(principal, trusted=False)`. The handle fixes the principal and origin and exposes only `authorize(permission, resource, payload=None, approval_id=None)`. Its API offers no way to add grants, register approvals, pick an identity or claim trust, and it refuses attribute writes. Arguments must be exact `str`/`bytes` instances; subclasses that could override hashing, equality or methods are `malformed_request`.
 - Only `human:` and `app:` principals may hold a trusted handle. **Any code path that parses imported content or model output must use an untrusted handle, whatever its principal namespace.** For example, an `app:` importer must not be trusted.
-- A bare `Authorizer` and its handles are single-threaded; callers that share one across threads must serialize access. A sink attached with a lock (`attach_sink(sink, lock=...)`) makes each decision (decide, record, consume) one step under that lock; `DurableAuthority` passes the store's lock, so it is safe to share across threads.
+- A bare `Authorizer` and its handles are single-threaded; callers that share one across threads must serialize access. A sink attached with a lock (`attach_sink(sink, lock=...)`) makes each decision (decide, record, consume) one step under that lock; `DurableAuthority` passes the store's lock and takes it in its read accessors too, so it is safe to share across threads.
 - This is an API boundary enforced by tests and review. It is not an in-process sandbox: Python code that deliberately reaches into private attributes, closures or other modules can subvert any in-process check; isolating community scripts remains the sprint's moonshot.
 
 ## Permissions
@@ -97,3 +97,5 @@ Replay validates each entry with the kernel, including `replay_decision`'s stric
 **Threads.** The authority shares the store's re-entrant lock, and the kernel decides, records and consumes under it, so concurrent requests get distinct audit sequences and an approval is spent once. Scope depth is per thread, so another thread's `execute` allow flushes immediately; it waits only while a commit holds the lock.
 
 **`consequential_scope()` is for `LibraryStore` commits only.** Inside it an allow is returned before it is on disk; the store makes that safe by staging nothing until the scope's single flush succeeds. Any other caller would act on an allow that might never be recorded.
+
+**Leaving `with authority:`.** A normal exit, an `Exception` or `SystemExit` flushes and closes. Any other `BaseException`, such as `KeyboardInterrupt`, closes without I/O, and buffered non-consequential decisions are lost, as in a crash.

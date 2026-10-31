@@ -138,7 +138,7 @@ class SovereigntyLedger:
             builder.check(value, principal)
             entry = envelope(kind, authority.now(), recorded_by=principal, value=fields)
             try:
-                head = authority.append(name, [entry], builder.head)
+                head = authority._append(name, [entry], builder.head)
             except ValueError as error:  # no batch could hold it; nothing was written
                 raise AuthorityError(str(error)) from None
             builder.apply(value, principal)
