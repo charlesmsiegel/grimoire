@@ -367,11 +367,10 @@ class ChatLibrary:
         return self._envelope(scope.ref, SCOPE_SCHEMA, scope_to_payload(scope), base)
 
     def _envelope(self, ref: ScopeRef | ChatRef, schema: str, payload: dict, base: ScopeRecord | None) -> ScopeRecord:
-        """A rewrite keeps the stored envelope's unknown fields and its original attribution."""
+        """A rewrite keeps the stored envelope's unknown fields and its original attribution, even none."""
         if base is None:
             return ScopeRecord(ref, schema, payload, owner=self._owner)
-        owner = base.owner if base.owner is not None else self._owner
-        return ScopeRecord(ref, schema, payload, owner=owner, extra=base.extra)
+        return ScopeRecord(ref, schema, payload, owner=base.owner, extra=base.extra)
 
     def _chat_change(self, chat: ChatRef, record: ChatRecord, base: ScopeRecord, expected: str,
                      envelope: RecordEnvelope | None = None) -> ChatChange:

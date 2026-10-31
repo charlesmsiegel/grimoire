@@ -137,7 +137,7 @@ Every mutating method returns a `ChatChange`:
 - `detach_source(…)`: works on a broken reference; it is the repair path.
 - `set_persona(chat, ref | None, expected=…, actor=None)`: detaches the current persona and binds the new one. Choosing the same persona entity again keeps its actor while that actor's instance exists; if the file has vanished, a new actor is minted.
 - `set_label(…)`.
-- Edits keep the stored envelope's unknown top-level fields and original `owner`.
+- Edits keep the stored envelope's unknown top-level fields and original `owner`, including an absent one. Only new records get the library's `owner`.
 - `name_scope`, `attach_world`, `detach_world`, `set_session_zero`.
 - `open_chat(chat)` returns the record, its scope and `broken`: every launch, active binding, roster actor and world reference that does not resolve now. Reasons are `missing_source`, `missing_entity`, `missing_revision`, `excluded_source`, `entity_dropped`, `missing_actor` and `world_drift`. Opening never fails because a source is missing.
   - `ChatView.problems` reports `orphan_chat` when the scope record is missing, and `undecodable_scope` when it exists but cannot be read.

@@ -551,3 +551,13 @@ def test_reattaching_a_character_can_reuse_its_actor(store, chats):
     with pytest.raises(InvalidBinding) as error:
         chats.attach_source(first.chat, ANYA, "character", expected=chats.read_chat(first.chat)[1], actor=mara)
     assert error.value.reason == "actor_mismatch"
+
+
+def test_rewriting_an_unowned_record_never_claims_it(store):
+    first = start(ChatLibrary(store, owner_handle(), clock=chat_library(store)._clock,
+                              new_id=chat_library(store)._new_id))  # written without an owner
+    assert store.read(first.chat).record.owner is None
+    claimant = chat_library(store)  # owner=OWNER
+    claimant.set_label(first.chat, "x", expected=claimant.read_chat(first.chat)[1]).commit()
+    claimant.name_scope(first.scope, "N", expected=claimant.read_scope(first.scope)[1]).commit()
+    assert store.read(first.chat).record.owner is None and store.read(first.scope).record.owner is None
