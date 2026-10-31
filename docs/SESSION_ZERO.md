@@ -116,7 +116,7 @@ Nothing caches the result. Callers recompute it on every review, so a tightened 
 
 | Deferred work | Owner |
 |---|---|
-| Persistence of configuration | [Native File Store](roadmap/sprints/native-file-store-and-revisions.md) (#010), as an opaque record that 010 does not interpret |
+| Persistence of configuration | Stored verbatim as the play scope's opaque `session_zero` object by [World-Optional Chat Scopes](CHATS.md) (#107). The store does not interpret it. A JSON codec for `SessionZero` and authenticating its setter belong to #035. |
 | Carrying over only genuine V1 preferences; missing ones stay unset | [V1 import](roadmap/sprints/v1-to-v2-import-apply.md) (#026) |
 | Rendering visible rulings into prompts, never `SessionZero` directly | #027 |
 | Authenticated audience and speakers, consent collection, request execution, extending the [intent router](intent-routing.md) with skip/redirect lanes, a visible correction | #035 |
