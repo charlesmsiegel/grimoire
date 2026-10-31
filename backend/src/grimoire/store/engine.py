@@ -72,9 +72,12 @@ class Access:
             self._listings = outer
 
     def list_dir(self, parts: Parts) -> list[str]:
+        """``parts``'s entries; ``LinkRefused`` if it or an ancestor is a link (never listed)."""
         if self._listings is None:
+            self.guard.check_read(parts)
             return self.ops.list_dir(self.path(parts))
         if parts not in self._listings:
+            self.guard.check_read(parts)
             self._listings[parts] = self.ops.list_dir(self.path(parts))
         return self._listings[parts]
 

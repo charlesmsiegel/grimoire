@@ -31,8 +31,8 @@ from .envelope import (
     EnvelopeError, RecordEnvelope, SourceManifest, parse_record, parse_source, record_document, source_document,
 )
 from .errors import (
-    CommitIncomplete, ImmutableRevision, InvalidEnvelope, InvalidSourceState, NameCollision, NotALibrary,
-    LedgerBusy, PendingRecovery, RecoveryBlocked, RecoveryFailed, StaleWrite, StoreError, WriteConflict,
+    CommitIncomplete, ImmutableRevision, InvalidEnvelope, InvalidSourceState, LinkRefused, NameCollision,
+    NotALibrary, LedgerBusy, PendingRecovery, RecoveryBlocked, RecoveryFailed, StaleWrite, StoreError, WriteConflict,
     WriteDenied,
 )
 from .guard import Guard, Limits, RootIdentity
@@ -140,6 +140,8 @@ class LibraryStore:
         names = ops.list_dir(root)
         if not names:
             return
+        if names == [TXN] and is_link(root / TXN):  # never list a linked .txn
+            raise LinkRefused(f"refusing to follow a link inside the library: {root / TXN}")
         if names == [TXN] and all(name == LOCK or is_staging_name(name) for name in ops.list_dir(root / TXN)):
             return  # an interrupted create
         raise LibraryPathError(f"{root} is not empty; refusing to create a library there")

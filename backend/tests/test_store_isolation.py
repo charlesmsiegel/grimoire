@@ -10,6 +10,7 @@ import pytest
 from grimoire.core.identity import InstanceRef
 from grimoire.library import LibraryPathError, V1IsolationError
 from grimoire.store import CommitIncomplete, LibraryStore, LinkRefused, ProcessLocker, RecoveryFailed, WriteConflict
+from grimoire.store.diskops import DiskOps
 from grimoire.testing import Crash, RootedFileOps, Target
 from grimoire.testing.fileops import snapshot
 
@@ -219,4 +220,35 @@ def test_a_linked_conflicts_folder_is_never_listed(tmp_path):
     make_dir_link(tmp_path / "lib" / ".conflicts", outside)
     with pytest.raises(LinkRefused):
         store.conflicts()
+    store.close()
+
+
+class _RecordingOps(DiskOps):
+    def __init__(self):
+        self.listed = []
+
+    def list_dir(self, path):
+        self.listed.append(Path(path))
+        return super().list_dir(path)
+
+
+def test_create_never_lists_a_linked_txn(tmp_path):
+    v1 = _v1_library(tmp_path / "old")
+    target = tmp_path / "lib"
+    target.mkdir()
+    make_dir_link(target / ".txn", v1)
+    ops = _RecordingOps()
+    with pytest.raises(LinkRefused):
+        LibraryStore.create(target, ops=ops)
+    assert all(not path.is_relative_to(target / ".txn") for path in ops.listed)
+
+
+def test_reading_through_access_never_lists_a_linked_folder(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    store = LibraryStore.create(tmp_path / "lib")
+    (tmp_path / "lib" / "campaigns").mkdir()
+    make_dir_link(tmp_path / "lib" / "campaigns" / "c1", outside)
+    with pytest.raises(LinkRefused):
+        store._access.list_dir(("campaigns", "c1"))
     store.close()
