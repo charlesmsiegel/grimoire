@@ -497,3 +497,13 @@ def test_choosing_the_same_persona_keeps_its_actor(store, chats):
     chats.set_persona(first.chat, SAM, expected=etag).commit()
     record = chats.read_chat(first.chat)[0]
     assert record.persona.actor == body and len(record.roster) == len({e.actor for e in record.roster}) == 2
+
+
+def test_choosing_the_same_persona_after_its_actor_vanished_mints_a_new_one(store, chats):
+    first = start(chats, persona=SAM)
+    record, etag = chats.read_chat(first.chat)
+    gone = record.persona.actor
+    (store.root / f"campaigns/{gone.campaign_id}/instances/character/{gone.instance_id}.json").unlink()
+    chats.set_persona(first.chat, SAM, expected=etag).commit()
+    record = chats.read_chat(first.chat)[0]
+    assert record.persona.actor != gone and record.roster_entry(gone) is not None  # history kept, new body

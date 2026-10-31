@@ -249,7 +249,7 @@ class ChatLibrary:
     def attach_source(self, chat: ChatRef, ref: SourceRef, role: str, *, expected: str,
                       actor: InstanceRef | None = None) -> ChatChange:
         record, base = self._current(chat, expected)
-        taken = {found.instance_id for found in self.store.campaign_instances(chat.campaign_id)}
+        taken = self._taken(chat, record)
         binding, envelope = self._prepare(chat.campaign_id, ref, role, actor, taken)
         return self._chat_change(chat, record.attach(binding, self._clock()), base, expected, envelope)
 
@@ -264,13 +264,13 @@ class ChatLibrary:
         at = self._clock()
         current = record.persona
         if current is not None:
-            if ref is not None and actor is None and ref.entity_key == current.ref.entity_key:
+            if (ref is not None and actor is None and ref.entity_key == current.ref.entity_key
+                    and current.actor in self.store.campaign_instances(chat.campaign_id)):
                 actor = current.actor  # the same persona (perhaps another revision) keeps its body
             record = record.detach(current.ref, "persona", at)
         envelope = None
         if ref is not None:
-            taken = {found.instance_id for found in self.store.campaign_instances(chat.campaign_id)}
-            binding, envelope = self._prepare(chat.campaign_id, ref, "persona", actor, taken)
+            binding, envelope = self._prepare(chat.campaign_id, ref, "persona", actor, self._taken(chat, record))
             record = record.attach(binding, at)
         return self._chat_change(chat, record, base, expected, envelope)
 
@@ -311,6 +311,11 @@ class ChatLibrary:
         if etag != expected:
             raise StaleWrite([("/".join(address_parts(chat)), "changed")])
         return record, stored
+
+    def _taken(self, chat: ChatRef, record: ChatRecord) -> set[str]:
+        """Actor ids a new actor may not use: every instance file, and this chat's roster even if a file vanished."""
+        taken = {found.instance_id for found in self.store.campaign_instances(chat.campaign_id)}
+        return taken | {entry.actor.instance_id for entry in record.roster}
 
     def _resolve(self, ref: SourceRef, role: str) -> tuple[str, str]:
         if role not in ROLE_KINDS or ref.kind != ROLE_KINDS[role]:

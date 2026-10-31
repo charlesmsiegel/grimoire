@@ -150,7 +150,7 @@ Its cost does not grow with the library, and no mutating method loads the whole 
 
 ### Actor ids
 
-Actor ids are `<entity_id>-<n>`, the smallest unused number across all kinds in the campaign. A look-alike instance file (`Mara-1.json`) is invisible to that listing, so the commit fails with `NameCollision` rather than reallocating.
+Actor ids are `<entity_id>-<n>`, the smallest number used neither by an instance file of any kind in the campaign nor by this chat's roster, even when an actor's file has vanished. **Limit:** an instance file deleted by hand can free its id for a *different* chat in the same campaign. A look-alike instance file (`Mara-1.json`) is invisible to that listing, so the commit fails with `NameCollision` rather than reallocating.
 
 ### Actor instances
 
