@@ -9,7 +9,7 @@ review, not an in-process sandbox against arbitrary imported code.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from .policy import (
@@ -63,6 +63,25 @@ def _well_formed(permission: object, resource: object, payload: object,
     return (payload is None) == (permission is Permission.INSPECT)
 
 
+def _check_record_types(record: object) -> None:
+    if type(record) is not AuditRecord:
+        raise ValueError("expected an AuditRecord")
+    if type(record.sequence) is not int or record.sequence < 1:
+        raise ValueError("sequence must be a positive int")
+    if not is_valid_principal(record.principal):
+        raise ValueError("invalid principal")
+    if record.permission is not None and type(record.permission) is not Permission:
+        raise ValueError("permission must be a Permission or None")
+    if type(record.reason) is not Reason:
+        raise ValueError("reason must be a Reason")
+    if type(record.trusted) is not bool or type(record.allowed) is not bool:
+        raise ValueError("trusted and allowed must be bools")
+    for label in ("resource", "grant_id", "approval_id"):
+        value = getattr(record, label)
+        if value is not None and type(value) is not str:
+            raise ValueError(f"{label} must be text or None")
+
+
 class Authorizer:
     """Holds grants, approvals and the audit log; never handed to workers."""
 
@@ -75,6 +94,24 @@ class Authorizer:
         self._approvals: dict[str, tuple[Approval, str]] = {}
         self._closed_approvals: set[str] = set()
         self._audit: list[AuditRecord] = []
+        self._sink: Callable[[AuditRecord], None] | None = None
+
+    def attach_sink(self, sink: Callable[[AuditRecord], None]) -> None:
+        """Make every later decision pass through ``sink`` before it takes effect.
+
+        The sink sees each record before it joins the audit and before an approval
+        is consumed; if it raises, the request is denied ``internal_error``. A
+        durable layer uses this to put decisions on disk first. Attached once.
+        """
+        if self._sink is not None:
+            raise ValueError("a sink is already attached")
+        if not callable(sink):
+            raise ValueError("a sink must be callable")
+        self._sink = sink
+
+    def issued(self, handle: object) -> bool:
+        """Whether ``handle`` was minted by this authorizer."""
+        return type(handle) is WorkerHandle and handle._authority is self
 
     def add_grant(self, grant: Grant) -> None:
         if not isinstance(grant, Grant):
@@ -153,7 +190,7 @@ class Authorizer:
 
     def _record(self, principal: str, trusted: bool, permission: object,
                 decision: Decision) -> None:
-        self._audit.append(AuditRecord(
+        record = AuditRecord(
             sequence=len(self._audit) + 1,
             principal=principal,
             permission=permission if type(permission) is Permission else None,
@@ -163,7 +200,54 @@ class Authorizer:
             reason=decision.reason,
             grant_id=decision.grant_id,
             approval_id=decision.approval_id,
-        ))
+        )
+        if self._sink is not None:
+            self._sink(record)  # durable first; a failure denies before anything takes effect
+        self._audit.append(record)
+
+    def replay_decision(self, record: AuditRecord) -> None:
+        """Rebuild one stored decision, validating it against the state replayed so far.
+
+        For a durable layer reopening its ledger: refused once a sink is attached.
+        Raises ``ValueError`` for anything this kernel could not have recorded.
+        """
+        if self._sink is not None:
+            raise ValueError("decisions can only be replayed before a sink is attached")
+        _check_record_types(record)
+        if record.sequence != len(self._audit) + 1:
+            raise ValueError(f"decision {record.sequence} is out of order (expected {len(self._audit) + 1})")
+        if record.trusted and not (is_human(record.principal) or record.principal.startswith("app:")):
+            raise ValueError("only human: or app: principals hold trusted handles")
+        if not record.allowed:
+            if record.reason in (Reason.GRANTED, Reason.APPROVED):
+                raise ValueError("a denial cannot carry an allow reason")
+            if record.grant_id is not None or record.approval_id is not None:
+                raise ValueError("a denial names no grant or approval")
+            self._audit.append(record)
+            return
+        if record.permission is None or record.resource is None:
+            raise ValueError("an allow names its permission and resource")
+        resource = ResourcePath.parse(record.resource)
+        grant = self._grants.get(record.grant_id) if record.grant_id is not None else None
+        if (grant is None or record.grant_id in self._revoked_grants
+                or not grant.covers(record.principal, record.permission, resource)):
+            raise ValueError(f"decision {record.sequence} names no active covering grant")
+        consequential = record.permission in CONSEQUENTIAL
+        if record.approval_id is None:
+            if record.reason is not Reason.GRANTED or (consequential and not record.trusted):
+                raise ValueError(f"decision {record.sequence} needed an approval")
+        else:
+            if record.reason is not Reason.APPROVED or record.trusted or not consequential:
+                raise ValueError(f"decision {record.sequence} cannot have used an approval")
+            entry = self._approvals.get(record.approval_id)
+            if entry is None or record.approval_id in self._closed_approvals:
+                raise ValueError(f"decision {record.sequence} used an unknown or closed approval")
+            approval, pinned = entry
+            if (pinned != record.grant_id or approval.principal != record.principal
+                    or approval.permission is not record.permission or approval.resource != resource):
+                raise ValueError(f"decision {record.sequence} does not match its approval")
+            self._closed_approvals.add(record.approval_id)
+        self._audit.append(record)
 
     def _decide(self, principal: str, trusted: bool, permission: object,
                 resource: object, payload: object, approval_id: object) -> Decision:
