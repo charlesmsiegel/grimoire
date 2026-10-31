@@ -99,7 +99,10 @@ A pure module cannot stop code elsewhere from calling a model, so the provider a
 - accept a `PlannedCall` from the turn's plan and refuse to issue a model request without one;
 - book every attempt, including failures and fallbacks to another route, to that turn's ledger.
 
-Cost comparisons with V0.2.1 (015) must use `provider_reported_only` data.
+Cost comparisons with V0.2.1 (015) must use `provider_reported_only` data. The story-quality run
+format `/2` ([docs/evals/STORY_QUALITY.md](evals/STORY_QUALITY.md)) rebuilds each recorded turn
+as a plan and ledger, and reports a run as measured only from such a summary plus verified
+capture evidence.
 
 **Status (Wave 2):** [`grimoire.providers`](PROVIDERS.md) meets this obligation for model calls:
 - It refuses any `PlannedCall` its turn's plan lacks.

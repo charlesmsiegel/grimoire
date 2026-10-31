@@ -134,6 +134,20 @@ def test_provenance_vocabularies_differ_only_as_documented():
     assert {m.value for m in Measurement} == {"provider_reported", "estimated", "synthetic"}
 
 
+# ---- story-quality /2 (015) reconciles the evals format with core.inference ----------
+
+def test_v2_purposes_are_inference_stages():
+    from grimoire.evals.format2 import MEASUREMENTS, STAGES_V2
+
+    assert set(STAGES_V2) == {stage.value for stage in InferenceStage}
+    assert evals_format.NARRATION not in STAGES_V2  # provisional until 027 adds a stage
+    assert set(MEASUREMENTS) == {m.value for m in Measurement}
+    baseline = load_json(benchmark_file("guild_betrayal", "baseline.v2.json"))
+    assert {call["stage"] for call in baseline["calls"]} <= set(STAGES_V2)
+    text = (DOCS / "evals" / "STORY_QUALITY.md").read_text(encoding="utf-8")
+    assert "## Format `grimoire.story-quality/2`" in text and "**Provisional**" in text
+
+
 # ---- library isolation (001) <-> tool authority (007) ------------------------------
 
 def test_no_worker_can_create_a_v1_root_entry_in_a_v2_library():

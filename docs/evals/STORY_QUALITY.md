@@ -1,4 +1,4 @@
-# Story-quality gate (Sprint 005, first slice)
+# Story-quality gate (Sprint 005 first slice; run format `/2` from Sprint 015)
 
 **Status:** offline, deterministic, automatic pass/fail gate. It scores *recorded* runs; it never
 calls a model. Blinded human comparison, long-horizon evaluation, NPC agency/initiative
@@ -7,6 +7,10 @@ calls a model. Blinded human comparison, long-horizon evaluation, NPC agency/ini
 ```bash
 python -m grimoire.evals.story_quality SCENARIO.json BASELINE.json CANDIDATE.json
 ```
+
+Baseline and candidate must both be `/1` or both `/2` runs (mixing them is exit `2`). For `/2`
+runs, `--evidence-baseline EVIDENCE` / `--evidence-candidate EVIDENCE` supply a capture's
+`evidence.json`; see [Format `/2`](#format-grimoirestory-quality2).
 
 Exit status: `0` pass, `1` gate failed, `2` invalid input or usage. The report goes to stdout and
 cites ids and indices only, never contribution or marker text. Options: `--max-cost-increase`
@@ -17,24 +21,28 @@ Any non-default tolerance is printed in the report.
 The shipped benchmark lives in `backend/src/grimoire/evals/benchmarks/guild_betrayal/`. Its
 baseline is a **synthetic, hand-authored imitation of V0.2.1's call shape** (one RP call per
 speaking NPC plus narration), not a measurement of V0.2.1. A pass against a synthetic run prints
-"no regression against a synthetic baseline — not a cost/quality certification". Measured V0.2.1
-billed-token capture is sprint 015. Its **first proof must include a runnable, explicitly opted-in real V0.2.1 capture**, not just synthetic fixtures. Ordinary CI never invokes a paid provider, and synthetic fixtures can never be relabeled measured.
+"no regression against a synthetic baseline — not a cost/quality certification". The same
+baseline in `/2` (narration removed, since `/2` has no narration stage) is `baseline.v2.json`.
+Measured V0.2.1 capture is [V0.2.1 baseline](V021_BASELINE.md) (sprint 015): its status is
+**baseline capture pending**. Ordinary CI never invokes a paid provider, and synthetic fixtures
+can never be relabeled measured.
 
 ## Divergence from the inference contract
 
-`grimoire.evals` deliberately does not import `grimoire.core`, so these known differences from
-[the inference contract](../INFERENCE.md) are pinned by `backend/tests/test_wave1_integration.py`
-instead:
+`grimoire.evals` imports only `grimoire.core.inference` from the domain core (it never imports
+`grimoire.core` itself). Format `/1` keeps these known differences from
+[the inference contract](../INFERENCE.md); format `/2` reconciles them. Both are pinned by
+`backend/tests/test_wave1_integration.py`:
 
-| Item | Evals format | `core.inference` | Owner |
+| Item | `/1` | `core.inference` | `/2` |
 |---|---|---|---|
-| narration purpose | `narration` is an unflagged RP purpose; the synthetic baseline spends about a third of its weighted tokens on it | no `narration` stage; a turn must not issue one | per-npc-generation-runtime (027) decides its stage before narration is generated |
-| provenance vocabulary | `synthetic` / `measured` (self-declared; the report says so) | `provider_reported` / `estimated` / `synthetic` per attempt | v1-cost-and-voice-regression (015) |
-| token fields | integer `input_tokens`, `cached_input_tokens`, `output_tokens`; an unreported count cannot be recorded | `None` means unreported; cache read/write and reasoning tokens separate | v1-cost-and-voice-regression (015) |
-| optional calls | `actor_id` only on `npc_generation`; free-form `feature_flag` names | every optional stage is an `InferenceStage`, with an optional actor | v1-cost-and-voice-regression (015) |
+| narration purpose | `narration` is an unflagged RP purpose; the synthetic baseline spends about a third of its weighted tokens on it | no `narration` stage; a turn must not issue one | no narration call or scene-level contribution; narration prose belongs to the NPC contribution that produced it. **Provisional** until per-npc-generation-runtime (027) decides a stage; a new stage is a `/3` |
+| provenance vocabulary | `synthetic` / `measured` (self-declared; the report says so) | `provider_reported` / `estimated` / `synthetic` per attempt | per-attempt `measurement`; "measured" is derived from the rebuilt ledger plus verified evidence, never declared |
+| token fields | integer `input_tokens`, `cached_input_tokens`, `output_tokens`; an unreported count cannot be recorded | `None` means unreported; cache read/write and reasoning tokens separate | the `TokenUsage` fields, `null` = unreported |
+| optional calls | `actor_id` only on `npc_generation`; free-form `feature_flag` names | every optional stage is an `InferenceStage`, with an optional actor | every call has a `stage` from a frozen copy of `InferenceStage`, planned under the run's `policy` |
 
-`npc_generation` means the same in both. The shipped benchmark's other purposes and flags must be
-`InferenceStage` values.
+`npc_generation` means the same in all three. The shipped `/1` benchmark's other purposes and
+flags must be `InferenceStage` values.
 
 ## Format `grimoire.story-quality/1`
 
@@ -73,6 +81,41 @@ failure (`script_incomplete`, exit 1).
 
 In the shipped benchmark Wren hears the secret in Bellamy's turn-3 song (`known_from` turn 3), so
 narration may mention it on turn 3 but not on turns 1–2.
+
+## Format `grimoire.story-quality/2`
+
+Runs only; scenarios keep format `/1`. A `/2` run is rebuilt turn by turn as a
+`TurnInferencePlan` (every scenario actor present, player actors player-controlled) and a
+`TurnUsageLedger`. Parsing is as strict as `/1`, and additionally:
+
+- **Run keys:** `source`, `conditions` (must include `model` and `budget`), `policy`
+  (`per_turn_call_caps` over optional stages, `max_attempts_per_call`), `turns`, `calls`,
+  `choice_outcomes`, optional `judge_scores`. There is no `provenance`, `enabled_flags` or
+  `feature_flag`; an optional stage is enabled by having a cap.
+- **Calls:** `call_id`, `turn`, optional `phase` (default `main`; phases in order of first
+  appearance), `stage`, `actor_id`, `purpose`, `latency_ms` (the whole call's wall time; `null` if
+  unreported) and `attempts`. Each attempt has `attempt`, `outcome` (`completed`, `failed`,
+  `cancelled`, `not_sent`), `measurement`, optional `route`, `usage` (the `TokenUsage` fields) and
+  optional `cost` (`usd`, `basis` `billed`/`equivalent`, provisional for 013). A call the planner
+  would refuse or decline (a PC's generation, a second generation for one NPC, a disabled or
+  over-cap optional stage) is a located error; so are out-of-order or over-limit attempts.
+- **Contributions:** a model contribution must name a `npc_generation` call of the same turn,
+  whose actor is its speaker, with a `completed` attempt. A planned call with no attempts and no
+  contribution is *unmetered*: reported as missing data, never free.
+- **Sources:** `synthetic`; `v0.2.1-capture` (`mode` `dry_run`/`live`, pinned `v1_commit`,
+  `harness`, `evidence_sha256`, `profile`, `llm_retries`, `route`); `v2-runtime` (reserved for
+  013/027). A synthetic or dry-run source may hold only `synthetic` measurements; a live capture
+  only `provider_reported`/`estimated`.
+- **Choice outcomes** may also be `unlabelled` (judged on marker evidence only, and counted).
+
+The gate runs the `/1` hard checks and cast distinguishability on a `/1`-shaped view, then judges
+usage from the ledgers. **Weighted billed tokens** are `(input − cache read) + cache read × weight
++ output` over every attempt (failed ones too); cache writes are billed at input weight. If either
+run has an unmetered call or an attempt that left input, output or cache-read counts unreported,
+the gate reports `usage_incomplete` instead of a cost verdict, and likewise for gated latency.
+Usage status is `measured` (complete, provider-reported, and verified evidence),
+`provider-reported (declared by capture, unverified)`, `estimated`, `synthetic` or `incomplete`;
+evidence that is supplied but does not verify is an `evidence_unverified` finding.
 
 ## Checks
 
