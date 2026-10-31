@@ -120,7 +120,7 @@ class Launch:
     premise: str | None = None
 
     def __post_init__(self) -> None:
-        if self.kind not in LAUNCH_KINDS:
+        if type(self.kind) is not str or self.kind not in LAUNCH_KINDS:
             raise _fail(f"unknown launch kind {self.kind!r}", "launch_kind")
         if self.kind == "premise":
             if self.ref is not None:
@@ -153,7 +153,7 @@ class SourceBinding:
     def __post_init__(self) -> None:
         if not isinstance(self.ref, SourceRef):
             raise _fail("a binding needs a SourceRef")
-        if self.role not in ROLE_KINDS:
+        if type(self.role) is not str or self.role not in ROLE_KINDS:
             raise _fail(f"unknown role {self.role!r}", "role_kind")
         if self.ref.kind != ROLE_KINDS[self.role]:
             raise _fail(f"role {self.role} binds {ROLE_KINDS[self.role]} definitions, not {self.ref}", "role_kind")
@@ -200,13 +200,13 @@ class RosterEntry:
     def __post_init__(self) -> None:
         if not isinstance(self.actor, InstanceRef) or self.actor.kind != "character":
             raise _fail("a roster actor is a character instance")
-        if self.role not in ACTOR_ROLES:
+        if type(self.role) is not str or self.role not in ACTOR_ROLES:
             raise _fail(f"a roster entry's role is one of {sorted(ACTOR_ROLES)}", "role_kind")
         if self.source is not None and not isinstance(self.source, SourceRef):
             raise _fail("a roster source is a SourceRef")
         _seq(self.introduced_seq, "introduced_seq")
         check_timestamp(self.introduced_at, "introduced_at")
-        if self.prior_history not in PRIOR_HISTORY:
+        if type(self.prior_history) is not str or self.prior_history not in PRIOR_HISTORY:
             raise _fail(f"prior_history must be one of {sorted(PRIOR_HISTORY)}")
 
 

@@ -30,7 +30,7 @@ from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, va
 from grimoire.store import (
     LibraryStore, LibraryView, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
 )
-from grimoire.store.layout import address_parts
+from grimoire.store.layout import address_parts, classify
 
 #: (role, entity key) -> an existing campaign actor to reuse instead of creating one
 ReuseMap = Mapping[tuple[str, tuple[str, str, str]], InstanceRef]
@@ -130,24 +130,37 @@ class ChatLibrary:
 
     def read_chat(self, chat: ChatRef) -> tuple[ChatRecord, str]:
         """The chat and its etag; ``ChatCodecError`` if this version cannot interpret it."""
-        stored = self.store.read(chat)
-        return chat_from_payload(chat, stored.record.schema, stored.record.payload), stored.etag  # type: ignore[union-attr]
+        record, etag, _ = self._read_chat(chat)
+        return record, etag
 
     def read_scope(self, scope: ScopeRef) -> tuple[PlayScope, str]:
-        stored = self.store.read(scope)
-        return scope_from_payload(scope, stored.record.schema, stored.record.payload), stored.etag  # type: ignore[union-attr]
+        current, etag, _ = self._read_scope(scope)
+        return current, etag
+
+    def _read_chat(self, chat: ChatRef) -> tuple[ChatRecord, str, ScopeRecord]:
+        found = self.store.read(chat)
+        stored = found.record  # type: ignore[union-attr]
+        return chat_from_payload(chat, stored.schema, stored.payload), found.etag, stored
+
+    def _read_scope(self, scope: ScopeRef) -> tuple[PlayScope, str, ScopeRecord]:
+        found = self.store.read(scope)
+        stored = found.record  # type: ignore[union-attr]
+        return scope_from_payload(scope, stored.schema, stored.payload), found.etag, stored
 
     def open_chat(self, chat: ChatRef) -> ChatView:
         """The chat, its scope and every reference that does not resolve now. Never fails on a missing source."""
         view = self.store.load()
         stored = view.chats.get(chat)
         if stored is None:
-            raise RecordNotFound(str(chat))
+            self.store.read(chat)  # raises what is wrong: RecordNotFound, MalformedRecord, UnsupportedFormat ...
+            raise RecordNotFound(str(chat))  # it appeared since the load: never report a stale view
         record = chat_from_payload(chat, stored.record.schema, stored.record.payload)
         problems: list[str] = []
         scope, scope_etag = None, None
         found = view.scopes.get(chat.scope)
-        if found is None:
+        if found is None and chat.scope in _problem_records(view)[1]:
+            problems.append("undecodable_scope")  # the file exists; this version cannot read its envelope
+        elif found is None:
             problems.append("orphan_chat")
         else:
             scope_etag = found.etag
@@ -173,6 +186,9 @@ class ChatLibrary:
                 scopes.append(scope_entry(scope_from_payload(ref, stored.record.schema, stored.record.payload)))
             except ChatCodecError:
                 scopes.append(ScopeEntry(ref))  # unreadable, but its chats are not orphans
+        bad_chats, bad_scopes = _problem_records(view)  # malformed, newer-format or misaddressed files
+        entries += [nav_entry(ref, None) for ref in sorted(bad_chats - set(view.chats), key=str)]
+        scopes += [ScopeEntry(ref) for ref in sorted(bad_scopes - set(view.scopes), key=str)]
         return NavigationIndex.build(entries, scopes)
 
     # -- starting a chat ----------------------------------------------------------------------
@@ -232,32 +248,35 @@ class ChatLibrary:
 
     def attach_source(self, chat: ChatRef, ref: SourceRef, role: str, *, expected: str,
                       actor: InstanceRef | None = None) -> ChatChange:
-        record = self._current(chat, expected)
+        record, base = self._current(chat, expected)
         taken = {found.instance_id for found in self.store.campaign_instances(chat.campaign_id)}
         binding, envelope = self._prepare(chat.campaign_id, ref, role, actor, taken)
-        return self._chat_change(chat, record.attach(binding, self._clock()), expected, envelope)
+        return self._chat_change(chat, record.attach(binding, self._clock()), base, expected, envelope)
 
     def detach_source(self, chat: ChatRef, ref: SourceRef, role: str, *, expected: str) -> ChatChange:
         """Tombstone a binding; works for a broken reference (the repair path). Actors stay."""
-        record = self._current(chat, expected)
-        return self._chat_change(chat, record.detach(ref, role, self._clock()), expected)
+        record, base = self._current(chat, expected)
+        return self._chat_change(chat, record.detach(ref, role, self._clock()), base, expected)
 
     def set_persona(self, chat: ChatRef, ref: SourceRef | None, *, expected: str,
                     actor: InstanceRef | None = None) -> ChatChange:
-        record = self._current(chat, expected)
+        record, base = self._current(chat, expected)
         at = self._clock()
-        if record.persona is not None:
-            record = record.detach(record.persona.ref, "persona", at)
+        current = record.persona
+        if current is not None:
+            if ref is not None and actor is None and ref.entity_key == current.ref.entity_key:
+                actor = current.actor  # the same persona (perhaps another revision) keeps its body
+            record = record.detach(current.ref, "persona", at)
         envelope = None
         if ref is not None:
             taken = {found.instance_id for found in self.store.campaign_instances(chat.campaign_id)}
             binding, envelope = self._prepare(chat.campaign_id, ref, "persona", actor, taken)
             record = record.attach(binding, at)
-        return self._chat_change(chat, record, expected, envelope)
+        return self._chat_change(chat, record, base, expected, envelope)
 
     def set_label(self, chat: ChatRef, label: str | None, *, expected: str) -> ChatChange:
-        record = self._current(chat, expected)
-        return self._chat_change(chat, record.relabel(label, self._clock()), expected)
+        record, base = self._current(chat, expected)
+        return self._chat_change(chat, record.relabel(label, self._clock()), base, expected)
 
     # -- scope edits ------------------------------------------------------------------------------
 
@@ -286,11 +305,12 @@ class ChatLibrary:
         validate_segment(value, "generated id")
         return value
 
-    def _current(self, chat: ChatRef, expected: str) -> ChatRecord:
-        record, etag = self.read_chat(chat)
+    def _current(self, chat: ChatRef, expected: str) -> tuple[ChatRecord, ScopeRecord]:
+        """The chat to edit and the stored envelope its rewrite keeps."""
+        record, etag, stored = self._read_chat(chat)
         if etag != expected:
             raise StaleWrite([("/".join(address_parts(chat)), "changed")])
-        return record
+        return record, stored
 
     def _resolve(self, ref: SourceRef, role: str) -> tuple[str, str]:
         if role not in ROLE_KINDS or ref.kind != ROLE_KINDS[role]:
@@ -335,15 +355,22 @@ class ChatLibrary:
         if source is None or source.entity_key != ref.entity_key:
             raise InvalidBinding(f"{actor} is not an instance of {ref.unpinned()}", "actor_mismatch")
 
-    def _chat_record(self, record: ChatRecord) -> ScopeRecord:
-        return ScopeRecord(record.ref, CHAT_SCHEMA, chat_to_payload(record), owner=self._owner)
+    def _chat_record(self, record: ChatRecord, base: ScopeRecord | None = None) -> ScopeRecord:
+        return self._envelope(record.ref, CHAT_SCHEMA, chat_to_payload(record), base)
 
-    def _scope_record(self, scope: PlayScope) -> ScopeRecord:
-        return ScopeRecord(scope.ref, SCOPE_SCHEMA, scope_to_payload(scope), owner=self._owner)
+    def _scope_record(self, scope: PlayScope, base: ScopeRecord | None = None) -> ScopeRecord:
+        return self._envelope(scope.ref, SCOPE_SCHEMA, scope_to_payload(scope), base)
 
-    def _chat_change(self, chat: ChatRef, record: ChatRecord, expected: str,
+    def _envelope(self, ref: ScopeRef | ChatRef, schema: str, payload: dict, base: ScopeRecord | None) -> ScopeRecord:
+        """A rewrite keeps the stored envelope's unknown fields and its original attribution."""
+        if base is None:
+            return ScopeRecord(ref, schema, payload, owner=self._owner)
+        owner = base.owner if base.owner is not None else self._owner
+        return ScopeRecord(ref, schema, payload, owner=owner, extra=base.extra)
+
+    def _chat_change(self, chat: ChatRef, record: ChatRecord, base: ScopeRecord, expected: str,
                      envelope: RecordEnvelope | None = None) -> ChatChange:
-        puts: list[tuple[RecordEnvelope | ScopeRecord, str | None]] = [(self._chat_record(record), expected)]
+        puts: list[tuple[RecordEnvelope | ScopeRecord, str | None]] = [(self._chat_record(record, base), expected)]
         actors: tuple[InstanceRef, ...] = ()
         if envelope is not None:
             puts.append((envelope, None))
@@ -352,10 +379,23 @@ class ChatLibrary:
 
     def _scope_change(self, scope: ScopeRef, expected: str,
                       change: Callable[[PlayScope], PlayScope]) -> ChatChange:
-        current, etag = self.read_scope(scope)
+        current, etag, stored = self._read_scope(scope)
         if etag != expected:
             raise StaleWrite([("/".join(address_parts(scope)), "changed")])
-        return ChatChange(self, ((self._scope_record(change(current)), expected),), scope)
+        return ChatChange(self, ((self._scope_record(change(current), stored), expected),), scope)
+
+
+def _problem_records(view: LibraryView) -> tuple[set[ChatRef], set[ScopeRef]]:
+    """Chat and scope files that exist but whose envelope the store could not read."""
+    chats: set[ChatRef] = set()
+    scopes: set[ScopeRef] = set()
+    for problem in view.problems:
+        found = classify(tuple(problem.path.split("/")))
+        if found is not None and found[0] == "chat":
+            chats.add(found[1])  # type: ignore[arg-type]
+        elif found is not None and found[0] == "scope":
+            scopes.add(found[1])  # type: ignore[arg-type]
+    return chats, scopes
 
 
 def _broken(view: LibraryView, record: ChatRecord, scope: PlayScope | None) -> list[BrokenBinding]:

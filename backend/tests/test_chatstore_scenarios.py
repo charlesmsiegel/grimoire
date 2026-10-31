@@ -416,3 +416,84 @@ def test_session_zero_is_stored_verbatim(store, chats):
     path = store.root / f"campaigns/{first.scope.campaign_id}/scope.json"
     assert json.loads(path.read_bytes())["payload"]["session_zero"] == data
     assert chats.open_chat(first.chat).scope.session_zero == data
+
+
+# -- regressions from the implementation review ---------------------------------------------------
+
+@pytest.mark.parametrize("edit", [
+    lambda p: p["launch"].update(kind={"x": 1}),
+    lambda p: p["bindings"][0].update(role={"x": 1}),
+    lambda p: p["roster"][0].update(prior_history=["x"]),
+    lambda p: p["roster"][0].update(role={"x": 1}),
+    lambda p: p.update(label={"x": 1}),
+])
+def test_a_wrongly_shaped_chat_is_undecodable_never_a_crash(store, chats, edit):
+    broken, fine = start(chats), start(chats)
+    path = store.root / f"campaigns/{broken.scope.campaign_id}/chats/{broken.chat.chat_id}.json"
+    document = json.loads(path.read_bytes())
+    edit(document["payload"])
+    path.write_text(json.dumps(document))
+    nav = chats.navigation()
+    assert set(nav.all_chats()) == {broken.chat, fine.chat}
+    assert dict(nav.problems()) == {broken.chat: "undecodable"}
+    with pytest.raises(ChatCodecError):
+        chats.open_chat(broken.chat)
+
+
+def test_rewrites_keep_unknown_envelope_fields_and_attribution(store):
+    first = start(chat_library(store))
+    for relative in (f"campaigns/{first.scope.campaign_id}/chats/{first.chat.chat_id}.json",
+                     f"campaigns/{first.scope.campaign_id}/scope.json"):
+        path = store.root / relative
+        document = json.loads(path.read_bytes())
+        document["sync"] = {"device": "phone"}
+        document["owner"] = "human:someone-else"
+        path.write_text(json.dumps(document))
+    other = ChatLibrary(store, owner_handle(), clock=chat_library(store)._clock, new_id=chat_library(store)._new_id,
+                        owner="app:another")
+    other.set_label(first.chat, "x", expected=other.read_chat(first.chat)[1]).commit()
+    other.name_scope(first.scope, "N", expected=other.read_scope(first.scope)[1]).commit()
+    for ref in (first.chat, first.scope):
+        record = store.read(ref).record
+        assert record.extra == {"sync": {"device": "phone"}} and record.owner == "human:someone-else"
+
+
+def test_detached_characters_and_replaced_personas_count_only_on_request(store, chats):
+    first = chats.start_chat(Launch("premise", premise="fog"), attach=[(ANYA.unpinned(), "character")],
+                             persona=SAM).commit()
+    etag = chats.read_chat(first.chat)[1]
+    etag = chats.detach_source(first.chat, ANYA.unpinned(), "character", expected=etag).commit().etags[
+        f"campaigns/{first.scope.campaign_id}/chats/{first.chat.chat_id}.json"]
+    chats.set_persona(first.chat, NAMESAKE, expected=etag).commit()
+    nav = chats.navigation()
+    assert nav.by_source(ANYA.unpinned()) == ()
+    assert nav.by_source(ANYA, include_detached=True) == (first.chat,)  # unpinned bind meant r1 then
+    assert nav.by_source(ANYA.unpinned(), include_detached=True) == (first.chat,)
+    assert nav.by_source(SAM.unpinned(), role="persona") == ()
+    assert nav.by_source(NAMESAKE.unpinned(), role="persona") == (first.chat,)
+
+
+def test_store_level_problem_files_stay_visible(store, chats):
+    first, second = start(chats), start(chats)
+    chat_path = store.root / f"campaigns/{first.scope.campaign_id}/chats/{first.chat.chat_id}.json"
+    document = json.loads(chat_path.read_bytes())
+    document["format"] = "grimoire.scope-record/2"
+    chat_path.write_text(json.dumps(document))
+    scope_path = store.root / f"campaigns/{second.scope.campaign_id}/scope.json"
+    scope_path.write_bytes(b"{not json")
+    nav = chats.navigation()
+    assert set(nav.all_chats()) == {first.chat, second.chat}
+    assert dict(nav.problems()) == {first.chat: "undecodable"}  # the second chat is not an orphan
+    from grimoire.store import UnsupportedFormat
+    with pytest.raises(UnsupportedFormat):
+        chats.open_chat(first.chat)
+    assert chats.open_chat(second.chat).problems == ("undecodable_scope",)
+
+
+def test_choosing_the_same_persona_keeps_its_actor(store, chats):
+    first = start(chats, persona=SAM)
+    record, etag = chats.read_chat(first.chat)
+    body = record.persona.actor
+    chats.set_persona(first.chat, SAM, expected=etag).commit()
+    record = chats.read_chat(first.chat)[0]
+    assert record.persona.actor == body and len(record.roster) == len({e.actor for e in record.roster}) == 2

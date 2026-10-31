@@ -166,8 +166,12 @@ def chat_from_payload(ref: ChatRef, schema: object, payload: object) -> ChatReco
         extras = {key: value for key, value in data.items() if key not in CHAT_FIELDS}
         return ChatRecord(ref, launch, data["created_at"], data["last_activity"], data["seq"], tuple(bindings),
                           tuple(roster), data.get("label"), extras)  # type: ignore[arg-type]
+    except ChatCodecError:
+        raise
     except ChatModelError as error:
         raise ChatCodecError(str(error), error.reason) from None
+    except (TypeError, ValueError) as error:  # hand-edited JSON of the wrong shape: refuse, never crash
+        raise ChatCodecError(f"a chat field has the wrong type: {error}", "invalid_field") from None
 
 
 def scope_from_payload(ref: ScopeRef, schema: object, payload: object) -> PlayScope:
@@ -183,5 +187,9 @@ def scope_from_payload(ref: ScopeRef, schema: object, payload: object) -> PlaySc
         extras = {key: value for key, value in data.items() if key not in SCOPE_FIELDS}
         return PlayScope(ref, data["created_at"], data.get("title"), world, data.get("session_zero"),
                          extras)  # type: ignore[arg-type]
+    except ChatCodecError:
+        raise
     except ChatModelError as error:
         raise ChatCodecError(str(error), error.reason) from None
+    except (TypeError, ValueError) as error:
+        raise ChatCodecError(f"a scope field has the wrong type: {error}", "invalid_field") from None

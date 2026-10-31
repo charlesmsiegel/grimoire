@@ -58,8 +58,9 @@ def nav_entry(ref: ChatRef, record: ChatRecord | None) -> NavEntry:
         mentions.append((launch.kind, launch.ref.entity_key, start.resolved_revision, True))  # provenance
     for binding in record.bindings:
         mentions.append((binding.role, binding.ref.entity_key, binding.resolved_revision, binding.active))
-    for entry in record.roster:
-        if entry.source is not None:
+    bound = {binding.actor for binding in record.bindings if binding.actor is not None}
+    for entry in record.roster:  # an actor's binding already says whether it is current and what it meant
+        if entry.source is not None and entry.actor not in bound:
             mentions.append((entry.role, entry.source.entity_key, entry.source.revision, True))
     return NavEntry(ref, record.label, record.last_activity, tuple(sorted(set(mentions), key=repr)))
 
