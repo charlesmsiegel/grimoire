@@ -1,0 +1,209 @@
+{
+  "format": "grimoire.v021-capture-evidence/1",
+  "scenario_id": "guild-betrayal",
+  "mode": "dry_run",
+  "provider_kind": "openrouter",
+  "v1_commit": "e4c4ec4abacd0beb87fc9f1cdd06e6787d5a88ce",
+  "profile": "two-call",
+  "llm_retries": 2,
+  "model": "synthetic/rp-model",
+  "budget": "max_tokens=unset",
+  "campaign": "guild-betrayal-synthetic",
+  "scene": "001--the-guild-hall-at-dusk",
+  "actor_map": {
+    "characters:oda": "npc-oda",
+    "characters:bellamy": "npc-bellamy",
+    "characters:quill": "npc-quill",
+    "characters:hask": "npc-hask",
+    "pcs:wren": "pc-wren"
+  },
+  "choice_outcomes": {
+    "ask-ledger": "honored",
+    "follow-bellamy": "honored",
+    "ask-song": "complicated"
+  },
+  "turns": [
+    {
+      "turn": 1,
+      "player_text": "I slide a silver coin across the counter and ask Oda for the guest ledger.",
+      "responses": [
+        {
+          "response_id": "1ec3eeb73501482c9fcbbd25174c027b",
+          "speaker_ref": "characters:oda",
+          "text": "Coin's good. Guest ledger's on the hook. Read it here."
+        },
+        {
+          "response_id": "947214a0a1fa468ca64c2eceec084d92",
+          "speaker_ref": "characters:bellamy",
+          "text": "Oh, darling Wren, a ledger! How deliciously bureaucratic of you, truly marvellous!"
+        }
+      ]
+    },
+    {
+      "turn": 2,
+      "player_text": "I follow Bellamy out to the balcony.",
+      "responses": [
+        {
+          "response_id": "99408aa822c6441280d7daf2b6faac96",
+          "speaker_ref": "characters:oda",
+          "text": "Balcony's shut after dark. Go if you must. Quickly."
+        },
+        {
+          "response_id": "e07fe538b3284f0bb68d5c293a222dd7",
+          "speaker_ref": "characters:bellamy",
+          "text": "Come, come, to the balcony, my dear! Hush now, darling, the voices below are simply dripping with intrigue!"
+        }
+      ]
+    },
+    {
+      "turn": 3,
+      "player_text": "I ask Bellamy to sing what was overheard.",
+      "responses": [
+        {
+          "response_id": "1c6fd64764af4d7e92fa9e63e21eb480",
+          "speaker_ref": "characters:oda",
+          "text": "Singing. In my hall. Fine. Rules are rules, so keep it short."
+        },
+        {
+          "response_id": "4cfee7699c3b49af8e8cac057d8689ac",
+          "speaker_ref": "characters:bellamy",
+          "text": "Oh, my darling, it is a dreadful song: the duke sold the guild to the river barons, every last splendid brick!"
+        }
+      ]
+    }
+  ],
+  "usage_rows": [
+    {
+      "ts": "2026-10-31T05:14:22Z",
+      "kind": "llm",
+      "task": "chat",
+      "campaign": "guild-betrayal-synthetic",
+      "scene": "001--the-guild-hall-at-dusk",
+      "model": "synthetic/rp-model",
+      "connection": "capture-openrouter",
+      "provider": "openrouter",
+      "round_id": "f49c88bcf89041cc9f29af1ca7bfcefd",
+      "response_id": "1ec3eeb73501482c9fcbbd25174c027b",
+      "operation": "generate",
+      "provider_id": "capture-openrouter",
+      "role": "primary",
+      "billing": "metered",
+      "prompt_tokens": 1200,
+      "completion_tokens": 40,
+      "cache_read_tokens": 400,
+      "post": 0,
+      "duration_ms": 3,
+      "status": "ok"
+    },
+    {
+      "ts": "2026-10-31T05:14:22Z",
+      "kind": "llm",
+      "task": "chat",
+      "campaign": "guild-betrayal-synthetic",
+      "scene": "001--the-guild-hall-at-dusk",
+      "model": "synthetic/rp-model",
+      "connection": "capture-openrouter",
+      "provider": "openrouter",
+      "round_id": "f49c88bcf89041cc9f29af1ca7bfcefd",
+      "response_id": "947214a0a1fa468ca64c2eceec084d92",
+      "operation": "generate",
+      "provider_id": "capture-openrouter",
+      "role": "primary",
+      "billing": "metered",
+      "prompt_tokens": 1300,
+      "completion_tokens": 80,
+      "cache_read_tokens": 400,
+      "post": 0,
+      "duration_ms": 2,
+      "status": "ok"
+    },
+    {
+      "ts": "2026-10-31T05:14:23Z",
+      "kind": "llm",
+      "task": "chat",
+      "campaign": "guild-betrayal-synthetic",
+      "scene": "001--the-guild-hall-at-dusk",
+      "model": "synthetic/rp-model",
+      "connection": "capture-openrouter",
+      "provider": "openrouter",
+      "round_id": "19b743c2869e4d7aa6b143f8164a4819",
+      "response_id": "99408aa822c6441280d7daf2b6faac96",
+      "operation": "generate",
+      "provider_id": "capture-openrouter",
+      "role": "primary",
+      "billing": "metered",
+      "prompt_tokens": 1300,
+      "completion_tokens": 40,
+      "cache_read_tokens": 400,
+      "post": 3,
+      "duration_ms": 2,
+      "status": "ok"
+    },
+    {
+      "ts": "2026-10-31T05:14:23Z",
+      "kind": "llm",
+      "task": "chat",
+      "campaign": "guild-betrayal-synthetic",
+      "scene": "001--the-guild-hall-at-dusk",
+      "model": "synthetic/rp-model",
+      "connection": "capture-openrouter",
+      "provider": "openrouter",
+      "round_id": "19b743c2869e4d7aa6b143f8164a4819",
+      "response_id": "e07fe538b3284f0bb68d5c293a222dd7",
+      "operation": "generate",
+      "provider_id": "capture-openrouter",
+      "role": "primary",
+      "billing": "metered",
+      "prompt_tokens": 1400,
+      "completion_tokens": 80,
+      "cache_read_tokens": 400,
+      "post": 3,
+      "duration_ms": 2,
+      "status": "ok"
+    },
+    {
+      "ts": "2026-10-31T05:14:23Z",
+      "kind": "llm",
+      "task": "chat",
+      "campaign": "guild-betrayal-synthetic",
+      "scene": "001--the-guild-hall-at-dusk",
+      "model": "synthetic/rp-model",
+      "connection": "capture-openrouter",
+      "provider": "openrouter",
+      "round_id": "c957f56718354f01b13d7a3e3b6a643e",
+      "response_id": "1c6fd64764af4d7e92fa9e63e21eb480",
+      "operation": "generate",
+      "provider_id": "capture-openrouter",
+      "role": "primary",
+      "billing": "metered",
+      "prompt_tokens": 1400,
+      "completion_tokens": 40,
+      "cache_read_tokens": 400,
+      "post": 6,
+      "duration_ms": 2,
+      "status": "ok"
+    },
+    {
+      "ts": "2026-10-31T05:14:23Z",
+      "kind": "llm",
+      "task": "chat",
+      "campaign": "guild-betrayal-synthetic",
+      "scene": "001--the-guild-hall-at-dusk",
+      "model": "synthetic/rp-model",
+      "connection": "capture-openrouter",
+      "provider": "openrouter",
+      "round_id": "c957f56718354f01b13d7a3e3b6a643e",
+      "response_id": "4cfee7699c3b49af8e8cac057d8689ac",
+      "operation": "generate",
+      "provider_id": "capture-openrouter",
+      "role": "primary",
+      "billing": "metered",
+      "prompt_tokens": 1500,
+      "completion_tokens": 80,
+      "cache_read_tokens": 400,
+      "post": 6,
+      "duration_ms": 2,
+      "status": "ok"
+    }
+  ]
+}
