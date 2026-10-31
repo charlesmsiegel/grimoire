@@ -82,6 +82,14 @@ def _check_record_types(record: object) -> None:
             raise ValueError(f"{label} must be text or None")
 
 
+class _NoLock:
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+
 class Authorizer:
     """Holds grants, approvals and the audit log; never handed to workers."""
 
@@ -95,8 +103,9 @@ class Authorizer:
         self._closed_approvals: set[str] = set()
         self._audit: list[AuditRecord] = []
         self._sink: Callable[[AuditRecord], None] | None = None
+        self._lock: object = _NoLock()
 
-    def attach_sink(self, sink: Callable[[AuditRecord], None]) -> None:
+    def attach_sink(self, sink: Callable[[AuditRecord], None], lock: object | None = None) -> None:
         """Make every later decision pass through ``sink`` before it takes effect.
 
         The sink sees each record before it joins the audit and before an approval
@@ -107,6 +116,11 @@ class Authorizer:
             raise ValueError("a sink is already attached")
         if not callable(sink):
             raise ValueError("a sink must be callable")
+        if lock is not None:
+            if not (callable(getattr(lock, "__enter__", None)) and callable(getattr(lock, "__exit__", None))):
+                raise ValueError("a lock must be a context manager")
+            # decide, record and consume as one step; a re-entrant lock lets the sink write
+            self._lock = lock
         self._sink = sink
 
     def approval_grant(self, approval_id: str) -> str | None:
@@ -184,6 +198,11 @@ class Authorizer:
 
     def _evaluate(self, principal: str, trusted: bool, permission: object,
                   resource: object, payload: object, approval_id: object) -> Decision:
+        with self._lock:  # type: ignore[attr-defined]
+            return self._evaluate_locked(principal, trusted, permission, resource, payload, approval_id)
+
+    def _evaluate_locked(self, principal: str, trusted: bool, permission: object,
+                         resource: object, payload: object, approval_id: object) -> Decision:
         try:
             decision = self._decide(principal, trusted, permission, resource, payload, approval_id)
             self._record(principal, trusted, permission, decision)

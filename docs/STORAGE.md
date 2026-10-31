@@ -188,7 +188,7 @@ Broken-reference reasons are the index's `missing_source`, `missing_entity` and 
   - A second writer gets `LibraryLocked`.
   - On a filesystem that cannot lock (some network shares), a writable open fails with `LockUnavailable`; a read-only open still works.
   - The locker is injectable. Crash-exploration tests use a process-local `ProcessLocker`.
-- **A `LibraryStore` is single-threaded.** Its per-load listing cache is not shared safely between threads; use one store per thread or serialize access.
+- **Threads.** Listing caches are per thread, so a `load` in one thread never changes what a commit in another sees. Commits, ledger writes and authority decisions are serialized by the store's re-entrant lock (`store.lock`); loads and reads take no lock and, like other readers, see a consistent library only while no commit is in progress.
 - **A linked `.txn`** is never entered. Writable opens, commits and `discard_journal` refuse with `LinkRefused`; a read-only open succeeds, but its reads raise `LinkRefused`. Remove the link by hand.
 - **Readers** (`writable=False`) take no lock and never recover. They are consistent only while no writer is active: a `load` that overlaps another process's commit may see a mix of old and new files. Cross-process read isolation is deferred to Effective World Snapshots (022) and Durable Action Recovery (030).
 - **Durability:** files are fsynced before they are renamed. On POSIX the parent directory is fsynced after each rename and after each directory the store creates; this is best-effort where a filesystem does not support it, but genuine I/O errors are raised. Power loss is not simulated by the harness.
@@ -248,7 +248,7 @@ An unbound store whose `authority/security` ledger exists refuses record commits
 `LibraryStore.repair_ledger(path, name, from_seq)` is an explicit human action:
 - it takes the writer lock;
 - it records its intent first in `.txn/repair.json`;
-- it moves batches `>= from_seq`, newest first, into `.conflicts/ledger-<name>-<N>/`;
+- it moves batches `>= from_seq`, newest first, into `.conflicts/ledger-<name>-<N>/`, where `/` in the name becomes `-` (`ledger-campaigns-c1-1`) and `N` is the first free number;
 - if it is interrupted, running it again with the same arguments resumes it. Until it finishes, recovery and reads refuse.
 
 **Warning:** history in the moved batches, including revocations and consumed approvals, is undone. `from_seq=1` resets the ledger, and the next authority open writes a fresh genesis.

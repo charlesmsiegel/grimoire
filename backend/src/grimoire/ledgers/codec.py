@@ -147,6 +147,7 @@ _DELEGATION = ("campaign_id", "delegation_id", "actor_id", "granted_by", "domain
 def encode_sovereignty(value: object) -> tuple[str, dict[str, object]]:
     """``(kind, fields)`` for a ControlChange, Delegation, Revocation or Correction."""
     if type(value) is ControlChange:
+        check_size(value.controller_id, "controller_id", 512)
         return "control", {"campaign_id": value.campaign_id, "actor_id": value.actor_id,
                            "controller_id": value.controller_id}
     if type(value) is Delegation:

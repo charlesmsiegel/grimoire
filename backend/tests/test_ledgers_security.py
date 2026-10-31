@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import tempfile
 import threading
 import time
@@ -12,11 +13,15 @@ from pathlib import Path
 import pytest
 
 from grimoire.ledgers import AuthorityUnavailable, DurableAuthority, LedgerBroken, LedgerInvalid
-from grimoire.security import Authorizer, Grant, Permission, Reason, ResourcePath
+from grimoire.ledgers.codec import encode_decision
+from grimoire.ledgers.security import _replay
+from grimoire.security import Approval, AuditRecord, Authorizer, Grant, Permission, Reason, ResourcePath
 from grimoire.store import (
-    CommitIncomplete, LibraryStore, ProcessLocker, RecordEnvelope, StoreError, WriteDenied,
+    CommitIncomplete, LibraryStore, LinkRefused, ProcessLocker, RecordEnvelope, StoreError, WriteDenied,
 )
+from grimoire.store.jsonfmt import parse_strict
 from grimoire.store.ledger import render_batches
+from grimoire.store.library import _Commit
 from grimoire.testing import (
     CrashScenario, Fail, Invariant, RootedFileOps, Target, explore_crashes, idempotent_recovery, no_residue,
 )
@@ -26,7 +31,7 @@ from grimoire.core.identity import InstanceRef
 from ledger_helpers import (
     ADDRESS, IMPORTER, OWNER, RECORD, approve, fixed_clock, grant_importer, open_authority, record_bytes,
 )
-from store_helpers import drop_empty_dirs
+from store_helpers import drop_empty_dirs, make_dir_link
 
 LIB = "lib"
 
@@ -165,22 +170,37 @@ def _s2_scenario():
 
     def durable_before_effect(outcome):
         decisions = _decisions_on_disk(None, outcome.recovered)
-        record = outcome.recovered.get("lib/" + ADDRESS)
-        if record is not None and outcome.before.get("lib/" + ADDRESS) is None:
+        published = (outcome.recovered.get("lib/" + ADDRESS) is not None
+                     and outcome.before.get("lib/" + ADDRESS) is None)
+        if published:
             if not any(d["allowed"] and d["resource"] == ADDRESS and d["approval_id"] == "a1" for d in decisions):
                 return "a record was published without its allow decision on disk"
+            if "a1" in _pending_after_replay(outcome.recovered):
+                return "the approval that authorized published bytes is still pending"  # N9(c)
         known = {}
         for item in seen:
-            sequence = item.sequence if hasattr(item, "sequence") else item["sequence"]
-            known[sequence] = item
+            item = encode_decision(item) if isinstance(item, AuditRecord) else dict(item)
+            known[item["sequence"]] = item
         for decision in decisions:
             if decision["sequence"] not in known:
                 return f"decision {decision['sequence']} on disk was never made"
+            if known[decision["sequence"]] != decision:
+                return f"decision {decision['sequence']} on disk differs from the one made"
         return None
 
     return CrashScenario("durable authority save", setup, action, recover,
                          (Invariant("durable_before_effect", durable_before_effect), idempotent_recovery(),
                           no_residue("lib/.txn/*.new", "lib/.txn/journal.json")), normalize=drop_empty_dirs)
+
+
+def _pending_after_replay(tree) -> set[str]:
+    """Approval ids still pending once the ``security`` ledger in ``tree`` is replayed."""
+    entries = []
+    for key in sorted(k for k in tree if k.startswith("lib/authority/security/") and tree[k] is not None):
+        entries.extend(parse_strict(tree[key])["entries"])
+    kernel = Authorizer([OWNER])
+    _replay(kernel, frozenset([OWNER]), entries)
+    return {approval.approval_id for approval in kernel.pending_approvals()}
 
 
 @pytest.mark.parametrize("mode", ["errors", "recovery-crashes"])
@@ -384,3 +404,158 @@ def test_another_threads_execute_waits_for_a_staging_commit(library):
     make_temp.worker.join(5)
     store._access.ops.make_temp = real
     assert results and not authority.poisoned
+
+
+@pytest.mark.parametrize("step", ["_check_paths", "_check_revisions", "_check_names"])
+def test_another_threads_execute_waits_through_a_commits_read_phase(library, monkeypatch, step):
+    store, authority, locker = library
+    grant_importer(authority, permissions=(Permission.APPLY, Permission.EXECUTE), scope="campaigns")
+    grant_importer(authority, permissions=(Permission.EXECUTE,), scope="providers", gid="gp")
+    approve(authority, b"call", aid="ap", address="providers/model", permission=Permission.EXECUTE)
+    results, workers = [], []
+    real = getattr(_Commit, step)
+
+    def hooked(self):  # one of steps 3-6, while the commit reads with cached listings
+        if workers or any(put.ledger for put in self.puts):
+            return real(self)
+        worker = threading.Thread(target=lambda: results.append(authority.handle_for(IMPORTER).authorize(
+            Permission.EXECUTE, "providers/model", b"call", "ap")))
+        worker.start()
+        workers.append(worker)
+        time.sleep(0.2)
+        assert not results
+        return real(self)
+    approve(authority, record_bytes(store))
+    txn = store.transaction()
+    txn.put(RECORD, None)
+    monkeypatch.setattr(_Commit, step, hooked)  # after preview(), which reads outside any commit
+    txn.commit(authority.handle_for(IMPORTER), {ADDRESS: "a1"})
+    workers[0].join(5)
+    assert results[0].allowed and not authority.poisoned
+
+
+def test_a_load_in_another_thread_does_not_poison_a_write(library):
+    store, authority, locker = library
+    seed_txn = store.transaction()
+    seed_txn.put(RECORD, None)
+    grant_importer(authority)
+    approve(authority, record_bytes(store))
+    seed_txn.commit(authority.handle_for(IMPORTER), {ADDRESS: "a1"})
+    inside, release = threading.Event(), threading.Event()
+    real = store._access.ops.list_dir
+
+    def list_dir(*args, **kwargs):
+        if threading.current_thread() is not threading.main_thread() and not inside.is_set():
+            inside.set()
+            release.wait(2)  # the main thread writes meanwhile (or waits on the lock until this times out)
+        return real(*args, **kwargs)
+    store._access.ops.list_dir = list_dir
+    reader = threading.Thread(target=store.load)
+    reader.start()
+    assert inside.wait(5)
+    grant_importer(authority, gid="g2")
+    release.set()
+    reader.join(5)
+    store._access.ops.list_dir = real
+    assert not authority.poisoned and "g2" in {g.grant_id for g in authority.active_grants()}
+
+
+def test_one_approval_is_spent_once_across_threads(library):
+    store, authority, locker = library
+    grant_importer(authority)
+    approve(authority, b"bytes")
+    barrier = threading.Barrier(8)
+    results = []
+
+    def spend():
+        handle = authority.handle_for(IMPORTER)
+        barrier.wait()
+        results.append(handle.authorize(Permission.APPLY, ADDRESS, b"bytes", "a1"))
+    threads = [threading.Thread(target=spend) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert sum(r.allowed for r in results) == 1 and not authority.poisoned
+    sequences = [record.sequence for record in authority.audit()]
+    assert sequences == list(range(1, len(sequences) + 1))
+    store, authority = _reopen(store, authority, locker)
+    assert [record.sequence for record in authority.audit()] == sequences
+    authority.close()
+    store.close()
+
+
+class _Subclass(Approval):
+    pass
+
+
+@pytest.mark.parametrize("call", ["subclass-approval", "clock-on-grant", "clock-on-approval",
+                                  "revoke-unknown-grant", "revoke-unknown-approval"])
+def test_a_refused_lifecycle_call_changes_nothing_and_does_not_poison(library, call):
+    store, authority, locker = library
+    grant_importer(authority)
+    before = (authority.active_grants(), authority.pending_approvals(), store.read_ledger("security").head)
+
+    def broken_clock():
+        raise RuntimeError("clock broke")
+    approval = Approval("a9", IMPORTER, Permission.APPLY, ResourcePath.parse(ADDRESS), "sha256:" + "0" * 64, OWNER)
+    if call == "subclass-approval":
+        action = lambda: authority.register_approval(_Subclass(*vars_of(approval)))  # noqa: E731
+    elif call.startswith("clock"):
+        authority._clock = broken_clock
+        action = ((lambda: grant_importer(authority, gid="g2")) if call == "clock-on-grant"
+                  else (lambda: authority.register_approval(approval)))
+    elif call == "revoke-unknown-grant":
+        action = lambda: authority.revoke_grant("nope")  # noqa: E731
+    else:
+        action = lambda: authority.revoke_approval("nope")  # noqa: E731
+    with pytest.raises((ValueError, RuntimeError)):
+        action()
+    assert not authority.poisoned
+    assert (authority.active_grants(), authority.pending_approvals(), store.read_ledger("security").head) == before
+
+
+def vars_of(approval: Approval) -> tuple:
+    return (approval.approval_id, approval.principal, approval.permission, approval.resource,
+            approval.payload_digest, approval.approved_by)
+
+
+def test_an_interrupt_inside_the_context_writes_nothing_more(library):
+    store, authority, locker = library
+    grant_importer(authority)
+    head = store.read_ledger("security").head
+    with pytest.raises(KeyboardInterrupt):
+        with authority:
+            authority.handle_for(IMPORTER).authorize(Permission.INSPECT, "campaigns/c1")  # pending, not flushed
+            raise KeyboardInterrupt
+    assert store.read_ledger("security").head == head
+    with pytest.raises(AuthorityUnavailable):
+        authority.handle_for(IMPORTER)
+
+
+# -- authority/ is never read or written through a link -------------------------------------------
+
+@pytest.mark.parametrize("swap", ["authority-link", "security-link", "batch-fifo"])
+def test_a_linked_or_special_security_ledger_is_refused(tmp_path, swap):
+    locker = ProcessLocker()
+    store = LibraryStore.create(tmp_path / LIB, locker=locker)
+    with open_authority(store) as authority:
+        grant_importer(authority)
+    store.close()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    folder = tmp_path / LIB / ("authority" if swap == "authority-link" else "authority/security")
+    if swap == "batch-fifo":
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("this OS has no FIFOs in the filesystem")
+        (folder / "0000000002.json").unlink()
+        os.mkfifo(folder / "0000000002.json")  # opening it could block
+    else:
+        folder.rename(outside / folder.name)
+        make_dir_link(folder, outside / folder.name)
+    before = snapshot(outside)
+    store = LibraryStore.open(tmp_path / LIB, locker=locker)
+    with pytest.raises((LedgerBroken, LinkRefused)):
+        open_authority(store)
+    store.close()
+    assert snapshot(outside) == before

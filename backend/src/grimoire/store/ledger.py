@@ -112,6 +112,14 @@ def _estimate(entry: Mapping[str, object]) -> int:
     return len(text) + 4 * (text.count(b"\n") + 1) + 2
 
 
+def entry_cost(entry: Mapping[str, object]) -> int:
+    """The entry's estimated size; ``ValueError`` if it cannot be rendered or no batch could hold it."""
+    cost = _estimate(entry)
+    if cost > MAX_BATCH_BYTES:
+        raise ValueError("a single ledger entry is larger than a batch may be")
+    return cost
+
+
 def render_batches(name: str, head: Head | None, entries: Sequence[Mapping[str, object]]
                    ) -> list[tuple[Parts, bytes]]:
     """Chained batch files continuing from ``head``, split by count and by (estimated) size."""
@@ -132,9 +140,7 @@ def render_batches(name: str, head: Head | None, entries: Sequence[Mapping[str, 
         previous, chunk, size = etag(data), [], 0
 
     for entry in entries:
-        cost = _estimate(entry)
-        if cost > MAX_BATCH_BYTES:
-            raise ValueError("a single ledger entry is larger than a batch may be")
+        cost = entry_cost(entry)
         if chunk and (len(chunk) >= MAX_BATCH_ENTRIES or size + cost > MAX_BATCH_BYTES):
             emit()
         chunk.append(entry)

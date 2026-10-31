@@ -23,7 +23,7 @@ from grimoire.security import (
 from grimoire.security.policy import CONSEQUENTIAL
 from grimoire.store import LibraryStore
 from grimoire.store.errors import AuthorityUnavailable, LedgerInvalid
-from grimoire.store.ledger import MAX_BATCH_ENTRIES
+from grimoire.store.ledger import MAX_BATCH_ENTRIES, Head, Ledger, entry_cost
 from grimoire.store.library import LedgerWriter
 
 from .codec import (
@@ -53,6 +53,7 @@ class DurableAuthority:
         self._closed = False
         self._capability: object | None = None
         self._writers: dict[str, LedgerWriter] = {}
+        self.views: dict[str, object] = {}  # replayed ledger views (sovereignty), guarded by ``lock``
 
     # -- opening ------------------------------------------------------------------
     @classmethod
@@ -67,8 +68,10 @@ class DurableAuthority:
         _replay(kernel, owners, ledger.entries)
         authority = cls(store, kernel, owners, clock or utc_now)
         authority._capability = store.bind_authority(authority)
-        authority._writers[SECURITY] = store.ledger_writer(SECURITY, capability=authority._capability)
-        kernel.attach_sink(authority._sink)
+        writer = authority._writers[SECURITY] = store.ledger_writer(SECURITY, capability=authority._capability)
+        if writer.head != ledger.head:
+            raise AuthorityUnavailable("the security ledger changed while it was being opened")
+        kernel.attach_sink(authority._sink, lock=store.lock)  # decide, record and consume as one step
         if not ledger.batches:
             with store.lock:
                 authority._pending.append(envelope("genesis", authority._clock(), owners=sorted(owners)))
@@ -144,7 +147,9 @@ class DurableAuthority:
 
     @contextlib.contextmanager
     def consequential_scope(self) -> Iterator[None]:
-        """Allows inside are flushed once, at the end of the outermost scope on this thread."""
+        """For ``LibraryStore`` commits only: allows inside are flushed once, at the end of the
+        outermost scope on this thread, and the commit stages nothing unless that flush succeeds.
+        Elsewhere, an allow would take effect before it is on disk."""
         self._local.depth = self._depth() + 1
         try:
             yield
@@ -174,47 +179,66 @@ class DurableAuthority:
             raise AuthorityUnavailable("the authority failed to persist; reopen it") from self._poisoned
 
     # -- lifecycle (durable before returning) -------------------------------------------------
-    def _lifecycle(self, entry_kind: str, fields: Mapping[str, object], apply: Callable[[], None]) -> None:
+    def _lifecycle(self, entry_kind: str, check: Callable[[], None], apply: Callable[[], None],
+                   fields: Callable[[], Mapping[str, object]]) -> None:
+        """Validate, apply, record; the entry is on disk before this returns."""
         with self.lock:
             self._require_usable()
+            check()  # refusals change nothing
+            recorded_at = self._clock()
             apply()  # the kernel validates before it changes anything
-            self._pending.append(envelope(entry_kind, self._clock(), **fields))
+            try:
+                self._pending.append(envelope(entry_kind, recorded_at, **fields()))
+            except BaseException as error:  # applied but not recordable: never act on it
+                self._poison(error)
+                raise
             self._flush_locked()
 
     def add_grant(self, grant: Grant) -> None:
-        fields = {"grant": encode_grant(grant)}  # exact type and size, before any change
-        self._lifecycle("grant_added", fields, lambda: self._kernel.add_grant(grant))
+        self._lifecycle("grant_added", lambda: encode_grant(grant), lambda: self._kernel.add_grant(grant),
+                        lambda: {"grant": encode_grant(grant)})
 
     def revoke_grant(self, grant_id: str) -> None:
-        if not self._kernel.is_grant_active(grant_id):
-            raise ValueError(f"grant {grant_id!r} is not active")
-        self._lifecycle("grant_revoked", {"grant_id": grant_id}, lambda: self._kernel.revoke_grant(grant_id))
+        def check() -> None:
+            if type(grant_id) is not str or not self._kernel.is_grant_active(grant_id):
+                raise ValueError(f"grant {grant_id!r} is not active")
+        self._lifecycle("grant_revoked", check, lambda: self._kernel.revoke_grant(grant_id),
+                        lambda: {"grant_id": grant_id})
 
     def register_approval(self, approval: Approval) -> None:
-        check_size(approval.approval_id if type(approval) is Approval else None, "approval_id", MAX_ID)
-        with self.lock:
-            self._require_usable()
-            self._kernel.register_approval(approval)
-            fields = {"approval": encode_approval(approval, self._kernel.approval_grant(approval.approval_id))}
-            self._pending.append(envelope("approval_registered", self._clock(), **fields))
-            self._flush_locked()
+        def fields() -> Mapping[str, object]:
+            return {"approval": encode_approval(approval, self._kernel.approval_grant(approval.approval_id))}
+        self._lifecycle("approval_registered", lambda: encode_approval(approval, ""),
+                        lambda: self._kernel.register_approval(approval), fields)
 
     def revoke_approval(self, approval_id: str) -> None:
-        if not self._kernel.is_approval_pending(approval_id):
-            raise ValueError(f"approval {approval_id!r} is not pending")
-        self._lifecycle("approval_revoked", {"approval_id": approval_id},
-                        lambda: self._kernel.revoke_approval(approval_id))
+        def check() -> None:
+            if type(approval_id) is not str or not self._kernel.is_approval_pending(approval_id):
+                raise ValueError(f"approval {approval_id!r} is not pending")
+        self._lifecycle("approval_revoked", check, lambda: self._kernel.revoke_approval(approval_id),
+                        lambda: {"approval_id": approval_id})
 
     # -- other ledgers (sovereignty) ----------------------------------------------------------------
-    def append(self, name: str, entries: list[dict[str, object]]) -> None:
-        """Durably append to another ``authority/`` ledger; a failure poisons the authority."""
+    def read_ledger(self, name: str) -> Ledger:
         with self.lock:
             self._require_usable()
-            writer = self._writers.get(name)
+            return self._store.read_ledger(name)
+
+    def append(self, name: str, entries: list[dict[str, object]], expected_head: Head | None) -> Head:
+        """Durably append to another ``authority/`` ledger after ``expected_head`` (the head the
+        caller replayed). ``ValueError`` for an entry no batch could hold, changing nothing; any
+        failure to write, including a head that moved, poisons the authority."""
+        if name == SECURITY:
+            raise ValueError("the security ledger is written only by the authority itself")
+        with self.lock:
+            self._require_usable()
+            for entry in entries:
+                entry_cost(entry)
             try:
+                writer = self._writers.get(name)
                 if writer is None:
                     writer = self._writers[name] = self._store.ledger_writer(name, capability=self._capability)
-                writer.append(entries, writer.head)
+                return writer.append(entries, expected_head)
             except Exception as error:
                 self._poison(error)
                 raise AuthorityUnavailable(f"could not persist ledger {name}: {error}") from error
@@ -235,11 +259,15 @@ class DurableAuthority:
                 self._closed = True
                 self._store.release_ledger_writers(self._capability)
                 self._writers.clear()
+                self.views.clear()
 
     def __enter__(self) -> DurableAuthority:
         return self
 
-    def __exit__(self, *exc_info: object) -> None:
+    def __exit__(self, exc_type: object, *exc_info: object) -> None:
+        if exc_type is not None and not issubclass(exc_type, Exception):  # type: ignore[arg-type]
+            self._closed = True  # a crash or interrupt: no further I/O, writers stay with the store
+            return
         self.close()
 
 

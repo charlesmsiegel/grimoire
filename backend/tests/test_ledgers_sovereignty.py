@@ -9,17 +9,18 @@ from grimoire.core.authority import (
     apply_corrections, auto_complete, delegate, review_narration,
 )
 from grimoire.core.model import ControlAssignment
-from grimoire.ledgers import ControlChange, LedgerInvalid, SovereigntyLedger
+from grimoire.ledgers import AuthorityUnavailable, ControlChange, LedgerBroken, LedgerInvalid, SovereigntyLedger
 from grimoire.ledgers.codec import (
     decode_approval, decode_decision, decode_grant, decode_sovereignty, encode_approval, encode_decision,
     encode_grant, encode_sovereignty,
 )
 from grimoire.security import Approval, AuditRecord, Authorizer, Grant, Permission, Reason, ResourcePath
-from grimoire.store import LibraryStore, ProcessLocker, etag
+from grimoire.store import LibraryStore, LinkRefused, ProcessLocker, etag
 from grimoire.store.jsonfmt import parse_strict, render
 from grimoire.store.ledger import render_batches
 
 from ledger_helpers import OWNER, open_authority
+from store_helpers import make_dir_link
 
 P1, P2 = "human:p1", "human:p2"
 
@@ -175,3 +176,58 @@ def test_a_hand_forged_entry_in_a_valid_tail_is_refused(library):
     authority.close()
     store.close()
     assert head == (1, etag((store.root / "authority/campaigns/c1/0000000001.json").read_bytes()))
+
+
+def test_ledgers_over_one_authority_share_state(library):
+    store, authority, locker = library
+    p1 = authority.handle_for(P1, trusted=True)
+    first, second = SovereigntyLedger(authority), SovereigntyLedger(authority)
+    value = delegate("incidental_dialogue", campaign_id="c1", delegation_id="d1", actor_id="wren", granted_by=P1,
+                     scope="campaign")
+    first.load("c1")
+    second.load("c1")
+    first.record("c1", value, p1)
+    with pytest.raises(AuthorityError, match="already exists"):
+        second.record("c1", value, p1)
+    assert len(store.read_ledger("campaigns/c1").entries) == 1 and not authority.poisoned
+
+
+def test_an_external_batch_poisons_instead_of_writing_over_it(library):
+    store, authority, locker = library
+    ledger = SovereigntyLedger(authority)
+    owner = authority.handle_for(OWNER, trusted=True)
+    ledger.record("c1", ControlChange("c1", "wren", P1), owner)
+    head = store.read_ledger("campaigns/c1").head
+    outside = {"schema": 1, "kind": "control", "recorded_at": "x", "recorded_by": OWNER,
+               "value": {"campaign_id": "c1", "actor_id": "wren", "controller_id": P2}}
+    parts, data = render_batches("campaigns/c1", head, [outside])[0]
+    (store.root / "/".join(parts)).write_bytes(data)
+    with pytest.raises(AuthorityUnavailable):
+        ledger.record("c1", ControlChange("c1", "gull", P1), owner)
+    assert authority.poisoned and (store.root / "/".join(parts)).read_bytes() == data
+    assert len(store.read_ledger("campaigns/c1").batches) == 2
+
+
+@pytest.mark.parametrize("value, campaign", [
+    (ControlChange("c1", "wren", "human:" + "x" * 600), "c1"),
+    (Correction("c1", "claim-1", OWNER, "x" * 5000), "c1"),
+    (ControlChange("c1", "wren", P1), "Not A Segment"),
+    (ControlChange("c1", "wren", P1), "../c1"),
+])
+def test_oversized_or_misaddressed_values_are_refused_without_poison(library, value, campaign):
+    store, authority, locker = library
+    with pytest.raises(AuthorityError):
+        SovereigntyLedger(authority).record(campaign, value, authority.handle_for(OWNER, trusted=True))
+    assert not authority.poisoned and not (store.root / "authority" / "campaigns").exists()
+
+
+def test_a_linked_campaign_ledger_is_never_written_through(library, tmp_path):
+    store, authority, locker = library
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (store.root / "authority" / "campaigns").mkdir()
+    make_dir_link(store.root / "authority" / "campaigns" / "c1", outside)
+    with pytest.raises((AuthorityUnavailable, LedgerBroken, LinkRefused)):
+        SovereigntyLedger(authority).record("c1", ControlChange("c1", "wren", P1),
+                                            authority.handle_for(OWNER, trusted=True))
+    assert list(outside.iterdir()) == []

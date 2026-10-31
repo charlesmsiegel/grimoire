@@ -1,6 +1,6 @@
 # Player sovereignty — first-slice authority contract
 
-**Status:** first slice of [Player Sovereignty](roadmap/sprints/player-sovereignty.md), implemented as a pure policy in `backend/src/grimoire/core/authority.py`. Field names are a first-slice contract, not a frozen file schema; nothing here is persisted yet.
+**Status:** first slice of [Player Sovereignty](roadmap/sprints/player-sovereignty.md), implemented as a pure policy in `backend/src/grimoire/core/authority.py`. The policy values are a first-slice contract; their stored form is defined in [Persistence (010b)](#persistence-010b).
 
 The player owns their PC's intentions, voluntary speech and actions, interior experience, beliefs and commitments. The director narrates a responsive, challenging world but does not author those things unless the player explicitly delegated them. Sovereignty never guarantees success: failures, harm, refusals, sensations and disclosed rule-imposed reactions remain the director's to narrate.
 
@@ -115,6 +115,8 @@ Every entry is flushed before `record` returns. `load(campaign_id)` returns a `S
 - a control change only by a library owner.
 
 Delegation ids are unique per campaign. `load` re-checks every entry against the same rules and fails closed (`LedgerInvalid`).
+
+The replayed state lives on the `DurableAuthority`, so every `SovereigntyLedger` over one authority sees the same state. Each append continues from the head that was replayed. A batch written by anything else makes the append fail and poisons the authority; reopening replays the ledger again and re-checks the foreign batch. Values that cannot be stored are refused with `AuthorityError` and change nothing. That covers an invalid `campaign_id` and an oversized field: ids and controllers over 512 characters, and correction notes over 4096.
 
 **Obligation on the runner (035) and multiplayer (102):** provenance is only as strong as handle minting. Mint a trusted human handle only for the authenticated human, never on behalf of another player.
 

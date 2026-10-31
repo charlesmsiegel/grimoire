@@ -273,8 +273,12 @@ class LibraryStore:
             if access.presence((CONFLICTS,)) == "mismatch":
                 raise NameCollision(f"{CONFLICTS} collides with a differently spelled folder")
             marker = root / TXN / REPAIR_MARKER
+            batches = ledger_folder(name)
             if access.repair_pending():
                 folder = cls._repair_folder(access, marker, name, from_seq)
+            elif access.presence(batches) != "present" or not any(
+                    (seq := ledger_seq(file)) is not None and seq >= from_seq for file in access.list_dir(batches)):
+                return ()  # nothing to move
             else:
                 flat = "ledger-" + name.replace("/", "-")
                 number = 1
@@ -291,7 +295,6 @@ class LibraryStore:
             access.guard.check_write(folder + ("x",), staging_device=None)
             if access.presence(folder) != "present":
                 ops.make_dirs(access.path(folder))
-            batches = ledger_folder(name)
             seqs = []
             if access.presence(batches) == "present":
                 seqs = sorted((seq for file in access.list_dir(batches)
@@ -500,7 +503,8 @@ class LedgerWriter:
             puts = []
             for parts, data in render_batches(self.name, expected_head, entries):
                 found = classify(parts)
-                assert found is not None and found[0] == "ledger" and found[1][0] == self.name
+                if found is None or found[0] != "ledger" or found[1][0] != self.name:
+                    raise StoreError(f"{'/'.join(parts)} is not a batch of ledger {self.name}")
                 puts.append(_Put(parts, logical(parts), data, None, None))
             _Commit(store, tuple(puts), None, {}).run()
             self.head = (int(puts[-1].parts[-1][:10]), etag(puts[-1].data))

@@ -19,6 +19,7 @@ from grimoire.core.identity import validate_segment
 from grimoire.core.model import ControlAssignment
 from grimoire.security import is_human
 from grimoire.store.errors import LedgerInvalid
+from grimoire.store.ledger import Head
 
 from .codec import SOVEREIGNTY_KEYS, ControlChange, decode_sovereignty, encode_sovereignty, envelope, exact
 from .security import DurableAuthority
@@ -52,6 +53,7 @@ class _Builder:
     revocations: list[Revocation] = field(default_factory=list)
     corrections: list[Correction] = field(default_factory=list)
     count: int = 0
+    head: Head | None = None  # the newest batch replayed or written
 
     def check(self, value: object, recorded_by: str) -> None:
         """The provenance and consistency rules; ``AuthorityError`` names what is wrong."""
@@ -100,16 +102,24 @@ class _Builder:
 
 
 def _ledger(campaign_id: str) -> str:
-    validate_segment(campaign_id, "campaign_id")
+    try:
+        validate_segment(campaign_id, "campaign_id")
+    except ValueError as error:
+        raise AuthorityError(str(error)) from None
     return f"campaigns/{campaign_id}"
 
 
 class SovereigntyLedger:
-    """Records and reloads player sovereignty through the library's durable authority."""
+    """Records and reloads player sovereignty through the library's durable authority.
+
+    The replayed state lives on the authority, so every ``SovereigntyLedger`` over
+    one authority shares it, and each append continues from the head it replayed:
+    a batch written by anything else makes the append ``StaleWrite``, which poisons
+    the authority until it is reopened and the ledger replayed again.
+    """
 
     def __init__(self, authority: DurableAuthority) -> None:
         self._authority = authority
-        self._states: dict[str, _Builder] = {}
 
     def record(self, campaign_id: str, value: object, handle: object) -> None:
         """Durably record one value from the player-input channel; refusals are ``AuthorityError``."""
@@ -118,6 +128,7 @@ class SovereigntyLedger:
                 and is_human(getattr(handle, "principal", None))):
             raise AuthorityError("only a trusted human handle from this library's authority may record sovereignty")
         principal = handle.principal  # type: ignore[attr-defined]
+        name = _ledger(campaign_id)
         try:
             kind, fields = encode_sovereignty(value)
         except ValueError as error:
@@ -126,17 +137,23 @@ class SovereigntyLedger:
             builder = self._builder(campaign_id)
             builder.check(value, principal)
             entry = envelope(kind, authority.now(), recorded_by=principal, value=fields)
-            authority.append(_ledger(campaign_id), [entry])
+            try:
+                head = authority.append(name, [entry], builder.head)
+            except ValueError as error:  # no batch could hold it; nothing was written
+                raise AuthorityError(str(error)) from None
             builder.apply(value, principal)
+            builder.head = head
 
     def load(self, campaign_id: str) -> SovereigntyState:
+        _ledger(campaign_id)
         with self._authority.lock:
             return self._builder(campaign_id).state()
 
     def _builder(self, campaign_id: str) -> _Builder:
         name = _ledger(campaign_id)
-        if campaign_id not in self._states:
-            ledger = self._authority._store.read_ledger(name)
+        views = self._authority.views
+        if name not in views:
+            ledger = self._authority.read_ledger(name)
             builder = _Builder(campaign_id, self._authority.owners)
             for index, entry in enumerate(ledger.entries, 1):
                 kind = entry.get("kind") if isinstance(entry, Mapping) else None
@@ -155,5 +172,6 @@ class SovereigntyLedger:
                 except AuthorityError as error:
                     raise LedgerInvalid(f"{name} entry {index}: {error}") from None
                 builder.apply(value, recorded_by)
-            self._states[campaign_id] = builder
-        return self._states[campaign_id]
+            builder.head = ledger.head
+            views[name] = builder
+        return views[name]  # type: ignore[return-value]

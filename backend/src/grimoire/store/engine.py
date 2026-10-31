@@ -22,6 +22,7 @@ partial publish.
 from __future__ import annotations
 
 import stat
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -51,7 +52,15 @@ class Access:
         self.root = root
         self.ops = ops
         self.guard = guard
-        self._listings: dict[Parts, list[str]] | None = None
+        self._local = threading.local()  # listing caches belong to the thread that opened them
+
+    @property
+    def _listings(self) -> dict[Parts, list[str]] | None:
+        return getattr(self._local, "listings", None)
+
+    @_listings.setter
+    def _listings(self, value: dict[Parts, list[str]] | None) -> None:
+        self._local.listings = value
 
     @contextmanager
     def cached_listings(self) -> Iterator[None]:
