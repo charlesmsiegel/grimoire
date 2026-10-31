@@ -3,9 +3,10 @@
 **Status:** first slice of [Native File Store And Revisions](roadmap/sprints/native-file-store-and-revisions.md) (Wave 2, #010), implemented as the filesystem adapter `grimoire.store`. It persists **facet-neutral record envelopes** for source-qualified definitions and campaign instances. It never interprets a payload, and it does not decide whether a record is a character, a PC, a creature or an item; that meaning belongs to [Entity Facets (009)](roadmap/sprints/entity-facets-and-instance-model.md), which joins through codecs in Wave 3. There is no application or UI yet. A green test suite proves this contract, not a playable app.
 
 Not in this slice:
-- persistence of the security audit, grants and approvals ([TOOL_AUTHORITY](TOOL_AUTHORITY.md)), and of PC delegations and corrections ([PLAYER_SOVEREIGNTY](PLAYER_SOVEREIGNTY.md)). These come next, in a follow-up 010 pull request built on this store; see [Remaining 010 obligations](#remaining-010-obligations);
 - the image blob store (018), sync (019), events and evidence (020), and effective views (022);
-- **Markdown.** The sprint's outcome names "Markdown/JSON" records. By the requester's decision this slice is JSON-only (stdlib, no YAML dependency); a Markdown payload codec is a remaining 010 obligation.
+- **Markdown.** The sprint's outcome names "Markdown/JSON" records. By the requester's decision this slice is JSON-only (stdlib, no YAML dependency); a Markdown payload codec is a remaining 010 obligation, re-homed by the requester to its own later pull request.
+
+The security audit, grants and approvals, and player sovereignty are persisted as [authority ledgers](#authority-ledgers-010b) (010b).
 
 ## Library layout
 
@@ -187,7 +188,7 @@ Broken-reference reasons are the index's `missing_source`, `missing_entity` and 
   - A second writer gets `LibraryLocked`.
   - On a filesystem that cannot lock (some network shares), a writable open fails with `LockUnavailable`; a read-only open still works.
   - The locker is injectable. Crash-exploration tests use a process-local `ProcessLocker`.
-- **A `LibraryStore` is single-threaded.** Its per-load listing cache is not shared safely between threads; use one store per thread or serialize access.
+- **Threads.** Listing caches are per thread, so a `load` in one thread never changes what a commit in another sees. Commits, `recover()`, ledger writes, authority decisions and in-process reads (`read`, `read_source`, `load`, `read_ledger`) all take the store's re-entrant lock (`store.lock`). A read in one thread waits for a commit in another, never sees it half-done, and so never raises `PendingRecovery` for a live commit. Other processes' readers are not covered: see Readers below.
 - **A linked `.txn`** is never entered. Writable opens, commits and `discard_journal` refuse with `LinkRefused`; a read-only open succeeds, but its reads raise `LinkRefused`. Remove the link by hand.
 - **Readers** (`writable=False`) take no lock and never recover. They are consistent only while no writer is active: a `load` that overlaps another process's commit may see a mix of old and new files. Cross-process read isolation is deferred to Effective World Snapshots (022) and Durable Action Recovery (030).
 - **Durability:** files are fsynced before they are renamed. On POSIX the parent directory is fsynced after each rename and after each directory the store creates; this is best-effort where a filesystem does not support it, but genuine I/O errors are raised. Power loss is not simulated by the harness.
@@ -198,10 +199,66 @@ Broken-reference reasons are the index's `missing_source`, `missing_entity` and 
 
 `grimoire.store` imports only `grimoire.core.identity`, `grimoire.core.index`, `grimoire.library` and `grimoire.security`, and pure packages may not import it (`backend/tests/purity.py`). A subprocess test pins the exact set of `grimoire` modules that `import grimoire.store` loads. `grimoire.core/__init__` currently pulls in `model` and `authority`, so 009 must not re-export facet classes from `grimoire.core`, or that test fails.
 
+## Authority ledgers (010b)
+
+A **ledger** is an append-only, hash-chained run of batch files under the reserved root `authority/`. There are two ledger kinds: `security`, and one `campaigns/<campaign_id>` ledger per campaign.
+
+```text
+authority/security/<seq:010d>.json
+authority/campaigns/<campaign_id>/<seq:010d>.json
+  {"format": "grimoire.ledger/1", "ledger": "<name>", "seq": N, "previous": "<etag of N-1>" | null,
+   "entries": [ 1–500 JSON objects ]}
+```
+
+### Reading
+
+`store.read_ledger(name)` verifies the whole chain:
+- `seq` runs gap-free from 1, and each batch's `seq` matches its file name;
+- each `previous` matches the etag of the batch before it, and `ledger` matches;
+- the format is exact, the JSON is strict, and every batch is a regular file.
+
+Any break raises `LedgerBroken(name, seq, reason)`; a ledger is never read partially. Other files beside the batches (for example a sync tool's "conflicted copy") are reported in `Ledger.ignored` and never replayed. For 019, that means another device's fork is dropped and only reported.
+
+**Limit (pinned by a test):** with local file access, the chain cannot detect changes at the tail. Appending a valid batch (even one with consistent forged provenance), editing or truncating the tail, or restoring an older copy all keep a valid chain. Interior edits, deletions and reordering are detected.
+
+### Writing
+
+- Only trusted code writes, through one `LedgerWriter` per ledger per store session. Asking for a second writer of the same ledger raises `LedgerBusy`.
+- Appends never pass through a worker's authorization; the `authority` root is reserved in `grimoire.security` too, so no grant or approval can name it.
+- An append is one transaction of create-only batch files, split at 500 entries or 4 MiB. Each append checks the caller's expected head in O(1); if the head moved, it raises `StaleWrite`.
+- Ledger batches ride the same journal, preflight, recovery and crash guarantees as records.
+
+### Binding
+
+`DurableAuthority.open` binds the store for the rest of its session; binding is permanent. Once bound:
+- record commits need handles that authority issued; any other handle gets `WriteDenied`, and nothing is consumed;
+- commit step 7 runs inside the authority's consequential scope, so every allow is on disk before step 8 stages anything;
+- only the authority can obtain ledger writers.
+
+An unbound store whose `authority/security` ledger exists refuses record commits. An unbound store without one keeps 010 behaviour: test fixtures may use that, production must not. Callers must not continue with a store after a failed `DurableAuthority.open`.
+
+### Concurrency and limits
+
+- **One lock:** the store and its authority share one re-entrant lock. A ledger flush from inside a commit re-enters it, and another thread waits.
+- **No nested writes during staging:** a ledger commit started while a record commit is staging is refused, so a nested `settle` can never touch the outer commit's staged files.
+- **One per process:** use one store and one authority per library per process.
+- **Close order:** call `authority.close()` before `store.close()`; it flushes buffered decisions. `store.close()` never raises (requester decision, deviating from the 010b spec's `StoreError`). Closing the store first is not detected there; the later `authority.close()` raises `AuthorityUnavailable`, and the buffered non-consequential decisions are lost, as in a crash. Consequential allows are already on disk.
+
+### Repair
+
+`LibraryStore.repair_ledger(path, name, from_seq)` is an explicit human action:
+- it takes the writer lock;
+- it records its intent first in `.txn/repair.json`;
+- it moves batches `>= from_seq`, newest first, into `.conflicts/ledger-<name>-<N>/`, where `/` in the name becomes `-` (`ledger-campaigns-c1-1`) and `N` is the first free number;
+- if it is interrupted, running it again with the same arguments resumes it. Until it finishes, recovery and reads refuse.
+
+**Warning:** history in the moved batches, including revocations and consumed approvals, is undone. `from_seq=1` resets the ledger, and the next authority open writes a fresh genesis.
+
+### Growth
+
+Ledgers grow without compaction, about one file per 500 decisions. Opening replays the whole security ledger.
+
 ## Remaining 010 obligations
 
-These are owned by the follow-up 010 pull request:
-- **Durable security audit, and the grant and approval lifecycle** ([TOOL_AUTHORITY](TOOL_AUTHORITY.md#requirements-on-later-sprints)). The typed journal (entry `kind`) is meant to carry audit-append and approval-consumption entries atomically with publication. The follow-up must also decide whether a durable "consumed if and only if committed" rule supersedes step 7's in-memory consumption. It needs a trusted record family under the reserved `authority/` root that is written without worker grants.
-- **PC delegations, revocations and corrections, and control-assignment history** ([PLAYER_SOVEREIGNTY](PLAYER_SOVEREIGNTY.md#correction-flow)).
-- **A Markdown payload codec**, so prose-heavy records can be authored as Markdown while the envelope stays JSON.
-- **Later milestones** of the sprint: versioned snapshots and change journals, external-edit watching, and device-level tests of real disk-full and permission errors.
+- **A Markdown payload codec** (its own later pull request, by requester decision), so prose-heavy records can be authored as Markdown while the envelope stays JSON.
+- **Later milestones** of the sprint: versioned snapshots and change journals, external-edit watching, ledger compaction, and device-level tests of real disk-full and permission errors.

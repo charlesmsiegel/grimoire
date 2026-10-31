@@ -123,3 +123,25 @@ class AddressMismatch(MalformedRecord):
 
 class LinkRefused(LibraryPathError):
     """A symlink, junction or reparse point inside the library; never followed."""
+
+
+class LedgerBroken(StoreError):
+    """A ledger's chain is broken at ``seq``; never read partially (see ``repair_ledger``)."""
+
+    def __init__(self, name: str, seq: int | None, reason: str) -> None:
+        self.name = name
+        self.seq = seq
+        self.reason = reason
+        super().__init__(f"ledger {name} is broken at batch {seq}: {reason}")
+
+
+class LedgerBusy(StoreError):
+    """Another writer owns this ledger in this store session."""
+
+
+class LedgerInvalid(StoreError):
+    """A well-formed ledger holds an entry the authority rules reject; nothing is trusted."""
+
+
+class AuthorityUnavailable(StoreError):
+    """The durable authority failed to persist and refuses everything until it is reopened."""

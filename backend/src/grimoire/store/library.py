@@ -10,10 +10,12 @@ guarded decision table (see ``engine``). See ``docs/STORAGE.md``.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import stat
-from collections.abc import Mapping
+import threading
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -30,20 +32,25 @@ from .envelope import (
 )
 from .errors import (
     CommitIncomplete, ImmutableRevision, InvalidEnvelope, InvalidSourceState, NameCollision, NotALibrary,
-    PendingRecovery, RecoveryBlocked, RecoveryFailed, StaleWrite, StoreError, WriteConflict, WriteDenied,
+    LedgerBusy, PendingRecovery, RecoveryBlocked, RecoveryFailed, StaleWrite, StoreError, WriteConflict,
+    WriteDenied,
 )
 from .guard import Guard, Limits, RootIdentity
 from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import JsonError, etag, is_etag, parse_strict, render
 from .layout import (
-    CONFLICTS, DISCARD_MARKER, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER, TXN, Parts, address_parts,
-    conflict_parts, definition_parts, instance_parts, logical, manifest_parts,
+    CONFLICTS, DISCARD_MARKER, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER, REPAIR_MARKER, TXN, Parts,
+    address_parts, classify, conflict_parts, definition_parts, instance_parts, ledger_folder, ledger_name,
+    ledger_parts, ledger_seq, logical, manifest_parts,
 )
+from .ledger import Head, Ledger, read_ledger, render_batches
 from .loader import LibraryView, StoredRecord, StoredSource
 from .lock import Locker, OsLocker
 
 DISCARD_FORMAT = "grimoire.discard/1"
 DISCARD_PREFIX = "discard"  # staging names the store gives a marker before it is committed
+REPAIR_FORMAT = "grimoire.repair/1"
+REPAIR_PREFIX = "repair"
 
 
 @dataclass(frozen=True)
@@ -80,6 +87,13 @@ class LibraryStore:
         self._lock = lock
         self._closed = False
         self.last_recovery = RecoveryReport()
+        #: One re-entrant lock for every commit and for a bound authority's sink and flushes:
+        #: a ledger flush from inside a commit re-enters; another thread waits its turn.
+        self.lock = threading.RLock()
+        self._authority: object | None = None
+        self._capability: object | None = None
+        self._writers: dict[str, LedgerWriter] = {}
+        self._staging = False  # a record commit has staged temps or a journal
 
     # -- opening -------------------------------------------------------------
     @classmethod
@@ -232,6 +246,89 @@ class LibraryStore:
             raise RecoveryFailed("the discard marker does not name a discard folder")
         return (CONFLICTS, folder)
 
+    @classmethod
+    def repair_ledger(cls, path: str | os.PathLike[str], name: str, from_seq: int, *,
+                      ops: FileOps | None = None, locker: Locker | None = None) -> tuple[str, ...]:
+        """A human's explicit way out of a broken ledger: move batches ``>= from_seq`` aside.
+
+        **Warning:** revocations, consumed approvals and other history in the moved
+        batches are undone; ``from_seq=1`` resets the ledger (the next authority open
+        writes a fresh genesis). The intent is recorded first (``.txn/repair.json``);
+        until the repair finishes nothing reads or recovers, and running it again
+        resumes into the same folder. Batches move newest first.
+        """
+        ops = ops or DiskOps()
+        locker = locker or OsLocker()
+        name = ledger_name(name)
+        if type(from_seq) is not int or from_seq < 1:
+            raise ValueError("from_seq must be a positive int")
+        root = check_write_destination(_absolute(path))
+        access = Access(root, ops, Guard(root, RootIdentity.capture(root)))
+        cls._require_marker(access)
+        lock = cls._lock(access, locker)
+        try:
+            access.guard.check_session()
+            if access.journal_exists() or access.discard_pending():
+                raise PendingRecovery("finish the pending commit or discard before repairing a ledger")
+            if access.presence((CONFLICTS,)) == "mismatch":
+                raise NameCollision(f"{CONFLICTS} collides with a differently spelled folder")
+            marker = root / TXN / REPAIR_MARKER
+            batches = ledger_folder(name)
+            if access.repair_pending():
+                folder = cls._repair_folder(access, marker, name, from_seq)
+            elif access.presence(batches) != "present" or not any(
+                    (seq := ledger_seq(file)) is not None and seq >= from_seq for file in access.list_dir(batches)):
+                return ()  # nothing to move
+            else:
+                flat = "ledger-" + name.replace("/", "-")
+                number = 1
+                while access.presence((CONFLICTS, f"{flat}-{number}")) != "absent":
+                    number += 1
+                    if number > 10_000:
+                        raise StoreError("no free repair folder name")
+                folder = (CONFLICTS, f"{flat}-{number}")
+                access.guard.check_write(folder + ("x",), staging_device=None)
+                temp = ops.make_temp(root / TXN, prefix=REPAIR_PREFIX, suffix=".new")
+                ops.write_bytes(temp, render({"format": REPAIR_FORMAT, "ledger": name, "from_seq": from_seq,
+                                              "folder": folder[-1]}))
+                ops.replace(temp, marker)  # durable intent: the ledger is undefined until this finishes
+            access.guard.check_write(folder + ("x",), staging_device=None)
+            if access.presence(folder) != "present":
+                ops.make_dirs(access.path(folder))
+            seqs = []
+            if access.presence(batches) == "present":
+                seqs = sorted((seq for file in access.list_dir(batches)
+                               if (seq := ledger_seq(file)) is not None and seq >= from_seq), reverse=True)
+            moved = []
+            for seq in seqs:  # newest first: an interruption leaves a shorter valid prefix
+                parts = ledger_parts(name, seq)
+                access.guard.check_read(parts)
+                ops.replace(access.path(parts), access.path(folder + (parts[-1],)))
+                moved.append("/".join(folder + (parts[-1],)))
+            for leftover in ops.list_dir(root / TXN):
+                if leftover.startswith(REPAIR_PREFIX) and is_staging_name(leftover):
+                    ops.remove(root / TXN / leftover)
+            ops.remove(marker)
+            return tuple(moved)
+        finally:
+            locker.release(lock)
+
+    @staticmethod
+    def _repair_folder(access: Access, marker: Path, name: str, from_seq: int) -> Parts:
+        access.check_staged_file(REPAIR_MARKER)
+        try:
+            document = parse_strict(access.ops.read_bytes(marker))
+        except JsonError as error:
+            raise RecoveryFailed(f"the repair marker is unreadable: {error}") from None
+        folder = document.get("folder")
+        if (document.get("format") != REPAIR_FORMAT or type(folder) is not str
+                or not re.fullmatch(r"ledger-[a-z0-9._-]+-[1-9][0-9]{0,8}", folder)):
+            raise RecoveryFailed("the repair marker does not name a repair folder")
+        if document.get("ledger") != name or document.get("from_seq") != from_seq:
+            raise StoreError(f"an unfinished repair of {document.get('ledger')} from "
+                             f"{document.get('from_seq')} must be finished with the same arguments")
+        return (CONFLICTS, folder)
+
     # -- lifecycle ------------------------------------------------------------
     def close(self) -> None:
         """Release the writer lock. Always succeeds, even after a crash (as process death would)."""
@@ -260,36 +357,90 @@ class LibraryStore:
 
     def _require_consistent(self) -> None:
         self._require_open()
-        if self._access.journal_exists() or self._access.discard_pending():
-            raise PendingRecovery("a commit or discard awaits recovery; reopen the library writable to finish it")
+        if self._access.journal_exists() or self._access.discard_pending() or self._access.repair_pending():
+            raise PendingRecovery("a commit, discard or ledger repair awaits recovery; "
+                                  "reopen the library writable to finish it")
+
+    # -- ledgers and the durable authority ------------------------------------
+    @property
+    def authority(self) -> object | None:
+        return self._authority
+
+    def bind_authority(self, authority: object) -> object:
+        """Bind the library's durable authority for the rest of this session.
+
+        Record commits then require handles it issued and authorize inside its
+        consequential scope; only the returned capability can obtain ledger
+        writers. Permanent; refused while any ledger writer is outstanding.
+        """
+        self._require_open()
+        with self.lock:
+            if self._authority is not None:
+                raise StoreError("this store is already bound to an authority")
+            if self._writers:
+                raise StoreError("a ledger writer is outstanding; bind before taking writers")
+            for method in ("issued", "consequential_scope"):
+                if not callable(getattr(authority, method, None)):
+                    raise TypeError(f"an authority needs {method}()")
+            self._authority, self._capability = authority, object()
+            return self._capability
+
+    def read_ledger(self, name: str) -> Ledger:
+        with self.lock:  # never overlaps this process's commits
+            self._require_consistent()
+            return read_ledger(self._access, name)
+
+    def ledger_writer(self, name: str, *, capability: object | None = None) -> LedgerWriter:
+        """The only writer of ledger ``name`` for this session (trusted code only)."""
+        self._require_open()
+        if not self._writable:
+            raise StoreError("the library was opened read-only")
+        name = ledger_name(name)
+        with self.lock:
+            if self._capability is not None and capability is not self._capability:
+                raise StoreError("ledgers of a bound library are written only through its authority")
+            if name in self._writers:
+                raise LedgerBusy(f"ledger {name} already has a writer in this session")
+            writer = LedgerWriter(self, name, self.read_ledger(name).head, capability)
+            self._writers[name] = writer
+            return writer
+
+    def release_ledger_writers(self, capability: object) -> None:
+        with self.lock:
+            if capability is self._capability:
+                self._writers.clear()
 
     def recover(self) -> RecoveryReport:
         """Finish or preserve an interrupted commit. Persistent I/O errors are ``RecoveryBlocked``."""
         self._require_open()
         if not self._writable:
             raise StoreError("a read-only store cannot recover")
-        try:
-            report = RecoveryReport.of(engine.recover(self._access))
-        except OSError as error:
-            raise RecoveryBlocked(f"recovery could not finish: {error}") from error
-        self.last_recovery = report
-        return report
+        with self.lock:  # waits for this process's commits; it would clean their staging
+            try:
+                report = RecoveryReport.of(engine.recover(self._access))
+            except OSError as error:
+                raise RecoveryBlocked(f"recovery could not finish: {error}") from error
+            self.last_recovery = report
+            return report
 
     # -- reading -----------------------------------------------------------------
     def read(self, ref: SourceRef | InstanceRef) -> StoredRecord:
         """One record by exact address (a definition must be pinned)."""
-        self._require_consistent()
         if isinstance(ref, SourceRef) and not ref.pinned:
             raise ValueError("read a pinned revision; resolve unpinned references with load().index")
-        return loader.read_record(self._access, address_parts(ref))
+        with self.lock:  # reads wait for this process's commits, so they never see one half-done
+            self._require_consistent()
+            return loader.read_record(self._access, address_parts(ref))
 
     def read_source(self, source_id: str) -> StoredSource:
-        self._require_consistent()
-        return loader.read_source(self._access, source_id)
+        with self.lock:
+            self._require_consistent()
+            return loader.read_source(self._access, source_id)
 
     def load(self) -> LibraryView:
-        self._require_consistent()
-        return loader.load(self._access)
+        with self.lock:
+            self._require_consistent()
+            return loader.load(self._access)
 
     def conflicts(self) -> tuple[str, ...]:
         """Preserved versions awaiting a human, as root-relative paths (files only)."""
@@ -322,7 +473,59 @@ class _Put:
     address: ResourcePath
     data: bytes
     expected: str | None
-    envelope: RecordEnvelope | SourceManifest
+    envelope: RecordEnvelope | SourceManifest | None  # None: a ledger batch (create-only, trusted)
+
+    @property
+    def ledger(self) -> bool:
+        return self.envelope is None
+
+
+class LedgerWriter:
+    """Appends chained batches to one ledger; obtained only from ``LibraryStore.ledger_writer``."""
+
+    def __init__(self, store: LibraryStore, name: str, head: Head | None, capability: object | None) -> None:
+        self._store = store
+        self.name = name
+        self.head = head
+        self._capability = capability
+
+    def append(self, entries: Sequence[Mapping[str, object]], expected_head: Head | None) -> Head:
+        """Write ``entries`` after ``expected_head`` in one transaction; ``StaleWrite`` if it moved."""
+        store = self._store
+        store._require_open()
+        if not entries:
+            raise ValueError("nothing to append")
+        with store.lock:
+            if store._capability is not None and self._capability is not store._capability:
+                raise StoreError("ledgers of a bound library are written only through its authority")
+            if store._writers.get(self.name) is not self:
+                raise LedgerBusy(f"this writer for {self.name} was released")
+            if store._staging:
+                raise StoreError("a ledger cannot be written while a record commit is staging")
+            if store._access._listings is not None:
+                raise StoreError("a ledger cannot be written during a read-only phase")
+            self._check_head(expected_head)
+            puts = []
+            for parts, data in render_batches(self.name, expected_head, entries):
+                found = classify(parts)
+                if found is None or found[0] != "ledger" or found[1][0] != self.name:
+                    raise StoreError(f"{'/'.join(parts)} is not a batch of ledger {self.name}")
+                puts.append(_Put(parts, logical(parts), data, None, None))
+            _Commit(store, tuple(puts), None, {}).run()
+            self.head = (int(puts[-1].parts[-1][:10]), etag(puts[-1].data))
+            return self.head
+
+    def _check_head(self, expected: Head | None) -> None:
+        """O(1): the expected newest batch is on disk unchanged and nothing follows it."""
+        access = self._store._access
+        seq = expected[0] if expected else 0
+        if expected is not None:
+            data = access.read(ledger_parts(self.name, seq))
+            if data is None or etag(data) != expected[1]:
+                raise StaleWrite([("/".join(ledger_parts(self.name, seq)), "changed")])
+        following = ledger_parts(self.name, seq + 1)
+        if access.presence(following) != "absent":
+            raise StaleWrite([("/".join(following), "exists")])
 
 
 class Transaction:
@@ -366,8 +569,16 @@ class Transaction:
             raise StoreError("this transaction was already committed")
         if not self._puts:
             raise InvalidEnvelope("nothing to commit")
-        self._committed = True
-        return _Commit(self._store, tuple(self._puts.values()), handle, dict(approvals or {})).run()
+        store = self._store
+        with store.lock:  # the binding cannot change between these checks and the commit
+            authority = store._authority
+            if authority is not None and not authority.issued(handle):  # type: ignore[attr-defined]
+                raise WriteDenied("the handle was not issued by this library's authority; nothing was written",
+                                  (), ())
+            if authority is None and store._access.presence(ledger_parts("security", 1)) != "absent":
+                raise StoreError("this library has a security ledger: open its durable authority before writing")
+            self._committed = True
+            return _Commit(store, tuple(self._puts.values()), handle, dict(approvals or {})).run()
 
 
 class _Commit:
@@ -381,13 +592,30 @@ class _Commit:
         self.consumed: list[str] = []
 
     def run(self) -> CommitResult:
+        with self.store.lock:
+            ledger = {put.ledger for put in self.puts}
+            if len(ledger) != 1:
+                raise InvalidEnvelope("a commit writes either ledger batches or records, never both")
+            outer, self.store._staging = self.store._staging, self.store._staging
+            try:
+                return self._run(ledger.pop())
+            finally:
+                self.store._staging = outer
+
+    def _run(self, ledger: bool) -> CommitResult:
         self.store._require_consistent()                 # 1. no pending journal
         with self.access.cached_listings():               # steps 3-6 only read
             staging = self._check_paths()                 # 3. root, links, V1, preflight
             self._check_revisions()                       # 4. compare-and-swap
             self._check_names()                           # 5. collisions
-            self._check_sources()                         # 6. loader-consistent sources
-        self._authorize()                                 # 7. authorization
+            if not ledger:
+                self._check_sources()                     # 6. loader-consistent sources
+        if not ledger:                                    # 7. authorization (ledgers: trusted)
+            authority = self.store._authority
+            scope = authority.consequential_scope() if authority is not None else contextlib.nullcontext()
+            with scope:  # type: ignore[attr-defined]
+                self._authorize()
+        self.store._staging = True                        # nested ledger commits are refused from here
         entries = self._stage(staging)                    # 8. directories and temps
         journal = Journal("commit", entries)
         self._recheck(staging)                            # still ours, just before the commit point
@@ -424,7 +652,7 @@ class _Commit:
             if current != put.expected:
                 stale.append(("/".join(put.parts), "exists" if put.expected is None else
                               "absent" if current is None else "changed"))
-            elif data is not None and _unsupported(data, isinstance(put.envelope, SourceManifest)):
+            elif data is not None and not put.ledger and _unsupported(data, isinstance(put.envelope, SourceManifest)):
                 stale.append(("/".join(put.parts), "unsupported_format"))
         if stale:
             raise StaleWrite(stale)
@@ -461,7 +689,9 @@ class _Commit:
             if not getattr(decision, "allowed", False) or decision.resource != put.address:
                 denied.append(text)
         if denied:
-            raise WriteDenied(f"not authorized to write {', '.join(denied)}; nothing was written",
+            unavailable = any(getattr(d, "reason", None) == "internal_error" for d in decisions)
+            why = "the authority is unavailable (reopen it)" if unavailable else "not authorized"
+            raise WriteDenied(f"{why} to write {', '.join(denied)}; nothing was written",
                               decisions, self.consumed)
 
     def _note(self, error: BaseException) -> None:

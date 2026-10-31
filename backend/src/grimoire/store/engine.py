@@ -22,6 +22,7 @@ partial publish.
 from __future__ import annotations
 
 import stat
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -35,7 +36,7 @@ from .errors import LinkRefused, NameCollision, RecoveryFailed, StoreError, Unst
 from .guard import Guard
 from .journal import Entry, Journal, is_staging_name, parse
 from .jsonfmt import MAX_FILE_BYTES, etag
-from .layout import DISCARD_MARKER, JOURNAL, TXN, Parts, conflict_parts, name_key
+from .layout import DISCARD_MARKER, JOURNAL, REPAIR_MARKER, TXN, Parts, conflict_parts, name_key
 
 Presence = Literal["absent", "present", "mismatch"]
 #: Distinct versions kept beside one conflict name before giving up (a backstop, never reached).
@@ -51,7 +52,15 @@ class Access:
         self.root = root
         self.ops = ops
         self.guard = guard
-        self._listings: dict[Parts, list[str]] | None = None
+        self._local = threading.local()  # listing caches belong to the thread that opened them
+
+    @property
+    def _listings(self) -> dict[Parts, list[str]] | None:
+        return getattr(self._local, "listings", None)
+
+    @_listings.setter
+    def _listings(self, value: dict[Parts, list[str]] | None) -> None:
+        self._local.listings = value
 
     @contextmanager
     def cached_listings(self) -> Iterator[None]:
@@ -152,6 +161,11 @@ class Access:
     def journal_exists(self) -> bool:
         self.check_staging()  # never look through a linked staging directory
         return self.ops.exists(self.journal)
+
+    def repair_pending(self) -> bool:
+        """An interrupted ``repair_ledger``: the ledger is undefined until it finishes."""
+        self.check_staging()
+        return self.ops.exists(self.path((TXN, REPAIR_MARKER)))
 
     def discard_pending(self) -> bool:
         """An interrupted ``discard_journal``: nothing may publish until it is finished."""
@@ -292,6 +306,8 @@ def recover(access: Access) -> Settlement:
         access.check_staging()
         if access.discard_pending():
             raise RecoveryFailed("a discard was interrupted; run LibraryStore.discard_journal again to finish it")
+        if access.repair_pending():
+            raise RecoveryFailed("a ledger repair was interrupted; run LibraryStore.repair_ledger again to finish it")
         if access.journal_exists():
             access.check_staged_file(JOURNAL)
     except (StoreError, ValueError) as error:  # LibraryPathError is a ValueError

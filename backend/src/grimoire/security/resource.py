@@ -22,7 +22,8 @@ V1_MARKER_ROOTS = frozenset({
     "llm_connections", "sampler_presets", "response_presets", ".world-staging",
     ".module-staging", ".char_macros_baked", "prompt_layout.json", "regex.json", "chores.json",
 })
-RESERVED_ROOTS = frozenset({"secrets"}) | V1_MARKER_ROOTS
+#: ``authority`` holds the durable audit, grants and sovereignty ledgers: trusted code only.
+RESERVED_ROOTS = frozenset({"secrets", "authority"}) | V1_MARKER_ROOTS
 
 _PUNCTUATION = frozenset("-_.")
 # Default_Ignorable_Code_Point ranges (Unicode DerivedCoreProperties). Most are

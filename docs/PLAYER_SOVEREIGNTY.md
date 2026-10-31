@@ -1,6 +1,6 @@
 # Player sovereignty — first-slice authority contract
 
-**Status:** first slice of [Player Sovereignty](roadmap/sprints/player-sovereignty.md), implemented as a pure policy in `backend/src/grimoire/core/authority.py`. Field names are a first-slice contract, not a frozen file schema; nothing here is persisted yet.
+**Status:** first slice of [Player Sovereignty](roadmap/sprints/player-sovereignty.md), implemented as a pure policy in `backend/src/grimoire/core/authority.py`. The policy values are a first-slice contract; their stored form is defined in [Persistence (010b)](#persistence-010b).
 
 The player owns their PC's intentions, voluntary speech and actions, interior experience, beliefs and commitments. The director narrates a responsive, challenging world but does not author those things unless the player explicitly delegated them. Sovereignty never guarantees success: failures, harm, refusals, sensations and disclosed rule-imposed reactions remain the director's to narrate.
 
@@ -88,13 +88,36 @@ A correction does not revoke a delegation. The player revokes it separately so t
 
 Both are labelling errors, so the remedy is a labeller and a mislabel-review path, not a wider correction right that could strike claims about other actors.
 
-**Delegations and control changes.** Control assignments are a snapshot, with no history. A delegation is therefore honored whenever its grantor controls the PC again: one granted by P1 is suspended while P2 controls the PC, and it applies again when control returns to P1. Ending it for good takes a revocation by the grantor. Owners for control history: [Native File Store](roadmap/sprints/native-file-store-and-revisions.md) and [Local Multi PC](roadmap/sprints/local-multi-pc.md).
+**Delegations and control changes.** Control assignments are a snapshot, with no history. A delegation is therefore honored whenever its grantor controls the PC again: one granted by P1 is suspended while P2 controls the PC, and it applies again when control returns to P1. Ending it for good takes a revocation by the grantor. Control history is now persisted (see [Persistence](#persistence-010b)); using it in review belongs to [Local Multi PC](roadmap/sprints/local-multi-pc.md).
 
 ## Deferred
 
 - Prose claim extraction and labelling.
 - Prompt rendering.
 - Session Zero's computation of agreed limits. Until then the rule/effect writer sets `within_agreed_limits`, which defaults to false.
-- Persistence of delegations and corrections.
 - Policy inheritance across worlds and retconned scenes.
 - AI-controlled companions as a third authority class.
+
+## Persistence (010b)
+
+`grimoire.ledgers.SovereigntyLedger` keeps one ledger per campaign (`authority/campaigns/<campaign_id>`; see [STORAGE](STORAGE.md#authority-ledgers-010b)). It records four kinds of value:
+- `ControlChange(campaign_id, actor_id, controller_id | None)`, where `None` unassigns the actor;
+- `Delegation`;
+- `Revocation`;
+- `Correction`.
+
+Every entry is flushed before `record` returns. `load(campaign_id)` returns a `SovereigntyState`: the current `ControlAssignment`s, the ordered control history, and the delegations, revocations and corrections, as exact values.
+
+**Strict provenance (requester decision).** `record` requires a trusted human handle issued by the library's `DurableAuthority`. Untrusted handles, which every path that parses imported content or model output uses, are refused with `AuthorityError`. The handle's principal must be the principal the value names:
+- a delegation is recorded only by its grantor;
+- a revocation only by its revoker, and only for a delegation that exists;
+- a correction only by its corrector;
+- a control change only by a library owner.
+
+Delegation ids are unique per campaign. `load` re-checks every entry against the same rules and fails closed (`LedgerInvalid`).
+
+The replayed state lives on the `DurableAuthority`, so every `SovereigntyLedger` over one authority sees the same state. Each append continues from the head that was replayed. A batch written by anything else makes the append fail and poisons the authority; reopening replays the ledger again and re-checks the foreign batch. Values that cannot be stored are refused with `AuthorityError` and change nothing. That covers an invalid `campaign_id` and an oversized field: ids and controllers over 512 characters, and correction notes over 4096.
+
+**Obligation on the runner (035) and multiplayer (102):** provenance is only as strong as handle minting. Mint a trusted human handle only for the authenticated human, never on behalf of another player.
+
+**Upgrade hazard:** entries are validated by the running code. A preset delegation stores its frozen domains, but `Delegation`'s constructor checks them against today's presets, so redefining a preset needs a migration, owned by whoever changes it.
