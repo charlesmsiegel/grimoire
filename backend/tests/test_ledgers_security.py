@@ -56,7 +56,7 @@ def _reopen(store, authority, locker):
 
 def _decisions_on_disk(root, tree=None):
     files = (tree or {}).items() if tree is not None else (
-        (str(path.relative_to(root.parent)), path.read_bytes()) for path in sorted((root / "authority" / "security").glob("*.json")))
+        (path.relative_to(root.parent).as_posix(), path.read_bytes()) for path in sorted((root / "authority" / "security").glob("*.json")))
     decisions = []
     for key, data in sorted(files):
         if not key.startswith("lib/authority/security/") or data is None:
