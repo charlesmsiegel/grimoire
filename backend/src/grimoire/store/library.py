@@ -359,6 +359,7 @@ class LibraryStore:
 
     def _require_consistent(self) -> None:
         self._require_open()
+        self._access.guard.check_root()  # a swapped root fails the read, not each source in it
         if self._access.journal_exists() or self._access.discard_pending() or self._access.repair_pending():
             raise PendingRecovery("a commit, discard or ledger repair awaits recovery; "
                                   "reopen the library writable to finish it")

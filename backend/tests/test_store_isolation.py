@@ -252,3 +252,25 @@ def test_reading_through_access_never_lists_a_linked_folder(tmp_path):
     with pytest.raises(LinkRefused):
         store._access.list_dir(("campaigns", "c1"))
     store.close()
+
+
+@pytest.mark.parametrize("swap", ["link-to-another-library", "replaced-directory"])
+def test_reads_refuse_a_root_swapped_after_open(tmp_path, swap):
+    root = tmp_path / "lib"
+    other = tmp_path / "other"
+    for path in (root, other):
+        with LibraryStore.create(path) as store:
+            seed(store)
+    store = LibraryStore.open(root, writable=False)
+    root.rename(tmp_path / "moved")
+    if swap == "link-to-another-library":
+        make_dir_link(root, other)
+    else:
+        other.rename(root)
+    with pytest.raises(LibraryPathError):
+        store.load()
+    with pytest.raises(LibraryPathError):
+        store.read(WREN_R1)
+    with pytest.raises(LibraryPathError):
+        store._access.list_dir(("sources",))
+    store.close()

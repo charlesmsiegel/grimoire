@@ -85,6 +85,11 @@ class Guard:
         again (once) after this call.
         """
         self._isolated.clear()
+        self.check_root()
+        check_write_destination(self.root)
+
+    def check_root(self) -> None:
+        """The root is still the directory that was opened: not a link, not replaced."""
         if is_link(self.root):
             raise LinkRefused(f"library root {self.root} became a link")
         try:
@@ -93,10 +98,10 @@ class Guard:
             raise LibraryPathError(f"library root changed: {error}") from error
         if current != self.identity:
             raise LibraryPathError(f"library root {self.root} was replaced after it was opened")
-        check_write_destination(self.root)
 
     def check_read(self, parts: Parts) -> None:
-        """No existing component of ``parts`` is a link; never follow one."""
+        """The root is unchanged and no existing component of ``parts`` is a link; never follow one."""
+        self.check_root()
         path = self.root
         for part in parts:
             path = path / part
