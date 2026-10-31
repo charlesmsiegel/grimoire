@@ -144,6 +144,7 @@ def test_ignored_files_do_not_dirty_the_checkout(checkout):
     assert capture.verify_checkout(checkout, expected_commit=git(checkout, "rev-parse", "HEAD"))
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
 def test_out_refuses_nonempty_and_symlink_into_repo(tmp_path):
     full = tmp_path / "full"
     full.mkdir()
@@ -256,7 +257,8 @@ def test_child_env_has_no_parent_secrets(checkout, scratch_tmp, scenario_files, 
     assert capture.main(argv(checkout, out, "--live", "--provider", "openrouter", "--model", "m",
                              "--api-key-env", "TEST_KEY", "--confirm-billing")) == 0, \
         capsys.readouterr().err
-    names = set(json.loads(env_dump.read_text()))
+    # macOS's CoreFoundation may add __CF_* variables to any process it starts.
+    names = {n for n in json.loads(env_dump.read_text()) if not n.startswith("__CF")}
     assert "PARENT_SECRET" not in names and "GRIMOIRE_V2_HOME" not in names
     assert {"GRIMOIRE_HOME", "HOME", "XDG_STATE_HOME", "TEST_KEY"} <= names
     assert names <= set(capture.CHILD_ENV_NAMES) | {"TEST_KEY", "LC_CTYPE"}
@@ -283,3 +285,13 @@ def test_driver_gets_the_temp_home_not_a_real_library(checkout, scratch_tmp, sce
         assert Path(data[name]).is_relative_to(scratch_tmp), name
     assert data["args"]["--mode"] == "dry_run" and data["args"]["--provider"] == "openrouter"
     assert Path(data["args"]["--checkout"]) == checkout.resolve()
+
+
+def test_child_env_keeps_what_windows_needs_to_start_python(tmp_path, monkeypatch):
+    # Windows cannot start an interpreter without SYSTEMROOT; nothing else is passed through.
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    options = capture.CaptureOptions("mini", tmp_path, Path(sys.executable), tmp_path / "out",
+                                     "dry_run", "openrouter")
+    env = capture._child_env(tmp_path, options, None)
+    assert env["SYSTEMROOT"] == r"C:\Windows"
+    assert set(env) <= set(capture.CHILD_ENV_NAMES)

@@ -43,7 +43,7 @@ EXPECTED_COMMIT = PINNED_V021_COMMIT
 #: The only environment the 0.2.1 child gets, plus the named key variable in live mode.
 CHILD_ENV_NAMES = ("PATH", "LANG", "PYTHONDONTWRITEBYTECODE", "GRIMOIRE_HOME", "HOME",
                    "XDG_STATE_HOME", "TMPDIR", "GRIMOIRE_CACHE_WARM",
-                   "GRIMOIRE_INFERENCE_AUTOMIGRATE")
+                   "GRIMOIRE_INFERENCE_AUTOMIGRATE", "SYSTEMROOT")
 TIMEOUT_SECONDS = 1800
 OUTPUTS = ("run.json", "evidence.json", "capture-report.txt")
 
@@ -159,6 +159,8 @@ def _child_env(temp: Path, options: CaptureOptions, key: str | None) -> dict[str
         "GRIMOIRE_CACHE_WARM": "0",
         "GRIMOIRE_INFERENCE_AUTOMIGRATE": "0",
     }
+    if os.environ.get("SYSTEMROOT"):  # Windows cannot start Python without it
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     if key is not None and options.api_key_env:
         env[options.api_key_env] = key
     return env

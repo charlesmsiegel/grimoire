@@ -6,7 +6,6 @@ GRIMOIRE_V021_PYTHON (an interpreter with that checkout installed) are set. Neve
 
 import json
 import os
-import pwd
 from pathlib import Path
 
 import pytest
@@ -22,6 +21,7 @@ pytestmark = pytest.mark.skipif(not (CHECKOUT and PYTHON),
 
 
 def real_state() -> tuple:
+    import pwd  # POSIX only; 0.2.1's lock directory comes from the account's home
     state = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local" / "state" / "grimoire"
     return state.exists(), sorted(p.name for p in state.rglob("*")) if state.exists() else []
 
