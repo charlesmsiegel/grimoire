@@ -223,23 +223,27 @@ def _run_driver(options: CaptureOptions, checkout: Path, setup: Path, temp: Path
     try:
         child = subprocess.Popen(command, env=_child_env(temp, options, key), cwd=temp,
                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE, text=True, encoding="utf-8")
+                                 stderr=subprocess.PIPE)
     except OSError as error:
         raise CaptureRefused(f"cannot start {options.v1_python}: {error}") from None
     try:
-        stdout, stderr = child.communicate(timeout=TIMEOUT_SECONDS)
+        # Bytes, decoded here: in text mode Windows decodes in a reader thread, where a bad
+        # byte is lost as a thread warning and the output silently becomes None.
+        raw_out, raw_err = child.communicate(timeout=TIMEOUT_SECONDS)
     except BaseException as error:  # timeout, interrupt, bad output: never leave 0.2.1 running
         child.kill()
         child.wait()
         if isinstance(error, subprocess.TimeoutExpired):
             raise CaptureFailed(f"the 0.2.1 driver timed out after {TIMEOUT_SECONDS} s") from None
-        if isinstance(error, UnicodeDecodeError):
-            raise CaptureFailed("the 0.2.1 driver's output is not UTF-8") from None
         raise
+    stderr = raw_err.decode("utf-8", errors="replace")
     if child.returncode != 0:
         tail = "\n".join(_scrub(stderr, key).strip().splitlines()[-20:])
         raise CaptureFailed(f"the 0.2.1 driver exited {child.returncode}:\n{tail}")
-    return stdout
+    try:
+        return raw_out.decode("utf-8")
+    except UnicodeDecodeError:
+        raise CaptureFailed("the 0.2.1 driver's output is not UTF-8") from None
 
 
 def _outputs(options: CaptureOptions, scenario: Scenario, stdout: str) -> dict[str, str]:
