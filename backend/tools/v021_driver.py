@@ -67,6 +67,11 @@ def partial_ledger(rows: list[dict]) -> list[dict]:
             for row in rows if row.get("kind") == "llm"]
 
 
+def encode_bundle(bundle: dict) -> bytes:
+    """The evidence as ASCII-escaped JSON: the same bytes whatever the pipe's locale encoding."""
+    return json.dumps(bundle, ensure_ascii=True).encode("ascii")
+
+
 def _usage_rows() -> list[dict]:
     rows = []
     for path in sorted((Path(os.environ["GRIMOIRE_HOME"]) / "usage").glob("*.jsonl")):
@@ -346,7 +351,8 @@ def main(argv: list[str]) -> int:
         "turns": turn_records,
         "usage_rows": usage_rows,
     }
-    sys.stdout.write(json.dumps(bundle, ensure_ascii=False))
+    sys.stdout.buffer.write(encode_bundle(bundle))
+    sys.stdout.buffer.flush()
     return 0
 
 

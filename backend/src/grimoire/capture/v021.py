@@ -233,8 +233,14 @@ def _run_driver(options: CaptureOptions, checkout: Path, setup: Path, temp: Path
     except BaseException as error:  # timeout, interrupt, bad output: never leave 0.2.1 running
         child.kill()
         child.wait()
+        # Killed, the driver cannot say what it already spent; its usage rows still can, until
+        # the temporary library is removed.
+        spent = _spent_so_far(temp)
         if isinstance(error, subprocess.TimeoutExpired):
-            raise CaptureFailed(f"the 0.2.1 driver timed out after {TIMEOUT_SECONDS} s") from None
+            raise CaptureFailed(f"the 0.2.1 driver timed out after {TIMEOUT_SECONDS} s{spent}") \
+                from None
+        if spent:
+            print(f"capture interrupted{spent}", file=sys.stderr)
         raise
     stderr = raw_err.decode("utf-8", errors="replace")
     if child.returncode != 0:
@@ -244,6 +250,22 @@ def _run_driver(options: CaptureOptions, checkout: Path, setup: Path, temp: Path
         return raw_out.decode("utf-8")
     except UnicodeDecodeError:
         raise CaptureFailed("the 0.2.1 driver's output is not UTF-8") from None
+
+
+def _spent_so_far(temp: Path) -> str:
+    """A counts-only partial ledger of the 0.2.1 rows already written, or ``""`` if none."""
+    rows: list[object] = []
+    try:
+        for path in sorted((temp / "library" / "usage").glob("*.jsonl")):
+            for line in path.read_text("utf-8", errors="replace").splitlines():
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue  # a row cut short by the kill
+    except OSError:
+        return ""
+    spent = partial_ledger(rows)
+    return f"\npartial ledger (counts only): {json.dumps(spent)}" if spent else ""
 
 
 def _outputs(options: CaptureOptions, scenario: Scenario, stdout: str) -> dict[str, str]:

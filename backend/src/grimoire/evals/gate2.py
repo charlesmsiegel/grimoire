@@ -69,6 +69,8 @@ def _weighted(run: RunV2, weight: Fraction) -> Fraction | None:
     total = Fraction(0)
     for call in run.calls:
         for each in call.attempts:
+            if each.outcome == "not_sent":  # used nothing; an absent cache count hides no cost
+                continue
             usage = each.usage
             if any(getattr(usage, name) is None for name in COSTED_FIELDS):
                 return None

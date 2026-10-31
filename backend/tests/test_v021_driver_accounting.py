@@ -61,3 +61,12 @@ def test_any_driver_crash_reports_the_partial_ledger(tmp_path, monkeypatch, caps
     assert exit_.value.code == 1
     err = capsys.readouterr().err
     assert "partial ledger" in err and '"prompt_tokens": 5' in err
+
+
+def test_evidence_is_written_as_ascii_json_whatever_the_locale():
+    # A Windows pipe uses the locale code page; escaped JSON is the same bytes everywhere.
+    d = driver()
+    data = d.encode_bundle({"text": "“Hush,” she said — ¡olé! 鍵"})
+    assert data.isascii()
+    import json
+    assert json.loads(data.decode("ascii"))["text"] == "“Hush,” she said — ¡olé! 鍵"

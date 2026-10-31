@@ -466,3 +466,20 @@ def test_rejected_conversion_still_reports_what_was_spent(checkout, scratch_tmp,
     err = capsys.readouterr().err
     assert "model_mismatch" in err and "partial ledger" in err and "0.0042" in err
     assert "You knock" not in err and KEY not in err and not out.exists()
+
+
+def test_timed_out_capture_reports_what_was_already_spent(checkout, scratch_tmp, scenario_files,
+                                                         tmp_path, monkeypatch, capsys):
+    fake_driver(tmp_path, monkeypatch, textwrap.dedent("""
+        usage = os.path.join(os.environ['GRIMOIRE_HOME'], 'usage')
+        os.makedirs(usage)
+        with open(os.path.join(usage, '2026-10.jsonl'), 'w') as f:
+            f.write(json.dumps({'kind': 'llm', 'task': 'chat', 'response_id': 'r-1',
+                                'prompt_tokens': 123, 'cost_usd': 0.0042}) + '\\n')
+        import time; time.sleep(30)
+    """))
+    monkeypatch.setattr(capture, "TIMEOUT_SECONDS", 2)
+    assert capture.main(dry(checkout, tmp_path / "out")) == 1
+    err = capsys.readouterr().err
+    assert "timed out" in err and "partial ledger" in err and "0.0042" in err and "123" in err
+    assert leftovers(scratch_tmp) == []

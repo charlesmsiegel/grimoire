@@ -232,3 +232,14 @@ def test_measured_label_admits_the_bundle_is_unauthenticated():
     text = render_v2(compare_v2(MINI, run, run, baseline_evidence=evidence,
                                 candidate_evidence=evidence))
     assert "origin and provider receipt unverified" in text
+
+
+def test_an_unsent_attempt_does_not_make_cost_incomplete():
+    def unsent_first(r):
+        r["policy"]["max_attempts_per_call"] = 2
+        r["calls"][0]["attempts"] = [attempt_v2(0, 0, cache_read=None, outcome="not_sent"),
+                                     attempt_v2(attempt=2)]
+    run = parse_run_v2(mutate(minimal_run_v2(), unsent_first), MINI)
+    report = compare_v2(MINI, run, run)
+    assert report.baseline.weighted_cost == 105
+    assert "usage_incomplete" not in checks(report)
