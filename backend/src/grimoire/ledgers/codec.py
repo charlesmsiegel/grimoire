@@ -40,6 +40,17 @@ def check_size(value: object, label: str, limit: int) -> None:
         raise ValueError(f"{label} must be text of at most {limit} characters")
 
 
+def _replayable(path: ResourcePath, label: str) -> str:
+    """The path's text, if replay will parse it back to the same path (its length is limited)."""
+    text = str(path)
+    try:
+        if ResourcePath.parse(text) == path:
+            return text
+    except ValueError:
+        pass
+    raise ValueError(f"the {label} cannot be stored: replay would not read it back (too long)")
+
+
 def _exact(entry: Mapping[str, object], kind: str, keys: set[str]) -> Mapping[str, object]:
     if not isinstance(entry, Mapping):
         raise LedgerInvalid("a ledger entry must be an object")
@@ -78,7 +89,7 @@ def encode_grant(grant: Grant) -> dict[str, object]:
         raise ValueError("expected a Grant")
     check_size(grant.grant_id, "grant_id", MAX_ID)
     return {"grant_id": grant.grant_id, "principal": grant.principal,
-            "permissions": sorted(p.value for p in grant.permissions), "scope": str(grant.scope),
+            "permissions": sorted(p.value for p in grant.permissions), "scope": _replayable(grant.scope, "scope"),
             "granted_by": grant.granted_by}
 
 
@@ -98,7 +109,7 @@ def encode_approval(approval: Approval, pinned_grant: str) -> dict[str, object]:
         raise ValueError("expected an Approval")
     check_size(approval.approval_id, "approval_id", MAX_ID)
     return {"approval_id": approval.approval_id, "principal": approval.principal,
-            "permission": approval.permission.value, "resource": str(approval.resource),
+            "permission": approval.permission.value, "resource": _replayable(approval.resource, "resource"),
             "payload_digest": approval.payload_digest, "approved_by": approval.approved_by,
             "grant_id": pinned_grant}
 

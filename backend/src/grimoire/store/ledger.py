@@ -80,9 +80,12 @@ def _read_ledger(access: Access, name: str) -> Ledger:
     for seq in seqs:
         parts = ledger_parts(name, seq)
         try:
-            data = access.read(parts)
+            too_large = access.too_large(parts)  # refused before it is read into memory
+            data = None if too_large else access.read(parts)
         except (OSError, StoreError, ValueError) as error:  # a link or non-regular file is refused
             raise LedgerBroken(name, seq, f"unreadable: {error}") from error
+        if too_large:
+            raise LedgerBroken(name, seq, "larger than a reader accepts")
         if data is None:
             raise LedgerBroken(name, seq, "vanished while reading")
         batches.append(_parse_batch(name, seq, data, previous))

@@ -645,3 +645,48 @@ def test_a_scope_left_by_an_error_still_flushes_its_decisions(library):
             assert _decisions_on_disk(store.root) == []  # deferred to the scope's end
             raise RuntimeError("the save failed after deciding")
     assert [d["approval_id"] for d in _decisions_on_disk(store.root)] == ["ap"] and not authority.poisoned
+
+
+def test_a_save_racing_the_first_open_cannot_use_a_foreign_handle(tmp_path):
+    from store_helpers import owner_handle
+    store = LibraryStore.create(tmp_path / LIB, locker=ProcessLocker())
+    foreign = owner_handle()  # a bare Authorizer's handle: valid only while the store is unbound
+    results, opened = [], []
+
+    def save():
+        txn = store.transaction()
+        txn.put(RECORD, None)
+        try:
+            results.append(txn.commit(foreign))
+        except Exception as error:  # noqa: BLE001
+            results.append(error)
+    with store.lock:  # the first open binds while the save waits
+        worker = threading.Thread(target=save)
+        worker.start()
+        time.sleep(0.2)
+        opened.append(open_authority(store))
+    worker.join(5)
+    assert isinstance(results[0], WriteDenied) and not (store.root / ADDRESS).exists()
+    opened[0].close()
+    store.close()
+
+
+@pytest.mark.parametrize("what", ["grant", "approval"])
+def test_a_path_replay_could_not_read_back_is_refused_before_any_change(library, what):
+    store, authority, locker = library
+    long_path = ResourcePath(("campaigns",) + tuple("s" * 60 + str(n) for n in range(17)))
+    assert len(str(long_path)) > 1024
+    if what == "grant":
+        call = lambda: authority.add_grant(Grant("g9", IMPORTER, frozenset({Permission.APPLY}), long_path, OWNER))  # noqa: E731
+    else:
+        grant_importer(authority)
+        call = lambda: authority.register_approval(  # noqa: E731
+            Approval("a9", IMPORTER, Permission.APPLY, long_path, "sha256:" + "0" * 64, OWNER))
+    before = (authority.active_grants(), authority.pending_approvals(), store.read_ledger("security").head)
+    with pytest.raises(ValueError, match="replay"):
+        call()
+    assert (authority.active_grants(), authority.pending_approvals(), store.read_ledger("security").head) == before
+    assert not authority.poisoned
+    store, authority = _reopen(store, authority, locker)  # still opens
+    authority.close()
+    store.close()

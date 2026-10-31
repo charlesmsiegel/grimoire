@@ -570,14 +570,15 @@ class Transaction:
         if not self._puts:
             raise InvalidEnvelope("nothing to commit")
         store = self._store
-        authority = store._authority
-        if authority is not None and not authority.issued(handle):  # type: ignore[attr-defined]
-            raise WriteDenied("the handle was not issued by this library's authority; nothing was written",
-                              (), ())
-        if authority is None and store._access.presence(ledger_parts("security", 1)) != "absent":
-            raise StoreError("this library has a security ledger: open its durable authority before writing")
-        self._committed = True
-        return _Commit(store, tuple(self._puts.values()), handle, dict(approvals or {})).run()
+        with store.lock:  # the binding cannot change between these checks and the commit
+            authority = store._authority
+            if authority is not None and not authority.issued(handle):  # type: ignore[attr-defined]
+                raise WriteDenied("the handle was not issued by this library's authority; nothing was written",
+                                  (), ())
+            if authority is None and store._access.presence(ledger_parts("security", 1)) != "absent":
+                raise StoreError("this library has a security ledger: open its durable authority before writing")
+            self._committed = True
+            return _Commit(store, tuple(self._puts.values()), handle, dict(approvals or {})).run()
 
 
 class _Commit:

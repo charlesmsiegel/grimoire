@@ -384,3 +384,21 @@ def test_explicit_recovery_waits_for_a_commit_in_another_thread(store):
         store._access.ops.make_temp = real
     workers[0].join(5)
     assert results and len(store.read_ledger("security").entries) == 1
+
+
+def test_an_oversized_batch_is_refused_before_it_is_read(store):
+    from grimoire.store.jsonfmt import MAX_FILE_BYTES
+    writer = store.ledger_writer("security")
+    writer.append(_entries(1), None)
+    batch = store.root / "authority" / "security" / "0000000001.json"
+    with batch.open("ab") as handle:
+        handle.truncate(MAX_FILE_BYTES + 1)
+    reads = []
+    real = store._access.ops.read_bytes
+    store._access.ops.read_bytes = lambda path: reads.append(path) or real(path)
+    try:
+        with pytest.raises(LedgerBroken, match="larger than"):
+            store.read_ledger("security")
+    finally:
+        store._access.ops.read_bytes = real
+    assert reads == []
