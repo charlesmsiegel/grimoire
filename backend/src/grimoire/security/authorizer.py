@@ -109,6 +109,17 @@ class Authorizer:
             raise ValueError("a sink must be callable")
         self._sink = sink
 
+    def approval_grant(self, approval_id: str) -> str | None:
+        """The grant an approval was pinned to at registration, or ``None``."""
+        entry = self._approvals.get(approval_id)
+        return None if entry is None else entry[1]
+
+    def is_grant_active(self, grant_id: str) -> bool:
+        return grant_id in self._grants and grant_id not in self._revoked_grants
+
+    def is_approval_pending(self, approval_id: str) -> bool:
+        return approval_id in self._approvals and approval_id not in self._closed_approvals
+
     def issued(self, handle: object) -> bool:
         """Whether ``handle`` was minted by this authorizer."""
         return type(handle) is WorkerHandle and handle._authority is self

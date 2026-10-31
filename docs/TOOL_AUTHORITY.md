@@ -56,7 +56,7 @@ These rules reject traversal, absolute paths, separators, whitespace, control/fo
 
 - **Native file store:** map a validated address to an OS path only by joining its segments under the library root, never follow symlinks out of the library, and refuse to create a name that collides case- or normalization-insensitively with an existing differently spelled entry.
 - **Approval UI ([World Change Sets](roadmap/sprints/world-change-sets.md), [Character Card Ingestion](roadmap/sprints/character-card-ingestion.md) preview):** issue approvals only from a direct human action. Show `describe()` text, including the non-ASCII flag and the staged content the digest refers to.
-- **Durable audit ([Native File Store](roadmap/sprints/native-file-store-and-revisions.md), surfaced by [Durable Action Recovery](roadmap/sprints/durable-action-recovery.md)):** persist decisions and also audit grant/approval lifecycle, which this slice exposes only through `describe_policy()`.
+- **Durable audit:** implemented by `grimoire.ledgers.DurableAuthority` (010b; see [Durable authority](#durable-authority-010b)). Surfacing it to people belongs to [Durable Action Recovery](roadmap/sprints/durable-action-recovery.md).
 - **Provider adapters and network ([Model Routing And Budgeting](roadmap/sprints/model-routing-and-budgeting.md)):** route every call through `execute`. Secrets stay under reserved roots and are read only by trusted adapter code, never through a worker grant.
 - **Device sync (028):** pairing keys and device credentials live under reserved roots, and peer devices are non-owner principals.
 - **Multiplayer (102):** each human approves only uses of grants they issued.
@@ -64,3 +64,34 @@ These rules reject traversal, absolute paths, separators, whitespace, control/fo
 - **Card import ([Character Card Ingestion](roadmap/sprints/character-card-ingestion.md)):** the importer is an untrusted worker; this is the first real use of the simulated proving scenario.
 - **App commands ([Minimal Text Scene Runner](roadmap/sprints/minimal-text-scene-runner.md)):** every `grimoire.intent` `ui_command` an executor runs is authorized through the same principal and grant path as the equivalent click; a confirmation is never an approval.
 - **Process sandboxing** of community automation stays this sprint's moonshot; script-running owners ([Mechanics Module Authoring](roadmap/sprints/mechanics-module-authoring.md)) must not run untrusted code in-process.
+
+## Durable authority (010b)
+
+`grimoire.ledgers.DurableAuthority` rebuilds the kernel `Authorizer` from the library's `security` ledger ([STORAGE](STORAGE.md#authority-ledgers-010b)) and records everything after it.
+
+**What is recorded.** The ledger holds:
+- the owner set, at genesis (fixed for the ledger's life in this slice);
+- grants and revocations;
+- approvals, each with the grant it was pinned to, and their revocations;
+- every decision, as its `AuditRecord`.
+
+Replay validates each entry with the kernel, including `replay_decision`'s strict checks, and fails closed (`LedgerInvalid`).
+
+**Kernel hooks (pure).**
+- `attach_sink(sink)`: every decision passes through the sink before it joins the audit and before an approval is consumed. If the sink raises, the request is denied `internal_error` and nothing is consumed.
+- `issued(handle)`: whether this authorizer minted the handle.
+- `replay_decision(record)`: rebuilds a stored decision, with validation.
+
+**Durable before effect.**
+- An allow for `apply` or `execute` is on disk before it is returned.
+- Inside a commit's consequential scope, a save's allows are flushed once, before anything is staged.
+- Lifecycle changes are validated, applied, and flushed before they return.
+- Other decisions (inspect, propose, denials) are flushed with the next flush, at 500 pending, or on `close()`; a crash may lose them. Any later consequential allow flushes them first, in order.
+
+**Consumption (requester decision).** An approval is consumed when an allow that uses it is returned. It stays consumed across restarts, even if the save it authorized never lands; the user re-approves. Two refinements:
+- **A decision on disk was made, but may not have taken effect.** If a flush fails after its own commit point, recovery may publish the batch. The approval is then consumed on disk although the caller was denied.
+- **A failed save flush leaves its approvals pending.** Inside a save's scope, if the single flush fails, the authority is poisoned and nothing is written. After reopening, those approvals are pending again.
+
+**Poisoning.** Any failure to persist poisons the authority. Every handle, including handles issued earlier, is then denied `internal_error`, lifecycle calls raise `AuthorityUnavailable`, and nothing more is written. Reopen to recover; the disk is the truth.
+
+**Threads.** The authority shares the store's re-entrant lock. Scope depth is per thread, so another thread's `execute` allow flushes immediately; it waits only while a commit holds the lock.

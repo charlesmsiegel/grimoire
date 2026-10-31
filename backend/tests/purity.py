@@ -63,13 +63,13 @@ def _impure_module_attribute(module_name: str, attr: str) -> bool:
 #: edge included (whose ``importlib.resources`` legitimately loads ``tempfile``).
 NETWORK_MODULES = ("socket", "ssl", "select", "selectors", "http.client", "urllib.request",
                    "subprocess", "multiprocessing", "asyncio", "ctypes", "sqlite3",
-                   "grimoire.library", "grimoire.store", "grimoire.testing")
+                   "grimoire.ledgers", "grimoire.library", "grimoire.store", "grimoire.testing")
 #: ...and what its pure modules must not pull in either.
 CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob", "random", "time",
                                          "datetime", "uuid", "secrets")
 
 #: grimoire packages that are adapters or test infrastructure, not pure.
-ADAPTERS = frozenset({"grimoire.library", "grimoire.store", "grimoire.testing"})
+ADAPTERS = frozenset({"grimoire.ledgers", "grimoire.library", "grimoire.store", "grimoire.testing"})
 
 
 @dataclass(frozen=True)
