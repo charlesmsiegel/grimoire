@@ -16,7 +16,7 @@ import re
 import unicodedata
 from typing import Literal
 
-from grimoire.core.identity import InstanceRef, SourceRef, validate_segment, validate_source_id
+from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, validate_segment, validate_source_id
 from grimoire.security import InvalidResourcePath, ResourcePath
 
 from .errors import UnstorableIdentifier
@@ -40,6 +40,8 @@ MANIFEST = "manifest.json"
 RECORDS = "records"
 INSTANCES = "instances"
 SUFFIX = ".json"
+CHATS = "chats"  # campaigns/<id>/chats/<chat_id>.json: one chat record (107)
+SCOPE = "scope.json"  # campaigns/<id>/scope.json: the play-scope record (107)
 
 ROOT_ENTRIES = frozenset({MARKER, SOURCES, CAMPAIGNS, TXN, CONFLICTS})
 #: Reserved for later record families; the loader skips them.
@@ -47,7 +49,7 @@ RESERVED_ROOTS = frozenset({"authority", "config", "assets", "secrets"})
 RESERVED_CAMPAIGN_ENTRIES = frozenset({"scenes", "events", "evidence", "relations"})
 _NOISE = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
 
-Kind = Literal["definition", "manifest", "instance", "ledger"]
+Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat"]
 
 
 def is_noise(name: str) -> bool:
@@ -92,9 +94,21 @@ def instance_parts(ref: InstanceRef) -> Parts:
     return _checked((CAMPAIGNS, ref.campaign_id, INSTANCES, ref.kind, ref.instance_id + SUFFIX))
 
 
-def address_parts(address: SourceRef | InstanceRef) -> Parts:
+def scope_parts(ref: ScopeRef) -> Parts:
+    return _checked((CAMPAIGNS, ref.campaign_id, SCOPE))
+
+
+def chat_parts(ref: ChatRef) -> Parts:
+    return _checked((CAMPAIGNS, ref.campaign_id, CHATS, ref.chat_id + SUFFIX))
+
+
+def address_parts(address: SourceRef | InstanceRef | ScopeRef | ChatRef) -> Parts:
     if isinstance(address, InstanceRef):
         return instance_parts(address)
+    if isinstance(address, ScopeRef):
+        return scope_parts(address)
+    if isinstance(address, ChatRef):
+        return chat_parts(address)
     return definition_parts(address)
 
 
@@ -141,15 +155,21 @@ def _stem(name: str) -> str | None:
     return stem
 
 
-def classify(parts: Parts) -> tuple[Kind, SourceRef | InstanceRef | str] | None:
+def classify(parts: Parts) -> tuple[Kind, SourceRef | InstanceRef | ScopeRef | ChatRef | str] | None:
     """The record a canonical path holds, or ``None``; exact inverse of the mappings."""
     parts = tuple(parts)
-    found: tuple[Kind, SourceRef | InstanceRef | str] | None = None
+    found: tuple[Kind, SourceRef | InstanceRef | ScopeRef | ChatRef | str] | None = None
     try:
         if len(parts) == 5 and parts[0] == CAMPAIGNS and parts[2] == INSTANCES:
             stem = _stem(parts[4])
             if stem is not None:
                 found = ("instance", InstanceRef(parts[1], parts[3], stem))
+        elif len(parts) == 3 and parts[0] == CAMPAIGNS and parts[2] == SCOPE:
+            found = ("scope", ScopeRef(parts[1]))
+        elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == CHATS:
+            stem = _stem(parts[3])
+            if stem is not None:
+                found = ("chat", ChatRef(parts[1], stem))
         elif len(parts) >= 3 and parts[0] == LEDGERS:
             seq = ledger_seq(parts[-1])
             if seq is not None:

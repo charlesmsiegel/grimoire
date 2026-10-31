@@ -20,19 +20,22 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from grimoire.core.identity import IdentityConflict, InstanceRef, SourceRef, validate_segment
+from grimoire.core.identity import ChatRef, IdentityConflict, InstanceRef, ScopeRef, SourceRef, validate_segment
 from grimoire.core.index import DIRECTED_RELATIONS, DefinitionIndex, DefinitionLink, SourceDescriptor
 
 from .diskops import is_link, lstat_or_none
 from .engine import Access
-from .envelope import EnvelopeError, LinkSpec, RecordEnvelope, SourceManifest, link_problem, parse_record, parse_source
+from .envelope import (
+    EnvelopeError, LinkSpec, RecordEnvelope, ScopeRecord, SourceManifest, link_problem, parse_record,
+    parse_scope_record, parse_source,
+)
 from .errors import (
     AddressMismatch, LinkRefused, MalformedRecord, RecordNotFound, StoreError, UnstorableIdentifier,
     UnsupportedFormat,
 )
 from .jsonfmt import JsonError, etag, parse_strict
 from .layout import (
-    CAMPAIGNS, CONFLICTS, INSTANCES, MANIFEST, MARKER, RECORDS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS,
+    CAMPAIGNS, CHATS, CONFLICTS, INSTANCES, SCOPE, MANIFEST, MARKER, RECORDS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS,
     SOURCE_DIR, SOURCES, SUFFIX, TXN, Parts, classify, is_noise, manifest_parts, name_key,
 )
 
@@ -42,6 +45,13 @@ EntityKey = tuple[str, str]  # (kind, entity_id) within one source
 @dataclass(frozen=True)
 class StoredRecord:
     envelope: RecordEnvelope
+    etag: str
+    previous: str | None
+
+
+@dataclass(frozen=True)
+class StoredScopeRecord:
+    record: ScopeRecord
     etag: str
     previous: str | None
 
@@ -90,6 +100,9 @@ class LibraryView:
     broken: tuple[BrokenRef, ...]
     excluded: tuple[str, ...]
     dropped: tuple[SourceRef, ...]
+    #: play scopes and chats (107); an empty mapping where a library has none
+    scopes: Mapping[ScopeRef, StoredScopeRecord] = field(default_factory=lambda: MappingProxyType({}))
+    chats: Mapping[ChatRef, StoredScopeRecord] = field(default_factory=lambda: MappingProxyType({}))
 
 
 def _text(parts: Parts) -> str:
@@ -129,6 +142,21 @@ def read_record(access: Access, parts: Parts) -> StoredRecord:
         raise AddressMismatch(f"{_text(parts)} holds {envelope.address}, not the record its path names", tag,
                               envelope.address)
     return StoredRecord(envelope, tag, previous)
+
+
+def read_scope_record(access: Access, parts: Parts) -> StoredScopeRecord:
+    """The scope or chat record at ``parts``; its address must be the one its path implies."""
+    document, tag = _document(access, parts)
+    try:
+        record, previous = parse_scope_record(document)
+    except EnvelopeError as error:
+        kind = UnsupportedFormat if error.code == "unsupported_format" else MalformedRecord
+        raise kind(f"{_text(parts)}: {error.detail}", tag) from None
+    found = classify(parts)
+    if found is None or found[1] != record.address:
+        raise AddressMismatch(f"{_text(parts)} holds {record.address}, not the record its path names", tag,
+                              record.address)
+    return StoredScopeRecord(record, tag, previous)
 
 
 def read_source(access: Access, source_id: str) -> StoredSource:
@@ -429,24 +457,73 @@ def _valid_segment(name: str) -> bool:
     return True
 
 
-def _discover_instances(access: Access, problems: list[LoadProblem]) -> dict[InstanceRef, StoredRecord]:
-    instances: dict[InstanceRef, StoredRecord] = {}
+@dataclass
+class _Campaigns:
+    instances: dict[InstanceRef, StoredRecord] = field(default_factory=dict)
+    scopes: dict[ScopeRef, StoredScopeRecord] = field(default_factory=dict)
+    chats: dict[ChatRef, StoredScopeRecord] = field(default_factory=dict)
+
+
+def _discover_instances(access: Access, problems: list[LoadProblem]) -> _Campaigns:
+    found = _Campaigns()
     for campaign in _listing(access, (CAMPAIGNS,), problems, None):
         try:
-            _discover_campaign(access, campaign, instances, problems)
+            _discover_campaign(access, campaign, found, problems)
         except OSError as error:  # an unreadable campaign folder: report it, load the rest
             problems.append(LoadProblem(_text((CAMPAIGNS, campaign)), "unreadable", str(error)))
-    return instances
+    return found
 
 
-def _discover_campaign(access: Access, campaign: str, instances: dict[InstanceRef, StoredRecord],
-                       problems: list[LoadProblem]) -> None:
+def campaign_instances(access: Access, campaign: str) -> tuple[InstanceRef, ...]:
+    """Canonically named instance files of one campaign (names only; links refused, never listed)."""
+    base = (CAMPAIGNS, campaign, INSTANCES)
+    if access.presence(base) != "present":
+        return ()
+    found = []
+    for kind in access.list_dir(base):
+        if not _valid_segment(kind) or not _is_dir(access, base + (kind,)):
+            continue
+        for name in access.list_dir(base + (kind,)):
+            hit = classify(base + (kind, name))
+            if hit is not None and hit[0] == "instance":
+                found.append(hit[1])
+    return tuple(sorted(found, key=str))  # type: ignore[arg-type]
+
+
+def _read_scoped(access: Access, parts: Parts, into: dict, problems: list[LoadProblem]) -> None:
+    try:
+        stored = read_scope_record(access, parts)
+    except (StoreError, ValueError, OSError) as error:
+        problems.append(LoadProblem(_text(parts), _code(error), str(error)))
+        return
+    into[stored.record.address] = stored
+
+
+def _discover_chats(access: Access, base: Parts, found: _Campaigns, problems: list[LoadProblem]) -> None:
+    folder = base + (CHATS,)
+    for name in _listing(access, folder, problems, None):
+        parts = folder + (name,)
+        hit = classify(parts)
+        if hit is None or hit[0] != "chat":
+            _unrecognized(access, parts, problems, None)
+            continue
+        _read_scoped(access, parts, found.chats, problems)
+
+
+def _discover_campaign(access: Access, campaign: str, into: _Campaigns, problems: list[LoadProblem]) -> None:
+    instances = into.instances
     base = (CAMPAIGNS, campaign)
     if not _is_dir(access, base) or not _valid_segment(campaign):
         _unrecognized(access, base, problems, None)
         return
     for entry in _listing(access, base, problems, None):
         if entry in RESERVED_CAMPAIGN_ENTRIES:
+            continue
+        if entry == SCOPE:
+            _read_scoped(access, base + (entry,), into.scopes, problems)
+            continue
+        if entry == CHATS and _is_dir(access, base + (entry,)):
+            _discover_chats(access, base, into, problems)
             continue
         if entry != INSTANCES or not _is_dir(access, base + (entry,)):
             _unrecognized(access, base + (entry,), problems, None)
@@ -543,13 +620,15 @@ def _load(access: Access) -> LibraryView:
             excluded |= blamed
             reported_excluded |= blamed
 
-    instances = _discover_instances(access, problems) if CAMPAIGNS in roots else {}
+    campaigns = _discover_instances(access, problems) if CAMPAIGNS in roots else _Campaigns()
+    instances = campaigns.instances
     broken = _broken(index, links, excluded - empty, dropped, instances)
     sources = {source_id: scan.stored for source_id, scan in scans.items()
                if source_id not in excluded and scan.stored is not None}
     dropped_refs = tuple(sorted((SourceRef(source_id, *key) for source_id, key in dropped), key=str))
     return LibraryView(index, MappingProxyType(sources), MappingProxyType(instances), tuple(problems),
-                       tuple(broken), tuple(sorted(reported_excluded)), dropped_refs)
+                       tuple(broken), tuple(sorted(reported_excluded)), dropped_refs,
+                       scopes=MappingProxyType(campaigns.scopes), chats=MappingProxyType(campaigns.chats))
 
 
 def _broken(index: DefinitionIndex, links: list[DefinitionLink], excluded: set[str],

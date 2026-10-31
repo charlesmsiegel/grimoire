@@ -16,6 +16,8 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   sources/<seg1>/…/<segN>/_source/manifest.json                   # one source's manifest
   sources/<segs>/_source/records/<kind>/<entity_id>/<revision>.json   # one definition revision
   campaigns/<campaign_id>/instances/<kind>/<instance_id>.json     # one campaign instance
+  campaigns/<campaign_id>/scope.json                              # the play scope (107)
+  campaigns/<campaign_id>/chats/<chat_id>.json                    # one chat record (107)
   .txn/lock, .txn/journal.json, .txn/*.new                        # writer lock, journal, staging
   .txn/discard.json                                               # an unfinished discard_journal
   .conflicts/<hash16>/<name>~<digest12>[.N]                       # preserved versions awaiting a human
@@ -34,6 +36,8 @@ The security audit, grants and approvals, and player sovereignty are persisted a
 - **Reserved names for later families**, which the loader skips silently:
   - at the root: `authority`, `config`, `assets`, `secrets`;
   - inside a campaign: `scenes`, `events`, `evidence`, `relations`.
+
+  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section).
 
   These follow the [architecture layout](ARCHITECTURE.md#storage-root-and-provisional-organization) and are a deliberate deviation from an earlier draft that reserved root-level `events`/`evidence`. No root entry is a [V1 marker name](ARCHITECTURE.md#library-location-and-v1-isolation-implemented-grimoirelibrary).
 - **Ignored silently:** OS and editor droppings (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `*~`, `*.swp`, `*.swo`, `.#*`) and directories with no file below them. Empty directories are not state: a failed commit can leave some behind, and nothing can remove them through the file seam. Per-target `.conflicts/<hash16>/` folders accumulate in the same way.
@@ -83,6 +87,41 @@ Fields:
 - Unknown keys are preserved.
 
 **`declared_by` is persisted by location, not as a field.** A link's declarer is always the manifest's own source. This is a deliberate deviation from "persist `declared_by`": it makes smuggling structurally impossible. A link that carries a `declared_by` key, or whose `subject` belongs to another source, is an `ownership` violation, and the whole manifest's source is excluded.
+
+### Scope record (`grimoire.scope-record/1`) — play scopes and chats (107)
+
+<a id="play-scopes-and-chats-107"></a>Added by [World-Optional Chat Scopes](roadmap/sprints/world-optional-chat-scopes.md) as an additive family; `record/1` and `source/1` are unchanged. Interpreted by [`grimoire.chats`](CHATS.md), never by the store.
+
+| Field | Written by | Meaning |
+|---|---|---|
+| `format` | store | Exact version; another is `unsupported_format` and never overwritten. |
+| `address` | caller | `campaign:<id>` (`ScopeRef`, at `scope.json`) or `campaign:<id>#chat/<chat_id>` (`ChatRef`, at `chats/<chat_id>.json`). Must equal what its path implies. |
+| `schema` | caller | The payload's schema id (nonempty, ≤ 128 chars). The envelope owns it, as in 009. |
+| `payload` | caller | Opaque JSON. |
+| `owner` | caller, optional | Attribution. |
+| `previous` | store | Etag of the replaced file. |
+| *other keys* | preserved | Unknown authored fields. |
+
+- `Transaction.put(ScopeRecord, expected)` runs every commit step a record put runs: guards, CAS, collisions (`Chats/`, `Scope.json`), `Permission.APPLY` on `campaigns/<id>/…`, journal, recovery and conflict preservation. One transaction may mix scope records, chats and instances.
+- `classify` recognises exactly the two new paths. Recovery therefore accepts journals that name them and nothing else.
+- A `chat_id` is limited to 123 characters by the file name.
+- `load()` adds `LibraryView.scopes` and `LibraryView.chats`. Bad files are contained per file, as for instances.
+- Anything else under `chats/` is `unrecognized`, including a sub-directory or a `chats` that is a file.
+- **Entity instances written by 107** carry the payload schema as a preserved top-level `"schema": "grimoire.entity/0"` key in `record/1`. See [ENTITIES](ENTITIES.md#provisional-payload-codec).
+
+**Rollback:** a pre-107 build reports `scope.json` and `chats/` as `unrecognized` and never writes or deletes them. It **cannot recover a journal that names them**: it raises `RecoveryFailed`, and reads then raise `PendingRecovery`. Recover with a 107+ build, or run `LibraryStore.discard_journal`, which does not interpret paths (tested).
+
+### Read-only helpers (107)
+
+All of these take the store lock, require a consistent library, and read listings and files only:
+
+- `read(ScopeRef | ChatRef)` returns a `StoredScopeRecord`.
+- `campaign_presence(id)` returns `absent`, `present`, or `mismatch` when only a look-alike folder exists.
+- `campaign_instances(id)` returns canonically named instance files across kinds. It reads names only and refuses links.
+- `check_source(source_id)` and `check_definition(ref)` run the loader's own scan-and-evaluate on **one** source:
+  - `check_definition` returns the definition `load()` would resolve, or a reason: `missing_source`, `excluded_source`, `entity_dropped`, `missing_entity` or `missing_revision`.
+  - Parity with `load()` is tested across bad and implicit heads, kind reuse, ownership, unreadable revisions and missing manifests.
+  - A cross-source `identity_conflict` is visible only to `load()`.
 
 ## Writing
 

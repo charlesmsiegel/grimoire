@@ -13,7 +13,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from grimoire.core.identity import InstanceRef, SourceRef, parse_ref, validate_segment, validate_source_id
+from grimoire.core.identity import (
+    ChatRef, InstanceRef, ScopeRef, SourceRef, parse_ref, validate_segment, validate_source_id,
+)
 from grimoire.core.index import DIRECTED_RELATIONS, SYMMETRIC_RELATIONS
 
 from .errors import InvalidEnvelope
@@ -21,12 +23,15 @@ from .jsonfmt import MAX_DEPTH, check_writable, depth_exceeds, freeze, is_etag, 
 
 RECORD_FORMAT = "grimoire.record/1"
 SOURCE_FORMAT = "grimoire.source/1"
+SCOPE_RECORD_FORMAT = "grimoire.scope-record/1"
+SCHEMA_MAX = 128
 
 _RECORD_FIELDS = frozenset({"format", "address", "payload", "name", "owner", "derived_from", "base",
                             "base_etag", "previous"})
 _INSTANCE_ONLY = ("derived_from", "base", "base_etag")
 _SOURCE_FIELDS = frozenset({"format", "source", "owner", "title", "heads", "links", "previous"})
 _LINK_FIELDS = frozenset({"subject", "relation", "object"})
+_SCOPE_RECORD_FIELDS = frozenset({"format", "address", "schema", "owner", "payload", "previous"})
 RELATIONS = SYMMETRIC_RELATIONS | DIRECTED_RELATIONS
 
 Address = SourceRef | InstanceRef
@@ -122,6 +127,37 @@ def _parse_source_ref(text: str, label: str) -> SourceRef:
         return SourceRef.parse(text)
     except ValueError as error:
         raise InvalidEnvelope(f"{label}: {error}") from None
+
+
+ScopeAddress = ScopeRef | ChatRef
+
+
+@dataclass(frozen=True)
+class ScopeRecord:
+    """A play-scope (``ScopeRef``) or chat (``ChatRef``) record with an opaque payload.
+
+    The envelope owns the address and the payload's schema id; the store never
+    interprets either payload. Unknown top-level fields are preserved in ``extra``.
+    """
+
+    address: ScopeAddress
+    schema: str
+    payload: object = None
+    owner: str | None = None
+    extra: Mapping[str, object] = field(default_factory=_empty)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.address, (ScopeRef, ChatRef)):
+            raise InvalidEnvelope("a scope record's address must be a ScopeRef or ChatRef")
+        if type(self.schema) is not str or not self.schema.strip() or len(self.schema) > SCHEMA_MAX:
+            raise InvalidEnvelope(f"schema must be nonempty text of at most {SCHEMA_MAX} characters")
+        _optional_text(self.owner, "owner", nonempty=True)
+        object.__setattr__(self, "payload", _freeze(self.payload))
+        object.__setattr__(self, "extra", _frozen_extra(self.extra, _SCOPE_RECORD_FIELDS))
+
+    def check_writable(self) -> None:
+        check_writable(self.payload)
+        check_writable(self.extra)
 
 
 @dataclass(frozen=True)
@@ -228,6 +264,15 @@ def record_document(envelope: RecordEnvelope, previous: str | None) -> dict[str,
     return document
 
 
+def scope_record_document(record: ScopeRecord, previous: str | None) -> dict[str, object]:
+    document: dict[str, object] = dict(thaw(record.extra))  # type: ignore[arg-type]
+    document.update(format=SCOPE_RECORD_FORMAT, address=str(record.address), schema=record.schema,
+                    payload=thaw(record.payload), previous=previous)
+    if record.owner is not None:
+        document["owner"] = record.owner
+    return document
+
+
 def source_document(manifest: SourceManifest, previous: str | None) -> dict[str, object]:
     document: dict[str, object] = dict(thaw(manifest.extra))  # type: ignore[arg-type]
     document.update(
@@ -297,3 +342,22 @@ def parse_source(document: Mapping[str, object]) -> tuple[SourceManifest, str | 
     except InvalidEnvelope as error:
         raise EnvelopeError("malformed", str(error)) from None
     return manifest, _previous(document)
+
+
+def parse_scope_record(document: Mapping[str, object]) -> tuple[ScopeRecord, str | None]:
+    _format(document, SCOPE_RECORD_FORMAT)
+    text = document.get("address")
+    address: ScopeAddress
+    try:
+        address = ChatRef.parse(text) if isinstance(text, str) and "#" in text else ScopeRef.parse(text)
+    except ValueError as error:
+        raise EnvelopeError("malformed", f"address: {error}") from None
+    if "payload" not in document:
+        raise EnvelopeError("malformed", "missing payload")
+    extra = {key: value for key, value in document.items() if key not in _SCOPE_RECORD_FIELDS}
+    try:
+        record = ScopeRecord(address, document.get("schema"), document["payload"],  # type: ignore[arg-type]
+                             owner=document.get("owner"), extra=extra)  # type: ignore[arg-type]
+    except InvalidEnvelope as error:
+        raise EnvelopeError("malformed", str(error)) from None
+    return record, _previous(document)

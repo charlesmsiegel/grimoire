@@ -20,7 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
-from grimoire.core.identity import InstanceRef, SourceRef
+from grimoire.core.identity import ChatRef, IdentityConflict, InstanceRef, ScopeRef, SourceRef, validate_segment
+from grimoire.core.index import DefinitionIndex, SourceDescriptor
 from grimoire.library import LibraryPathError, check_write_destination
 from grimoire.security import Permission, ResourcePath
 
@@ -28,7 +29,8 @@ from . import engine, loader
 from .diskops import DiskOps, FileOps, is_link, lstat_or_none
 from .engine import Access, Settlement
 from .envelope import (
-    EnvelopeError, RecordEnvelope, SourceManifest, parse_record, parse_source, record_document, source_document,
+    EnvelopeError, RecordEnvelope, ScopeRecord, SourceManifest, parse_record, parse_scope_record, parse_source,
+    record_document, scope_record_document, source_document,
 )
 from .errors import (
     CommitIncomplete, ImmutableRevision, InvalidEnvelope, InvalidSourceState, LinkRefused, NameCollision,
@@ -39,12 +41,12 @@ from .guard import Guard, Limits, RootIdentity
 from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import JsonError, etag, is_etag, parse_strict, render
 from .layout import (
-    CONFLICTS, DISCARD_MARKER, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER, REPAIR_MARKER, TXN, Parts,
+    CAMPAIGNS, CONFLICTS, DISCARD_MARKER, INSTANCES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER, REPAIR_MARKER, TXN, Parts,
     address_parts, classify, conflict_parts, definition_parts, instance_parts, ledger_folder, ledger_name,
     ledger_parts, ledger_seq, logical, manifest_parts,
 )
 from .ledger import Head, Ledger, read_ledger, render_batches
-from .loader import LibraryView, StoredRecord, StoredSource
+from .loader import LibraryView, StoredDefinition, StoredRecord, StoredScopeRecord, StoredSource
 from .lock import Locker, OsLocker
 
 DISCARD_FORMAT = "grimoire.discard/1"
@@ -427,13 +429,71 @@ class LibraryStore:
             return report
 
     # -- reading -----------------------------------------------------------------
-    def read(self, ref: SourceRef | InstanceRef) -> StoredRecord:
+    def read(self, ref: SourceRef | InstanceRef | ScopeRef | ChatRef) -> StoredRecord | StoredScopeRecord:
         """One record by exact address (a definition must be pinned)."""
         if isinstance(ref, SourceRef) and not ref.pinned:
             raise ValueError("read a pinned revision; resolve unpinned references with load().index")
         with self.lock:  # reads wait for this process's commits, so they never see one half-done
             self._require_consistent()
+            if isinstance(ref, (ScopeRef, ChatRef)):
+                return loader.read_scope_record(self._access, address_parts(ref))
             return loader.read_record(self._access, address_parts(ref))
+
+    def campaign_presence(self, campaign_id: str) -> str:
+        """``absent``, ``present`` or ``mismatch`` (only a look-alike folder) for ``campaigns/<id>``."""
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return self._access.presence((CAMPAIGNS, campaign_id))
+
+    def campaign_instances(self, campaign_id: str) -> tuple[InstanceRef, ...]:
+        """Every canonically named instance file of one campaign, across kinds; reads no content."""
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return loader.campaign_instances(self._access, campaign_id)
+
+    def check_source(self, source_id: str) -> StoredSource | str:
+        """One source as ``load()`` would admit it, or why not (``missing_source``/``excluded_source``).
+
+        Scans only that source, so its cost does not grow with the library. Exclusions that
+        only a whole-library build can see (two sources' ``identity_conflict``) are not detected.
+        """
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                scan = loader.contained_scan(self._access, source_id)
+        verdict = _scan_verdict(scan)
+        return verdict if verdict is not None else scan.stored  # type: ignore[return-value]
+
+    def check_definition(self, ref: SourceRef) -> StoredDefinition | str:
+        """The definition ``ref`` resolves to under ``load()``'s rules for its own source, or a reason.
+
+        Reasons: ``missing_source``, ``excluded_source``, ``entity_dropped``, ``missing_entity``,
+        ``missing_revision``. An unpinned ref follows the declared head, or the only revision.
+        Same scope limit as ``check_source``.
+        """
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                scan = loader.contained_scan(self._access, ref.source)
+        verdict = _scan_verdict(scan)
+        if verdict is not None:
+            return verdict
+        definitions, heads, dropped, _ = loader.evaluate(scan)
+        if (ref.kind, ref.entity_id) in dropped:
+            return "entity_dropped"
+        manifest = scan.stored.manifest  # type: ignore[union-attr]
+        try:
+            index = DefinitionIndex([SourceDescriptor(ref.source, manifest.owner, manifest.title)], definitions, heads)
+        except IdentityConflict:
+            return "excluded_source"
+        broken = index.check(ref)
+        if broken is not None:
+            return broken.reason
+        return index.resolve(ref)  # type: ignore[return-value]
 
     def read_source(self, source_id: str) -> StoredSource:
         with self.lock:
@@ -471,13 +531,22 @@ class LibraryStore:
         return Transaction(self)
 
 
+def _scan_verdict(scan: loader.SourceScan) -> str | None:
+    """Why ``load()`` would not admit this source, or ``None``."""
+    if scan.excluded_by:
+        return "excluded_source"
+    if scan.stored is None:
+        return "excluded_source" if scan.revisions else "missing_source"
+    return None
+
+
 @dataclass(frozen=True)
 class _Put:
     parts: Parts
     address: ResourcePath
     data: bytes
     expected: str | None
-    envelope: RecordEnvelope | SourceManifest | None  # None: a ledger batch (create-only, trusted)
+    envelope: RecordEnvelope | SourceManifest | ScopeRecord | None  # None: a ledger batch (trusted)
 
     @property
     def ledger(self) -> bool:
@@ -540,7 +609,7 @@ class Transaction:
         self._puts: dict[Parts, _Put] = {}
         self._committed = False
 
-    def put(self, envelope: RecordEnvelope | SourceManifest, expected: str | None) -> str:
+    def put(self, envelope: RecordEnvelope | SourceManifest | ScopeRecord, expected: str | None) -> str:
         """Stage a write; ``expected`` is the etag read, or ``None`` for "must not exist yet"."""
         if self._committed:
             raise StoreError("this transaction was already committed")
@@ -556,8 +625,12 @@ class Transaction:
                 raise ImmutableRevision(f"{envelope.address} exists; add a new revision and move the head")
             parts = address_parts(envelope.address)
             document = record_document(envelope, expected)
+        elif isinstance(envelope, ScopeRecord):
+            envelope.check_writable()
+            parts = address_parts(envelope.address)
+            document = scope_record_document(envelope, expected)
         else:
-            raise InvalidEnvelope("put takes a RecordEnvelope or a SourceManifest")
+            raise InvalidEnvelope("put takes a RecordEnvelope, a SourceManifest or a ScopeRecord")
         if parts in self._puts:
             raise InvalidEnvelope(f"{'/'.join(parts)} is written twice in one transaction")
         address = logical(parts)
@@ -656,7 +729,7 @@ class _Commit:
             if current != put.expected:
                 stale.append(("/".join(put.parts), "exists" if put.expected is None else
                               "absent" if current is None else "changed"))
-            elif data is not None and not put.ledger and _unsupported(data, isinstance(put.envelope, SourceManifest)):
+            elif data is not None and not put.ledger and _unsupported(data, put.envelope):
                 stale.append(("/".join(put.parts), "unsupported_format"))
         if stale:
             raise StaleWrite(stale)
@@ -673,7 +746,7 @@ class _Commit:
             if isinstance(put.envelope, SourceManifest):
                 entry = touched.setdefault(put.envelope.source, (None, []))
                 touched[put.envelope.source] = (put.envelope, entry[1])
-            elif put.envelope.is_definition:
+            elif isinstance(put.envelope, RecordEnvelope) and put.envelope.is_definition:
                 ref = put.envelope.address
                 assert isinstance(ref, SourceRef)
                 touched.setdefault(ref.source, (None, []))[1].append(ref)
@@ -753,10 +826,12 @@ class _Commit:
             raise
 
 
-def _unsupported(data: bytes, manifest: bool) -> bool:
+def _unsupported(data: bytes, envelope: object) -> bool:
     """Whether the current file is a format this store must not overwrite (a newer version)."""
+    parse = (parse_source if isinstance(envelope, SourceManifest) else
+             parse_scope_record if isinstance(envelope, ScopeRecord) else parse_record)
     try:
-        (parse_source if manifest else parse_record)(parse_strict(data))
+        parse(parse_strict(data))
     except EnvelopeError as error:
         return error.code == "unsupported_format"
     except JsonError:
