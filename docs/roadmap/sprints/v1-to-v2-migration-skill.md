@@ -34,6 +34,22 @@ The skill `.agents/skills/migrate-v1-to-v2/SKILL.md` already exists but is *docu
 
 **Parallelism:** consumes only Wave 1 ID and path contracts plus the tagged V1 file formats. This scanner does **not** import 009's facets, 010's storage or 018's V2 image-store code. The future 026 importer consumes the reviewable manifest. See [Wave 2 handoffs](../WAVE2_HANDOFFS.md#parallel-ownership-and-handoffs).
 
+## First-slice status
+
+Implemented as `grimoire.migrate_v1` (`python -m grimoire.migrate_v1 scan`), documented in [the inventory contract](../../MIGRATION_INVENTORY.md); the [migration skill](../../../.agents/skills/migrate-v1-to-v2/SKILL.md) now invokes it. Against a synthetic 0.2.1 library (checked against V1 0.2.1's own readers) the tests prove:
+- one image object stays distinct from its avatar and expression placements;
+- same-named characters in two worlds get distinct, unlinked candidates;
+- a PC is a `character` whose instance control comes from its V1 role, and a portrayal is a separate entity;
+- scene posts keep V1's order and authorship;
+- a hidden inherited picture and a campaign crop are reported as such, and a dangling reference is reported, not substituted;
+- repeated scans are byte-identical, the source is unchanged, and an audit hook sees no write, spawn or socket.
+
+Failure tests cover links, junctions, FIFOs, sockets, mount points, unreadable and oversized files, malformed and hostile JSON, refused and colliding path spellings, newer formats, full-copy campaigns, corrupt ledgers, unsynced expression layers, tampered blobs, identity collisions and a source edited mid-scan.
+
+`grimoire.library.check_report_destination` was added so the report can never land in, or under, a source, destination or V1 library.
+
+The fixture deliberately crops the inherited avatar campaign-side, so acceptance F reports that avatar as `focus_override` rather than `inherited`. The `inherited`, `overridden` and library-hide states are each tested separately.
+
 ## Open questions
-- What user-visible review, failure and rollback flows must the implementation spec prove?
-- Which optional later integrations can stay outside the first slice?
+- ~~What user-visible review, failure and rollback flows must the implementation spec prove?~~ Review: summary + manifest with `findings`, `losses`, `unresolved` and `status`; nothing to roll back because nothing is written except the user-chosen report (published atomically, 0600). Failure: exit codes 2–5; a blocked inventory must be refused by the importer.
+- ~~Which optional later integrations can stay outside the first slice?~~ Pixel-id re-verification, full-copy campaign reconstruction, ledger semantics (knowledge, relationships, chronicle), reroll/response-variant contents, VN presentation history, sheets/modules and zip input; see the contract's known limits.

@@ -16,7 +16,7 @@ Pass conditions for the Wave 2 scanner:
 6. Refuses external symlink traversal, corrupt records and unsupported formats safely; rerunning is idempotent and source input hashes remain unchanged.
 7. Makes **zero network/model requests** and no paid inference calls; if a future optional analyzer is proposed, it is a separate opt-in operation with a visible budget and reviewable output.
 
-**This preview must not call the V2 canonical writer.** Wave 4 owns staged asset copying, approval, apply, crash recovery and rendering verification. The skill remains merely a specification until the runnable scanner has passed the above tests.
+**This preview must not call the V2 canonical writer.** Wave 4 owns staged asset copying, approval, apply, crash recovery and rendering verification. Sprint 011's scanner (`python -m grimoire.migrate_v1 scan`, [contract](../../../../docs/MIGRATION_INVENTORY.md)) passes these conditions against the synthetic fixture in `backend/tests/v1_fixture.py`; see `backend/tests/test_migrate_v1_*.py`.
 
 ## Before any apply
 

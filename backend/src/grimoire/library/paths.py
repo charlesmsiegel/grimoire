@@ -127,6 +127,45 @@ def check_migration_paths(source: str | os.PathLike[str] | None, destination: st
     return src, dst
 
 
+def check_report_destination(path: str | os.PathLike[str], *,
+                             protected: Iterable[tuple[str, str | os.PathLike[str]]] = (),
+                             overwrite: bool = False, environ: Mapping[str, str] | None = None,
+                             home: Path | None = None) -> Path:
+    """Where a read-only tool may write one report file, resolved. Creates nothing.
+
+    The file is refused when it is, or sits inside, a V1 library (the guarded
+    roots, or a directory that looks like one) or one of the `protected` roots,
+    such as a migration's source and destination. A directory that merely
+    *contains* one of them is fine: a report beside a scanned library is not in
+    it. The parent must already exist; an existing file is replaced only with
+    `overwrite`, and only when it is a regular file rather than a link.
+
+    The check is point-in-time: a writer re-checks the parent's identity before
+    publishing, and creates its temporary file exclusively.
+    """
+    environ = os.environ if environ is None else environ
+    known = _known_home(home)
+    raw = _parse_user_path(_fspath(path), known, "report")
+    name = raw.name
+    if name in ("", ".", "..") or (_default_platform() == "win32" and ":" in name):
+        raise LibraryPathError(f"report: {str(raw)!r} does not name a file")
+    parent = _realpath(raw.parent)
+    info = _probe(parent)
+    if info is None or not stat.S_ISDIR(info.st_mode):
+        raise LibraryPathError(f"report: the directory {parent} does not exist")
+    target = parent / name
+    roots = _guarded_roots(environ, known) + [
+        (label, _realpath(_parse_user_path(_fspath(root), known, label))) for label, root in protected]
+    _check_isolation(target, roots, refuse_contains=False)
+    existing = _probe(target, follow=False)
+    if existing is not None:
+        if not stat.S_ISREG(existing.st_mode):
+            raise LibraryPathError(f"report: {target} exists and is not a regular file")
+        if not overwrite:
+            raise LibraryPathError(f"report: {target} already exists; choose another name or overwrite it")
+    return target
+
+
 # ---- parsing and normalization ---------------------------------------------------
 
 def _default_platform() -> str:
@@ -514,14 +553,20 @@ def _looks_like_v1(directory: Path) -> bool:
         _probe(directory / name, follow=False) is not None for name in V1_ROOT_MARKERS)
 
 
-def _check_isolation(path: Path, roots: list[tuple[str, Path]], *, fingerprint: bool = True) -> None:
+def _check_isolation(path: Path, roots: list[tuple[str, Path]], *, fingerprint: bool = True,
+                     refuse_contains: bool = True) -> None:
+    """Refuse `path` when it is, sits inside or (unless `refuse_contains` is
+    false, as for a single file) contains one of `roots`, or when `fingerprint`
+    finds what looks like a V1 library at or above it."""
     mounts = _mounts()
     names = _aliases(path, mounts)
     for label, root in roots:
         root_names = _aliases(root, mounts)
+        refusable = lambda r: r is not None and (refuse_contains or r != "contains")  # noqa: E731
         relation = next((r for name in names for root_name in root_names
-                         if (r := _lexical_relation(name, root_name))), None)
-        relation = relation or _identity_relation(path, root)
+                         if refusable(r := _lexical_relation(name, root_name))), None)
+        if relation is None and refusable(identity := _identity_relation(path, root)):
+            relation = identity
         if relation is not None:
             raise V1IsolationError(f"refusing {path}: it {relation} {label} ({root})")
     if fingerprint:
