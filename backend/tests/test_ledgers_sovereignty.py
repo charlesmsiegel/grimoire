@@ -231,3 +231,18 @@ def test_a_linked_campaign_ledger_is_never_written_through(library, tmp_path):
         SovereigntyLedger(authority).record("c1", ControlChange("c1", "wren", P1),
                                             authority.handle_for(OWNER, trusted=True))
     assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize("value", [
+    Correction("c1", "claim-1", OWNER, None),  # the constructor accepts it; the decoder would not
+    Correction("c1", "claim-1", OWNER, 7),
+], ids=["none-note", "int-note"])
+def test_a_value_replay_could_not_read_back_is_refused_before_it_is_written(library, value):
+    store, authority, locker = library
+    with pytest.raises(AuthorityError, match="replay|note"):
+        SovereigntyLedger(authority).record("c1", value, authority.handle_for(OWNER, trusted=True))
+    assert not authority.poisoned and not (store.root / "authority" / "campaigns").exists()
+    store, authority = _reopen(store, authority, locker)
+    assert SovereigntyLedger(authority).load("c1").corrections == ()
+    authority.close()
+    store.close()

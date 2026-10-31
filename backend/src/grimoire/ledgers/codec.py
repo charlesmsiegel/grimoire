@@ -14,6 +14,7 @@ from grimoire.core.authority import Correction, Delegation, Revocation
 from grimoire.core.identity import validate_segment
 from grimoire.security import Approval, AuditRecord, Grant, Permission, Reason, ResourcePath
 from grimoire.store.errors import LedgerInvalid
+from grimoire.store.jsonfmt import parse_strict, render
 
 SCHEMA = 1
 MAX_ID = 128
@@ -40,15 +41,19 @@ def check_size(value: object, label: str, limit: int) -> None:
         raise ValueError(f"{label} must be text of at most {limit} characters")
 
 
-def _replayable(path: ResourcePath, label: str) -> str:
-    """The path's text, if replay will parse it back to the same path (its length is limited)."""
-    text = str(path)
+def _readable(fields: dict[str, object], reads_back) -> dict[str, object]:
+    """``fields`` if replay decodes their stored bytes to the value encoded, else ``ValueError``.
+
+    Constructors accept some values the strict decoder does not (a ``None`` note, a path
+    longer than ``ResourcePath.parse`` allows); storing one would make the ledger unreadable.
+    """
     try:
-        if ResourcePath.parse(text) == path:
-            return text
-    except ValueError:
-        pass
-    raise ValueError(f"the {label} cannot be stored: replay would not read it back (too long)")
+        same = reads_back(parse_strict(render(fields)))
+    except (ValueError, TypeError, LedgerInvalid):
+        same = False
+    if not same:
+        raise ValueError("this value cannot be stored: replay would not read it back")
+    return fields
 
 
 def _exact(entry: Mapping[str, object], kind: str, keys: set[str]) -> Mapping[str, object]:
@@ -88,9 +93,10 @@ def encode_grant(grant: Grant) -> dict[str, object]:
     if type(grant) is not Grant:
         raise ValueError("expected a Grant")
     check_size(grant.grant_id, "grant_id", MAX_ID)
-    return {"grant_id": grant.grant_id, "principal": grant.principal,
-            "permissions": sorted(p.value for p in grant.permissions), "scope": _replayable(grant.scope, "scope"),
-            "granted_by": grant.granted_by}
+    fields = {"grant_id": grant.grant_id, "principal": grant.principal,
+              "permissions": sorted(p.value for p in grant.permissions), "scope": str(grant.scope),
+              "granted_by": grant.granted_by}
+    return _readable(fields, lambda data: decode_grant(data) == grant)
 
 
 def decode_grant(data: object) -> Grant:
@@ -108,10 +114,11 @@ def encode_approval(approval: Approval, pinned_grant: str) -> dict[str, object]:
     if type(approval) is not Approval:
         raise ValueError("expected an Approval")
     check_size(approval.approval_id, "approval_id", MAX_ID)
-    return {"approval_id": approval.approval_id, "principal": approval.principal,
-            "permission": approval.permission.value, "resource": _replayable(approval.resource, "resource"),
-            "payload_digest": approval.payload_digest, "approved_by": approval.approved_by,
-            "grant_id": pinned_grant}
+    fields = {"approval_id": approval.approval_id, "principal": approval.principal,
+              "permission": approval.permission.value, "resource": str(approval.resource),
+              "payload_digest": approval.payload_digest, "approved_by": approval.approved_by,
+              "grant_id": pinned_grant}
+    return _readable(fields, lambda data: decode_approval(data) == (approval, pinned_grant))
 
 
 def decode_approval(data: object) -> tuple[Approval, str]:
@@ -157,6 +164,11 @@ _DELEGATION = ("campaign_id", "delegation_id", "actor_id", "granted_by", "domain
 
 def encode_sovereignty(value: object) -> tuple[str, dict[str, object]]:
     """``(kind, fields)`` for a ControlChange, Delegation, Revocation or Correction."""
+    kind, fields = _sovereignty_fields(value)
+    return kind, _readable(fields, lambda data: decode_sovereignty(kind, data) == value)
+
+
+def _sovereignty_fields(value: object) -> tuple[str, dict[str, object]]:
     if type(value) is ControlChange:
         check_size(value.controller_id, "controller_id", 512)
         return "control", {"campaign_id": value.campaign_id, "actor_id": value.actor_id,
