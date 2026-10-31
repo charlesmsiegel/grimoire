@@ -9,7 +9,7 @@
 - **Authority:** portable native Markdown/JSON, stored scene text, events, typed relations, image placement associations and reviewed mappings. Never import cache, credentials, logs or inferred private details as facts.
 - **Cost:** source scanning, image mapping, graph building and ordinary migration verification do not call paid models. Optional content extraction is explicitly consented and billed.
 
-The repository includes an *early migration skill specification*, [`migrate-v1-to-v2`](../.agents/skills/migrate-v1-to-v2/SKILL.md), with [V1 file mapping](../.agents/skills/migrate-v1-to-v2/references/v1-layout.md), [art/expressions](../.agents/skills/migrate-v1-to-v2/references/images.md) and [verification](../.agents/skills/migrate-v1-to-v2/references/verification.md). **Neither executable scanning nor import/apply is implemented at this baseline.** Wave 2 must deliver the executable read-only scanner, while the canonical writer and guarded import/apply are separately owned by 010 and 026. See [Wave 2 handoffs](roadmap/WAVE2_HANDOFFS.md).
+The repository includes an *early migration skill specification*, [`migrate-v1-to-v2`](../.agents/skills/migrate-v1-to-v2/SKILL.md), with [V1 file mapping](../.agents/skills/migrate-v1-to-v2/references/v1-layout.md), [art/expressions](../.agents/skills/migrate-v1-to-v2/references/images.md) and [verification](../.agents/skills/migrate-v1-to-v2/references/verification.md). **The executable read-only scanner is implemented** (`python -m grimoire.migrate_v1 scan`, [contract](MIGRATION_INVENTORY.md)); **import/apply is not.** The canonical writer and guarded import/apply are separately owned by 010 and 026. See [Wave 2 handoffs](roadmap/WAVE2_HANDOFFS.md).
 
 ## Migration milestones in delivery order
 

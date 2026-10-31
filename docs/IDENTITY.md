@@ -21,7 +21,9 @@ A name, a legacy V1 slug or an inherited portrayal is never identity. Two defini
 
 The scheme makes the three forms mutually unambiguous. `parse_ref` dispatches on it. Parsing **rejects rather than normalizes**: whitespace, uppercase, non-ASCII, empty segments and stray separators are all errors. So `parse(str(x)) == x` exactly.
 
-`CampaignActor.ref` is the actor's `InstanceRef`. Campaign and actor IDs on actors, control assignments, events, observations and beliefs obey the segment grammar.
+`CampaignActor.ref` and `EntityInstance.ref` are `InstanceRef`s. Campaign and actor IDs on actors and control assignments obey the segment grammar, as do the [knowledge](KNOWLEDGE.md) record IDs, references and channels (scene/turn labels, `authored_by` and `contribution_id` are free text, as in player sovereignty); evidence holders and other actors there are `InstanceRef`s.
+
+**An instance id is unique within a campaign across kinds and is never reused for a different individual**, mirroring entity-ID uniqueness within a source. That keeps the segment that authority and intent use (`actor_id`) unambiguous; `CampaignRoster` converts between it and the full `InstanceRef` ([entity facets](ENTITIES.md#control-the-campaign-roster)). Enforcing no-reuse across history belongs to the file store and sync sprints.
 
 ## Revisions, pins and portrayals
 

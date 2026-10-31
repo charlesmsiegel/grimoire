@@ -15,14 +15,16 @@ STORE = SRC / "grimoire" / "store"
 #: What the store may import from grimoire. A 009 facet module is outside it by default.
 ALLOWED = ("grimoire.core.identity", "grimoire.core.index", "grimoire.library", "grimoire.security",
            "grimoire.store")
-#: Exactly what ``import grimoire.store`` loads today. ``grimoire.core``'s package
-#: ``__init__`` re-exports model and authority, so they load; anything new fails here.
+#: Exactly what ``import grimoire.store`` itself loads; anything new fails here.
+#: ``grimoire.core``'s package ``__init__`` re-exports the entity modules (009), so,
+#: as in test_entity_isolation, the package is stubbed to load only what the store imports.
 EXPECTED_RUNTIME = {
-    "grimoire", "grimoire.core", "grimoire.core.authority", "grimoire.core.identity", "grimoire.core.index",
-    "grimoire.core.model", "grimoire.core.resolve", "grimoire.library", "grimoire.library.paths",
-    "grimoire.security", "grimoire.security.authorizer", "grimoire.security.policy",
+    "grimoire", "grimoire.core", "grimoire.core.identity", "grimoire.core.index", "grimoire.library",
+    "grimoire.library.paths", "grimoire.security", "grimoire.security.authorizer", "grimoire.security.policy",
     "grimoire.security.resource",
 }
+_STUB_CORE = ("import sys, types; core = types.ModuleType('grimoire.core'); "
+              f"core.__path__ = [{str(SRC / 'grimoire' / 'core')!r}]; sys.modules['grimoire.core'] = core; ")
 
 
 def _grimoire_imports(path: Path) -> list[str]:
@@ -49,7 +51,7 @@ def test_store_imports_only_identity_paths_and_authority():
 
 
 def test_importing_the_store_loads_no_unexpected_grimoire_module():
-    code = ("import json, sys; import grimoire.store; "
+    code = (_STUB_CORE + "import json; import grimoire.store; "
             "print(json.dumps(sorted(m for m in sys.modules if m.split('.')[0] == 'grimoire')))")
     output = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
                             env={**os.environ, "PYTHONPATH": str(SRC)}).stdout

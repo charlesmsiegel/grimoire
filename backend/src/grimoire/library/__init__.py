@@ -11,6 +11,7 @@ from .paths import (
     LibraryPathError,
     V1IsolationError,
     check_migration_paths,
+    check_report_destination,
     check_write_destination,
     resolve_library,
 )
@@ -18,6 +19,6 @@ from .paths import (
 __all__ = [
     "DEFAULT_DIRNAME", "V1_DEFAULT_DIRNAME", "V1_HOME_ENV", "V1_POINTER_NAME",
     "V1_ROOT_MARKERS", "V2_HOME_ENV", "LibraryLocation", "LibraryPathError",
-    "V1IsolationError", "check_migration_paths", "check_write_destination",
+    "V1IsolationError", "check_migration_paths", "check_report_destination", "check_write_destination",
     "resolve_library",
 ]

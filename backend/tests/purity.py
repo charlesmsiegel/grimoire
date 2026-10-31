@@ -63,13 +63,15 @@ def _impure_module_attribute(module_name: str, attr: str) -> bool:
 #: edge included (whose ``importlib.resources`` legitimately loads ``tempfile``).
 NETWORK_MODULES = ("socket", "ssl", "select", "selectors", "http.client", "urllib.request",
                    "subprocess", "multiprocessing", "asyncio", "ctypes", "sqlite3",
-                   "grimoire.ledgers", "grimoire.library", "grimoire.store", "grimoire.testing")
+                   "grimoire.capture", "grimoire.ledgers", "grimoire.library", "grimoire.providers",
+                   "grimoire.store", "grimoire.testing")
 #: ...and what its pure modules must not pull in either.
 CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob", "random", "time",
                                          "datetime", "uuid", "secrets")
 
 #: grimoire packages that are adapters or test infrastructure, not pure.
-ADAPTERS = frozenset({"grimoire.ledgers", "grimoire.library", "grimoire.store", "grimoire.testing"})
+ADAPTERS = frozenset({"grimoire.capture", "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1",
+                      "grimoire.providers", "grimoire.store", "grimoire.testing"})
 
 
 @dataclass(frozen=True)
@@ -97,8 +99,13 @@ PURE_PACKAGES = (
     PurePackage("grimoire.core.inference", ("grimoire.core.inference",)),
     PurePackage("grimoire.intent", ("grimoire.intent",)),
     PurePackage("grimoire.security", ("grimoire.security",)),
-    # Offline evaluation: independent of the domain core; only its loader and CLI read files.
-    PurePackage("grimoire.evals", ("grimoire.evals",),
+    # Voice evidence: shares the gate's text matcher so screening and scoring agree.
+    PurePackage("grimoire.voice", ("grimoire.voice", "grimoire.core", "grimoire.evals.text",
+                                   "grimoire.evals.checks"),
+                never_import=("grimoire.core.inference",)),
+    # Offline evaluation: of the domain core it uses only the inference contracts (sprint 015);
+    # only its loader and CLI read files.
+    PurePackage("grimoire.evals", ("grimoire.evals", "grimoire.core.inference"),
                 io_modules=frozenset({"loader.py", "story_quality.py"}),
                 io_stdlib=frozenset({"json", "pathlib", "importlib.resources", "sys", "argparse"}),
                 io_names=frozenset({"print"})),

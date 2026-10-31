@@ -47,7 +47,17 @@ Port only enough of the V0.2.1 inference stack to issue an **authorized planned 
 
 **Parallelism:** use synthetic opaque prompt payloads. 013 must neither import 014's voice prompt compiler nor 015's offline story-quality runner; both will consume its stable adapter/results when ready. See [Wave 2 handoffs](../WAVE2_HANDOFFS.md#providervoicequality-boundaries-013--014--015--027).
 
+## First-slice status
+
+Milestone 1's adapter exists as [`grimoire.providers`](../../PROVIDERS.md) (OpenAI-compatible streaming over stdlib `http.client`). It covers:
+- planned-call and destination-bound `execute` enforcement;
+- per-attempt booking with `None` for unreported counts;
+- fail-visibly retries and fallbacks;
+- a scripted fake and an exhaustive fault explorer.
+
+Measured per-task *cost* is token usage only; money is deferred. The proving scenario "a model outage falls back or fails visibly" is `backend/tests/test_providers_adapter.py::test_a2_outage_falls_back_visibly` and `test_a3_outage_without_fallback_fails_visibly`. "Never silently redone" is `test_a4_completed_call_is_never_redone`.
+
 ## Open questions
-- How are token accounting discrepancies handled?
+- How are token accounting discrepancies handled? *First answer:* keep the whole counts, drop inconsistent slices to `None` and note it; never raise, never zero-fill ([PROVIDERS](../../PROVIDERS.md)).
 - What objective signals trigger more expensive models?
 - Which jobs may use local-only providers?

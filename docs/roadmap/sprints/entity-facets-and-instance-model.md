@@ -1,5 +1,7 @@
 # Composable entities, facets and campaign instances
 
+**Status:** first slice implemented as pure in-memory values; see the [entity facets contract](../../ENTITIES.md). A person, a species, a particular creature and a sentient sword share one `EntityDefinition` type with typed facets; campaign `EntityInstance`s carry added/replaced capabilities and state; `CampaignRoster` reconciles `InstanceRef` with the segment-keyed authority and intent APIs. The sentient-sword scenario (carried, damaged, heard, addressed, played by a human) is proven on **synthetic fixtures** only. Not persisted (010 owns the store; a provisional payload codec is proven against a neutral in-memory envelope), no relations (017), no runner.
+
 **Outcome:** Replace exclusive Character, PC, Creature, Item and Location backend types with stable entities plus validated, composable capabilities.
 
 ## Scope and first proof

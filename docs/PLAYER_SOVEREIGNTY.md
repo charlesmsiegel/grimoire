@@ -77,7 +77,7 @@ Presets are frozen into explicit domains at grant time. Redefining a preset late
 
 - **Protected claims about the player's own PC are struck** (`player_correction`). This applies even when the claim was delegated or expressed the player's own contribution.
 - **Other claims about the player's PC are only flagged** and stay accepted (`review.disputed`). This covers sensations, external effects, unresolved outcomes and subjectless world facts; any player with an actor in the campaign may flag the last. A flag is a possible-mislabel report for a later referee, never a veto of harm or failure.
-- **Resolved outcomes and disclosed condition reactions are refused** (`not_player_authority`). Content limits belong to Session Zero.
+- **Resolved outcomes and disclosed condition reactions are refused** (`not_player_authority`). Content limits belong to [Session Zero](SESSION_ZERO.md).
 - **Corrections by anyone other than the subject's controller are refused** (`not_controller`). Ambiguous control of the subject raises `AuthorityError` (an `Exception`, deliberately not an `OSError`).
 
 A correction does not revoke a delegation. The player revokes it separately so the overreach does not recur.
@@ -94,7 +94,7 @@ Both are labelling errors, so the remedy is a labeller and a mislabel-review pat
 
 - Prose claim extraction and labelling.
 - Prompt rendering.
-- Session Zero's computation of agreed limits. Until then the rule/effect writer sets `within_agreed_limits`, which defaults to false.
+- Wiring agreed limits into the rule/effect writer. [Session Zero](SESSION_ZERO.md#agreed-limits-for-imposed-conditions) now computes them (`agreed_limits`); the writer passes the result as `within_agreed_limits`, which still defaults to false, and must recompute it on every review.
 - Policy inheritance across worlds and retconned scenes.
 - AI-controlled companions as a third authority class.
 

@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from grimoire.testing.explore import HARNESS_INVARIANTS
+from grimoire.testing.providers import PROVIDER_INVARIANTS
 
 BACKEND = Path(__file__).resolve().parents[1]
 PACKAGE = BACKEND / "src" / "grimoire"
@@ -48,5 +49,5 @@ def test_catalog_references_exist():
         tree = ast.parse((BACKEND / "tests" / filename).read_text(encoding="utf-8"))
         defined = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
         assert name in defined, f"docs/TESTING.md cites missing test {filename}::{name}"
-    for invariant in HARNESS_INVARIANTS + BUILT_INS:
+    for invariant in HARNESS_INVARIANTS + BUILT_INS + PROVIDER_INVARIANTS:
         assert f"| `{invariant}` |" in text, f"{invariant} is not catalogued"

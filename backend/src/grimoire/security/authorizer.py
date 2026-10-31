@@ -104,6 +104,7 @@ class Authorizer:
         self._audit: list[AuditRecord] = []
         self._sink: Callable[[AuditRecord], None] | None = None
         self._lock: object = _NoLock()
+        self._issued: dict[int, WorkerHandle] = {}  # by id(); kept alive, so ids are never reused
 
     def attach_sink(self, sink: Callable[[AuditRecord], None], lock: object | None = None) -> None:
         """Make every later decision pass through ``sink`` before it takes effect.
@@ -133,10 +134,6 @@ class Authorizer:
 
     def is_approval_pending(self, approval_id: str) -> bool:
         return approval_id in self._approvals and approval_id not in self._closed_approvals
-
-    def issued(self, handle: object) -> bool:
-        """Whether ``handle`` was minted by this authorizer."""
-        return type(handle) is WorkerHandle and handle._authority is self
 
     def add_grant(self, grant: Grant) -> None:
         if not isinstance(grant, Grant):
@@ -194,7 +191,17 @@ class Authorizer:
         if trusted is not False and not (
                 trusted is True and (is_human(principal) or principal.startswith("app:"))):
             raise ValueError("only human: or app: principals may hold a trusted handle")
-        return WorkerHandle(self, principal, trusted)
+        handle = WorkerHandle(self, principal, trusted)
+        self._issued[id(handle)] = handle
+        return handle
+
+    def issued(self, handle: object) -> bool:
+        """Whether ``handle_for`` on this authorizer made ``handle``.
+
+        Lets trusted code (a provider adapter) refuse a hand-built or foreign
+        handle. Compared by identity; issued handles are kept alive.
+        """
+        return type(handle) is WorkerHandle and self._issued.get(id(handle)) is handle
 
     def _evaluate(self, principal: str, trusted: bool, permission: object,
                   resource: object, payload: object, approval_id: object) -> Decision:
