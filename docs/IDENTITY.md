@@ -97,6 +97,6 @@ Known review hazards for the migration sprints, none of them resolved automatica
 ## Not yet covered
 
 - Fork, import and export round trips. Those subsystems do not exist in V2 yet; this slice proves the text-form round trip they rely on.
-- Persisted manifests for sources, links and heads.
+- ~~Persisted manifests for sources, links and heads.~~ Persisted by the [native store](STORAGE.md); a link's `declared_by` is its manifest's source.
 - Catalog include/exclude.
 - Owner semantics beyond a label.

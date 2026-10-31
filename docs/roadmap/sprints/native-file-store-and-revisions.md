@@ -1,5 +1,7 @@
 # Human-editable V2 file storage and revisions
 
+**Status:** first slice implemented as `grimoire.store` (JSON-only by decision; Markdown payloads are a remaining obligation); contract in [STORAGE.md](../../STORAGE.md). Persistence of the security audit/grants/approvals and of PC delegations/corrections and control history is implemented as [authority ledgers](../../STORAGE.md#authority-ledgers-010b) (`grimoire.ledgers`, 010b). Remaining: a Markdown payload codec (its own later PR) and the later milestones.
+
 **Outcome:** Native canonical Markdown/JSON records support definitions and campaign instances independently, with stable references and safe revisioned writes.
 
 ## Scope and first proof
