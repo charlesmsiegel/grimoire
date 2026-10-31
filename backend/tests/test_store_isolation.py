@@ -209,3 +209,14 @@ def test_staging_swapped_for_a_link_during_authorization_is_never_written(tmp_pa
         txn.commit(SwapsStaging())
     store.close()
     assert snapshot(v1) == before
+
+
+def test_a_linked_conflicts_folder_is_never_listed(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "external.json").write_text("{}")
+    store = LibraryStore.create(tmp_path / "lib")
+    make_dir_link(tmp_path / "lib" / ".conflicts", outside)
+    with pytest.raises(LinkRefused):
+        store.conflicts()
+    store.close()

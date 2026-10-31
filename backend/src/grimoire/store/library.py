@@ -450,6 +450,7 @@ class LibraryStore:
             parts = stack.pop()
             if self._access.presence(parts) != "present":
                 continue
+            self._access.guard.check_read(parts)  # never list a linked .conflicts (LinkRefused)
             for name in self._access.ops.list_dir(self._access.path(parts)):
                 child = parts + (name,)
                 info = lstat_or_none(self._access.path(child))
