@@ -242,6 +242,7 @@ An unbound store whose `authority/security` ledger exists refuses record commits
 - **One lock:** the store and its authority share one re-entrant lock. A ledger flush from inside a commit re-enters it, and another thread waits.
 - **No nested writes during staging:** a ledger commit started while a record commit is staging is refused, so a nested `settle` can never touch the outer commit's staged files.
 - **One per process:** use one store and one authority per library per process.
+- **Close order:** call `authority.close()` before `store.close()`; it flushes buffered decisions. `store.close()` never raises (requester decision, deviating from the 010b spec's `StoreError`). Closing the store first is not detected there; the later `authority.close()` raises `AuthorityUnavailable`, and the buffered non-consequential decisions are lost, as in a crash. Consequential allows are already on disk.
 
 ### Repair
 
