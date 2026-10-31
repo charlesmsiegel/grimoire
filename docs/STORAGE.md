@@ -171,7 +171,7 @@ Damage is contained as locally as blame allows:
 | source | `malformed`/`unsupported_format` manifest, `ownership`, `identity_conflict` | the source is excluded |
 | library | `link`, `unrecognized`, `name_mismatch`, `unreadable` (a directory that cannot be listed) | reported only |
 
-**Link order.** In-source links register first, then cross-source links, each group ordered by declaring source and then by file order. When two sources' cross-source links together close a derivation cycle, the link from the alphabetically later declarer is the one dropped. This is a policy to revisit with real data.
+**Link order.** In-source links register first, then cross-source links, each group ordered by declaring source and then by file order. When two sources' cross-source links together close a derivation cycle, the link from the alphabetically later declarer is the one dropped. **Accepted policy** (requester decision on PR 568), as is judging only the committing source's own links in step 6.
 
 Broken-reference reasons are the index's `missing_source`, `missing_entity` and `missing_revision`, plus four store reasons:
 - `excluded_source`: the source exists on disk but was excluded;
