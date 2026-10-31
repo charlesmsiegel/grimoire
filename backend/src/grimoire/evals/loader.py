@@ -10,6 +10,7 @@ from importlib.resources.abc import Traversable
 from pathlib import Path
 
 from .format import BenchmarkFormatError, Run, Scenario, parse_run, parse_scenario
+from .format2 import FORMAT_V2, RunV2, parse_run_v2
 
 
 def _no_duplicates(pairs: list[tuple[str, object]]) -> dict:
@@ -50,6 +51,14 @@ def load_scenario(path: str | Path | Traversable) -> Scenario:
 
 def load_run(path: str | Path | Traversable, scenario: Scenario) -> Run:
     return parse_run(load_json(path), scenario)
+
+
+def load_any_run(path: str | Path | Traversable, scenario: Scenario) -> Run | RunV2:
+    """A ``/1`` or ``/2`` run, by its ``format``; any other format is the ``/1`` parser's error."""
+    data = load_json(path)
+    if isinstance(data, dict) and data.get("format") == FORMAT_V2:
+        return parse_run_v2(data, scenario)
+    return parse_run(data, scenario)
 
 
 def benchmark_file(name: str, filename: str) -> Traversable:
