@@ -1,6 +1,6 @@
 # Grimoire V2 — architecture charter
 
-**Status:** proposal and tiny in-memory experimental kernel. The V2 `core/model.py` still names `CharacterDefinition` and `CampaignActor`; these are *temporary first-slice types*, not a commitment to a character-exclusive ontology. Follow the [ordered V2 roadmap](roadmap/README.md) before introducing persisted schemas.
+**Status:** proposal and tiny in-memory experimental kernel. Composable entities are now `EntityDefinition`/`EntityInstance` values with typed facets and a campaign roster for control (see [entity facets](ENTITIES.md)); `core/model.py`'s `CharacterDefinition` and `CampaignActor` remain only as *legacy first-slice types* with explicit conversions, not a commitment to a character-exclusive ontology. Follow the [ordered V2 roadmap](roadmap/README.md) before introducing persisted schemas.
 
 ## Fundamental concepts
 

@@ -15,7 +15,9 @@ from grimoire.core.authority import (
     CONTRIBUTION_DOMAINS, AuthorityError, NarrationClaim, NarrationContext, PlayerContribution,
     review_narration, submit_contribution,
 )
+from grimoire.core.entity import instance_from_actor
 from grimoire.core.inference import InferenceStage, Measurement
+from grimoire.core.roster import CampaignRoster
 from grimoire.evals import format as evals_format
 from grimoire.evals.checks import RP_PURPOSES
 from grimoire.evals.loader import benchmark_file, load_json
@@ -89,7 +91,8 @@ def test_a_campaign_actor_id_is_the_authority_policys_actor_id():
 
 def test_a_full_instance_reference_is_not_silently_taken_for_the_actor():
     # Authority and intent ids are a campaign-local segment; a reference text is
-    # not one. Today this fails closed; reconciling the grammars belongs to 009.
+    # not one and still fails closed. Entity Facets (009) reconciles the grammars
+    # with one explicit adapter: `CampaignRoster.segment_for` (docs/ENTITIES.md).
     actor = CampaignActor(CAMPAIGN, PC, local_name="Wren")
     reference = str(actor.ref)
     assert reference != actor.actor_id
@@ -97,6 +100,9 @@ def test_a_full_instance_reference_is_not_silently_taken_for_the_actor():
     intent = route(Utterance("I wave."), RoutingContext(reference, False))
     with pytest.raises(AuthorityError):
         submit_contribution(contribution_from(intent, ALICE), controls)
+    roster = CampaignRoster(CAMPAIGN, [instance_from_actor(actor)])
+    intent = route(Utterance("I wave."), RoutingContext(roster.segment_for(reference), False))
+    assert submit_contribution(contribution_from(intent, ALICE), controls).actor_id == PC
 
 
 # ---- inference flags (004) <-> story-quality evals (005) ---------------------------

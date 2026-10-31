@@ -102,6 +102,38 @@ from .boundaries import (
     rule_themes,
     visible_boundaries,
 )
+from .entity import (
+    EffectiveEntity,
+    EntityDefinition,
+    EntityError,
+    EntityInstance,
+    Integrity,
+    can_be_addressed,
+    can_be_carried,
+    can_be_damaged,
+    can_be_heard,
+    effective_entity,
+    entity_from_character,
+    instance_from_actor,
+    integrity,
+    is_agent,
+    propose_damage,
+)
+from .facets import (
+    Agent,
+    Biological,
+    Communicative,
+    Durable,
+    FacetBundle,
+    FacetError,
+    FacetSet,
+    Physical,
+    Portable,
+    Spatial,
+    UnknownFacet,
+)
+from .json_value import JsonObject
+from .roster import CampaignRoster, ControlProblem, UnknownInstance
 from .resolve import MissingDefinition, actor_view
 
 __all__ = [
@@ -128,4 +160,10 @@ __all__ = [
     "RequestDecision", "SegmentDecision", "SessionZero", "ThemeRuling", "VisibleBoundary",
     "agreed_limits", "decide_presentation", "decide_request", "owner_boundaries",
     "rule_themes", "visible_boundaries",
+    "Agent", "Biological", "Communicative", "Durable", "FacetBundle", "FacetError", "FacetSet",
+    "Physical", "Portable", "Spatial", "UnknownFacet", "JsonObject",
+    "EffectiveEntity", "EntityDefinition", "EntityError", "EntityInstance", "Integrity",
+    "can_be_addressed", "can_be_carried", "can_be_damaged", "can_be_heard", "effective_entity",
+    "entity_from_character", "instance_from_actor", "integrity", "is_agent", "propose_damage",
+    "CampaignRoster", "ControlProblem", "UnknownInstance",
 ]
