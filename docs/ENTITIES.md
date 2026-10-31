@@ -88,7 +88,7 @@ The authority and intent string fields still accept any nonempty string, and an 
 `CharacterDefinition` and `CampaignActor` remain for Wave 1 callers and stay character-only; an actor of any other kind (a sentient sword, a ship) is an `EntityInstance`, which chooses its kind explicitly. Two explicit functions convert them:
 
 - `entity_from_character(d)`: an individual with only `agent`. Physicality is not invented.
-- `instance_from_actor(a)`: `campaign:<c>/character/<actor_id>`, keeping the segment so old assignments, observations and beliefs still apply. A campaign-original actor (no source) gets an added `agent`; a sourced actor's agency comes from its converted definition.
+- `instance_from_actor(a)`: `campaign:<c>/character/<actor_id>`, keeping the segment and the `InstanceRef`, so old control assignments and the actor's [knowledge](KNOWLEDGE.md) (evidence and beliefs held by that ref) still apply. A campaign-original actor (no source) gets an added `agent`; a sourced actor's agency comes from its converted definition.
 
 A legacy definition and its conversion cannot share an index, because they have the same ref. `actor_view` accepts either actor type. Every `EntityInstance`, and every legacy actor whose source is an `EntityDefinition`, must be an effective agent, so the legacy type cannot bypass that rule.
 
