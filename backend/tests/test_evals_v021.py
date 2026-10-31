@@ -227,3 +227,52 @@ def test_unconvertible_evidence_fails_verification():
     broken = live_bundle(usage_rows=[])
     check = verify_evidence(run, broken, run.source.evidence_sha256, SCENARIO)
     assert not check.ok
+
+
+# ---- final-review fixes ------------------------------------------------------------------
+
+@pytest.mark.parametrize("change", [
+    lambda b: b["turns"][0].update(responses=None),
+    lambda b: b["turns"][0]["responses"][0].update(response_id=["unhashable"]),
+    lambda b: b.update(actor_map={"characters:ana": ["npc-a"]}),
+    lambda b: b.update(turns=[None]),
+    lambda b: b["usage_rows"][0].update(prompt_tokens="many"),
+])
+def test_malformed_bundle_shapes_are_malformed_evidence(change):
+    data = bundle()
+    change(data)
+    refused(data, "malformed_evidence")
+
+
+def test_conditions_name_the_model_that_served():
+    data = bundle(model="vendor/model", usage_rows=[v021_row(
+        "r-1", model="vendor-model-2026-01", requested_model="vendor/model")])
+    raw, _ = run_of(data)
+    assert raw["conditions"]["model"] == "vendor-model-2026-01"
+
+
+def test_a_row_served_by_another_model_is_refused():
+    refused(bundle(model="vendor/model", usage_rows=[v021_row("r-1", model="fallback-model")]),
+            "model_mismatch")
+
+
+def test_rows_must_agree_on_the_served_model():
+    data, scenario = guild_bundle()
+    data["model"] = "vendor/model"
+    for index, row in enumerate(data["usage_rows"]):
+        row["requested_model"] = "vendor/model"
+        row["model"] = "snapshot-a" if index else "snapshot-b"
+    refused(data, "model_mismatch", scenario)
+
+
+def test_cost_without_basis_is_unreported():
+    raw, _ = run_of(live_bundle(usage_rows=[v021_row("r-1", cost_usd=0.002, cost_basis="")]))
+    assert "cost" not in raw["calls"][0]["attempts"][-1]
+
+
+def test_verification_covers_judge_scores():
+    data = live_bundle()
+    raw, run = run_of(data)
+    scored = parse_run_v2({**raw, "judge_scores": {"fluency": 0.9}}, SCENARIO)
+    check = verify_evidence(scored, data, evidence_digest(data), SCENARIO)
+    assert not check.ok and "judge_scores" in check.reason

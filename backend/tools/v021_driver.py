@@ -38,6 +38,42 @@ def fail(message: str) -> None:
     raise DriverError(message)
 
 
+def check_accounting(rows: list[dict], *, forwarded: int, planned: int, budget: int) -> None:
+    """Every request the guard forwarded is an attempt some 0.2.1 usage row accounts for.
+
+    A retry is allowed (0.2.1 books it as ``attempts`` on the row that served); a request no
+    row accounts for, a planned call that never went out, or a run over budget is not.
+    """
+    llm = [row for row in rows if row.get("kind") == "llm"]
+    attempts = sum(row.get("attempts", 1) for row in llm)
+    if forwarded > budget:
+        fail(f"0.2.1 sent {forwarded} provider requests, over the budget of {budget}")
+    if forwarded < planned:
+        fail(f"0.2.1 sent {forwarded} provider requests, fewer than the {planned} planned calls")
+    if attempts != forwarded:
+        fail(f"0.2.1's usage rows record {attempts} attempts, which do not add up to the "
+             f"{forwarded} requests sent")
+
+
+PARTIAL_FIELDS = ("prompt_tokens", "completion_tokens", "cache_read_tokens",
+                  "cache_write_tokens", "cost_usd")
+
+
+def partial_ledger(rows: list[dict]) -> list[dict]:
+    """What a failed capture still cost, as ids and counts only (never text)."""
+    return [{"task": row.get("task"), "response_id": row.get("response_id"),
+             "attempts": row.get("attempts", 1), "status": row.get("status"),
+             **{name: row.get(name) for name in PARTIAL_FIELDS}}
+            for row in rows if row.get("kind") == "llm"]
+
+
+def _usage_rows() -> list[dict]:
+    rows = []
+    for path in sorted((Path(os.environ["GRIMOIRE_HOME"]) / "usage").glob("*.jsonl")):
+        rows += [json.loads(line) for line in path.read_text("utf-8").splitlines() if line]
+    return rows
+
+
 def _args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--setup", required=True, type=Path)
@@ -47,6 +83,8 @@ def _args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--state", required=True, type=Path)
     parser.add_argument("--model")
     parser.add_argument("--key-env")
+    # Test-only fault injection for dry runs (the capture CLI never passes it).
+    parser.add_argument("--fault", choices=("retry-first",))
     return parser.parse_args(argv)
 
 
@@ -153,20 +191,35 @@ def main(argv: list[str]) -> int:
         replies = setup["dry_run"]["replies"]
         bodies = [_sse(llm_fakes, args.provider, replies[str(t["turn"])][speaker])
                   for t in turns for speaker in speakers]
+        if args.fault == "retry-first":  # the first call fails once and 0.2.1 retries it
+            bodies.insert(0, (429, "synthetic rate limit"))  # 0.2.1 retries rate limits
         sse = llm_fakes.SSEProvider(args.provider, bodies)
         inner = httpx.MockTransport(sse._answer)
         api_key = "dry-run-not-a-key"
+        # 0.2.1 counts what a provider did not report with tiktoken, which downloads its
+        # encoding on first use; its tests force the offline heuristic through this seam.
+        from grimoire.store import tokens  # noqa: PLC0415
+        tokens._encoder = lambda: None
     else:
+        if args.fault:
+            fail("--fault is only for dry runs")
         model = args.model or fail("--model is required for a live capture")
         api_key = os.environ.get(args.key_env or "") or fail("the key variable is not set")
-        inner = httpx.AsyncHTTPTransport()
-    guard = Guard(httpx, inner, args.provider, planned * (1 + retries))
+        inner = None  # built below with 0.2.1's own TLS context
 
     app = create_app()
     gateway = app.state.llm
     client_attr = {"openrouter": "_openrouter", "anthropic": "_anthropic"}[args.provider]
     kind_client = getattr(gateway, client_attr)
-    kind_client._http = httpx.AsyncClient(transport=guard.transport())
+    if inner is None:
+        # What 0.2.1's own lazily built client would use (provider_http.ProviderHTTP): its CA
+        # bundle, and the environment's proxy (a custom transport ignores proxy variables).
+        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("ALL_PROXY") or None
+        inner = httpx.AsyncHTTPTransport(verify=kind_client._verify(), proxy=proxy)
+    guard = Guard(httpx, inner, args.provider, planned * (1 + retries))
+    # 0.2.1's own timeouts (provider_http.ProviderHTTP._client), so latency means the same.
+    kind_client._http = httpx.AsyncClient(transport=guard.transport(),
+                                          timeout=httpx.Timeout(120.0, connect=30.0))
     kind_client._owns = False
     for kind, attr in (("openrouter", "_openrouter"), ("anthropic", "_anthropic"),
                        ("openai_compatible", "_openai_compatible")):
@@ -228,7 +281,8 @@ def main(argv: list[str]) -> int:
         # A fresh format-2 store has one connection and no fallback route; the other kinds'
         # clients refuse every request anyway (below). Images stay at 0.2.1's default, off.
         config = _ok(client.get("/api/config"), "read config")
-        for name, off in (("send_images", "off"), ("decide_turn_plan", "off"),
+        for name, off in (("send_images", "off"), ("decide_speaker_sampling", "on"),
+                          ("decide_turn_plan", "off"),
                           ("decide_play_tool", "off"),
                           ("epistemic_decide", "off"), ("history_recall_depth", "0"),
                           ("semantic_recall_depth", "0")):
@@ -251,11 +305,8 @@ def main(argv: list[str]) -> int:
             time.sleep(0.05)
 
     messages = store.scenes.read_scene(cid, sid)["messages"]
-    usage_rows = []
-    for path in sorted((Path(os.environ["GRIMOIRE_HOME"]) / "usage").glob("*.jsonl")):
-        usage_rows += [json.loads(line) for line in path.read_text("utf-8").splitlines() if line]
-    if guard.forwarded != planned:
-        fail(f"0.2.1 sent {guard.forwarded} provider requests, not the planned {planned}")
+    usage_rows = _usage_rows()
+    check_accounting(usage_rows, forwarded=guard.forwarded, planned=planned, budget=guard.budget)
 
     by_name = {npcs[a]["name"]: ref for ref, a in refs.items() if a in npcs}
     turn_records, start = [], 0
@@ -304,4 +355,11 @@ if __name__ == "__main__":
         raise SystemExit(main(sys.argv[1:]))
     except DriverError as error:
         print(f"v021 driver: {error}", file=sys.stderr)
+        try:  # what was already spent, so a failed live capture still says what it cost
+            spent = partial_ledger(_usage_rows())
+        except (OSError, ValueError, KeyError):
+            spent = []
+        if spent:
+            print("v021 driver: partial ledger (counts only): " + json.dumps(spent),
+                  file=sys.stderr)
         raise SystemExit(1) from None

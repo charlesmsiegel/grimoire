@@ -28,12 +28,12 @@
       "player_text": "I slide a silver coin across the counter and ask Oda for the guest ledger.",
       "responses": [
         {
-          "response_id": "a4e2e75afb924d378be3298c3a7cdc72",
+          "response_id": "12e44c5d65934265a3be7395ef1acf26",
           "speaker_ref": "characters:oda",
           "text": "Coin's good. Guest ledger's on the hook. Read it here."
         },
         {
-          "response_id": "2b155c0a87c44695ab466fc91061dbe8",
+          "response_id": "a9760814052045df92fc4ad3f7a960d4",
           "speaker_ref": "characters:bellamy",
           "text": "Oh, darling Wren, a ledger! How deliciously bureaucratic of you, truly marvellous!"
         }
@@ -44,12 +44,12 @@
       "player_text": "I follow Bellamy out to the balcony.",
       "responses": [
         {
-          "response_id": "6a1f324027d040f884190a7c3e721878",
+          "response_id": "6f4202b090434e7094138671431fa24d",
           "speaker_ref": "characters:oda",
           "text": "Balcony's shut after dark. Go if you must. Quickly."
         },
         {
-          "response_id": "413c6724fe854f64b5da67dd10219cae",
+          "response_id": "4f59558a0c4b4c018e706907cee1ca0e",
           "speaker_ref": "characters:bellamy",
           "text": "Come, come, to the balcony, my dear! Hush now, darling, the voices below are simply dripping with intrigue!"
         }
@@ -60,12 +60,12 @@
       "player_text": "I ask Bellamy to sing what was overheard.",
       "responses": [
         {
-          "response_id": "eadfb37622ee43f4a1c7db5f12265246",
+          "response_id": "ce7abab968104ce4aa62ad860d11a06d",
           "speaker_ref": "characters:oda",
           "text": "Singing. In my hall. Fine. Rules are rules, so keep it short."
         },
         {
-          "response_id": "c199e24ff2634ff9ae496701acafc7c2",
+          "response_id": "050520076ac3408689905c3c7cb7ea9e",
           "speaker_ref": "characters:bellamy",
           "text": "Oh, my darling, it is a dreadful song: the duke sold the guild to the river barons, every last splendid brick!"
         }
@@ -74,7 +74,7 @@
   ],
   "usage_rows": [
     {
-      "ts": "2026-10-31T05:14:27Z",
+      "ts": "2026-10-31T05:32:09Z",
       "kind": "llm",
       "task": "chat",
       "campaign": "guild-betrayal-synthetic",
@@ -82,8 +82,8 @@
       "model": "synthetic-rp-model",
       "connection": "capture-anthropic",
       "provider": "anthropic",
-      "round_id": "5e36f950139c496b842398c779205019",
-      "response_id": "a4e2e75afb924d378be3298c3a7cdc72",
+      "round_id": "c1f27f9864f94c97b0b805ebc2edf3cd",
+      "response_id": "12e44c5d65934265a3be7395ef1acf26",
       "operation": "generate",
       "provider_id": "capture-anthropic",
       "requested_model": "synthetic/rp-model",
@@ -98,7 +98,7 @@
       "status": "ok"
     },
     {
-      "ts": "2026-10-31T05:14:27Z",
+      "ts": "2026-10-31T05:32:09Z",
       "kind": "llm",
       "task": "chat",
       "campaign": "guild-betrayal-synthetic",
@@ -106,8 +106,8 @@
       "model": "synthetic-rp-model",
       "connection": "capture-anthropic",
       "provider": "anthropic",
-      "round_id": "5e36f950139c496b842398c779205019",
-      "response_id": "2b155c0a87c44695ab466fc91061dbe8",
+      "round_id": "c1f27f9864f94c97b0b805ebc2edf3cd",
+      "response_id": "a9760814052045df92fc4ad3f7a960d4",
       "operation": "generate",
       "provider_id": "capture-anthropic",
       "requested_model": "synthetic/rp-model",
@@ -118,11 +118,11 @@
       "cache_read_tokens": 400,
       "cache_write_tokens": 0,
       "post": 0,
-      "duration_ms": 3,
+      "duration_ms": 2,
       "status": "ok"
     },
     {
-      "ts": "2026-10-31T05:14:27Z",
+      "ts": "2026-10-31T05:32:09Z",
       "kind": "llm",
       "task": "chat",
       "campaign": "guild-betrayal-synthetic",
@@ -130,8 +130,8 @@
       "model": "synthetic-rp-model",
       "connection": "capture-anthropic",
       "provider": "anthropic",
-      "round_id": "bca6dc4f4adf4fcba2c1beef475403c4",
-      "response_id": "6a1f324027d040f884190a7c3e721878",
+      "round_id": "b3f98bbfc9244f7b847c402a55f98d51",
+      "response_id": "6f4202b090434e7094138671431fa24d",
       "operation": "generate",
       "provider_id": "capture-anthropic",
       "requested_model": "synthetic/rp-model",
@@ -142,11 +142,11 @@
       "cache_read_tokens": 400,
       "cache_write_tokens": 0,
       "post": 3,
-      "duration_ms": 3,
+      "duration_ms": 2,
       "status": "ok"
     },
     {
-      "ts": "2026-10-31T05:14:27Z",
+      "ts": "2026-10-31T05:32:09Z",
       "kind": "llm",
       "task": "chat",
       "campaign": "guild-betrayal-synthetic",
@@ -154,8 +154,8 @@
       "model": "synthetic-rp-model",
       "connection": "capture-anthropic",
       "provider": "anthropic",
-      "round_id": "bca6dc4f4adf4fcba2c1beef475403c4",
-      "response_id": "413c6724fe854f64b5da67dd10219cae",
+      "round_id": "b3f98bbfc9244f7b847c402a55f98d51",
+      "response_id": "4f59558a0c4b4c018e706907cee1ca0e",
       "operation": "generate",
       "provider_id": "capture-anthropic",
       "requested_model": "synthetic/rp-model",
@@ -170,7 +170,7 @@
       "status": "ok"
     },
     {
-      "ts": "2026-10-31T05:14:27Z",
+      "ts": "2026-10-31T05:32:10Z",
       "kind": "llm",
       "task": "chat",
       "campaign": "guild-betrayal-synthetic",
@@ -178,8 +178,8 @@
       "model": "synthetic-rp-model",
       "connection": "capture-anthropic",
       "provider": "anthropic",
-      "round_id": "d737c950097e42febe07a8e19be70c04",
-      "response_id": "eadfb37622ee43f4a1c7db5f12265246",
+      "round_id": "3ba0527c7dae490bb7340cd963b30b7d",
+      "response_id": "ce7abab968104ce4aa62ad860d11a06d",
       "operation": "generate",
       "provider_id": "capture-anthropic",
       "requested_model": "synthetic/rp-model",
@@ -190,11 +190,11 @@
       "cache_read_tokens": 400,
       "cache_write_tokens": 0,
       "post": 6,
-      "duration_ms": 3,
+      "duration_ms": 2,
       "status": "ok"
     },
     {
-      "ts": "2026-10-31T05:14:27Z",
+      "ts": "2026-10-31T05:32:10Z",
       "kind": "llm",
       "task": "chat",
       "campaign": "guild-betrayal-synthetic",
@@ -202,8 +202,8 @@
       "model": "synthetic-rp-model",
       "connection": "capture-anthropic",
       "provider": "anthropic",
-      "round_id": "d737c950097e42febe07a8e19be70c04",
-      "response_id": "c199e24ff2634ff9ae496701acafc7c2",
+      "round_id": "3ba0527c7dae490bb7340cd963b30b7d",
+      "response_id": "050520076ac3408689905c3c7cb7ea9e",
       "operation": "generate",
       "provider_id": "capture-anthropic",
       "requested_model": "synthetic/rp-model",
@@ -214,7 +214,7 @@
       "cache_read_tokens": 400,
       "cache_write_tokens": 0,
       "post": 6,
-      "duration_ms": 2,
+      "duration_ms": 3,
       "status": "ok"
     }
   ]

@@ -113,7 +113,8 @@ usage from the ledgers. **Weighted billed tokens** are `(input − cache read) +
 + output` over every attempt (failed ones too); cache writes are billed at input weight. If either
 run has an unmetered call or an attempt that left input, output or cache-read counts unreported,
 the gate reports `usage_incomplete` instead of a cost verdict, and likewise for gated latency.
-Usage status is `measured` (complete, provider-reported, and verified evidence),
+Usage status is `measured` (complete, provider-reported, and evidence whose digest and
+re-conversion verify; the evidence bundle itself is not authenticated),
 `provider-reported (declared by capture, unverified)`, `estimated`, `synthetic` or `incomplete`;
 evidence that is supplied but does not verify is an `evidence_unverified` finding.
 

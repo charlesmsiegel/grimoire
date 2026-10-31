@@ -261,7 +261,8 @@ def test_child_env_has_no_parent_secrets(checkout, scratch_tmp, scenario_files, 
     names = {n for n in json.loads(env_dump.read_text()) if not n.startswith("__CF")}
     assert "PARENT_SECRET" not in names and "GRIMOIRE_V2_HOME" not in names
     assert {"GRIMOIRE_HOME", "HOME", "XDG_STATE_HOME", "TEST_KEY"} <= names
-    assert names <= set(capture.CHILD_ENV_NAMES) | {"TEST_KEY", "LC_CTYPE"}
+    assert names <= (set(capture.CHILD_ENV_NAMES) | set(capture.LIVE_NETWORK_ENV)
+                     | {"TEST_KEY", "LC_CTYPE"})
 
 
 def test_dry_run_child_gets_no_key(checkout, scratch_tmp, scenario_files, tmp_path, monkeypatch):
@@ -295,3 +296,107 @@ def test_child_env_keeps_what_windows_needs_to_start_python(tmp_path, monkeypatc
     env = capture._child_env(tmp_path, options, None)
     assert env["SYSTEMROOT"] == r"C:\Windows"
     assert set(env) <= set(capture.CHILD_ENV_NAMES)
+
+
+# ---- final-review fixes ------------------------------------------------------------------
+
+@pytest.mark.parametrize("name", ["GRIMOIRE_HOME", "HOME", "PATH", "XDG_STATE_HOME", "TMPDIR",
+                                  "PYTHONPATH", "GRIMOIRE_V2_HOME", "lower_case", "BAD-NAME",
+                                  "SSL_CERT_FILE", "HTTPS_PROXY"])
+def test_key_env_cannot_name_an_isolation_variable(tmp_path, monkeypatch, capsys, name):
+    monkeypatch.setenv(name, KEY)
+    out = tmp_path / "out"
+    code = capture.main(argv(tmp_path, out, "--live", "--provider", "openrouter", "--model", "m",
+                             "--api-key-env", name, "--confirm-billing"))
+    assert code == 2 and "--api-key-env" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_driver_timeout_is_a_failed_capture(checkout, scratch_tmp, scenario_files, tmp_path,
+                                            monkeypatch, capsys):
+    fake_driver(tmp_path, monkeypatch, "import time; time.sleep(30)\n")
+    monkeypatch.setattr(capture, "TIMEOUT_SECONDS", 0.5)
+    out = tmp_path / "out"
+    assert capture.main(dry(checkout, out)) == 1
+    assert "timed out" in capsys.readouterr().err
+    assert not out.exists() and leftovers(scratch_tmp) == []
+
+
+def test_undecodable_driver_output_is_a_failed_capture(checkout, scratch_tmp, scenario_files,
+                                                      tmp_path, monkeypatch, capsys):
+    fake_driver(tmp_path, monkeypatch, "sys.stdout.buffer.write(b'\\xff\\xfe')\n")
+    assert capture.main(dry(checkout, tmp_path / "out")) == 1
+    assert leftovers(scratch_tmp) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def test_sigterm_kills_the_driver_and_cleans_up(checkout, scratch_tmp, scenario_files, tmp_path,
+                                                monkeypatch):
+    import signal
+    fake_driver(tmp_path, monkeypatch, "import time; time.sleep(30)\n")
+    real_popen = subprocess.Popen
+    started = []
+
+    class Terminated(real_popen):
+        def communicate(self, *args, **kwargs):
+            started.append(self)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return super().communicate(*args, **kwargs)
+
+    monkeypatch.setattr(capture.subprocess, "Popen", Terminated)
+    out = tmp_path / "out"
+    with pytest.raises(KeyboardInterrupt):
+        capture.main(dry(checkout, out))
+    assert started and started[0].poll() is not None
+    assert not out.exists() and leftovers(scratch_tmp) == []
+    assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL  # restored
+
+
+def test_a_temp_library_that_cannot_be_removed_is_reported(checkout, scratch_tmp, scenario_files,
+                                                          tmp_path, monkeypatch, capsys):
+    fake_driver(tmp_path, monkeypatch, PRINT)
+    monkeypatch.setattr(capture.shutil, "rmtree", lambda path, ignore_errors=False: None)
+    assert capture.main(dry(checkout, tmp_path / "out")) == 1
+    err = capsys.readouterr().err
+    assert "could not remove" in err and "grimoire-v021-" in err
+
+
+def test_out_that_gains_files_during_the_run_fails_cleanly(checkout, scratch_tmp, scenario_files,
+                                                          tmp_path, monkeypatch, capsys):
+    out = tmp_path / "out"
+    out.mkdir()
+    fake_driver(tmp_path, monkeypatch,
+                f"open({str(out / 'intruder')!r}, 'w').write('x')\n" + PRINT)
+    assert capture.main(dry(checkout, out)) == 1
+    assert sorted(p.name for p in out.iterdir()) == ["intruder"]
+    assert [p.name for p in tmp_path.iterdir() if ".partial" in p.name] == []
+
+
+def test_real_state_dir_is_a_forbidden_root(tmp_path):
+    if sys.platform == "win32":
+        pytest.skip("POSIX account home")
+    import pwd
+    state = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local" / "state" / "grimoire"
+    assert Path(os.path.realpath(state)) in capture.forbidden_roots(tmp_path)
+
+
+def test_live_child_keeps_tls_and_proxy_settings_dry_run_does_not(tmp_path, monkeypatch):
+    monkeypatch.setenv("SSL_CERT_FILE", "/etc/ssl/cert.pem")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    live = capture.CaptureOptions("mini", tmp_path, Path(sys.executable), tmp_path / "out",
+                                  "live", "openrouter", "m", "TEST_KEY")
+    env = capture._child_env(tmp_path, live, KEY)
+    assert env["SSL_CERT_FILE"] == "/etc/ssl/cert.pem"
+    assert env["HTTPS_PROXY"] == "http://proxy.invalid:3128"
+    dry_options = capture.CaptureOptions("mini", tmp_path, Path(sys.executable),
+                                         tmp_path / "out", "dry_run", "openrouter")
+    assert "HTTPS_PROXY" not in capture._child_env(tmp_path, dry_options, None)
+
+
+def test_driver_extra_args_seam_reaches_the_driver(checkout, scratch_tmp, scenario_files,
+                                                   tmp_path, monkeypatch):
+    seen = tmp_path / "args.json"
+    fake_driver(tmp_path, monkeypatch, f"open({str(seen)!r}, 'w').write(json.dumps(argv))\n" + PRINT)
+    monkeypatch.setattr(capture, "DRIVER_EXTRA_ARGS", ("--fault", "retry-first"))
+    assert capture.main(dry(checkout, tmp_path / "out")) == 0
+    assert json.loads(seen.read_text())[-2:] == ["--fault", "retry-first"]

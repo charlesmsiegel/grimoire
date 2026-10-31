@@ -16,7 +16,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -40,11 +42,19 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 DRIVER = REPO_ROOT / "backend" / "tools" / "v021_driver.py"
 #: The commit the checkout must be at. Tests substitute a scratch repository's commit.
 EXPECTED_COMMIT = PINNED_V021_COMMIT
-#: The only environment the 0.2.1 child gets, plus the named key variable in live mode.
+#: Extra driver arguments, for tests only (e.g. a dry-run fault); never a CLI flag.
+DRIVER_EXTRA_ARGS: tuple[str, ...] = ()
+#: The only environment the 0.2.1 child gets, plus, in live mode, the named key variable and
+#: the TLS/proxy settings 0.2.1's own HTTPS client would honour.
 CHILD_ENV_NAMES = ("PATH", "LANG", "PYTHONDONTWRITEBYTECODE", "GRIMOIRE_HOME", "HOME",
                    "XDG_STATE_HOME", "TMPDIR", "GRIMOIRE_CACHE_WARM",
                    "GRIMOIRE_INFERENCE_AUTOMIGRATE", "SYSTEMROOT")
-TIMEOUT_SECONDS = 1800
+LIVE_NETWORK_ENV = ("SSL_CERT_FILE", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY")
+#: A key variable must be an ordinary name that cannot override the child's isolation.
+_KEY_ENV = re.compile(r"[A-Z_][A-Z0-9_]*")
+_RESERVED_KEY_ENV_PREFIXES = ("GRIMOIRE", "XDG_", "PYTHON", "SSL_", "HTTP", "ALL_PROXY",
+                              "NO_PROXY", "LC_")
+TIMEOUT_SECONDS: float = 1800
 OUTPUTS = ("run.json", "evidence.json", "capture-report.txt")
 
 
@@ -105,10 +115,35 @@ def forbidden_roots(v1_checkout: Path, *, environ: Mapping[str, str] | None = No
     environ = os.environ if environ is None else environ
     home = Path.home() if home is None else home
     roots = [REPO_ROOT, Path(v1_checkout), home / V1_DEFAULT_DIRNAME, home / DEFAULT_DIRNAME]
+    account_home = _account_home()
+    if account_home is not None:  # 0.2.1's machine-local lock state lives here
+        roots.append(account_home / ".local" / "state" / "grimoire")
     for name in (V1_HOME_ENV, V2_HOME_ENV):
         if environ.get(name):
             roots.append(Path(os.path.expanduser(environ[name])))
     return [Path(os.path.realpath(root)) for root in roots]
+
+
+def _account_home() -> Path | None:
+    """The home 0.2.1 itself resolves (from the account database, not ``$HOME``), on POSIX."""
+    try:
+        import pwd
+    except ImportError:
+        return None
+    try:
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except (KeyError, OSError):
+        return None
+
+
+def check_key_env(name: str) -> str:
+    """``name`` if it can carry the key without overriding anything the child relies on."""
+    if (not _KEY_ENV.fullmatch(name) or name in CHILD_ENV_NAMES or name in LIVE_NETWORK_ENV
+            or name.startswith(_RESERVED_KEY_ENV_PREFIXES)):
+        raise CaptureRefused(f"--api-key-env {name!r} must be a plain upper-case variable name "
+                             "that is not one of the capture's own (PATH, HOME, GRIMOIRE_*, "
+                             "XDG_*, PYTHON*, TLS/proxy settings ...)")
+    return name
 
 
 def check_out_dir(out: Path, *, forbidden: Sequence[Path]) -> Path:
@@ -161,8 +196,12 @@ def _child_env(temp: Path, options: CaptureOptions, key: str | None) -> dict[str
     }
     if os.environ.get("SYSTEMROOT"):  # Windows cannot start Python without it
         env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    if options.mode == "live":
+        for name in LIVE_NETWORK_ENV:
+            if os.environ.get(name):
+                env[name] = os.environ[name]
     if key is not None and options.api_key_env:
-        env[options.api_key_env] = key
+        env[check_key_env(options.api_key_env)] = key
     return env
 
 
@@ -177,6 +216,7 @@ def _run_driver(options: CaptureOptions, checkout: Path, setup: Path, temp: Path
         command += ["--model", options.model]
     if options.api_key_env and options.mode == "live":
         command += ["--key-env", options.api_key_env]
+    command += list(DRIVER_EXTRA_ARGS)
     try:
         child = subprocess.Popen(command, env=_child_env(temp, options, key), cwd=temp,
                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -185,9 +225,13 @@ def _run_driver(options: CaptureOptions, checkout: Path, setup: Path, temp: Path
         raise CaptureRefused(f"cannot start {options.v1_python}: {error}") from None
     try:
         stdout, stderr = child.communicate(timeout=TIMEOUT_SECONDS)
-    except BaseException:  # timeout, KeyboardInterrupt: never leave 0.2.1 running
+    except BaseException as error:  # timeout, interrupt, bad output: never leave 0.2.1 running
         child.kill()
         child.wait()
+        if isinstance(error, subprocess.TimeoutExpired):
+            raise CaptureFailed(f"the 0.2.1 driver timed out after {TIMEOUT_SECONDS} s") from None
+        if isinstance(error, UnicodeDecodeError):
+            raise CaptureFailed("the 0.2.1 driver's output is not UTF-8") from None
         raise
     if child.returncode != 0:
         tail = "\n".join(_scrub(stderr, key).strip().splitlines()[-20:])
@@ -225,14 +269,19 @@ def _outputs(options: CaptureOptions, scenario: Scenario, stdout: str) -> dict[s
 
 def _write(out: Path, files: Mapping[str, str]) -> None:
     """All outputs appear together, or none do."""
-    partial = out.parent / f".{out.name}.partial-{os.getpid()}"
-    partial.mkdir()
+    try:
+        partial = Path(tempfile.mkdtemp(prefix=f".{out.name}.partial-", dir=out.parent))
+    except OSError as error:
+        raise CaptureFailed(f"cannot write next to --out: {error}") from None
     try:
         for name, text in files.items():
             (partial / name).write_text(text, encoding="utf-8")
         if out.exists():
-            out.rmdir()  # checked empty before the capture started
+            out.rmdir()  # empty when the capture started; refuses if anything arrived since
         os.replace(partial, out)
+    except OSError as error:
+        raise CaptureFailed(f"cannot write --out {out} (did something else write there?): "
+                            f"{error}") from None
     finally:
         if partial.exists():
             shutil.rmtree(partial, ignore_errors=True)
@@ -245,6 +294,7 @@ def run_capture(options: CaptureOptions) -> Path:
     if options.mode == "live":
         if not options.api_key_env or not options.model:
             raise CaptureRefused("--live needs --model and --api-key-env")
+        check_key_env(options.api_key_env)
         key = os.environ.get(options.api_key_env) or None
         if key is None:
             raise CaptureRefused(f"the environment variable {options.api_key_env} is not set")
@@ -260,6 +310,9 @@ def run_capture(options: CaptureOptions) -> Path:
         stdout = _run_driver(options, checkout, setup, temp, key)
     finally:
         shutil.rmtree(temp, ignore_errors=True)
+        if temp.exists():  # it may hold the key (0.2.1 stores it in llm_connections)
+            raise CaptureFailed(f"could not remove the temporary 0.2.1 library {temp}; it may "
+                                "hold the provider key, so delete it by hand")
     verify_checkout(checkout)  # the run left 0.2.1 exactly as it was
     files = _outputs(options, scenario, stdout)
     if key and any(key in text for text in files.values()):
@@ -296,16 +349,33 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _interrupt(signum, frame):  # SIGTERM/SIGHUP take the same cleanup path as Ctrl-C
+    raise KeyboardInterrupt(f"signal {signum}")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
     except SystemExit as error:
         return int(error.code or 0)
+    caught = [s for s in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGHUP", None))
+              if s is not None]
+    previous = {s: signal.signal(s, _interrupt) for s in caught}
+    try:
+        return _main(args)
+    finally:
+        for s, handler in previous.items():
+            signal.signal(s, handler)
+
+
+def _main(args: argparse.Namespace) -> int:
     try:
         if args.live and not args.confirm_billing:
             raise CaptureRefused("--live makes billed provider calls; add --confirm-billing")
         if args.live and not args.api_key_env:
             raise CaptureRefused("--live needs --api-key-env naming the key's variable")
+        if args.api_key_env:
+            check_key_env(args.api_key_env)
         options = CaptureOptions(args.scenario, args.v1_checkout, args.v1_python, args.out,
                                  "live" if args.live else "dry_run", args.provider, args.model,
                                  args.api_key_env)

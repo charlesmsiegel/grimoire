@@ -15,10 +15,15 @@ SYNTHETIC_NOTICE = ("no regression against a synthetic baseline — not a cost/q
 #: /2: a capture's provider-reported ledger whose evidence was not supplied or did not verify.
 UNVERIFIED_NOTICE = ("provider-reported (declared by capture, unverified): pass --evidence-… to "
                      "verify")
-MEASURED_NOTICE = ("measured: evidence digest and re-conversion verified; the provider's own "
-                   "receipt is not independently verified")
+MEASURED_NOTICE = ("measured: the capture evidence's digest and re-conversion verified; the "
+                   "evidence bundle itself is not authenticated and the provider's own receipt "
+                   "is not independently verified")
+#: A passing /2 comparison where a run is neither synthetic nor a verified measurement.
+NOT_VERIFIED_NOTICE = ("no regression, but at least one run is not a verified measurement — "
+                       "not a cost/quality certification")
 STATUS_LABELS = {
-    "measured": "measured (provider-reported, evidence verified)",
+    "measured": "measured (provider-reported, evidence consistent; origin and provider receipt "
+                "unverified)",
     "provider_reported_unverified": "provider-reported (declared by capture, unverified)",
     "estimated": "estimated",
     "synthetic": "synthetic",
@@ -144,7 +149,7 @@ def render_v2(report: GateReportV2) -> str:
     if all(status == "measured" for status in statuses):
         lines.append(f"note: {MEASURED_NOTICE}")
     elif report.passed:
-        lines.append(f"note: {SYNTHETIC_NOTICE}")
+        lines.append(f"note: {SYNTHETIC_NOTICE if 'synthetic' in statuses else NOT_VERIFIED_NOTICE}")
     else:
         lines.append("note: at least one run is not a verified measurement")
     if "provider_reported_unverified" in statuses:

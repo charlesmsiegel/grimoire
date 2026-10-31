@@ -11,7 +11,7 @@ from grimoire.evals.gate2 import compare_v2, usage_status
 from grimoire.evals.loader import evidence_digest
 from grimoire.evals.policy import GatePolicy
 from grimoire.evals.report import (
-    MEASURED_NOTICE, SYNTHETIC_NOTICE, UNVERIFIED_NOTICE, render_v2,
+    MEASURED_NOTICE, NOT_VERIFIED_NOTICE, SYNTHETIC_NOTICE, UNVERIFIED_NOTICE, render_v2,
 )
 from grimoire.evals.v021 import convert, verify_evidence
 
@@ -213,3 +213,22 @@ def test_report_shows_unreported_beside_sums_and_unlabelled_choices():
     assert "output tokens" in text and "(1 unreported)" in text
     assert "choices unlabelled            3" in text
     assert "weighted billed tokens        n/a (usage incomplete)" in text
+
+
+def test_passing_estimated_run_is_not_called_synthetic():
+    scenario, raw = guild()
+    run = parse_run_v2(live(raw, "estimated"), scenario)
+    text = render_v2(compare_v2(scenario, run, run))
+    assert SYNTHETIC_NOTICE not in text and NOT_VERIFIED_NOTICE in text
+    unverified = parse_run_v2(live(raw), scenario)
+    text = render_v2(compare_v2(scenario, unverified, unverified))
+    assert SYNTHETIC_NOTICE not in text and NOT_VERIFIED_NOTICE in text
+
+
+def test_measured_label_admits_the_bundle_is_unauthenticated():
+    assert "not authenticated" in MEASURED_NOTICE
+    data, digest, run = captured()
+    evidence = verify_evidence(run, data, digest, MINI)
+    text = render_v2(compare_v2(MINI, run, run, baseline_evidence=evidence,
+                                candidate_evidence=evidence))
+    assert "origin and provider receipt unverified" in text

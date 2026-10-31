@@ -136,14 +136,37 @@ def _attempts(row: Mapping, mode: str, route: str) -> list[dict]:
             "reasoning_tokens": None,  # 0.2.1 has no reasoning-token field
         },
     }
-    if row.get("cost_usd") is not None:
-        served["cost"] = {"usd": row["cost_usd"], "basis": row.get("cost_basis") or "billed"}
+    if row.get("cost_usd") is not None and row.get("cost_basis"):  # no basis: unreported
+        served["cost"] = {"usd": row["cost_usd"], "basis": row["cost_basis"]}
     return [*attempts, served]
 
 
 def convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
             label: str) -> dict:
     """The /2 run dict for ``bundle``. Validate the result with ``parse_run_v2``."""
+    try:
+        return _convert(bundle, scenario, digest=digest, run_id=run_id, label=label)
+    except (TypeError, AttributeError, KeyError) as error:  # a shape no check above expected
+        raise _malformed(f"unexpected structure ({type(error).__name__})") from None
+
+
+def _served_model(rows: list[Mapping], requested: str) -> str:
+    """The one model that answered every call; a dated snapshot of the requested one is fine."""
+    served = set()
+    for index, row in enumerate(rows):
+        model = row.get("model")
+        if not isinstance(model, str) or not model or (
+                model != requested and row.get("requested_model") != requested):
+            raise CaptureConversionError("model_mismatch",
+                                         f"usage row {index} was not served by the requested model")
+        served.add(model)
+    if len(served) > 1:
+        raise CaptureConversionError("model_mismatch", "calls were served by different models")
+    return served.pop() if served else requested
+
+
+def _convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
+             label: str) -> dict:
     _check_bundle(bundle, scenario)
     mode = bundle["mode"]
     actor_map = bundle["actor_map"]
@@ -228,7 +251,8 @@ def convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
         "source": {"kind": "v0.2.1-capture", "mode": mode, "v1_commit": bundle["v1_commit"],
                    "harness": HARNESS, "evidence_sha256": digest, "profile": PROFILE,
                    "llm_retries": bundle["llm_retries"], "route": route},
-        "conditions": {"model": bundle["model"], "budget": bundle["budget"]},
+        "conditions": {"model": _served_model(list(rows_by_response.values()), bundle["model"]),
+                       "budget": bundle["budget"]},
         "policy": {"per_turn_call_caps": {}, "max_attempts_per_call": 1 + bundle["llm_retries"]},
         "turns": turns,
         "calls": calls,
@@ -246,7 +270,8 @@ def verify_evidence(run: RunV2, bundle: Mapping, digest: str, scenario: Scenario
     except ValueError as error:
         code = getattr(error, "code", "invalid")
         return EvidenceCheck(False, f"re-conversion failed ({code})")
-    for name in ("source", "conditions", "policy", "turns", "calls", "choice_outcomes"):
+    for name in ("source", "conditions", "policy", "turns", "calls", "choice_outcomes",
+                 "judge_scores"):
         if getattr(again, name) != getattr(run, name):
             return EvidenceCheck(False, f"re-conversion does not reproduce the run's {name}")
     return EvidenceCheck(True, "digest and re-conversion match")

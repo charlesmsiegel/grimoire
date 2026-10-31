@@ -28,12 +28,12 @@
       "player_text": "I slide a silver coin across the counter and ask Oda for the guest ledger.",
       "responses": [
         {
-          "response_id": "1ec3eeb73501482c9fcbbd25174c027b",
+          "response_id": "54b4e062a075415eaedd4cac844cf61a",
           "speaker_ref": "characters:oda",
           "text": "Coin's good. Guest ledger's on the hook. Read it here."
         },
         {
-          "response_id": "947214a0a1fa468ca64c2eceec084d92",
+          "response_id": "48cd6186cd2d4db0befb644dac52476a",
           "speaker_ref": "characters:bellamy",
           "text": "Oh, darling Wren, a ledger! How deliciously bureaucratic of you, truly marvellous!"
         }
@@ -44,12 +44,12 @@
       "player_text": "I follow Bellamy out to the balcony.",
       "responses": [
         {
-          "response_id": "99408aa822c6441280d7daf2b6faac96",
+          "response_id": "3477915b9983431cb28b68408391bbfa",
           "speaker_ref": "characters:oda",
           "text": "Balcony's shut after dark. Go if you must. Quickly."
         },
         {
-          "response_id": "e07fe538b3284f0bb68d5c293a222dd7",
+          "response_id": "158e546476b94b7a810c115173f46672",
           "speaker_ref": "characters:bellamy",
           "text": "Come, come, to the balcony, my dear! Hush now, darling, the voices below are simply dripping with intrigue!"
         }
@@ -60,12 +60,12 @@
       "player_text": "I ask Bellamy to sing what was overheard.",
       "responses": [
         {
-          "response_id": "1c6fd64764af4d7e92fa9e63e21eb480",
+          "response_id": "81352d340b244ce2ad0b2fb984e86d13",
           "speaker_ref": "characters:oda",
           "text": "Singing. In my hall. Fine. Rules are rules, so keep it short."
         },
         {
-          "response_id": "4cfee7699c3b49af8e8cac057d8689ac",
+          "response_id": "dfcb6ee4d1fe45858e7e264a109d8428",
           "speaker_ref": "characters:bellamy",
           "text": "Oh, my darling, it is a dreadful song: the duke sold the guild to the river barons, every last splendid brick!"
         }
@@ -74,7 +74,7 @@
   ],
   "usage_rows": [
     {
-      "ts": "2026-10-31T05:14:22Z",
+      "ts": "2026-10-31T05:32:05Z",
       "kind": "llm",
       "task": "chat",
       "campaign": "guild-betrayal-synthetic",
@@ -82,8 +82,8 @@
       "model": "synthetic/rp-model",
       "connection": "capture-openrouter",
       "provider": "openrouter",
-      "round_id": "f49c88bcf89041cc9f29af1ca7bfcefd",
-      "response_id": "1ec3eeb73501482c9fcbbd25174c027b",
+      "round_id": "7cc0602a5d7840b7bd3b76d4d3595338",
+      "response_id": "54b4e062a075415eaedd4cac844cf61a",
       "operation": "generate",
       "provider_id": "capture-openrouter",
       "role": "primary",
@@ -92,11 +92,11 @@
       "completion_tokens": 40,
       "cache_read_tokens": 400,
       "post": 0,
-      "duration_ms": 3,
+      "duration_ms": 2,
       "status": "ok"
     },
     {
-      "ts": "2026-10-31T05:14:22Z",
+      "ts": "2026-10-31T05:32:05Z",
       "kind": "llm",
       "task": "chat",
       "campaign": "guild-betrayal-synthetic",
@@ -104,8 +104,8 @@
       "model": "synthetic/rp-model",
       "connection": "capture-openrouter",
       "provider": "openrouter",
-      "round_id": "f49c88bcf89041cc9f29af1ca7bfcefd",
-      "response_id": "947214a0a1fa468ca64c2eceec084d92",
+      "round_id": "7cc0602a5d7840b7bd3b76d4d3595338",
+      "response_id": "48cd6186cd2d4db0befb644dac52476a",
       "operation": "generate",
       "provider_id": "capture-openrouter",
       "role": "primary",
@@ -118,7 +118,7 @@
       "status": "ok"
     },
     {
-      "ts": "2026-10-31T05:14:23Z",
+      "ts": "2026-10-31T05:32:05Z",
       "kind": "llm",
       "task": "chat",
       "campaign": "guild-betrayal-synthetic",
@@ -126,8 +126,8 @@
       "model": "synthetic/rp-model",
       "connection": "capture-openrouter",
       "provider": "openrouter",
-      "round_id": "19b743c2869e4d7aa6b143f8164a4819",
-      "response_id": "99408aa822c6441280d7daf2b6faac96",
+      "round_id": "6d692b41b2e6466f9a50ff056c60c1e0",
+      "response_id": "3477915b9983431cb28b68408391bbfa",
       "operation": "generate",
       "provider_id": "capture-openrouter",
       "role": "primary",
@@ -140,7 +140,7 @@
       "status": "ok"
     },
     {
-      "ts": "2026-10-31T05:14:23Z",
+      "ts": "2026-10-31T05:32:05Z",
       "kind": "llm",
       "task": "chat",
       "campaign": "guild-betrayal-synthetic",
@@ -148,8 +148,8 @@
       "model": "synthetic/rp-model",
       "connection": "capture-openrouter",
       "provider": "openrouter",
-      "round_id": "19b743c2869e4d7aa6b143f8164a4819",
-      "response_id": "e07fe538b3284f0bb68d5c293a222dd7",
+      "round_id": "6d692b41b2e6466f9a50ff056c60c1e0",
+      "response_id": "158e546476b94b7a810c115173f46672",
       "operation": "generate",
       "provider_id": "capture-openrouter",
       "role": "primary",
@@ -162,7 +162,7 @@
       "status": "ok"
     },
     {
-      "ts": "2026-10-31T05:14:23Z",
+      "ts": "2026-10-31T05:32:05Z",
       "kind": "llm",
       "task": "chat",
       "campaign": "guild-betrayal-synthetic",
@@ -170,8 +170,8 @@
       "model": "synthetic/rp-model",
       "connection": "capture-openrouter",
       "provider": "openrouter",
-      "round_id": "c957f56718354f01b13d7a3e3b6a643e",
-      "response_id": "1c6fd64764af4d7e92fa9e63e21eb480",
+      "round_id": "0b61d97235d34df9a62df664d1b3831b",
+      "response_id": "81352d340b244ce2ad0b2fb984e86d13",
       "operation": "generate",
       "provider_id": "capture-openrouter",
       "role": "primary",
@@ -184,7 +184,7 @@
       "status": "ok"
     },
     {
-      "ts": "2026-10-31T05:14:23Z",
+      "ts": "2026-10-31T05:32:05Z",
       "kind": "llm",
       "task": "chat",
       "campaign": "guild-betrayal-synthetic",
@@ -192,8 +192,8 @@
       "model": "synthetic/rp-model",
       "connection": "capture-openrouter",
       "provider": "openrouter",
-      "round_id": "c957f56718354f01b13d7a3e3b6a643e",
-      "response_id": "4cfee7699c3b49af8e8cac057d8689ac",
+      "round_id": "0b61d97235d34df9a62df664d1b3831b",
+      "response_id": "dfcb6ee4d1fe45858e7e264a109d8428",
       "operation": "generate",
       "provider_id": "capture-openrouter",
       "role": "primary",

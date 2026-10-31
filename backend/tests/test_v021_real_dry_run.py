@@ -40,3 +40,19 @@ def test_real_dry_run(kind, tmp_path):
     run = parse_run_v2(json.loads((out / "run.json").read_text()), scenario)
     assert len(run.calls) == 6 and run.source.mode == "dry_run"
     assert "findings (0):" in (out / "capture-report.txt").read_text()
+
+
+def test_real_dry_run_with_a_retry_is_captured_as_incomplete(tmp_path, monkeypatch):
+    # 0.2.1 fails the first call once and retries it: the capture still succeeds, the retried
+    # call books an unreported failed attempt, and the run is "incomplete", never complete.
+    monkeypatch.setattr(capture, "DRIVER_EXTRA_ARGS", ("--fault", "retry-first"))
+    out = tmp_path / "out"
+    assert capture.main(["--scenario", "guild_betrayal", "--v1-checkout", CHECKOUT,
+                         "--v1-python", PYTHON, "--dry-run", "--provider", "openrouter",
+                         "--out", str(out)]) == 0
+    scenario = load_scenario(benchmark_file("guild_betrayal", "scenario.json"))
+    run = parse_run_v2(json.loads((out / "run.json").read_text()), scenario)
+    assert run.usage.total.attempts == 7
+    assert [a.outcome for a in run.calls[0].attempts] == ["failed", "completed"]
+    assert not run.usage.complete
+    assert "incomplete" in (out / "capture-report.txt").read_text()
