@@ -19,6 +19,10 @@
 
 **Default desktop V2 library: `~/.grimoire-v2/`.** A V2-specific `GRIMOIRE_V2_HOME` override may select a different directory. Never fall back to V1's `GRIMOIRE_HOME`, `~/.grimoire/` or its bootstrap pointer. Android will default to its separate app-private V2 area; until that milestone lands, Android requires an explicit `GRIMOIRE_V2_HOME`.
 
+### Provider adapter (implemented: `grimoire.providers`)
+
+Planned, authorized, fully booked OpenAI-compatible model calls. Endpoints are trusted configuration, and every attempt is booked on the turn's ledger. See [PROVIDERS.md](PROVIDERS.md).
+
 ### Library location and V1 isolation (implemented: `grimoire.library`)
 
 `resolve_library()` returns the V2 library and what selected it (`default` or `env`); `python -m grimoire.library` prints the same. Resolution is **read-only**: it creates nothing and never opens or lists a V1 directory.

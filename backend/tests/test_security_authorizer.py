@@ -326,3 +326,16 @@ def test_spoofed_permission_objects_are_malformed():
     decision = authority.handle_for(WORKER).authorize(Impostor(), WREN, PAYLOAD)
     assert not decision.allowed and decision.reason is Reason.MALFORMED_REQUEST
     assert authority.audit()[-1].permission is None
+
+
+def test_issued_only_for_handles_this_authorizer_made():
+    from grimoire.security import WorkerHandle
+
+    authz = Authorizer({"human:owner"})
+    other = Authorizer({"human:owner"})
+    mine = authz.handle_for("app:runtime", trusted=True)
+    assert authz.issued(mine) is True
+    assert authz.issued(other.handle_for("app:runtime", trusted=True)) is False
+    assert authz.issued(WorkerHandle(authz, "app:forged", True)) is False
+    assert authz.issued(object()) is False
+    assert authz.issued(None) is False

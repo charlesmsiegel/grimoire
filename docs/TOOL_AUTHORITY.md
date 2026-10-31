@@ -10,6 +10,7 @@ Imported Markdown, character cards (including extensions and greetings), rules s
 
 - Trusted application code owns the `Authorizer`: grants, approvals, policy and audit.
 - Each worker gets only a `WorkerHandle` from `authorizer.handle_for(principal, trusted=False)`. The handle fixes the principal and origin and exposes only `authorize(permission, resource, payload=None, approval_id=None)`. Its API offers no way to add grants, register approvals, pick an identity or claim trust, and it refuses attribute writes. Arguments must be exact `str`/`bytes` instances; subclasses that could override hashing, equality or methods are `malformed_request`.
+- `authorizer.issued(handle)` tells trusted code (such as the provider adapter) whether that authorizer's `handle_for` made a handle; a hand-built `WorkerHandle(...)` or one from another authorizer is not issued.
 - Only `human:` and `app:` principals may hold a trusted handle. **Any code path that parses imported content or model output must use an untrusted handle, whatever its principal namespace.** For example, an `app:` importer must not be trusted.
 - An `Authorizer` and its handles are single-threaded; callers that share one across threads must serialize access (approval consumption is not locked).
 - This is an API boundary enforced by tests and review. It is not an in-process sandbox: Python code that deliberately reaches into private attributes, closures or other modules can subvert any in-process check; isolating community scripts remains the sprint's moonshot.
@@ -57,7 +58,13 @@ These rules reject traversal, absolute paths, separators, whitespace, control/fo
 - **Native file store:** map a validated address to an OS path only by joining its segments under the library root, never follow symlinks out of the library, and refuse to create a name that collides case- or normalization-insensitively with an existing differently spelled entry.
 - **Approval UI ([World Change Sets](roadmap/sprints/world-change-sets.md), [Character Card Ingestion](roadmap/sprints/character-card-ingestion.md) preview):** issue approvals only from a direct human action. Show `describe()` text, including the non-ASCII flag and the staged content the digest refers to.
 - **Durable audit ([Native File Store](roadmap/sprints/native-file-store-and-revisions.md), surfaced by [Durable Action Recovery](roadmap/sprints/durable-action-recovery.md)):** persist decisions and also audit grant/approval lifecycle, which this slice exposes only through `describe_policy()`.
-- **Provider adapters and network ([Model Routing And Budgeting](roadmap/sprints/model-routing-and-budgeting.md)):** route every call through `execute`. Secrets stay under reserved roots and are read only by trusted adapter code, never through a worker grant.
+- **Provider adapters and network ([Model Routing And Budgeting](roadmap/sprints/model-routing-and-budgeting.md)):** route every call through `execute`. Secrets stay under reserved roots and are read only by trusted adapter code, never through a worker grant. **Partly met by [`grimoire.providers`](PROVIDERS.md):**
+  - The authorized payload is an envelope binding the destination URL and the exact body.
+  - Handles must be `issued` by the adapter's authorizer.
+  - Keys are read only by trusted adapter code, after an allow.
+  - **Recorded deviation:** keys come from environment variables, not from the reserved `secrets/` root, until the native file store (010) exists.
+
+  Whether a generation runtime that parses model output may hold a trusted `app:` handle is an open question for 027. It is not decided here, and this rule is unchanged.
 - **Device sync (028):** pairing keys and device credentials live under reserved roots, and peer devices are non-owner principals.
 - **Multiplayer (102):** each human approves only uses of grants they issued.
 - **V1 migration ([V1 To V2 Import Apply](roadmap/sprints/v1-to-v2-import-apply.md)):** V1 libraries have no address in the V2 namespace. A future read-only migration source must be an explicit, separate root.

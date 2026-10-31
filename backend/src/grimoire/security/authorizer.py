@@ -75,6 +75,7 @@ class Authorizer:
         self._approvals: dict[str, tuple[Approval, str]] = {}
         self._closed_approvals: set[str] = set()
         self._audit: list[AuditRecord] = []
+        self._issued: list[WorkerHandle] = []
 
     def add_grant(self, grant: Grant) -> None:
         if not isinstance(grant, Grant):
@@ -132,7 +133,17 @@ class Authorizer:
         if trusted is not False and not (
                 trusted is True and (is_human(principal) or principal.startswith("app:"))):
             raise ValueError("only human: or app: principals may hold a trusted handle")
-        return WorkerHandle(self, principal, trusted)
+        handle = WorkerHandle(self, principal, trusted)
+        self._issued.append(handle)
+        return handle
+
+    def issued(self, handle: object) -> bool:
+        """Whether ``handle_for`` on this authorizer made ``handle``.
+
+        Lets trusted code (a provider adapter) refuse a hand-built or foreign
+        handle. Compared by identity; issued handles are kept alive.
+        """
+        return any(each is handle for each in self._issued)
 
     def _evaluate(self, principal: str, trusted: bool, permission: object,
                   resource: object, payload: object, approval_id: object) -> Decision:
