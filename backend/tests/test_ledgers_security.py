@@ -690,3 +690,25 @@ def test_a_path_replay_could_not_read_back_is_refused_before_any_change(library,
     store, authority = _reopen(store, authority, locker)  # still opens
     authority.close()
     store.close()
+
+
+def test_a_full_buffer_does_not_split_a_saves_flush(library):
+    store, authority, locker = library
+    grant_importer(authority)
+    handle = authority.handle_for(IMPORTER)
+    txn = store.transaction()
+    for name in ("one", "two"):
+        txn.put(RecordEnvelope(InstanceRef("c1", "character", name), {}), None)
+    for number, (address, data) in enumerate(txn.preview().items()):
+        approve(authority, data, aid=f"a{number}", address=address)  # lifecycle calls flush
+    for _ in range(499):  # one short of the threshold
+        handle.authorize(Permission.INSPECT, "campaigns/c1")
+    writer = authority._writers["security"]
+    appends = []
+    real = writer.append
+    writer.append = lambda entries, head: appends.append(len(entries)) or real(entries, head)
+    try:
+        txn.commit(handle, {address: f"a{n}" for n, address in enumerate(txn.preview())})
+    finally:
+        del writer.append
+    assert appends == [501] and not authority.poisoned  # one flush: the buffer and both allows

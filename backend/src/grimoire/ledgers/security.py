@@ -128,7 +128,8 @@ class DurableAuthority:
                 raise
             self._pending.append(entry)
             consequential = record.allowed and record.permission in CONSEQUENTIAL
-            if (consequential and self._depth() == 0) or len(self._pending) >= MAX_BATCH_ENTRIES:
+            # inside a save's scope everything waits for its single flush (appends split into batches)
+            if self._depth() == 0 and (consequential or len(self._pending) >= MAX_BATCH_ENTRIES):
                 self._flush_locked()
 
     def _flush_locked(self) -> None:

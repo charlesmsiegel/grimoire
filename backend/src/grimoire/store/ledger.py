@@ -60,6 +60,7 @@ def _read_ledger(access: Access, name: str) -> Ledger:
     folder = ledger_folder(name)
     if access.presence(folder) != "present":
         return Ledger(name, (), ())
+    access.guard.check_read(folder)  # the folder itself is never a link (LinkRefused)
     try:
         listed = access.list_dir(folder)
     except OSError as error:

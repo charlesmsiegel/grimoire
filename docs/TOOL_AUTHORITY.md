@@ -86,7 +86,7 @@ Replay validates each entry with the kernel, including `replay_decision`'s stric
 - An allow for `apply` or `execute` is on disk before it is returned.
 - Inside a commit's consequential scope, a save's allows are flushed once, before anything is staged.
 - Lifecycle changes are validated, applied, and flushed before they return. The durable layer also requires exact `Grant` and `Approval` instances, and grant and approval ids of at most 128 characters; anything else is refused with `ValueError` before any change.
-- Other decisions (inspect, propose, denials) are flushed with the next flush, at 500 pending, or on `close()`; a crash may lose them. Any later consequential allow flushes them first, in order.
+- Other decisions (inspect, propose, denials) are flushed with the next flush, at 500 pending (outside a save, whose decisions all wait for its single flush), or on `close()`; a crash may lose them. Any later consequential allow flushes them first, in order.
 
 **Consumption (requester decision).** An approval is consumed when an allow that uses it is returned. It stays consumed across restarts, even if the save it authorized never lands; the user re-approves. Two refinements:
 - **A decision on disk was made, but may not have taken effect.** If a flush fails after its own commit point, recovery may publish the batch. The approval is then consumed on disk although the caller was denied.

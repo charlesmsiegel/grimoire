@@ -402,3 +402,15 @@ def test_an_oversized_batch_is_refused_before_it_is_read(store):
     finally:
         store._access.ops.read_bytes = real
     assert reads == []
+
+
+def test_a_linked_ledger_folder_is_refused_even_without_batches(store, tmp_path):
+    from grimoire.store import LinkRefused
+    from store_helpers import make_dir_link
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "notes.json").write_text("{}")
+    (store.root / "authority").mkdir()
+    make_dir_link(store.root / "authority" / "security", outside)
+    with pytest.raises(LinkRefused):
+        store.read_ledger("security")
