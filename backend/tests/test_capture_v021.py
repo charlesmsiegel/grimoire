@@ -400,3 +400,38 @@ def test_driver_extra_args_seam_reaches_the_driver(checkout, scratch_tmp, scenar
     monkeypatch.setattr(capture, "DRIVER_EXTRA_ARGS", ("--fault", "retry-first"))
     assert capture.main(dry(checkout, tmp_path / "out")) == 0
     assert json.loads(seen.read_text())[-2:] == ["--fault", "retry-first"]
+
+
+@pytest.mark.skipif(not hasattr(__import__("signal"), "SIGHUP"), reason="POSIX signals")
+def test_an_ignored_sighup_stays_ignored(checkout, scratch_tmp, scenario_files, tmp_path,
+                                         monkeypatch):
+    # `nohup` ignores SIGHUP; a capture started that way must survive the user logging out.
+    import signal
+    seen = []
+    fake_driver(tmp_path, monkeypatch, PRINT)
+    real_run = capture.run_capture
+
+    def run(options):
+        seen.append(signal.getsignal(signal.SIGHUP))
+        return real_run(options)
+
+    monkeypatch.setattr(capture, "run_capture", run)
+    previous = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    try:
+        assert capture.main(dry(checkout, tmp_path / "out")) == 0
+        assert seen == [signal.SIG_IGN]
+        assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGHUP, previous)
+
+
+def test_main_works_off_the_main_thread(checkout, scratch_tmp, scenario_files, tmp_path,
+                                        monkeypatch):
+    import threading
+    fake_driver(tmp_path, monkeypatch, PRINT)
+    result = []
+    worker = threading.Thread(target=lambda: result.append(
+        capture.main(dry(checkout, tmp_path / "out"))))
+    worker.start()
+    worker.join(60)
+    assert result == [0]

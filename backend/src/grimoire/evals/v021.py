@@ -151,7 +151,12 @@ def convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
 
 
 def _served_model(rows: list[Mapping], requested: str) -> str:
-    """The one model that answered every call; a dated snapshot of the requested one is fine."""
+    """The one model that answered every call, recorded as served.
+
+    A row is accepted when it names the requested model or 0.2.1 recorded the request as the
+    requested model (a dated snapshot, or a route the provider resolved); every call must have
+    been served by the same model.
+    """
     served = set()
     for index, row in enumerate(rows):
         model = row.get("model")

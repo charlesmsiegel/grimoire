@@ -22,6 +22,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -358,14 +359,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         args = _parser().parse_args(argv)
     except SystemExit as error:
         return int(error.code or 0)
-    caught = [s for s in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGHUP", None))
-              if s is not None]
-    previous = {s: signal.signal(s, _interrupt) for s in caught}
+    previous = {}
+    if threading.current_thread() is threading.main_thread():  # signals are main-thread only
+        for number in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGHUP", None)):
+            handler = None if number is None else signal.getsignal(number)
+            # An ignored signal (`nohup`) stays ignored; an unknown (non-Python) one is left be.
+            if handler is not None and handler is not signal.SIG_IGN:
+                previous[number] = signal.signal(number, _interrupt)
     try:
         return _main(args)
     finally:
-        for s, handler in previous.items():
-            signal.signal(s, handler)
+        for number, handler in previous.items():
+            signal.signal(number, handler)
 
 
 def _main(args: argparse.Namespace) -> int:

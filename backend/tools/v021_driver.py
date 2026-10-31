@@ -350,12 +350,17 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-if __name__ == "__main__":
+def run(argv: list[str]) -> None:
+    """``main``, reporting what was already spent if the capture fails for any reason."""
     try:
-        raise SystemExit(main(sys.argv[1:]))
-    except DriverError as error:
-        print(f"v021 driver: {error}", file=sys.stderr)
-        try:  # what was already spent, so a failed live capture still says what it cost
+        code = main(argv)
+    except BaseException as error:  # noqa: BLE001 -- a crashed live capture still cost money
+        if isinstance(error, SystemExit) and not error.code:
+            raise
+        message = str(error) if isinstance(error, DriverError) else (
+            f"unexpected {type(error).__name__}")
+        print(f"v021 driver: {message}", file=sys.stderr)
+        try:
             spent = partial_ledger(_usage_rows())
         except (OSError, ValueError, KeyError):
             spent = []
@@ -363,3 +368,8 @@ if __name__ == "__main__":
             print("v021 driver: partial ledger (counts only): " + json.dumps(spent),
                   file=sys.stderr)
         raise SystemExit(1) from None
+    raise SystemExit(code)
+
+
+if __name__ == "__main__":
+    run(sys.argv[1:])
