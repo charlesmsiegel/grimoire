@@ -72,8 +72,9 @@ def _decisions_on_disk(root, tree=None):
 def test_security_state_survives_a_restart(library):
     store, authority, locker = library
     grant_importer(authority)
-    grant_importer(authority, gid="g2")
+    grant_importer(authority, scope="worlds", gid="g2")
     approve(authority, b"pending", aid="a2")
+    approve(authority, b"elsewhere", aid="a3", address="worlds/w/x.json")  # pinned to g2
     data = record_bytes(store)
     approve(authority, data)
     txn = store.transaction()
@@ -84,7 +85,7 @@ def test_security_state_survives_a_restart(library):
     before = (authority.active_grants(), authority.pending_approvals(), authority.audit())
     store, authority = _reopen(store, authority, locker)
     assert (authority.active_grants(), authority.pending_approvals(), authority.audit()) == before
-    assert [a.approval_id for a in authority.pending_approvals()] == ["a2"]  # pinned to g1, still pending
+    assert [a.approval_id for a in authority.pending_approvals()] == ["a2"]  # a3 closed with g2; a2 is on g1
     replay = authority.handle_for(IMPORTER).authorize(Permission.APPLY, ADDRESS, data, "a1")
     assert not replay.allowed  # a consumed approval stays consumed
     authority.close()
@@ -100,8 +101,11 @@ def test_an_allow_is_on_disk_before_it_is_returned(library):
     # the process dies here: nothing is closed or flushed
     decisions = _decisions_on_disk(store.root)
     assert decisions[-1]["approval_id"] == "a1" and decisions[-1]["allowed"] is True
-    reopened = LibraryStore.open(store.root, locker=ProcessLocker(), writable=False)
-    assert reopened.read_ledger("security").head is not None
+    store.close()  # the writer lock goes with the process
+    reopened = LibraryStore.open(store.root, locker=locker)
+    with DurableAuthority.open(reopened, [OWNER], clock=fixed_clock()) as replayed:
+        assert replayed.pending_approvals() == ()  # consumed, and it stays consumed
+        assert not replayed.handle_for(IMPORTER).authorize(Permission.APPLY, ADDRESS, b"bytes", "a1").allowed
     reopened.close()
 
 
@@ -603,3 +607,41 @@ def test_a_deliberate_exit_still_flushes(library):
             authority.handle_for(IMPORTER).authorize(Permission.INSPECT, "campaigns/c1")
             raise SystemExit(0)
     assert _decisions_on_disk(store.root)[-1]["permission"] == "inspect"
+
+
+@pytest.mark.parametrize("closed", ["revoked-grant", "revoked-approval", "consumed-approval", "grant-revoked-under-it"])
+def test_a_closed_grant_or_approval_cannot_be_revoked_again(library, closed):
+    store, authority, locker = library
+    grant_importer(authority)
+    approve(authority, b"bytes")
+    if closed == "revoked-grant":
+        authority.revoke_grant("g1")
+        again = lambda: authority.revoke_grant("g1")  # noqa: E731
+    else:
+        if closed == "revoked-approval":
+            authority.revoke_approval("a1")
+        elif closed == "consumed-approval":
+            assert authority.handle_for(IMPORTER).authorize(Permission.APPLY, ADDRESS, b"bytes", "a1").allowed
+        else:
+            authority.revoke_grant("g1")
+        again = lambda: authority.revoke_approval("a1")  # noqa: E731
+    authority.flush()
+    head = store.read_ledger("security").head
+    with pytest.raises(ValueError):
+        again()  # a second revocation on disk would make the ledger unreplayable
+    assert store.read_ledger("security").head == head and not authority.poisoned
+    store, authority = _reopen(store, authority, locker)  # still opens
+    authority.close()
+    store.close()
+
+
+def test_a_scope_left_by_an_error_still_flushes_its_decisions(library):
+    store, authority, locker = library
+    grant_importer(authority, permissions=(Permission.EXECUTE,), scope="providers", gid="gp")
+    approve(authority, b"call", aid="ap", address="providers/model", permission=Permission.EXECUTE)
+    with pytest.raises(RuntimeError):
+        with authority.consequential_scope():
+            assert authority.handle_for(IMPORTER).authorize(Permission.EXECUTE, "providers/model", b"call", "ap").allowed
+            assert _decisions_on_disk(store.root) == []  # deferred to the scope's end
+            raise RuntimeError("the save failed after deciding")
+    assert [d["approval_id"] for d in _decisions_on_disk(store.root)] == ["ap"] and not authority.poisoned

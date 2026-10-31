@@ -312,3 +312,36 @@ def test_batches_split_by_size_and_an_oversized_entry_is_refused(store):
     assert head[0] == 2  # two batches: together they would exceed the batch size
     with pytest.raises(ValueError):
         render_batches("security", head, [{"text": "x" * (5 * 1024 * 1024)}])
+
+
+def test_repair_refuses_while_a_commit_awaits_recovery(tmp_path):
+    from grimoire.testing import Crash, Target
+    locker = ProcessLocker()
+    root = tmp_path / "root"
+    root.mkdir()
+    with LibraryStore.create(root / LIB, locker=locker) as store:
+        head = store.ledger_writer("security").append(_entries(1), None)
+    crashing = RootedFileOps(root, plan=[Crash(Target("replace", target="lib/.txn/journal.json"), "after")],
+                             record=False)
+    with pytest.raises(BaseException):
+        with LibraryStore.open(root / LIB, ops=crashing, locker=locker) as store:
+            store.ledger_writer("security").append(_entries(1, start=1), head)
+    assert (root / LIB / ".txn" / "journal.json").exists()
+    before = snapshot(root)
+    with pytest.raises(PendingRecovery):
+        LibraryStore.repair_ledger(root / LIB, "security", 1, locker=locker)
+    assert snapshot(root) == before
+
+
+def test_a_second_repair_never_reuses_a_conflicts_folder(tmp_path):
+    locker = ProcessLocker()
+    path = tmp_path / LIB
+    moved = []
+    for round_ in range(2):
+        with LibraryStore.open(path, locker=locker) if round_ else LibraryStore.create(path, locker=locker) as store:
+            store.ledger_writer("security").append(_entries(1, start=round_), None)
+        moved.append(LibraryStore.repair_ledger(path, "security", 1, locker=locker))
+    assert moved[0] == (".conflicts/ledger-security-1/0000000001.json",)
+    assert moved[1] == (".conflicts/ledger-security-2/0000000001.json",)
+    first = json.loads((path / moved[0][0]).read_bytes())
+    assert first["entries"][0]["n"] == 0  # the first repair's batch was not overwritten

@@ -223,7 +223,7 @@ Any break raises `LedgerBroken(name, seq, reason)`; a ledger is never read parti
 
 ### Writing
 
-- Only trusted code writes, through one `LedgerWriter` per ledger per store session.
+- Only trusted code writes, through one `LedgerWriter` per ledger per store session. Asking for a second writer of the same ledger raises `LedgerBusy`.
 - Appends never pass through a worker's authorization; the `authority` root is reserved in `grimoire.security` too, so no grant or approval can name it.
 - An append is one transaction of create-only batch files, split at 500 entries or 4 MiB. Each append checks the caller's expected head in O(1); if the head moved, it raises `StaleWrite`.
 - Ledger batches ride the same journal, preflight, recovery and crash guarantees as records.
