@@ -16,7 +16,7 @@ V2 is a redesign of the **fictional world and actor model**, not a wholesale rep
 - A V2-specific CI workflow for pushes and PRs targeting `v2`.
 - [Architecture](docs/ARCHITECTURE.md), [porting plan](docs/PORTING.md), and [working agreements](AGENTS.md).
 
-**Not yet present:** persistence, game-state transactions, actual model inference, a playable scene runner, desktop/web UI, Android, voice, content import/export, or server/API. Those are intentionally absent, not silently claimed complete. Current types are first-slice experiments, **not a finalized file schema**.
+**Not yet present on the integration branch at the time of this roadmap update:** a complete persisted story/game runtime, chat storage, a playable scene runner, desktop/web UI, Android, interactive voice, approved content import/apply, or a server/API. The native generic record store is Sprint 010 work; its implementation status must be checked independently of this README. Those are intentionally absent, not silently claimed complete. Current types are first-slice experiments, **not a finalized file schema**.
 
 ## Try the kernel
 
@@ -39,11 +39,11 @@ No model keys, network service, user library or LLM are required for the tests. 
 
 ## Prioritized V2 delivery roadmap
 
-Start with the [**ordered V2 sprint roadmap**](docs/roadmap/README.md) and its [Wave 2 interface/exit contract](docs/roadmap/WAVE2_HANDOFFS.md): 106 proposals are arranged into 11 dependency-safe parallel waves with a critical migration/play path. The original [roadmapping notebook](https://github.com/charlesmsiegel/grimoire/tree/roadmapping/docs/roadmapping) remains an archived V1-era planning reference; the V2 wave order supersedes it.
+Start with the [**ordered V2 sprint roadmap**](docs/roadmap/README.md) and its [Wave 2 interface/exit contract](docs/roadmap/WAVE2_HANDOFFS.md): 107 proposals are arranged into 11 dependency-safe parallel waves with a critical migration/play path. The original [roadmapping notebook](https://github.com/charlesmsiegel/grimoire/tree/roadmapping/docs/roadmapping) remains an archived V1-era planning reference; the V2 wave order supersedes it.
 
 - **V2 desktop library default:** `~/.grimoire-v2/` (override with an absolute `GRIMOIRE_V2_HOME`), never V1's `~/.grimoire/`, `GRIMOIRE_HOME` or `~/.grimoire.json`. The read-only resolver and V1-isolation guard are in `grimoire.library` (see [Architecture](docs/ARCHITECTURE.md#library-location-and-v1-isolation-implemented-grimoirelibrary)); run `python -m grimoire.library` to see which library V2 would use. Nothing writes a library yet.
 - **Migration from `0.2.1`:** begin with [the migration skill](.agents/skills/migrate-v1-to-v2/SKILL.md), which currently specifies the preview/apply/verification workflow, including image objects, galleries, expressions and inheritance. The **runnable, read-only inventory scanner** is implemented (`python -m grimoire.migrate_v1 scan`; see [the inventory contract](docs/MIGRATION_INVENTORY.md)); reviewed import/apply is Wave 4 and is not implemented.
-- **Playable testing:** native storage and graph first; a real imported desktop text scene is the Wave 5 gate, with phone play and device synchronization in Wave 6.
+- **Playable testing:** native storage and a lightweight chat scope (Sprint 107), then **standalone character/scenario/lorebook cards (037)** and reviewed V1 worlds; Wave 5 must play **both a world-less chat and a migrated-world scene**, with phone play, one-click onboarding and synchronization in Wave 6. See [chat and navigation design](docs/roadmap/CHAT_MODEL.md).
 - **Sync without Syncthing:** authenticated app-managed transfer and conflict-preserving revisions are early work. An off-LAN sync needs reachable infrastructure (remote endpoint or optional relay).
 - **Token economics:** separate actor-specific model generation for every speaking NPC is the required default. Additional paid inference is optional, feature-flagged and metered.
 

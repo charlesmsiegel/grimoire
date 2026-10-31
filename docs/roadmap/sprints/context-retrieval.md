@@ -27,6 +27,12 @@ Consume 012's actor visibility/claim evidence, 017's bounded typed graph queries
 
 **Parallelism in Wave 4:** 027 owns minimally sufficient actor context and actual separate NPC calls; 031 owns optional richer retrieval/prompt packing through a stable extension interface. Do not make 027's first useful slice depend on completing 031 in the same wave.
 
+## World-optional source and lorebook context
+
+A scene may start with a single imported card or a scenario/lorebook bundle and no world. Retrieve **only explicitly attached and relevant source entries** plus current chat/actor observations; do not force a world lookup, include the full imported catalog, or promote a lorebook instruction to director truth. Deterministic trigger/semantic retrieval must respect session revisions, speaker viewpoint, scope and a strict input token cap.
+
+Newly added source material applies to **future context selection**, and does not retroactively make a previously absent NPC hear old private messages. Adding a card must not automatically cause a paid graph lookup or independent background reasoning for every present NPC. [Chat lifecycle](../CHAT_MODEL.md).
+
 ## Open questions
 - What relevance signals beat full-text/embedding baselines?
 - How should context budget be divided?

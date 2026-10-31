@@ -22,6 +22,12 @@ The first proof must preserve **one shared blob/image object with two distinct v
 
 See [Wave 2 handoffs](../WAVE2_HANDOFFS.md#parallel-ownership-and-handoffs).
 
+## Art attached to standalone cards and world-specific portrayals
+
+Art belongs to the *picture object and scoped placement* model, never automatically to a world directory. A standalone imported card can have an avatar/gallery/expression placement with no world; a derived Modern/Vampire Elderfen portrayal may inherit core art **only where that placement's provenance/override policy allows it**. A `clear` or hidden inherited placement must not fall back to a different depiction via same logical name.
+
+Offer a source-qualified API usable by both 026's V1 importer and 037's standalone card/scenario importer. Two chats using one character image may share blob bytes but own distinct chat/actor state. [Chat model](../CHAT_MODEL.md).
+
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove?
 - Which optional later integrations can stay outside the first slice?

@@ -17,10 +17,18 @@ The repository includes an *early migration skill specification*, [`migrate-v1-t
 |---|---|
 | Wave 1 | V2 library-path resolver, source-qualified IDs and cost/authority contracts |
 | Wave 2 | Composable entity/instance model, generic revisioned files and an **executable V1 read-only inventory scanner** with source-ID, scene, image-object/placement and loss reports |
-| Wave 3 | Typed graph/event evidence, shared images/placements and device conflict-safe revisions |
-| Wave 4 | Reviewed **import/apply** of a V1 world plus character/PC versions, images, expressions and an accepted scene; separate per-NPC model generation; app-managed transport |
-| Wave 5 | **Playable desktop text loop** using the imported V1 scenario, with stable persistence and actual token accounting |
-| Wave 6 | **Playable phone client with actual sync/handoff** of scene, picture and actor knowledge to desktop |
+| Wave 3 | **World-optional chat scopes**, pinned shared-character/setting-portrayal composition, typed graph/event evidence, shared images and device conflict-safe revisions |
+| Wave 4 | Reviewed V0.2.1 world import **and independent standalone character/scenario/lorebook card import**, plus separate per-NPC generation and app-managed transport |
+| Wave 5 | **Playable desktop text loop** for a migrated V1 world *or a world-less card/scenario chat*, with stable persistence; loss-aware SillyTavern chat-history/swipe import |
+| Wave 6 | **One-click Start Chat** from character/scenario/lore and phone client with actual sync/handoff of scene, pictures and actor knowledge |
+
+## SillyTavern to V2 without a world
+
+V2 must support the former SillyTavern use case as a **first-class mode**, not as a special RPG engine or a hidden requirement to build a whole world. A character card, scenario-only card, character + lorebook bundle or simple premise starts a lightweight 107 chat in an automatically created campaign identity namespace (`world = null`), preserving source and instance identity, then can grow by adding more cards, being grouped into a named campaign, or gaining a selectively authored world later.
+
+**037 (Wave 4)** imports standalone character/scenario/lorebook cards independently of V0.2.1's world migration (026). **036 (Wave 5)** imports exported SillyTavern *chat histories* including selected swipes, alternate branches, group-chat speakers and personas without treating the alternatives as parallel canonical events. Accepted chat text is not evidence that every character witnessed it. The first playable **035 (Wave 5)** must support both direct-card world-less chat and imported-world sessions; 052/065 add richer start and discovery UX. Full ST import fidelity remains a tracked goal, not a capability already present.
+
+**One chat can be found by character and scenario**, but its canonical history is stored once. Reusing a card in a separate chat creates separate actor memories; adding a card mid-session never retroactively confers private knowledge. The base Mara portrait and Elderfen AU portrayals can be related by reviewed, explicit inheritance rather than automatic name matching. See [chat navigation design](roadmap/CHAT_MODEL.md).
 
 ## Why early Wave 2 scans matter
 

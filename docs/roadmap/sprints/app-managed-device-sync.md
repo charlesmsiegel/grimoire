@@ -25,6 +25,10 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 
 Consume 010's guarded record-envelope API and 019's device ancestry and conflict protocol; the input stream may contain images, but it must not infer image ownership from a raw blob hash. Authentication is independent of content-sourced permissions. The first peer transfer can use a testable reachable transport; synchronization completeness is reported only after the staged revision and all referenced blobs/placements are verified. Offline conflict preservation is guaranteed by 019; Wave 7 owns semantic resolution. No hidden dependency on a particular sync vendor, always-on server or V1 library.
 
+## One chat, many navigation links
+
+Replicate a world-less chat as 107's **one canonical play-scope record** plus source associations, conversation history, actor/evidence data and referenced picture objects. A desktop list by character and a phone list by scenario must converge to the **same** chat ID. Transport neither requires a world file nor treats derived reverse-index caches as independent conflicts. A missing/uninstalled source remains a broken qualified link with explicit recovery status. [Chat model](../CHAT_MODEL.md).
+
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove?
 - Which optional later integrations can stay outside the first slice?
