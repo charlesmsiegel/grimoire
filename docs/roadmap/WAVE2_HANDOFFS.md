@@ -39,7 +39,7 @@ The exact Markdown/JSON filenames, field spellings and on-disk form are an **010
 
 ### Observation/evidence boundary (012 / 017 / 020)
 
-The canonical *meaning* of evidence belongs to 012: event/claim/evidence IDs and sources; observer/recipient; perception or communication channel and whether delivery was confirmed; time/scene sequence; access/audience; status (**established**, **reported**, **suspected**, **rejected**, or **unknown**); and the distinction between the actual event and an actor's potentially false proposition.
+**Implemented first slice:** [Knowledge and perspective contract](../KNOWLEDGE.md) (`grimoire.core.knowledge`, `grimoire.core.perspective`); it maps the status list below onto proposition *standing* and belief *stance*. The canonical *meaning* of evidence belongs to 012: event/claim/evidence IDs and sources; observer/recipient; perception or communication channel and whether delivery was confirmed; time/scene sequence; access/audience; status (**established**, **reported**, **suspected**, **rejected**, or **unknown**); and the distinction between the actual event and an actor's potentially false proposition.
 
 - An actor's **access to evidence** is not equivalent to its **belief**, and neither is equivalent to world truth. Receiving a message does not make its assertion canonically true. A transcript line does not establish that an off-stage actor heard it.
 - The actor-only projection is deterministic and must fail closed for private/unknown evidence; no model call on ordinary filtering. The director projection is separate and explicitly authorized.

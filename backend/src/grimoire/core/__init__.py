@@ -11,12 +11,27 @@ from .index import (
 )
 from .model import (
     ActorView,
-    Belief,
     CampaignActor,
     CharacterDefinition,
     ControlAssignment,
+)
+from .knowledge import (
+    RULED_STANDINGS,
+    STANCES,
+    STANDINGS,
+    SUBJECT_KINDS,
+    Belief,
+    Disclosure,
     Event,
-    Observation,
+    Evidence,
+    Knowledge,
+    KnowledgeError,
+    Moment,
+    Perception,
+    Proposition,
+    Report,
+    Ruling,
+    Subject,
 )
 from .authority import (
     ADJUDICATED_DOMAINS,
@@ -47,11 +62,27 @@ from .authority import (
     review_narration,
     submit_contribution,
 )
+from .perspective import (
+    ActorKnowledge,
+    BeliefAuthorityError,
+    DirectorKnowledge,
+    KnownBelief,
+    KnownEvidence,
+    PlayerKnowledge,
+    PropositionStanding,
+    SentReport,
+    TableEvent,
+    actor_knowledge,
+    admit_belief,
+    director_knowledge,
+    knowledge_about,
+    player_knowledge,
+    standing,
+)
 from .resolve import MissingDefinition, actor_view
 
 __all__ = [
-    "ActorView", "Belief", "CampaignActor", "CharacterDefinition",
-    "ControlAssignment", "Event", "Observation", "SourceRef",
+    "ActorView", "CampaignActor", "CharacterDefinition", "ControlAssignment", "SourceRef",
     "IdentityConflict", "InstanceRef", "LegacyId", "parse_ref",
     "BrokenReference", "DefinitionIndex", "DefinitionLink", "LegacyIdMap",
     "SourceDescriptor", "UnmappedLegacyId",
@@ -63,4 +94,10 @@ __all__ = [
     "PlayerContribution", "RejectedClaim", "Resolution", "Revocation",
     "apply_corrections", "auto_complete", "controller_of", "delegate",
     "narration_policy", "review_narration", "submit_contribution",
+    "RULED_STANDINGS", "STANCES", "STANDINGS", "SUBJECT_KINDS", "Belief", "Disclosure", "Event",
+    "Evidence", "Knowledge", "KnowledgeError", "Moment", "Perception", "Proposition", "Report",
+    "Ruling", "Subject",
+    "ActorKnowledge", "BeliefAuthorityError", "DirectorKnowledge", "KnownBelief", "KnownEvidence",
+    "PlayerKnowledge", "PropositionStanding", "SentReport", "TableEvent", "actor_knowledge",
+    "admit_belief", "director_knowledge", "knowledge_about", "player_knowledge", "standing",
 ]

@@ -3,6 +3,8 @@
 > **V2 scope correction:** The typed graph and evidence store are not globally visible to any NPC. Actor views may traverse only evidence-authorized relationships. Deterministic observation filtering is default; model uncertainty resolution needs an opt-in cost flag. See the [V2 ordered roadmap](../README.md) for prerequisites, waves and current first-slice proof. Older references to shipped V1 APIs describe behavior to *port*, not V2 capabilities.
 
 
+> **Status:** the first slice (milestone 1) is implemented as a pure in-memory contract; see [Knowledge and perspective contract](../../KNOWLEDGE.md). Milestones 2–3 and persistence remain open.
+
 **Outcome:** Distinguish established truth from who witnessed it, believes it, inferred it or is allowed to know it.
 
 ## Scope

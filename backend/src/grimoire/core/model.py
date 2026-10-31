@@ -8,9 +8,12 @@ knowledge assumptions before a storage implementation exists.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING
 
 from .identity import InstanceRef, SourceRef, validate_segment
+
+if TYPE_CHECKING:
+    from .perspective import ActorKnowledge
 
 
 def _nonempty(value: str, label: str) -> None:
@@ -76,48 +79,6 @@ class ControlAssignment:
 
 
 @dataclass(frozen=True, slots=True)
-class Event:
-    """Director-visible accepted event; not automatically actor knowledge."""
-
-    campaign_id: str
-    event_id: str
-    description: str
-
-    def __post_init__(self) -> None:
-        validate_segment(self.campaign_id, "campaign_id")
-
-
-@dataclass(frozen=True, slots=True)
-class Observation:
-    """What one actor perceived, not the entire objective event."""
-
-    campaign_id: str
-    actor_id: str
-    event_id: str
-    channel: str
-    perceived: str
-
-    def __post_init__(self) -> None:
-        validate_segment(self.campaign_id, "campaign_id")
-        validate_segment(self.actor_id, "actor_id")
-
-
-@dataclass(frozen=True, slots=True)
-class Belief:
-    """An actor's possibly false interpretation; never promoted to truth."""
-
-    campaign_id: str
-    actor_id: str
-    proposition: str
-    status: Literal["believed", "suspected", "rejected"]
-    evidence_ids: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        validate_segment(self.campaign_id, "campaign_id")
-        validate_segment(self.actor_id, "actor_id")
-
-
-@dataclass(frozen=True, slots=True)
 class ActorView:
     """Disposable perspective for one inference, not a canonical record."""
 
@@ -125,6 +86,8 @@ class ActorView:
     actor_id: str
     name: str
     description: str
-    observations: tuple[Observation, ...]
-    beliefs: tuple[Belief, ...]
     resolved_source: SourceRef | None = None  # the exact revision this view used
+    # Only a ``perspective`` projection for this actor; ``None`` means none was
+    # supplied, and an actor-prompt builder must refuse it rather than read it
+    # as unfiltered knowledge.
+    knowledge: ActorKnowledge | None = None
