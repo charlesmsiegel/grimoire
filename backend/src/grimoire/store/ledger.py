@@ -52,7 +52,11 @@ class Ledger:
 
 def read_ledger(access: Access, name: str) -> Ledger:
     """The whole ledger, verified; ``LedgerBroken`` for any break, never a partial result."""
-    name = ledger_name(name)
+    with access.cached_listings():  # one listing of the folder, not one per batch
+        return _read_ledger(access, ledger_name(name))
+
+
+def _read_ledger(access: Access, name: str) -> Ledger:
     folder = ledger_folder(name)
     if access.presence(folder) != "present":
         return Ledger(name, (), ())

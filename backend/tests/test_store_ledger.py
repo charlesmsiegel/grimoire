@@ -345,3 +345,42 @@ def test_a_second_repair_never_reuses_a_conflicts_folder(tmp_path):
     assert moved[1] == (".conflicts/ledger-security-2/0000000001.json",)
     first = json.loads((path / moved[0][0]).read_bytes())
     assert first["entries"][0]["n"] == 0  # the first repair's batch was not overwritten
+
+
+def test_reading_a_long_ledger_lists_its_folder_once(store):
+    writer = store.ledger_writer("security")
+    head = None
+    for number in range(60):
+        head = writer.append(_entries(1, start=number), head)
+    calls = []
+    real = store._access.ops.list_dir
+    store._access.ops.list_dir = lambda path: calls.append(path) or real(path)
+    try:
+        assert len(store.read_ledger("security").batches) == 60
+    finally:
+        store._access.ops.list_dir = real
+    assert len(calls) < 10  # per ancestor, not per batch
+
+
+def test_explicit_recovery_waits_for_a_commit_in_another_thread(store):
+    import threading
+    import time
+    writer = store.ledger_writer("security")
+    results, workers = [], []
+    real = store._access.ops.make_temp
+
+    def make_temp(*args, **kwargs):  # staging, before the journal exists
+        if not workers:
+            worker = threading.Thread(target=lambda: results.append(store.recover()))
+            worker.start()
+            workers.append(worker)
+            time.sleep(0.2)
+            assert not results  # recovery would clean this commit's staging
+        return real(*args, **kwargs)
+    store._access.ops.make_temp = make_temp
+    try:
+        writer.append(_entries(1), None)
+    finally:
+        store._access.ops.make_temp = real
+    workers[0].join(5)
+    assert results and len(store.read_ledger("security").entries) == 1

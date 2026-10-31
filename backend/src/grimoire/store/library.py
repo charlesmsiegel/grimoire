@@ -415,12 +415,13 @@ class LibraryStore:
         self._require_open()
         if not self._writable:
             raise StoreError("a read-only store cannot recover")
-        try:
-            report = RecoveryReport.of(engine.recover(self._access))
-        except OSError as error:
-            raise RecoveryBlocked(f"recovery could not finish: {error}") from error
-        self.last_recovery = report
-        return report
+        with self.lock:  # waits for this process's commits; it would clean their staging
+            try:
+                report = RecoveryReport.of(engine.recover(self._access))
+            except OSError as error:
+                raise RecoveryBlocked(f"recovery could not finish: {error}") from error
+            self.last_recovery = report
+            return report
 
     # -- reading -----------------------------------------------------------------
     def read(self, ref: SourceRef | InstanceRef) -> StoredRecord:
