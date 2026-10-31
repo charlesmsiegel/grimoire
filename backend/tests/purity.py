@@ -102,8 +102,9 @@ PURE_PACKAGES = (
     PurePackage("grimoire.voice", ("grimoire.voice", "grimoire.core", "grimoire.evals.text",
                                    "grimoire.evals.checks"),
                 never_import=("grimoire.core.inference",)),
-    # Offline evaluation: independent of the domain core; only its loader and CLI read files.
-    PurePackage("grimoire.evals", ("grimoire.evals",),
+    # Offline evaluation: of the domain core it uses only the inference contracts (sprint 015);
+    # only its loader and CLI read files.
+    PurePackage("grimoire.evals", ("grimoire.evals", "grimoire.core.inference"),
                 io_modules=frozenset({"loader.py", "story_quality.py"}),
                 io_stdlib=frozenset({"json", "pathlib", "importlib.resources", "sys", "argparse"}),
                 io_names=frozenset({"print"})),
