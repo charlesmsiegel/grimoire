@@ -121,10 +121,20 @@ def test_duplicate_canonical_records_are_refused():
         NavigationIndex.build(chats, scopes + scopes[:1])
 
 
-def test_navigation_loads_no_provider_and_no_store():
-    code = ("import json, sys; import grimoire.chats; "
+def _loaded(module: str) -> list[str]:
+    code = (f"import json, sys; import {module}; "
             "print(json.dumps(sorted(m for m in sys.modules if m.split('.')[0] == 'grimoire')))")
     output = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
                             env={**os.environ, "PYTHONPATH": str(SRC)}).stdout
-    loaded = json.loads(output)
-    assert not [m for m in loaded if m.startswith(("grimoire.providers", "grimoire.store", "grimoire.chatstore"))]
+    return json.loads(output)
+
+
+def test_navigation_loads_no_provider_and_no_store():
+    assert not [m for m in _loaded("grimoire.chats")
+                if m.startswith(("grimoire.providers", "grimoire.store", "grimoire.chatstore"))]
+
+
+def test_the_chat_service_loads_no_provider():
+    loaded = _loaded("grimoire.chatstore")
+    assert "grimoire.store" in loaded  # the check is not vacuous
+    assert not [m for m in loaded if m.startswith(("grimoire.providers", "grimoire.capture", "grimoire.evals"))]

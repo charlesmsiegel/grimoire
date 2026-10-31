@@ -110,7 +110,7 @@ Each query returns `ChatRef`s, each chat at most once:
 | Query | Returns |
 |---|---|
 | `all_chats()` / `recent(limit ≤ 1000)` | every chat file, newest activity first. Chats this version cannot decode (`undecodable`) and chats without a scope (`orphan_chat`) are included and flagged, so nothing is lost from Chats. |
-| `by_source(ref, role=None, include_detached=False)` | chats whose launch, a binding or a roster actor is the same qualified entity (`entity_key`). A pinned query also requires that revision. Names are never matched. Definition links (`alternate_portrayal`, `derived_variant`, `same_individual`) are never followed: equivalence filters belong to 022/065. The launch always counts as provenance. Detached bindings count only on request. |
+| `by_source(ref, role=None, include_detached=False)` | chats whose launch or a binding is the same qualified entity (`entity_key`). A roster actor counts through its binding: only while that binding is active, or with `include_detached`. A detached character or replaced persona is therefore not found by default, although its actor stays on the roster. A roster entry without any binding (a hand edit) always counts. A pinned query also requires that revision. Names are never matched. Definition links (`alternate_portrayal`, `derived_variant`, `same_individual`) are never followed: equivalence filters belong to 022/065. The launch always counts as provenance. Detached bindings count only on request. |
 | `by_scope(id)`, `campaigns()`, `by_world(source)` | chats in a scope; the scopes the player named; chats in scopes with that world |
 
 **No index is persisted in this slice.** `ChatLibrary.navigation()` rebuilds it from `store.load()` on every call, so "deleting the cache" is equivalent to rebuilding. `to_json()` is the deterministic form any later persisted cache (065) must equal. The index is never built from an LLM call; neither package imports a provider.
@@ -132,10 +132,16 @@ Every mutating method returns a `ChatChange`:
 - `start_chat(launch, attach=…, persona=…, label=…, scope=None, reuse_actors=None)`:
   - **New scope:** the campaign id is drawn until `campaign_presence` is `absent`; a look-alike folder counts as taken.
   - **Continuing a scope:** pass `scope=`. A campaign without `scope.json` (one from before 107, or from 026) gets one lazily. To reuse existing campaign actors instead of creating new ones, pass `reuse_actors={(role, entity_key): InstanceRef}`. A reused actor must be a character instance of the same entity.
-- `attach_source(chat, ref, role, expected=…, actor=None)`, `detach_source(…)`, `set_persona(chat, ref | None, …)`, `set_label(…)`.
-  - `detach_source` works on a broken reference; it is the repair path.
+- `read_chat(chat)` / `read_scope(scope)` return the decoded record and its etag, the `expected` value for an edit.
+- `attach_source(chat, ref, role, expected=…, actor=None)`: `actor=` explicitly reuses an existing campaign actor of the same entity, for example when re-attaching a detached character. The default is a new actor.
+- `detach_source(…)`: works on a broken reference; it is the repair path.
+- `set_persona(chat, ref | None, expected=…, actor=None)`: detaches the current persona and binds the new one. Choosing the same persona entity again keeps its actor while that actor's instance exists; if the file has vanished, a new actor is minted.
+- `set_label(…)`.
+- Edits keep the stored envelope's unknown top-level fields and original `owner`.
 - `name_scope`, `attach_world`, `detach_world`, `set_session_zero`.
 - `open_chat(chat)` returns the record, its scope and `broken`: every launch, active binding, roster actor and world reference that does not resolve now. Reasons are `missing_source`, `missing_entity`, `missing_revision`, `excluded_source`, `entity_dropped`, `missing_actor` and `world_drift`. Opening never fails because a source is missing.
+  - `ChatView.problems` reports `orphan_chat` when the scope record is missing, and `undecodable_scope` when it exists but cannot be read.
+  - Opening a chat file whose envelope the store cannot read raises that store error (`UnsupportedFormat`, `MalformedRecord`, …). Navigation lists such a file as `undecodable`.
 - `navigation()`.
 
 ### Validation

@@ -18,7 +18,7 @@ from grimoire.security import Approval, Authorizer, Grant, Permission, ResourceP
 from grimoire.store import LibraryStore, RecordEnvelope, ScopeRecord, StaleWrite, WriteDenied
 from grimoire.testing.fileops import snapshot
 
-from chat_fixtures import ANYA, CARDS, LORE, MARA, NAMESAKE, OTHER, SAM, STORM, WORLD, chat_library, seed_sources
+from chat_fixtures import ANYA, CARDS, FOG, LORE, MARA, NAMESAKE, OTHER, SAM, STORM, WORLD, chat_library, seed_sources
 from store_helpers import OWNER, owner_handle
 
 
@@ -507,3 +507,47 @@ def test_choosing_the_same_persona_after_its_actor_vanished_mints_a_new_one(stor
     chats.set_persona(first.chat, SAM, expected=etag).commit()
     record = chats.read_chat(first.chat)[0]
     assert record.persona.actor != gone and record.roster_entry(gone) is not None  # history kept, new body
+
+
+def test_a_second_scenario_is_another_binding_not_a_new_chat(store, chats):
+    first = start(chats)
+    actors = [entry.actor for entry in chats.read_chat(first.chat)[0].roster]
+    files = chat_files(store)
+    etag = chats.read_chat(first.chat)[1]
+    etag = chats.attach_source(first.chat, STORM, "scenario", expected=etag).commit().etags[
+        f"campaigns/{first.scope.campaign_id}/chats/{first.chat.chat_id}.json"]
+    chats.attach_source(first.chat, FOG, "scenario", expected=etag).commit()
+    record = chats.read_chat(first.chat)[0]
+    assert {b.ref for b in record.active_bindings("scenario")} == {STORM, FOG}
+    nav = chats.navigation()
+    assert nav.by_source(STORM.unpinned()) == nav.by_source(FOG.unpinned()) == (first.chat,)
+    assert nav.by_source(FOG.unpinned(), role="scenario") == (first.chat,)
+    assert chat_files(store) == files and [e.actor for e in record.roster] == actors
+
+
+def test_detaching_a_world_keeps_the_scope_and_its_chats(store, chats):
+    first = start(chats)
+    etag = chats.attach_world(first.scope, WORLD, expected=chats.read_scope(first.scope)[1]).commit().etags[
+        f"campaigns/{first.scope.campaign_id}/scope.json"]
+    assert chats.navigation().by_world(WORLD) == (first.chat,)
+    chats.detach_world(first.scope, expected=etag).commit()
+    scope = chats.read_scope(first.scope)[0]
+    assert scope.world is None and scope.created_at == chats.open_chat(first.chat).scope.created_at
+    nav = chats.navigation()
+    assert nav.by_world(WORLD) == () and nav.all_chats() == (first.chat,)
+
+
+def test_reattaching_a_character_can_reuse_its_actor(store, chats):
+    first = start(chats)
+    record, etag = chats.read_chat(first.chat)
+    mara = record.roster[0].actor
+    etag = chats.detach_source(first.chat, MARA, "character", expected=etag).commit().etags[
+        f"campaigns/{first.scope.campaign_id}/chats/{first.chat.chat_id}.json"]
+    change = chats.attach_source(first.chat, MARA, "character", expected=etag, actor=mara)
+    assert change.new_actors == () and len(change.preview()) == 1  # no new instance
+    change.commit()
+    record = chats.read_chat(first.chat)[0]
+    assert [b.actor for b in record.active_bindings("character")] == [mara] and len(record.roster) == 1
+    with pytest.raises(InvalidBinding) as error:
+        chats.attach_source(first.chat, ANYA, "character", expected=chats.read_chat(first.chat)[1], actor=mara)
+    assert error.value.reason == "actor_mismatch"
