@@ -113,3 +113,62 @@ def test_deeply_nested_json_is_invalid_input(tmp_path, capsys):
     candidate = write(tmp_path, "candidate.json", "[" * 200000)
     assert main([shipped("scenario.json"), shipped("baseline.json"), candidate]) == 2
     assert "nested too deeply" in capsys.readouterr().err
+
+
+# ---- /2 runs --------------------------------------------------------------------------------
+
+from pathlib import Path  # noqa: E402
+
+from evals_helpers import bundle, guild_run_v2, minimal_scenario  # noqa: E402
+from grimoire.evals.format import parse_scenario  # noqa: E402
+from grimoire.evals.loader import evidence_digest  # noqa: E402
+from grimoire.evals.report import MEASURED_NOTICE, UNVERIFIED_NOTICE  # noqa: E402
+from grimoire.evals.v021 import convert  # noqa: E402
+
+V1_REPORT = Path(__file__).parent / "fixtures" / "story_quality_v1_report.txt"
+
+
+def test_v1_cli_output_unchanged(capsys):
+    assert main([shipped("scenario.json"), shipped("baseline.json"), shipped("baseline.json")]) == 0
+    assert capsys.readouterr().out == V1_REPORT.read_text("utf-8")
+
+
+def test_cli_v2_pass_exit_0(tmp_path, capsys):
+    _, run = guild_run_v2()
+    path = write(tmp_path, "v2.json", run)
+    assert main([shipped("scenario.json"), path, path]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("story-quality gate: PASS") and SYNTHETIC_NOTICE in out
+
+
+def test_cli_mixed_formats_exit_2(tmp_path, capsys):
+    _, run = guild_run_v2()
+    path = write(tmp_path, "v2.json", run)
+    assert main([shipped("scenario.json"), shipped("baseline.json"), path]) == 2
+    assert "same run format" in capsys.readouterr().err
+
+
+def capture_files(tmp_path):
+    scenario_path = write(tmp_path, "scenario.json", minimal_scenario())
+    data = bundle(mode="live", choice_outcomes={"c1": "unlabelled"})
+    run = convert(data, parse_scenario(minimal_scenario()), digest=evidence_digest(data),
+                  run_id="cap", label="capture")
+    return scenario_path, write(tmp_path, "run.json", run), write(tmp_path, "evidence.json", data), data
+
+
+def test_cli_evidence_makes_a_capture_measured(tmp_path, capsys):
+    scenario_path, run_path, evidence_path, _ = capture_files(tmp_path)
+    assert main([scenario_path, run_path, run_path]) == 0
+    assert UNVERIFIED_NOTICE in capsys.readouterr().out
+    assert main([scenario_path, run_path, run_path, "--evidence-baseline", evidence_path,
+                 "--evidence-candidate", evidence_path]) == 0
+    assert MEASURED_NOTICE in capsys.readouterr().out
+
+
+def test_cli_bad_evidence_exit_2(tmp_path, capsys):
+    scenario_path, run_path, _, _ = capture_files(tmp_path)
+    broken = write(tmp_path, "broken.json", "{not json")
+    assert main([scenario_path, run_path, run_path, "--evidence-baseline", broken]) == 2
+    v1 = write(tmp_path, "evidence.json", bundle())
+    assert main([shipped("scenario.json"), shipped("baseline.json"), shipped("baseline.json"),
+                 "--evidence-baseline", v1]) == 2

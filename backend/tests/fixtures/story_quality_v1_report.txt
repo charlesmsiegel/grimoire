@@ -1,0 +1,25 @@
+story-quality gate: PASS
+baseline: guild-betrayal-synthetic-0.2.1
+candidate: guild-betrayal-synthetic-0.2.1
+note: no regression against a synthetic baseline — not a cost/quality certification
+
+findings (0):
+
+metric                        baseline                             candidate
+provenance                    synthetic                            synthetic
+NPC lines                     6                                    6
+leak rate (NPC lines)         0                                    0
+choices negated by label      0                                    0
+choices negated by evidence   0                                    0
+choices unrealized            0                                    0
+cast distinguishability       1                                    1
+calls by purpose              narration=3, npc_generation=6        narration=3, npc_generation=6
+uncached input tokens         8700                                 8700
+cached input tokens           4200                                 4200
+output tokens                 540                                  540
+weighted billed tokens        9660                                 9660
+cost by purpose               narration=3360, npc_generation=6300  narration=3360, npc_generation=6300
+cost by feature flag          none                                 none
+total call latency ms         8700                                 8700
+judge scores (informational)  fluency=0.6                          fluency=0.6
+judge scores never decide the verdict.

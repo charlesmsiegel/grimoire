@@ -1,5 +1,9 @@
 # Measured V0.2.1 cost/quality comparison
 
+> **Status (first slice):** baseline capture pending. `grimoire.story-quality/2` and the opt-in
+> 0.2.1 capture harness have landed and are proven by a real-0.2.1 dry run; no live,
+> provider-reported capture has been run. See [V0.2.1 baseline](../../evals/V021_BASELINE.md).
+
 **Outcome:** V2 should improve character fidelity without silently increasing ordinary play costs.
 
 ## Scope and first proof

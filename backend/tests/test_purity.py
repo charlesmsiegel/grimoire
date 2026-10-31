@@ -136,6 +136,21 @@ def test_only_the_evals_edge_modules_read_files():
     assert check("from .loader import load_json", cli) == []
 
 
+def test_evals_may_import_core_inference_only():
+    # Sprint 015: /2 runs are rebuilt as inference plans and ledgers. Nothing else in
+    # the fiction domain is the evaluator's business.
+    def check(source):
+        return boundary_problems(source, "grimoire/evals/x.py", EVALS, "grimoire.evals")
+    assert check("from grimoire.core.inference import plan_turn") == []
+    assert check("from grimoire.core.inference.usage import TokenUsage") == []
+    assert check("import grimoire.core.inference") == []
+    assert check("from grimoire.core import SourceRef")
+    assert check("import grimoire.core")
+    assert check("from grimoire.core.model import Event")
+    assert check("from grimoire import core")
+    assert check("from grimoire.library import paths")
+
+
 def _modules_loaded_by(statement: str) -> set[str]:
     # -S: no site hooks, so a start-up .pth file cannot preload (and hide) a module.
     env = {**os.environ, "PYTHONPATH": str(SRC)}
@@ -169,15 +184,15 @@ def test_importing_a_pure_package_loads_no_capability_module(package):
     loaded = _newly_loaded("\n".join(f"import {name}" for name in names))
     assert set(names) <= loaded
     assert _reached(loaded, CAPABILITY_MODULES) == []
-    if package is EVALS:
-        assert _reached(loaded, ["grimoire.core"]) == []
+    # grimoire.evals may load grimoire.core at run time: importing grimoire.core.inference
+    # runs grimoire/core/__init__.py. Its own imports stay within core.inference (static rule).
 
 
-def test_the_evals_file_edge_loads_no_network_or_core_module():
+def test_the_evals_file_edge_loads_no_network_module():
     names = _module_names(EVALS, io=True)
     assert names
     loaded = _newly_loaded("\n".join(f"import {name}" for name in names))
-    assert _reached(loaded, NETWORK_MODULES + ("grimoire.core",)) == []
+    assert _reached(loaded, NETWORK_MODULES) == []
 
 
 def test_closure_check_sees_a_capability_module_loaded_indirectly():
