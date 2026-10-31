@@ -1,6 +1,6 @@
 # Campaign Archaeology and Evidence-Based Transcript Reconstruction
 
-**Outcome:** Import long-running RP transcripts faithfully after V0.2.1 source inventory and basic V2 import become real, without fabricating events or leaking knowledge.
+**Outcome:** Faithfully import **SillyTavern chat histories and group-chat exports**, alongside V0.2.1 scenes, without fabricating events, overwriting swipes or leaking actor knowledge.
 
 ## V2 migration contract
 
@@ -16,7 +16,7 @@ Use the new [migration skill](../../../.agents/skills/migrate-v1-to-v2/SKILL.md)
 
 ## Milestones
 
-1. Preview one transcript as exact source-backed scenes and ambiguity warnings without writes.
+1. Import a **synthetic SillyTavern conversation export** into a 107 chat/play scope after 037's card import, preserving exact user/NPC messages, order, persona, alternate swipes/edits and active-branch choice with source provenance; separately preview V0.2.1 transcript segmentation.
 2. Reconcile an accepted segmented transcript with V2's events, actor IDs and source version map without duplicate scenes.
 3. Support multi-file/multi-era campaigns with versioned historical evidence and verified rollback.
 
@@ -26,7 +26,7 @@ A multi-year, million-word RP can be moved into V2 with faithful chronology, per
 
 ## Proving scenario
 
-Two same-named actors and a telepathic private exchange occur in one imported transcript. The mapping remains explicit and only the right recipients acquire knowledge.
+A synthetic ST group chat has two same-named characters from different sources, a persona, alternate swipes, edited messages and a private exchange. Every source message and chosen active branch is recoverable; unchosen swipes do not create canon or automatically grant secret knowledge.
 
 ## Independence and interfaces
 
@@ -35,6 +35,18 @@ Consumes first [V1 import/apply](v1-to-v2-import-apply.md), native files and sce
 ## Wave 2 handoff: evidence-aware reconstruction
 
 Accept 011's exact V1 source inventory and 026's approved identity/scene mapping. Use 012's access-versus-belief distinction: an old transcript line is evidence that the narrator **wrote** it, not proof that every named character observed it. Preserve original passages and provenance; proposed historical belief/relationship edges remain reviewable suggestions until accepted. Do not rescan images using a new ID scheme or run the V1 absorb pipeline to fabricate extra prose.
+
+## SillyTavern chat-history migration: preserve, don't reinterpret
+
+This Wave 5 first slice is the **historical conversation** side of SillyTavern replacement. 037 (moved to Wave 4) owns standalone **character/scenario/lorebook card import**, and 107 owns the canonical world-less chat scope. Here accept explicitly selected ST chat export files and linked group/character IDs and produce a loss-aware preview/apply for the chat timeline. The accepted import is a *record of prior text*, not an invitation to run V1's `absorb` or expensive language-model reconstruction.
+
+- Preserve exact source text, roles, speaker IDs, timestamps when supplied, chosen greeting/persona, imported author-note/lorebook associations, message edits and alternate swipes. Distinguish active text from **unchosen historical variants**; neither multiple swipes nor reruns may create duplicate accepted events.
+- Missing card IDs, abandoned swipe branches, unsupported ST metadata and ambiguous names are reported for review; never match actors automatically by a shared display name. A group chat keeps one canonical conversation with distinct speaker instances.
+- A private line does **not** imply every present or mentioned character heard it. Maintain reported evidence separately from director truth and typed knowledge; unknown audiences remain unknown.
+- The original export remains unchanged, the import uses the approved 010/107 writer, repeats are idempotent, and no model calls occur during ordinary scan/replay.
+- The first playable **new chat** owned by 035 is independent of this same-wave work; after both land, imported ST chats may be continued with the usual per-speaking-NPC generation. More complex variants and lorebook semantics remain explicitly tracked for later interoperability.
+
+[Navigation contract](../CHAT_MODEL.md) / [Standalone card import](character-card-ingestion.md).
 
 ## Open questions
 

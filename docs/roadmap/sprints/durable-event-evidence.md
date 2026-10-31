@@ -20,6 +20,10 @@ Implement the persisted form of **012's access/evidence/claim contract**, includ
 
 The first proof includes a false report **with proof of delivery** and a bystander that never received it. A normal reader cannot silently promote rumor into fact. Ownership: 020 persists evidence; 012 owns its semantics; 017 graph traverses it; 032 later handles actual transmission. Keep independent Wave 3 ownership (no dependence on 017's unfinished graph writer).
 
+## Evidence is owned by play scope, not a world
+
+A 107 lightweight chat has a stable campaign namespace even without an authored world; event and evidence stores must accept that namespace and its chat/scene IDs. Character and scenario links identify **authoring sources**, not a grant to know the entire chat transcript. A newly added NPC begins with only explicitly introduced/delivered knowledge and cannot be assumed to have perceived earlier accepted events. Group chats and later world promotion retain their own source/actor/history provenance. [Chat model](../CHAT_MODEL.md).
+
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove?
 - Which optional later integrations can stay outside the first slice?

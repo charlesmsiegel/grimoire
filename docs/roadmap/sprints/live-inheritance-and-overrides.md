@@ -21,6 +21,12 @@ A creature species gets new artwork; ordinary children inherit it, one customize
 ## Independence and interfaces
 Can prototype on existing species/character records; reusable identity is a narrow reference, not a demand for full catalog DAGs.
 
+## Multi-setting character inheritance
+
+Use **022's** pinned composed effective definition and 042's reviewed rebase. Demonstrate a common Mara concept with explicit Regency, Modern, Mecha and Vampire portrayals that **inherit**, **replace** or **clear** authored fields without copying the entire source. Do not confuse `alternate_portrayal` with `derived_variant`, or use a matching name as evidence of shared identity.
+
+Extend field provenance to voice anchors (027 owns speaking prompts), scoped art and expressions (018/038), compatible abilities and relationships (017). One world/local instance override must never mutate the core definition or another variant, and a source update must not silently change a pinned chat or cause old incompatible facts to reappear. [Chat model](../CHAT_MODEL.md).
+
 ## Open questions
 - Which fields inherit live and which must snapshot?
 - What is the semantics of explicit null?

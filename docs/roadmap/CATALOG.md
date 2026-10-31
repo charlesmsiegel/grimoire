@@ -1,8 +1,8 @@
-# V2 thematic sprint catalog (106 proposals)
+# V2 thematic sprint catalog (107 proposals)
 
-The [ordered roadmap](README.md) is authoritative for **priorities, dependencies, parallel waves and the early migration/play/sync path**. This thematic catalog preserves the 90 earlier ideas and highlights 16 V2-specific foundations. V1 assumptions in carried proposal bodies are not implemented V2 features.
+The [ordered roadmap](README.md) is authoritative for **priorities, dependencies, parallel waves and the early migration/play/sync path**. This thematic catalog preserves the 90 earlier ideas and highlights 17 V2-specific foundations. V1 assumptions in carried proposal bodies are not implemented V2 features.
 
-## V2-specific foundations and playable milestones (16)
+## V2-specific foundations and playable milestones (17)
 
 | Proposal | First proof | Scheduled wave |
 |---|---|---:|
@@ -12,6 +12,7 @@ The [ordered roadmap](README.md) is authoritative for **priorities, dependencies
 | [Native File Store And Revisions](sprints/native-file-store-and-revisions.md) | Persist native definitions/instances with revision preconditions | 2 |
 | [V1 To V2 Migration Skill](sprints/v1-to-v2-migration-skill.md) | Preview V0.2.1 IDs, scene files, image references and losses without writes | 2 |
 | [V1 Cost And Voice Regression](sprints/v1-cost-and-voice-regression.md) | Capture actual 0.2.1 billed tokens and per-NPC voice baselines | 2 |
+| [World-optional Chat Scopes](sprints/world-optional-chat-scopes.md) | Start a chat without a world, attach characters/scenarios/lorebooks and keep one history across navigation views | 3 |
 | [Typed Relationship Graph](sprints/typed-relationship-graph.md) | Traverse typed relations with scope, time and epistemic bounds | 3 |
 | [Image Identity And Placements](sprints/image-identity-and-placements.md) | Preserve shared image blobs, per-record placements and version crop | 3 |
 | [Sync Revisions And Conflict Core](sprints/sync-revisions-and-conflict-core.md) | Preserve concurrent edits and detect conflict rather than overwrite | 3 |
@@ -19,7 +20,7 @@ The [ordered roadmap](README.md) is authoritative for **priorities, dependencies
 | [V1 To V2 Import Apply](sprints/v1-to-v2-import-apply.md) | Import two actors, one scene and their actual pictures into isolated V2 | 4 |
 | [Per Npc Generation Runtime](sprints/per-npc-generation-runtime.md) | Generate each speaking NPC in a separate knowledge-scoped model call | 4 |
 | [App Managed Device Sync](sprints/app-managed-device-sync.md) | Transfer an authenticated scene and image between two local peers | 4 |
-| [Minimal Text Scene Runner](sprints/minimal-text-scene-runner.md) | Play three turns, save and resume with an imported 0.2.1 NPC | 5 |
+| [Minimal Text Scene Runner](sprints/minimal-text-scene-runner.md) | Play/resume both a world-based campaign and world-less card/scenario chat | 5 |
 | [Source Rebase And Semantic Merge](sprints/source-rebase-and-semantic-merge.md) | Update one root fact while two campaigns retain independent memories | 5 |
 | [V2 Mobile Client](sprints/v2-mobile-client.md) | Play on phone, sync an accepted turn plus picture, resume on desktop | 6 |
 

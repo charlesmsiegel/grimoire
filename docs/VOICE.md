@@ -34,6 +34,12 @@ These caps are **provisional** first-slice values.
 
 How V1 `mes_example` and `voice_anchor.md` content becomes native examples and anchors is decided by the importer (026), not here.
 
+## Downstream requirement: reusable base character voice across derived portrayals
+
+**Not implemented by this Wave 2 voice package.** A world-specific Mara (Modern/Mecha/Vampire) may be an explicitly **derived** authored definition of a standalone Mara base. `resolve_voice` currently accepts an exact pinned profile or a directly linked `alternate_portrayal`; it does not compose voice examples/anchors through `derived_variant`, and it must **not** begin guessing by name. Sprint **022** provides the deterministic pinned *effective-definition provenance*; Sprint **027** must integrate that provenance into separately generated NPC prompts, preserving base voice items and applying explicit local override/suppress/clear semantics with secret-screening. An unlinked portrayal or unknown source fails visibly; no leakage of incompatible setting backstory or wrong-world relationships.
+
+World-less chat prompts use the same 014 voice contract with no compulsory world. Group chats still run independent model calls for actual speakers. See [World-optional chat/portrayal model](roadmap/CHAT_MODEL.md).
+
 ## Campaign binding and resolution
 
 `VoiceBinding(campaign_id, actor_id, portrayal=None, anchors=(), examples=(), suppress=())` is campaign-owned and never edits a profile.

@@ -1,6 +1,6 @@
 # Wave 2 interface and acceptance contract
 
-**Status:** normative handoff for the **first usable slices** of sprints 009–016 on the V2 branch; these contracts are **planned, not already implemented**. Read with the [ordered roadmap](README.md), [V2 architecture](../ARCHITECTURE.md), and [Wave 1 contracts](../IDENTITY.md). This is not a new sprint, not a mandate to freeze the complete ontology, and not a license to skip independent review.
+**Status:** normative handoff for the **first usable slices** of sprints 009–016 on the V2 branch. Several have already landed as headless contracts; consult each sprint and current PR state for implementation status. The handoff describes intended interfaces and does not imply a complete playable application. Read with the [ordered roadmap](README.md), [V2 architecture](../ARCHITECTURE.md), and [Wave 1 contracts](../IDENTITY.md). This is not a new sprint, not a mandate to freeze the complete ontology, and not a license to skip independent review.
 
 ## Wave 2 entry gate
 
@@ -72,9 +72,15 @@ The exact Markdown/JSON filenames, field spellings and on-disk form are an **010
 
 **No V2 canonical migration apply, actual graph, scene runtime or phone sync in Wave 2.** These remain Waves 3–6. Don't claim them when all Wave 2 tests are green.
 
+## Downstream ownership after Wave 2: quick chats, portrayals and navigation
+
+The new [World-optional chat contract](CHAT_MODEL.md) adds **Sprint 107 in Wave 3** after the accepted 010 storage contract; it does **not** reopen 010 or change the eight Wave 2 exit requirements. A one-off chat has an automatically allocated internal campaign namespace and no mandatory world. 107 owns its persisted chat associations and rebuildable reverse indexes. **022 independently owns effective definition inheritance** (shared character → world portrayal with inherit/replace/clear), using the same Wave 2 source/record contracts; neither can require the other's unfinished Wave 3 implementation. 035 joins both to play.
+
+**037 is promoted to Wave 4** for direct standalone character/scenario/lorebook cards, independent of 026's V1 import. **035 in Wave 5** must play a migrated V1 world *and* a new world-less card/scenario chat; **036 in Wave 5** imports prior SillyTavern histories/swipes as an independent first proof; **052 is promoted to Wave 6** for fast Start Chat onboarding, while 065 provides later richer navigation. Historical chat records live once, in the campaign-local chat, and are indexed by all associated characters/scenarios/worlds without copying.
+
 ## Downstream ownership and unchanged milestones
 
-- Wave 3: 017 graph + 012 perspective, 018 assets + 010 generic storage, 019 device conflict records, 020 accepted events/evidence, 022 effective source/instance views.
-- Wave 4: 026 approved, idempotent V1 import from 011's manifest; 027 generation using 013/014 and bounded actor views; 031 optional richer context retrieval must not gate 027's minimal per-actor prompt.
-- Wave 5: 035 playable text scene consumes 016's safe content-boundary intents, 026's reviewed assets and 027's independent NPC calls.
-- Wave 6: 044 phone play and authenticated, conflict-preserving transfer.
+- Wave 3: 107 world-optional chat scopes + 010 storage, 022 shared-character/derived-portrayal effective views (both independent), 017 graph + 012 perspective, 018 assets, 019 device conflicts, and 020 accepted events/evidence.
+- Wave 4: 026 approved, idempotent V1 world/campaign import; **037 standalone card/scenario/lorebook import** independently; 027 generation using 013/014 and bounded actor views; 031 richer optional retrieval must not gate 027.
+- Wave 5: 035 plays both imported V1 world scenes and new world-less 037 card/scenario chats with 107 IDs and 016 boundaries; 036 imports SillyTavern chat histories/swipes independently.
+- Wave 6: 044 phone play and authenticated, conflict-preserving transfer, plus 052's one-click character/scenario Start Chat UX.
