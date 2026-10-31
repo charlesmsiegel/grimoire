@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from collections.abc import Mapping
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 from pathlib import Path
@@ -53,3 +55,18 @@ def load_run(path: str | Path | Traversable, scenario: Scenario) -> Run:
 def benchmark_file(name: str, filename: str) -> Traversable:
     """A file of a shipped synthetic benchmark, e.g. ``("guild_betrayal", "scenario.json")``."""
     return files("grimoire.evals").joinpath("benchmarks", name, filename)
+
+
+def evidence_digest(bundle: Mapping) -> str:
+    """SHA-256 of a capture evidence bundle's canonical JSON (sorted keys, no spaces, UTF-8)."""
+    text = json.dumps(bundle, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                      allow_nan=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def load_evidence(path: str | Path) -> tuple[dict, str]:
+    """A capture evidence bundle and its digest, read strictly."""
+    bundle = load_json(path)
+    if not isinstance(bundle, dict):
+        raise BenchmarkFormatError(f"{path}: evidence must be a JSON object")
+    return bundle, evidence_digest(bundle)

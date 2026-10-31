@@ -178,3 +178,35 @@ def guild_run_v2() -> tuple[dict, dict]:
     """(scenario, /2 run) for the shipped guild_betrayal benchmark."""
     scenario, baseline = load_benchmark()
     return scenario, v2_from_v1(baseline)
+
+
+# --- 0.2.1 capture evidence --------------------------------------------------------------------
+
+V021_COMMIT = "e4c4ec4abacd0beb87fc9f1cdd06e6787d5a88ce"
+
+
+def v021_row(response_id: str, prompt=100, completion=5, *, cache_read=0, **extra) -> dict:
+    row = {"ts": "2026-10-31T00:00:00Z", "kind": "llm", "task": "chat", "campaign": "c-1",
+           "scene": "s-1", "model": "vendor-model", "provider": "openrouter",
+           "response_id": response_id, "prompt_tokens": prompt, "completion_tokens": completion,
+           "cache_read_tokens": cache_read, "duration_ms": 50, "status": "ok"}
+    row.update(extra)
+    return row
+
+
+def bundle(**overrides) -> dict:
+    """A one-turn synthetic 0.2.1 evidence bundle for ``minimal_scenario``."""
+    data = {
+        "format": "grimoire.v021-capture-evidence/1",
+        "scenario_id": "mini", "mode": "dry_run", "provider_kind": "openrouter",
+        "v1_commit": V021_COMMIT, "profile": "two-call", "llm_retries": 2,
+        "model": "vendor-model", "budget": "max_tokens=400",
+        "campaign": "c-1", "scene": "s-1",
+        "actor_map": {"characters:ana": "npc-a", "pcs:pat": "pc"},
+        "choice_outcomes": {"c1": "honored"},
+        "turns": [{"turn": 1, "player_text": "I knock.", "responses": [
+            {"response_id": "r-1", "speaker_ref": "characters:ana", "text": "You knock. Enter."}]}],
+        "usage_rows": [v021_row("r-1")],
+    }
+    data.update(overrides)
+    return data
