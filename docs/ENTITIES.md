@@ -41,7 +41,7 @@ A facet is a typed, immutable capability contract with invariants. Integers are 
 - `source` follows Wave 1 semantics: pinned stays on that revision, unpinned follows the declared head. `None` means a campaign-original entity, which needs a `local_name`.
 - `added` capabilities live on this instance only, so awakening one sword never changes its definition or another campaign's copy. `replaced` swaps a same-named trait explicitly. A name may not appear in both.
 - `state` is typed campaign state, at most one value per type. The first slice has `Integrity(current)`, which needs an effective `durable` and means full integrity when absent.
-- Several instances of one definition may exist in a campaign under distinct ids (clones, three goblins). Template instances may be unnamed and then show the template's name. Naming and promotion rules belong to [Creature Individualization](roadmap/sprints/creature-individualization.md).
+- Several instances of one definition may exist in a campaign under distinct ids (clones, three goblins). Template instances may be unnamed and then show the template's name. Promotion of one of them to a persistent individual is described in [Individualizing a template instance](#individualizing-a-template-instance).
 
 `effective_entity(instance, index)` resolves the exact source revision and checks it:
 
@@ -92,12 +92,58 @@ The authority and intent string fields still accept any nonempty string, and an 
 
 A legacy definition and its conversion cannot share an index, because they have the same ref. `actor_view` accepts either actor type. Every `EntityInstance`, and every legacy actor whose source is an `EntityDefinition`, must be an effective agent, so the legacy type cannot bypass that rule.
 
+## Individualizing a template instance
+
+**Status:** first slice of [Creature Individualization](roadmap/sprints/creature-individualization.md) (024), in `grimoire.core.individual` plus `Individuality` in `entity.py`. Pure and in memory; there is no runner, UI or accepted-event record.
+
+Three goblins are three instances of the goblin **template**. An instance is **generic** while its source resolves to a template and it has no `individuality`; `is_generic(instance, index)` answers this. A `local_name` on a generic instance is only a label ("the tall goblin"). An instance of an *individual* definition, or a campaign original, is already an individual.
+
+`individualize(roster, decision, index, controls=())` promotes one generic instance **in place** and returns `Individualization(roster, instance, applied)`:
+
+- The instance keeps its `InstanceRef`. Everything keyed by that reference stays with it: the [evidence](KNOWLEDGE.md) it holds (the conversation it witnessed while generic), control assignments, and later relations (017) and image placements (018). Nothing is copied or re-keyed. Its siblings and the species definition are untouched.
+- It sets `local_name` to the decision's name and records `Individuality(decision_id, given_name, decided_by, scene_id, template, event_ids=())`. `template` is the exact pinned template revision the source resolved to at promotion. It is **provenance only**: the live source stays `instance.source`, with the usual pin semantics, so an unpinned individual follows template head moves (and can meet the [drift errors](#source-drift); pinning is the remedy). `given_name` is history; a later rename changes only `local_name`.
+- Live from the source: traits and description. Personal: name, state (wounds), added and replaced facets, extras, and everything keyed by the reference.
+- A template source is not a species-membership *relation*. It is only where inherited traits come from. [The graph](GRAPH.md) assigns species membership to 024, and an explicit membership relation is a later 024 milestone.
+- Individualization is facet-agnostic. No `agent` or `biological` facet is required.
+
+**Who decides.** `IndividualizationDecision(campaign_id, decision_id, instance, name, decided_by, scene_id, event_ids=())` is the only input that individualizes. The permitted decider is the actor's current controller if it has one, otherwise `director`, so an NPC or a non-agent is director-only and a player's actor is that player's call. A mismatch is an `AuthorityError`, and ambiguous control fails closed. A decision comes only from a human, out-of-character channel: the table owner's command or a confirmed intent (in solo play, the user's explicit confirmation is the director decision), or the controlling player. It **never** comes from narrator or model output. `decided_by` is asserted by that trusted caller and checked against current control here. `event_ids` are optional recorded grounds, not cross-checked against `Knowledge` in this slice.
+
+**Check order.**
+1. Argument types (`TypeError`). `controls` is read once.
+2. Another campaign (`ValueError`).
+3. A decision id recorded on a *different* instance (`decision_conflict`).
+4. Exact target lookup (`UnknownInstance`).
+5. An instance that already has `individuality`:
+   - an exact replay (event ids compared sorted, and even after a rename) is a no-op with `applied=False` and no authority check;
+   - the same decision id with different content is `decision_conflict`;
+   - any other decision is `already_individualized`.
+6. Template:
+   - a campaign original or an individual source is `not_template`;
+   - a missing source raises `MissingDefinition`;
+   - a non-entity source is `not_entity_definition`.
+7. Authority.
+8. `effective_entity` validation of the result. For example, existing drift propagates.
+
+A roster does not enforce unique decision ids when it is built, so a sync-merged campaign still loads. On such a roster even an exact replay fails closed with `decision_conflict`. Idempotency is per roster. A durable decision record belongs to 020/021 and history tombstones to 010/019.
+
+**Instance invariants** (`EntityError` reasons):
+- an `individuality` value must be exactly an `Individuality` (`invalid_field`);
+- it needs a source (`individuality_without_template`);
+- it needs a `local_name` (`individual_needs_name`);
+- its template must be the same entity as the source (`template_mismatch`).
+
+All `Individuality` and decision field errors are `invalid_field`. At resolution, a template revision that changes nature to `individual` makes an individualized instance `not_template`. A generic sibling then simply resolves as an instance of an individual. The existing `kind_mismatch` check runs first.
+
 ## Provisional payload codec
 
 `grimoire.core.entity_codec` (not exported from `grimoire.core`) converts definitions and instances to and from plain JSON-compatible payloads that the [Native File Store](roadmap/sprints/native-file-store-and-revisions.md) envelope carries opaquely.
 
 - **The envelope owns the address and the schema id** (`grimoire.entity/0`). Both are passed in. In the native store's `grimoire.record/1`, the schema id is a preserved top-level `"schema"` key, which is how [chat actors (107)](CHATS.md) are written. A reader checks it before decoding. A payload that repeats an address part (`ref`, `address`, `source_id`, `campaign_id`, `kind`, `entity_id`, `instance_id`, `revision`) or `schema` is refused (`address_in_payload`), so a hand edit can never appear to rebind identity. `extras` may not use these keys either.
 - Facets are encoded as a list of `{"facet": name, …}` objects, so duplicates are detected.
+- An instance's `individuality` is an object with `decision_id`, `given_name`, `decided_by`, `scene_id`, `template` (pinned reference text) and `event_ids` (omitted when empty). Unknown fields inside it are refused as `unknown_individuality_field`; a missing field, malformed value or unpinned template is `invalid_field`. A payload without the key decodes with `individuality=None`.
+  - A pre-024 build keeps the key as an unknown extra, so nothing is lost. But such a build could clear `local_name` while keeping it, and a 024 decode then refuses the payload as `individual_needs_name`.
+  - An old foreign `individuality` extra is now decoded strictly.
+  - Both cases are refusals, not loss.
 - **Extension points keep unknowns.** Unknown top-level fields become `extras`, and unknown facet names become `UnknownFacet`.
 - **Inside a known structure, unknowns are refused with a reason.** `CodecError` reasons are `unknown_facet_field`, `unknown_state`, `unknown_state_field`, `invalid_field` (including missing required fields), `address_in_payload` and `unsupported_schema`. `FacetError` and `EntityError` reasons (`duplicate_facet`, `reserved_name`, …) propagate unchanged; every refusal is a `ValueError` with `.reason`. Refusing is not losing: the envelope still holds the original payload.
 - Field spellings are provisional; 010 owns serialization and files. Re-encoding is canonical: explicit nulls and defaults (`"material": null`, `"description": ""`, `"added": []`) are omitted, and the decoded values stay equal. A known field of the *other* record type (such as `traits` in an instance payload) is just an unknown field there and is kept in `extras`.
@@ -106,4 +152,4 @@ Interoperability is proven against a test-only neutral envelope that imports no 
 
 ## Not in this slice
 
-Persistence and files; relations (carrying, location and kinship now exist in [the graph](GRAPH.md), without facet constraints; species membership belongs to 024); species-trait inheritance; facet suppression; collective, container and mechanics facets; time-bound state; UI; changes to authority or intent signatures.
+Persistence and files (a codec↔store round trip of an individual is proven by a test-local join only); relations (carrying, location and kinship now exist in [the graph](GRAPH.md), without facet constraints; a species-membership relation is a later 024 milestone, see [Individualizing a template instance](#individualizing-a-template-instance)); creating a named instance directly from a template; re-sourcing an individual to a changed species; facet suppression; collective, container and mechanics facets; time-bound state; UI; changes to authority or intent signatures.
