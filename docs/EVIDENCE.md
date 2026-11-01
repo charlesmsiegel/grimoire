@@ -154,7 +154,7 @@ These are tested against the undamaged ledger U, for every actor, the player and
 | `player_knowledge(…)` | 012's projection over the assembled ledger |
 | `standing(…)` | 012's projection over the assembled ledger |
 
-There is no widening flag. Every read scans the campaign's knowledge files and assembles them: O(records). Nothing is cached or persisted.
+There is no widening flag. Every read scans the campaign's knowledge files and assembles them. That is linear in the number of files; log verification walks only the batch files present, so a stray huge sequence number costs one file. Assembly is quadratic in the worst case, when many records depend on one quarantined record. Nothing is cached or persisted.
 
 ### `append`
 

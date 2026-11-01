@@ -6,9 +6,11 @@ never imported. U is the six-batch ledger of ``evidence_fixtures``.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import traceback
+from pathlib import Path
 
 import pytest
 
@@ -377,6 +379,11 @@ def test_reads_work_read_only_and_appends_refuse_there(tmp_path):
             EvidenceLibrary(store).append(C, [Event(C, "e9", "x", m(4), "director")])  # no handle
 
 
+def test_text_utf8_cannot_hold_is_refused_as_a_reason(store, evidence):
+    refused(store, evidence, [Event(C, "e9", "half \ud800 a pair", m(1), "director")], "invalid_field")
+    refused(store, evidence, [Event(C, "e9", "x", m(1, "s\udfff"), "director")], "invalid_field")
+
+
 def test_f22_errors_never_carry_record_text(store, evidence):
     secret = "SENTINEL-RECORD-TEXT"
     cases = [
@@ -398,5 +405,5 @@ def test_the_service_loads_no_provider():
     code = ("import sys; import grimoire.evidencestore, grimoire.evidence; "
             "bad = [m for m in sys.modules if m.startswith(('grimoire.providers', 'grimoire.capture'))]; "
             "assert not bad, bad")
-    subprocess.run([sys.executable, "-c", code], check=True, env={"PYTHONPATH": str(__import__("pathlib").Path(
-        __file__).parents[1] / "src"), "PATH": ""})
+    source = str(Path(__file__).parents[1] / "src")
+    subprocess.run([sys.executable, "-c", code], check=True, env={**os.environ, "PYTHONPATH": source})

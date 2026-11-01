@@ -128,6 +128,42 @@ All of these take the store lock, require a consistent library, and read listing
   - Parity with `load()` is tested across bad and implicit heads, kind reuse, ownership, unreadable revisions and missing manifests.
   - A cross-source `identity_conflict` is visible only to `load()`.
 
+### Knowledge record (`grimoire.knowledge-record/1`) — events and evidence (020)
+
+<a id="events-and-evidence-020"></a>Added by [Durable Event Evidence](roadmap/sprints/durable-event-evidence.md) as an additive, **create-only** family. `record/1`, `source/1` and `scope-record/1` are unchanged. The payloads are interpreted by [`grimoire.evidence`](EVIDENCE.md), never by the store.
+
+| Field | Written by | Meaning |
+|---|---|---|
+| `format` | store | Exact version. |
+| `address` | caller | A `KnowledgeRef`: `campaign:<id>#<family>/<id>`. An `event` lives at `events/<id>.json`; any other family at `evidence/<family>/<id>.json`; a log batch at `evidence/batch/<seq:010d>.json`. Must equal what its path implies. |
+| `schema` | caller | The payload's schema id. |
+| `payload` | caller | Opaque JSON. |
+| `owner` | caller, optional | Attribution. |
+| `previous` | store | Always `null`: a knowledge record is never replaced. A non-null value reads as `malformed`. |
+| *other keys* | preserved | Unknown authored fields. |
+
+A distinct format, rather than an extension of `scope-record/1`, keeps a parser from ever treating one as a mutable scope record.
+
+| Item | Behaviour |
+|---|---|
+| `Transaction.put(KnowledgeRecord, expected)` | `expected` must be `None`, otherwise `ImmutableRevision`. An existing file is `StaleWrite` (`exists`). Every other commit step applies as for a record put: guards, collisions, `Permission.APPLY` on `campaigns/<id>/…`, journal, recovery, conflict preservation. |
+| `classify` | recognises exactly the two path shapes. `evidence/event/…`, a batch name other than ten digits from 1, and look-alike families are not canonical. |
+| journal recovery | accepts knowledge targets, but refuses (`RecoveryFailed`) a knowledge target whose `old` is not null, so recovery can never replace an immutable record |
+| `read(KnowledgeRef)` | `StoredKnowledgeRecord(record, etag)` |
+| `campaign_knowledge(id)` | `KnowledgeScan(records, damaged, problems, entries)` for that campaign's two trees only; details below |
+
+`campaign_knowledge(id)` details:
+- `damaged` holds a code per unreadable canonical file: `malformed`, `unsupported_format`, `address_mismatch` or `link`.
+- `problems` holds `link`, `unrecognized`, `name_mismatch` and `unreadable`, at the campaign, tree, family and file levels. Look-alike tree names such as `Events/` are included.
+- `entries` is the snapshot a writer compares before committing: every file and link, canonical or not. OS noise and empty directories are not state.
+- An absent campaign scans empty. A look-alike campaign reports `name_mismatch`, and a linked `campaigns/` raises `LinkRefused`.
+- It never follows links, and never copies file content into a problem.
+- **Director-level and store-internal:** graph, index and retrieval builders must not read it ([EVIDENCE](EVIDENCE.md#trust-boundaries-documented-not-checked-here)).
+
+**Rollback:** a pre-020 build skips both trees, which were already reserved, and never writes there. It cannot recover a journal that names knowledge paths: use a 020+ build, or `discard_journal` (tested).
+
+**Sync:** knowledge files and the log are canonical user data that 019/028 will transfer. Merging two devices' logs belongs to 019.
+
 ## Writing
 
 `LibraryStore` is trusted application code. It is never handed to a worker; workers reach it only through a `WorkerHandle` decision. Reads take no handle.
@@ -238,41 +274,6 @@ Broken-reference reasons are the index's `missing_source`, `missing_entity` and 
 - **Durability:** files are fsynced before they are renamed. On POSIX the parent directory is fsynced after each rename and after each directory the store creates; this is best-effort where a filesystem does not support it, but genuine I/O errors are raised. Power loss is not simulated by the harness.
 - **Windows reparse points:** every reparse point counts as a link and is refused, not only symlinks and junctions. A library inside a cloud-synced folder that uses placeholder files (such as OneDrive Files-On-Demand) is therefore refused. Narrowing this to specific reparse tags is future work.
 - A malformed **instance** can be replaced by passing its exact etag (`MalformedRecord.etag`); the caller has, in effect, seen those bytes. The old bytes are not copied first. A malformed definition revision can only be fixed by hand.
-### Knowledge record (`grimoire.knowledge-record/1`) — events and evidence (020)
-
-<a id="events-and-evidence-020"></a>Added by [Durable Event Evidence](roadmap/sprints/durable-event-evidence.md) as an additive, **create-only** family. `record/1`, `source/1` and `scope-record/1` are unchanged. The payloads are interpreted by [`grimoire.evidence`](EVIDENCE.md), never by the store.
-
-| Field | Written by | Meaning |
-|---|---|---|
-| `format` | store | Exact version. |
-| `address` | caller | A `KnowledgeRef`: `campaign:<id>#<family>/<id>`. An `event` lives at `events/<id>.json`; any other family at `evidence/<family>/<id>.json`; a log batch at `evidence/batch/<seq:010d>.json`. Must equal what its path implies. |
-| `schema` | caller | The payload's schema id. |
-| `payload` | caller | Opaque JSON. |
-| `owner` | caller, optional | Attribution. |
-| `previous` | store | Always `null`: a knowledge record is never replaced. A non-null value reads as `malformed`. |
-| *other keys* | preserved | Unknown authored fields. |
-
-A distinct format, rather than an extension of `scope-record/1`, keeps a parser from ever treating one as a mutable scope record.
-
-| Item | Behaviour |
-|---|---|
-| `Transaction.put(KnowledgeRecord, expected)` | `expected` must be `None`, otherwise `ImmutableRevision`. An existing file is `StaleWrite` (`exists`). Every other commit step applies as for a record put: guards, collisions, `Permission.APPLY` on `campaigns/<id>/…`, journal, recovery, conflict preservation. |
-| `classify` | recognises exactly the two path shapes. `evidence/event/…`, a batch name other than ten digits from 1, and look-alike families are not canonical. |
-| journal recovery | accepts knowledge targets, but refuses (`RecoveryFailed`) a knowledge target whose `old` is not null, so recovery can never replace an immutable record |
-| `read(KnowledgeRef)` | `StoredKnowledgeRecord(record, etag)` |
-| `campaign_knowledge(id)` | `KnowledgeScan(records, damaged, problems, entries)` for that campaign's two trees only; details below |
-
-`campaign_knowledge(id)` details:
-- `damaged` holds a code per unreadable canonical file: `malformed`, `unsupported_format`, `address_mismatch` or `link`.
-- `problems` holds `link`, `unrecognized`, `name_mismatch` and `unreadable`, at the campaign, tree, family and file levels. Look-alike tree names such as `Events/` are included.
-- `entries` is the snapshot a writer compares before committing: every file and link, canonical or not. OS noise and empty directories are not state.
-- An absent campaign scans empty. A look-alike campaign reports `name_mismatch`, and a linked `campaigns/` raises `LinkRefused`.
-- It never follows links, and never copies file content into a problem.
-- **Director-level and store-internal:** graph, index and retrieval builders must not read it ([EVIDENCE](EVIDENCE.md#trust-boundaries-documented-not-checked-here)).
-
-**Rollback:** a pre-020 build skips both trees, which were already reserved, and never writes there. It cannot recover a journal that names knowledge paths: use a 020+ build, or `discard_journal` (tested).
-
-**Sync:** knowledge files and the log are canonical user data that 019/028 will transfer. Merging two devices' logs belongs to 019.
 
 ## Facet independence
 

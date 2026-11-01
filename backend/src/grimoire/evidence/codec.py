@@ -88,7 +88,18 @@ _SPEC: Mapping[type, tuple[tuple[str, str, bool], ...]] = MappingProxyType({
 _EMPTY = (None, False, ())
 
 
+def _storable(text: str) -> str:
+    """Text that UTF-8 can hold (no lone surrogate), else ``invalid_field``."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        raise _Refused("invalid_field") from None
+    return text
+
+
 def _encode_value(kind: str, value: object) -> object:
+    if isinstance(value, str):
+        _storable(value)
     if kind == "moment":
         assert isinstance(value, Moment)
         moment: dict[str, object] = {"sequence": value.sequence}
@@ -97,7 +108,7 @@ def _encode_value(kind: str, value: object) -> object:
             if text is not None:
                 if len(text) > LABEL_LIMIT:
                     raise _Refused("too_long")
-                moment[label] = text
+                moment[label] = _storable(text)
         return moment
     if kind in ("actor",):
         return str(value)

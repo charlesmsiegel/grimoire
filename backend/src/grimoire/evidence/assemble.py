@@ -71,36 +71,42 @@ def _decoded(ref: KnowledgeRef, scanned: ScannedFile) -> tuple[tuple[Record, Cha
 
 
 def _verify_log(files: Mapping[KnowledgeRef, ScannedFile]) -> tuple[list[Batch], list[Batch], bool, tuple[int, str] | None]:
-    """Verified batches, hint batches, whether the log broke, and the head when intact."""
+    """Verified batches, hint batches, whether the log broke, and the head when intact.
+
+    Walks only the batch files present, so a stray huge sequence number costs one file, never a
+    loop over the numbers below it.
+    """
     present = {ref.seq: (ref, scanned) for ref, scanned in files.items() if ref.family == "batch"}
     if not present:
         return [], [], False, None
-    top = max(present)
-    batches: list[tuple[Batch | None, str | None]] = []
-    broken_at: int | None = None
-    seen: set[str] = set()
-    for seq in range(1, top + 1):
-        found = present.get(seq)
+    decoded: dict[int, Batch | None] = {}
+    for seq, (ref, scanned) in present.items():
         batch: Batch | None = None
-        if found is not None and found[1].damage is None:
+        if scanned.damage is None:
             try:
-                batch = decode_batch(found[0], found[1].schema, found[1].payload)
+                batch = decode_batch(ref, scanned.schema, scanned.payload)
             except EvidenceCodecError:
                 batch = None
-        etag = found[1].etag if found is not None else None
-        batches.append((batch, etag))
-        if broken_at is not None:
-            continue
-        previous_etag = batches[seq - 2][1] if seq > 1 else None
-        if (batch is None or batch.previous != previous_etag or seen & set(batch.entries)):
+        decoded[seq] = batch
+    order = sorted(present)
+    broken_at: int | None = None
+    seen: set[str] = set()
+    previous_etag: str | None = None
+    for expected, seq in enumerate(order, start=1):
+        if seq != expected:  # a gap: batch `expected` is missing
+            broken_at = expected
+            break
+        batch = decoded[seq]
+        if batch is None or batch.previous != previous_etag or seen & set(batch.entries):
             broken_at = seq
-            continue
+            break
         seen |= set(batch.entries)
+        previous_etag = present[seq][1].etag
     if broken_at is None:
-        return [b for b, _ in batches], [], False, (top, batches[-1][1])  # type: ignore[list-item]
+        return [decoded[seq] for seq in order], [], False, (order[-1], present[order[-1]][1].etag)  # type: ignore[misc]
     # A previous-mismatch at k cannot tell whether k or k-1 was altered: trust only < k-1.
-    verified = [b for b, _ in batches[:max(broken_at - 2, 0)]]
-    hints = [b for b, _ in batches[max(broken_at - 2, 0):] if b is not None]
+    verified = [decoded[seq] for seq in order if seq < broken_at - 1]
+    hints = [decoded[seq] for seq in order if seq >= broken_at - 1 and decoded[seq] is not None]
     return verified, hints, True, None  # type: ignore[return-value]
 
 

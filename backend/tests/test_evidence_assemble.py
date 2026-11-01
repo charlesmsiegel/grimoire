@@ -193,6 +193,16 @@ def test_a_record_listed_twice_breaks_the_log():
     assert "log_broken" in assembly.problems
 
 
+def test_a_stray_huge_batch_number_costs_one_file():
+    import time
+    files = in_memory_files()
+    files[KnowledgeRef("c1", "batch", "9999999999")] = ScannedFile(None, damage="malformed")
+    started = time.perf_counter()
+    assembly = assemble(C, files)
+    assert time.perf_counter() - started < 2
+    assert "log_broken" in assembly.problems and assembly.knowledge.beliefs == ()
+
+
 def test_a_consistent_tail_edit_is_the_documented_limit():
     """Like 010b ledgers: dropping the newest record and its entry from the newest batch is invisible."""
     files = in_memory_files()
@@ -253,6 +263,19 @@ def check_accounting(assembly, files) -> None:
     for file_ref in files:  # nothing silently dropped
         if file_ref.family != "batch":
             assert file_ref.name in kept | quarantined, file_ref.name
+    if not assembly.log_intact:  # the break is reported; every absent record a readable batch lists is missing
+        assert "log_broken" in assembly.problems
+        reasons = {q.name: q.reason for q in assembly.quarantined}
+        for file_ref, scanned in files.items():
+            if file_ref.family != "batch":
+                continue
+            try:
+                entries = decode_batch(file_ref, scanned.schema, scanned.payload).entries
+            except Exception:
+                continue
+            for name in entries:
+                if ref(name) not in files:
+                    assert reasons.get(name) == "missing", name
     if assembly.log_intact:
         listed = set()
         for file_ref, scanned in files.items():
