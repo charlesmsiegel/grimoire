@@ -18,7 +18,8 @@ def reason(build):
 
 def test_vocabulary_is_the_specified_first_slice():
     assert set(KNOWN_FACETS) == {
-        "physical", "portable", "durable", "biological", "agent", "communicative", "spatial"}
+        "physical", "portable", "durable", "biological", "agent", "communicative", "spatial",
+        "abilities"}
     assert RESERVED_FACET_NAMES == {"control", "controller", "pc", "npc", "player", "director"}
     assert SIZES == {"tiny", "small", "medium", "large", "huge"}
     assert BULKS == {"light", "normal", "heavy"}
@@ -26,7 +27,7 @@ def test_vocabulary_is_the_specified_first_slice():
     assert {name: cls.requires for name, cls in KNOWN_FACETS.items()} == {
         "physical": frozenset(), "portable": {"physical"}, "durable": {"physical"},
         "biological": {"physical"}, "agent": frozenset(), "communicative": {"agent"},
-        "spatial": frozenset(),
+        "spatial": frozenset(), "abilities": frozenset(),
     }
 
 

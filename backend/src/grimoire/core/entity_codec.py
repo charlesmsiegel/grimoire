@@ -10,7 +10,11 @@ Extension points preserve what this version does not know: unknown top-level
 fields become ``extras`` and unknown facet names become ``UnknownFacet``.
 Inside a known typed structure an unknown or malformed field is refused with a
 reason instead of being dropped or coerced; the envelope still holds the
-original payload, so refusing to interpret it loses nothing.
+original payload, so refusing to interpret it loses nothing. The one exception
+is the ``abilities`` facet (025): unknown keys on the facet object and inside
+an ability, effect, limit, cost or prerequisite are kept as that value's
+``extras``, and the ability assessment fails closed on them (``needs_upgrade``).
+Malformed known fields and duplicate list entries are still refused.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import MISSING, fields
 
+from .abilities import Abilities, Ability, Cost, Effect, Limit, Prerequisite
 from .entity import ADDRESS_KEYS, STATE_TYPES, EntityDefinition, EntityInstance, StateValue
 from .facets import KNOWN_FACETS, Communicative, Facet, FacetBundle, FacetSet, UnknownFacet
 from .identity import InstanceRef, SourceRef
@@ -25,6 +30,13 @@ from .json_value import JsonValueError, freeze_object, thaw
 
 ENTITY_SCHEMA = "grimoire.entity/0"
 _CHANNEL_FIELDS = frozenset({"speaks", "understands"})
+#: Nested lists of ability values, by field name.
+_ABILITY_PARTS: dict[str, type] = {"abilities": Ability, "effects": Effect, "limits": Limit,
+                                   "costs": Cost, "prerequisites": Prerequisite}
+#: Fields holding sets of id segments.
+_ABILITY_NAMES = frozenset({"tags", "excludes", "applies_to"})
+#: Field values that are the default and so are omitted when encoding.
+_ABILITY_DEFAULTS = {"certainty": "reliable", "description": ""}
 
 
 class CodecError(ValueError):
@@ -44,9 +56,29 @@ def _invalid(message: str) -> CodecError:
 
 # --- encoding -------------------------------------------------------------------
 
+def _ability_payload(value: object) -> dict:
+    """One ability value (or the facet) without defaults; extras become top-level keys."""
+    payload: dict = {}
+    for item in fields(value):
+        if item.name == "extras":
+            continue
+        field_value = getattr(value, item.name)
+        if (field_value is None or field_value in ((), frozenset())
+                or _ABILITY_DEFAULTS.get(item.name, object()) == field_value):
+            continue
+        if isinstance(field_value, frozenset):
+            field_value = sorted(field_value)
+        elif isinstance(field_value, tuple):
+            field_value = [_ability_payload(part) for part in field_value]
+        payload[item.name] = field_value
+    return {**payload, **thaw(value.extras)}
+
+
 def _facet_payload(facet: Facet) -> dict:
     if isinstance(facet, UnknownFacet):
         return {"facet": facet.name, **thaw(facet.data)}
+    if isinstance(facet, Abilities):
+        return {"facet": facet.name, **_ability_payload(facet)}
     payload: dict = {"facet": facet.name}
     for item in fields(facet):
         value = getattr(facet, item.name)
@@ -125,6 +157,8 @@ def _facet(entry: object) -> Facet:
     cls = KNOWN_FACETS.get(entry["facet"])
     if cls is None:
         return UnknownFacet(entry["facet"], data)
+    if cls is Abilities:
+        return _ability_value(Abilities, data, "abilities")
     known = {item.name for item in fields(cls)}
     unknown = sorted(set(data) - known)
     if unknown:
@@ -133,6 +167,35 @@ def _facet(entry: object) -> Facet:
     if cls is Communicative:
         data = {key: _channels(value, key) if key in _CHANNEL_FIELDS else value for key, value in data.items()}
     return cls(**data)
+
+
+def _names(value: object, label: str) -> frozenset:
+    entries = _entries(value, label)
+    if not all(isinstance(entry, str) for entry in entries):
+        raise _invalid(f"{label} must list names")
+    if len(set(entries)) != len(entries):
+        raise _invalid(f"{label} lists a name twice")
+    return frozenset(entries)
+
+
+def _ability_value(cls: type, entry: object, label: str) -> object:
+    """An ability value (or the facet): known fields decoded, unknown keys kept as extras."""
+    if not isinstance(entry, Mapping) or any(not isinstance(key, str) for key in entry):
+        raise _invalid(f"{label} must be an object with text keys: {entry!r}")
+    rest = dict(entry)  # a stored payload is read-only
+    known: dict = {}
+    for item in fields(cls):
+        if item.name == "extras" or item.name not in rest:
+            continue
+        value = rest.pop(item.name)
+        if item.name in _ABILITY_NAMES:
+            value = _names(value, f"{label} {item.name}")
+        elif item.name in _ABILITY_PARTS:
+            value = tuple(_ability_value(_ABILITY_PARTS[item.name], part, f"{label} {item.name}")
+                          for part in _entries(value, f"{label} {item.name}"))
+        known[item.name] = value
+    _require_fields(cls, known, label)
+    return cls(**known, extras=_extras(rest))
 
 
 def _facets(value: object, label: str) -> tuple[Facet, ...]:

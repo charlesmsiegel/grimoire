@@ -25,12 +25,14 @@ A facet is a typed, immutable capability contract with invariants. Integers are 
 | `agent` | | | can hold intentions and act; **the only facet that makes control possible** |
 | `communicative` | `speaks`, `understands`: sets of `speech`, `telepathy`, `sign`, `writing` (not both empty) | `agent` | can be heard (expresses itself on any channel) and/or addressed |
 | `spatial` | | | a place other entities can be in; what is in it is a relation (017) |
+| `abilities` | `abilities`: `Ability` values (effects, limits, costs, prerequisites), `extras` | | what the entity may and may not do with fictional powers; an empty facet means none. Only an agent can attempt one. See [ABILITIES.md](ABILITIES.md) (025) |
 
 - `FacetBundle`: canonical (sorted by name), hashable, one facet per name, no requirement check. Used for an instance's additions and replacements.
 - `FacetSet`: a bundle in which every known facet's requirements are present as **known** facets. Used for definition traits and effective facets.
 - `UnknownFacet(name, data)`: a facet from another version, kept verbatim. Its data and every `extras` mapping are `JsonObject`s, whose equality is JSON-type strict (`true`, `1` and `1.0` differ). It grants no capability and satisfies no requirement; it cannot use a known facet name or put a `facet` key in its data.
 - Reserved names `control`, `controller`, `pc`, `npc`, `player` and `director` are refused. This is extra defence: the real guarantee is that no authority or intent module imports facet code (pinned by `test_entity_isolation.py`).
-- `FacetError(ValueError).reason`: `invalid_field`, `duplicate_facet`, `reserved_name`, `known_name_as_unknown`, `missing_requirement`.
+- `FacetError(ValueError).reason`: `invalid_field`, `duplicate_facet`, `reserved_name`, `known_name_as_unknown`, `missing_requirement`; ability values add `duplicate_ability`, `duplicate_ability_part`, `unknown_applies_to`, `empty_ability` and `contradictory_ability` ([abilities](ABILITIES.md#ability-values)). `FacetError` lives in the leaf module `facet_errors` and is re-exported from `facets`.
+- `abilities` is one facet, so evolving one ability on a sourced instance means `replaced` with a full copy, which no longer follows head changes to the other abilities. Per-ability inheritance belongs to 022/024.
 
 ## Definitions and instances
 
@@ -99,11 +101,11 @@ A legacy definition and its conversion cannot share an index, because they have 
 - **The envelope owns the address and the schema id** (`grimoire.entity/0`). Both are passed in. In the native store's `grimoire.record/1`, the schema id is a preserved top-level `"schema"` key, which is how [chat actors (107)](CHATS.md) are written. A reader checks it before decoding. A payload that repeats an address part (`ref`, `address`, `source_id`, `campaign_id`, `kind`, `entity_id`, `instance_id`, `revision`) or `schema` is refused (`address_in_payload`), so a hand edit can never appear to rebind identity. `extras` may not use these keys either.
 - Facets are encoded as a list of `{"facet": name, …}` objects, so duplicates are detected.
 - **Extension points keep unknowns.** Unknown top-level fields become `extras`, and unknown facet names become `UnknownFacet`.
-- **Inside a known structure, unknowns are refused with a reason.** `CodecError` reasons are `unknown_facet_field`, `unknown_state`, `unknown_state_field`, `invalid_field` (including missing required fields), `address_in_payload` and `unsupported_schema`. `FacetError` and `EntityError` reasons (`duplicate_facet`, `reserved_name`, …) propagate unchanged; every refusal is a `ValueError` with `.reason`. Refusing is not losing: the envelope still holds the original payload.
+- **Inside a known structure, unknowns are refused with a reason**, except in the `abilities` facet: there unknown keys on the facet and on each ability value are kept as that value's `extras`, and the [ability assessment](ABILITIES.md#assessment) fails closed on them (`needs_upgrade`). `CodecError` reasons are `unknown_facet_field`, `unknown_state`, `unknown_state_field`, `invalid_field` (including missing required fields), `address_in_payload` and `unsupported_schema`. `FacetError` and `EntityError` reasons (`duplicate_facet`, `reserved_name`, …) propagate unchanged; every refusal is a `ValueError` with `.reason`. Refusing is not losing: the envelope still holds the original payload.
 - Field spellings are provisional; 010 owns serialization and files. Re-encoding is canonical: explicit nulls and defaults (`"material": null`, `"description": ""`, `"added": []`) are omitted, and the decoded values stay equal. A known field of the *other* record type (such as `traits` in an instance payload) is just an unknown field there and is kept in `extras`.
 
 Interoperability is proven against a test-only neutral envelope that imports no grimoire module.
 
 ## Not in this slice
 
-Persistence and files; relations (carrying, location, kinship, species membership); species-trait inheritance; facet suppression; collective, container and mechanics facets; time-bound state; UI; changes to authority or intent signatures.
+Persistence and files; relations (carrying, location, kinship, species membership); species-trait inheritance; facet suppression; collective, container and mechanics facets (fictional abilities are the `abilities` facet, 025); time-bound state; UI; changes to authority or intent signatures.
