@@ -135,6 +135,7 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
 - **`Transaction.put_exact(path, data, expected, *, replace_unreferenced=False)`** stages exact bytes at a canonical definition, manifest or instance path.
   - The bytes are validated as the envelope they hold: strict JSON, supported format, address equal to the path, writable values. A failure is `InvalidEnvelope` with a `code`.
   - They are published **verbatim**: `previous` is not rewritten, so two libraries converge on one etag.
+  - With `regenerable=True` (sync passes it: the bytes still exist on the other device), the entry's journal kind is `replica`, which an abort or an external edit of the target drops instead of preserving. Without it, the bytes are preserved like any `put`.
   - Definition revisions stay create-only (`ImmutableRevision`). The one exception is `replace_unreferenced`: then step 6b refuses with `RevisionReferenced` unless nothing on the library can pin the revision. That covers a manifest head, a link endpoint, and an instance's `derived_from` or `base`, of every parsable manifest and instance including excluded sources. A blocked manifest or instance means "cannot prove".
 - **`Transaction.keep_version(path, data, slot=None)`** stages a kept version of a canonical record under `.conflicts/<hash16>/<name>~<digest12>[.N]`.
   - A slot already holding those bytes is reused, and nothing is staged.

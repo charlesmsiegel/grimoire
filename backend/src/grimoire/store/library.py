@@ -641,14 +641,15 @@ class Transaction:
         self._puts[put.parts] = put
 
     def put_exact(self, path: str, data: bytes, expected: str | None, *,
-                  replace_unreferenced: bool = False) -> str:
+                  replace_unreferenced: bool = False, regenerable: bool = False) -> str:
         """Stage another library's exact bytes at canonical ``path`` (sync, 019).
 
         The bytes are validated as ``put`` would validate the envelope they hold (strict JSON,
         supported format, address equal to the path) and published verbatim, so two libraries
-        converge on one etag. Their bytes are another library's, so if the commit is aborted or an
-        external edit claims the target, they are dropped rather than preserved under
-        ``.conflicts`` (journal kind ``replica``). A definition revision is create-only unless
+        converge on one etag. With ``regenerable`` (the bytes still exist in another library, as for
+        sync), an aborted commit or an external edit of the target drops them rather than
+        preserving them under ``.conflicts`` (journal kind ``replica``); without it they are
+        preserved like any ``put``. A definition revision is create-only unless
         ``replace_unreferenced``: then ``expected`` must be its current etag, and the commit
         refuses (``RevisionReferenced``) unless nothing on this library can pin it.
         """
@@ -667,7 +668,7 @@ class Transaction:
             raise InvalidEnvelope("only a definition revision is replaced as unreferenced")
         address = logical(parts)
         self._add(_Put(parts, address, bytes(data), expected, envelope, "record", str(address),
-                       replace_unreferenced, regenerable=True))
+                       replace_unreferenced, regenerable=regenerable))
         return str(address)
 
     def keep_version(self, path: str, data: bytes, slot: int | None = None) -> str:
@@ -964,6 +965,8 @@ class _Commit:
     def _note(self, error: BaseException) -> None:
         if self.consumed:
             error.add_note(f"approvals consumed without a write: {', '.join(self.consumed)}")
+            if not hasattr(error, "consumed_approvals"):
+                error.consumed_approvals = tuple(self.consumed)  # type: ignore[attr-defined]
 
     def _recheck(self, staging: int) -> None:
         """Repeat the point-in-time checks just before a phase that mutates (authorization or

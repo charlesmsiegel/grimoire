@@ -616,3 +616,24 @@ def test_f14_a_failed_verification_read_writes_no_archive(pair, monkeypatch):
             for store, other in ((desktop, PHONE), (phone, DESKTOP))] == archives
     report = sync(desktop, phone, handles())  # the landed copy is verifiably agreed via its marker
     assert report.conflicts == () and canonical(desktop) == canonical(phone)
+
+
+def test_f6_approvals_spent_by_an_interrupted_commit_are_reported(pair, monkeypatch):
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    edit_instance(desktop, WREN_B, 9)
+    authority = Authorizer([OWNER])
+    authority.add_grant(Grant("g", "app:sync", frozenset({Permission.APPLY}), ResourcePath.parse("campaigns/c1"),
+                              OWNER))
+    plan = plan_sync(desktop, phone)
+    preview = plan.preview()[PHONE]
+    from grimoire.security import Approval, payload_digest
+    authority.register_approval(Approval("a1", "app:sync", Permission.APPLY, ResourcePath.parse(PATHS["wren_a"]),
+                                         payload_digest(preview[PATHS["wren_a"]]), OWNER))
+    # wren_b (campaign c2) is denied; while it is pruned, the library is found changed
+    monkeypatch.setattr(sync_session, "_preflight", lambda txn, what: (_ for _ in ()).throw(
+        SyncInterrupted("a library changed")))
+    with pytest.raises(SyncInterrupted) as stopped:
+        sync_session.apply_sync(plan, {DESKTOP: handle(), PHONE: authority.handle_for("app:sync")},
+                                {PHONE: {PATHS["wren_a"]: "a1"}})
+    assert stopped.value.report.consumed_approvals == ("a1",)

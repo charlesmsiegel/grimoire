@@ -79,7 +79,7 @@ def identify(store: LibraryStore, device_id: str, *, replace: bool = False) -> s
     is conservative, never a first sync.
     """
     check_device_id(device_id)
-    current = _state(store, DEVICE_FILE)
+    current = store.read_sync_state(DEVICE_FILE)  # a read error propagates as itself
     existing = parse_device(current)
     if existing == device_id:
         return device_id
@@ -264,8 +264,8 @@ def _preflight(txn, what: str) -> BaseException | None:  # type: ignore[no-untyp
 
 
 def _stage(txn, copies: list[Copy], keeps: list[Keep]) -> None:  # type: ignore[no-untyped-def]
-    for copy in copies:
-        txn.put_exact(copy.path, copy.data, copy.expected)
+    for copy in copies:  # the origin still holds these bytes: an aborted commit drops, never parks, them
+        txn.put_exact(copy.path, copy.data, copy.expected, regenerable=True)
     for keep in keeps:
         txn.keep_version(keep.path, keep.data, slot=keep.slot)
 
@@ -512,7 +512,8 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
 
     try:
         result = txn.commit(handle, dict(approvals), on_denied=on_denied)
-    except (StaleWrite, WriteConflict, *PER_PATH_ERRORS) as error:
+    except (StaleWrite, WriteConflict, SyncInterrupted, *PER_PATH_ERRORS) as error:
+        applied.consumed.extend(getattr(error, "consumed_approvals", ()))  # spent without a write (R16)
         raise SyncInterrupted(f"the data commit on {device} stopped: {error}", _report(plan, applied)) from error
     applied.consumed.extend(result.consumed_approvals)
     published = [copy for copy in copies if copy.path in result.etags]
@@ -699,16 +700,17 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     txn = stores[receiver].transaction()
     resolved = [path]
     if kind == "definition":
-        txn.put_exact(path, data, None if mine is None else etag(mine), replace_unreferenced=mine is not None)
+        txn.put_exact(path, data, None if mine is None else etag(mine), replace_unreferenced=mine is not None,
+                      regenerable=True)
     else:
-        txn.put_exact(path, data, None if mine is None else etag(mine))
+        txn.put_exact(path, data, None if mine is None else etag(mine), regenerable=True)
     if kind == "manifest":
         for head in _manifest_heads(Copy(path, winner, receiver, data, None)):
             theirs, ours = scans[winner].files.get(head), scans[receiver].files.get(head)
             if theirs is None:
                 raise ResolveRefused(f"{head} is not readable on {winner}")
             if ours is None:
-                txn.put_exact(head, theirs, None)
+                txn.put_exact(head, theirs, None, regenerable=True)
                 resolved.append(head)
             elif ours != theirs:
                 raise ResolveRefused(f"{head} differs between the devices; resolve it first")

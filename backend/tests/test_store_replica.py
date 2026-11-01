@@ -559,12 +559,13 @@ def test_an_aborted_commit_drops_exact_copies_instead_of_keeping_orphans(tmp_pat
     def action(ops, root):
         with LibraryStore.open(root / "lib", ops=ops, locker=locker) as store:
             txn = store.transaction()
-            txn.put_exact(WREN_A_PATH, theirs, store.read(WREN_A).etag)
+            txn.put_exact(WREN_A_PATH, theirs, store.read(WREN_A).etag, regenerable=REGENERABLE[0])
             txn.commit(owner_handle(*ALL))
 
     def human(ops, root):
         ops.write_bytes(root / "lib" / WREN_A_PATH, b'{"a human": 1}\n')
 
+    REGENERABLE = [True]
     scenario = CrashScenario(
         "abort a replica", lambda ops, root: _replay(ops, root, template), action,
         lambda ops, root: LibraryStore.open(root / "lib", ops=ops, locker=locker).close(),
@@ -575,3 +576,6 @@ def test_an_aborted_commit_drops_exact_copies_instead_of_keeping_orphans(tmp_pat
     run = report.runs[1]
     assert "WriteConflict" in run.action_error
     assert not [key for key, value in run.recovered.items() if key.startswith("lib/.conflicts/") and value]
+    REGENERABLE[0] = False  # without the flag, put_exact's bytes are preserved like any put
+    run = run_plans(scenario, [[Interleave(guard, human)]], tmp_path / "plain").runs[1]
+    assert theirs in [value for key, value in run.recovered.items() if key.startswith("lib/.conflicts/")]
