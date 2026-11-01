@@ -149,6 +149,8 @@ def is_generic(instance: EntityInstance, index: DefinitionIndex) -> bool:
     """A not-yet-individualized instance of a template; resolution errors propagate."""
     if not isinstance(instance, EntityInstance):
         raise TypeError(f"expected an EntityInstance, not {type(instance).__name__}")
+    if not isinstance(index, DefinitionIndex):
+        raise TypeError(f"expected a DefinitionIndex, not {type(index).__name__}")
     if instance.individuality is not None or instance.source is None:
         return False
     definition = index.resolve(instance.source)

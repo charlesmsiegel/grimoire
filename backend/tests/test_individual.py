@@ -305,6 +305,9 @@ def test_argument_types_are_checked():
         individualize(roster, decide(), INDEX, [("c1", "goblin-1", "p1")])
     with pytest.raises(TypeError):
         is_generic(G1, INDEX)
+    for instance in (generic(G1), generic(G1, local_name="x"), EntityInstance(G2, None, "Original")):
+        with pytest.raises(TypeError):
+            is_generic(instance, {})
 
 
 @pytest.mark.parametrize("fields", [
