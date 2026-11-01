@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -38,6 +39,8 @@ from grimoire.testing import (
     preserves_interleave, preserves_meddle, run_plans,
 )
 from grimoire.testing.fileops import snapshot
+
+import pytest
 
 from grimoire.core.identity import InstanceRef
 
@@ -355,3 +358,28 @@ def test_s11_a_file_changed_after_publication_stops_the_sync_before_its_archive(
     assert run.recovered[target] == edited  # verification failed: no archive claimed the copy landed
     kept_on_desktop = {value for key, value in run.recovered.items() if key.startswith(f"{DESKTOP}/.conflicts/")}
     assert edited in kept_on_desktop  # the retry saw an uncertain base: a keep-both conflict
+
+
+# -- unreduced, opt-in -----------------------------------------------------------------------
+
+EXHAUSTIVE = pytest.mark.skipif(not os.environ.get("GRIMOIRE_EXHAUSTIVE_SYNC"),
+                                reason="unreduced exploration: set GRIMOIRE_EXHAUSTIVE_SYNC=1 (minutes)")
+
+
+@EXHAUSTIVE
+def test_exhaustive_every_mutating_operation_crashed_torn_and_failed(tmp_path):
+    """No commit-outcome reduction: every mutating operation, every timing (about 220 points)."""
+    report = explore_crashes(_scenario(S9), tmp_path, errors=True)
+    report.assert_ok()
+    assert report.points_explored > 200
+
+
+@EXHAUSTIVE
+def test_exhaustive_an_edit_at_every_operation(tmp_path):
+    """No observation-gap reduction: an edit before every operation except the file's own replace."""
+    trace = _baseline_trace()
+    for name in ("phone copy target", "desktop conflict side"):
+        target, data_of, _, _ = _s10_targets(trace)[name]
+        own = {op.index for op in trace if op.kind == "replace" and op.target == target}
+        plans = [[Interleave(op.index, _edit(target, data_of))] for op in trace if op.index not in own]
+        run_plans(_scenario(S10), plans, tmp_path / name.replace(" ", "-")).assert_ok()

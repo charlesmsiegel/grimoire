@@ -637,3 +637,61 @@ def test_f6_approvals_spent_by_an_interrupted_commit_are_reported(pair, monkeypa
         sync_session.apply_sync(plan, {DESKTOP: handle(), PHONE: authority.handle_for("app:sync")},
                                 {PHONE: {PATHS["wren_a"]: "a1"}})
     assert stopped.value.report.consumed_approvals == ("a1",)
+
+
+def test_sync_until_quiet_gives_up_with_a_named_error(pair, monkeypatch):
+    desktop, phone = pair
+    report = sync_session.SyncReport((DESKTOP, PHONE), wrote=True)
+    monkeypatch.setattr(sync_session, "sync", lambda *args, **kwargs: report)
+    with pytest.raises(sync_session.SyncNotQuiet):
+        sync_until_quiet(desktop, phone, handles(), attempts=2)
+
+
+def _retitle(store, title, heads=None):
+    current = store.read_source("world:harbor")
+    txn = store.transaction()
+    txn.put(SourceManifest("world:harbor", OWNER, title, heads if heads is not None else dict(current.manifest.heads)),
+            current.etag)
+    txn.commit(handle())
+
+
+def test_s8_resolving_a_manifest_brings_its_absent_heads_and_refuses_differing_ones(pair):
+    desktop, phone = pair
+    new_revision(desktop, "r2", "a captain")  # the desktop moves its head to a new r2
+    _retitle(phone, "Harbour")                # the phone retitles the manifest
+    report = sync(desktop, phone, handles())
+    assert report.conflict(PATHS["manifest"]).code == "concurrent"
+    assert report.conflict(PATHS["r2"]).code == "unapplicable"  # headless on the phone without the manifest
+    mine, theirs = (desktop.root / PATHS["manifest"]).read_bytes(), (phone.root / PATHS["manifest"]).read_bytes()
+    resolve(desktop, phone, PATHS["manifest"], etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+    assert (phone.root / PATHS["r2"]).read_bytes() == (desktop.root / PATHS["r2"]).read_bytes()
+    assert (phone.root / PATHS["manifest"]).read_bytes() == mine and phone.load().problems == ()
+    assert sync(desktop, phone, handles()).conflicts == ()
+    # a head revision that differs between the devices must be resolved first
+    new_revision(desktop, "r3", "an admiral")
+    new_revision(phone, "r3", "a mutineer")
+    _retitle(phone, "Harbour!")
+    sync(desktop, phone, handles())
+    mine, theirs = (desktop.root / PATHS["manifest"]).read_bytes(), (phone.root / PATHS["manifest"]).read_bytes()
+    with pytest.raises(ResolveRefused, match="resolve it first"):
+        resolve(desktop, phone, PATHS["manifest"], etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+
+
+def test_f1_a_replaced_identity_makes_the_next_sync_conservative(pair):
+    desktop, phone = pair
+    identify(phone, "tablet", replace=True)
+    edit_instance(desktop, WREN_A, 9)
+    (desktop.root / PATHS["wren_b"]).unlink()
+    report = sync(desktop, phone, {DESKTOP: handle(), "tablet": handle()})
+    assert report.copied == ()  # not a first sync: nothing is copied, nothing re-created
+    assert report.conflict(PATHS["wren_a"]).code == "missing_ancestor"
+    assert report.conflict(PATHS["wren_b"]).code == "missing_ancestor"
+
+
+def test_f4_a_record_at_the_wrong_address_is_blocked(pair):
+    desktop, phone = pair
+    data = json.loads((phone.root / PATHS["wren_a"]).read_bytes())
+    data["address"] = str(InstanceRef("c1", "character", "imposter"))
+    (phone.root / PATHS["wren_a"]).write_text(json.dumps(data))
+    edit_instance(desktop, WREN_A, 9)
+    assert sync(desktop, phone, handles()).conflict(PATHS["wren_a"]).code == "blocked"

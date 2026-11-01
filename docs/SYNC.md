@@ -12,7 +12,7 @@
 
 ## What is synchronized
 
-`grimoire.sync.syncable(path)` is the single definition of the synced set, and the extension point for later families (018 assets, 021/035 scenes, ledgers). In this slice it covers the canonical records of 010: source manifests, definition revisions and campaign instances. 107's world-less chat records are campaign instances, so they sync like any other record.
+`grimoire.sync.syncable(path)` is the single definition of the synced set, and the extension point for later families (018 assets, 021/035 scenes, ledgers). In this slice it covers the canonical records of 010: source manifests, definition revisions and campaign instances. The chat proof (S3) uses a **synthetic, instance-shaped chat record**. Sprint 107 is not implemented: when it defines its real chat records, it must extend `syncable()` for them and re-prove S3 against them (a 107/019 handoff).
 
 Never transferred:
 - device-local state: `.txn/`, `.conflicts/` and `.sync/`;
@@ -57,7 +57,7 @@ A path's base is trusted only where **both devices' own records agree**:
    - the shared entry, when both archives are valid and hold the identical entry;
    - `none`: both archives are valid and neither has an entry (a path new since the last sync);
    - otherwise `uncertain`: one archive is missing or ignored, or the entries disagree.
-2. **Pending override.** If either device has a pending entry for the path, the base is `agreed to` only when every entry names the same `to` and each device holding one still has those bytes: the copy verifiably landed, and the peer held `to`. Anything else is `uncertain`: a revert to the old bytes, an edit racing the copy, disagreeing entries, or an unreadable marker.
+2. **Pending override.** If either device has a pending entry for the path, the base is `agreed to` only when every entry names the same `to` and each device holding one still has those bytes: the copy verifiably landed, and the peer held `to`. Anything else is `uncertain`: a revert to the old bytes, an edit racing the copy, disagreeing entries, or a marker that parses but is invalid (ignored).
 
 `uncertain` never copies anything. This is what defeats:
 - a **clone** of a library that synced with the phone: its archive cannot make one device's version look like an ancestor;
@@ -101,15 +101,15 @@ A copy publishes the other device's **exact bytes** (`Transaction.put_exact`), s
 
 ## Keep-both
 
-For every conflict, each device whose peer has a present, usable version receives that version as a **kept version**. It goes under `.conflicts/<hash16>/<name>~<digest12>[.N]`, through `Transaction.keep_version`. The authorization address is distinct from the record's own: `kept/<hash16>/<digest12>[-N]/<name>`. So "keep these bytes beside p" and "overwrite p" are different approvals, and they appear under different `preview()` keys.
+For every conflict except `denied`, each device whose peer has a present, usable version receives that version as a **kept version**. It goes under `.conflicts/<hash16>/<name>~<digest12>[.N]`, through `Transaction.keep_version`. The authorization address is distinct from the record's own: `kept/<hash16>/<digest12>[-N]/<name>`. So "keep these bytes beside p" and "overwrite p" are different approvals, and they appear under different `preview()` keys.
 
-A slot already holding those bytes is reused, so kept versions are never duplicated, and a conflict stays reported on every sync until a human ends it. A kept version that cannot be written (for example, because of path limits) is reported as `kept: false`. A device whose own file could not even be read receives nothing: there is nothing to keep it beside, and the next readable sync decides the path. Kept versions are not indexed: `load()` still shows one record per path.
+A slot already holding those bytes is reused, so kept versions are never duplicated, and a conflict stays reported on every sync until a human ends it. A kept version that cannot be written (for example, because of path limits) is reported as `kept: false`. A device whose own file could not even be read receives nothing: there is nothing to keep it beside, and the next readable sync decides the path. A `denied` conflict keeps nothing either: the denial is only known while committing, after kept versions were planned. Both versions stay canonical on their own device, and the conflict is reported on every sync until the grant changes. Kept versions are not indexed: `load()` still shows one record per path.
 
 Dismissing a kept version by deleting it is not supported yet: the next sync delivers it again.
 
 ## Ending a conflict
 
-- `resolve(left, right, path, keep=<etag>, expected={device: etag | None}, handles)` makes the device that does not hold `keep` receive it. Its replaced version is kept under `.conflicts/` in the same transaction, and both archives then record `agreed keep`.
+- `resolve(left, right, path, keep=<etag>, expected={device: etag | None}, handles, approvals=None)` makes the device that does not hold `keep` receive it. Its replaced version is kept under `.conflicts/` in the same transaction, and both archives then record `agreed keep`.
   - **Manifest:** absent head revisions are copied with it. A head revision that differs must be resolved first.
   - **Definition revision:** allowed only if nothing on the receiving device can pin it: a manifest head, a link endpoint, or an instance's `derived_from` or `base`. Every parsable manifest and instance is checked, those of excluded sources included. An unreadable manifest or instance means "cannot prove unreferenced" (`RevisionReferenced`), so any blocked manifest or instance anywhere in the library blocks revision resolves until it is fixed.
   - **Refused (`ResolveRefused`, nothing written):** a deletion choice, a blocked side, `keep` matching neither device, or either device differing from `expected`.
@@ -150,6 +150,9 @@ Errors:
   - dependency checks beyond manifest heads;
   - dismissing kept versions.
 - A true first sync, or one after `.sync/` was deleted on **both** devices, re-creates records deleted on one device beforehand. After a tombstone, resurrection is detected only for the exact tombstoned bytes.
+- **A restore after verification is an edit.** Pending markers protect a restore of the old bytes made *before* a sync verified its copy. Once verified, both devices held the copy, so a restore made after verification (even before the archive is written) is treated as an ordinary later edit, exactly like a restore after the sync finished, and synchronized as one.
+- **Denials are coarse.** A denied write drops every copy of its source to that device (instances are independent), not only the writes that strictly depend on it.
+- **Single-device trust in markers.** A pending marker is trusted on one device's word, and the `check` digest detects damage, not forgery. `.sync` writes need no handle; keeping them out of workers' reach is the application's job until 007/028 integrate.
 - **Link-drop policy.** A copied manifest is admitted exactly as a local commit of it would be. Under 010's accepted link-order policy, it can cause *another* source's cross-source link to be dropped on the destination, and the next `load` reports it.
 - 010's R7 window remains: an external edit landing exactly between a target's guard read and its `replace` is lost. 019 narrowed it to the `replace` alone: a new file's directories are now created before its guard read.
 - **Rollback.** A pre-019 build cannot recover an unfinished journal that contains `replica`, `keep` or `state` entries (`RecoveryFailed`, unknown kind). Finish recovery with a 019 build, or use `discard_journal`.
@@ -157,6 +160,6 @@ Errors:
 ## Proofs
 
 The scenarios live in:
-- `backend/tests/test_sync_scenarios.py` (S1–S8, F1–F11);
+- `backend/tests/test_sync_scenarios.py` (S1–S8 and the failure scenarios; F5 is covered by the S7 tests and F11 by an S8 test; the harness additions, F8, are in `test_builtin_invariants.py`, `test_fault_harness.py` and `test_store_replica.py`);
 - `backend/tests/test_sync_decide.py` (every combination of the table, mirror symmetry, the safety property, base derivation and the documents);
-- `backend/tests/test_sync_faults.py`: two replica roots under the 006 harness, covering crashes, I/O errors, recovery crashes, interleaves at every observation gap, an ABA restore and a meddle. Its docstring reasons the commit-outcome and observation-gap reductions that keep it near a minute on Linux. Read faults (an unreadable marker, record or verification read) are covered by monkeypatched scenarios, because the harness faults only mutating operations.
+- `backend/tests/test_sync_faults.py`: two replica roots under the 006 harness, covering crashes, I/O errors, recovery crashes, interleaves at every observation gap, an ABA restore and a meddle. Its docstring reasons the commit-outcome and observation-gap reductions that keep it near a minute on Linux. The unreduced explorations exist as opt-in tests (`GRIMOIRE_EXHAUSTIVE_SYNC=1`): every mutating operation with crashes, torn writes and errors, about 220 points and two minutes on Linux, ran with no violation. Read faults (an unreadable marker, record or verification read) are covered by monkeypatched scenarios, because the harness faults only mutating operations.
