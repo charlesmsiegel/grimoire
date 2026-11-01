@@ -1,5 +1,7 @@
 # Synchronization revisions and conflict detection
 
+**Status:** first slice implemented as `grimoire.sync` (transport-free, two locally open libraries); contract in [SYNC.md](../../SYNC.md). Proven under the 006 harness with `Interleave`/`meddle` on two replica roots, with the new `preserves_interleave` built-in. Remaining: the later milestones below, deletion propagation, ledger sync, archive compaction, and more than two devices; transport is 028's.
+
 **Outcome:** A transport-independent version history makes V2 libraries safe across independently edited devices.
 
 ## Scope and first proof

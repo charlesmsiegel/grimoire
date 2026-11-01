@@ -1,0 +1,160 @@
+# Device sync: revisions and conflicts
+
+**Status:** first slice of [Sync Revisions And Conflict Core](roadmap/sprints/sync-revisions-and-conflict-core.md) (Wave 3, #019), implemented as `grimoire.sync` over the [native store](STORAGE.md). It synchronizes **two libraries that are both open locally**: a desktop folder and a phone folder, or any two copies of one library. There is no network transport, pairing or UI yet; transport belongs to [App-Managed Device Sync (028)](roadmap/sprints/app-managed-device-sync.md). A green test suite proves this contract, not a working phone sync.
+
+## What it guarantees
+
+- **Timestamps never decide.** Sync compares bytes (etags). Nothing in `grimoire.sync` reads a clock, a modification time or randomness; a test pins this.
+- **Non-overlapping edits merge deterministically.** `sync(a, b)` and `sync(b, a)` produce byte-identical libraries, the sync bookkeeping included.
+- **Nothing is silently overwritten, resurrected or dropped.** Overlapping edits, deletions, records the other library cannot accept, and anything without a provable common ancestor become **named conflicts**. Each device keeps its own file and also receives the other device's version under its `.conflicts/`.
+- **Crash-safe.** Every write is a 010 transaction. After a crash, reopening both libraries and syncing again reaches exactly the state an uninterrupted sync reaches.
+- **One bad record never blocks the rest.** A path or source the other library cannot apply, a write the policy denies, or an unusable file becomes a conflict, and everything else still syncs.
+
+## What is synchronized
+
+`grimoire.sync.syncable(path)` is the single definition of the synced set, and the extension point for later families (018 assets, 021/035 scenes, ledgers). In this slice it covers the canonical records of 010: source manifests, definition revisions and campaign instances. 107's world-less chat records are campaign instances, so they sync like any other record.
+
+Never transferred:
+- device-local state: `.txn/`, `.conflicts/` and `.sync/`;
+- **derived indexes**, such as 107's navigation indexes. They are rebuilt on each device, never synchronized as a second owner.
+
+Reported as `skipped` and never touched:
+- ledgers under `authority/`;
+- the library marker;
+- unknown root entries such as `worlds/`;
+- the reserved campaign families (`scenes/`, `events/`, `evidence/`, `relations/`);
+- non-record files.
+
+Sync compares whole files. It never interprets payloads, never merges inside a file, and never treats source inheritance (`derived_from`, `base`, portrayals) as device ancestry. Two structural readings are the only exceptions:
+- a manifest's `heads`, for the head-dependency rule;
+- on a true first sync only, a record's `previous` field, for one-hop lineage.
+
+## Device identity
+
+`identify(store, device_id)` writes `.sync/device.json`. Device IDs are supplied by the caller and never generated. An ID is one lowercase identity segment that is also a portable path segment.
+
+Refusals:
+- a library with no identity, or a damaged one: `NoDeviceIdentity`;
+- two libraries with the same ID (the same library twice, or a folder copied together with its `.sync`): `SameDevice`;
+- changing a valid ID without `replace=True`: `IdentityExists`.
+
+A damaged identity file is replaced by `identify`. After a new ID, the old peer files no longer match the pair, so the next sync is conservative rather than a first sync.
+
+## Bookkeeping (`.sync/peers/<peer>/`)
+
+- **`archive.json`** holds the last agreed state per path. `{"agreed": E}` means both devices verifiably held exactly E. `{"deleted": E}` is a **tombstone**: both devices were absent after last agreeing on E. Tombstones are kept; there is no compaction yet.
+- **`pending.json`** records what an unfinished sync published on this device: `{"from": E0, "to": E1}` per path, or `{"uncertain": true}`. It is written in the **same transaction** as the data. An entry is removed only after both archives are written and its path is resolved.
+
+Both files carry a `check` digest of their own content. A file that is not strictly valid is **ignored and reported** (`SyncReport.notices`), never partially trusted. This covers bad JSON, a wrong format, an archive for another pair of devices, and a failed `check`.
+
+## Base derivation
+
+A path's base is trusted only where **both devices' own records agree**:
+1. **Archive candidate:**
+   - `first`: neither device has any file at its archive location for this pair (a true first sync);
+   - the shared entry, when both archives are valid and hold the identical entry;
+   - `none`: both archives are valid and neither has an entry (a path new since the last sync);
+   - otherwise `uncertain`: one archive is missing or ignored, or the entries disagree.
+2. **Pending override.** If either device has a pending entry for the path, the base is `agreed to` only when every entry names the same `to` and each device holding one still has those bytes: the copy verifiably landed, and the peer held `to`. Anything else is `uncertain`: a revert to the old bytes, an edit racing the copy, disagreeing entries, or an unreadable marker.
+
+`uncertain` never copies anything. This is what defeats:
+- a **clone** of a library that synced with the phone: its archive cannot make one device's version look like an ancestor;
+- **ABA** after a crash: the user restores the exact old bytes before the sync finished.
+
+## Decision table
+
+Each device's file is `absent`, `present(etag)`, or `blocked`. A file is blocked when it is:
+- a link;
+- a look-alike spelling;
+- unreadable, oversized or not a regular file;
+- not strict JSON;
+- in a newer format;
+- an envelope whose address does not match its path.
+
+The rows are evaluated top to bottom, and swapping the devices mirrors every decision.
+
+| # | Base | Devices | Decision |
+|---|---|---|---|
+| 1 | any | either blocked | conflict `blocked` |
+| 2 | any | equal etags, or both absent | agreed |
+| 3 | `uncertain` | differ | conflict `missing_ancestor` |
+| 4 | `first` | one absent | copy (create-only) |
+| 5 | `first` | both present | copy if exactly one side's `previous` is the other's etag (not for revisions), else `missing_ancestor` |
+| 6 | `none` | one absent | copy (create-only) |
+| 7 | `none` | both present | conflict `missing_ancestor` |
+| 8 | `agreed E` | one is E, the other present | copy the other over E; a definition revision is `revision_modified` |
+| 9 | `agreed E` | one is E, the other absent | conflict `deleted` (deletion is not propagated) |
+| 10 | `agreed E` | one absent, the other not E | conflict `edit_delete` |
+| 11 | `agreed E` | both present, neither E | conflict `concurrent` |
+| 12 | `deleted E` | one absent, the other is E | conflict `resurrected` |
+| 13 | `deleted E` | one absent, the other not E | copy (a new record at a deleted path) |
+| 14 | `deleted E` | both present, different | conflict `concurrent` |
+
+A copy publishes the other device's **exact bytes** (`Transaction.put_exact`), so both devices converge on one etag. Before it is admitted, three overrides apply:
+- **Head dependency.** A manifest copies only if every head it names will hold the origin's bytes on the destination: either already equal, or copied in the same commit. Otherwise the conflict is `head_dependency`.
+- **Name collision.** A destination path that collides with a differently spelled entry gives `name_collision`.
+- **Destination preflight.** The destination's writes are checked once with 010's read-only `Transaction.check()`. Only if that check fails are they admitted unit by unit, and a unit the store refuses becomes `unapplicable`. A unit is one instance, one manifest with its head revisions, or the other revisions of one entity. Instances are checked alone; source units are checked cumulatively, so cross-source link cycles are caught. Library-wide problems propagate and are never blamed on one path.
+
+**Denied writes.** Authorization cannot be dry-run without consuming approvals, so a data commit uses 010's partial mode (`commit(..., on_denied=...)`). Each write is authorized exactly once. A write denied for its path (not granted, approval required, reserved) is dropped together with every copy of the same source, becomes conflict `denied`, and its pending entry is removed. A denial that is not about a path propagates: an unissued handle, or an unavailable authority. Approvals consumed by dropped dependents are reported in `SyncReport.consumed_approvals`.
+
+## Keep-both
+
+For every conflict, each device whose peer has a present, usable version receives that version as a **kept version**. It goes under `.conflicts/<hash16>/<name>~<digest12>[.N]`, through `Transaction.keep_version`. The authorization address is distinct from the record's own: `kept/<hash16>/<digest12>[-N]/<name>`. So "keep these bytes beside p" and "overwrite p" are different approvals, and they appear under different `preview()` keys.
+
+A slot already holding those bytes is reused, so kept versions are never duplicated, and a conflict stays reported on every sync until a human ends it. A kept version that cannot be written (for example, because of path limits) is reported as `kept: false`. Kept versions are not indexed: `load()` still shows one record per path.
+
+Dismissing a kept version by deleting it is not supported yet: the next sync delivers it again.
+
+## Ending a conflict
+
+- `resolve(left, right, path, keep=<etag>, expected={device: etag | None}, handles)` makes the device that does not hold `keep` receive it. Its replaced version is kept under `.conflicts/` in the same transaction, and both archives then record `agreed keep`.
+  - **Manifest:** absent head revisions are copied with it. A head revision that differs must be resolved first.
+  - **Definition revision:** allowed only if nothing on the receiving device can pin it: a manifest head, a link endpoint, or an instance's `derived_from` or `base`. Every parsable manifest and instance is checked, those of excluded sources included. An unreadable manifest or instance means "cannot prove unreferenced" (`RevisionReferenced`), so any blocked manifest or instance anywhere in the library blocks revision resolves until it is fixed.
+  - **Refused (`ResolveRefused`, nothing written):** a deletion choice, a blocked side, `keep` matching neither device, or either device differing from `expected`.
+- Deleting a record on both devices by hand ends a `deleted` conflict, and a tombstone is archived.
+
+## Apply order and crash safety
+
+`plan_sync` only reads (directory listings are cached for the whole plan). `SyncPlan.preview()` gives, per device, the exact bytes of every authorized write.
+
+`apply_sync(plan, handles, approvals=None)` writes in a fixed order, where `a` is the lower device ID:
+1. data(a): copies, kept versions and the merged pending marker, in one transaction;
+2. data(b);
+3. verify: every published and kept file is re-read and must hold the planned bytes;
+4. archive(b), then archive(a);
+5. pending(b), then pending(a).
+
+An archive entry `agreed E` is written only after both data commits and verification succeeded, and only for paths both devices verifiably held as E. A first sync with nothing agreed still writes an empty archive.
+
+Errors:
+- These stop the sync with `SyncInterrupted`, and no archive is written after the stop:
+  - a stale write (a library changed after planning);
+  - `WriteConflict` (an external edit raced publication; 010 kept the human's file);
+  - a per-path refusal at commit time;
+  - a failed verification.
+- `CommitIncomplete`, `OSError`, `PendingRecovery`, `RecoveryBlocked` and root or V1 errors propagate; 010 recovery owns them.
+
+`sync_until_quiet` retries `SyncInterrupted` until a sync completes and writes nothing. After `attempts` it raises the last error, or `SyncNotQuiet`.
+
+## Limits
+
+- One archive per pair, under 010's 8 MiB file cap (tens of thousands of entries). A larger plan is refused before any write (`ArchiveTooLarge`). Compaction is a later milestone and a release blocker for large libraries.
+- Not in this slice:
+  - more than two devices, transport and pairing;
+  - causal branches, and history beyond one agreed etag per path;
+  - deletion propagation, and resolving toward a deletion;
+  - ledger sync;
+  - semantic or field-level merge (042);
+  - dependency checks beyond manifest heads;
+  - dismissing kept versions.
+- A true first sync, or one after `.sync/` was deleted on **both** devices, re-creates records deleted on one device beforehand. After a tombstone, resurrection is detected only for the exact tombstoned bytes.
+- **Link-drop policy.** A copied manifest is admitted exactly as a local commit of it would be. Under 010's accepted link-order policy, it can cause *another* source's cross-source link to be dropped on the destination, and the next `load` reports it.
+- 010's R7 window remains: an external edit landing exactly between a target's guard read and its `replace` is lost. 019 narrowed it to the `replace` alone: a new file's directories are now created before its guard read.
+- **Rollback.** A pre-019 build cannot recover an unfinished journal that contains `keep` or `state` entries (`RecoveryFailed`, unknown kind). Finish recovery with a 019 build, or use `discard_journal`.
+
+## Proofs
+
+The scenarios live in:
+- `backend/tests/test_sync_scenarios.py` (S1–S8, F1–F11);
+- `backend/tests/test_sync_decide.py` (every combination of the table, mirror symmetry, the safety property, base derivation and the documents);
+- `backend/tests/test_sync_faults.py`: two replica roots under the 006 harness, covering crashes, I/O errors, recovery crashes, interleaves at every observation gap, an ABA restore and a meddle. Its docstring reasons the commit-outcome and observation-gap reductions that keep it near 40 s.

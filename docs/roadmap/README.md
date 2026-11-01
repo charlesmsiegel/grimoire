@@ -118,6 +118,11 @@ We still target the first **playable migrated desktop text campaign in Wave 5** 
 | 024 | [Creature Individualization](sprints/creature-individualization.md) | **P1** | [Entity Facets And Instance Model](sprints/entity-facets-and-instance-model.md), [Source Qualified Identity](sprints/source-qualified-identity.md) | actors / template instances | Instantiate one individually named creature from a species |
 | 025 | [Fictional Abilities](sprints/fictional-abilities.md) | **P1** | [Entity Facets And Instance Model](sprints/entity-facets-and-instance-model.md) | world / power constraints | Represent what a powers-capable entity may and may not do |
 
+#### Wave 3 status
+
+- **019 first slice:** `grimoire.sync`, a headless, transport-free revision and conflict core for two locally open libraries ([SYNC.md](../SYNC.md)). It proves keep-both conflicts and crash convergence under the 006 harness. It is not phone sync: transport and pairing belong to 028.
+- The other Wave 3 rows have not started.
+
 ### Wave 4 — Card/scenario import, V1 migration, independent NPC generation and peer transfer
 
 | # | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
