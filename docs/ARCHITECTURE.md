@@ -52,6 +52,8 @@ Planned, authorized, fully booked OpenAI-compatible model calls. Endpoints are t
   worlds/<world>/                     # self-contained setting and authored content
   campaigns/<campaign>/
     instances/                        # individual entities and overrides
+    scope.json                        # the play scope; world optional (107, see CHATS.md)
+    chats/                            # one record per chat thread (107)
     scenes/                           # accepted authored contributions, exact text
     events/                           # committed happenings and consequences
     evidence/                         # observations, reports, beliefs and provenance

@@ -69,7 +69,7 @@ def _syncable(path: object) -> bool:
     if type(path) is not str:
         return False
     found = classify(tuple(path.split("/")))
-    return found is not None and found[0] in ("definition", "manifest", "instance")
+    return found is not None and found[0] in ("definition", "manifest", "instance", "scope", "chat")
 
 
 @dataclass(frozen=True)

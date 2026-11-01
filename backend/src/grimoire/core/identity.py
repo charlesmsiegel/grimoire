@@ -31,6 +31,8 @@ _SOURCE_REF_RE = re.compile(
 _INSTANCE_REF_RE = re.compile(
     rf"campaign:(?P<campaign_id>{_SEGMENT})/(?P<kind>{_SEGMENT})/(?P<instance_id>{_SEGMENT})"
 )
+_SCOPE_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})")
+_CHAT_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#chat/(?P<chat_id>{_SEGMENT})")
 
 
 class IdentityConflict(ValueError):
@@ -140,6 +142,60 @@ class InstanceRef:
         match = _INSTANCE_REF_RE.fullmatch(_require_text(text))
         if match is None:
             raise ValueError(f"not a campaign instance reference: {text!r}")
+        return cls(**match.groupdict())
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeRef:
+    """A play scope: the campaign namespace itself, not anything inside it.
+
+    Not returned by ``parse_ref``: a scope is never a definition or an individual.
+    """
+
+    campaign_id: str
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+
+    def __str__(self) -> str:
+        return f"campaign:{self.campaign_id}"
+
+    @classmethod
+    def parse(cls, text: object) -> ScopeRef:
+        match = _SCOPE_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not a play scope reference: {text!r}")
+        return cls(**match.groupdict())
+
+
+@dataclass(frozen=True, slots=True)
+class ChatRef:
+    """One conversation thread, homed in exactly one play scope; never an actor or a scene.
+
+    ``campaign:<campaign_id>#chat/<chat_id>``. Not returned by ``parse_ref``.
+    """
+
+    campaign_id: str
+    chat_id: str
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.chat_id, "chat_id")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"campaign:{self.campaign_id}#chat/{self.chat_id}"
+
+    @property
+    def scope(self) -> ScopeRef:
+        return ScopeRef(self.campaign_id)
+
+    @classmethod
+    def parse(cls, text: object) -> ChatRef:
+        match = _CHAT_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not a chat reference: {text!r}")
         return cls(**match.groupdict())
 
 

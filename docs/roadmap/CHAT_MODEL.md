@@ -1,6 +1,6 @@
 # World-optional chats, reusable portrayals and navigation
 
-**Status: V2 architectural decision and implementation handoff, not an existing playable feature.** Implement the follow-up to the shipped Sprint 010 contract in [Sprint 107](sprints/world-optional-chat-scopes.md). The first usable world-less text chat is a **Wave 5** gate; desktop/phone navigation starts in Waves 5–6, with a richer library browser later. The [ordered roadmap](README.md) schedules these tasks. Do **not** re-open or rewrite 010 to get there.
+**Status: V2 architectural decision and implementation handoff, not an existing playable feature.** Sprint 107's headless storage and navigation slice is implemented ([CHATS](../CHATS.md)). Implement the follow-up to the shipped Sprint 010 contract in [Sprint 107](sprints/world-optional-chat-scopes.md). The first usable world-less text chat is a **Wave 5** gate; desktop/phone navigation starts in Waves 5–6, with a richer library browser later. The [ordered roadmap](README.md) schedules these tasks. Do **not** re-open or rewrite 010 to get there.
 
 ## Decisions
 

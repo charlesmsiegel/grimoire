@@ -40,15 +40,19 @@ PER_PATH_ERRORS = (InvalidSourceState, NameCollision, UnstorableIdentifier, Link
                    InvalidEnvelope, ImmutableRevision, RevisionReferenced)
 #: The largest archive this slice writes (one file under the store's limit; no compaction yet).
 ARCHIVE_LIMIT = MAX_FILE_BYTES
-#: The record kinds this slice synchronizes; later families extend ``syncable``.
-SYNCED_KINDS = frozenset({"definition", "manifest", "instance"})
+#: The record kinds this slice synchronizes; later families extend ``syncable``. ``scope`` and
+#: ``chat`` are 107's campaign-local play-scope and chat records.
+SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat"})
+#: Campaign-local kinds: independent of sources and of each other at commit time.
+CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat"})
 
 
 def syncable(path: str) -> str | None:
     """The record kind sync owns at ``path``, or ``None``: the one extension point for later families.
 
-    018 assets, 021/035 scenes and ledgers add their paths and decision overrides here. Derived
-    reverse indexes (such as 107's navigation indexes) are never synchronized.
+    018 assets, 021/035 scenes and ledgers add their paths and decision overrides here. 107's
+    scope and chat records are included; derived reverse indexes (107's navigation index) are
+    never synchronized.
     """
     found = classify(tuple(path.split("/")))
     return found[0] if found is not None and found[0] in SYNCED_KINDS else None
@@ -321,7 +325,7 @@ def _admit_units(store: LibraryStore, copies: list[Copy]) -> tuple[list[Copy], l
              for copy in copies if syncable(copy.path) == "manifest"}
     admitted: list[Copy] = []
     rejected: list[tuple[Copy, BaseException]] = []
-    for copy in (copy for copy in copies if syncable(copy.path) == "instance"):  # independent: alone
+    for copy in (copy for copy in copies if syncable(copy.path) in CAMPAIGN_LOCAL):  # independent: alone
         txn = store.transaction()
         _stage(txn, [copy], [])
         error = _preflight(txn, copy.path)
@@ -333,7 +337,7 @@ def _admit_units(store: LibraryStore, copies: list[Copy]) -> tuple[list[Copy], l
     in_manifest_unit = {path for paths in heads.values() for path in paths}
     for copy in copies:
         kind = syncable(copy.path)
-        if kind == "instance" or copy.path in in_manifest_unit:
+        if kind in CAMPAIGN_LOCAL or copy.path in in_manifest_unit:
             continue
         if kind == "manifest":
             units = sources.setdefault(_source_of(copy.path), [])
@@ -479,10 +483,11 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
 
     def on_denied(keys: frozenset[str]) -> dict[str, bytes | None]:
         denied = {key for key in keys if not key.startswith("kept/")}
-        sources = {_source_of(path) for path in denied if syncable(path) != "instance"}
+        sources = {_source_of(path) for path in denied if syncable(path) not in CAMPAIGN_LOCAL}
         changes: dict[str, bytes | None] = {}
         for copy in copies:
-            if copy.path in denied or (syncable(copy.path) != "instance" and _source_of(copy.path) in sources):
+            if copy.path in denied or (syncable(copy.path) not in CAMPAIGN_LOCAL
+                                       and _source_of(copy.path) in sources):
                 dropped.add(copy.path)
                 if copy.path not in denied:
                     changes[copy.path] = None
