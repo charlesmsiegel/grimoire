@@ -165,12 +165,25 @@ def test_unknown_fields_on_the_named_ability_fail_closed(part, path):
     assert refusal(lambda: check_ruling(ruling(attempt(effect_id="veil")), entity)) == "ruling_not_needed"
 
 
-def test_unknown_fields_on_an_unrelated_effect_or_ability_do_not_matter():
-    unrelated = _bending_with(("effects", 1, {"x": 1}))  # `glow`, not the named effect
-    entity = effective(person("iris", "Iris", unrelated,
+def test_unknown_fields_on_any_effect_of_the_named_ability_fail_closed():
+    # An extrapolation stretches the ability's effects without naming one, so an unknown field on
+    # an effect it does not name could still narrow it: no approval may be reported over it.
+    glow = _bending_with(("effects", 1, {"x-forbids": ["flight"]}))  # `glow`, not named
+    entity = effective(person("iris", "Iris", glow))
+    for label in (attempt(effect_id="veil"), attempt(needs=("light", "flight"))):
+        result = assess_attempt(label, entity, [ruling(label)])
+        assert (result.classification, result.approval, result.costs) == ("needs_upgrade", "not_needed", ())
+        assert result.unrecognized == ("light_bending/glow",)
+        assert refusal(lambda: check_ruling(ruling(label, ruling_id="r2"), entity)) == "ruling_not_needed"
+
+
+def test_unknown_fields_on_another_ability_do_not_matter():
+    entity = effective(person("iris", "Iris", _bending_with(("ability", 0, {})),
                               Ability("other", "Other", [Effect("e", "t", {"z"}, extras={"y": 2})])))
     result = assess_attempt(attempt(effect_id="veil"), entity)
     assert result.classification == "known_capability" and result.unrecognized == ()
+    stretch = attempt(needs=("light", "flight"))
+    assert assess_attempt(stretch, entity, [ruling(stretch)]).approval == "approved"
 
 
 # --- N4/M12: relabelling escapes are reported ---------------------------------------------

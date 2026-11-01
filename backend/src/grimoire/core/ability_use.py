@@ -21,7 +21,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from .abilities import MAX_PARTS, MAX_TAGS, Abilities, Ability, Cost, Effect
+from .abilities import MAX_PARTS, MAX_TAGS, Abilities, Ability, Cost
 from .entity import EffectiveEntity
 from .facets import Agent
 from .identity import TEXT_MAX, InstanceRef, validate_segment
@@ -208,16 +208,15 @@ def _tags(tags: Iterable[str]) -> str:
     return ", ".join(sorted(tags))
 
 
-def _unrecognized(facet: Abilities | None, ability: Ability | None, effect: Effect | None) -> list[str]:
+def _unrecognized(facet: Abilities | None, ability: Ability | None) -> list[str]:
+    """Values carrying extras on the facet or anywhere in the named ability (fail closed)."""
     paths = []
     if facet is not None and facet.extras:
         paths.append(FACET_PATH)
     if ability is not None:
         if ability.extras:
             paths.append(ability.id)
-        parts = [*ability.limits, *ability.costs, *ability.prerequisites]
-        if effect is not None:
-            parts.append(effect)
+        parts = [*ability.effects, *ability.limits, *ability.costs, *ability.prerequisites]
         paths += [f"{ability.id}/{part.id}" for part in parts if part.extras]
     return sorted(paths)
 
@@ -291,7 +290,7 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
                     others.append((each.id, limit.id, hit))
                     reasons.append(Reason("other_limit_excludes", f"limit {limit.id!r} of another ability "
                                                                   f"{each.id!r} excludes {_tags(hit)}"))
-    unrecognized = _unrecognized(facet, ability, effect)
+    unrecognized = _unrecognized(facet, ability)
     reasons += [Reason("unrecognized_constraint", f"{path} has fields this version does not understand")
                 for path in unrecognized]
 

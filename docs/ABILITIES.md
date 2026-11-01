@@ -42,7 +42,7 @@ Rules:
 - **Bounds:** prose ≤ 4000 characters; ≤ 64 abilities; ≤ 64 parts of each kind per ability; ≤ 32 tags per effect or limit.
 - Values are frozen and exact types (subclasses are refused). They are canonical: sorted by id, with sets frozen and deduplicated.
 
-**`extras`** exist on the facet and on every value. They keep unknown authored fields verbatim and take part in equality. They may not use one of that value's field names; the facet's extras may also not use `facet`. They **fail closed** where they could narrow what is attempted: extras on the facet, on the named ability, on its limits, costs and prerequisites, or on the named effect make the assessment `needs_upgrade` instead of a grant. Extras on the ability's *other* effects and on the actor's *other* abilities are not consulted, so they do not block an approved extrapolation or new ability. Write free prose in `description` or `text`, not in new keys.
+**`extras`** exist on the facet and on every value. They keep unknown authored fields verbatim and take part in equality. They may not use one of that value's field names; the facet's extras may also not use `facet`. They **fail closed** where they could narrow what is attempted: extras on the facet, or anywhere in the named ability (the ability itself or any of its effects, limits, costs and prerequisites), make the assessment `needs_upgrade` instead of a grant. An extrapolation stretches effects it does not name, so every effect counts. Extras on the actor's *other* abilities are not consulted, so they do not block that ability's uses or an approved new ability. Write free prose in `description` or `text`, not in new keys.
 
 `FacetError` reasons:
 - `invalid_field`;
@@ -100,7 +100,7 @@ Let `A` be the named ability and `E` the named effect, if they exist. Then:
 - **Applicable prerequisites:** the ability-wide ones plus `E`'s. An attempt that names no effect is checked against the ability-wide prerequisites only. A non-covering `E` still pulls in its own prerequisites, so a wrong label can read `unavailable` before `relabel`. This is conservative: nothing is used.
 - `candidates`: declared effects whose own tags cover `needs`, including `E`. **A union of tags across effects never covers.**
 - Computed whenever the entity has the facet: `unknown_tags` (needed tags that none of the actor's abilities use) and `other_conflicts` (limits of the actor's *other* abilities that exclude a needed tag). These are advisory only.
-- `unrecognized`: paths of values carrying extras. These are `#facet`, `<ability>` and `<ability>/<part>`, for the named ability's parts and the named effect only.
+- `unrecognized`: paths of values carrying extras. These are `#facet`, `<ability>` and `<ability>/<part>`, for every part of the named ability.
 
 **Classification**, first match:
 
