@@ -14,7 +14,7 @@ is a named error, never a silent repair, and pinning is the remedy.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import ClassVar, Literal
 
@@ -120,7 +120,7 @@ def _segment(value: object, label: str) -> None:
 
 def segments(values: object, label: str) -> tuple[str, ...]:
     """Distinct identity segments as a sorted tuple; any problem is ``invalid_field``."""
-    if isinstance(values, (str, bytes)) or not isinstance(values, Iterable):
+    if isinstance(values, (str, bytes, Mapping)) or not isinstance(values, Iterable):
         raise _invalid(f"{label} must be a collection of ids")
     items = list(values)
     for item in items:

@@ -6,7 +6,7 @@ the evidence it holds) is unchanged, the template keeps supplying inherited
 traits, and nothing personal is shared with the species or its other instances.
 """
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import pytest
 from entity_fixtures import EMBER, goblin, goblin_r2, grakka, index_of, plain_sword, ref
@@ -57,6 +57,11 @@ def decide(instance=G1, name="Snik", decision_id="d-snik", decided_by=DIRECTOR, 
 INDEX = index_of(goblin())
 
 
+@dataclass(frozen=True, slots=True)
+class SubRef(SourceRef):
+    pass
+
+
 # --- Individuality on an instance -------------------------------------------------
 
 def test_individuality_invariants():
@@ -69,6 +74,13 @@ def test_individuality_invariants():
     assert reason(lambda: EntityInstance(G1, ref("species", "orc"), "Snik", individuality=snik)) \
         == "template_mismatch"
     assert reason(lambda: EntityInstance(G1, GOBLIN, "Snik", individuality="Snik")) == "invalid_field"
+
+    @dataclass(frozen=True, slots=True)
+    class Sneaky(Individuality):
+        pass
+
+    sneaky = Sneaky("d-snik", "Snik", DIRECTOR, "s3", ref("species", "goblin"))
+    assert reason(lambda: EntityInstance(G1, GOBLIN, "Snik", individuality=sneaky)) == "invalid_field"
     assert reason(lambda: EntityInstance(G1, GOBLIN, "Snik", extras={"individuality": {}})) == "invalid_field"
 
 
@@ -82,6 +94,8 @@ def test_individuality_invariants():
     {"event_ids": ("evt-a", "evt-a")},
     {"event_ids": ("Bad",)},
     {"event_ids": "evt-a"},
+    {"event_ids": {"evt-a": 1}},
+    {"template": SubRef(EMBER, "species", "goblin", "r1")},
 ])
 def test_individuality_field_errors_carry_a_reason(fields):
     assert reason(lambda: snik_individuality(**fields)) == "invalid_field"
@@ -192,8 +206,10 @@ def test_replaying_a_decision_is_a_no_op_even_reordered_or_after_a_rename():
 
 def test_replay_needs_no_authority_but_a_new_decision_does():
     roster = individualize(three_goblins(), decide(), INDEX).roster
-    p1 = (ControlAssignment(C, "goblin-1", "p1"),)  # control changed after promotion
-    assert not individualize(roster, decide(), INDEX, p1).applied
+    p1 = (ControlAssignment(C, "goblin-1", "p1"), ControlAssignment(C, "goblin-2", "p1"))
+    assert not individualize(roster, decide(), INDEX, p1).applied  # control changed after promotion
+    with pytest.raises(AuthorityError):
+        individualize(roster, decide(G2, "Mog", "d-mog"), INDEX, p1)
 
 
 def test_conflicting_decisions_are_refused():
@@ -302,6 +318,7 @@ def test_argument_types_are_checked():
     {"event_ids": ("evt-a", "evt-a")},
     {"event_ids": ("Evt",)},
     {"event_ids": "evt-a"},
+    {"event_ids": {"evt-a": 1}},
 ])
 def test_decision_field_errors_carry_a_reason(fields):
     assert reason(lambda: decide(**fields)) == "invalid_field"
