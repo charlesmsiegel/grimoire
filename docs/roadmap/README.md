@@ -121,7 +121,7 @@ We still target the first **playable migrated desktop text campaign in Wave 5** 
 #### Wave 3 status
 
 - **019 first slice:** `grimoire.sync`, a headless, transport-free revision and conflict core for two locally open libraries ([SYNC.md](../SYNC.md)). It proves keep-both conflicts and crash convergence under the 006 harness. It is not phone sync: transport and pairing belong to 028.
-- The other Wave 3 rows have not started.
+- 019 synchronizes 107's play-scope and chat records too; derived navigation indexes are never synced.
 
 ### Wave 4 — Card/scenario import, V1 migration, independent NPC generation and peer transfer
 

@@ -12,11 +12,14 @@
 
 ## What is synchronized
 
-`grimoire.sync.syncable(path)` is the single definition of the synced set, and the extension point for later families (018 assets, 021/035 scenes, ledgers). In this slice it covers the canonical records of 010: source manifests, definition revisions and campaign instances. The chat proof (S3) uses a **synthetic, instance-shaped chat record**. Sprint 107 is not implemented: when it defines its real chat records, it must extend `syncable()` for them and re-prove S3 against them (a 107/019 handoff).
+`grimoire.sync.syncable(path)` is the single definition of the synced set, and the extension point for later families (018 assets, 021/035 scenes, ledgers). In this slice it covers the canonical records of 010 and of [107](CHATS.md): source manifests, definition revisions, campaign instances, and 107's play-scope (`campaigns/<id>/scope.json`) and chat (`campaigns/<id>/chats/<chat_id>.json`) records. Instances, scopes and chats are campaign-local: each is its own admission unit, never grouped with a source. S3 is proven both on a synthetic instance-shaped chat and on real 107 chats made by `grimoire.chatstore`:
+- a lorebook attached on one device and a world attached on the other touch different files, so both merge;
+- concurrent edits of one chat record are a keep-both conflict, and the new participant's actor still travels;
+- after either, each device's navigation index still finds exactly one chat.
 
 Never transferred:
 - device-local state: `.txn/`, `.conflicts/` and `.sync/`;
-- **derived indexes**, such as 107's navigation indexes. They are rebuilt on each device, never synchronized as a second owner.
+- **derived indexes**, such as 107's navigation index. It is rebuilt from canonical records on each device, never synchronized as a second owner.
 
 Reported as `skipped` and never touched:
 - ledgers under `authority/`;
@@ -111,7 +114,7 @@ Dismissing a kept version by deleting it is not supported yet: the next sync del
 
 - `resolve(left, right, path, keep=<etag>, expected={device: etag | None}, handles, approvals=None)` makes the device that does not hold `keep` receive it. Its replaced version is kept under `.conflicts/` in the same transaction, and both archives then record `agreed keep`.
   - **Manifest:** absent head revisions are copied with it. A head revision that differs must be resolved first.
-  - **Definition revision:** allowed only if nothing on the receiving device can pin it: a manifest head, a link endpoint, or an instance's `derived_from` or `base`. Every parsable manifest and instance is checked, those of excluded sources included. An unreadable manifest or instance means "cannot prove unreferenced" (`RevisionReferenced`), so any blocked manifest or instance anywhere in the library blocks revision resolves until it is fixed.
+  - **Definition revision:** allowed only if nothing on the receiving device can pin it: a manifest head, a link endpoint, an instance's `derived_from` or `base`, or any text in a 107 scope or chat record that names it (a chat's source bindings). Every parsable manifest and instance is checked, those of excluded sources included. An unreadable manifest or instance means "cannot prove unreferenced" (`RevisionReferenced`), so any blocked manifest or instance anywhere in the library blocks revision resolves until it is fixed.
   - **Refused (`ResolveRefused`, nothing written):** a deletion choice, a blocked side, `keep` matching neither device, or either device differing from `expected`.
 - Deleting a record on both devices by hand ends a `deleted` conflict, and a tombstone is archived.
 

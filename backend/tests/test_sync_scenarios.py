@@ -695,3 +695,68 @@ def test_f4_a_record_at_the_wrong_address_is_blocked(pair):
     (phone.root / PATHS["wren_a"]).write_text(json.dumps(data))
     edit_instance(desktop, WREN_A, 9)
     assert sync(desktop, phone, handles()).conflict(PATHS["wren_a"]).code == "blocked"
+
+
+# -- S3 against real 107 chats (grimoire.chatstore) ----------------------------------------------------
+
+def _chat_pair(tmp_path):
+    from chat_fixtures import MARA, chat_library, seed_sources
+    from grimoire.chats.model import Launch
+    desktop, phone = LibraryStore.create(tmp_path / DESKTOP), LibraryStore.create(tmp_path / PHONE)
+    seed_sources(desktop)
+    started = chat_library(desktop).start_chat(Launch("character", MARA)).commit()
+    identify(desktop, DESKTOP), identify(phone, PHONE)
+    sync(desktop, phone, handles())
+    assert canonical(desktop) == canonical(phone)
+    return desktop, phone, started.chat, started.scope
+
+
+def test_s3_real_chats_merge_a_world_attach_and_a_lorebook_attach_on_two_devices(tmp_path):
+    from chat_fixtures import LORE, WORLD, chat_library
+    desktop, phone, chat, scope = _chat_pair(tmp_path)
+    on_desktop, on_phone = chat_library(desktop), chat_library(phone)
+    on_desktop.attach_source(chat, LORE, "lorebook", expected=on_desktop.read_chat(chat)[1]).commit()
+    on_phone.attach_world(scope, WORLD, expected=on_phone.read_scope(scope)[1]).commit()
+    report = sync(desktop, phone, handles())
+    assert report.conflicts == ()  # the chat record and the scope record are different files
+    assert canonical(desktop) == canonical(phone)
+    for library in (on_desktop, on_phone):
+        index = library.navigation()
+        assert index.all_chats() == (chat,)  # one canonical chat, never a duplicate
+        assert index.by_world(WORLD) == (chat,) and index.by_source(LORE) == (chat,)
+
+
+def test_s3_real_chats_conflict_keeps_every_participant_and_one_chat(tmp_path):
+    from chat_fixtures import ANYA, chat_library
+    desktop, phone, chat, scope = _chat_pair(tmp_path)
+    on_desktop, on_phone = chat_library(desktop), chat_library(phone)
+    on_desktop.set_label(chat, "Harbor night", expected=on_desktop.read_chat(chat)[1]).commit()
+    added = on_phone.attach_source(chat, ANYA, "character", expected=on_phone.read_chat(chat)[1]).commit()
+    report = sync(desktop, phone, handles())
+    path = f"campaigns/{chat.campaign_id}/chats/{chat.chat_id}.json"
+    found = report.conflict(path)
+    assert found.code == "concurrent" and dict(found.kept) == {DESKTOP: True, PHONE: True}
+    # the phone's new participant is never dropped: its actor travels and its chat version is kept
+    assert [(p, d) for p, d in report.copied if "/instances/" in p] and kept(desktop)
+    assert any(b"anya" in data for data in kept(desktop))
+    for library in (on_desktop, on_phone):
+        assert library.navigation().all_chats() == (chat,)
+    assert on_phone.read_chat(chat)[0].label is None and on_desktop.read_chat(chat)[0].label == "Harbor night"
+    mine = (desktop.root / path).read_bytes()
+    theirs = (phone.root / path).read_bytes()
+    resolve(desktop, phone, path, etag(theirs), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+    assert (desktop.root / path).read_bytes() == theirs and mine in kept(desktop)
+    assert sync(desktop, phone, handles()).conflicts == () and canonical(desktop) == canonical(phone)
+    assert added.actors and on_desktop.navigation().all_chats() == (chat,)
+
+
+def test_a_chat_binding_pins_a_revision_against_replacement(tmp_path):
+    from chat_fixtures import MARA
+    desktop, phone, chat, scope = _chat_pair(tmp_path)
+    path = "/".join(("sources", *MARA.source.split(":"), "_source", "records", MARA.kind, MARA.entity_id,
+                     MARA.revision + ".json"))
+    current = (phone.root / path).read_bytes()
+    txn = phone.transaction()
+    txn.put_exact(path, current.replace(b"smuggler", b"pirate"), etag(current), replace_unreferenced=True)
+    with pytest.raises(Exception, match="binds|based"):
+        txn.check()
