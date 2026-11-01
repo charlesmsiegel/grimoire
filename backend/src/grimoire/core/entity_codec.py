@@ -14,7 +14,8 @@ original payload, so refusing to interpret it loses nothing. The one exception
 is the ``abilities`` facet (025): unknown keys on the facet object and inside
 an ability, effect, limit, cost or prerequisite are kept as that value's
 ``extras``, and the ability assessment fails closed on them (``needs_upgrade``).
-Malformed known fields and duplicate list entries are still refused.
+Malformed known fields are still refused, with the ability values' own
+``FacetError`` reasons, and a name listed twice is a ``CodecError``.
 """
 
 from __future__ import annotations

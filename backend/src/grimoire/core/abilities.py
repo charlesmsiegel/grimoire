@@ -36,6 +36,8 @@ def _invalid(message: str) -> FacetError:
 
 
 def _segment(value: object, label: str) -> None:
+    if type(value) is not str:  # a str subclass could redefine equality
+        raise _invalid(f"{label} must be plain text: {value!r}")
     try:
         validate_segment(value, label)
     except ValueError as error:
@@ -43,8 +45,8 @@ def _segment(value: object, label: str) -> None:
 
 
 def _prose(value: object, label: str, *, blank: bool = False) -> None:
-    if not isinstance(value, str) or (not blank and not value.strip()):
-        raise _invalid(f"{label} must be {'' if blank else 'nonempty '}text")
+    if type(value) is not str or (not blank and not value.strip()):
+        raise _invalid(f"{label} must be {'' if blank else 'nonempty '}plain text")
     if len(value) > PROSE_MAX:
         raise _invalid(f"{label} is longer than {PROSE_MAX} characters")
 
@@ -108,7 +110,7 @@ class Effect:
         object.__setattr__(self, "tags", _names(self.tags, "effect tags", nonempty=True))
         if self.range is not None:
             _prose(self.range, "effect range")
-        if not isinstance(self.certainty, str) or self.certainty not in CERTAINTIES:
+        if type(self.certainty) is not str or self.certainty not in CERTAINTIES:
             raise _invalid(f"certainty must be one of {sorted(CERTAINTIES)}: {self.certainty!r}")
         object.__setattr__(self, "extras", _extras(self.extras, self.FIELDS))
 

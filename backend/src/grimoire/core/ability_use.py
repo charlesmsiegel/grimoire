@@ -34,6 +34,7 @@ CLASSIFICATIONS = frozenset({"known_capability", "attempted_feat", "extrapolatio
 #: The only classifications an approval ruling can decide.
 APPROVABLE = frozenset({"extrapolation", "new_ability"})
 DECISIONS = frozenset({"approved", "refused"})
+#: Rulings on one attempt id; others in the input are not counted.
 MAX_RULINGS = 256
 #: ``unrecognized`` path for extras on the facet itself; not a segment, so no ability id collides.
 FACET_PATH = "#facet"
@@ -55,6 +56,8 @@ def _invalid(message: str) -> AbilityError:
 
 
 def _segment(value: object, label: str) -> None:
+    if type(value) is not str:  # a str subclass could redefine equality
+        raise _invalid(f"{label} must be plain text: {value!r}")
     try:
         validate_segment(value, label)
     except ValueError as error:
@@ -62,8 +65,8 @@ def _segment(value: object, label: str) -> None:
 
 
 def _text(value: object, label: str, *, blank: bool = False) -> None:
-    if not isinstance(value, str) or (not blank and not value.strip()):
-        raise _invalid(f"{label} must be {'' if blank else 'nonempty '}text")
+    if type(value) is not str or (not blank and not value.strip()):
+        raise _invalid(f"{label} must be {'' if blank else 'nonempty '}plain text")
     if len(value) > TEXT_MAX:
         raise _invalid(f"{label} is longer than {TEXT_MAX} characters")
 
@@ -98,7 +101,7 @@ class AbilityAttempt:
 
     def __post_init__(self) -> None:
         _text(self.attempt_id, "attempt_id")
-        if not isinstance(self.actor, InstanceRef):
+        if type(self.actor) is not InstanceRef:  # a subclass could redefine equality
             raise _invalid("an attempt's actor must be an InstanceRef")
         _segment(self.ability_id, "ability_id")
         needs = _names(self.needs, "needs", MAX_TAGS)
@@ -126,9 +129,9 @@ class AbilityRuling:
         _segment(self.ruling_id, "ruling_id")
         if type(self.attempt) is not AbilityAttempt:
             raise _invalid("a ruling decides an AbilityAttempt")
-        if not isinstance(self.decides, str) or self.decides not in APPROVABLE:
+        if type(self.decides) is not str or self.decides not in APPROVABLE:
             raise _invalid(f"a ruling decides one of {sorted(APPROVABLE)}: {self.decides!r}")
-        if not isinstance(self.decision, str) or self.decision not in DECISIONS:
+        if type(self.decision) is not str or self.decision not in DECISIONS:
             raise _invalid(f"decision must be one of {sorted(DECISIONS)}: {self.decision!r}")
         _text(self.provenance, "provenance")
         _text(self.note, "note", blank=True)
@@ -173,8 +176,6 @@ class AbilityAssessment:
 def _matching_rulings(attempt: AbilityAttempt, rulings: object):
     """Same-campaign rulings on this attempt id: (matching, mismatched ids)."""
     given = _collection(rulings, "rulings")
-    if len(given) > MAX_RULINGS:
-        raise _invalid(f"more than {MAX_RULINGS} rulings")
     for ruling in given:
         if type(ruling) is not AbilityRuling:
             raise _invalid(f"not an AbilityRuling: {ruling!r}")
@@ -184,6 +185,8 @@ def _matching_rulings(attempt: AbilityAttempt, rulings: object):
     if len(set(ids)) != len(ids):
         raise AbilityError("a ruling id appears twice", "duplicate_ruling")
     same = [ruling for ruling in mine if ruling.attempt.attempt_id == attempt.attempt_id]
+    if len(same) > MAX_RULINGS:
+        raise _invalid(f"more than {MAX_RULINGS} rulings on attempt {attempt.attempt_id!r}")
     matching = [ruling for ruling in same if ruling.attempt == attempt]
     mismatched = tuple(sorted(ruling.ruling_id for ruling in same if ruling.attempt != attempt))
     return mine, matching, mismatched

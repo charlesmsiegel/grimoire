@@ -307,9 +307,19 @@ def test_the_attempt_must_be_by_this_agent():
     lambda: assess_attempt(attempt(), IRIS, ["r1"]),
     lambda: assess_attempt(attempt(), IRIS, ruling(attempt())),
     lambda: assess_attempt(attempt(), IRIS, [ruling(attempt(), ruling_id=f"r{n}") for n in range(257)]),
+    lambda: attempt(effect_id=type("Loose", (str,), {})("veil")),
+    lambda: AbilityAttempt("t1", type("Ref", (InstanceRef,), {})("c1", "character", "iris-1"), "a",
+                           frozenset({"x"}), "p"),
 ])
 def test_malformed_inputs_are_refused(build):
     assert refusal(build) == "invalid_field"
+
+
+def test_the_ruling_bound_counts_only_rulings_on_this_attempt():
+    # Many rulings elsewhere (another campaign, another attempt) are not this attempt's business.
+    elsewhere = [ruling(flight(campaign="c2"), ruling_id=f"r{n}") for n in range(300)]
+    others = [ruling(flight(attempt_id=f"t{n}"), ruling_id=f"q{n}") for n in range(300)]
+    assert assess_attempt(flight(), OPEN_IRIS, elsewhere + others).approval == "pending"
 
 
 def test_any_contribution_id_shaped_text_is_an_attempt_id():

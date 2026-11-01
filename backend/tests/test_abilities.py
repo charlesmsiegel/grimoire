@@ -98,6 +98,9 @@ def test_an_authored_contradiction_is_refused():
     (lambda: Abilities(extras={"abilities": []}), "invalid_field"),
     (lambda: effect(extras={"x": float("nan")}), "invalid_field"),
     (lambda: Cost("c", "t", "e"), "invalid_field"),
+    (lambda: effect(certainty=type("Loose", (str,), {})("uncertain")), "invalid_field"),
+    (lambda: effect(type("Loose", (str,), {})("veil")), "invalid_field"),
+    (lambda: Effect("e", type("Loose", (str,), {})("t"), {"x"}), "invalid_field"),
 ])
 def test_invalid_values_are_refused_with_a_reason(build, expected):
     assert reason(build) == expected

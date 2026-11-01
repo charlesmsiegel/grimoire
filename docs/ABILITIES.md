@@ -42,7 +42,7 @@ Rules:
 - **Bounds:** prose ≤ 4000 characters; ≤ 64 abilities; ≤ 64 parts of each kind per ability; ≤ 32 tags per effect or limit.
 - Values are frozen and exact types (subclasses are refused). They are canonical: sorted by id, with sets frozen and deduplicated.
 
-**`extras`** exist on the facet and on every value. They keep unknown authored fields verbatim and take part in equality. They may not use one of that value's field names; the facet's extras may also not use `facet`. They **fail closed**: an unknown field might narrow a power, so the assessment never reports a grant over one (see `needs_upgrade`). Write free prose in `description` or `text`, not in new keys.
+**`extras`** exist on the facet and on every value. They keep unknown authored fields verbatim and take part in equality. They may not use one of that value's field names; the facet's extras may also not use `facet`. They **fail closed** where they could narrow what is attempted: extras on the facet, on the named ability, on its limits, costs and prerequisites, or on the named effect make the assessment `needs_upgrade` instead of a grant. Extras on the ability's *other* effects and on the actor's *other* abilities are not consulted, so they do not block an approved extrapolation or new ability. Write free prose in `description` or `text`, not in new keys.
 
 `FacetError` reasons:
 - `invalid_field`;
@@ -56,10 +56,10 @@ Rules:
 
 The codec writes `{"facet": "abilities", "abilities": [ … ], …extras}`. Each value is an object:
 - Sets are written as sorted lists.
-- Defaults and empty values are omitted: `certainty: reliable`, a null `range`, `[]`, `""` and an empty facet.
+- Defaults and empty values are omitted: `certainty: reliable`, a null `range`, `[]` and `""`. An empty facet is still written, as `{"facet": "abilities"}`, because "no powers" differs from "no facet".
 - Extras are written as that object's own keys.
 
-Unlike every other known facet, **unknown keys here are kept as extras** rather than refused. Malformed known fields and duplicate list entries are still refused (`invalid_field`). Decoding accepts the read-only mappings and tuples of a stored payload, and re-encoding is canonical.
+Unlike every other known facet, **unknown keys here are kept as extras** rather than refused. Malformed known fields are still refused: a wrong container or a name listed twice is a `CodecError` (`invalid_field`), and a value the ability types reject keeps its `FacetError` reason (`invalid_field`, `duplicate_ability`, `duplicate_ability_part`, …). Decoding accepts the read-only mappings and tuples of a stored payload, and re-encoding is canonical.
 
 Abilities therefore persist in any record that carries an entity payload, such as a 010 definition or instance record. **The store needs no change only because it treats payloads opaquely.** The 107 chat actors are plain source bindings: they reach abilities through their definition.
 
@@ -71,6 +71,7 @@ Abilities therefore persist in any record that carries an entity payload, such a
 |---|---|
 | `attempt_id` | any nonempty text up to 512 characters. For a player-controlled actor it is the submitting action's `contribution_id`, as `Resolution.attempt_id` is; one action carries at most one ability attempt. |
 | `needs` | 1–32 tags: what the attempted feat requires. |
+| `actor` | an exact `InstanceRef`. Ids and text everywhere must be plain `str`; subclasses are refused. |
 | `effect_id` | the declared effect the labeller says it uses, or none. |
 | `conditions_met` | the prerequisites the labeller says hold. These are asserted, not checked against scene facts; checking them is 029's job. |
 
@@ -143,7 +144,9 @@ How rulings are matched:
 - Only the group that equals the current classification is **live**. Approve and refuse within the live group raise `conflicting_rulings`; agreeing rulings are fine, and the lowest id is reported.
 - Every other matching ruling is `inapplicable` and never raises. An approval of an extrapolation therefore stops applying when the author deletes the ability (the attempt becomes `new_ability`, `pending`), and nothing crashes.
 
-`check_ruling(ruling, entity, existing=())` is the issue-time check. It assesses the attempt, then refuses, in this order:
+At most 256 same-campaign rulings may name one `attempt_id`; rulings on other attempts or in other campaigns are not counted.
+
+`check_ruling(ruling, entity, existing=())` is the issue-time check. It assesses the attempt with `existing` (so an already inconsistent `existing` raises `duplicate_ruling` or `conflicting_rulings` first), then refuses, in this order:
 1. `limit_not_approvable`: the attempt is beyond limits. Only an authored change to the ability can alter that.
 2. `ruling_not_needed`: any other classification that needs no approval, whether the ruling approves or refuses.
 3. `wrong_classification`.

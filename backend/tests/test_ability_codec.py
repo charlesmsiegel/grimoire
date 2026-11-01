@@ -130,6 +130,14 @@ def test_malformed_entries_are_refused_with_invalid_field(entry):
     ({"facet": "abilities", "abilities": [{"id": "a", "name": "A", "effects": []}]}, "empty_ability"),
     ({"facet": "abilities", "abilities": [{"id": "a", "name": "A", "effects": [
         {"id": "e", "text": "t", "tags": ["x"], "certainty": "maybe"}]}]}, "invalid_field"),
+    ({"facet": "abilities", "abilities": [{"id": "a", "name": "A", "effects": [
+        {"id": "e", "text": "t", "tags": ["x"]}]}, {"id": "a", "name": "B", "effects": [
+        {"id": "e", "text": "t", "tags": ["x"]}]}]}, "duplicate_ability"),
+    ({"facet": "abilities", "abilities": [{"id": "a", "name": "A", "effects": [
+        {"id": "e", "text": "t", "tags": ["x"]}, {"id": "e", "text": "u", "tags": ["y"]}]}]},
+     "duplicate_ability_part"),
+    ({"facet": "abilities", "abilities": [{"id": "a", "name": "A", "description": None, "effects": [
+        {"id": "e", "text": "t", "tags": ["x"]}]}]}, "invalid_field"),
 ])
 def test_domain_refusals_propagate_with_their_reason(entry, expected):
     with pytest.raises(FacetError) as caught:
