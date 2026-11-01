@@ -53,3 +53,17 @@ def index_of(*definitions, heads=None, links=()):
     sources = sorted({definition.ref.source for definition in definitions})
     return DefinitionIndex([SourceDescriptor(source, owner="user") for source in sources],
                            definitions, heads, links)
+
+
+GOBLIN_TRAITS = (Physical(size="small"), Durable(7), Biological(), Agent())
+
+
+def goblin(revision="r1", *, nature="template", voice=False, description="A small, quarrelsome humanoid"):
+    """The goblin species (024). r2 typically adds speech and a new description."""
+    traits = [*GOBLIN_TRAITS, *([VOICE] if voice else [])]
+    return EntityDefinition(ref("species", "goblin", revision), "Goblin", nature, FacetSet(traits),
+                            description)
+
+
+def goblin_r2(**kwargs):
+    return goblin("r2", voice=True, description="A small, quarrelsome humanoid that haggles", **kwargs)
