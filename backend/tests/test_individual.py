@@ -349,3 +349,13 @@ def test_existing_drift_still_blocks_promotion():
     moved = index_of(goblin(), goblin_r2(), heads={GOBLIN: "r2"})
     assert reason(lambda: individualize(CampaignRoster(C, (voiced,)), decide(), moved)) \
         == "added_shadows_trait"
+
+
+def test_a_legacy_definition_source_is_not_an_entity_definition():
+    from grimoire.core import CharacterDefinition
+    legacy = CharacterDefinition(ref("character", "old-goblin"), "Old goblin")
+    target = InstanceRef(C, "character", "old-1")
+    roster = CampaignRoster(C, (EntityInstance(target, legacy.ref),))
+    index = index_of(legacy)
+    assert reason(lambda: individualize(roster, decide(target), index)) == "not_entity_definition"
+    assert not is_generic(roster.instance(target), index)

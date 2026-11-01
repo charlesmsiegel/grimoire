@@ -132,7 +132,11 @@ A roster does not enforce unique decision ids when it is built, so a sync-merged
 - it needs a `local_name` (`individual_needs_name`);
 - its template must be the same entity as the source (`template_mismatch`).
 
-All `Individuality` and decision field errors are `invalid_field`. At resolution, a template revision that changes nature to `individual` makes an individualized instance `not_template`. A generic sibling then simply resolves as an instance of an individual. The existing `kind_mismatch` check runs first.
+All `Individuality` and decision field errors are `invalid_field`. The `template_mismatch` rule holds only for this slice; it will be relaxed when re-sourcing to a changed species lands.
+
+At resolution, a template revision that changes nature to `individual` makes an individualized instance `not_template`. The existing `kind_mismatch` check runs first, so this is reachable only for instances of the definition's own kind. Instances of another kind (`creature` instances of `species/goblin`) all hit `kind_mismatch`. A generic instance of the definition's own kind then simply resolves as an instance of an individual.
+
+`is_generic` answers `False` for a source that is not an `EntityDefinition`, such as a legacy `CharacterDefinition`. `individualize` refuses such a source as `not_entity_definition`.
 
 ## Provisional payload codec
 
@@ -152,4 +156,4 @@ Interoperability is proven against a test-only neutral envelope that imports no 
 
 ## Not in this slice
 
-Persistence and files (a codec↔store round trip of an individual is proven by a test-local join only); relations (carrying, location and kinship now exist in [the graph](GRAPH.md), without facet constraints; a species-membership relation is a later 024 milestone, see [Individualizing a template instance](#individualizing-a-template-instance)); creating a named instance directly from a template; re-sourcing an individual to a changed species; facet suppression; collective, container and mechanics facets; time-bound state; UI; changes to authority or intent signatures.
+Persistence and files (a codec↔store round trip of an individual is proven by a test-local join only); relations (carrying, location and kinship now exist in [the graph](GRAPH.md), without facet constraints; a species-membership relation is a later 024 milestone, see [Individualizing a template instance](#individualizing-a-template-instance)); creating a named instance directly from a template; re-sourcing an individual to a changed species; a durable accepted-event record of an individualization decision (020/021); model proposals of individualization; cross-checking a decision's event grounds against knowledge; facet suppression; collective, container and mechanics facets; time-bound state; UI; changes to authority or intent signatures.

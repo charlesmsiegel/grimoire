@@ -6,7 +6,10 @@
 - a second goblin can become Mog;
 - template updates flow into an unpinned individual without changing its identity.
 
-The provisional codec carries the record, and a test-local join proves it round-trips through the 010 store. Synthetic fixtures only; there is no runner or UI. Milestone 2's separate art and relations wait for 018 and 017, which attach to the individual's distinct reference. Milestone 3 changed species (re-sourcing) is open.
+The provisional codec carries the record, and a test-local join proves it round-trips through the 010 store. Synthetic fixtures only; there is no runner or UI. What is still open:
+- **Portrait clause.** The proving scenario is met except for its portrait clause ("changing the first's portrait does not change the species card"). Art inheritance and milestone 2's separate art wait for 018 placements, and relations for 017. Both attach to the individual's distinct reference.
+- **Direct creation.** Creating a named instance directly from a template was dropped from this slice: create a generic instance, then promote it.
+- **Milestone 3, changed species.** Re-sourcing is open.
 
 **Outcome:** Turn a noteworthy generic creature into a unique actor with inherited species defaults and independent personal history.
 
