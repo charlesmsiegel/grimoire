@@ -49,6 +49,8 @@ Both files carry a `check` digest of their own content. A file that is not stric
 
 ## Base derivation
 
+A `.sync` file that exists but cannot be read (an I/O error, a file held by another program) stops the sync with `SyncInterrupted` before anything is written. An unreadable marker must never look like a missing one.
+
 A path's base is trusted only where **both devices' own records agree**:
 1. **Archive candidate:**
    - `first`: neither device has any file at its archive location for this pair (a true first sync);
@@ -66,7 +68,7 @@ A path's base is trusted only where **both devices' own records agree**:
 Each device's file is `absent`, `present(etag)`, or `blocked`. A file is blocked when it is:
 - a link;
 - a look-alike spelling;
-- unreadable, oversized or not a regular file;
+- unreadable, oversized or not a regular file (a directory where a record belongs counts too);
 - not strict JSON;
 - in a newer format;
 - an envelope whose address does not match its path.
@@ -90,18 +92,18 @@ The rows are evaluated top to bottom, and swapping the devices mirrors every dec
 | 13 | `deleted E` | one absent, the other not E | copy (a new record at a deleted path) |
 | 14 | `deleted E` | both present, different | conflict `concurrent` |
 
-A copy publishes the other device's **exact bytes** (`Transaction.put_exact`), so both devices converge on one etag. Before it is admitted, three overrides apply:
+A copy publishes the other device's **exact bytes** (`Transaction.put_exact`), so both devices converge on one etag. Those bytes still exist on the other device, so an aborted commit drops the copy rather than parking it under `.conflicts/` (journal kind `replica`). Before it is admitted, three overrides apply:
 - **Head dependency.** A manifest copies only if every head it names will hold the origin's bytes on the destination: either already equal, or copied in the same commit. Otherwise the conflict is `head_dependency`.
 - **Name collision.** A destination path that collides with a differently spelled entry gives `name_collision`.
-- **Destination preflight.** The destination's writes are checked once with 010's read-only `Transaction.check()`. Only if that check fails are they admitted unit by unit, and a unit the store refuses becomes `unapplicable`. A unit is one instance, one manifest with its head revisions, or the other revisions of one entity. Instances are checked alone; source units are checked cumulatively, so cross-source link cycles are caught. Library-wide problems propagate and are never blamed on one path.
+- **Destination preflight.** The destination's writes are checked once with 010's read-only `Transaction.check()`. Only if that check fails are they admitted unit by unit, and a unit the store refuses becomes `unapplicable`. A unit is one instance, one manifest with its head revisions, or the other revisions of one entity. Instances are checked alone; source units are checked cumulatively, so cross-source link cycles are caught. In that fallback, one final combined check runs before the commit. Library-wide problems propagate and are never blamed on one path.
 
-**Denied writes.** Authorization cannot be dry-run without consuming approvals, so a data commit uses 010's partial mode (`commit(..., on_denied=...)`). Each write is authorized exactly once. A write denied for its path (not granted, approval required, reserved) is dropped together with every copy of the same source, becomes conflict `denied`, and its pending entry is removed. A denial that is not about a path propagates: an unissued handle, or an unavailable authority. Approvals consumed by dropped dependents are reported in `SyncReport.consumed_approvals`.
+**Denied writes.** Authorization cannot be dry-run without consuming approvals, so a data commit uses 010's partial mode (`commit(..., on_denied=...)`). Each write is authorized exactly once. A write denied for its path (not granted, approval required, reserved) is dropped together with every copy of the same source, becomes conflict `denied`, and its pending entry is removed. What remains is checked again. If it is no longer acceptable on its own (for example, another source's manifest needed the denied one), it is re-admitted unit by unit, and each refused unit is also `denied`, so a denial never stalls the rest. A denial that is not about a path propagates: an unissued handle, or an unavailable authority. Approvals consumed by dropped dependents are reported in `SyncReport.consumed_approvals`.
 
 ## Keep-both
 
 For every conflict, each device whose peer has a present, usable version receives that version as a **kept version**. It goes under `.conflicts/<hash16>/<name>~<digest12>[.N]`, through `Transaction.keep_version`. The authorization address is distinct from the record's own: `kept/<hash16>/<digest12>[-N]/<name>`. So "keep these bytes beside p" and "overwrite p" are different approvals, and they appear under different `preview()` keys.
 
-A slot already holding those bytes is reused, so kept versions are never duplicated, and a conflict stays reported on every sync until a human ends it. A kept version that cannot be written (for example, because of path limits) is reported as `kept: false`. Kept versions are not indexed: `load()` still shows one record per path.
+A slot already holding those bytes is reused, so kept versions are never duplicated, and a conflict stays reported on every sync until a human ends it. A kept version that cannot be written (for example, because of path limits) is reported as `kept: false`. A device whose own file could not even be read receives nothing: there is nothing to keep it beside, and the next readable sync decides the path. Kept versions are not indexed: `load()` still shows one record per path.
 
 Dismissing a kept version by deleting it is not supported yet: the next sync delivers it again.
 
@@ -138,7 +140,7 @@ Errors:
 
 ## Limits
 
-- One archive per pair, under 010's 8 MiB file cap (tens of thousands of entries). A larger plan is refused before any write (`ArchiveTooLarge`). Compaction is a later milestone and a release blocker for large libraries.
+- One archive and one pending marker per pair, each under 010's 8 MiB file cap (tens of thousands of entries). A plan whose archive or marker could exceed it is refused before any write (`ArchiveTooLarge`). Compaction is a later milestone and a release blocker for large libraries.
 - Not in this slice:
   - more than two devices, transport and pairing;
   - causal branches, and history beyond one agreed etag per path;
@@ -150,11 +152,11 @@ Errors:
 - A true first sync, or one after `.sync/` was deleted on **both** devices, re-creates records deleted on one device beforehand. After a tombstone, resurrection is detected only for the exact tombstoned bytes.
 - **Link-drop policy.** A copied manifest is admitted exactly as a local commit of it would be. Under 010's accepted link-order policy, it can cause *another* source's cross-source link to be dropped on the destination, and the next `load` reports it.
 - 010's R7 window remains: an external edit landing exactly between a target's guard read and its `replace` is lost. 019 narrowed it to the `replace` alone: a new file's directories are now created before its guard read.
-- **Rollback.** A pre-019 build cannot recover an unfinished journal that contains `keep` or `state` entries (`RecoveryFailed`, unknown kind). Finish recovery with a 019 build, or use `discard_journal`.
+- **Rollback.** A pre-019 build cannot recover an unfinished journal that contains `replica`, `keep` or `state` entries (`RecoveryFailed`, unknown kind). Finish recovery with a 019 build, or use `discard_journal`.
 
 ## Proofs
 
 The scenarios live in:
 - `backend/tests/test_sync_scenarios.py` (S1–S8, F1–F11);
 - `backend/tests/test_sync_decide.py` (every combination of the table, mirror symmetry, the safety property, base derivation and the documents);
-- `backend/tests/test_sync_faults.py`: two replica roots under the 006 harness, covering crashes, I/O errors, recovery crashes, interleaves at every observation gap, an ABA restore and a meddle. Its docstring reasons the commit-outcome and observation-gap reductions that keep it near 40 s.
+- `backend/tests/test_sync_faults.py`: two replica roots under the 006 harness, covering crashes, I/O errors, recovery crashes, interleaves at every observation gap, an ABA restore and a meddle. Its docstring reasons the commit-outcome and observation-gap reductions that keep it near a minute on Linux. Read faults (an unreadable marker, record or verification read) are covered by monkeypatched scenarios, because the harness faults only mutating operations.

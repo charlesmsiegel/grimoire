@@ -280,12 +280,11 @@ def test_s7_head_dependency_and_name_collision(pair):
     assert json.loads((phone.root / PATHS["manifest"]).read_bytes())["heads"] == {"character/wren": "r1"}
     folder = phone.root / "campaigns" / "c4" / "instances" / "character"
     folder.mkdir(parents=True)
-    probe = folder / "Wren-x.json"
-    probe.write_bytes(b"{}")
-    if not (folder / "wren-x.json").exists():  # a case-sensitive filesystem: a real look-alike
-        put(desktop, instance(InstanceRef("c4", "character", "wren-x"), WREN_R1), None)
-        assert sync(desktop, phone, handles()).conflict(
-            "campaigns/c4/instances/character/wren-x.json").code == "name_collision"
+    (folder / "Wren-x.json").write_bytes(b"{}")  # a hand-made look-alike, on every filesystem
+    put(desktop, instance(InstanceRef("c4", "character", "wren-x"), WREN_R1), None)
+    assert sync(desktop, phone, handles()).conflict(
+        "campaigns/c4/instances/character/wren-x.json").code == "name_collision"
+    assert (folder / "Wren-x.json").read_bytes() == b"{}"
 
 
 # -- S8 resolve ---------------------------------------------------------------------------------
@@ -531,3 +530,89 @@ def test_sync_until_quiet_retries_an_interruption(pair, monkeypatch):
     monkeypatch.setattr(sync_session, "sync", flaky)
     report = sync_until_quiet(desktop, phone, handles())
     assert not report.wrote and len(calls) == 3
+
+
+def test_f6_a_denied_source_another_source_needed_never_blocks_the_rest(pair):
+    """Dropping a denied manifest can invalidate another admitted one: it is re-admitted, not fatal."""
+    desktop, phone = pair
+    ref = {source: str(SourceRef(source, "character", "x", "r1")) for source in ("set:a", "set:b")}
+    for store in (desktop, phone):
+        _source(store, "set:b")
+        _source(store, "set:a", links=[LinkSpec(ref["set:a"], "derived_variant", ref["set:b"])])
+    sync(desktop, phone, handles())
+    _source(phone, "set:a", links=[])  # the phone moves the link from a to b, reversed
+    _source(phone, "set:b", links=[LinkSpec(ref["set:b"], "derived_variant", ref["set:a"])])
+    edit_instance(phone, WREN_A, 3)
+    limited = _grants("campaigns", "kept", "sources/set/b", "sources/world")  # a's change is denied
+    report = sync_until_quiet(desktop, phone, {PHONE: handle(), DESKTOP: limited})
+    codes = {found.path: found.code for found in report.conflicts}
+    assert codes["sources/set/a/_source/manifest.json"] == "denied"
+    assert codes["sources/set/b/_source/manifest.json"] == "denied"  # it needed a's change: a cycle alone
+    assert canonical(desktop)[PATHS["wren_a"]] == canonical(phone)[PATHS["wren_a"]]
+    assert not [problem for problem in desktop.load().problems if problem.code == "bad_link"]
+
+
+def test_f12_an_unreadable_sync_file_stops_the_sync_instead_of_looking_missing(pair, monkeypatch):
+    desktop, phone = pair
+    edit_instance(phone, WREN_A, 4)
+    before = (_tree(desktop.root), _tree(phone.root))
+    access, real = desktop._access, desktop._access.read
+
+    def flaky(parts):
+        if parts[-1] == "pending.json":
+            raise PermissionError("held by another program")
+        return real(parts)
+
+    monkeypatch.setattr(access, "read", flaky)
+    with pytest.raises(SyncInterrupted, match="cannot read"):
+        sync(desktop, phone, handles())
+    assert (_tree(desktop.root), _tree(phone.root)) == before
+    monkeypatch.undo()
+    assert (PATHS["wren_a"], DESKTOP) in sync(desktop, phone, handles()).copied
+
+
+def test_f13_an_unreadable_record_is_blocked_and_never_kept_onto(pair, monkeypatch):
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    access, real = phone._access, phone._access.read
+
+    def flaky(parts):
+        if "/".join(parts) == PATHS["wren_a"]:
+            raise OSError("transient read error")
+        return real(parts)
+
+    monkeypatch.setattr(access, "read", flaky)
+    report = sync(desktop, phone, handles())
+    monkeypatch.undo()
+    assert report.conflict(PATHS["wren_a"]).code == "blocked"
+    assert kept(phone) == [] and kept(desktop) == []  # nothing to dismiss later
+    assert (PATHS["wren_a"], PHONE) in sync(desktop, phone, handles()).copied  # the next sync heals it
+
+
+def test_f13_a_directory_where_a_record_belongs_is_blocked(pair):
+    desktop, phone = pair
+    (phone.root / PATHS["wren_a"]).unlink()
+    (phone.root / PATHS["wren_a"]).mkdir()
+    edit_instance(desktop, WREN_A, 9)
+    report = sync(desktop, phone, handles())
+    assert report.conflict(PATHS["wren_a"]).code == "blocked"
+    assert (phone.root / PATHS["wren_a"]).is_dir()
+
+
+def test_f14_a_failed_verification_read_writes_no_archive(pair, monkeypatch):
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    archives = [store.read_sync_state(f"peers/{other}/archive.json")
+                for store, other in ((desktop, PHONE), (phone, DESKTOP))]
+
+    def broken(path):
+        raise OSError("the disk went away")
+
+    monkeypatch.setattr(phone, "read_exact", broken)
+    with pytest.raises(OSError):
+        sync(desktop, phone, handles())
+    monkeypatch.undo()
+    assert [store.read_sync_state(f"peers/{other}/archive.json")
+            for store, other in ((desktop, PHONE), (phone, DESKTOP))] == archives
+    report = sync(desktop, phone, handles())  # the landed copy is verifiably agreed via its marker
+    assert report.conflicts == () and canonical(desktop) == canonical(phone)

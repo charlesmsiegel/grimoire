@@ -83,12 +83,6 @@ def test_a_copy_only_ever_lands_on_an_absent_file_or_the_base_or_a_proven_ancest
     assert copies > 50
 
 
-def test_the_table_never_consults_anything_but_bytes():
-    # identical inputs give identical decisions, whatever the order of evaluation
-    shuffled = sorted(COMBOS, key=lambda combo: repr(combo)[::-1])
-    assert [decide(*combo) for combo in shuffled] == [decide(*combo) for combo in shuffled]
-
-
 # -- base derivation --------------------------------------------------------------------
 
 P = "campaigns/c1/instances/character/wren-a.json"

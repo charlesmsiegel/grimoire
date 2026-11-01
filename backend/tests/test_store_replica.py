@@ -546,3 +546,32 @@ def test_r7_window_is_only_the_replace_when_a_file_is_created(tmp_path):
     report.assert_ok()  # every position up to the replace keeps the human's file
     lost = run_plans(scenario, [[Interleave(publish, human)]], tmp_path / "w")
     assert "preserves_interleave" in {violation.invariant for violation in lost.violations}  # R7, pinned
+
+
+def test_an_aborted_commit_drops_exact_copies_instead_of_keeping_orphans(tmp_path):
+    """Another library's bytes (put_exact) are regenerable: an abort never parks them in .conflicts."""
+    locker = ProcessLocker()
+    with LibraryStore.create(tmp_path / "lib", locker=locker) as store:
+        seed(store)
+        theirs = (store.root / WREN_A_PATH).read_bytes().replace(b'"hp": 3', b'"hp": 6')
+    template = snapshot(tmp_path / "lib")
+
+    def action(ops, root):
+        with LibraryStore.open(root / "lib", ops=ops, locker=locker) as store:
+            txn = store.transaction()
+            txn.put_exact(WREN_A_PATH, theirs, store.read(WREN_A).etag)
+            txn.commit(owner_handle(*ALL))
+
+    def human(ops, root):
+        ops.write_bytes(root / "lib" / WREN_A_PATH, b'{"a human": 1}\n')
+
+    scenario = CrashScenario(
+        "abort a replica", lambda ops, root: _replay(ops, root, template), action,
+        lambda ops, root: LibraryStore.open(root / "lib", ops=ops, locker=locker).close(),
+        (preserves_interleave(), idempotent_recovery()), normalize=drop_empty_dirs)
+    guard = Target("read_bytes", path=f"lib/{WREN_A_PATH}", nth=3)
+    report = run_plans(scenario, [[Interleave(guard, human)]], tmp_path / "work")
+    report.assert_ok()
+    run = report.runs[1]
+    assert "WriteConflict" in run.action_error
+    assert not [key for key, value in run.recovered.items() if key.startswith("lib/.conflicts/") and value]

@@ -13,9 +13,10 @@ present    = new        = new       drop the temp
 present    = new        other       preserve (external edit is kept)
 =========  ===========  ==========  =====================================
 
-"Preserve" applies to ``publish`` entries. A ``keep`` (kept version) or ``state``
-(``.sync``) entry that would be preserved is *dropped* instead: its bytes are
-regenerable, and preserving them would nest conflict copies of conflict copies.
+"Preserve" applies to ``publish`` entries. A ``replica`` (another library's exact
+bytes), ``keep`` (kept version) or ``state`` (``.sync``) entry that would be
+preserved is *dropped* instead: its bytes are regenerable, and preserving them
+would leave copies nobody asked to keep, or nest conflict copies of conflict copies.
 
 An ``abort`` journal never publishes. A commit journal whose temps are all
 still present and which would preserve any entry is first rewritten as
@@ -226,7 +227,7 @@ def _replace_journal(access: Access, journal: Journal) -> None:
 def _preserve(access: Access, entry: Entry, settlement: Settlement, digest: str) -> None:
     """Move a staged version into ``.conflicts``, named by its *actual* digest; never drop distinct bytes.
 
-    A keep or state entry is dropped instead (its temp removed): see the module docstring.
+    A replica, keep or state entry is dropped instead (its temp removed): see the module docstring.
     """
     if entry.kind != "publish":
         access.ops.remove(access.path((TXN, entry.temp)))

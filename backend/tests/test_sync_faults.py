@@ -5,7 +5,7 @@ Two replica roots (``desktop/`` and ``phone/``) live in one harness root. The ac
 and sync once.
 
 **Run budget (step 0, measured on Linux):** one sync of this fixture is about 800 file operations,
-66 of them mutating, in six 010 commits; a full harness run (setup, action, two recoveries that each
+under 80 of them mutating, in six 010 commits; a full harness run (setup, action, two recoveries that each
 sync) takes about 0.5 s, so exploring every point at every timing would take minutes per test and
 far longer on Windows runners. The store's own tests already crash, tear and fail every operation
 inside a commit (``test_store_recovery``, ``test_store_replica``) and prove that any crash inside
@@ -18,9 +18,9 @@ and inject an I/O error at its commit point and at its first publish.
 Interleaves use an **observation-gap reduction**: two positions for an edit of an existing file F
 behave the same unless an operation between them observes F. An edit of an existing file changes
 no directory listing, so only ``read_bytes``/``exists`` of F and mutations of F observe it; one
-position per gap is explored (F's own ``replace`` excepted: 010's pinned R7 window). The desktop
-copy target, the phone copy origin and the desktop conflict side mirror explored targets with the
-devices swapped (decisions are mirror-symmetric, ``test_sync_decide``), so they are not repeated.
+position per gap is explored (F's own ``replace`` excepted: 010's pinned R7 window). Every edit
+target is explored on both devices, because the apply order is not symmetric even though the
+decisions are. Not explored here: interleaves that create or delete a file.
 """
 
 from __future__ import annotations
@@ -39,7 +39,9 @@ from grimoire.testing import (
 )
 from grimoire.testing.fileops import snapshot
 
-from store_helpers import drop_empty_dirs
+from grimoire.core.identity import InstanceRef
+
+from store_helpers import WREN_R1, drop_empty_dirs, instance
 from sync_helpers import (
     DESKTOP, PATHS, PHONE, WREN_A, WREN_B, chat_record, edit_instance, handles, make_pair, new_revision, put,
 )
@@ -56,6 +58,7 @@ def _fixture() -> tuple[tuple[tuple[str, bytes | None], ...], tuple[tuple[str, b
         desktop, phone = make_pair(root)
         agreed = tuple(sorted(desktop.scan().files.items()))
         edit_instance(desktop, WREN_A, 9)             # copied to the phone
+        put(desktop, instance(InstanceRef("c5", "character", "zed"), WREN_R1), None)  # a new folder there
         edit_instance(phone, WREN_B, 5)               # copied to the desktop
         new_revision(phone, "r2", "a captain")        # a source unit: revision + head move
         put(desktop, chat_record(["character:wren", "character:mara"]))  # the conflict
@@ -236,9 +239,10 @@ def test_s9_an_io_error_at_any_commit_boundary_converges(tmp_path):
 def test_s9_a_crash_while_recovering_still_converges(tmp_path):
     trace = _baseline_trace()
     commits = [op.index for op in trace if _is_journal_replace(op)]
-    # crash right after the phone's data commit point (the desktop's data already published), then
+    # crash right after the phone's data commit point (the desktop's data already published), and
+    # right before the desktop's archive commit point (the phone's archive already written); then
     # crash the recovering sync before and after each of its own commit points
-    chosen = {commits[1]: frozenset({"after"})}
+    chosen = {commits[1]: frozenset({"after"}), commits[3]: frozenset({"before"})}
     report = explore_crashes(_scenario(S9), tmp_path, torn=False, recovery_crashes=True,
                              select=_select(chosen, {"before", "after"}), recovery_select=_recovery_boundary)
     report.assert_ok()
@@ -308,11 +312,11 @@ def _s10(tmp_path, names):
 
 
 def test_s10_external_edits_of_a_copy_target_and_an_aba_restore_are_kept(tmp_path):
-    _s10(tmp_path, ["phone copy target", "aba restore"])
+    _s10(tmp_path, ["phone copy target", "desktop copy target", "aba restore"])
 
 
 def test_s10_external_edits_of_a_copy_origin_and_a_conflict_side_are_kept(tmp_path):
-    _s10(tmp_path, ["desktop copy origin", "phone conflict side"])
+    _s10(tmp_path, ["desktop copy origin", "phone copy origin", "phone conflict side", "desktop conflict side"])
 
 
 def _meddle(ops, root):

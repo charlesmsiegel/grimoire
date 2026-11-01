@@ -493,14 +493,15 @@ class LibraryStore:
             return replica.scan(self._access)
 
     def read_sync_state(self, name: str) -> bytes | None:
-        """The exact bytes of ``.sync/<name>`` (``device.json``, ``peers/<id>/{archive,pending}.json``)."""
+        """The exact bytes of ``.sync/<name>`` (``device.json``, ``peers/<id>/{archive,pending}.json``).
+
+        ``None`` only when the file does not exist; a read error propagates (an unreadable marker
+        must never look like a missing one).
+        """
         parts = sync_state_parts(name)
         with self.lock:
             self._require_consistent()
-            try:
-                return self._access.read(parts)
-            except OSError:
-                return None
+            return self._access.read(parts)
 
     def read_exact(self, path: str) -> bytes | None:
         """The exact bytes of a canonical record or kept-version file, or ``None``; never through a link."""
@@ -536,6 +537,7 @@ class _Put:
     kind: str = "record"  # record | ledger | keep (a kept version) | state (``.sync``)
     key: str = ""  # the preview / approval / result key
     replace_unreferenced: bool = False
+    regenerable: bool = False  # exact bytes another library still holds: dropped, never preserved
 
     @property
     def ledger(self) -> bool:
@@ -543,6 +545,8 @@ class _Put:
 
     @property
     def journal_kind(self) -> str:
+        if self.kind == "record" and self.regenerable:
+            return "replica"
         return {"keep": "keep", "state": "state"}.get(self.kind, "publish")
 
 
@@ -642,7 +646,9 @@ class Transaction:
 
         The bytes are validated as ``put`` would validate the envelope they hold (strict JSON,
         supported format, address equal to the path) and published verbatim, so two libraries
-        converge on one etag. A definition revision is create-only unless
+        converge on one etag. Their bytes are another library's, so if the commit is aborted or an
+        external edit claims the target, they are dropped rather than preserved under
+        ``.conflicts`` (journal kind ``replica``). A definition revision is create-only unless
         ``replace_unreferenced``: then ``expected`` must be its current etag, and the commit
         refuses (``RevisionReferenced``) unless nothing on this library can pin it.
         """
@@ -661,7 +667,7 @@ class Transaction:
             raise InvalidEnvelope("only a definition revision is replaced as unreferenced")
         address = logical(parts)
         self._add(_Put(parts, address, bytes(data), expected, envelope, "record", str(address),
-                       replace_unreferenced))
+                       replace_unreferenced, regenerable=True))
         return str(address)
 
     def keep_version(self, path: str, data: bytes, slot: int | None = None) -> str:
@@ -824,7 +830,11 @@ class _Commit:
                 self._prune(denied)
                 if not self.puts:
                     return self._result()
-                staging = self.preflight()                # 4-6 again on what remains; never re-authorized
+                try:
+                    staging = self.preflight()            # 4-6 again on what remains; never re-authorized
+                except BaseException as error:
+                    self._note(error)
+                    raise
         self.store._staging = True                        # nested ledger commits are refused from here
         entries = self._stage(staging)                    # 8. directories and temps
         journal = Journal("commit", entries)

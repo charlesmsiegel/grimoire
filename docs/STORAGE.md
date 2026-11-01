@@ -150,16 +150,16 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
   - Denials that are not about a path still raise `WriteDenied`: an unissued handle, or `internal_error`.
   - `CommitResult` lists `denied`, `dropped` and every consumed approval, including those of dropped dependents.
 - **`preview()` keys** are what is approved: a record's logical address, a kept version's `kept/…` address, or a `.sync/…` path.
-- **Journal entry kinds:** `publish` (canonical targets, via `classify`), `keep` (a kept-version slot) and `state` (a sync-state file). Recovery validates each target against its kind. A `keep` or `state` entry that would be preserved (an abort, or an external edit of its target) is **dropped** instead: its bytes are regenerable, and preserving them would nest conflict copies. A live commit whose settlement aborted or dropped anything raises `WriteConflict` (with `dropped`).
+- **Journal entry kinds:** `publish` (canonical targets, via `classify`), `replica` (a canonical target holding another library's exact bytes, from `put_exact`), `keep` (a kept-version slot) and `state` (a sync-state file). Recovery validates each target against its kind. A `replica`, `keep` or `state` entry that would be preserved (an abort, or an external edit of its target) is **dropped** instead: its bytes are regenerable, and preserving them would leave copies nobody asked to keep, or nest conflict copies. A live commit whose settlement aborted or dropped anything raises `WriteConflict` (with `dropped`).
 - **Reads:**
   - `LibraryStore.scan()` returns every canonical file's exact bytes. It also names blocked paths (`link`, `lookalike`, `unreadable`, `malformed`, `unsupported_format`, `address_mismatch`; a directory blocks its subtree) and skipped non-record entries. It never follows a link.
-  - `read_exact(path)` reads a canonical or kept-version file, and `read_sync_state(name)` a `.sync` file.
+  - `read_exact(path)` reads a canonical or kept-version file, and `read_sync_state(name)` a `.sync` file. Both return `None` only when the file is absent; a read error propagates.
   - `collides(path)` checks for a differently spelled existing entry.
   - `cached_reads()` reuses directory listings for a read-only phase such as a sync plan.
 
 **R7 narrowed.** For an entry that creates a file, `settle` now re-checks the path and creates the missing directories *before* the per-entry guard read. Only the `replace` itself remains between that read and the publish (`backend/tests/test_store_replica.py::test_r7_window_is_only_the_replace_when_a_file_is_created`). An update never creates directories, so a parent deleted while the app was down is not re-created.
 
-**Rollback.** A pre-019 build cannot recover an unfinished journal that contains `keep` or `state` entries (`RecoveryFailed`, unknown kind). Finish recovery with a 019 build, or use `discard_journal`.
+**Rollback.** A pre-019 build cannot recover an unfinished journal that contains `replica`, `keep` or `state` entries (`RecoveryFailed`, unknown kind). Finish recovery with a 019 build, or use `discard_journal`.
 
 ## Recovery
 

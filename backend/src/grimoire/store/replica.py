@@ -155,6 +155,10 @@ def _walk(access: Access, parts: Parts, files: dict[str, bytes], blocked: dict[s
         child = parts + (name,)
         text = "/".join(child)
         if kind == "dir":
+            found = classify(child)
+            if found is not None and found[0] != "ledger":  # a directory where a record file belongs
+                blocked[text] = "unreadable"
+                continue
             _walk(access, child, files, blocked, skipped)
         elif kind == "file":
             found = classify(child)

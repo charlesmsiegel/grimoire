@@ -56,8 +56,16 @@ def syncable(path: str) -> str | None:
 
 # -- identity ------------------------------------------------------------------------
 
+def _state(store: LibraryStore, name: str) -> bytes | None:
+    """A ``.sync`` file's bytes; an unreadable one stops the sync (it must never look missing)."""
+    try:
+        return store.read_sync_state(name)
+    except OSError as error:
+        raise SyncInterrupted(f"cannot read .sync/{name} on {store.root}: {error}") from error
+
+
 def device_of(store: LibraryStore) -> str:
-    device = parse_device(store.read_sync_state(DEVICE_FILE))
+    device = parse_device(_state(store, DEVICE_FILE))
     if device is None:
         raise NoDeviceIdentity(f"{store.root} has no readable .sync/{DEVICE_FILE}; call identify first")
     return device
@@ -71,7 +79,7 @@ def identify(store: LibraryStore, device_id: str, *, replace: bool = False) -> s
     is conservative, never a first sync.
     """
     check_device_id(device_id)
-    current = store.read_sync_state(DEVICE_FILE)
+    current = _state(store, DEVICE_FILE)
     existing = parse_device(current)
     if existing == device_id:
         return device_id
@@ -146,6 +154,7 @@ class SyncPlan:
     conflicts: dict[str, Conflict] = field(default_factory=dict)
     agreed: set[str] = field(default_factory=set)
     notices: list[str] = field(default_factory=list)
+    fallback: set[str] = field(default_factory=set)  # devices whose copies were admitted unit by unit
 
     def other(self, device: str) -> str:
         return self.devices[1] if device == self.devices[0] else self.devices[0]
@@ -189,9 +198,9 @@ def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
     a, b = pair
     scans = {device: stores[device].scan() for device in pair}
     other = {a: b, b: a}
-    archives = {device: parse_archive(stores[device].read_sync_state(archive_name(other[device])), pair)
+    archives = {device: parse_archive(_state(stores[device], archive_name(other[device])), pair)
                 for device in pair}
-    pendings = {device: parse_pending(stores[device].read_sync_state(pending_name(other[device])), pair)
+    pendings = {device: parse_pending(_state(stores[device], pending_name(other[device])), pair)
                 for device in pair}
     notices = [f"{device}: archive ignored ({view.reason})" for device, view in archives.items()
                if view.state == "ignored"]
@@ -225,8 +234,8 @@ def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
     for device in pair:
         _plan_keeps(plan, device)
     for device in pair:  # the whole planned commit, once: interactions between units are caught here
-        if not (plan.copies[device] and plan.keeps[device]):
-            continue  # each part alone was already checked as a whole
+        if not plan.copies[device] or (not plan.keeps[device] and device not in plan.fallback):
+            continue  # what remains was already checked as one whole
         txn = stores[device].transaction()
         _stage(txn, plan.copies[device], plan.keeps[device])
         if txn.preview():
@@ -237,7 +246,8 @@ def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
 
 
 def _check_archive_size(pair: tuple[str, str], paths: tuple[str, ...]) -> None:
-    estimate = len(paths) * 160 + sum(len(path.encode("utf-8")) for path in paths)
+    # each path costs at most one archive entry and one pending entry (two etags) beside its text
+    estimate = len(paths) * 300 + sum(len(path.encode("utf-8")) for path in paths)
     if estimate > ARCHIVE_LIMIT:
         raise ArchiveTooLarge(f"an archive of {len(paths)} paths would exceed {ARCHIVE_LIMIT} bytes")
 
@@ -275,13 +285,11 @@ def _admit(plan: SyncPlan, dest: str) -> None:
         else:
             copies.append(copy)
     by_path = {copy.path: copy for copy in copies}
-    heads: dict[str, list[str]] = {}
     for copy in list(copies):
         if syncable(copy.path) != "manifest":
             continue
-        needed = _manifest_heads(copy)
         origin_files, dest_files = origin_scans[copy.origin].files, origin_scans[dest].files  # type: ignore[attr-defined]
-        missing = [path for path in needed if origin_files.get(path) is None or not (
+        missing = [path for path in _manifest_heads(copy) if origin_files.get(path) is None or not (
             dest_files.get(path) == origin_files.get(path)
             or (path in by_path and by_path[path].data == origin_files.get(path)))]
         if missing:
@@ -289,46 +297,55 @@ def _admit(plan: SyncPlan, dest: str) -> None:
             del by_path[copy.path]
             plan.conflicts[copy.path] = Conflict(copy.path, "head_dependency",
                                                  f"heads not identical on {dest}: {', '.join(missing)}")
-        else:
-            heads[copy.path] = [path for path in needed if path in by_path]
     everything = store.transaction()
     _stage(everything, copies, [])
     if not copies or _preflight(everything, f"the copies to {dest}") is None:
         plan.copies[dest] = sorted(copies, key=lambda copy: copy.path)  # the common case: one check
         return
     store.transaction().check()  # library-wide problems propagate; they are never blamed on one path
+    plan.fallback.add(dest)
+    admitted, rejected = _admit_units(store, copies)
+    for copy, error in rejected:
+        plan.conflicts[copy.path] = Conflict(copy.path, "unapplicable", str(error))
+    plan.copies[dest] = admitted
+
+
+def _admit_units(store: LibraryStore, copies: list[Copy]) -> tuple[list[Copy], list[tuple[Copy, BaseException]]]:
+    """Admit copies unit by unit: instances alone, source units cumulatively in sorted order.
+
+    A unit is one instance, one manifest with the head revisions it names among ``copies``, or
+    the other revisions of one entity. Returns the admitted copies and each refused copy's reason.
+    """
+    by_path = {copy.path: copy for copy in copies}
+    heads = {copy.path: [path for path in _manifest_heads(copy) if path in by_path]
+             for copy in copies if syncable(copy.path) == "manifest"}
     admitted: list[Copy] = []
-    instances = [copy for copy in copies if syncable(copy.path) == "instance"]
-    for copy in instances:  # independent of each other and of sources: checked alone
+    rejected: list[tuple[Copy, BaseException]] = []
+    for copy in (copy for copy in copies if syncable(copy.path) == "instance"):  # independent: alone
         txn = store.transaction()
         _stage(txn, [copy], [])
         error = _preflight(txn, copy.path)
         if error is None:
             admitted.append(copy)
         else:
-            plan.conflicts[copy.path] = Conflict(copy.path, "unapplicable", str(error))
+            rejected.append((copy, error))
     sources: dict[str, list[list[Copy]]] = {}
     in_manifest_unit = {path for paths in heads.values() for path in paths}
     for copy in copies:
         kind = syncable(copy.path)
         if kind == "instance" or copy.path in in_manifest_unit:
             continue
-        found = classify(tuple(copy.path.split("/")))
-        assert found is not None
         if kind == "manifest":
-            source = found[1]
-            sources.setdefault(source, []).insert(0, [copy, *(by_path[path] for path in heads[copy.path])])  # type: ignore[arg-type]
+            units = sources.setdefault(_source_of(copy.path), [])
+            units.insert(0, [copy, *(by_path[path] for path in heads[copy.path])])
+            continue
+        units = sources.setdefault(_source_of(copy.path), [])
+        unit = next((unit for unit in units if syncable(unit[0].path) == "definition"
+                     and _entity(unit[0].path) == _entity(copy.path)), None)
+        if unit is None:
+            units.append([copy])
         else:
-            ref = found[1]
-            assert isinstance(ref, SourceRef)
-            units = sources.setdefault(ref.source, [])
-            key = (ref.kind, ref.entity_id)
-            unit = next((unit for unit in units if syncable(unit[0].path) == "definition"
-                         and _entity(unit[0].path) == key), None)
-            if unit is None:
-                units.append([copy])
-            else:
-                unit.append(copy)
+            unit.append(copy)
     accepted: list[Copy] = []
     for source in sorted(sources):
         group = [copy for unit in sources[source] for copy in unit]
@@ -344,9 +361,8 @@ def _admit(plan: SyncPlan, dest: str) -> None:
             if error is None:
                 accepted += unit
             else:
-                for copy in unit:
-                    plan.conflicts[copy.path] = Conflict(copy.path, "unapplicable", str(error))
-    plan.copies[dest] = sorted(admitted + accepted, key=lambda copy: copy.path)
+                rejected.extend((copy, error) for copy in unit)
+    return sorted(admitted + accepted, key=lambda copy: copy.path), rejected
 
 
 def _entity(path: str) -> tuple[str, str]:
@@ -361,8 +377,9 @@ def _plan_keeps(plan: SyncPlan, device: str) -> None:
     keeps: list[Keep] = []
     for path, conflict in sorted(plan.conflicts.items()):
         side = plan.sides[path][other]
-        if side.state != "present":
-            continue
+        mine = plan.sides[path][device]
+        if side.state != "present" or (mine.state == "blocked" and mine.reason == "unreadable"):
+            continue  # nothing to keep, or this device's own file could not even be read
         data = plan.scans[other].files[path]  # type: ignore[attr-defined]
         txn = store.transaction()
         try:
@@ -472,6 +489,18 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
                 why = "not authorized" if copy.path in denied else "depends on a write that was not authorized"
                 plan.conflicts[copy.path] = Conflict(copy.path, "denied", why,
                                                      MappingProxyType({device: False}))
+        remaining = [copy for copy in copies if copy.path not in dropped]
+        if remaining:  # what is left must still be acceptable on its own (R1): re-admit it
+            check = store.transaction()
+            _stage(check, remaining, [])
+            if _preflight(check, f"the authorized copies to {device}") is not None:
+                _, refused = _admit_units(store, remaining)
+                for copy, error in refused:
+                    dropped.add(copy.path)
+                    changes[copy.path] = None
+                    plan.conflicts[copy.path] = Conflict(
+                        copy.path, "denied", f"depends on a write that was not authorized: {error}",
+                        MappingProxyType({device: False}))
         for keep in keeps:
             if str(_kept_key(keep)) in keys:
                 _kept(plan, keep.path, device, False, "keeping it was not authorized")
@@ -696,7 +725,7 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     other = {pair[0]: pair[1], pair[1]: pair[0]}
     for device in reversed(pair):
         store = stores[device]
-        archive = parse_archive(store.read_sync_state(archive_name(other[device])), pair)
+        archive = parse_archive(_state(store, archive_name(other[device])), pair)
         entries = dict(archive.entries) if archive.state == "valid" else {}
         for done in resolved:
             entries[done] = ("agreed", etag(scans[winner].files[done]))
@@ -708,7 +737,7 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             state.commit(None)
     for device in reversed(pair):
         store = stores[device]
-        pending = parse_pending(store.read_sync_state(pending_name(other[device])), pair)
+        pending = parse_pending(_state(store, pending_name(other[device])), pair)
         if pending.state != "valid" or not set(resolved) & set(pending.entries):
             continue
         state = store.transaction()

@@ -23,14 +23,15 @@ STAGING_SUFFIX = ".new"
 _TEMP = re.compile(r"[A-Za-z0-9][A-Za-z0-9_~-]*\.new")
 
 State = Literal["commit", "abort"]
-#: ``publish`` a canonical record; ``keep`` a kept version under ``.conflicts``; ``state`` a
-#: device-local ``.sync`` file. Keep and state entries are never preserved: dropped instead.
-Kind = Literal["publish", "keep", "state"]
-KINDS = ("publish", "keep", "state")
+#: ``publish`` a canonical record; ``replica`` a canonical record holding another library's exact
+#: bytes; ``keep`` a kept version under ``.conflicts``; ``state`` a device-local ``.sync`` file.
+#: Replica, keep and state entries are never preserved: dropped instead (their bytes are regenerable).
+Kind = Literal["publish", "replica", "keep", "state"]
+KINDS = ("publish", "replica", "keep", "state")
 
 
 def valid_target(kind: str, target: Parts) -> bool:
-    if kind == "publish":
+    if kind in ("publish", "replica"):
         return classify(target) is not None
     if kind == "keep":
         return is_kept_target(target)
