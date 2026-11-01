@@ -13,6 +13,10 @@ present    = new        = new       drop the temp
 present    = new        other       preserve (external edit is kept)
 =========  ===========  ==========  =====================================
 
+"Preserve" applies to ``publish`` entries. A ``keep`` (kept version) or ``state``
+(``.sync``) entry that would be preserved is *dropped* instead: its bytes are
+regenerable, and preserving them would nest conflict copies of conflict copies.
+
 An ``abort`` journal never publishes. A commit journal whose temps are all
 still present and which would preserve any entry is first rewritten as
 ``abort``, so a crash part-way through preserving can never resume as a
@@ -187,6 +191,7 @@ class Settlement:
     published: list[tuple[str, str]] = field(default_factory=list)  # (target, etag)
     preserved: list[str] = field(default_factory=list)  # conflict paths
     incomplete: list[str] = field(default_factory=list)  # targets whose staging vanished
+    dropped: list[str] = field(default_factory=list)  # keep/state targets set aside unpublished
     aborted: bool = False
 
 
@@ -206,8 +211,9 @@ def check_entry_paths(access: Access, journal: Journal) -> None:
         if entry.temp in staged:
             access.check_staged_file(entry.temp)
         access.guard.check_write(entry.target, staging_device=device)
-        access.guard.check_write(conflict_parts(entry.target, entry.new), staging_device=device)
-        access.check_conflict_folder(conflict_parts(entry.target, entry.new))
+        if entry.kind == "publish":  # keep/state entries are dropped, never preserved
+            access.guard.check_write(conflict_parts(entry.target, entry.new), staging_device=device)
+            access.check_conflict_folder(conflict_parts(entry.target, entry.new))
 
 
 def _replace_journal(access: Access, journal: Journal) -> None:
@@ -218,7 +224,14 @@ def _replace_journal(access: Access, journal: Journal) -> None:
 
 
 def _preserve(access: Access, entry: Entry, settlement: Settlement, digest: str) -> None:
-    """Move a staged version into ``.conflicts``, named by its *actual* digest; never drop distinct bytes."""
+    """Move a staged version into ``.conflicts``, named by its *actual* digest; never drop distinct bytes.
+
+    A keep or state entry is dropped instead (its temp removed): see the module docstring.
+    """
+    if entry.kind != "publish":
+        access.ops.remove(access.path((TXN, entry.temp)))
+        settlement.dropped.append(_text(entry.target))
+        return
     staging = lstat_or_none(access.path((TXN,)))
     temp = access.path((TXN, entry.temp))
     for attempt in range(MAX_CONFLICT_ATTEMPTS):
@@ -238,10 +251,22 @@ def _preserve(access: Access, entry: Entry, settlement: Settlement, digest: str)
     settlement.preserved.append(_text(conflict))
 
 
+def _prepare(access: Access, entry: Entry) -> None:
+    """Before the per-entry guard read: re-check the path and create a new file's directories.
+
+    Doing this first keeps the window between the guard read and the ``replace`` to the
+    ``replace`` alone (R7). An update never creates directories: its present target proves
+    the parent exists, and a parent deleted while the app was down is not re-created.
+    """
+    staging = lstat_or_none(access.path((TXN,)))
+    access.guard.check_write(entry.target, staging_device=staging.st_dev if staging else None)
+    if entry.old is None:
+        access.make_parent(entry.target)
+
+
 def _publish(access: Access, entry: Entry, settlement: Settlement) -> None:
     staging = lstat_or_none(access.path((TXN,)))
     access.guard.check_write(entry.target, staging_device=staging.st_dev if staging else None)
-    access.make_parent(entry.target)
     access.ops.replace(access.path((TXN, entry.temp)), access.path(entry.target))
     settlement.published.append((_text(entry.target), entry.new))
 
@@ -281,6 +306,7 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
         if journal.state == "abort" or digest != entry.new:
             _preserve(access, entry, settlement, digest)
             continue
+        _prepare(access, entry)
         current = access.etag_of(entry.target)  # per-entry guard, immediately before acting
         if current == entry.old:
             _publish(access, entry, settlement)

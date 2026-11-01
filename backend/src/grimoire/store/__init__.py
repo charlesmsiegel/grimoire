@@ -10,20 +10,22 @@ from .envelope import LinkSpec, RecordEnvelope, SourceManifest
 from .errors import (
     CommitIncomplete, CrossDevice, ImmutableRevision, InvalidEnvelope, InvalidSourceState, LibraryLocked,
     LinkRefused, LockUnavailable, MalformedRecord, NameCollision, NotALibrary, PendingRecovery,
-    RecordNotFound, RecoveryBlocked, RecoveryFailed, StaleWrite, StoreError, UnstorableIdentifier,
+    RecordNotFound, RecoveryBlocked, RecoveryFailed, RevisionReferenced, StaleWrite, StoreError,
+    UnstorableIdentifier,
     UnsupportedFormat, WriteConflict, WriteDenied,
 )
 from .jsonfmt import etag
 from .library import CommitResult, LibraryStore, RecoveryReport, Transaction
 from .loader import BrokenRef, LibraryView, LoadProblem, StoredDefinition, StoredRecord, StoredSource
 from .lock import Locker, OsLocker, ProcessLocker
+from .replica import CanonicalScan
 
 __all__ = [
-    "BrokenRef", "CommitIncomplete", "CommitResult", "CrossDevice", "DiskOps", "FileOps",
+    "BrokenRef", "CanonicalScan", "CommitIncomplete", "CommitResult", "CrossDevice", "DiskOps", "FileOps",
     "ImmutableRevision", "InvalidEnvelope", "InvalidSourceState", "LibraryLocked", "LibraryStore",
     "LibraryView", "LinkRefused", "LinkSpec", "LoadProblem", "LockUnavailable", "Locker",
     "MalformedRecord", "NameCollision", "NotALibrary", "OsLocker", "PendingRecovery", "ProcessLocker",
-    "RecordEnvelope", "RecordNotFound", "RecoveryBlocked", "RecoveryFailed", "RecoveryReport",
+    "RecordEnvelope", "RecordNotFound", "RecoveryBlocked", "RecoveryFailed", "RecoveryReport", "RevisionReferenced",
     "SourceManifest", "StaleWrite", "StoreError", "StoredDefinition", "StoredRecord", "StoredSource",
     "Transaction", "UnstorableIdentifier", "UnsupportedFormat", "WriteConflict", "WriteDenied", "etag",
 ]
