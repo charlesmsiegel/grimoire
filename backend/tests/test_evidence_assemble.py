@@ -204,6 +204,16 @@ def test_a_record_listed_twice_breaks_the_log():
     assert "log_broken" in assembly.problems
 
 
+def test_a_batch_without_a_byte_hash_breaks_the_log():
+    files = in_memory_files()
+    head = KnowledgeRef.batch(C, 6)
+    files[head] = ScannedFile(None, files[head].schema, files[head].payload)
+    assembly = assemble(C, files)
+    assert "log_broken" in assembly.problems and assembly.head is None
+    assert assembly.knowledge.rulings == () and assembly.knowledge.beliefs == () and assembly.knowledge.disclosures == ()
+    check_guarantees(assembly, files)
+
+
 def test_a_stray_huge_batch_number_costs_one_file():
     import time
     files = in_memory_files()

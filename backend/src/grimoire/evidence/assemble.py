@@ -82,7 +82,7 @@ def _verify_log(files: Mapping[KnowledgeRef, ScannedFile]) -> tuple[list[Batch],
     decoded: dict[int, Batch | None] = {}
     for seq, (ref, scanned) in present.items():
         batch: Batch | None = None
-        if scanned.damage is None:
+        if scanned.damage is None and isinstance(scanned.etag, str):  # no byte hash: it cannot chain
             try:
                 batch = decode_batch(ref, scanned.schema, scanned.payload)
             except EvidenceCodecError:
