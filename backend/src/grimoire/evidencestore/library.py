@@ -238,7 +238,8 @@ class EvidenceLibrary:
         # 5: only an intact ledger is extended.
         assembly, scan, files = self._assembly(campaign_id)
         if not assembly.clean or scan.problems:
-            raise EvidenceWriteError("ledger_damaged", sorted({q.name for q in assembly.quarantined}))
+            raise EvidenceWriteError("ledger_damaged", sorted({q.name for q in assembly.quarantined}
+                                                              | set(_problems(assembly, scan))))
         # 6: fresh ids only.
         on_disk = {ref.name for ref in files}
         taken = sorted(set(names) & on_disk)

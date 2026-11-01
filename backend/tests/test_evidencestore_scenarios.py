@@ -357,6 +357,16 @@ def test_f10_a_store_level_put_is_not_a_supported_writer(store, evidence):
     refused(store, evidence, [Event(C, "e9", "x", m(5), "director")], "ledger_damaged")  # F18
 
 
+def test_f18_a_stray_file_alone_blocks_appends(store, evidence):
+    append_u(evidence, upto=1)
+    stray = store.root / "campaigns" / C / "evidence" / "belief"
+    stray.mkdir(parents=True, exist_ok=True)
+    (stray / "notes.txt").write_text("x")
+    assert evidence.read(C, requested_by=DIRECTOR).quarantined == ()
+    error = refused(store, evidence, [Event(C, "e9", "x", m(1), "director")], "ledger_damaged")
+    assert error.records == (f"campaigns/{C}/evidence/belief/notes.txt:unrecognized",)
+
+
 def test_f19_the_raw_ledger_is_the_directors(evidence):
     for who in ("player-1", "narrator", None):
         with pytest.raises(AuthorityError):

@@ -27,5 +27,5 @@ The first proof includes a false report **with proof of delivery** and a bystand
 A 107 lightweight chat has a stable campaign namespace even without an authored world; event and evidence stores must accept that namespace and its chat/scene IDs. Character and scenario links identify **authoring sources**, not a grant to know the entire chat transcript. A newly added NPC begins with only explicitly introduced/delivered knowledge and cannot be assumed to have perceived earlier accepted events. Group chats and later world promotion retain their own source/actor/history provenance. [Chat model](../CHAT_MODEL.md).
 
 ## Open questions
-- What user-visible review, failure and rollback flows must the implementation spec prove?
-- Which optional later integrations can stay outside the first slice?
+- What user-visible review, failure and rollback flows must the implementation spec prove? *Answered for the first slice:* every append is previewed, approved and committed once, or refused with a reason. Read-time damage only removes knowledge. Manual rollback of the knowledge log is documented. See [EVIDENCE](../../EVIDENCE.md#correction-and-repair).
+- Which optional later integrations can stay outside the first slice? *Answered:* see the [EVIDENCE deferrals](../../EVIDENCE.md#deferrals).

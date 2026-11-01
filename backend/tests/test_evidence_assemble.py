@@ -165,6 +165,7 @@ def test_a_key_mismatch_quarantines_both_chains():  # F17
     assembly = assemble(C, files)
     assert "key_mismatch" in assembly.problems and reasons(assembly)["belief:b-mara-2"] == "key_mismatch"
     assert {"belief:b-mara-1", "belief:b-ines-1", "belief:b-ines-2"} <= set(reasons(assembly))
+    check_guarantees(assembly, files)
 
 
 def test_only_the_record_whose_rule_failed_is_quarantined():
@@ -178,6 +179,16 @@ def test_only_the_record_whose_rule_failed_is_quarantined():
     assert reasons(assembly)["belief:b-ines-1"] == "foreign_evidence"
     assert "evidence:v-mara" not in reasons(assembly)
     assert actor_knowledge(assembly.knowledge, MARA, as_of=9) == actor_knowledge(U, MARA, as_of=9)
+
+
+def test_a_newer_batch_format_reads_as_a_broken_log():  # forward compatibility (spec 9)
+    files = in_memory_files()
+    batch_ref = KnowledgeRef.batch(C, 3)
+    files[batch_ref] = ScannedFile(files[batch_ref].etag, "grimoire.knowledge-batch/2", files[batch_ref].payload)
+    assembly = assemble(C, files)
+    assert "log_broken" in assembly.problems
+    assert assembly.knowledge.rulings == () and assembly.knowledge.beliefs == () and assembly.knowledge.disclosures == ()
+    check_guarantees(assembly, files)
 
 
 def test_a_record_listed_twice_breaks_the_log():

@@ -189,9 +189,9 @@ def read_knowledge_record(access: Access, parts: Parts) -> StoredKnowledgeRecord
     document, tag = _document(access, parts)
     try:
         record, _ = parse_knowledge_record(document)
-    except EnvelopeError as error:
+    except EnvelopeError as error:  # a fixed detail: the file's own values are never echoed
         kind = UnsupportedFormat if error.code == "unsupported_format" else MalformedRecord
-        raise kind(f"{_text(parts)}: {error.detail}", tag) from None
+        raise kind(f"{_text(parts)}: not a readable knowledge record ({error.code})", tag) from None
     found = classify(parts)
     if found is None or found[1] != record.address:
         raise AddressMismatch(f"{_text(parts)} holds another knowledge record than its path names", tag,

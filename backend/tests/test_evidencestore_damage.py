@@ -174,3 +174,42 @@ def test_a_newer_builds_record_is_quarantined_with_its_chain(tmp_path):  # F16, 
         with pytest.raises(EvidenceWriteError) as caught:
             evidence.append(C, [U.events[0].__class__(C, "e9", "x", m(9), "director")])
         assert caught.value.reason == "ledger_damaged"
+
+
+def test_a_renamed_newest_belief_reads_as_missing_with_its_chain(tmp_path):  # F12, on disk
+    lib = _materialize(tmp_path)
+    folder = lib / KNOWLEDGE / "evidence" / "belief"
+    (folder / "b-mara-2.json").rename(folder / "B-MARA-2.json")
+    with LibraryStore.open(lib, writable=False) as store:
+        evidence = EvidenceLibrary(store)
+        stored = evidence.read(C, requested_by=DIRECTOR)
+        reasons = {q.name: q.reason for q in stored.quarantined}
+        assert reasons == {"belief:b-mara-2": "missing", "belief:b-mara-1": "chain_quarantined"}
+        assert any(problem.endswith("B-MARA-2.json:name_mismatch") for problem in stored.problems)
+        view = evidence.actor_knowledge(C, MARA, as_of=9)
+        assert view.current == () and view.history == ()
+        check_projections(stored.knowledge)
+
+
+def test_an_unlistable_folder_fails_closed_and_blocks_appends(tmp_path, monkeypatch):
+    import pytest
+    from grimoire.evidencestore import EvidenceWriteError
+    from grimoire.store.engine import Access
+    lib = _materialize(tmp_path)
+    real = Access.list_dir
+
+    def list_dir(self, parts):
+        if tuple(parts)[-2:] == ("evidence", "belief"):
+            raise PermissionError("denied")
+        return real(self, parts)
+
+    monkeypatch.setattr(Access, "list_dir", list_dir)
+    with LibraryStore.open(lib) as store:
+        evidence = EvidenceLibrary(store, owner_handle())
+        stored = evidence.read(C, requested_by=DIRECTOR)
+        assert f"{KNOWLEDGE}evidence/belief:unreadable" in stored.problems
+        assert stored.knowledge.beliefs == ()
+        check_projections(stored.knowledge)
+        with pytest.raises(EvidenceWriteError) as caught:
+            evidence.append(C, [U.events[0].__class__(C, "e9", "x", m(9), "director")])
+        assert caught.value.reason == "ledger_damaged"

@@ -312,5 +312,6 @@ def test_errors_never_carry_malformed_content(library):
     scan = library.campaign_knowledge("c1")
     assert scan.damaged == {EVENT: "unsupported_format"}
     assert "SENTINEL" not in repr(scan)
-    with pytest.raises(MalformedRecord):
+    with pytest.raises(MalformedRecord) as caught:
         library.read(EVENT)
+    assert "SENTINEL" not in str(caught.value)

@@ -131,7 +131,7 @@ These are tested against the undamaged ledger U, for every actor, the player and
 - **Nothing silently dropped.**
   - Every record on disk is in the ledger or in `quarantined`.
   - With an intact log, every listed record that is absent is `missing`.
-  - With a broken log, the break itself is reported. A deleted event, proposition or evidence item that only the altered batch listed may then go unreported individually. Its loss only removes knowledge.
+  - With a broken log, the break itself is reported. Any deleted record that only the altered or deleted batch listed may then go unreported individually. Its loss only removes knowledge, and rulings, beliefs and disclosures are quarantined wholesale anyway.
 
 **Limits.** As for [010b ledgers](STORAGE.md#reading), the log is an integrity check, not authentication. It cannot detect:
 - truncating, or consistently editing, the **tail**: removing the newest record together with its entry in the newest batch (a test pins this);
@@ -163,7 +163,7 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 1. **Read-only.** A read-only store, or no handle → `read_only`.
 2. **Shape.** 1–500 012 records of this campaign (`empty`, `too_many`, `invalid_record`, `campaign_mismatch`).
 3. **Existence.** The campaign, the chat and every actor named must already exist as files (`unknown_campaign`, `unknown_chat`, `unknown_actor`). That covers holder, sender, `attributed_to`, participants and instance subjects. There is no name lookup, and a typo never creates a campaign.
-4. **Integrity.** Only an intact ledger is extended. Any quarantine or problem → `ledger_damaged`. A write validated against a partial ledger could change meaning once a human repairs it.
+4. **Integrity.** Only an intact ledger is extended. Any quarantine or problem → `ledger_damaged`, naming the quarantined records and the problem paths. A write validated against a partial ledger could change meaning once a human repairs it.
 5. **Fresh IDs.** An ID already on disk, in any state → `duplicate_id`.
 6. **No backdating.**
    - Every new `moment.sequence` must be at least the ledger's high-water mark H (`backdated`), and at most H + 1 000 000 (`sequence_jump`).
