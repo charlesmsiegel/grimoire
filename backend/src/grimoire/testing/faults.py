@@ -209,6 +209,8 @@ class RootedFileOps:
         self.crash_index: int | None = None  # the fired Crash or Fail
         self.fault_timing: str | None = None
         self.interleaved_paths: set[str] = set()
+        #: What the interleaves left at the paths they changed (a removed path has no key).
+        self.interleaved: dict[str, bytes | None] = {}
         self.mediation_gap: str | None = None  # shadow vs disk mismatch seen before an interleave
         self.interleave_error: BaseException | None = None
         self._fired = [False] * len(self.plan)
@@ -305,8 +307,10 @@ class RootedFileOps:
                 for key in changed:
                     if key in after:
                         self.shadow[key] = after[key]
+                        self.interleaved[key] = after[key]
                     else:
                         self.shadow.pop(key, None)
+                        self.interleaved.pop(key, None)
                 self.interleaved_paths |= changed
         if fatal is not None:
             self.crash_index = op.index
