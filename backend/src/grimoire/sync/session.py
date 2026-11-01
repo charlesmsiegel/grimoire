@@ -1,0 +1,714 @@
+"""Plan and apply a transport-free sync between two open libraries (docs/SYNC.md).
+
+``plan_sync`` only reads. ``apply_sync`` writes in a fixed order — data(a), data(b), verify,
+archive(b), archive(a), pending(b), pending(a), where ``a`` is the lower device ID — each step
+one 010 transaction. Nothing here reads a clock, a modification time or randomness: decisions
+depend only on bytes, the two devices' own archives and their unfinished-sync markers.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
+
+from grimoire.core.identity import SourceRef
+from grimoire.store import (
+    CrossDevice, ImmutableRevision, InvalidEnvelope, InvalidSourceState, LibraryStore, LinkRefused,
+    NameCollision, RevisionReferenced, StaleWrite, StoreError, UnstorableIdentifier, WriteConflict, etag,
+)
+from grimoire.store.jsonfmt import MAX_FILE_BYTES
+from grimoire.store.layout import classify, definition_parts
+from grimoire.store.replica import parse_exact, previous_of
+
+from .decide import decide, derive_base
+from .documents import (
+    DEVICE_FILE, ArchiveView, PendingView, archive_name, check_device_id, parse_archive, parse_device,
+    parse_pending, pending_name, render_archive, render_device, render_pending,
+)
+from .errors import (
+    ArchiveTooLarge, IdentityExists, NoDeviceIdentity, ResolveRefused, SameDevice, SyncInterrupted,
+    SyncNotQuiet,
+)
+from .model import Base, Side
+
+_SLOT = re.compile(r"~[0-9a-f]{12}(?:\.([1-9][0-9]*))?$")
+
+#: Store refusals that concern one path or unit: that unit becomes ``unapplicable``.
+PER_PATH_ERRORS = (InvalidSourceState, NameCollision, UnstorableIdentifier, LinkRefused, CrossDevice,
+                   InvalidEnvelope, ImmutableRevision, RevisionReferenced)
+#: The largest archive this slice writes (one file under the store's limit; no compaction yet).
+ARCHIVE_LIMIT = MAX_FILE_BYTES
+#: The record kinds this slice synchronizes; later families extend ``syncable``.
+SYNCED_KINDS = frozenset({"definition", "manifest", "instance"})
+
+
+def syncable(path: str) -> str | None:
+    """The record kind sync owns at ``path``, or ``None``: the one extension point for later families.
+
+    018 assets, 021/035 scenes and ledgers add their paths and decision overrides here. Derived
+    reverse indexes (such as 107's navigation indexes) are never synchronized.
+    """
+    found = classify(tuple(path.split("/")))
+    return found[0] if found is not None and found[0] in SYNCED_KINDS else None
+
+
+# -- identity ------------------------------------------------------------------------
+
+def device_of(store: LibraryStore) -> str:
+    device = parse_device(store.read_sync_state(DEVICE_FILE))
+    if device is None:
+        raise NoDeviceIdentity(f"{store.root} has no readable .sync/{DEVICE_FILE}; call identify first")
+    return device
+
+
+def identify(store: LibraryStore, device_id: str, *, replace: bool = False) -> str:
+    """Give a library its device ID (an explicit human or app action; IDs are never generated here).
+
+    A damaged identity is replaced. Changing a valid ID needs ``replace=True`` (the fix for a
+    library copied with its ``.sync``); the old peer files are kept, so the next sync of the new ID
+    is conservative, never a first sync.
+    """
+    check_device_id(device_id)
+    current = store.read_sync_state(DEVICE_FILE)
+    existing = parse_device(current)
+    if existing == device_id:
+        return device_id
+    if existing is not None and not replace:
+        raise IdentityExists(f"{store.root} is already device {existing!r}")
+    txn = store.transaction()
+    txn.put_sync_state(DEVICE_FILE, render_device(device_id), None if current is None else etag(current))
+    txn.commit(None)
+    return device_id
+
+
+# -- plan ----------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Copy:
+    path: str
+    origin: str
+    dest: str
+    data: bytes
+    expected: str | None
+
+    @property
+    def etag(self) -> str:
+        return etag(self.data)
+
+
+@dataclass(frozen=True)
+class Keep:
+    """``device`` keeps ``data`` (the other device's version) beside ``path``."""
+
+    path: str
+    device: str
+    data: bytes
+    slot: int
+
+
+@dataclass(frozen=True)
+class Conflict:
+    path: str
+    code: str
+    detail: str = ""
+    #: device -> whether it now holds the other device's version under ``.conflicts``
+    kept: Mapping[str, bool] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SyncReport:
+    devices: tuple[str, str]
+    copied: tuple[tuple[str, str], ...] = ()  # (path, destination device)
+    conflicts: tuple[Conflict, ...] = ()
+    skipped: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    notices: tuple[str, ...] = ()
+    wrote: bool = False
+    consumed_approvals: tuple[str, ...] = ()
+
+    def conflict(self, path: str) -> Conflict | None:
+        return next((found for found in self.conflicts if found.path == path), None)
+
+
+@dataclass
+class SyncPlan:
+    devices: tuple[str, str]
+    stores: dict[str, LibraryStore]
+    scans: dict[str, object]
+    archives: dict[str, ArchiveView]
+    pendings: dict[str, PendingView]
+    paths: tuple[str, ...]
+    sides: dict[str, dict[str, Side]]
+    bases: dict[str, Base]
+    copies: dict[str, list[Copy]] = field(default_factory=dict)
+    keeps: dict[str, list[Keep]] = field(default_factory=dict)
+    conflicts: dict[str, Conflict] = field(default_factory=dict)
+    agreed: set[str] = field(default_factory=set)
+    notices: list[str] = field(default_factory=list)
+
+    def other(self, device: str) -> str:
+        return self.devices[1] if device == self.devices[0] else self.devices[0]
+
+    def preview(self) -> dict[str, dict[str, bytes]]:
+        """Per device, the exact bytes each authorized write will hold, keyed as approvals are."""
+        found: dict[str, dict[str, bytes]] = {}
+        for device in self.devices:
+            txn = self.stores[device].transaction()
+            _stage(txn, self.copies[device], self.keeps[device])
+            found[device] = {key: data for key, data in txn.preview().items() if not key.startswith(".sync/")}
+        return found
+
+
+def _side(scan, path: str) -> Side:  # type: ignore[no-untyped-def]
+    reason = scan.blocked_reason(path)
+    if reason is not None:
+        return Side.blocked(reason)
+    data = scan.files.get(path)
+    if data is None:
+        return Side.absent()
+    return Side.present(etag(data), previous_of(data))
+
+
+def _current(side: Side) -> str | None:
+    return side.etag if side.state == "present" else None
+
+
+def plan_sync(left: LibraryStore, right: LibraryStore) -> SyncPlan:
+    """Decide every path; read only. Raises ``SameDevice``/``NoDeviceIdentity`` or ``SyncInterrupted``."""
+    ids = device_of(left), device_of(right)
+    if ids[0] == ids[1]:
+        raise SameDevice(f"both libraries are device {ids[0]!r}; give one a new identity")
+    stores = dict(zip(ids, (left, right)))
+    pair: tuple[str, str] = tuple(sorted(ids))  # type: ignore[assignment]
+    a, b = pair
+    scans = {device: stores[device].scan() for device in pair}
+    other = {a: b, b: a}
+    archives = {device: parse_archive(stores[device].read_sync_state(archive_name(other[device])), pair)
+                for device in pair}
+    pendings = {device: parse_pending(stores[device].read_sync_state(pending_name(other[device])), pair)
+                for device in pair}
+    notices = [f"{device}: archive ignored ({view.reason})" for device, view in archives.items()
+               if view.state == "ignored"]
+    notices += [f"{device}: pending marker ignored ({view.reason})" for device, view in pendings.items()
+                if view.state == "ignored"]
+    paths: set[str] = set()
+    for device in pair:
+        scan = scans[device]
+        paths |= {path for path in (*scan.files, *scan.blocked) if syncable(path)}
+        paths |= set(archives[device].entries) | set(pendings[device].entries)
+    ordered = tuple(sorted(paths))
+    _check_archive_size(pair, ordered)
+    sides = {path: {device: _side(scans[device], path) for device in pair} for path in ordered}
+    bases = {path: derive_base(path, (archives[a], archives[b]), (pendings[a], pendings[b]),
+                               (_current(sides[path][a]), _current(sides[path][b]))) for path in ordered}
+    plan = SyncPlan(pair, stores, scans, archives, pendings, ordered, sides, bases,
+                    copies={a: [], b: []}, keeps={a: [], b: []}, notices=notices)
+    for path in ordered:
+        decision = decide(syncable(path), bases[path], sides[path][a], sides[path][b])  # type: ignore[arg-type]
+        if decision.action == "agreed":
+            plan.agreed.add(path)
+        elif decision.action == "conflict":
+            plan.conflicts[path] = Conflict(path, decision.code or "conflict")
+        else:
+            origin = a if decision.origin == "left" else b
+            dest = other[origin]
+            plan.copies[dest].append(Copy(path, origin, dest, scans[origin].files[path],
+                                          _current(sides[path][dest])))
+    for device in pair:
+        _admit(plan, device)
+    for device in pair:
+        _plan_keeps(plan, device)
+    for device in pair:  # the whole planned commit, once: interactions between units are caught here
+        txn = stores[device].transaction()
+        _stage(txn, plan.copies[device], plan.keeps[device])
+        if txn.preview():
+            error = _preflight(txn, "the combined plan")
+            if error is not None:
+                raise SyncInterrupted(f"the planned writes for {device} conflict with each other: {error}")
+    return plan
+
+
+def _check_archive_size(pair: tuple[str, str], paths: tuple[str, ...]) -> None:
+    estimate = len(paths) * 160 + sum(len(path.encode("utf-8")) for path in paths)
+    if estimate > ARCHIVE_LIMIT:
+        raise ArchiveTooLarge(f"an archive of {len(paths)} paths would exceed {ARCHIVE_LIMIT} bytes")
+
+
+def _preflight(txn, what: str) -> BaseException | None:  # type: ignore[no-untyped-def]
+    """``None`` if the transaction would commit; a per-path refusal; else raise."""
+    try:
+        txn.check()
+    except StaleWrite as error:
+        raise SyncInterrupted(f"a library changed while {what} was planned: {error}") from error
+    except PER_PATH_ERRORS as error:
+        return error
+    return None
+
+
+def _stage(txn, copies: list[Copy], keeps: list[Keep]) -> None:  # type: ignore[no-untyped-def]
+    for copy in copies:
+        txn.put_exact(copy.path, copy.data, copy.expected)
+    for keep in keeps:
+        txn.keep_version(keep.path, keep.data, slot=keep.slot)
+
+
+def _manifest_heads(copy: Copy) -> list[str]:
+    envelope = parse_exact(tuple(copy.path.split("/")), copy.data)
+    return ["/".join(definition_parts(ref.at(revision))) for ref, revision in envelope.head_refs().items()]  # type: ignore[union-attr]
+
+
+def _admit(plan: SyncPlan, dest: str) -> None:
+    """Overrides for every copy to ``dest``: name collision, head dependency, then preflight units."""
+    store, origin_scans = plan.stores[dest], plan.scans
+    copies = []
+    for copy in plan.copies[dest]:
+        if store.collides(copy.path):
+            plan.conflicts[copy.path] = Conflict(copy.path, "name_collision", "a differently spelled entry exists")
+        else:
+            copies.append(copy)
+    by_path = {copy.path: copy for copy in copies}
+    heads: dict[str, list[str]] = {}
+    for copy in list(copies):
+        if syncable(copy.path) != "manifest":
+            continue
+        needed = _manifest_heads(copy)
+        origin_files, dest_files = origin_scans[copy.origin].files, origin_scans[dest].files  # type: ignore[attr-defined]
+        missing = [path for path in needed if origin_files.get(path) is None or not (
+            dest_files.get(path) == origin_files.get(path)
+            or (path in by_path and by_path[path].data == origin_files.get(path)))]
+        if missing:
+            copies.remove(copy)
+            del by_path[copy.path]
+            plan.conflicts[copy.path] = Conflict(copy.path, "head_dependency",
+                                                 f"heads not identical on {dest}: {', '.join(missing)}")
+        else:
+            heads[copy.path] = [path for path in needed if path in by_path]
+    library = store.transaction()
+    library.check()  # library-wide problems propagate; they are never blamed on one path
+    admitted: list[Copy] = []
+    instances = [copy for copy in copies if syncable(copy.path) == "instance"]
+    for copy in instances:  # independent of each other and of sources: checked alone
+        txn = store.transaction()
+        _stage(txn, [copy], [])
+        error = _preflight(txn, copy.path)
+        if error is None:
+            admitted.append(copy)
+        else:
+            plan.conflicts[copy.path] = Conflict(copy.path, "unapplicable", str(error))
+    sources: dict[str, list[list[Copy]]] = {}
+    in_manifest_unit = {path for paths in heads.values() for path in paths}
+    for copy in copies:
+        kind = syncable(copy.path)
+        if kind == "instance" or copy.path in in_manifest_unit:
+            continue
+        found = classify(tuple(copy.path.split("/")))
+        assert found is not None
+        if kind == "manifest":
+            source = found[1]
+            sources.setdefault(source, []).insert(0, [copy, *(by_path[path] for path in heads[copy.path])])  # type: ignore[arg-type]
+        else:
+            ref = found[1]
+            assert isinstance(ref, SourceRef)
+            units = sources.setdefault(ref.source, [])
+            key = (ref.kind, ref.entity_id)
+            unit = next((unit for unit in units if syncable(unit[0].path) == "definition"
+                         and _entity(unit[0].path) == key), None)
+            if unit is None:
+                units.append([copy])
+            else:
+                unit.append(copy)
+    accepted: list[Copy] = []
+    for source in sorted(sources):
+        group = [copy for unit in sources[source] for copy in unit]
+        txn = store.transaction()
+        _stage(txn, accepted + group, [])
+        if _preflight(txn, f"source {source}") is None:
+            accepted += group
+            continue
+        for unit in sources[source]:
+            txn = store.transaction()
+            _stage(txn, accepted + unit, [])
+            error = _preflight(txn, f"source {source}")
+            if error is None:
+                accepted += unit
+            else:
+                for copy in unit:
+                    plan.conflicts[copy.path] = Conflict(copy.path, "unapplicable", str(error))
+    plan.copies[dest] = sorted(admitted + accepted, key=lambda copy: copy.path)
+
+
+def _entity(path: str) -> tuple[str, str]:
+    found = classify(tuple(path.split("/")))
+    assert found is not None and isinstance(found[1], SourceRef)
+    return found[1].kind, found[1].entity_id
+
+
+def _plan_keeps(plan: SyncPlan, device: str) -> None:
+    """Keep-both: ``device`` receives the other device's present version of each conflict path."""
+    other, store = plan.other(device), plan.stores[device]
+    keeps: list[Keep] = []
+    for path, conflict in sorted(plan.conflicts.items()):
+        side = plan.sides[path][other]
+        if side.state != "present":
+            continue
+        data = plan.scans[other].files[path]  # type: ignore[attr-defined]
+        txn = store.transaction()
+        try:
+            target = txn.keep_version(path, data)
+        except StoreError as error:
+            _kept(plan, path, device, False, str(error))
+            continue
+        if not txn.preview():
+            _kept(plan, path, device, True)  # already kept by an earlier sync
+            continue
+        slot = _SLOT.search(target)
+        assert slot is not None
+        keeps.append(Keep(path, device, data, int(slot.group(1) or 0)))
+    txn = store.transaction()
+    _stage(txn, [], keeps)
+    if keeps and _preflight(txn, "kept versions") is not None:
+        good = []
+        for keep in keeps:  # split only on failure
+            single = store.transaction()
+            _stage(single, [], [keep])
+            error = _preflight(single, keep.path)
+            if error is None:
+                good.append(keep)
+            else:
+                _kept(plan, keep.path, device, False, str(error))
+        keeps = good
+    for keep in keeps:
+        _kept(plan, keep.path, device, True)
+    plan.keeps[device] = keeps
+
+
+def _kept(plan: SyncPlan, path: str, device: str, kept: bool, detail: str = "") -> None:
+    conflict = plan.conflicts[path]
+    marks = {**conflict.kept, device: kept}
+    plan.conflicts[path] = Conflict(path, conflict.code, conflict.detail or detail, MappingProxyType(marks))
+
+
+# -- apply ---------------------------------------------------------------------------
+
+@dataclass
+class _Applied:
+    published: dict[str, list[Copy]] = field(default_factory=dict)
+    kept: dict[str, list[Keep]] = field(default_factory=dict)
+    pending_written: dict[str, bytes] = field(default_factory=dict)
+    wrote: bool = False
+    consumed: list[str] = field(default_factory=list)
+
+
+def _pending_entries(plan: SyncPlan, device: str) -> dict[str, Mapping[str, object]]:
+    """The device's marker entries before this sync's own copies are added."""
+    view = plan.pendings[device]
+    if view.state == "ignored":  # unknown entries: every path not already agreed stays uncertain
+        return {path: {"uncertain": True} for path in plan.paths if path not in plan.agreed}
+    return dict(view.entries)
+
+
+def _report(plan: SyncPlan, applied: _Applied) -> SyncReport:
+    copied = tuple(sorted((copy.path, device) for device, copies in applied.published.items() for copy in copies))
+    skipped = {device: plan.scans[device].skipped for device in plan.devices}  # type: ignore[attr-defined]
+    return SyncReport(plan.devices, copied, tuple(plan.conflicts[path] for path in sorted(plan.conflicts)),
+                      MappingProxyType(skipped), tuple(plan.notices), applied.wrote, tuple(applied.consumed))
+
+
+def apply_sync(plan: SyncPlan, handles: Mapping[str, object],
+               approvals: Mapping[str, Mapping[str, str]] | None = None) -> SyncReport:
+    """Write the plan: data(a), data(b), verify, archive(b), archive(a), pending(b), pending(a)."""
+    approvals = approvals or {}
+    applied = _Applied()
+    for device in plan.devices:
+        _commit_data(plan, device, handles[device], approvals.get(device, {}), applied)
+    _verify(plan, applied)
+    resolved = _resolved(plan, applied)
+    for device in reversed(plan.devices):
+        _commit_archive(plan, device, resolved, applied)
+    for device in reversed(plan.devices):
+        _commit_pending(plan, device, resolved, applied)
+    return _report(plan, applied)
+
+
+def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping[str, str],
+                 applied: _Applied) -> None:
+    store = plan.stores[device]
+    copies, keeps = list(plan.copies[device]), list(plan.keeps[device])
+    if not copies and not keeps:
+        applied.published[device], applied.kept[device] = [], []
+        return
+    txn = store.transaction()
+    _stage(txn, copies, keeps)
+    marker_key = None
+    marker: list[bytes] = []  # the bytes the marker will hold (on_denied may change them)
+    if copies:
+        marker.append(_marker(plan, device, copies))
+        old = plan.pendings[device].data
+        marker_key = txn.put_sync_state(pending_name(plan.other(device)), marker[0],
+                                        None if old is None else etag(old))
+    dropped: set[str] = set()
+
+    def on_denied(keys: frozenset[str]) -> dict[str, bytes | None]:
+        denied = {key for key in keys if not key.startswith("kept/")}
+        sources = {_source_of(path) for path in denied if syncable(path) != "instance"}
+        changes: dict[str, bytes | None] = {}
+        for copy in copies:
+            if copy.path in denied or (syncable(copy.path) != "instance" and _source_of(copy.path) in sources):
+                dropped.add(copy.path)
+                if copy.path not in denied:
+                    changes[copy.path] = None
+                why = "not authorized" if copy.path in denied else "depends on a write that was not authorized"
+                plan.conflicts[copy.path] = Conflict(copy.path, "denied", why,
+                                                     MappingProxyType({device: False}))
+        for keep in keeps:
+            if str(_kept_key(keep)) in keys:
+                _kept(plan, keep.path, device, False, "keeping it was not authorized")
+        if marker_key is not None:
+            remaining = [copy for copy in copies if copy.path not in dropped]
+            marker[0] = _marker(plan, device, remaining)
+            changes[marker_key] = marker[0] if remaining else None
+        return changes
+
+    try:
+        result = txn.commit(handle, dict(approvals), on_denied=on_denied)
+    except (StaleWrite, WriteConflict, *PER_PATH_ERRORS) as error:
+        raise SyncInterrupted(f"the data commit on {device} stopped: {error}", _report(plan, applied)) from error
+    applied.consumed.extend(result.consumed_approvals)
+    published = [copy for copy in copies if copy.path in result.etags]
+    applied.published[device] = published
+    applied.kept[device] = [keep for keep in keeps if str(_kept_key(keep)) in result.etags]
+    if marker_key is not None and marker_key in result.etags:
+        applied.pending_written[device] = marker[0]
+    applied.wrote = applied.wrote or bool(result.etags)
+    plan.copies[device] = published
+
+
+def _marker(plan: SyncPlan, device: str, copies: list[Copy]) -> bytes:
+    entries = _pending_entries(plan, device)
+    entries.update({copy.path: {"from": copy.expected, "to": copy.etag} for copy in copies})
+    return render_pending(plan.devices, entries)
+
+
+def _kept_key(keep: Keep) -> object:
+    from grimoire.store.layout import kept_address
+    return kept_address(tuple(keep.path.split("/")), etag(keep.data), keep.slot)
+
+
+def _source_of(path: str) -> str:
+    found = classify(tuple(path.split("/")))
+    assert found is not None
+    return found[1] if found[0] == "manifest" else found[1].source  # type: ignore[return-value, union-attr]
+
+
+def _verify(plan: SyncPlan, applied: _Applied) -> None:
+    """Re-read every file this sync published or kept; its bytes must be the planned ones."""
+    from grimoire.store.layout import conflict_parts
+    for device in plan.devices:
+        store = plan.stores[device]
+        checks = [(copy.path, copy.data) for copy in applied.published.get(device, [])]
+        checks += [("/".join(conflict_parts(tuple(keep.path.split("/")), etag(keep.data), keep.slot)), keep.data)
+                   for keep in applied.kept.get(device, [])]
+        for path, data in checks:
+            found = store.read_exact(path)
+            if found is None or etag(found) != etag(data):
+                raise SyncInterrupted(f"verification failed on {device}: {path} does not hold the planned bytes",
+                                      _report(plan, applied))
+
+
+def _final(plan: SyncPlan, applied: _Applied, path: str, device: str) -> Side:
+    for copy in applied.published.get(device, []):
+        if copy.path == path:
+            return Side.present(copy.etag)
+    return plan.sides[path][device]
+
+
+def _resolved(plan: SyncPlan, applied: _Applied) -> dict[str, tuple[str, str] | None]:
+    """Paths both devices now verifiably agree on, with their new archive entry (``None``: no entry)."""
+    a, b = plan.devices
+    found: dict[str, tuple[str, str] | None] = {}
+    for path in plan.paths:
+        left, right = _final(plan, applied, path, a), _final(plan, applied, path, b)
+        if "blocked" in (left.state, right.state) or left.state != right.state:
+            continue
+        if left.state == "present":
+            if left.etag == right.etag:
+                found[path] = ("agreed", left.etag)  # type: ignore[assignment]
+            continue
+        base = plan.bases[path]  # both absent: keep (or derive) a tombstone
+        candidates = sorted({entry[1] for view in plan.archives.values() if view.state == "valid"
+                             for entry in [view.entries.get(path)] if entry is not None})
+        if base.kind in ("agreed", "deleted"):
+            found[path] = ("deleted", base.etag)  # type: ignore[assignment]
+        elif candidates:
+            found[path] = ("deleted", candidates[0])
+        else:
+            found[path] = None
+    return found
+
+
+def _new_archive(plan: SyncPlan, device: str, resolved: Mapping[str, tuple[str, str] | None]) -> bytes:
+    view = plan.archives[device]
+    entries: dict[str, tuple[str, str]] = dict(view.entries) if view.state == "valid" else {}
+    for path, entry in resolved.items():
+        if entry is None:
+            entries.pop(path, None)
+        else:
+            entries[path] = entry
+    return render_archive(plan.devices, entries)
+
+
+def _commit_archive(plan: SyncPlan, device: str, resolved: Mapping[str, tuple[str, str] | None],
+                    applied: _Applied) -> None:
+    data = _new_archive(plan, device, resolved)
+    old = plan.archives[device].data
+    if data == old:
+        return
+    if len(data) > ARCHIVE_LIMIT:
+        raise ArchiveTooLarge(f"the archive for {device} would be {len(data)} bytes")
+    txn = plan.stores[device].transaction()
+    txn.put_sync_state(archive_name(plan.other(device)), data, None if old is None else etag(old))
+    try:
+        txn.commit(None)
+    except (StaleWrite, WriteConflict) as error:
+        raise SyncInterrupted(f"the archive on {device} changed during the sync: {error}",
+                              _report(plan, applied)) from error
+    applied.wrote = True
+
+
+def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object], applied: _Applied) -> None:
+    current = applied.pending_written.get(device, plan.pendings[device].data)
+    if device in applied.pending_written:
+        entries = dict(parse_pending(current, plan.devices).entries)
+    else:
+        entries = _pending_entries(plan, device)
+    desired = {path: entry for path, entry in entries.items() if path not in resolved}
+    if current is None and not desired:
+        return
+    data = render_pending(plan.devices, desired)
+    if data == current:
+        return
+    txn = plan.stores[device].transaction()
+    txn.put_sync_state(pending_name(plan.other(device)), data, None if current is None else etag(current))
+    try:
+        txn.commit(None)
+    except (StaleWrite, WriteConflict) as error:
+        raise SyncInterrupted(f"the pending marker on {device} changed during the sync: {error}",
+                              _report(plan, applied)) from error
+    applied.wrote = True
+
+
+# -- entry points ----------------------------------------------------------------------
+
+def sync(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object],
+         approvals: Mapping[str, Mapping[str, str]] | None = None) -> SyncReport:
+    """Plan and apply one sync. ``handles`` (and ``approvals``) are keyed by device ID."""
+    return apply_sync(plan_sync(left, right), handles, approvals)
+
+
+def sync_until_quiet(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object],
+                     approvals: Mapping[str, Mapping[str, str]] | None = None, *, attempts: int = 4) -> SyncReport:
+    """Sync until one sync completes and writes nothing; retries ``SyncInterrupted``."""
+    last: Exception | None = None
+    report: SyncReport | None = None
+    for _ in range(attempts):
+        try:
+            report = sync(left, right, handles, approvals)
+        except SyncInterrupted as error:
+            last = error
+            continue
+        if not report.wrote:
+            return report
+        last = None
+    if last is not None:
+        raise last
+    raise SyncNotQuiet(f"every one of {attempts} syncs still wrote something", report)
+
+
+def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expected: Mapping[str, str | None],
+            handles: Mapping[str, object], approvals: Mapping[str, Mapping[str, str]] | None = None) -> str:
+    """End one conflict by choosing the version whose etag is ``keep``; returns the device that changed.
+
+    The other device receives those bytes and keeps its replaced version under ``.conflicts``,
+    in one transaction; both archives then record the agreement. See docs/SYNC.md for refusals.
+    """
+    kind = syncable(path)
+    if kind is None:
+        raise ResolveRefused(f"{path} is not a synchronized record")
+    ids = device_of(left), device_of(right)
+    if ids[0] == ids[1]:
+        raise SameDevice(f"both libraries are device {ids[0]!r}")
+    stores = dict(zip(ids, (left, right)))
+    pair: tuple[str, str] = tuple(sorted(ids))  # type: ignore[assignment]
+    scans = {device: stores[device].scan() for device in pair}
+    sides = {device: _side(scans[device], path) for device in pair}
+    for device, side in sides.items():
+        if side.state == "blocked":
+            raise ResolveRefused(f"{path} is {side.reason} on {device}")
+        if set(expected) != set(pair) or _current(side) != expected[device]:
+            raise ResolveRefused(f"{path} changed on {device} since the conflict was reported")
+    winners = [device for device in pair if _current(sides[device]) == keep]
+    if not winners:
+        raise ResolveRefused("keep must be the current etag of one device's version (deletions cannot be chosen)")
+    if len(winners) == 2:
+        raise ResolveRefused(f"{path} is already identical on both devices")
+    winner = winners[0]
+    receiver = pair[1] if winner == pair[0] else pair[0]
+    data = scans[winner].files[path]
+    mine = scans[receiver].files.get(path)
+    txn = stores[receiver].transaction()
+    resolved = [path]
+    if kind == "definition":
+        txn.put_exact(path, data, None if mine is None else etag(mine), replace_unreferenced=mine is not None)
+    else:
+        txn.put_exact(path, data, None if mine is None else etag(mine))
+    if kind == "manifest":
+        for head in _manifest_heads(Copy(path, winner, receiver, data, None)):
+            theirs, ours = scans[winner].files.get(head), scans[receiver].files.get(head)
+            if theirs is None:
+                raise ResolveRefused(f"{head} is not readable on {winner}")
+            if ours is None:
+                txn.put_exact(head, theirs, None)
+                resolved.append(head)
+            elif ours != theirs:
+                raise ResolveRefused(f"{head} differs between the devices; resolve it first")
+    if mine is not None:
+        txn.keep_version(path, mine)
+    try:
+        txn.check()
+    except (StaleWrite, *PER_PATH_ERRORS) as error:
+        raise ResolveRefused(f"{path} cannot be resolved on {receiver}: {error}") from error
+    txn.commit(handles[receiver], dict((approvals or {}).get(receiver, {})))
+    found = stores[receiver].read_exact(path)
+    if found is None or etag(found) != keep:
+        raise SyncInterrupted(f"verification failed on {receiver}: {path} does not hold the chosen bytes")
+    other = {pair[0]: pair[1], pair[1]: pair[0]}
+    for device in reversed(pair):
+        store = stores[device]
+        archive = parse_archive(store.read_sync_state(archive_name(other[device])), pair)
+        entries = dict(archive.entries) if archive.state == "valid" else {}
+        for done in resolved:
+            entries[done] = ("agreed", etag(scans[winner].files[done]))
+        rendered = render_archive(pair, entries)
+        if rendered != archive.data:
+            state = store.transaction()
+            state.put_sync_state(archive_name(other[device]), rendered,
+                                 None if archive.data is None else etag(archive.data))
+            state.commit(None)
+    for device in reversed(pair):
+        store = stores[device]
+        pending = parse_pending(store.read_sync_state(pending_name(other[device])), pair)
+        if pending.state != "valid" or not set(resolved) & set(pending.entries):
+            continue
+        state = store.transaction()
+        state.put_sync_state(pending_name(other[device]), render_pending(
+            pair, {key: value for key, value in pending.entries.items() if key not in resolved}),
+            etag(pending.data))  # type: ignore[arg-type]
+        state.commit(None)
+    return receiver
+
+
+__all__ = [
+    "ARCHIVE_LIMIT", "Conflict", "Copy", "Keep", "SyncPlan", "SyncReport", "apply_sync", "device_of",
+    "identify", "plan_sync", "resolve", "sync", "sync_until_quiet", "syncable",
+]

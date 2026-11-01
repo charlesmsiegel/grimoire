@@ -64,14 +64,14 @@ def _impure_module_attribute(module_name: str, attr: str) -> bool:
 NETWORK_MODULES = ("socket", "ssl", "select", "selectors", "http.client", "urllib.request",
                    "subprocess", "multiprocessing", "asyncio", "ctypes", "sqlite3",
                    "grimoire.capture", "grimoire.ledgers", "grimoire.library", "grimoire.providers",
-                   "grimoire.store", "grimoire.testing")
+                   "grimoire.store", "grimoire.sync", "grimoire.testing")
 #: ...and what its pure modules must not pull in either.
 CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob", "random", "time",
                                          "datetime", "uuid", "secrets")
 
 #: grimoire packages that are adapters or test infrastructure, not pure.
 ADAPTERS = frozenset({"grimoire.capture", "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1",
-                      "grimoire.providers", "grimoire.store", "grimoire.testing"})
+                      "grimoire.providers", "grimoire.store", "grimoire.sync", "grimoire.testing"})
 
 
 @dataclass(frozen=True)

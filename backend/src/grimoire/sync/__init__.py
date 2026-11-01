@@ -1,0 +1,25 @@
+"""V2 device synchronization core (019): transport-free, file-granular, keep-both on conflict.
+
+An adapter over ``grimoire.store``, not part of the pure core. Two open libraries are
+synchronized by bytes: non-overlapping edits merge deterministically, anything else becomes a
+named conflict that keeps both versions on both devices. Timestamps never decide. See
+docs/SYNC.md for the contract.
+"""
+
+from .decide import decide, derive_base
+from .errors import (
+    ArchiveTooLarge, IdentityExists, NoDeviceIdentity, ResolveRefused, SameDevice, SyncError,
+    SyncInterrupted, SyncNotQuiet,
+)
+from .model import CONFLICT_CODES, Base, Decision, Side
+from .session import (
+    Conflict, Copy, Keep, SyncPlan, SyncReport, apply_sync, device_of, identify, plan_sync, resolve, sync,
+    sync_until_quiet, syncable,
+)
+
+__all__ = [
+    "ArchiveTooLarge", "Base", "CONFLICT_CODES", "Conflict", "Copy", "Decision", "IdentityExists", "Keep",
+    "NoDeviceIdentity", "ResolveRefused", "SameDevice", "Side", "SyncError", "SyncInterrupted", "SyncNotQuiet",
+    "SyncPlan", "SyncReport", "apply_sync", "decide", "derive_base", "device_of", "identify", "plan_sync",
+    "resolve", "sync", "sync_until_quiet", "syncable",
+]

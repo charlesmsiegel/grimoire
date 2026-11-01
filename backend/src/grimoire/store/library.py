@@ -41,7 +41,8 @@ from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, render
 from .layout import (
     CONFLICTS, DISCARD_MARKER, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER, REPAIR_MARKER, SYNC, TXN, Parts,
-    address_parts, classify, conflict_parts, definition_parts, instance_parts, kept_address, ledger_folder,
+    address_parts, classify, conflict_parts, definition_parts, instance_parts, is_kept_target, kept_address,
+    ledger_folder,
     ledger_name, ledger_parts, ledger_seq, logical, manifest_parts, sync_state_parts,
 )
 from .ledger import Head, Ledger, read_ledger, render_batches
@@ -490,6 +491,16 @@ class LibraryStore:
                 return self._access.read(parts)
             except OSError:
                 return None
+
+    def read_exact(self, path: str) -> bytes | None:
+        """The exact bytes of a canonical record or kept-version file, or ``None``; never through a link."""
+        parts = tuple(path.split("/"))
+        found = classify(parts)
+        if (found is None or found[0] == "ledger") and not is_kept_target(parts):
+            raise ValueError(f"{path} is not a canonical record or kept-version path")
+        with self.lock:
+            self._require_consistent()
+            return self._access.read(parts)
 
     def collides(self, path: str) -> bool:
         """Whether ``path`` (or a missing ancestor) would collide with a differently spelled entry."""
