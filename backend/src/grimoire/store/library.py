@@ -15,7 +15,7 @@ import os
 import re
 import stat
 import threading
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -476,6 +476,16 @@ class LibraryStore:
         return tuple(sorted(found))
 
     # -- synchronization (019) --------------------------------------------------
+    @contextlib.contextmanager
+    def cached_reads(self) -> Iterator[None]:
+        """Reuse directory listings for a read-only phase of this thread (a sync plan).
+
+        Nothing may be written through this store inside the block; a commit's own compare-and-swap
+        still re-reads every target, so a change made meanwhile by another program is caught there.
+        """
+        with self.lock, self._access.cached_listings():
+            yield
+
     def scan(self) -> CanonicalScan:
         """Every canonical record file's exact bytes; blocked and skipped paths are named."""
         with self.lock:

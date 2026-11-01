@@ -176,6 +176,11 @@ def _current(side: Side) -> str | None:
 
 def plan_sync(left: LibraryStore, right: LibraryStore) -> SyncPlan:
     """Decide every path; read only. Raises ``SameDevice``/``NoDeviceIdentity`` or ``SyncInterrupted``."""
+    with left.cached_reads(), right.cached_reads():
+        return _plan(left, right)
+
+
+def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
     ids = device_of(left), device_of(right)
     if ids[0] == ids[1]:
         raise SameDevice(f"both libraries are device {ids[0]!r}; give one a new identity")
@@ -220,6 +225,8 @@ def plan_sync(left: LibraryStore, right: LibraryStore) -> SyncPlan:
     for device in pair:
         _plan_keeps(plan, device)
     for device in pair:  # the whole planned commit, once: interactions between units are caught here
+        if not (plan.copies[device] and plan.keeps[device]):
+            continue  # each part alone was already checked as a whole
         txn = stores[device].transaction()
         _stage(txn, plan.copies[device], plan.keeps[device])
         if txn.preview():
@@ -284,8 +291,12 @@ def _admit(plan: SyncPlan, dest: str) -> None:
                                                  f"heads not identical on {dest}: {', '.join(missing)}")
         else:
             heads[copy.path] = [path for path in needed if path in by_path]
-    library = store.transaction()
-    library.check()  # library-wide problems propagate; they are never blamed on one path
+    everything = store.transaction()
+    _stage(everything, copies, [])
+    if not copies or _preflight(everything, f"the copies to {dest}") is None:
+        plan.copies[dest] = sorted(copies, key=lambda copy: copy.path)  # the common case: one check
+        return
+    store.transaction().check()  # library-wide problems propagate; they are never blamed on one path
     admitted: list[Copy] = []
     instances = [copy for copy in copies if syncable(copy.path) == "instance"]
     for copy in instances:  # independent of each other and of sources: checked alone
