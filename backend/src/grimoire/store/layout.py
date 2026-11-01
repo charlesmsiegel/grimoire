@@ -16,7 +16,9 @@ import re
 import unicodedata
 from typing import Literal
 
-from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, validate_segment, validate_source_id
+from grimoire.core.identity import (
+    KNOWLEDGE_FAMILIES, ChatRef, InstanceRef, KnowledgeRef, ScopeRef, SourceRef, validate_segment, validate_source_id,
+)
 from grimoire.security import InvalidResourcePath, ResourcePath
 
 from .errors import UnstorableIdentifier
@@ -42,14 +44,19 @@ INSTANCES = "instances"
 SUFFIX = ".json"
 CHATS = "chats"  # campaigns/<id>/chats/<chat_id>.json: one chat record (107)
 SCOPE = "scope.json"  # campaigns/<id>/scope.json: the play-scope record (107)
+EVENTS = "events"  # campaigns/<id>/events/<event_id>.json: accepted events (020)
+EVIDENCE = "evidence"  # campaigns/<id>/evidence/<family>/<id>.json: everything else, and the batch log (020)
+#: families stored under ``evidence/`` (an event lives under ``events/``)
+EVIDENCE_FAMILIES = frozenset(KNOWLEDGE_FAMILIES) - {"event"}
 
 ROOT_ENTRIES = frozenset({MARKER, SOURCES, CAMPAIGNS, TXN, CONFLICTS})
-#: Reserved for later record families; the loader skips them.
+#: Reserved for later record families; the loader skips them. ``events``/``evidence`` belong to
+#: 020 and are read only by ``campaign_knowledge``, so ``load()``'s cost never grows with history.
 RESERVED_ROOTS = frozenset({"authority", "config", "assets", "secrets"})
 RESERVED_CAMPAIGN_ENTRIES = frozenset({"scenes", "events", "evidence", "relations"})
 _NOISE = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
 
-Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat"]
+Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat", "knowledge"]
 
 
 def is_noise(name: str) -> bool:
@@ -102,7 +109,15 @@ def chat_parts(ref: ChatRef) -> Parts:
     return _checked((CAMPAIGNS, ref.campaign_id, CHATS, ref.chat_id + SUFFIX))
 
 
-def address_parts(address: SourceRef | InstanceRef | ScopeRef | ChatRef) -> Parts:
+def knowledge_parts(ref: KnowledgeRef) -> Parts:
+    if ref.family == "event":
+        return _checked((CAMPAIGNS, ref.campaign_id, EVENTS, ref.record_id + SUFFIX))
+    return _checked((CAMPAIGNS, ref.campaign_id, EVIDENCE, ref.family, ref.record_id + SUFFIX))
+
+
+def address_parts(address: SourceRef | InstanceRef | ScopeRef | ChatRef | KnowledgeRef) -> Parts:
+    if isinstance(address, KnowledgeRef):
+        return knowledge_parts(address)
     if isinstance(address, InstanceRef):
         return instance_parts(address)
     if isinstance(address, ScopeRef):
@@ -155,10 +170,10 @@ def _stem(name: str) -> str | None:
     return stem
 
 
-def classify(parts: Parts) -> tuple[Kind, SourceRef | InstanceRef | ScopeRef | ChatRef | str] | None:
+def classify(parts: Parts) -> tuple[Kind, SourceRef | InstanceRef | ScopeRef | ChatRef | KnowledgeRef | str] | None:
     """The record a canonical path holds, or ``None``; exact inverse of the mappings."""
     parts = tuple(parts)
-    found: tuple[Kind, SourceRef | InstanceRef | ScopeRef | ChatRef | str] | None = None
+    found: tuple[Kind, SourceRef | InstanceRef | ScopeRef | ChatRef | KnowledgeRef | str] | None = None
     try:
         if len(parts) == 5 and parts[0] == CAMPAIGNS and parts[2] == INSTANCES:
             stem = _stem(parts[4])
@@ -170,6 +185,14 @@ def classify(parts: Parts) -> tuple[Kind, SourceRef | InstanceRef | ScopeRef | C
             stem = _stem(parts[3])
             if stem is not None:
                 found = ("chat", ChatRef(parts[1], stem))
+        elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == EVENTS:
+            stem = _stem(parts[3])
+            if stem is not None:
+                found = ("knowledge", KnowledgeRef(parts[1], "event", stem))
+        elif len(parts) == 5 and parts[0] == CAMPAIGNS and parts[2] == EVIDENCE and parts[3] in EVIDENCE_FAMILIES:
+            stem = _stem(parts[4])
+            if stem is not None:
+                found = ("knowledge", KnowledgeRef(parts[1], parts[3], stem))
         elif len(parts) >= 3 and parts[0] == LEDGERS:
             seq = ledger_seq(parts[-1])
             if seq is not None:

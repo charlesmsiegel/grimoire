@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from grimoire.core.identity import (
-    ChatRef, InstanceRef, ScopeRef, SourceRef, parse_ref, validate_segment, validate_source_id,
+    ChatRef, InstanceRef, KnowledgeRef, ScopeRef, SourceRef, parse_ref, validate_segment, validate_source_id,
 )
 from grimoire.core.index import DIRECTED_RELATIONS, SYMMETRIC_RELATIONS
 
@@ -24,6 +24,7 @@ from .jsonfmt import MAX_DEPTH, check_writable, depth_exceeds, freeze, is_etag, 
 RECORD_FORMAT = "grimoire.record/1"
 SOURCE_FORMAT = "grimoire.source/1"
 SCOPE_RECORD_FORMAT = "grimoire.scope-record/1"
+KNOWLEDGE_RECORD_FORMAT = "grimoire.knowledge-record/1"
 SCHEMA_MAX = 128
 
 _RECORD_FIELDS = frozenset({"format", "address", "payload", "name", "owner", "derived_from", "base",
@@ -32,6 +33,7 @@ _INSTANCE_ONLY = ("derived_from", "base", "base_etag")
 _SOURCE_FIELDS = frozenset({"format", "source", "owner", "title", "heads", "links", "previous"})
 _LINK_FIELDS = frozenset({"subject", "relation", "object"})
 _SCOPE_RECORD_FIELDS = frozenset({"format", "address", "schema", "owner", "payload", "previous"})
+_KNOWLEDGE_RECORD_FIELDS = _SCOPE_RECORD_FIELDS
 RELATIONS = SYMMETRIC_RELATIONS | DIRECTED_RELATIONS
 
 Address = SourceRef | InstanceRef
@@ -161,6 +163,34 @@ class ScopeRecord:
 
 
 @dataclass(frozen=True)
+class KnowledgeRecord:
+    """One create-only event/evidence record or knowledge-log batch (020), with an opaque payload.
+
+    The store never interprets the payload (``grimoire.evidence`` does) and never replaces the
+    file: ``previous`` is always ``null``. Unknown top-level fields are preserved in ``extra``.
+    """
+
+    address: KnowledgeRef
+    schema: str
+    payload: object = None
+    owner: str | None = None
+    extra: Mapping[str, object] = field(default_factory=_empty)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.address, KnowledgeRef):
+            raise InvalidEnvelope("a knowledge record's address must be a KnowledgeRef")
+        if type(self.schema) is not str or not self.schema.strip() or len(self.schema) > SCHEMA_MAX:
+            raise InvalidEnvelope(f"schema must be nonempty text of at most {SCHEMA_MAX} characters")
+        _optional_text(self.owner, "owner", nonempty=True)
+        object.__setattr__(self, "payload", _freeze(self.payload))
+        object.__setattr__(self, "extra", _frozen_extra(self.extra, _KNOWLEDGE_RECORD_FIELDS))
+
+    def check_writable(self) -> None:
+        check_writable(self.payload)
+        check_writable(self.extra)
+
+
+@dataclass(frozen=True)
 class LinkSpec:
     """A link as a manifest states it; ``declared_by`` is the manifest's own source."""
 
@@ -273,6 +303,15 @@ def scope_record_document(record: ScopeRecord, previous: str | None) -> dict[str
     return document
 
 
+def knowledge_record_document(record: KnowledgeRecord) -> dict[str, object]:
+    document: dict[str, object] = dict(thaw(record.extra))  # type: ignore[arg-type]
+    document.update(format=KNOWLEDGE_RECORD_FORMAT, address=str(record.address), schema=record.schema,
+                    payload=thaw(record.payload), previous=None)
+    if record.owner is not None:
+        document["owner"] = record.owner
+    return document
+
+
 def source_document(manifest: SourceManifest, previous: str | None) -> dict[str, object]:
     document: dict[str, object] = dict(thaw(manifest.extra))  # type: ignore[arg-type]
     document.update(
@@ -361,3 +400,23 @@ def parse_scope_record(document: Mapping[str, object]) -> tuple[ScopeRecord, str
     except InvalidEnvelope as error:
         raise EnvelopeError("malformed", str(error)) from None
     return record, _previous(document)
+
+
+def parse_knowledge_record(document: Mapping[str, object]) -> tuple[KnowledgeRecord, None]:
+    """A knowledge record; its ``previous`` must be ``null`` (create-only). Details never echo values."""
+    _format(document, KNOWLEDGE_RECORD_FORMAT)
+    try:
+        address = KnowledgeRef.parse(document.get("address"))
+    except ValueError:
+        raise EnvelopeError("malformed", "address is not a knowledge record reference") from None
+    if "payload" not in document:
+        raise EnvelopeError("malformed", "missing payload")
+    if document.get("previous") is not None:
+        raise EnvelopeError("malformed", "a knowledge record is create-only; previous must be null")
+    extra = {key: value for key, value in document.items() if key not in _KNOWLEDGE_RECORD_FIELDS}
+    try:
+        record = KnowledgeRecord(address, document.get("schema"), document["payload"],  # type: ignore[arg-type]
+                                 owner=document.get("owner"), extra=extra)  # type: ignore[arg-type]
+    except InvalidEnvelope as error:
+        raise EnvelopeError("malformed", str(error)) from None
+    return record, None

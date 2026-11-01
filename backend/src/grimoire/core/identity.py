@@ -199,6 +199,73 @@ class ChatRef:
         return cls(**match.groupdict())
 
 
+#: Record families of one campaign's events/evidence store (020): 012's error families plus the log.
+KNOWLEDGE_FAMILIES = ("event", "proposition", "ruling", "evidence", "belief", "disclosure", "batch")
+_BATCH_ID_RE = re.compile(r"[0-9]{10}")
+_KNOWLEDGE_REF_RE = re.compile(
+    rf"campaign:(?P<campaign_id>{_SEGMENT})#(?P<family>{'|'.join(KNOWLEDGE_FAMILIES)})/(?P<record_id>{_SEGMENT})"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeRef:
+    """One stored event/evidence record (020), or one batch of the campaign's knowledge log.
+
+    ``campaign:<campaign_id>#<family>/<record_id>``. ``name`` is 012's ``KnowledgeError.records``
+    form (``"<family>:<id>"``), so an error names exactly one stored file. A batch id is its
+    sequence number as exactly ten digits, from 1. Not returned by ``parse_ref``.
+    """
+
+    campaign_id: str
+    family: str
+    record_id: str
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        if self.family not in KNOWLEDGE_FAMILIES:
+            raise ValueError("unknown knowledge family")
+        validate_segment(self.record_id, "record_id")
+        if self.family == "batch" and (not _BATCH_ID_RE.fullmatch(self.record_id)
+                                       or int(self.record_id) < 1):
+            raise ValueError("a batch id is a ten-digit sequence number from 1")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"campaign:{self.campaign_id}#{self.family}/{self.record_id}"
+
+    @property
+    def name(self) -> str:
+        return f"{self.family}:{self.record_id}"
+
+    @property
+    def seq(self) -> int:
+        if self.family != "batch":
+            raise ValueError("only a batch has a sequence number")
+        return int(self.record_id)
+
+    @classmethod
+    def batch(cls, campaign_id: str, seq: int) -> KnowledgeRef:
+        if type(seq) is not int or not 1 <= seq <= 9_999_999_999:
+            raise ValueError("a batch sequence number is an int from 1")
+        return cls(campaign_id, "batch", f"{seq:010d}")
+
+    @classmethod
+    def from_name(cls, campaign_id: str, name: object) -> KnowledgeRef:
+        """The ref a ``"<family>:<id>"`` record name denotes in ``campaign_id``."""
+        if not isinstance(name, str) or name.count(":") != 1:
+            raise ValueError("not a knowledge record name")
+        family, record_id = name.split(":")
+        return cls(campaign_id, family, record_id)
+
+    @classmethod
+    def parse(cls, text: object) -> KnowledgeRef:
+        match = _KNOWLEDGE_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not a knowledge record reference: {text!r}")
+        return cls(**match.groupdict())
+
+
 @dataclass(frozen=True, slots=True)
 class LegacyId:
     """A V1 record: explicit archive plus exact source-relative path.

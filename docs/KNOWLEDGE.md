@@ -1,7 +1,7 @@
 # Knowledge and perspective contract
 
 **Status:** first slice of [Knowledge And Perspective](roadmap/sprints/knowledge-and-perspective.md) (sprint 012). It is implemented as pure, in-memory, provider-free code in `backend/src/grimoire/core/knowledge.py` (records and ledger) and `perspective.py` (projections and belief admission).
-- Nothing is persisted; 020 owns the stored form.
+- These modules persist nothing. [Durable event evidence](EVIDENCE.md) (020) stores these records unchanged and reads them back through these same projections.
 - No model is called, and no prose is read or rendered.
 - Field names are a first-slice contract, not a frozen file schema.
 - None of this is app-integrated.
@@ -135,16 +135,16 @@ A proposition missing from the ledger raises `KnowledgeError("unknown_propositio
 
 | Consumer | Must |
 |---|---|
-| [Typed graph](roadmap/sprints/typed-relationship-graph.md) (017) | Gate actor-scoped traversal only through `knowledge_about` and the actor projection. An actor-scoped view may present only those items: perceptions of the subject (an event), or propositions that overtly mention it. They never expose the subject's canonical fields, participants or edges, and never permit expanding from it. A refuted proposition about X is still only a proposition the actor holds. Never infer knowledge from connectivity |
-| [Event/evidence persistence](roadmap/sprints/durable-event-evidence.md) (020) | Persist these records' meaning in 010 envelopes, quarantine using `KnowledgeError.records`, and own retraction and retcon semantics. Removing cited evidence currently fails loudly rather than silently weakening a belief |
+| [Typed graph](roadmap/sprints/typed-relationship-graph.md) (017) | Gate actor-scoped traversal only through `knowledge_about` and the actor projection. An actor-scoped view may present only those items: perceptions of the subject (an event), or propositions that overtly mention it. They never expose the subject's canonical fields, participants or edges, and never permit expanding from it. A refuted proposition about X is still only a proposition the actor holds. Never infer knowledge from connectivity. Never derive edges or indexes from stored `events/`/`evidence/` files ([EVIDENCE](EVIDENCE.md#trust-boundaries-documented-not-checked-here)) |
+| [Event/evidence persistence](roadmap/sprints/durable-event-evidence.md) (020) | **First slice implemented** ([EVIDENCE](EVIDENCE.md)). It persists these records unchanged, and quarantines by `KnowledgeError.records` and by chain so that damage only removes knowledge. Records are create-only: correction is a later ruling or a superseding belief. Retcons are a later 020 milestone |
 | [Per-NPC generation](roadmap/sprints/per-npc-generation-runtime.md) (027) | Build each NPC's prompt from that actor's `ActorKnowledge` only. Refuse `ActorView.knowledge is None` rather than read it as unfiltered. Never pass `DirectorKnowledge` or render IDs. Call `admit_belief` before writing a model-proposed NPC belief |
-| [Context retrieval](roadmap/sprints/context-retrieval.md) (031) | Pack only `knowledge_about` and actor-projection items. A rumour is evidence of a report, not of truth |
+| [Context retrieval](roadmap/sprints/context-retrieval.md) (031) | Pack only `knowledge_about` and actor-projection items. A rumour is evidence of a report, not of truth. Read stored knowledge only through `EvidenceLibrary` projections |
 | [Diegetic communication](roadmap/sprints/diegetic-communication.md) (032) | Emit `Report`s with honest `sender`, `addressed`, `sent_at`, `attributed_to` and `confirmed`. Never mark receipt as confirmed without evidence of it. An addressed report puts its text in the sender's `sent` (you know what you said), so name a sender only when that actor really asserted it. A prophecy cannot be `about` an event that does not exist yet |
 
 ## Open questions and owners
 
 - Redacting director-only events, rulings and true senders from exports: the export owner.
-- Retcons that invalidate witnessed evidence: 020.
+- Retcons that invalidate witnessed evidence: a later 020 milestone (the first slice has none; see [EVIDENCE](EVIDENCE.md#correction-and-repair)).
 - Timed control history and delegated PC beliefs: 009 and 035.
 - Graded uncertainty beyond three stances: [NPC theory of mind](roadmap/sprints/npc-theory-of-mind.md).
 - Knowledge crossing campaigns: [cross-campaign scene transfer](roadmap/sprints/cross-campaign-scene-transfer.md).

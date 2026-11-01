@@ -1,5 +1,7 @@
 # Accepted events, observations and actor evidence
 
+**Status:** **first slice implemented**, headless. It consists of `grimoire.evidence` (a pure codec and assembly), `grimoire.evidencestore` (the service), and an additive, create-only `events/`/`evidence/` record family in `grimoire.store` with a hash-chained knowledge log. The contract is in [EVIDENCE.md](../../EVIDENCE.md). The proving scenario, the failure cases, an in-memory and an on-disk damage property test, and the crash exploration are executable. Retcon-aware references, materialized projections and guided repair are still later milestones. There is no playable app yet.
+
 **Outcome:** Canonical events are different from actor-specific observations, reports, hypotheses and false beliefs.
 
 ## Scope and first proof

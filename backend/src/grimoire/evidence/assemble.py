@@ -1,0 +1,216 @@
+"""Assemble one campaign's stored knowledge into a valid 012 ledger, quarantining what it must (020).
+
+Input is what a scan found: each canonical file's etag, schema and payload, or a damage code.
+Output is a ``Knowledge`` plus every record left out and why. Visible damage can only make
+actors know less. It never promotes a proposition's standing, never brings back an older
+belief or ruling, and never moves a disclosure's moment. To guarantee this, quarantining
+anything in a *chain* (one proposition's rulings, one holder's beliefs about one proposition,
+one event's disclosures) quarantines the whole chain. Pure and deterministic: no I/O and no
+model call, and the same input set always gives the same result.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
+
+from grimoire.core.identity import ChatRef, KnowledgeRef
+from grimoire.core.knowledge import (
+    Belief, Disclosure, Event, Knowledge, KnowledgeError, Perception, Proposition, Report, Ruling,
+)
+
+from .codec import Batch, ChainKey, EvidenceCodecError, Record, chain_key, decode, decode_batch
+
+#: families whose chains can resurface an older value if only part of them is lost
+CHAIN_FAMILIES = ("ruling", "belief", "disclosure")
+
+
+@dataclass(frozen=True)
+class ScannedFile:
+    """One canonically named file as a scan found it: readable content, or a damage code."""
+
+    etag: str | None = None
+    schema: object = None
+    payload: object = None
+    damage: str | None = None
+
+
+@dataclass(frozen=True, order=True)
+class Quarantine:
+    name: str  # "<family>:<id>"
+    reason: str
+
+
+@dataclass(frozen=True)
+class Assembly:
+    knowledge: Knowledge
+    quarantined: tuple[Quarantine, ...]
+    problems: tuple[str, ...]
+    origins: Mapping[str, ChatRef]
+    high_water: int
+    #: the newest batch's (seq, etag) when the log is intact, else None
+    head: tuple[int, str] | None
+    log_intact: bool = True
+    #: the kept records by name, for a writer that extends the ledger
+    records: Mapping[str, Record] = field(default_factory=lambda: MappingProxyType({}), repr=False)
+
+    @property
+    def clean(self) -> bool:
+        return not self.quarantined and not self.problems
+
+
+def _decoded(ref: KnowledgeRef, scanned: ScannedFile) -> tuple[tuple[Record, ChatRef | None] | None, str | None]:
+    if scanned.damage is not None:
+        return None, scanned.damage
+    try:
+        return decode(ref, scanned.schema, scanned.payload), None
+    except EvidenceCodecError as error:
+        reason = error.reason
+    return None, reason
+
+
+def _verify_log(files: Mapping[KnowledgeRef, ScannedFile]) -> tuple[list[Batch], list[Batch], bool, tuple[int, str] | None]:
+    """Verified batches, hint batches, whether the log broke, and the head when intact."""
+    present = {ref.seq: (ref, scanned) for ref, scanned in files.items() if ref.family == "batch"}
+    if not present:
+        return [], [], False, None
+    top = max(present)
+    batches: list[tuple[Batch | None, str | None]] = []
+    broken_at: int | None = None
+    seen: set[str] = set()
+    for seq in range(1, top + 1):
+        found = present.get(seq)
+        batch: Batch | None = None
+        if found is not None and found[1].damage is None:
+            try:
+                batch = decode_batch(found[0], found[1].schema, found[1].payload)
+            except EvidenceCodecError:
+                batch = None
+        etag = found[1].etag if found is not None else None
+        batches.append((batch, etag))
+        if broken_at is not None:
+            continue
+        previous_etag = batches[seq - 2][1] if seq > 1 else None
+        if (batch is None or batch.previous != previous_etag or seen & set(batch.entries)):
+            broken_at = seq
+            continue
+        seen |= set(batch.entries)
+    if broken_at is None:
+        return [b for b, _ in batches], [], False, (top, batches[-1][1])  # type: ignore[list-item]
+    # A previous-mismatch at k cannot tell whether k or k-1 was altered: trust only < k-1.
+    verified = [b for b, _ in batches[:max(broken_at - 2, 0)]]
+    hints = [b for b, _ in batches[max(broken_at - 2, 0):] if b is not None]
+    return verified, hints, True, None  # type: ignore[return-value]
+
+
+def assemble(campaign_id: str, files: Mapping[KnowledgeRef, ScannedFile]) -> Assembly:
+    """The valid ledger the files support, with every quarantined record named (see module doc)."""
+    quarantined: dict[str, str] = {}
+    chains: set[ChainKey] = set()
+    families: set[str] = set()
+    problems: list[str] = []
+
+    def quarantine(name: str, reason: str, *keys: ChainKey | None) -> None:
+        quarantined.setdefault(name, reason)
+        chains.update(key for key in keys if key is not None)
+
+    records = {ref: scanned for ref, scanned in files.items()
+               if ref.family != "batch" and ref.campaign_id == campaign_id}
+    decoded: dict[str, tuple[Record, ChatRef | None]] = {}
+    failures: dict[str, str] = {}
+    for ref, scanned in records.items():
+        value, reason = _decoded(ref, scanned)
+        if value is not None:
+            decoded[ref.name] = value
+        else:
+            failures[ref.name] = reason  # type: ignore[assignment]
+
+    def own_key(name: str) -> ChainKey | None:
+        return chain_key(decoded[name][0]) if name in decoded else None
+
+    verified, hints, broken, head = _verify_log(
+        {ref: scanned for ref, scanned in files.items() if ref.family == "batch" and ref.campaign_id == campaign_id})
+    if broken:
+        problems.append("log_broken")
+        families.update(CHAIN_FAMILIES)
+
+    # 1. Every record a verified batch lists must be on disk, unchanged and readable.
+    listed: dict[str, KnowledgeRef] = {}
+    for batch in verified:
+        for name, entry in batch.entries.items():
+            ref = KnowledgeRef.from_name(campaign_id, name)
+            listed[name] = ref
+            key = entry.key(ref.family)
+            scanned = records.get(ref)
+            if scanned is None:
+                quarantine(name, "missing", key)
+            elif scanned.damage is not None:
+                quarantine(name, scanned.damage, key, own_key(name))
+            elif scanned.etag != entry.etag:
+                quarantine(name, "edited", key, own_key(name))
+            elif name in failures:
+                quarantine(name, failures[name], key)
+            elif own_key(name) != key:
+                problems.append("key_mismatch")
+                quarantine(name, "key_mismatch", key, own_key(name))
+    # 2. Batches after a break are untrusted hints: they can only widen quarantine.
+    for batch in hints:
+        for name, entry in batch.entries.items():
+            ref = KnowledgeRef.from_name(campaign_id, name)
+            quarantine(name, "missing" if ref not in records else "log_broken", entry.key(ref.family), own_key(name))
+    # 3. A file no verified batch accounts for is not trusted.
+    for ref in records:
+        if ref.name in listed or ref.name in quarantined:
+            continue
+        quarantine(ref.name, "unlisted", own_key(ref.name))
+        if ref.name not in decoded and ref.family in CHAIN_FAMILIES:
+            families.add(ref.family)
+
+    def sweep(candidates: dict[str, Record]) -> None:
+        for name in sorted(candidates):
+            family = name.split(":", 1)[0]
+            if family in families:
+                quarantine(name, f"{family}_family_damaged")
+            elif chain_key(candidates[name]) in chains:
+                quarantine(name, "chain_quarantined")
+        for name in [name for name in candidates if name in quarantined]:
+            del candidates[name]
+
+    candidates: dict[str, Record] = {name: value[0] for name, value in decoded.items() if name not in quarantined}
+    sweep(candidates)
+    knowledge = None
+    for _ in range(len(candidates) + 2):
+        try:
+            knowledge = build_ledger(campaign_id, candidates.values())
+            break
+        except KnowledgeError as error:
+            named = [name for name in error.records if name in candidates]
+            reason = error.reason
+        if not named:
+            for name in candidates:
+                quarantine(name, "unassemblable")
+            candidates.clear()
+            continue
+        quarantine(named[0], reason, chain_key(candidates[named[0]]))
+        del candidates[named[0]]
+        sweep(candidates)
+    if knowledge is None:  # pragma: no cover - the loop always ends with an empty, valid ledger
+        knowledge = Knowledge(campaign_id)
+
+    kept = {name: candidates[name] for name in sorted(candidates)}
+    origins = {name: decoded[name][1] for name in kept if decoded[name][1] is not None}
+    high_water = max((record.moment.sequence for record in kept.values()), default=0)
+    return Assembly(knowledge, tuple(sorted(Quarantine(name, reason) for name, reason in quarantined.items())),
+                    tuple(sorted(set(problems))), MappingProxyType(origins), high_water, head,
+                    log_intact=not broken, records=MappingProxyType(kept))
+
+
+def build_ledger(campaign_id: str, records) -> Knowledge:  # type: ignore[no-untyped-def]
+    """A ``Knowledge`` from records of any families (perceptions and reports share evidence)."""
+    groups: dict[type, list[Record]] = {Event: [], Proposition: [], Ruling: [], Perception: [], Belief: [],
+                                        Disclosure: []}
+    for record in records:
+        groups[Perception if isinstance(record, Report) else type(record)].append(record)
+    return Knowledge(campaign_id, groups[Event], groups[Proposition], groups[Ruling], groups[Perception],
+                     groups[Belief], groups[Disclosure])

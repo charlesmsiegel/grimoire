@@ -20,7 +20,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
-from grimoire.core.identity import ChatRef, IdentityConflict, InstanceRef, ScopeRef, SourceRef, validate_segment
+from grimoire.core.identity import (
+    ChatRef, IdentityConflict, InstanceRef, KnowledgeRef, ScopeRef, SourceRef, validate_segment,
+)
 from grimoire.core.index import DefinitionIndex, SourceDescriptor
 from grimoire.library import LibraryPathError, check_write_destination
 from grimoire.security import Permission, ResourcePath
@@ -29,8 +31,9 @@ from . import engine, loader
 from .diskops import DiskOps, FileOps, is_link, lstat_or_none
 from .engine import Access, Settlement
 from .envelope import (
-    EnvelopeError, RecordEnvelope, ScopeRecord, SourceManifest, parse_record, parse_scope_record, parse_source,
-    record_document, scope_record_document, source_document,
+    EnvelopeError, KnowledgeRecord, RecordEnvelope, ScopeRecord, SourceManifest, knowledge_record_document,
+    parse_knowledge_record, parse_record, parse_scope_record, parse_source, record_document, scope_record_document,
+    source_document,
 )
 from .errors import (
     CommitIncomplete, ImmutableRevision, InvalidEnvelope, InvalidSourceState, LinkRefused, NameCollision,
@@ -46,7 +49,9 @@ from .layout import (
     ledger_parts, ledger_seq, logical, manifest_parts,
 )
 from .ledger import Head, Ledger, read_ledger, render_batches
-from .loader import LibraryView, StoredDefinition, StoredRecord, StoredScopeRecord, StoredSource
+from .loader import (
+    KnowledgeScan, LibraryView, StoredDefinition, StoredKnowledgeRecord, StoredRecord, StoredScopeRecord, StoredSource,
+)
 from .lock import Locker, OsLocker
 
 DISCARD_FORMAT = "grimoire.discard/1"
@@ -429,7 +434,8 @@ class LibraryStore:
             return report
 
     # -- reading -----------------------------------------------------------------
-    def read(self, ref: SourceRef | InstanceRef | ScopeRef | ChatRef) -> StoredRecord | StoredScopeRecord:
+    def read(self, ref: SourceRef | InstanceRef | ScopeRef | ChatRef | KnowledgeRef
+             ) -> StoredRecord | StoredScopeRecord | StoredKnowledgeRecord:
         """One record by exact address (a definition must be pinned)."""
         if isinstance(ref, SourceRef) and not ref.pinned:
             raise ValueError("read a pinned revision; resolve unpinned references with load().index")
@@ -437,6 +443,8 @@ class LibraryStore:
             self._require_consistent()
             if isinstance(ref, (ScopeRef, ChatRef)):
                 return loader.read_scope_record(self._access, address_parts(ref))
+            if isinstance(ref, KnowledgeRef):
+                return loader.read_knowledge_record(self._access, address_parts(ref))
             return loader.read_record(self._access, address_parts(ref))
 
     def campaign_presence(self, campaign_id: str) -> str:
@@ -454,6 +462,18 @@ class LibraryStore:
             self._require_consistent()
             with self._access.cached_listings():
                 return loader.campaign_instances(self._access, campaign_id)
+
+    def campaign_knowledge(self, campaign_id: str) -> KnowledgeScan:
+        """One campaign's events/evidence files as found (020): director-level, store-internal.
+
+        Never interpreted here: ``grimoire.evidencestore`` assembles and projects them. No graph,
+        index or retrieval builder may read this; they consume actor projections only.
+        """
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return loader.campaign_knowledge(self._access, campaign_id)
 
     def check_source(self, source_id: str) -> StoredSource | str:
         """One source as ``load()`` would admit it, or why not (``missing_source``/``excluded_source``).
@@ -546,7 +566,7 @@ class _Put:
     address: ResourcePath
     data: bytes
     expected: str | None
-    envelope: RecordEnvelope | SourceManifest | ScopeRecord | None  # None: a ledger batch (trusted)
+    envelope: RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord | None  # None: a ledger batch
 
     @property
     def ledger(self) -> bool:
@@ -609,7 +629,8 @@ class Transaction:
         self._puts: dict[Parts, _Put] = {}
         self._committed = False
 
-    def put(self, envelope: RecordEnvelope | SourceManifest | ScopeRecord, expected: str | None) -> str:
+    def put(self, envelope: RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord,
+            expected: str | None) -> str:
         """Stage a write; ``expected`` is the etag read, or ``None`` for "must not exist yet"."""
         if self._committed:
             raise StoreError("this transaction was already committed")
@@ -629,8 +650,14 @@ class Transaction:
             envelope.check_writable()
             parts = address_parts(envelope.address)
             document = scope_record_document(envelope, expected)
+        elif isinstance(envelope, KnowledgeRecord):
+            if expected is not None:
+                raise ImmutableRevision(f"{envelope.address} is create-only; correct it by appending")
+            envelope.check_writable()
+            parts = address_parts(envelope.address)
+            document = knowledge_record_document(envelope)
         else:
-            raise InvalidEnvelope("put takes a RecordEnvelope, a SourceManifest or a ScopeRecord")
+            raise InvalidEnvelope("put takes a RecordEnvelope, a SourceManifest, a ScopeRecord or a KnowledgeRecord")
         if parts in self._puts:
             raise InvalidEnvelope(f"{'/'.join(parts)} is written twice in one transaction")
         address = logical(parts)
@@ -829,7 +856,8 @@ class _Commit:
 def _unsupported(data: bytes, envelope: object) -> bool:
     """Whether the current file is a format this store must not overwrite (a newer version)."""
     parse = (parse_source if isinstance(envelope, SourceManifest) else
-             parse_scope_record if isinstance(envelope, ScopeRecord) else parse_record)
+             parse_scope_record if isinstance(envelope, ScopeRecord) else
+             parse_knowledge_record if isinstance(envelope, KnowledgeRecord) else parse_record)
     try:
         parse(parse_strict(data))
     except EnvelopeError as error:
