@@ -55,7 +55,8 @@ def test_an_instance_with_added_and_replaced_abilities_round_trips():
     original = EntityInstance(actor("orin"), None, "Orin", added=FacetBundle([Abilities([thruster_pack()])]))
     for value in (instance, original):
         payload = instance_to_payload(value)
-        assert instance_from_payload(value.ref, ENTITY_SCHEMA, payload) == value
+        envelope = NeutralEnvelope.wrap(value.ref, "user", ENTITY_SCHEMA, "rev-1", payload)
+        assert instance_from_payload(envelope.address, envelope.schema, envelope.payload) == value
         assert instance_to_payload(instance_from_payload(value.ref, ENTITY_SCHEMA, payload)) == payload
 
 

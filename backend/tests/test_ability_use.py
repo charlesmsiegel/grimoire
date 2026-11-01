@@ -162,8 +162,7 @@ def test_unknown_fields_on_the_named_ability_fail_closed(part, path):
     result = assess_attempt(attempt(effect_id="veil"), entity)
     assert (result.classification, result.approval, result.costs) == ("needs_upgrade", "not_needed", ())
     assert result.unrecognized == (path,) and "unrecognized_constraint" in codes(result)
-    with pytest.raises(AbilityError):
-        check_ruling(ruling(attempt(effect_id="veil")), entity)
+    assert refusal(lambda: check_ruling(ruling(attempt(effect_id="veil")), entity)) == "ruling_not_needed"
 
 
 def test_unknown_fields_on_an_unrelated_effect_or_ability_do_not_matter():
@@ -266,7 +265,8 @@ def test_check_ruling_refuses_rulings_that_cannot_decide_this_attempt():
         assert refusal(lambda: check_ruling(ruling(flight(), decision=decision), IRIS)) == "limit_not_approvable"
     for label in (attempt(effect_id="veil"), attempt(needs=("light", "illusion"), effect_id="mirage"),
                   attempt(), attempt(effect_id="veil", conditions=())):
-        assert refusal(lambda: check_ruling(ruling(label), IRIS)) == "ruling_not_needed"
+        for decision in ("approved", "refused"):
+            assert refusal(lambda: check_ruling(ruling(label, decision=decision), IRIS)) == "ruling_not_needed"
     assert refusal(lambda: check_ruling(ruling(flight(), decides="new_ability"), OPEN_IRIS)) == \
         "wrong_classification"
     check_ruling(ruling(flight()), OPEN_IRIS, [ruling(flight(), ruling_id="r0")])  # agreeing is fine
@@ -346,9 +346,11 @@ def test_assessment_is_a_pure_function_of_its_inputs():
                         costs=list(reversed(light_bending().costs)),
                         prerequisites=light_bending().prerequisites,
                         description=light_bending().description)
+    baseline = assess_attempt(flight(), effective(person("iris", "Iris", light_bending(force_limit=False),
+                                                         speak_with_dead(), thruster_pack())), rulings)
+    assert baseline.classification == expected.classification and baseline.costs == expected.costs
     for reorder_abilities in itertools.permutations([reordered, speak_with_dead(), thruster_pack()]):
         entity = effective(person("iris", "Iris", *reorder_abilities))
-        again = assess_attempt(flight(), entity, rulings)
-        assert again.classification == expected.classification and again.costs == expected.costs
-        assert again.reasons == assess_attempt(flight(), entity, list(reversed(rulings))).reasons
+        assert assess_attempt(flight(), entity, rulings) == baseline
+        assert assess_attempt(flight(), entity, list(reversed(rulings))) == baseline
     assert assess_attempt(flight(), OPEN_IRIS, rulings) == expected

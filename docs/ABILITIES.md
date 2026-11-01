@@ -71,9 +71,10 @@ Abilities therefore persist in any record that carries an entity payload, such a
 |---|---|
 | `attempt_id` | any nonempty text up to 512 characters. For a player-controlled actor it is the submitting action's `contribution_id`, as `Resolution.attempt_id` is; one action carries at most one ability attempt. |
 | `needs` | 1–32 tags: what the attempted feat requires. |
-| `actor` | an exact `InstanceRef`. Ids and text everywhere must be plain `str`; subclasses are refused. |
+| `actor` | an exact `InstanceRef` (subclasses are refused). Ids and text in ability values, attempts and rulings must be plain `str`. |
 | `effect_id` | the declared effect the labeller says it uses, or none. |
-| `conditions_met` | the prerequisites the labeller says hold. These are asserted, not checked against scene facts; checking them is 029's job. |
+| `provenance` | attribution text up to 512 characters, never authority. |
+| `conditions_met` | up to 64 prerequisite ids the labeller says hold. These are asserted, not checked against scene facts; checking them is 029's job. |
 
 **Labelling is the trust boundary.** These fields come from a labeller that is **not the narrator**, the same rule as for `NarrationClaim`. The assessment is only as good as the labels and the shared vocabulary.
 - A labeller that writes `push` for `force` escapes `no_force`. The unused tag then shows up in `unknown_tags`.
@@ -96,7 +97,7 @@ A non-attempt or non-entity argument is a `TypeError`. **References never raise.
 Let `A` be the named ability and `E` the named effect, if they exist. Then:
 
 - `conflicts`: limits of `A` that exclude a needed tag.
-- **Applicable prerequisites:** the ability-wide ones plus `E`'s. A non-covering `E` still pulls in its own prerequisites, so a wrong label can read `unavailable` before `relabel`. This is conservative: nothing is used.
+- **Applicable prerequisites:** the ability-wide ones plus `E`'s. An attempt that names no effect is checked against the ability-wide prerequisites only. A non-covering `E` still pulls in its own prerequisites, so a wrong label can read `unavailable` before `relabel`. This is conservative: nothing is used.
 - `candidates`: declared effects whose own tags cover `needs`, including `E`. **A union of tags across effects never covers.**
 - Computed whenever the entity has the facet: `unknown_tags` (needed tags that none of the actor's abilities use) and `other_conflicts` (limits of the actor's *other* abilities that exclude a needed tag). These are advisory only.
 - `unrecognized`: paths of values carrying extras. These are `#facet`, `<ability>` and `<ability>/<part>`, for the named ability's parts and the named effect only.
@@ -135,7 +136,7 @@ Other outputs:
 
 ## Provisional rulings
 
-`AbilityRuling(ruling_id, attempt, decides, decision, provenance, note="")` decides one **exact attempt value** for one classification. `decides` is `extrapolation` or `new_ability`; `decision` is `approved` or `refused`. It is **025-provisional**: 029 may replace this surface. It is unrelated to [`knowledge.Ruling`](KNOWLEDGE.md).
+`AbilityRuling(ruling_id, attempt, decides, decision, provenance, note="")` decides one **exact attempt value** for one classification. `decides` is `extrapolation` or `new_ability`; `decision` is `approved` or `refused`. `provenance` and `note` are text up to 512 characters. It is **025-provisional**: 029 may replace this surface. It is unrelated to [`knowledge.Ruling`](KNOWLEDGE.md).
 
 How rulings are matched:
 - A ruling's campaign is that of its attempt's actor. Other-campaign rulings are **ignored**. Within the campaign, ruling ids are unique.

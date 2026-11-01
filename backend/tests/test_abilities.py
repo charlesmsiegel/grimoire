@@ -7,7 +7,7 @@ from ability_fixtures import index_of, light_bending, person, speak_with_dead, t
 
 from grimoire.core import AuthorityError, CampaignRoster, InstanceRef
 from grimoire.core.abilities import (
-    MAX_ABILITIES, MAX_TAGS, PROSE_MAX, Abilities, Ability, Cost, Effect, Limit, Prerequisite,
+    MAX_ABILITIES, MAX_PARTS, MAX_TAGS, PROSE_MAX, Abilities, Ability, Cost, Effect, Limit, Prerequisite,
 )
 from grimoire.core.entity import EntityDefinition, EntityInstance
 from grimoire.core.facet_errors import FacetError
@@ -99,6 +99,12 @@ def test_an_authored_contradiction_is_refused():
     (lambda: effect(extras={"x": float("nan")}), "invalid_field"),
     (lambda: Cost("c", "t", "e"), "invalid_field"),
     (lambda: effect(certainty=type("Loose", (str,), {})("uncertain")), "invalid_field"),
+    (lambda: ability([effect(f"e{n}", (f"t{n}",)) for n in range(MAX_PARTS + 1)]), "invalid_field"),
+    (lambda: ability(limits=[Limit(f"l{n}", "t", {f"x{n}"}) for n in range(MAX_PARTS + 1)]), "invalid_field"),
+    (lambda: Ability("a", "A", [effect()], description="x" * (PROSE_MAX + 1)), "invalid_field"),
+    (lambda: effect(range="x" * (PROSE_MAX + 1)), "invalid_field"),
+    (lambda: Limit("l", "t", {f"x{n}" for n in range(MAX_TAGS + 1)}), "invalid_field"),
+    (lambda: Cost("c", "t", {f"e{n}" for n in range(MAX_PARTS + 1)}), "invalid_field"),
     (lambda: effect(type("Loose", (str,), {})("veil")), "invalid_field"),
     (lambda: Effect("e", type("Loose", (str,), {})("t"), {"x"}), "invalid_field"),
 ])
