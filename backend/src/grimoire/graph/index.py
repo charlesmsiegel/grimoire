@@ -320,17 +320,13 @@ class GraphIndex:
             return relation.endpoints() == frozenset({subject, object})
         return (relation.subject, relation.object) == (subject, object)
 
-    def matching(self, predicate: str, subject: InstanceRef, object: InstanceRef, as_of: int) -> tuple[str, ...]:
-        """Ids of walkable relations recording this fact at ``as_of`` (callers check the director)."""
+    def _matching(self, predicate: str, subject: InstanceRef, object: InstanceRef, as_of: int) -> tuple[str, ...]:
+        """Ids of walkable relations recording this fact at ``as_of``. Package-internal: callers check the director."""
         if subject not in self.instances:
             return ()
         return tuple(relation.ref.relation_id
                      for relation, _, _ in self._walk_from(subject, as_of, frozenset({predicate}), "any")
                      if self._matches(relation, predicate, subject, object))
-
-    def entries(self) -> Mapping[str, RelationEntry]:
-        """Every relation file by id (callers check the director)."""
-        return self._entries
 
     def to_json(self, *, requested_by: str) -> dict:
         """A deterministic JSON-compatible form; a pure function of the canonical inputs."""

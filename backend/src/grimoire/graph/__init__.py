@@ -6,10 +6,12 @@ one node at a time (``claims_about``). Nothing here touches files or calls a mod
 ``grimoire.graphstore`` is the store-backed service.
 """
 
+from .claims import ClaimSet, ClaimShape, NodeClaim, NodeClaims, check_subjects, claim_matches, claims_about
 from .index import GraphIndex, GraphProblem, RelationEntry, Step, Traversal
 from .model import PREDICATES, Ending, GraphError, Predicate, Relation, Retraction, UnsupportedRelation
 
 __all__ = [
-    "PREDICATES", "Ending", "GraphError", "GraphIndex", "GraphProblem", "Predicate", "Relation", "RelationEntry",
-    "Retraction", "Step", "Traversal", "UnsupportedRelation",
+    "PREDICATES", "ClaimSet", "ClaimShape", "Ending", "GraphError", "GraphIndex", "GraphProblem", "Predicate", "Relation", "RelationEntry",
+    "NodeClaim", "NodeClaims", "Retraction", "Step", "Traversal", "UnsupportedRelation", "check_subjects",
+    "claim_matches", "claims_about",
 ]
