@@ -27,6 +27,7 @@ from grimoire.chats import (
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import ENTITY_SCHEMA, instance_to_payload
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, validate_segment
+from grimoire.graphstore import relation_endpoint_ids
 from grimoire.store import (
     LibraryStore, LibraryView, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
 )
@@ -220,7 +221,7 @@ class ChatLibrary:
                 self.store.read(scope)
             except RecordNotFound:  # a campaign from before 107 (or 026): give it a scope record now
                 scope_puts.append((self._scope_record(PlayScope(scope, at)), None))
-            taken = {ref.instance_id for ref in self.store.campaign_instances(scope.campaign_id)}
+            taken = self._campaign_taken(scope.campaign_id)
         chat = ChatRef(scope.campaign_id, self._id("t"))
         bindings, actors = [], []
         for ref, role in wanted:
@@ -314,8 +315,12 @@ class ChatLibrary:
 
     def _taken(self, chat: ChatRef, record: ChatRecord) -> set[str]:
         """Actor ids a new actor may not use: every instance file, and this chat's roster even if a file vanished."""
-        taken = {found.instance_id for found in self.store.campaign_instances(chat.campaign_id)}
-        return taken | {entry.actor.instance_id for entry in record.roster}
+        return self._campaign_taken(chat.campaign_id) | {entry.actor.instance_id for entry in record.roster}
+
+    def _campaign_taken(self, campaign: str) -> set[str]:
+        """Every instance file's id, and every id a relation names (017): a vanished endpoint's id stays taken."""
+        taken = {found.instance_id for found in self.store.campaign_instances(campaign)}
+        return taken | relation_endpoint_ids(self.store, campaign)
 
     def _resolve(self, ref: SourceRef, role: str) -> tuple[str, str]:
         if role not in ROLE_KINDS or ref.kind != ROLE_KINDS[role]:
