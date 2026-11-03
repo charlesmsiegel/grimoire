@@ -20,7 +20,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
-from grimoire.core.identity import ChatRef, IdentityConflict, InstanceRef, ScopeRef, SourceRef, validate_segment
+from grimoire.core.identity import (
+    ChatRef, IdentityConflict, InstanceRef, RelationRef, ScopeRef, SourceRef, validate_segment,
+)
 from grimoire.core.index import DefinitionIndex, SourceDescriptor
 from grimoire.library import LibraryPathError, check_write_destination
 from grimoire.security import Permission, ResourcePath
@@ -46,7 +48,7 @@ from .layout import (
     ledger_parts, ledger_seq, logical, manifest_parts,
 )
 from .ledger import Head, Ledger, read_ledger, render_batches
-from .loader import LibraryView, StoredDefinition, StoredRecord, StoredScopeRecord, StoredSource
+from .loader import CampaignRelations, LibraryView, StoredDefinition, StoredRecord, StoredScopeRecord, StoredSource
 from .lock import Locker, OsLocker
 
 DISCARD_FORMAT = "grimoire.discard/1"
@@ -429,13 +431,13 @@ class LibraryStore:
             return report
 
     # -- reading -----------------------------------------------------------------
-    def read(self, ref: SourceRef | InstanceRef | ScopeRef | ChatRef) -> StoredRecord | StoredScopeRecord:
+    def read(self, ref: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef) -> StoredRecord | StoredScopeRecord:
         """One record by exact address (a definition must be pinned)."""
         if isinstance(ref, SourceRef) and not ref.pinned:
             raise ValueError("read a pinned revision; resolve unpinned references with load().index")
         with self.lock:  # reads wait for this process's commits, so they never see one half-done
             self._require_consistent()
-            if isinstance(ref, (ScopeRef, ChatRef)):
+            if isinstance(ref, (ScopeRef, ChatRef, RelationRef)):
                 return loader.read_scope_record(self._access, address_parts(ref))
             return loader.read_record(self._access, address_parts(ref))
 
@@ -454,6 +456,14 @@ class LibraryStore:
             self._require_consistent()
             with self._access.cached_listings():
                 return loader.campaign_instances(self._access, campaign_id)
+
+    def campaign_relations(self, campaign_id: str) -> CampaignRelations:
+        """One campaign's relation records (017) and their problems, as ``load()`` reports them."""
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return loader.campaign_relations(self._access, campaign_id)
 
     def check_source(self, source_id: str) -> StoredSource | str:
         """One source as ``load()`` would admit it, or why not (``missing_source``/``excluded_source``).
