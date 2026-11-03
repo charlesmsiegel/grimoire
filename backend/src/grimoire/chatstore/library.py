@@ -107,7 +107,7 @@ class ChatChange:
             if self.new_scope and store.campaign_presence(campaign) != "absent":
                 raise StaleWrite([(f"campaigns/{campaign}", "exists")])
             if self.new_actors:
-                taken = {ref.instance_id for ref in store.campaign_instances(campaign)}
+                taken = self.library._campaign_taken(campaign)
                 clash = [actor for actor in self.new_actors if actor.instance_id in taken]
                 if clash:
                     raise StaleWrite([("/".join(address_parts(actor)), "id taken") for actor in clash])

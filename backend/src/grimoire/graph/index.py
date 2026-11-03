@@ -202,11 +202,15 @@ class GraphIndex:
                 raise GraphError("invalid_field")
             admit(ref, RelationEntry(ref, None, undecodable=reason))
             problems.append(GraphProblem("undecodable", (ref.relation_id,)))
-        decoded.sort(key=lambda r: r.ref.relation_id)
-        for i, first in enumerate(decoded):  # every overlapping pair, reported on its own
-            for second in decoded[i + 1:]:
-                if first.overlaps(second):
-                    problems.append(GraphProblem("duplicate", (first.ref.relation_id, second.ref.relation_id)))
+        facts: dict[tuple, list[Relation]] = {}  # only relations recording the same fact can overlap
+        for relation in sorted(decoded, key=lambda r: r.ref.relation_id):
+            ends = relation.endpoints() if relation.symmetric else (relation.subject, relation.object)
+            facts.setdefault((relation.predicate, ends), []).append(relation)
+        for same in facts.values():
+            for i, first in enumerate(same):  # every overlapping pair, reported on its own
+                for second in same[i + 1:]:
+                    if first.overlaps(second):
+                        problems.append(GraphProblem("duplicate", (first.ref.relation_id, second.ref.relation_id)))
         return cls(campaign_id, known, entries, tuple(sorted(problems, key=GraphProblem.sort_key)))
 
     # -- validation helpers ------------------------------------------------------------------------

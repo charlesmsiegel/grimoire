@@ -546,7 +546,9 @@ def campaign_relations(access: Access, campaign: str) -> CampaignRelations:
     folder = base + (RELATIONS,)
     if is_link(access.path(base)):
         problems.append(LoadProblem(_text(base), "link", "links are never followed"))
-    elif access.presence(base) == "present" and _is_dir(access, base):
+    elif access.presence(base) == "present" and not _is_dir(access, base):
+        _unrecognized(access, base, problems, None)
+    elif access.presence(base) == "present":
         if is_link(access.path(folder)):
             problems.append(LoadProblem(_text(folder), "link", "links are never followed"))
         elif access.presence(folder) == "present":
@@ -554,6 +556,9 @@ def campaign_relations(access: Access, campaign: str) -> CampaignRelations:
                 _discover_relations(access, base, found, problems)
             else:
                 _unrecognized(access, folder, problems, None)
+        for name in access.list_dir(base):  # a look-alike ("Relations") is reported, as load() reports it
+            if name != RELATIONS and name_key(name) == RELATIONS and not is_link(access.path(base + (name,))):
+                _unrecognized(access, base + (name,), problems, None)
     return CampaignRelations(MappingProxyType(found.relations), tuple(problems))
 
 

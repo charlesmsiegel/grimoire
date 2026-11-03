@@ -299,9 +299,11 @@ def test_relation_endpoint_ids(store, library):
     assert relation_endpoint_ids(store, C) == frozenset({"wren", "ashen-guild", "gone"})  # not "lost"
 
 
-def _loaded(module: str) -> set[str]:
+def _loaded(module: str, watched=NETWORK_MODULES) -> set[str]:
+    """Which of ``watched`` (or their submodules) importing ``module`` loads, in a fresh interpreter."""
     code = (f"import sys, json; import {module}; "
-            f"print(json.dumps(sorted(m for m in {list(NETWORK_MODULES)!r} if m in sys.modules)))")
+            f"print(json.dumps(sorted(m for m in {list(watched)!r} "
+            f"if any(n == m or n.startswith(m + '.') for n in sys.modules))))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
                          env={**os.environ, "PYTHONPATH": str(SRC)})
     return set(json.loads(out.stdout))
@@ -310,4 +312,30 @@ def _loaded(module: str) -> set[str]:
 def test_no_provider_or_network_imports():
     assert _loaded("grimoire.graph") == set()  # the pure package reaches nothing
     assert _loaded("grimoire.graphstore") == _loaded("grimoire.store")  # the service adds nothing to the store's
-    assert "grimoire.providers" not in _loaded("grimoire.graphstore")
+    assert _loaded("grimoire.graphstore", ("grimoire.providers", "grimoire.capture", "grimoire.testing")) == set()
+    assert _loaded("grimoire.store", ("grimoire.store",)) == {"grimoire.store"}  # the probe can see a hit
+
+
+def test_allocation_skips_a_linked_relation_file(store, library, tmp_path):
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}")
+    folder = store.root / "campaigns/c/relations"
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        (folder / "r-1.json").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("file links are not available here")
+    assert add(library).relation == RelationRef(C, "r-2")
+
+
+def test_an_endpoint_replaced_between_preview_and_commit_is_stale(store, library):
+    change = add(library)
+    target = store.root / "campaigns/c/instances/organization/ashen-guild.json"
+    document = json.loads(target.read_bytes())
+    target.unlink()
+    document["payload"]["local_name"] = "A different guild"  # a new individual under the same id
+    target.write_text(json.dumps(document))
+    with pytest.raises(StaleWrite):
+        change.commit()
+    assert not (store.root / "campaigns/c/relations").exists() or not any(
+        (store.root / "campaigns/c/relations").iterdir())

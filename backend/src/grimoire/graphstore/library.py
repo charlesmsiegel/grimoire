@@ -22,6 +22,7 @@ from grimoire.graph import (
 )
 from grimoire.graph.codec import RELATION_SCHEMA, RelationCodecError, relation_from_payload, relation_to_payload
 from grimoire.graph.index import require_director
+from grimoire.library import LibraryPathError
 from grimoire.store import (
     LibraryStore, LoadProblem, RecordNotFound, ScopeRecord, StaleWrite, StoreError, StoredScopeRecord,
 )
@@ -100,6 +101,7 @@ class RelationChange:
     puts: tuple[tuple[ScopeRecord, str | None], ...]
     relation: RelationRef
     new: Relation | None = None  # set for an add; its endpoints and duplicates are re-checked at commit
+    endpoint_etags: Mapping[InstanceRef, str] = field(default_factory=dict)  # the instance files it was checked against
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -118,7 +120,7 @@ class RelationChange:
             if self._committed:
                 raise StoreError("this change was already committed")
             if self.new is not None:
-                stale = self.library._stale_add(self.new)
+                stale = self.library._stale_add(self.new, self.endpoint_etags)
                 if stale:
                     raise StaleWrite(stale)
             result = self._transaction().commit(self.library.handle, approvals)
@@ -192,6 +194,7 @@ class RelationLibrary:
         for endpoint in (subject, object):
             if endpoint not in existing:
                 raise InvalidRelation(f"{endpoint} has no instance file", "missing_endpoint")
+        etags = {endpoint: self._instance_etag(endpoint) for endpoint in (subject, object)}
         at = self._clock()
         ref = self._allocate(campaign_id)
         try:
@@ -204,7 +207,7 @@ class RelationLibrary:
             raise InvalidRelation("the same relation is already recorded for an overlapping time",
                                   "duplicate_relation")
         record = ScopeRecord(ref, RELATION_SCHEMA, relation_to_payload(relation), owner=self._owner)
-        return RelationChange(self, ((record, None),), ref, relation)
+        return RelationChange(self, ((record, None),), ref, relation, etags)
 
     def end(self, ref: RelationRef, *, until: Moment, provenance: str, expected: str) -> RelationChange:
         """The relation stopped holding at ``until``. Works when an endpoint is missing (repair)."""
@@ -235,8 +238,8 @@ class RelationLibrary:
                 self.store.read(ref)
             except RecordNotFound:  # exact presence only: a look-alike fails the commit with NameCollision
                 return ref
-            except StoreError:
-                continue  # a file is there, even if unreadable
+            except (StoreError, LibraryPathError):
+                continue  # a file (or a link) is there, even if unreadable
         raise StoreError("could not allocate an unused relation id")
 
     def _current(self, ref: RelationRef, expected: str) -> tuple[Relation, StoredScopeRecord]:
@@ -257,12 +260,24 @@ class RelationLibrary:
                              extra=stored.record.extra)
         return RelationChange(self, ((record, expected),), relation.ref)
 
-    def _stale_add(self, relation: Relation) -> list[tuple[str, str]]:
-        """Why an add previewed earlier may no longer be written (checked under the store lock)."""
+    def _instance_etag(self, ref: InstanceRef) -> str | None:
+        try:
+            return self.store.read(ref).etag
+        except (StoreError, LibraryPathError):
+            return None  # an unreadable file still names the endpoint; its bytes are pinned as "unreadable"
+
+    def _stale_add(self, relation: Relation, etags: Mapping[InstanceRef, str | None]) -> list[tuple[str, str]]:
+        """Why an add previewed earlier may no longer be written (checked under the store lock).
+
+        An endpoint file that was replaced since the preview may hold a different individual
+        under the same id, so its bytes must be the ones checked then.
+        """
         campaign = relation.ref.campaign_id
         existing = set(self.store.campaign_instances(campaign))
         stale = [(_path(end), "endpoint missing") for end in (relation.subject, relation.object)
                  if end not in existing]
+        stale += [(_path(end), "endpoint changed") for end in (relation.subject, relation.object)
+                  if end in existing and end in etags and self._instance_etag(end) != etags[end]]
         if any(isinstance(other, Relation) and other.ref != relation.ref and other.overlaps(relation)
                for other in _decoded(self.store, campaign)):
             stale.append((_path(relation.ref), "duplicate recorded"))

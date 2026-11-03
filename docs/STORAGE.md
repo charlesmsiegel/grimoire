@@ -121,6 +121,7 @@ Fields:
 - A `relation_id` is limited to 123 characters.
 - `load()` adds `LibraryView.relations`. Bad files are contained per file, as for chats. Anything else under `relations/` (a sub-directory, another suffix, a look-alike name) is `unrecognized` or `name_mismatch`, and a `relations` that is a file is `unrecognized`.
 - `read(RelationRef)` returns a `StoredScopeRecord`. `campaign_relations(id)` returns `CampaignRelations(records, problems)` for **one** campaign, contained exactly as `load()` contains it (a parity test). Links are reported and never followed.
+- Writes read every relation file of the campaign (no cap; O(n)).
 - **Instance allocators must use `grimoire.graphstore.relation_endpoint_ids`** (see [GRAPH](GRAPH.md#endpoint-ids-stay-taken)), so the id of a hand-deleted relation endpoint is never reused.
 
 **Rollback:** a pre-017 build skips `relations/` (it is reserved there), and never writes or deletes it. Its allocators do not protect relation endpoint ids. It **cannot recover a journal that names a relation path**: it raises `RecoveryFailed`, and reads then raise `PendingRecovery`. Recover with a 017+ build, or run `LibraryStore.discard_journal` (tested).

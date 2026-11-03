@@ -262,3 +262,21 @@ def test_to_json_deterministic():
     assert first == second
     assert json.loads(json.dumps(first, sort_keys=True)) == first
     assert first["campaign_id"] == C and [r["id"] for r in first["relations"]][:2] == ["r-a", "r-b"]
+
+
+def test_build_compares_only_relations_that_record_the_same_fact(monkeypatch):
+    """Duplicate detection must not compare every pair: 2000 distinct facts cost no overlap calls."""
+    calls = {"n": 0}
+    real = Relation.overlaps
+
+    def counting(self, other):
+        calls["n"] += 1
+        return real(self, other)
+
+    monkeypatch.setattr(Relation, "overlaps", counting)
+    people = [InstanceRef(C, "character", f"p-{n}") for n in range(2001)]
+    chain = [rel(f"r-{n}", "knows", people[n], people[n + 1]) for n in range(2000)]
+    twice = [rel("r-x", "knows", people[0], people[1], since=5)]
+    graph = GraphIndex.build(C, chain + twice, people)
+    assert graph.problems == (GraphProblem("duplicate", ("r-0", "r-x")),)
+    assert calls["n"] <= 2

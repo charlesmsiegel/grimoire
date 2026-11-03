@@ -77,7 +77,7 @@ Keys: `predicate`, `subject`, `object`, `since` (`{sequence, scene_id?, turn_id?
 
 `GraphIndex.build(campaign_id, relations, instances, *, unsupported=(), undecodable=())` is a pure function of one campaign's relation files and the instances that exist.
 
-- **It is a director-only type**, like `DirectorKnowledge`: every query takes `requested_by` and refuses anything but `DIRECTOR` with `AuthorityError`. That keeps call sites explicit and auditable; it is not authorization.
+- **It is a director-only type**, like `DirectorKnowledge`: every query takes `requested_by` and refuses anything but `DIRECTOR` with `AuthorityError`. That keeps call sites explicit and auditable; it is not authorization. Its `problems` and `instances` attributes are plain data: holding a `GraphIndex` (or a `CampaignGraph`) is itself the director's, and neither may be handed to an actor-facing caller.
 - `to_json(requested_by=…)` is its deterministic form. Any later cache must equal it.
 - **No derived file is written.**
 
@@ -92,7 +92,7 @@ A relation is **walkable** at `as_of` when it is decodable, has a known predicat
 | Query | Returns |
 |---|---|
 | `relations(node, *, as_of, predicates=None, direction="any")` | walkable relations incident to an existing node, ordered by `(predicate, id)`. A symmetric relation counts as both `out` and `in`. |
-| `history(node)` | every relation file naming `node` at any time, flagged (ended, retracted, missing endpoint, unsupported). `node` need not exist any more. |
+| `history(node)` | every decodable or unsupported relation file naming `node` at any time, flagged (ended, retracted, missing endpoint, unsupported). `node` need not exist any more. An undecodable file has no known endpoints, so it is listed only in `problems` and by `relation(id)`. |
 | `relation(id)` | any relation entry, undecodable ones included (`unknown_relation` otherwise) |
 | `traverse(start, *, as_of, predicates=None, direction="any", max_depth=2, max_steps=200)` | a bounded walk; see below |
 | `recorded(predicate, subject, object, *, as_of)` | whether a walkable relation records it. **False means not recorded.** |
@@ -101,7 +101,7 @@ Validation:
 - `as_of` must be a non-negative `int` (else `invalid_as_of`).
 - `direction` must be `out`, `in` or `any` (else `invalid_direction`).
 - `predicates` must be a nonempty iterable of registry names, never a bare string (else `invalid_predicates` or `unknown_predicate`).
-- A node of another campaign is `campaign_mismatch`.
+- A node that is not an `InstanceRef` is `invalid_field`; a node of another campaign is `campaign_mismatch`.
 - A `relations` or `traverse` node with no instance file is `unknown_instance`.
 
 ### Traversal
@@ -142,7 +142,7 @@ Writers must also follow these rules, which the text is not checked for, as in 0
 - Like `ActorKnowledge`, the IDs in it are never rendered into prompts (027).
 
 **Director-side checks:**
-- `claim_matches(index, claims, proposition_id, *, as_of, requested_by)` returns the walkable relations that match a claim; it is empty for a false claim. It is informational only and creates no ruling.
+- `claim_matches(index, claims, proposition_id, *, as_of, requested_by)` returns the walkable relations that match a claim; it is empty for a false claim, and a proposition with no shape is `unknown_claim`. It is informational only and creates no ruling.
 - `check_subjects(knowledge, index, *, requested_by)` validates what 012 handed to the graph, in propositions' `about` and rulings' `grounds`:
   - a `Subject("relation", …)` naming no relation is `unknown_relation`; others are `undecodable_relation`, `unsupported_relation` or `retracted_relation`;
   - one valid only after the citing record is `about_future_relation` or `ruling_cites_future_relation`;
@@ -162,8 +162,9 @@ Writers must also follow these rules, which the text is not checked for, as in 0
 | `read(ref)` | the relation and its etag. Store errors propagate. |
 | `graph(campaign_id, *, requested_by)` | `CampaignGraph(index, etags, problems)`, read from one campaign's relation and instance listings under one store lock. It never loads the whole library. |
 
-- An `add` is re-checked under the store lock at commit: endpoints must still exist and no duplicate may have appeared. Otherwise it raises `StaleWrite`, never reallocating an id the approval pinned.
-- Relation ids come from `new_id("r")` and are taken by exact presence. A look-alike file fails the commit with `NameCollision`.
+- An `add` is re-checked under the store lock at commit: each endpoint's instance file must still hold the bytes it was checked against (a file replaced since the preview may be a different individual under the same id), and no duplicate may have appeared. Otherwise it raises `StaleWrite`, never reallocating an id the approval pinned.
+- **Scale.** There is no cap on relations per campaign. A write reads every relation file of its campaign (O(n)); `graph()` reads the campaign's relation and instance files once, and duplicate detection compares only relations recording the same fact. Only `traverse` is bounded. `relations`, `history` and `claims_about` return everything incident to one node.
+- Relation ids come from `new_id("r")` and are taken by exact presence; any file or link already there counts as taken. A look-alike file fails the commit with `NameCollision`.
 - No model call is made, and nothing writes events, evidence or beliefs.
 
 ### Endpoint ids stay taken
@@ -182,7 +183,7 @@ Writers must also follow these rules, which the text is not checked for, as in 0
 |---|---|
 | Relations authored inside sources or worlds | 022/026 |
 | Events as nodes; persisting claim shapes with propositions; running `check_subjects` on write; definition-subject and future-instance validity | 020 |
-| Endpoint facet constraints (`located_in` a `spatial`, `carries` a `portable`), functional predicates (one location at a time) | 059/023 |
+| Endpoint facet constraints (`located_in` a `spatial`, `carries` a `portable`), functional predicates (one location at a time). Known gap: an item may be recorded in two places at once, and nothing reports it | 059/023 |
 | Species membership | 024 |
 | Emotions, trust, reputation | 078 |
 | A multi-hop actor-side mental graph | not planned; it would need an amendment to 012 |

@@ -260,3 +260,14 @@ def test_a_journal_naming_a_relation_recovers_or_can_be_discarded(tmp_path):
     with LibraryStore.open(lib, locker=locker) as store:
         assert store.load().relations == {}
         assert any("discarded" in path for path in store.conflicts())
+
+
+@pytest.mark.parametrize("make, path, code", [
+    (lambda root: _write(root, "campaigns/c1/Relations/r-1.json", b"{}"), "campaigns/c1/Relations", "name_mismatch"),
+    (lambda root: _write(root, "campaigns/c3", b"a file, not a folder"), "campaigns/c3", "unrecognized"),
+])
+def test_campaign_relations_reports_what_load_reports_for_its_folder(library, make, path, code):
+    make(library.root)
+    campaign = path.split("/")[1]
+    assert (path, code) in {(p.path, p.code) for p in library.load().problems}
+    assert (path, code) in {(p.path, p.code) for p in library.campaign_relations(campaign).problems}
