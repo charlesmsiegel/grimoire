@@ -10,10 +10,10 @@ from .claims import (
     ClaimSet, ClaimShape, NodeClaim, NodeClaims, check_subjects, claim_matches, claims_about,
 )
 from .index import GraphIndex, GraphProblem, RelationEntry, Step, Traversal
-from .model import PREDICATES, Ending, GraphError, Predicate, Relation, Retraction, UnsupportedRelation
+from .model import PREDICATES, Ending, GraphError, Predicate, Relation, Reopening, Retraction, UnsupportedRelation
 
 __all__ = [
     "PREDICATES", "ClaimSet", "ClaimShape", "Ending", "GraphError", "GraphIndex", "GraphProblem", "Predicate", "Relation", "RelationEntry",
-    "NodeClaim", "NodeClaims", "Retraction", "Step", "Traversal", "UnsupportedRelation", "check_subjects",
+    "NodeClaim", "NodeClaims", "Reopening", "Retraction", "Step", "Traversal", "UnsupportedRelation", "check_subjects",
     "claim_matches", "claims_about",
 ]

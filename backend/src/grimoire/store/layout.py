@@ -17,7 +17,8 @@ import unicodedata
 from typing import Literal
 
 from grimoire.core.identity import (
-    KNOWLEDGE_FAMILIES, ChatRef, ImageRef, InstanceRef, KnowledgeRef, PlacementRef, RelationRef, ScopeRef, SourceRef,
+    KNOWLEDGE_FAMILIES, AcceptedRef, ChatRef, ImageRef, InstanceRef, KnowledgeRef, PlacementRef, RelationRef, ScopeRef,
+    SourceRef, WrapUpRef,
     validate_segment,
     validate_source_id,
 )
@@ -47,6 +48,8 @@ INSTANCES = "instances"
 SUFFIX = ".json"
 CHATS = "chats"  # campaigns/<id>/chats/<chat_id>.json: one chat record (107)
 RELATIONS = "relations"  # campaigns/<id>/relations/<relation_id>.json: one relation record (017)
+ACCEPTED = "accepted"  # campaigns/<id>/accepted/<event_id>.json: one accepted fictional event (021)
+WRAPUPS = "wrapups"  # campaigns/<id>/wrapups/<wrapup_id>.json: one scene wrap-up (021)
 SCOPE = "scope.json"  # campaigns/<id>/scope.json: the play-scope record (107)
 EVENTS = "events"  # campaigns/<id>/events/<event_id>.json: accepted events (020)
 EVIDENCE = "evidence"  # campaigns/<id>/evidence/<family>/<id>.json: everything else, and the batch log (020)
@@ -67,7 +70,7 @@ RESERVED_CAMPAIGN_ENTRIES = frozenset({"scenes", "events", "evidence"})
 _NOISE = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
 
 Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat", "relation", "knowledge", "blob",
-               "image", "placement"]
+               "image", "placement", "accepted", "wrapup"]
 
 
 def is_noise(name: str) -> bool:
@@ -130,6 +133,14 @@ def knowledge_parts(ref: KnowledgeRef) -> Parts:
     return _checked((CAMPAIGNS, ref.campaign_id, EVIDENCE, ref.family, ref.record_id + SUFFIX))
 
 
+def accepted_parts(ref: AcceptedRef) -> Parts:
+    return _checked((CAMPAIGNS, ref.campaign_id, ACCEPTED, ref.event_id + SUFFIX))
+
+
+def wrapup_parts(ref: WrapUpRef) -> Parts:
+    return _checked((CAMPAIGNS, ref.campaign_id, WRAPUPS, ref.wrapup_id + SUFFIX))
+
+
 def image_parts(ref: ImageRef) -> Parts:
     if ref.campaign_id is not None:
         return _checked((CAMPAIGNS, ref.campaign_id, IMAGES, ref.image_id + SUFFIX))
@@ -151,7 +162,8 @@ def blob_parts(sha256: str, ext: str) -> Parts:
     return _checked((ASSETS, BLOBS, sha256[:2], f"{sha256}.{ext}"))
 
 
-Address = SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef | ImageRef | PlacementRef
+Address = (SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef | ImageRef | PlacementRef
+           | AcceptedRef | WrapUpRef)
 
 
 def address_parts(address: Address) -> Parts:
@@ -169,6 +181,10 @@ def address_parts(address: Address) -> Parts:
         return chat_parts(address)
     if isinstance(address, RelationRef):
         return relation_parts(address)
+    if isinstance(address, AcceptedRef):
+        return accepted_parts(address)
+    if isinstance(address, WrapUpRef):
+        return wrapup_parts(address)
     return definition_parts(address)
 
 
@@ -258,6 +274,14 @@ def classify(parts: Parts) -> tuple[Kind, object] | None:
             stem = _stem(parts[4])
             if stem is not None:
                 found = ("knowledge", KnowledgeRef(parts[1], parts[3], stem))
+        elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == ACCEPTED:
+            stem = _stem(parts[3])
+            if stem is not None:
+                found = ("accepted", AcceptedRef(parts[1], stem))
+        elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == WRAPUPS:
+            stem = _stem(parts[3])
+            if stem is not None:
+                found = ("wrapup", WrapUpRef(parts[1], stem))
         elif len(parts) >= 3 and parts[0] == LEDGERS:
             seq = ledger_seq(parts[-1])
             if seq is not None:

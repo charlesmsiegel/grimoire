@@ -169,7 +169,7 @@ Actor instances are written as `grimoire.record/1` with:
 
 | Not here | Owner |
 |---|---|
-| Messages and scene segments, and what an added actor is told | 021/027/032. Events and evidence are stored by 020 ([EVIDENCE](EVIDENCE.md)); records accept a chat as provenance, and a late actor starts with none |
+| Messages and scene segments, and what an added actor is told | 027/032; accepted turn effects are 021's ([EFFECTS](EFFECTS.md)), and a chat is their provenance and must exist. Events and evidence are stored by 020 ([EVIDENCE](EVIDENCE.md)); records accept a chat as provenance, and a late actor starts with none |
 | Control assignment for the persona's actor | 003/035 |
 | Effective portrayal composition (first slice implemented: [EFFECTIVE_VIEWS](EFFECTIVE_VIEWS.md), including `chat_snapshot`) and derivation-aware navigation filters | 022/065 |
 | Card import | 037 |
@@ -179,4 +179,4 @@ Actor instances are written as `grimoire.record/1` with:
 
 Binding a source creates no event, belief or evidence record and never makes anyone aware of its content.
 
-New actor ids skip every id named by the campaign's relation files (`relation_endpoint_ids`, 017), at allocation and again under the store lock at commit, so a hand-deleted endpoint's id never goes to a different individual. See [GRAPH](GRAPH.md#endpoint-ids-stay-taken).
+New actor ids skip every id named by the campaign's relation files (`relation_endpoint_ids`, 017) and accepted events (`accepted_instance_ids`, [021](EFFECTS.md)), at allocation and again under the store lock at commit, so a hand-deleted endpoint's id never goes to a different individual. See [GRAPH](GRAPH.md#endpoint-ids-stay-taken).

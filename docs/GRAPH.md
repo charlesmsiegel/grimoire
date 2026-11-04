@@ -40,7 +40,7 @@ A closed registry, `grimoire.graph.PREDICATES`. Every predicate's domain is `wor
 | `kin_of` | symmetric | the two are family |
 | `allied_with` | symmetric | the two are allied |
 
-**Player sovereignty.** Relations are editorial world facts, approved through the store's preview and approval like 107's actor records. There is no player-consent gate in this slice, even when a player character is an endpoint (requester decision). Play-derived changes, such as a PC joining a guild in a scene, belong to [accepted turn effects](roadmap/sprints/turn-effects-and-wrap-up.md) (021). Emotional and attitudinal relations (`loves`, `trusts`) are interiority, a protected PC domain, and are not predicates here; owner [Relationships and reputation](roadmap/sprints/relationships-and-reputation.md) (078).
+**Player sovereignty.** Relations are editorial world facts, approved through the store's preview and approval like 107's actor records. There is no player-consent gate in this slice, even when a player character is an endpoint (requester decision). Play-derived changes, such as a PC joining a guild in a scene, go through [accepted turn effects](EFFECTS.md) (021), which add and end relations with the provenance `effect:accepted/<event_id>` under its two-key rule. Emotional and attitudinal relations (`loves`, `trusts`) are interiority, a protected PC domain, and are not predicates here; owner [Relationships and reputation](roadmap/sprints/relationships-and-reputation.md) (078).
 
 ## The record
 
@@ -72,6 +72,34 @@ Keys: `predicate`, `subject`, `object`, `since` (`{sequence, scene_id?, turn_id?
 - Other refusals: `unsupported_schema`, `campaign_mismatch`, `self_relation`, `invalid_until`.
 - Re-encoding is canonical, and decode(encode(x)) == x.
 - A predicate this version does not know decodes to an `UnsupportedRelation`. It is kept verbatim with whichever endpoints parse, reported as `unknown_predicate`, never walked, and never rewritten (`end` and `retract` refuse with `unsupported_relation`).
+
+### Reopening an ending (021)
+
+<a id="reopening-an-ending-021"></a>An additive amendment made by [021](EFFECTS.md) for revoking an accepted event: **reopening** cancels a relation's ending in place.
+
+- `Reopening(ending, provenance, at)` keeps the cancelled ending verbatim.
+- `Relation.reopenings` is a tuple, oldest first, and is the model's last field, so 017's positional calls still fit.
+- `Relation.reopened(reopening)` requires a current ending equal to `reopening.ending` and no retraction. Otherwise it refuses with `not_ended` or `already_retracted`.
+- The result has `ending=None`, and the same id, `since`, provenance and extras. It holds again from `since`, so a later `end` works as usual.
+
+Reopening is the third non-destructive operation:
+- *ending* is fictional;
+- *retraction* is editorial;
+- *reopening* says "that ending was revoked".
+
+Nothing is deleted, so 012/020 subjects that cite the relation stay valid. 021 reopens only endings it made; a relation that was added already bounded (`add(until=…)`) can be reopened only editorially.
+
+- **Codec.** The optional payload key is `reopenings: [{ending: {until, provenance, at}, provenance, at}]`. It is written only when nonempty, so a never-reopened file is byte-identical to 017's. An absent, `null` or empty `reopenings` all mean never reopened (as an absent or `null` ending means not ended), and re-encoding omits the key. Decoding refuses unknown keys and `until <= since`. List order is the order the reopenings were made; their `at` clock text is never compared, since clocks can step back.
+- **Older builds.** A 017-only build keeps `reopenings` as a preserved unknown key and sees no ending, so it answers `holds_at` correctly. This is tested against the verbatim 017 codec.
+- **The index** flags `RelationEntry.reopened`. `history`, `relation` and `to_json` expose the reopenings.
+- **The service.** `RelationLibrary.reopen(ref, *, provenance, expected)` mirrors `end`, works on a relation with a missing endpoint, and refuses with `duplicate_relation` when the reopened interval would overlap another unretracted record of the fact. Its overlap is re-checked at commit.
+- **`RelationChange.stale()`** is additive and public. It reports why a previewed change can no longer be committed:
+  - for an add, exactly `commit`'s own check;
+  - for a rewrite, the store's CAS words `absent` and `changed`;
+  - for a reopen, also an overlap.
+
+  021 calls it under the store lock before folding relation changes into its own transaction. `commit` is unchanged for add, end and retract.
+- **Checking many changes against one read.** `add`, `reopen` and `RelationChange.stale` take an optional `relations` list (the campaign's decoded relations, read under the same lock), so 021 checks up to 32 operations against one read of the folder instead of one read each. Omitted, they read the folder as before.
 
 ## The index (director-only)
 
@@ -183,6 +211,7 @@ Writers must also follow these rules, which the text is not checked for, as in 0
 |---|---|
 | Relations authored inside sources or worlds | 022/026 |
 | Events as nodes; persisting claim shapes with propositions; running `check_subjects` on write; definition-subject and future-instance validity | 020 |
+| Play-derived relation changes and their undo | [021](EFFECTS.md) |
 | Endpoint facet constraints (`located_in` a `spatial`, `carries` a `portable`), functional predicates (one location at a time). Known gap: an item may be recorded in two places at once, and nothing reports it | 059/023 |
 | Species membership | 024 |
 | Emotions, trust, reputation | 078 |

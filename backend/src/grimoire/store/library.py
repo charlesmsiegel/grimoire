@@ -21,7 +21,8 @@ from pathlib import Path
 from types import MappingProxyType
 
 from grimoire.core.identity import (
-    ChatRef, IdentityConflict, ImageRef, InstanceRef, KnowledgeRef, PlacementRef, RelationRef, ScopeRef, SourceRef,
+    AcceptedRef, ChatRef, IdentityConflict, ImageRef, InstanceRef, KnowledgeRef, PlacementRef, RelationRef, ScopeRef,
+    SourceRef, WrapUpRef,
     validate_segment,
 )
 from grimoire.core.index import DefinitionIndex, SourceDescriptor
@@ -46,14 +47,14 @@ from .guard import Guard, Limits, RootIdentity
 from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import JsonError, etag, is_etag, parse_strict, render
 from .layout import (
-    CAMPAIGNS, CONFLICTS, DISCARD_MARKER, INSTANCES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER, REPAIR_MARKER, TXN, Parts,
+    ACCEPTED, CAMPAIGNS, CONFLICTS, DISCARD_MARKER, INSTANCES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER, REPAIR_MARKER, TXN, Parts,
     IMAGES, PLACEMENTS, address_parts, blob_parts, classify, conflict_parts, definition_parts, image_parts,
     name_key,
-    instance_parts, ledger_folder, ledger_name, ledger_parts, ledger_seq, logical, manifest_parts,
+    instance_parts, ledger_folder, WRAPUPS, ledger_name, ledger_parts, ledger_seq, logical, manifest_parts,
 )
 from .ledger import Head, Ledger, read_ledger, render_batches
 from .loader import (
-    CampaignRelations, KnowledgeScan, LibraryView, LoadProblem, StoredAssetRecord, StoredDefinition,
+    CampaignRecords, CampaignRelations, KnowledgeScan, LibraryView, LoadProblem, StoredAssetRecord, StoredDefinition,
     StoredKnowledgeRecord, StoredRecord, StoredScopeRecord, StoredSource,
 )
 from .media import MAX_BLOB_BYTES, ImageBlob
@@ -453,13 +454,14 @@ class LibraryStore:
 
     # -- reading -----------------------------------------------------------------
     def read(self, ref: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef | ImageRef
-             | PlacementRef) -> StoredRecord | StoredScopeRecord | StoredKnowledgeRecord | StoredAssetRecord:
+             | PlacementRef | AcceptedRef | WrapUpRef
+             ) -> StoredRecord | StoredScopeRecord | StoredKnowledgeRecord | StoredAssetRecord:
         """One record by exact address (a definition must be pinned)."""
         if isinstance(ref, SourceRef) and not ref.pinned:
             raise ValueError("read a pinned revision; resolve unpinned references with load().index")
         with self.lock:  # reads wait for this process's commits, so they never see one half-done
             self._require_consistent()
-            if isinstance(ref, (ScopeRef, ChatRef, RelationRef)):
+            if isinstance(ref, (ScopeRef, ChatRef, RelationRef, AcceptedRef, WrapUpRef)):
                 return loader.read_scope_record(self._access, address_parts(ref))
             if isinstance(ref, KnowledgeRef):
                 return loader.read_knowledge_record(self._access, address_parts(ref))
@@ -627,6 +629,21 @@ class LibraryStore:
             self._require_consistent()
             with self._access.cached_listings():
                 return loader.campaign_knowledge(self._access, campaign_id)
+
+    def campaign_accepted(self, campaign_id: str) -> CampaignRecords:
+        """One campaign's accepted-event records (021) and their problems, as ``load()`` reports them."""
+        return self._campaign_family(campaign_id, ACCEPTED)
+
+    def campaign_wrapups(self, campaign_id: str) -> CampaignRecords:
+        """One campaign's scene wrap-up records (021) and their problems, as ``load()`` reports them."""
+        return self._campaign_family(campaign_id, WRAPUPS)
+
+    def _campaign_family(self, campaign_id: str, family: str) -> CampaignRecords:
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return loader.campaign_family(self._access, campaign_id, family)
 
     def source_facts(self) -> SourceFacts:
         """One verified answer to "which sources would ``load()`` exclude?", reusable by a caller.

@@ -34,6 +34,8 @@ _INSTANCE_REF_RE = re.compile(
 _SCOPE_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})")
 _CHAT_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#chat/(?P<chat_id>{_SEGMENT})")
 _RELATION_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#relation/(?P<relation_id>{_SEGMENT})")
+_ACCEPTED_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#accepted/(?P<event_id>{_SEGMENT})")
+_WRAPUP_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#wrapup/(?P<wrapup_id>{_SEGMENT})")
 _IMAGE_REF_RE = re.compile(
     rf"(?P<scope>campaign:{_SEGMENT}|{_SOURCE_RE.pattern})#image/(?P<image_id>{_SEGMENT})"
 )
@@ -301,6 +303,69 @@ class RelationRef:
         match = _RELATION_REF_RE.fullmatch(_require_text(text))
         if match is None:
             raise ValueError(f"not a relation reference: {text!r}")
+        return cls(**match.groupdict())
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptedRef:
+    """One accepted fictional event of a campaign (021): an authority record with operations and receipts.
+
+    ``campaign:<campaign_id>#accepted/<event_id>``. Distinct from 020's ``#event/`` knowledge family.
+    Not returned by ``parse_ref``.
+    """
+
+    campaign_id: str
+    event_id: str
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.event_id, "event_id")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"campaign:{self.campaign_id}#accepted/{self.event_id}"
+
+    @property
+    def scope(self) -> ScopeRef:
+        return ScopeRef(self.campaign_id)
+
+    @classmethod
+    def parse(cls, text: object) -> AcceptedRef:
+        match = _ACCEPTED_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not an accepted-event reference: {text!r}")
+        return cls(**match.groupdict())
+
+
+@dataclass(frozen=True, slots=True)
+class WrapUpRef:
+    """One scene wrap-up (021): a retrospective director summary of one chat scene; never actor memory.
+
+    ``campaign:<campaign_id>#wrapup/<wrapup_id>``. Not returned by ``parse_ref``.
+    """
+
+    campaign_id: str
+    wrapup_id: str
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.wrapup_id, "wrapup_id")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"campaign:{self.campaign_id}#wrapup/{self.wrapup_id}"
+
+    @property
+    def scope(self) -> ScopeRef:
+        return ScopeRef(self.campaign_id)
+
+    @classmethod
+    def parse(cls, text: object) -> WrapUpRef:
+        match = _WRAPUP_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not a wrap-up reference: {text!r}")
         return cls(**match.groupdict())
 
 

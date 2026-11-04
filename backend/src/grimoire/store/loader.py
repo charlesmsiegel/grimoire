@@ -23,7 +23,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from grimoire.core.identity import (
-    ChatRef, IdentityConflict, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef, validate_segment,
+    AcceptedRef, ChatRef, IdentityConflict, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef, WrapUpRef,
+    validate_segment,
 )
 from grimoire.core.index import DIRECTED_RELATIONS, DefinitionIndex, DefinitionLink, SourceDescriptor
 
@@ -39,9 +40,9 @@ from .errors import (
 )
 from .jsonfmt import JsonError, etag, parse_strict
 from .layout import (
-    CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, IMAGES, INSTANCES, PLACEMENTS, SCOPE, MANIFEST,
-    MARKER, RECORDS, RELATIONS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS, SOURCE_DIR, SOURCES, SUFFIX, TXN, Parts,
-    classify, is_noise, manifest_parts, name_key,
+    ACCEPTED, CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, IMAGES, INSTANCES, PLACEMENTS, SCOPE,
+    MANIFEST, MARKER, RECORDS, RELATIONS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS, SOURCE_DIR, SOURCES, SUFFIX, TXN,
+    WRAPUPS, Parts, classify, is_noise, manifest_parts, name_key,
 )
 
 EntityKey = tuple[str, str]  # (kind, entity_id) within one source
@@ -144,11 +145,16 @@ class LibraryView:
 
 
 @dataclass(frozen=True)
-class CampaignRelations:
-    """One campaign's relation records and the problems ``load()`` would report under its folder."""
+class CampaignRecords:
+    """One campaign's records of one family (relations, accepted events or wrap-ups) and the problems
+    ``load()`` would report under that family's folder."""
 
-    records: Mapping[RelationRef, StoredScopeRecord]
+    records: Mapping[RelationRef | AcceptedRef | WrapUpRef, StoredScopeRecord]
     problems: tuple[LoadProblem, ...]
+
+
+#: the name 017 introduced; one campaign's relation records
+CampaignRelations = CampaignRecords
 
 
 def _text(parts: Parts) -> str:
@@ -572,6 +578,8 @@ class _Campaigns:
     scopes: dict[ScopeRef, StoredScopeRecord] = field(default_factory=dict)
     chats: dict[ChatRef, StoredScopeRecord] = field(default_factory=dict)
     relations: dict[RelationRef, StoredScopeRecord] = field(default_factory=dict)
+    accepted: dict[AcceptedRef, StoredScopeRecord] = field(default_factory=dict)
+    wrapups: dict[WrapUpRef, StoredScopeRecord] = field(default_factory=dict)
 
 
 def _discover_instances(access: Access, problems: list[LoadProblem]) -> _Campaigns:
@@ -679,26 +687,35 @@ def _discover_chats(access: Access, base: Parts, found: _Campaigns, problems: li
         _read_scoped(access, parts, found.chats, problems)
 
 
-def _discover_relations(access: Access, base: Parts, found: _Campaigns, problems: list[LoadProblem]) -> None:
-    folder = base + (RELATIONS,)
+#: campaign-scoped record families stored one file per record: folder -> (classified kind, ``_Campaigns`` field)
+_FAMILIES = {RELATIONS: ("relation", "relations"), ACCEPTED: ("accepted", "accepted"), WRAPUPS: ("wrapup", "wrapups")}
+#: families that grow with every played turn (021): like 020's events/evidence, ``load()`` skips them
+_HISTORY = frozenset({ACCEPTED, WRAPUPS})
+
+
+def _discover_family(access: Access, base: Parts, family: str, found: _Campaigns,
+                     problems: list[LoadProblem]) -> None:
+    kind, attribute = _FAMILIES[family]
+    folder = base + (family,)
     for name in _listing(access, folder, problems, None):
         parts = folder + (name,)
         hit = classify(parts)
-        if hit is None or hit[0] != "relation":
+        if hit is None or hit[0] != kind:
             _unrecognized(access, parts, problems, None)
             continue
-        _read_scoped(access, parts, found.relations, problems)
+        _read_scoped(access, parts, getattr(found, attribute), problems)
 
 
-def campaign_relations(access: Access, campaign: str) -> CampaignRelations:
-    """One campaign's relation records, contained per file exactly as ``load()`` contains them.
+def campaign_family(access: Access, campaign: str, family: str) -> CampaignRecords:
+    """One campaign's records of one family, contained per file exactly as ``load()`` contains them.
 
-    Reads only ``campaigns/<campaign>/relations``; links are reported, never followed.
+    Reads only ``campaigns/<campaign>/<family>``; links are reported, never followed.
     """
+    _, attribute = _FAMILIES[family]
     base = (CAMPAIGNS, campaign)
     problems: list[LoadProblem] = []
     found = _Campaigns()
-    folder = base + (RELATIONS,)
+    folder = base + (family,)
     if is_link(access.path(base)):
         problems.append(LoadProblem(_text(base), "link", "links are never followed"))
     elif access.presence(base) == "present" and not _is_dir(access, base):
@@ -708,13 +725,21 @@ def campaign_relations(access: Access, campaign: str) -> CampaignRelations:
             problems.append(LoadProblem(_text(folder), "link", "links are never followed"))
         elif access.presence(folder) == "present":
             if _is_dir(access, folder):
-                _discover_relations(access, base, found, problems)
+                _discover_family(access, base, family, found, problems)
             else:
                 _unrecognized(access, folder, problems, None)
         for name in access.list_dir(base):  # a look-alike ("Relations") is reported, as load() reports it
-            if name != RELATIONS and name_key(name) == RELATIONS and not is_link(access.path(base + (name,))):
-                _unrecognized(access, base + (name,), problems, None)
-    return CampaignRelations(MappingProxyType(found.relations), tuple(problems))
+            if name != family and name_key(name) == family:
+                if is_link(access.path(base + (name,))):
+                    problems.append(LoadProblem(_text(base + (name,)), "link", "links are never followed"))
+                else:
+                    _unrecognized(access, base + (name,), problems, None)
+    return CampaignRecords(MappingProxyType(getattr(found, attribute)), tuple(problems))
+
+
+def campaign_relations(access: Access, campaign: str) -> CampaignRecords:
+    """One campaign's relation records (017), contained per file exactly as ``load()`` contains them."""
+    return campaign_family(access, campaign, RELATIONS)
 
 
 def _discover_campaign(access: Access, campaign: str, into: _Campaigns, problems: list[LoadProblem]) -> None:
@@ -732,8 +757,10 @@ def _discover_campaign(access: Access, campaign: str, into: _Campaigns, problems
         if entry == CHATS and _is_dir(access, base + (entry,)):
             _discover_chats(access, base, into, problems)
             continue
-        if entry == RELATIONS and _is_dir(access, base + (entry,)):
-            _discover_relations(access, base, into, problems)
+        if entry in _HISTORY and _is_dir(access, base + (entry,)):  # 021's per-turn history: never walked here
+            continue
+        if entry in _FAMILIES and _is_dir(access, base + (entry,)):
+            _discover_family(access, base, entry, into, problems)
             continue
         if entry == IMAGES:
             walk_assets(access, base + (entry,), 0, "image", problems, None)

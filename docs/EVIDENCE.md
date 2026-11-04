@@ -212,7 +212,7 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 | Retcons, correcting an event, invalidating witnessed evidence | 020 later milestone |
 | Guided repair tooling | 020 later milestone |
 | Materialized projections, caches, incremental reads | 020 later milestone / 065 |
-| Which narration becomes an accepted event | 021 |
+| Which narration becomes an accepted event | 021 ([EFFECTS](EFFECTS.md); its `as_knowledge_event` bridge yields the 012 `Event` to store here) |
 | Transmission semantics | 032 |
 | Prompts from actor projections | 027 |
 | Cross-device merge of logs | 019/028 |
