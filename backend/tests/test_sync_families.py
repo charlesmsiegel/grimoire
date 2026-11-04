@@ -410,3 +410,41 @@ def test_021_an_unlistable_campaigns_folder_holds_every_relation(tmp_path):
     finally:
         desktop.close()
         phone.close()
+
+
+def test_020_a_knowledge_log_stuck_by_uncertainty_is_ended_by_one_resolve(tmp_path):
+    """After a re-identification every base is uncertain, so a one-sided append is a conflict. resolve
+    delivers the whole log unit create-only (records and batch), and later appends sync again."""
+    desktop, phone = _evidence_pair(tmp_path)
+    try:
+        _evidence(desktop).append(EVIDENCE_C, [Event(EVIDENCE_C, "e-1", "first", m(1), "director")]).commit()
+        identify(phone, "phone2", replace=True)
+        renamed = {DESKTOP: handles()[DESKTOP], "phone2": handles()[PHONE]}
+        batch = f"campaigns/{EVIDENCE_C}/evidence/batch/0000000001.json"
+        assert sync(desktop, phone, renamed).conflict(batch).code == "missing_ancestor"
+        mine = (desktop.root / batch).read_bytes()
+        assert resolve(desktop, phone, batch, etag(mine), {DESKTOP: etag(mine), "phone2": None}, renamed) == "phone2"
+        assert (phone.root / batch).exists() and (phone.root / f"campaigns/{EVIDENCE_C}/events/e-1.json").exists()
+        assert _evidence(phone).read(EVIDENCE_C, requested_by="director").problems == ()
+        _evidence(desktop).append(EVIDENCE_C, [Event(EVIDENCE_C, "e-2", "second", m(2), "director")]).commit()
+        sync(desktop, phone, renamed)
+        assert (phone.root / f"campaigns/{EVIDENCE_C}/events/e-2.json").exists()
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_020_resolve_never_merges_two_diverged_knowledge_logs(tmp_path):
+    desktop, phone = _evidence_pair(tmp_path)
+    try:
+        _evidence(desktop).append(EVIDENCE_C, [Event(EVIDENCE_C, "e-d", "desk", m(1), "director")]).commit()
+        _evidence(phone).append(EVIDENCE_C, [Event(EVIDENCE_C, "e-p", "phone", m(1), "director")]).commit()
+        sync(desktop, phone, handles())
+        event = f"campaigns/{EVIDENCE_C}/events/e-d.json"
+        mine = (desktop.root / event).read_bytes()
+        with pytest.raises(ResolveRefused, match="diverged"):
+            resolve(desktop, phone, event, etag(mine), {DESKTOP: etag(mine), PHONE: None}, handles())
+        assert not (phone.root / event).exists()
+    finally:
+        desktop.close()
+        phone.close()

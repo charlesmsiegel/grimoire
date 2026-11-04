@@ -274,3 +274,131 @@ def test_a_knowledge_record_held_by_a_denied_pin_holds_back_its_whole_append(tmp
     finally:
         desktop.close()
         phone.close()
+
+
+# -- round 10 -------------------------------------------------------------------------------------------
+
+def test_a_manifest_head_naming_an_unstorable_revision_never_stops_the_sync(tmp_path):
+    from grimoire.store.jsonfmt import parse_strict, render, thaw
+    from sync_helpers import PATHS, WREN_B, edit_instance
+    desktop, phone = make_pair(tmp_path)
+    try:
+        path = desktop.root / PATHS["manifest"]
+        document = thaw(parse_strict(path.read_bytes()))
+        document["heads"] = {"character/wren": "con"}  # a reserved device name: no library can store it
+        path.write_bytes(render(document))
+        edit_instance(phone, WREN_B, 9)
+        report = sync(desktop, phone, handles())
+        assert report.conflict(PATHS["manifest"]).code == "head_dependency"
+        assert (PATHS["wren_b"], DESKTOP) in report.copied
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_one_unreadable_kept_slot_never_stops_the_sync(tmp_path, monkeypatch):
+    from grimoire.store import engine
+    from sync_helpers import PATHS, WREN_A, WREN_B, edit_instance
+    desktop, phone = make_pair(tmp_path)
+    try:
+        edit_instance(desktop, WREN_A, 7)
+        edit_instance(phone, WREN_A, 8)
+        sync(desktop, phone, handles())  # a conflict: each device keeps the other's version
+        edit_instance(phone, WREN_A, 9)  # the desktop must keep a new version...
+        edit_instance(phone, WREN_B, 5)  # ...and an unrelated edit must still land
+        real = engine.Access.read
+
+        def locked(self, parts):
+            if ".conflicts" in parts and self.root == desktop._access.root:
+                raise PermissionError(13, "held by another program")
+            return real(self, parts)
+        monkeypatch.setattr(engine.Access, "read", locked)
+        report = sync(desktop, phone, handles())
+        monkeypatch.undo()
+        assert (PATHS["wren_b"], DESKTOP) in report.copied
+        assert dict(report.conflict(PATHS["wren_a"]).kept)[DESKTOP] is False
+    finally:
+        desktop.close()
+        phone.close()
+
+
+@pytest.mark.parametrize("how", ["lookalike", "denied"])
+def test_020_knowledge_naming_an_actor_the_destination_lacks_stays_behind(tmp_path, how):
+    """020 never writes knowledge about an unknown actor; sync never creates that state either (and a
+    later local actor with the same id never inherits another device's percepts)."""
+    from grimoire.core import Event, Perception
+    from grimoire.evidencestore import EvidenceLibrary
+    from evidence_fixtures import C, m
+    from test_evidencestore_scenarios import seed_actors
+    from test_sync_scenarios import _grants
+    vex = InstanceRef(C, "character", "vex")
+    desktop = LibraryStore.create(tmp_path / DESKTOP)
+    seed_actors(desktop)
+    phone = LibraryStore.create(tmp_path / PHONE)
+    try:
+        identify(desktop, DESKTOP)
+        identify(phone, PHONE)
+        sync(desktop, phone, handles())
+        put(desktop, RecordEnvelope(vex, {}), None)
+        EvidenceLibrary(desktop, owner_handle("sources", "campaigns", "kept"), owner=OWNER).append(C, [
+            Event(C, "e-x", "a secret meeting", m(1), "director"),
+            Perception(C, "v-vex", vex, "e-x", "witnessed", "SECRET-PERCEPT", m(1), "director", confirmed=True),
+        ]).commit()
+        grants = handles()
+        if how == "lookalike":
+            (phone.root / "campaigns" / C / "instances" / "character").mkdir(parents=True, exist_ok=True)
+            (phone.root / "campaigns" / C / "instances" / "character" / "Vex.json").write_bytes(b"{}")
+        else:
+            grants = {DESKTOP: handle(), PHONE: _grants("sources", f"campaigns/{C}/events",
+                                                         f"campaigns/{C}/evidence", "kept")}
+        report = sync(desktop, phone, grants)
+        assert not [path for path, device in report.copied if device == PHONE and ("/events/" in path
+                                                                               or "/evidence/" in path)]
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_a_chat_waits_while_its_actor_is_blocked_on_the_origin(tmp_path):
+    from chat_fixtures import MARA, chat_library, seed_sources
+    from grimoire.chats.model import Launch
+    desktop, phone = LibraryStore.create(tmp_path / DESKTOP), LibraryStore.create(tmp_path / PHONE)
+    try:
+        seed_sources(desktop)
+        identify(desktop, DESKTOP)
+        identify(phone, PHONE)
+        sync(desktop, phone, handles())
+        chat_library(desktop).start_chat(Launch("character", MARA)).commit()
+        actor = desktop.root / "campaigns" / "q-1" / "instances" / "character" / "mara-1.json"
+        actor.unlink()
+        actor.mkdir()  # the origin's own actor file cannot be read: unknown, never "absent on both"
+        report = sync(desktop, phone, handles())
+        assert not [path for path, _ in report.copied if "/chats/" in path]
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_an_ignored_marker_keeps_a_both_absent_path_uncertain(tmp_path):
+    """Archives and markers damaged (ignored, still naming their paths), the record then deleted on both:
+    a later restore is a conflict. (Bytes that name nothing cannot be remembered: a true first sync.)"""
+    from sync_helpers import PATHS
+    desktop, phone = make_pair(tmp_path)
+    try:
+        path = PATHS["wren_b"]
+        old = (phone.root / path).read_bytes()
+        sync(desktop, phone, handles())  # leaves a (now empty) pending marker on each device
+        for store, peer in ((desktop, PHONE), (phone, DESKTOP)):
+            damaged = (phone.root / ".sync" / "peers" / DESKTOP / "pending.json").read_bytes()
+            for name in ("archive.json", "pending.json"):  # damaged: the check fails, the paths still read
+                state = store.root / ".sync" / "peers" / peer / name
+                data = state.read_bytes() if state.exists() else damaged  # (a marker on both devices)
+                state.write_bytes(data.replace(b'"check": "sha256:', b'"check": "sha256:0'))
+            (store.root / path).unlink()
+        sync(desktop, phone, handles())
+        (phone.root / path).write_bytes(old)  # restored from a backup on the phone
+        report = sync(desktop, phone, handles())
+        assert report.copied == () and report.conflict(path).code == "missing_ancestor"
+    finally:
+        desktop.close()
+        phone.close()

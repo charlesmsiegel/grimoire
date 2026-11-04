@@ -294,8 +294,17 @@ def _stage(txn, copies: list[Copy], keeps: list[Keep]) -> None:  # type: ignore[
 
 
 def _manifest_heads(copy: Copy) -> list[str]:
+    """The revision files a manifest names as heads. A head no library can store (``con``, ``nul``)
+    can never exist anywhere: it gets a placeholder path that no device holds, so the head
+    dependency is unmet (the manifest is a ``head_dependency`` conflict) instead of a crash."""
     envelope = parse_exact(tuple(copy.path.split("/")), copy.data)
-    return ["/".join(definition_parts(ref.at(revision))) for ref, revision in envelope.head_refs().items()]  # type: ignore[union-attr]
+    paths = []
+    for ref, revision in envelope.head_refs().items():  # type: ignore[union-attr]
+        try:
+            paths.append("/".join(definition_parts(ref.at(revision))))
+        except (ValueError, UnstorableIdentifier):
+            paths.append(f"<unstorable head {ref.at(revision)}>")
+    return paths
 
 
 def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[Copy], dict[str, str]]:
@@ -328,7 +337,7 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
 
             def blocked(path: str) -> bool:  # unknown on either side: never read as "absent on both"
                 return origin_scan.blocked_reason(path) is not None or dest_scan.blocked_reason(path) is not None
-            missing = sorted(path for path in pins if final(path) != origin_files.get(path) or blocked(path)
+            missing = sorted(path for path in pins | heads if final(path) != origin_files.get(path) or blocked(path)
                              or (path in heads and origin_files.get(path) is None))
             actors = sorted(path for path in ("/".join(instance_parts(ref)) for ref in instances_named(parts, copy.data))
                             if (path in origin_files and final(path) is None) or blocked(path))
@@ -479,7 +488,7 @@ def _plan_keeps(plan: SyncPlan, device: str) -> None:
         txn = store.transaction()
         try:
             target = txn.keep_version(path, data, regenerable=True)  # the peer still holds these bytes
-        except StoreError as error:
+        except (StoreError, OSError) as error:  # one unreadable kept slot never stops the whole sync
             _kept(plan, path, device, False, str(error))
             continue
         if not txn.preview():
@@ -920,8 +929,6 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     kind = syncable(path)
     if kind is None:
         raise ResolveRefused(f"{path} is not a synchronized record")
-    if kind == "knowledge":
-        raise ResolveRefused(f"{path} is a create-only knowledge record; correct it by appending, never replacing")
     ids = device_of(left), device_of(right)
     if ids[0] == ids[1]:
         raise SameDevice(f"both libraries are device {ids[0]!r}")
@@ -958,7 +965,11 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     mine = scans[receiver].files.get(path)
     txn = stores[receiver].transaction()
     resolved = [path]
-    if kind == "definition":
+    if kind == "knowledge":
+        resolved = _knowledge_log_copies(scans, winner, receiver, path)  # the whole log unit, create-only
+        for done in resolved:
+            txn.put_exact(done, scans[winner].files[done], None, regenerable=True)
+    elif kind == "definition":
         # A manifest byte-identical on both devices names the same revision id on both: once the
         # receiver holds the winner's bytes, that reference means the same thing everywhere.
         manifest = "/".join(manifest_parts(_source_of(path)))
@@ -1036,6 +1047,29 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             etag(pending.data))  # type: ignore[arg-type]
         _commit_state(state, device)
     return receiver
+
+
+def _knowledge_log_copies(scans: Mapping[str, CanonicalScan], winner: str, receiver: str, path: str) -> list[str]:
+    """What resolving one knowledge path delivers: every knowledge record of its campaign that the
+    winner holds and the receiver lacks (020 writes records and their batch as one unit), never a
+    replacement. Two logs that diverged (a path both hold with different bytes) cannot be merged yet."""
+    if scans[receiver].files.get(path) is not None:
+        raise ResolveRefused(f"{path} is a create-only knowledge record both devices hold differently; two "
+                             "devices' knowledge logs cannot be merged yet (correct it by appending)")
+    campaign = _knowledge_campaign(path)
+    log = sorted({candidate for scan in scans.values() for candidate in (*scan.files, *scan.blocked)
+                  if _knowledge_campaign(candidate) == campaign})
+    copies = []
+    for candidate in log:
+        if any(scan.blocked_reason(candidate) is not None for scan in scans.values()):
+            raise ResolveRefused(f"{candidate}, in the same knowledge log, is blocked; fix it first")
+        theirs, ours = scans[winner].files.get(candidate), scans[receiver].files.get(candidate)
+        if theirs is not None and ours is not None and theirs != ours:
+            raise ResolveRefused(f"{candidate} differs between the devices: their knowledge logs diverged and "
+                                 "cannot be merged yet")
+        if theirs is not None and ours is None:
+            copies.append(candidate)
+    return copies
 
 
 def _commit_state(txn, device: str) -> None:  # type: ignore[no-untyped-def]

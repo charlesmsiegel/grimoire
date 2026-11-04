@@ -410,10 +410,9 @@ def test_scan_lists_canonical_files_and_names_what_it_cannot_use(pair):
     assert set(found.files) == {MANIFEST_PATH, R1_PATH, WREN_A_PATH, "campaigns/c2/instances/character/wren-b.json"}
     assert found.files[WREN_A_PATH] == (root / WREN_A_PATH).read_bytes()
     assert found.blocked["campaigns/c1/instances/character/broken.json"] == "malformed"
-    if lookalikes:
-        assert found.blocked["campaigns/c1/instances/item/lamp.json"] == "lookalike"
-    else:
-        assert found.blocked["campaigns/c1/instances/item/lamp.json"] == "malformed"
+    assert found.blocked["campaigns/c1/instances/item/lamp.json"] == "malformed"  # the canonical one is read
+    if lookalikes:  # as load() does: only the look-alike spelling is blocked (and load() reports it)
+        assert found.blocked["campaigns/c1/instances/item/Lamp.json"] == "lookalike"
     assert {"worlds", "notes.txt", "campaigns/c1/instances/character/readme.md"} <= set(found.skipped)
     assert not any(path.startswith((".txn", ".conflicts", ".sync", "grimoire-library")) for path in
                    [*found.files, *found.blocked, *found.skipped])
@@ -1025,3 +1024,13 @@ def test_a_reused_regenerable_kept_slot_never_satisfies_a_replace(pair):
     txn.keep_version(R1_FILE, current, regenerable=True)  # reused: nothing staged, nothing re-checked
     with pytest.raises(InvalidEnvelope, match="must be a hold"):
         txn.check()
+
+
+
+def test_a_stray_empty_lookalike_folder_never_blocks_the_canonical_one(pair):
+    """An empty ``Campaigns`` beside ``campaigns`` (a case-sensitive phone) must not stop the real folder."""
+    phone = pair[1]
+    (phone.root / "Campaigns").mkdir()
+    found = phone.scan()
+    assert WREN_A_PATH in found.files and found.blocked_reason(WREN_A_PATH) is None
+    assert found.blocked.get("Campaigns") == "lookalike"

@@ -160,7 +160,7 @@ def _children(access: Access, parts: Parts, blocked: dict[str, str]) -> list[tup
             blocked[text] = "link"
             found.append((name, "skip"))
             continue
-        if keys.get(name_key(name), 0) > 1:
+        if keys.get(name_key(name), 0) > 1 and not _the_canonical_one(name, names, noise):
             blocked[text] = "lookalike"
             found.append((name, "skip"))
             continue
@@ -169,6 +169,22 @@ def _children(access: Access, parts: Parts, blocked: dict[str, str]) -> list[tup
             continue
         found.append((name, "dir" if stat.S_ISDIR(info.st_mode) else "file"))
     return found
+
+
+def _valid_name(name: str) -> bool:
+    try:
+        validate_segment(name, "name")
+    except ValueError:
+        return False
+    return True
+
+
+def _the_canonical_one(name: str, names: list[str], noise: set[str]) -> bool:
+    """In a group of look-alike spellings, the one valid identifier segment (store names are
+    lowercase segments, so at most one can be) is the record and stays readable; only the others
+    are blocked. A stray empty ``Campaigns`` beside ``campaigns`` never stops the real folder."""
+    group = [other for other in names if other not in noise and name_key(other) == name_key(name)]
+    return _valid_name(name) and sum(_valid_name(other) for other in group) == 1
 
 
 def _real_identifier(access: Access, parts: Parts) -> bool:
@@ -328,10 +344,11 @@ def _storable(parts_of, ref) -> bool:  # type: ignore[no-untyped-def]
 
 
 def instances_named(parts: Parts, data: bytes) -> frozenset[InstanceRef]:
-    """The campaign instances a scope or chat record names anywhere in its payload (107's roster
-    actors): sync never delivers such a record to a device that lacks one of them."""
+    """The campaign instances a scope, chat, relation or 020 knowledge record names anywhere in its
+    payload (107's roster actors, 017 endpoints, 020 holders and participants): sync never delivers
+    such a record to a device that lacks one of them."""
     envelope = parse_exact(parts, data)
-    if not isinstance(envelope, ScopeRecord):
+    if not isinstance(envelope, (ScopeRecord, KnowledgeRecord)):
         return frozenset()
     found: set[InstanceRef] = set()
     stack: list[object] = [envelope.payload, envelope.extra]
