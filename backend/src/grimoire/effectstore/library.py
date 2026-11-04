@@ -328,9 +328,10 @@ class TurnEffectsLibrary:
         campaign = ref.campaign_id
         with self.store.lock:
             snap = self._snapshot(campaign)
-            if ref not in snap.events and ref not in snap.etags:
-                self.store.read(ref)  # raises the store's own error (RecordNotFound, a link ...)
             self._require_trustworthy(snap)
+            if ref not in snap.events:
+                self.store.read(ref)  # raises the store's own error (RecordNotFound ...)
+                raise InvalidEffect(f"{ref} cannot be read", "undecodable_event")
             event, etag = snap.events[ref], snap.etags[ref]
             if etag != expected:
                 raise StaleWrite([("/".join(address_parts(ref)), "changed")])
