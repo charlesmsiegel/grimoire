@@ -323,7 +323,7 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
 
 [`grimoire.sync`](SYNC.md) copies another device's file byte for byte and keeps both versions of a conflict. It does so only through these store operations, all of them riding the same journal, preflight, recovery and crash guarantees as `put`:
 
-- **`Transaction.put_exact(path, data, expected, *, replace_unreferenced=False, regenerable=False, allowed_manifests=frozenset())`** stages exact bytes at a canonical definition, manifest, instance, play-scope, chat, relation or knowledge path (knowledge records are create-only, like revisions).
+- **`Transaction.put_exact(path, data, expected, *, replace_unreferenced=False, regenerable=False, allowed_manifests=frozenset())`** stages exact bytes at a canonical definition, manifest, instance, play-scope, chat, relation, knowledge, accepted-event, wrap-up or holdings path (`replica.EXACT_KINDS`; knowledge records are create-only, like revisions). Sync itself copies only the first seven: 021's and 023's families are held back until their merge rules exist ([SYNC](SYNC.md)).
   - The bytes are validated as the envelope they hold: strict JSON, supported format, address equal to the path, writable values. A failure is `InvalidEnvelope` with a `code`.
   - They are published **verbatim**: `previous` is not rewritten, so two libraries converge on one etag.
   - With `regenerable=True` (sync passes it: the bytes still exist on the other device), the entry's journal kind is `replica`, which an abort or an external edit of the target drops instead of preserving. Without it, the bytes are preserved like any `put`.

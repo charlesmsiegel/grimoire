@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import atexit
+import functools
+import shutil
+import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -65,7 +69,31 @@ def new_revision(store: LibraryStore, revision: str, bio: str) -> None:
 
 
 def make_pair(root: Path, *, ops=None, locker=None) -> tuple[LibraryStore, LibraryStore]:
-    """A seeded desktop, an identical phone (synced once), both identified."""
+    """A seeded desktop, an identical phone (synced once), both identified.
+
+    Built once per test session and copied (plus opened, which is 010 recovery of a clean library)
+    for each caller: the bytes are exactly what building it gives, at a fraction of the cost. A
+    caller passing its own ``ops`` or ``locker`` (the fault harness) gets a fresh build through them.
+    """
+    if ops is not None or locker is not None:
+        return _build_pair(root, ops=ops, locker=locker)
+    template = _template()
+    for name in (DESKTOP, PHONE):
+        shutil.copytree(template / name, root / name)
+    return LibraryStore.open(root / DESKTOP), LibraryStore.open(root / PHONE)
+
+
+@functools.cache
+def _template() -> Path:
+    folder = Path(tempfile.mkdtemp(prefix="grimoire-sync-pair-"))
+    atexit.register(shutil.rmtree, folder, True)
+    desktop, phone = _build_pair(folder)
+    desktop.close()
+    phone.close()
+    return folder
+
+
+def _build_pair(root: Path, *, ops=None, locker=None) -> tuple[LibraryStore, LibraryStore]:
     desktop = LibraryStore.create(root / DESKTOP, ops=ops, locker=locker)
     seed(desktop, handle())
     put(desktop, chat_record(["character:wren"]), None)

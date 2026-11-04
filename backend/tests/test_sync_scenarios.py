@@ -1509,3 +1509,26 @@ def test_disagreeing_tombstones_after_a_crash_between_archives_stay_uncertain(pa
     report = sync(desktop, phone, handles())
     assert report.copied == () and report.conflict(path) is not None
     assert not (phone.root / path).exists()
+
+
+def test_a_marker_only_data_commit_survives_a_crash_before_the_pending_step(pair, monkeypatch):
+    """With no copy and no keep to stage (the kept slot is reused), the uncertainty marker alone must still
+    be committed before the archives are rewritten: else a crash there lets a later sync undo a deletion."""
+    desktop, phone = pair
+    (desktop.root / PATHS["wren_b"]).unlink()
+    assert sync(desktop, phone, handles()).conflict(PATHS["wren_b"]).code == "deleted"  # kept copy on the desktop
+    identify(desktop, "tablet", replace=True)
+    renamed = {PHONE: handle(), "tablet": handle()}
+    plan = plan_sync(desktop, phone)
+    assert plan.keeps == {PHONE: [], "tablet": []} and plan.copies == {PHONE: [], "tablet": []}
+
+    def crash(*args, **kwargs):
+        raise _Crash("power loss before the pending step")
+
+    monkeypatch.setattr(sync_session, "_commit_pending", crash)
+    with pytest.raises(_Crash):
+        sync(desktop, phone, renamed)
+    monkeypatch.undo()
+    report = sync(desktop, phone, renamed)
+    assert (PATHS["wren_b"], "tablet") not in report.copied
+    assert not (desktop.root / PATHS["wren_b"]).exists()
