@@ -16,7 +16,7 @@
 
 ### Elderfen: one reusable concept, setting-specific portrayals
 
-An optional reusable `catalog:elderfen-cast/character/charlotte@r1` can own the stable characterization, voice anchors and shared art associations. Independently authored portrayals such as `world:elderfen-modern/character/charlotte@r1`, `world:elderfen-mecha/character/charlotte@r1`, and `world:elderfen-vampire/character/charlotte@r1` may declare explicit `derived_variant` links to a **pinned** common base. A Regency Elderfen portrayal can itself be authored/derived without being the one true ancestor.
+An optional reusable `catalog:elderfen-cast/character/mara@r1` can own the stable characterization, voice anchors and shared art associations. Independently authored portrayals such as `world:elderfen-modern/character/mara@r1`, `world:elderfen-mecha/character/mara@r1`, and `world:elderfen-vampire/character/mara@r1` may declare explicit `derived_variant` links to a **pinned** common base. A Regency Elderfen portrayal can itself be authored/derived without being the one true ancestor.
 
 Effective-definition composition must:
 
@@ -45,11 +45,11 @@ chat:
   scope: quick-123
   launched_from:                     # optional, pinned or explicitly following source
     type: character_or_scenario
-    ref: catalog:elderfen-cast/character/charlotte@r1
+    ref: catalog:elderfen-cast/character/mara@r1
   attached_sources:                  # references, not full materialized copies
     - ref: library:personal/lorebook/notes@r2
   actors:
-    - campaign:quick-123/character/charlotte-1
+    - campaign:quick-123/character/mara-1
   primary_label: Mara           # editable navigation label, not identity
   world: null
 ```

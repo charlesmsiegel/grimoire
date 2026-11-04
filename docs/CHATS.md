@@ -171,7 +171,7 @@ Actor instances are written as `grimoire.record/1` with:
 |---|---|
 | Messages and scene segments, and what an added actor is told | 021/027/032. Events and evidence are stored by 020 ([EVIDENCE](EVIDENCE.md)); records accept a chat as provenance, and a late actor starts with none |
 | Control assignment for the persona's actor | 003/035 |
-| Effective portrayal composition and derivation-aware navigation filters | 022/065 |
+| Effective portrayal composition (first slice implemented: [EFFECTIVE_VIEWS](EFFECTIVE_VIEWS.md), including `chat_snapshot`) and derivation-aware navigation filters | 022/065 |
 | Card import | 037 |
 | World promotion and release pinning | 042/056 |
 | Cross-device merge of chat metadata | 019/028 |
