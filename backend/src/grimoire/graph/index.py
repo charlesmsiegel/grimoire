@@ -53,6 +53,7 @@ class RelationEntry:
     missing_endpoint: bool = False
     unsupported: bool = False
     undecodable: str | None = None  # the reason, when the file could not be decoded
+    reopened: bool = False  # an ending was revoked at least once (021); see ``relation.reopenings``
 
     @property
     def traversable(self) -> bool:
@@ -187,7 +188,8 @@ class GraphIndex:
                 raise GraphError("invalid_field")
             missing = not relation.endpoints() <= known
             admit(relation.ref, RelationEntry(relation.ref, relation, retracted=relation.retraction is not None,
-                                              ended=relation.ending is not None, missing_endpoint=missing))
+                                              ended=relation.ending is not None, missing_endpoint=missing,
+                                              reopened=bool(relation.reopenings)))
             if missing:
                 problems.append(GraphProblem("missing_endpoint", (relation.ref.relation_id,)))
             decoded.append(relation)

@@ -15,12 +15,12 @@ from grimoire.core.identity import InstanceRef, RelationRef
 from grimoire.core.json_value import JsonObject, JsonValueError, thaw
 from grimoire.core.knowledge import KnowledgeError, Moment
 
-from .model import PREDICATES, Ending, GraphError, Relation, Retraction, UnsupportedRelation
+from .model import PREDICATES, Ending, GraphError, Relation, Reopening, Retraction, UnsupportedRelation
 
 RELATION_SCHEMA = "grimoire.relation/0"
 ADDRESS_KEYS = frozenset({"ref", "address", "campaign_id", "relation_id", "schema"})
 FIELDS = frozenset({"predicate", "subject", "object", "since", "provenance", "recorded_at", "ending",
-                    "retraction"})
+                    "retraction", "reopenings"})
 _REQUIRED = frozenset({"predicate", "subject", "object", "since", "provenance", "recorded_at"})
 _MOMENT = frozenset({"sequence", "scene_id", "turn_id"})
 
@@ -51,6 +51,10 @@ def _moment(moment: Moment) -> dict:
     return data
 
 
+def _ending(ending: Ending) -> dict:
+    return {"until": _moment(ending.until), "provenance": ending.provenance, "at": ending.at}
+
+
 def relation_to_payload(relation: Relation) -> dict:
     clash = sorted(set(relation.extras) & (ADDRESS_KEYS | FIELDS))
     if clash:
@@ -61,10 +65,12 @@ def relation_to_payload(relation: Relation) -> dict:
         "since": _moment(relation.since), "provenance": relation.provenance, "recorded_at": relation.recorded_at,
     }
     if relation.ending is not None:
-        payload["ending"] = {"until": _moment(relation.ending.until), "provenance": relation.ending.provenance,
-                             "at": relation.ending.at}
+        payload["ending"] = _ending(relation.ending)
     if relation.retraction is not None:
         payload["retraction"] = {"provenance": relation.retraction.provenance, "at": relation.retraction.at}
+    if relation.reopenings:  # written only when nonempty, so a never-reopened file is byte-identical to 017's
+        payload["reopenings"] = [
+            {"ending": _ending(r.ending), "provenance": r.provenance, "at": r.at} for r in relation.reopenings]
     return {**thaw(relation.extras), **payload}  # type: ignore[dict-item]
 
 
@@ -131,9 +137,8 @@ def relation_from_payload(ref: RelationRef, schema: str, payload: object) -> Rel
     since = _decode_moment(payload["since"], "since")
     ending = retraction = None
     if payload.get("ending") is not None:
-        data = _object(payload["ending"], "ending", frozenset({"until", "provenance", "at"}),
-                       frozenset({"until", "provenance", "at"}))
-        ending = _build(lambda: Ending(_decode_moment(data["until"], "ending.until"), data["provenance"], data["at"]))
+        ending = _decode_ending(payload["ending"], "ending")
+    reopenings = _decode_reopenings(payload["reopenings"]) if "reopenings" in payload else ()
     if payload.get("retraction") is not None:
         data = _object(payload["retraction"], "retraction", frozenset({"provenance", "at"}),
                        frozenset({"provenance", "at"}))
@@ -143,7 +148,30 @@ def relation_from_payload(ref: RelationRef, schema: str, payload: object) -> Rel
     except JsonValueError:
         raise _invalid("unknown fields are not JSON") from None
     return _build(lambda: Relation(ref, predicate, subject, obj, since, payload["provenance"],
-                                   payload["recorded_at"], ending, retraction, extras))
+                                   payload["recorded_at"], ending, retraction, extras, reopenings))
+
+
+_ENDING = frozenset({"until", "provenance", "at"})
+_REOPENING = frozenset({"ending", "provenance", "at"})
+
+
+def _decode_ending(value: object, label: str) -> Ending:
+    data = _object(value, label, _ENDING, _ENDING)
+    return _build(lambda: Ending(_decode_moment(data["until"], f"{label}.until"), data["provenance"], data["at"]))
+
+
+def _decode_reopenings(value: object) -> tuple[Reopening, ...]:
+    """A nonempty list, oldest first: an explicit empty list is not canonical, so it is refused."""
+    if not isinstance(value, (list, tuple)) or not value:  # a stored payload is frozen: lists arrive as tuples
+        raise _invalid("reopenings must be a nonempty list")
+    found = []
+    for index, item in enumerate(value):
+        data = _object(item, f"reopenings[{index}]", _REOPENING, _REOPENING)
+        ending = _decode_ending(data["ending"], f"reopenings[{index}].ending")
+        found.append(_build(lambda: Reopening(ending, data["provenance"], data["at"])))
+    if any(type(r.at) is str and type(prev.at) is str and r.at < prev.at for prev, r in zip(found, found[1:])):
+        raise _invalid("reopenings must be in the order they were made")
+    return tuple(found)
 
 
 def _build(make):  # type: ignore[no-untyped-def]

@@ -93,6 +93,24 @@ class Retraction:
         _text(self.at)
 
 
+@dataclass(frozen=True, slots=True)
+class Reopening:
+    """An ending that was revoked: the relation holds again as if it had never ended (021's undo).
+
+    ``ending`` is the cancelled ending, kept verbatim; ``provenance`` and ``at`` say who reopened it and when.
+    """
+
+    ending: Ending
+    provenance: str
+    at: str
+
+    def __post_init__(self) -> None:
+        if type(self.ending) is not Ending:
+            raise _invalid()
+        _text(self.provenance)
+        _text(self.at)
+
+
 def _empty() -> JsonObject:
     return JsonObject({})
 
@@ -111,6 +129,7 @@ class Relation:
     ending: Ending | None = None
     retraction: Retraction | None = None
     extras: JsonObject = field(default_factory=_empty)
+    reopenings: tuple[Reopening, ...] = ()  # cancelled endings, oldest first (021); last so 017 calls still fit
 
     def __post_init__(self) -> None:
         if type(self.ref) is not RelationRef:
@@ -139,6 +158,13 @@ class Relation:
             raise _invalid(rid)
         if type(self.extras) is not JsonObject:
             raise _invalid(rid)  # unknown authored fields arrive as a JsonObject (the codec builds it)
+        if type(self.reopenings) is not tuple:
+            raise _invalid(rid)
+        for reopening in self.reopenings:
+            if type(reopening) is not Reopening:
+                raise _invalid(rid)
+            if reopening.ending.until.sequence <= self.since.sequence:
+                raise GraphError("invalid_until", (rid,))
 
     @property
     def symmetric(self) -> bool:
@@ -175,6 +201,14 @@ class Relation:
         if self.ending is not None:
             raise GraphError("already_ended", (self.ref.relation_id,))
         return replace(self, ending=ending)
+
+    def reopened(self, reopening: Reopening) -> Relation:
+        """Cancel the current ending (keeping it in ``reopenings``); the relation holds again from ``since``."""
+        if self.retraction is not None:
+            raise GraphError("already_retracted", (self.ref.relation_id,))
+        if self.ending is None or reopening.ending != self.ending:
+            raise GraphError("not_ended", (self.ref.relation_id,))
+        return replace(self, ending=None, reopenings=(*self.reopenings, reopening))
 
     def retracted(self, retraction: Retraction) -> Relation:
         if self.retraction is not None:
