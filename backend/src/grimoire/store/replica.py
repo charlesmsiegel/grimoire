@@ -31,7 +31,8 @@ SCOPE_FILE = SCOPE
 #: Root entries a scan walks for canonical records.
 _RECORD_ROOTS = (SOURCES, CAMPAIGNS)
 #: The record kinds this module reads, copies and checks: every kind sync may own. 018's blobs,
-#: images and placements are not among them yet (a later slice); ledgers never are.
+#: images and placements and 021's accepted events and wrap-ups are not among them yet (a later
+#: slice); ledgers never are.
 EXACT_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge"})
 #: Root entries that are device-local or the library's own marker: never transferred, never reported.
 _LOCAL = frozenset({TXN, CONFLICTS, SYNC, MARKER})

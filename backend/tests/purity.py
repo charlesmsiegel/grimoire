@@ -70,8 +70,8 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
                                          "datetime", "uuid", "secrets")
 
 #: grimoire packages that are adapters or test infrastructure, not pure.
-ADAPTERS = frozenset({"grimoire.capture", "grimoire.chatstore", "grimoire.effective", "grimoire.evidencestore",
-                      "grimoire.graphstore", "grimoire.imagestore",
+ADAPTERS = frozenset({"grimoire.capture", "grimoire.chatstore", "grimoire.effective", "grimoire.effectstore",
+                      "grimoire.evidencestore", "grimoire.graphstore", "grimoire.imagestore",
                       "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1", "grimoire.providers",
                       "grimoire.store", "grimoire.sync", "grimoire.testing"})
 
@@ -106,6 +106,9 @@ PURE_PACKAGES = (
     PurePackage("grimoire.graph", ("grimoire.graph", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Stored events and evidence (020): codec and assembly; the store-backed service is an adapter.
     PurePackage("grimoire.evidence", ("grimoire.evidence", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # Accepted turn effects (021): values, codecs, authority, planning and checks; the service is an adapter.
+    PurePackage("grimoire.effects", ("grimoire.effects", "grimoire.graph", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
     # Image identity and placements (018): values, codec and resolver; storage is an adapter.
     PurePackage("grimoire.images", ("grimoire.images", "grimoire.core"), never_import=("grimoire.core.inference",)),
     PurePackage("grimoire.security", ("grimoire.security",)),

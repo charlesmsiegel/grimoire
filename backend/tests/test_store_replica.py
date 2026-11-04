@@ -750,7 +750,7 @@ def test_exact_kinds_cover_every_synced_kind_and_nothing_of_018():
     from grimoire.store.replica import EXACT_KINDS
     from grimoire.sync.model import SYNCED_KINDS
     assert SYNCED_KINDS <= EXACT_KINDS
-    assert not EXACT_KINDS & {"blob", "image", "placement", "ledger"}
+    assert not EXACT_KINDS & {"blob", "image", "placement", "ledger", "accepted", "wrapup"}
 
 
 @pytest.mark.parametrize("path", ["campaigns/c1/images/portrait.json",

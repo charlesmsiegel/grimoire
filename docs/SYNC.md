@@ -12,7 +12,7 @@
 
 ## What is synchronized
 
-`grimoire.sync.syncable(path)` is the single definition of the synced set, and the extension point for later families (018 assets, 021/035 scenes, ledgers). In this slice it covers the canonical records of 010 and of [107](CHATS.md): source manifests, definition revisions, campaign instances, 107's play-scope (`campaigns/<id>/scope.json`) and chat (`campaigns/<id>/chats/<chat_id>.json`) records, [017](GRAPH.md)'s relation records (`campaigns/<id>/relations/<relation_id>.json`), and [020](EVIDENCE.md)'s create-only knowledge records (events, evidence and knowledge-log batches under `campaigns/<id>/events/` and `campaigns/<id>/evidence/`). Instances, scopes, chats, relations and knowledge records are campaign-local: each is its own admission unit, never grouped with a source. S3 is proven both on a synthetic instance-shaped chat and on real 107 chats made by `grimoire.chatstore`:
+`grimoire.sync.syncable(path)` is the single definition of the synced set, and the extension point for later families (018 images and blobs, 021 accepted events and wrap-ups, 035 scenes, ledgers). In this slice it covers the canonical records of 010 and of [107](CHATS.md): source manifests, definition revisions, campaign instances, 107's play-scope (`campaigns/<id>/scope.json`) and chat (`campaigns/<id>/chats/<chat_id>.json`) records, [017](GRAPH.md)'s relation records (`campaigns/<id>/relations/<relation_id>.json`), and [020](EVIDENCE.md)'s create-only knowledge records (events, evidence and knowledge-log batches under `campaigns/<id>/events/` and `campaigns/<id>/evidence/`). Instances, scopes, chats, relations and knowledge records are campaign-local: each is its own admission unit, never grouped with a source. S3 is proven both on a synthetic instance-shaped chat and on real 107 chats made by `grimoire.chatstore`:
 - a lorebook attached on one device and a world attached on the other touch different files, so both merge;
 - concurrent edits of one chat record are a keep-both conflict, and the new participant's actor still travels;
 - after either, each device's navigation index still finds exactly one chat.
@@ -26,6 +26,7 @@ Reported as `skipped` and never touched:
 - the library marker;
 - unknown root entries such as `worlds/`;
 - [018](IMAGES.md)'s image objects and placements (`images/` and `placements/` under a source's `_source/` or a campaign) and its blobs under `assets/`: they are not synced yet, and they never pin a definition revision (placements attach to the entity), so they never block `resolve`;
+- [021](EFFECTS.md)'s accepted events and scene wrap-ups (`campaigns/<id>/accepted/`, `campaigns/<id>/wrapups/`): not synced yet; they name instances, chats and relations, never a revision;
 - the reserved campaign family `scenes/`, and any file under `events/` or `evidence/` that is not a knowledge record of a known family;
 - non-record files.
 

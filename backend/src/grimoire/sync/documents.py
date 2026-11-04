@@ -70,7 +70,8 @@ def _digest(devices: tuple[str, str], entries: Mapping[str, object]) -> str:
 def syncable(path: object) -> str | None:
     """The record kind sync owns at ``path``, or ``None``: the one definition of the synced set.
 
-    The extension point for later families (018 assets, 021/035 scenes, ledgers): add the kind to
+    The extension point for later families (018 images, 021 accepted events and wrap-ups, 035 scenes,
+    ledgers): add the kind to
     ``model.SYNCED_KINDS`` and its decision overrides. Derived reverse indexes (107's navigation
     index) are never synchronized.
     """

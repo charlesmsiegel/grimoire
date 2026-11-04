@@ -333,14 +333,15 @@ def test_s8_revision_resolve_replaces_only_an_unreferenced_revision(pair):
 
 _IMAGE_PATHS = ("campaigns/c1/images/portrait.json", "sources/world/harbor/_source/images/portrait.json",
                 "sources/world/harbor/_source/placements/character/wren/portrait.json",
-                "campaigns/c1/placements/character/wren-a/portrait.json", "assets/blobs/ab/" + "ab" * 32 + ".png")
+                "campaigns/c1/placements/character/wren-a/portrait.json", "assets/blobs/ab/" + "ab" * 32 + ".png",
+                "campaigns/c1/accepted/e1.json", "campaigns/c1/wrapups/w1.json")  # and 021's accepted events, wrap-ups
 
 
-def test_018_images_are_skipped_and_never_block_a_revision_resolve(pair):
-    """018's images, placements and blobs are not synced yet, and can never pin a revision."""
+def test_018_and_021_families_are_skipped_and_never_block_a_revision_resolve(pair):
+    """018's images, placements and blobs and 021's records are not synced yet, and never pin a revision."""
     desktop, phone = pair
     for store in (desktop, phone):
-        for path in _IMAGE_PATHS:  # even a damaged one: 018 records never name a revision
+        for path in _IMAGE_PATHS:  # even a damaged one: these records never name a revision
             (store.root / path).parent.mkdir(parents=True, exist_ok=True)
             (store.root / path).write_bytes(b"{}" if path.endswith(".json") else b"\x89PNG")
     for store, bio in ((desktop, "captain"), (phone, "pirate")):  # a non-head revision, as in S8
@@ -355,7 +356,8 @@ def test_018_images_are_skipped_and_never_block_a_revision_resolve(pair):
     assert report.conflict(r9).code == "missing_ancestor"
     assert {conflict.path for conflict in report.conflicts} == {r9}
     for device in (DESKTOP, PHONE):
-        assert {"campaigns/c1/images/portrait.json", "assets"} <= set(report.skipped[device])
+        assert {"campaigns/c1/images/portrait.json", "campaigns/c1/accepted/e1.json", "assets"} <= set(
+            report.skipped[device])
     mine, theirs = (desktop.root / r9).read_bytes(), (phone.root / r9).read_bytes()
     resolve(desktop, phone, r9, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
     assert (phone.root / r9).read_bytes() == mine
