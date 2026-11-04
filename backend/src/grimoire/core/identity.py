@@ -36,6 +36,11 @@ _CHAT_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#chat/(?P<chat_
 _RELATION_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#relation/(?P<relation_id>{_SEGMENT})")
 _ACCEPTED_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#accepted/(?P<event_id>{_SEGMENT})")
 _WRAPUP_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#wrapup/(?P<wrapup_id>{_SEGMENT})")
+_IMAGE_REF_RE = re.compile(
+    rf"(?P<scope>campaign:{_SEGMENT}|{_SOURCE_RE.pattern})#image/(?P<image_id>{_SEGMENT})"
+)
+#: The longest slot (and so placement file stem) the store can hold: 123 + ".json" = 128.
+SLOT_MAX = 123
 
 
 class IdentityConflict(ValueError):
@@ -362,6 +367,89 @@ class WrapUpRef:
         if match is None:
             raise ValueError(f"not a wrap-up reference: {text!r}")
         return cls(**match.groupdict())
+
+
+@dataclass(frozen=True, slots=True)
+class ImageRef:
+    """One picture object, owned by one source or one play scope; never a blob or a file path.
+
+    ``<source>#image/<image_id>`` or ``campaign:<campaign_id>#image/<image_id>``. The source
+    grammar forbids ``campaign`` as a first segment, so the two forms never collide. Not
+    returned by ``parse_ref``.
+    """
+
+    scope: str
+    image_id: str
+
+    def __post_init__(self) -> None:
+        if isinstance(self.scope, str) and self.scope.startswith("campaign:"):
+            ScopeRef.parse(self.scope)
+        else:
+            validate_source_id(self.scope, "image scope")
+        validate_segment(self.image_id, "image_id")
+        if len(self.image_id) > SLOT_MAX:  # its file name is image_id + ".json"
+            raise ValueError(f"image_id is longer than {SLOT_MAX} characters")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"{self.scope}#image/{self.image_id}"
+
+    @property
+    def campaign_id(self) -> str | None:
+        return self.scope[len("campaign:"):] if self.scope.startswith("campaign:") else None
+
+    @property
+    def source(self) -> str | None:
+        return None if self.scope.startswith("campaign:") else self.scope
+
+    @classmethod
+    def parse(cls, text: object) -> ImageRef:
+        match = _IMAGE_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not an image reference: {text!r}")
+        return cls(**match.groupdict())
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementRef:
+    """One slot of one subject's pictures: ``<subject>#placement/<slot>``.
+
+    The subject is an *unpinned* definition (the entity across all its revisions) or a campaign
+    instance. Not returned by ``parse_ref``.
+    """
+
+    subject: SourceRef | InstanceRef
+    slot: str
+
+    def __post_init__(self) -> None:
+        if isinstance(self.subject, SourceRef):
+            if self.subject.pinned:
+                raise ValueError(f"a placement subject is an unpinned entity, not {self.subject}")
+        elif not isinstance(self.subject, InstanceRef):
+            raise ValueError("a placement subject must be a SourceRef or an InstanceRef")
+        validate_segment(self.slot, "slot")
+        if len(self.slot) > SLOT_MAX:
+            raise ValueError(f"slot is longer than {SLOT_MAX} characters")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"{self.subject}#placement/{self.slot}"
+
+    @classmethod
+    def parse(cls, text: object) -> PlacementRef:
+        text = _require_text(text)
+        subject_text, separator, slot = text.rpartition("#placement/")
+        if not separator:
+            raise ValueError(f"not a placement reference: {text!r}")
+        subject: SourceRef | InstanceRef
+        try:
+            subject = (InstanceRef.parse(subject_text) if subject_text.startswith("campaign:")
+                       else SourceRef.parse(subject_text))
+            return cls(subject, slot)
+        except ValueError as error:
+            raise ValueError(f"not a placement reference: {text!r} ({error})") from None
 
 
 @dataclass(frozen=True, slots=True)

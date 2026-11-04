@@ -14,9 +14,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from grimoire.core.identity import (
-    AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef, WrapUpRef, parse_ref,
-    validate_segment,
-    validate_source_id,
+    AcceptedRef, ChatRef, ImageRef, InstanceRef, KnowledgeRef, PlacementRef, RelationRef, ScopeRef, SourceRef,
+    WrapUpRef, parse_ref, validate_segment, validate_source_id,
 )
 from grimoire.core.index import DIRECTED_RELATIONS, SYMMETRIC_RELATIONS
 
@@ -27,6 +26,7 @@ RECORD_FORMAT = "grimoire.record/1"
 SOURCE_FORMAT = "grimoire.source/1"
 SCOPE_RECORD_FORMAT = "grimoire.scope-record/1"
 KNOWLEDGE_RECORD_FORMAT = "grimoire.knowledge-record/1"
+ASSET_RECORD_FORMAT = "grimoire.asset-record/1"
 SCHEMA_MAX = 128
 
 _RECORD_FIELDS = frozenset({"format", "address", "payload", "name", "owner", "derived_from", "base",
@@ -36,6 +36,7 @@ _SOURCE_FIELDS = frozenset({"format", "source", "owner", "title", "heads", "link
 _LINK_FIELDS = frozenset({"subject", "relation", "object"})
 _SCOPE_RECORD_FIELDS = frozenset({"format", "address", "schema", "owner", "payload", "previous"})
 _KNOWLEDGE_RECORD_FIELDS = frozenset({"format", "address", "schema", "owner", "payload", "previous"})
+_ASSET_RECORD_FIELDS = _SCOPE_RECORD_FIELDS
 RELATIONS = SYMMETRIC_RELATIONS | DIRECTED_RELATIONS
 
 Address = SourceRef | InstanceRef
@@ -162,6 +163,42 @@ class ScopeRecord:
         _optional_text(self.owner, "owner", nonempty=True)
         object.__setattr__(self, "payload", _freeze(self.payload))
         object.__setattr__(self, "extra", _frozen_extra(self.extra, _SCOPE_RECORD_FIELDS))
+
+    def check_writable(self) -> None:
+        check_writable(self.payload)
+        check_writable(self.extra)
+
+
+AssetAddress = ImageRef | PlacementRef
+
+
+@dataclass(frozen=True)
+class AssetRecord:
+    """An image object (``ImageRef``) or placement (``PlacementRef``) record with an opaque payload.
+
+    Like ``ScopeRecord``: the envelope owns the address and the payload's schema id, and the store
+    never interprets the payload. Image records are create-only. Unknown top-level fields are
+    preserved in ``extra``.
+    """
+
+    address: AssetAddress
+    schema: str
+    payload: object = None
+    owner: str | None = None
+    extra: Mapping[str, object] = field(default_factory=_empty)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.address, (ImageRef, PlacementRef)):
+            raise InvalidEnvelope("an asset record's address must be an ImageRef or PlacementRef")
+        if type(self.schema) is not str or not self.schema.strip() or len(self.schema) > SCHEMA_MAX:
+            raise InvalidEnvelope(f"schema must be nonempty text of at most {SCHEMA_MAX} characters")
+        _optional_text(self.owner, "owner", nonempty=True)
+        object.__setattr__(self, "payload", _freeze(self.payload))
+        object.__setattr__(self, "extra", _frozen_extra(self.extra, _ASSET_RECORD_FIELDS))
+
+    @property
+    def is_image(self) -> bool:
+        return isinstance(self.address, ImageRef)
 
     def check_writable(self) -> None:
         check_writable(self.payload)
@@ -318,6 +355,15 @@ def knowledge_record_document(record: KnowledgeRecord) -> dict[str, object]:
     return document
 
 
+def asset_record_document(record: AssetRecord, previous: str | None) -> dict[str, object]:
+    document: dict[str, object] = dict(thaw(record.extra))  # type: ignore[arg-type]
+    document.update(format=ASSET_RECORD_FORMAT, address=str(record.address), schema=record.schema,
+                    payload=thaw(record.payload), previous=previous)
+    if record.owner is not None:
+        document["owner"] = record.owner
+    return document
+
+
 def source_document(manifest: SourceManifest, previous: str | None) -> dict[str, object]:
     document: dict[str, object] = dict(thaw(manifest.extra))  # type: ignore[arg-type]
     document.update(
@@ -439,3 +485,25 @@ def parse_knowledge_record(document: Mapping[str, object]) -> tuple[KnowledgeRec
     except InvalidEnvelope as error:
         raise EnvelopeError("malformed", str(error)) from None
     return record, None
+
+
+def parse_asset_record(document: Mapping[str, object]) -> tuple[AssetRecord, str | None]:
+    _format(document, ASSET_RECORD_FORMAT)
+    text = document.get("address")
+    address: AssetAddress
+    try:
+        if isinstance(text, str) and "#placement/" in text:
+            address = PlacementRef.parse(text)
+        else:
+            address = ImageRef.parse(text)
+    except ValueError as error:
+        raise EnvelopeError("malformed", f"address: {error}") from None
+    if "payload" not in document:
+        raise EnvelopeError("malformed", "missing payload")
+    extra = {key: value for key, value in document.items() if key not in _ASSET_RECORD_FIELDS}
+    try:
+        record = AssetRecord(address, document.get("schema"), document["payload"],  # type: ignore[arg-type]
+                             owner=document.get("owner"), extra=extra)  # type: ignore[arg-type]
+    except InvalidEnvelope as error:
+        raise EnvelopeError("malformed", str(error)) from None
+    return record, _previous(document)

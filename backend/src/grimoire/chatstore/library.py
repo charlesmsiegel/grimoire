@@ -6,7 +6,8 @@ before ``commit``. The store applies CAS, authorization, link/V1 guards, journal
 every record the change touches.
 
 New bindings are validated against one source's own files with ``load()``'s rules
-(``LibraryStore.check_definition``); the whole library is never loaded for a write. Opening a
+(``LibraryStore.check_definition``, which also consults the store's shared, cached whole-library
+exclusions); ``load()`` is never called for a write. Opening a
 chat and building navigation do load the library, and they never fail because a source is gone:
 broken references are reported, never rebound.
 
@@ -199,6 +200,11 @@ class ChatLibrary:
                    persona: SourceRef | None = None, label: str | None = None, scope: ScopeRef | None = None,
                    reuse_actors: ReuseMap | None = None) -> ChatChange:
         """A new chat, by default in a new world-less scope; ``scope`` continues an existing campaign."""
+        with self.store.read_pass():  # every binding is validated against one verified exclusion set
+            return self._start_chat(launch, attach, persona, label, scope, reuse_actors)
+
+    def _start_chat(self, launch: Launch, attach: Iterable[tuple[SourceRef, str]], persona: SourceRef | None,
+                    label: str | None, scope: ScopeRef | None, reuse_actors: ReuseMap | None) -> ChatChange:
         at = self._clock()
         reuse = dict(reuse_actors or {})
         if reuse and scope is None:

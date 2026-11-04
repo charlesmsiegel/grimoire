@@ -60,11 +60,11 @@ Planned, authorized, fully booked OpenAI-compatible model calls. Endpoints are t
     relations/                        # scoped typed relationship records
     accepted/                         # accepted fictional events and their receipts (021)
     wrapups/                          # retrospective scene summaries; never actor memory (021)
-  assets/                             # content-addressed image objects and placements
+  assets/                             # content-addressed image blobs (018; objects and placements live with their owner)
   .cache/                             # disposable derived graph, search, embeddings
 ```
 
-The native store's accepted first-slice layout (`sources/<segments>/_source/…`, `campaigns/<id>/instances/…`) and its revision, recovery and isolation contract are in [STORAGE.md](STORAGE.md); the first-slice relation schema (`campaigns/<id>/relations/`) and graph semantics are in [GRAPH.md](GRAPH.md); accepted turn effects (`accepted/`, `wrapups/`) are in [EFFECTS.md](EFFECTS.md). `accepted/` is not `events/`: an accepted event is an authority record with operations and receipts, while `events/` holds 020's objective 012 `Event`s, bridged by `as_knowledge_event`. Data files must remain usable by humans and external agents. Derived indexes, embeddings and cached actor views are disposable and may not become a second canonical store.
+Image objects and placements (018) deliberately live under their owning source's `_source/` or their campaign, not in `assets/`; only content-addressed blobs are library-global. See [IMAGES](IMAGES.md). The native store's accepted first-slice layout (`sources/<segments>/_source/…`, `campaigns/<id>/instances/…`) and its revision, recovery and isolation contract are in [STORAGE.md](STORAGE.md); the first-slice relation schema (`campaigns/<id>/relations/`) and graph semantics are in [GRAPH.md](GRAPH.md); accepted turn effects (`accepted/`, `wrapups/`) are in [EFFECTS.md](EFFECTS.md). `accepted/` is not `events/`: an accepted event is an authority record with operations and receipts, while `events/` holds 020's objective 012 `Event`s, bridged by `as_knowledge_event`. Data files must remain usable by humans and external agents. Derived indexes, embeddings and cached actor views are disposable and may not become a second canonical store.
 
 ## Wave 2 independent domain and storage contracts (planned)
 

@@ -146,12 +146,11 @@ Every mutating method returns a `ChatChange`:
 
 ### Validation
 
-New bindings are validated with `store.check_definition`. It applies `load()`'s rules to **that one source only**:
+New bindings are validated with `store.check_definition`. It applies `load()`'s rules to the bound source, and consults the store's shared, cached whole-library exclusions ([`source_facts`](STORAGE.md#read-only-helpers-107)). `start_chat` verifies them once for all its bindings; `attach_source`, `set_persona` and `attach_world` verify once each:
 - an implicit single-revision head resolves;
-- excluded sources and dropped entities are refused.
+- excluded sources, including one excluded only by a cross-source `identity_conflict`, and dropped entities are refused.
 
-Its cost does not grow with the library, and no mutating method loads the whole library (tested). Limits:
-- An `identity_conflict` that only a whole-library build can see is not caught at write time. `open_chat` reports it.
+No mutating method calls `load()` (tested). A changed source is scanned again; an unchanged library costs one `stat` per manifest and revision entry, once per `start_chat`, plus one manifest read (an etag check) and one revision read per bound definition (see [STORAGE](STORAGE.md#read-only-helpers-107)). Limits:
 - Validation happens when a change is created. A source deleted before `commit` becomes a broken binding that `open_chat` reports.
 
 ### Actor ids
