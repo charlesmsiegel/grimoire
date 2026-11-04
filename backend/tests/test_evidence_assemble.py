@@ -14,13 +14,15 @@ from collections import Counter
 import pytest
 
 from grimoire.core import (
-    DIRECTOR, Belief, Event, Knowledge, KnowledgeRef, Perception, Proposition, Ruling, Subject, actor_knowledge,
+    DIRECTOR, Belief, Event, Knowledge, KnowledgeRef, Perception, Proposition, Report, Ruling, Subject,
+    actor_knowledge,
     player_knowledge, standing,
 )
 from grimoire.evidence import ScannedFile, assemble, decode_batch, encode, encode_batch
 
 from evidence_fixtures import (
-    ACTORS, C, E1, INES, MARA, ORRIN, PC_CONTROLS, PLAYER, SAM, TAVI, all_records, fake_etag, in_memory_files, m,
+    ACTORS, C, E1, INES, MARA, ORRIN, PC_CONTROLS, PLAYER, SAM, TAVI, all_records, batches, fake_etag,
+    in_memory_files, m,
 )
 
 AS_OF = range(0, 10)
@@ -265,6 +267,50 @@ def test_an_edit_that_names_another_holder_leaves_that_holders_chain_alone():
     assert actor_knowledge(assembly.knowledge, INES, as_of=9) == actor_knowledge(U, INES, as_of=9)
 
 
+def test_a_rule_failure_on_the_newest_belief_takes_its_whole_chain():
+    """Inside the 012 loop: b-ines-2 now cites Mara's perception under its own etag (foreign_evidence)."""
+    files = in_memory_files()
+    target = ref("belief:b-ines-2")
+    payload = {**files[target].payload, "evidence_ids": ["v-mara"]}
+    files[target] = ScannedFile(files[target].etag, files[target].schema, payload)
+    assembly = assemble(C, files)
+    assert reasons(assembly) == {"belief:b-ines-2": "foreign_evidence", "belief:b-ines-1": "chain_quarantined"}
+    assert actor_knowledge(assembly.knowledge, INES, as_of=9).current == ()  # never the older b-ines-1
+    check_guarantees(assembly, files)
+
+
+def test_dependents_of_a_rule_failure_drain_linearly():
+    """A proposition that fails a 012 rule (about a later event) takes thousands of reports in linear time."""
+    import time
+    first = [Event(C, "e-late", "a bell", m(5), "director")]
+    second = [Proposition(C, "p-big", "the bell rang", m(5), "director", about=(Subject("event", "e-late"),))]
+    reports = [Report(C, f"v-r-{n}", MARA, "p-big", "told", m(5), "director", confirmed=True) for n in range(2000)]
+    files = in_memory_files([first, second, *(reports[i:i + 500] for i in range(0, 2000, 500))])
+    late = ref("event:e-late")
+    files[late] = ScannedFile(files[late].etag, files[late].schema,  # read later than its proposition
+                              {**files[late].payload, "moment": {"sequence": 9}})
+    import sys
+    module = sys.modules["grimoire.evidence.assemble"]  # the name is shadowed by the function
+    builds = []
+    real = module.build_ledger
+    module.build_ledger = lambda *args: builds.append(1) or real(*args)
+    try:
+        started = time.perf_counter()
+        assembly = assemble(C, files)
+    finally:
+        module.build_ledger = real
+    assert time.perf_counter() - started < 5
+    assert len(builds) <= 3  # one failing build, one valid one: never one rebuild per dependent
+    assert reasons(assembly)["proposition:p-big"] == "about_future_event"
+    assert sum(r == "unknown_proposition" for r in reasons(assembly).values()) == 2000
+
+
+def test_the_high_water_mark_counts_every_family():
+    files = in_memory_files(batches() + [[Report(C, "v-last", ORRIN, "p-lie", "told", m(12), "director",
+                                                 confirmed=True)]])
+    assert assemble(C, files).high_water == 12
+
+
 def test_a_cascade_from_one_deleted_file_stays_linear():
     import time
     seen = [Perception(C, f"v-big-{n}", MARA, "e-big", "seen", "faces", m(1), "director", confirmed=True)
@@ -273,12 +319,17 @@ def test_a_cascade_from_one_deleted_file_stays_linear():
              Proposition(C, "p-big", "a crowd gathered", m(1), "director", about=(Subject("event", "e-big"),))]
     beliefs = [Belief(C, f"b-big-{n}", MARA, "p-big", "believed", m(1), DIRECTOR, (f"v-big-{n}",))
                for n in range(400)]
-    files = in_memory_files([first, *(seen[i:i + 500] for i in range(0, 1500, 500)), beliefs])
+    about = [Proposition(C, f"p-about-{n}", "the crowd", m(1), "director", about=(Subject("event", "e-big"),))
+             for n in range(300)]
+    grounded = [Ruling(C, f"r-g-{n}", f"p-about-{n}", "established", m(1), "director",
+                       grounds=(Subject("event", "e-big"),)) for n in range(300)]
+    files = in_memory_files([first, *(seen[i:i + 500] for i in range(0, 1500, 500)), beliefs, about, grounded])
     del files[ref("event:e-big")]
     started = time.perf_counter()
     assembly = assemble(C, files)
     assert time.perf_counter() - started < 5
-    assert len(assembly.quarantined) == 1 + 1 + 1500 + 400 and assembly.knowledge.evidence == ()
+    assert len(assembly.quarantined) == 1 + 1 + 1500 + 400 + 300 + 300 and assembly.knowledge.evidence == ()
+    assert assembly.knowledge.rulings == ()
 
 
 def test_a_consistent_tail_edit_is_the_documented_limit():
@@ -382,13 +433,20 @@ EXTRA = [
 def damage(files: dict, rng: random.Random) -> str:
     records = sorted((r for r in files if r.family != "batch"), key=str)
     kind = rng.choice(["delete", "edit", "add", "undecodable", "newer_schema", "batch_edit", "batch_delete",
-                       "consistent_edit"])  # a look-alike rename is a real rename only on disk (damage test)
+                       "consistent_edit", "same_etag_rule_break"])  # a look-alike rename is a real rename only on disk (damage test)
     if not records:
         return "none"
     target = rng.choice(records)
     scanned = files[target]
     if kind == "delete":
         del files[target]
+    elif kind == "same_etag_rule_break":  # content another build reads differently: same bytes' etag,
+        beliefs = [r for r in records if r.family == "belief" and files[r].damage is None]  # 012 rule broken
+        evidence = [r.record_id for r in records if r.family == "evidence"]
+        if beliefs and evidence:
+            victim = rng.choice(beliefs)
+            payload = {**files[victim].payload, "evidence_ids": [rng.choice(evidence)]}
+            files[victim] = ScannedFile(files[victim].etag, files[victim].schema, payload)
     elif kind == "consistent_edit":  # edit a non-chain record AND its entry's etag, in one batch other than the newest
         listed = [(seq, entry_name) for seq in range(1, 6) if KnowledgeRef.batch(C, seq) in files
                   for entry_name in decode_batch(KnowledgeRef.batch(C, seq), files[KnowledgeRef.batch(C, seq)].schema,

@@ -116,8 +116,9 @@ Every append writes its records and exactly **one batch**, in one store transact
 4. **Validate the rest.**
    - First, in linear passes, remove every record whose reference is gone (an event, a proposition, a cited evidence item, a superseded belief), with the reason 012's check order would give (`unknown_event`, `unknown_proposition`, `unknown_evidence`, `unknown_belief`) and the chain rule. One deleted file therefore costs a near-linear read, however many records cite it.
    - Build `Knowledge` from the remaining records.
-   - On a `KnowledgeError`, quarantine only the **first-named record still present**. In 012 that is always the record whose rule failed; for `reused_contribution` it is the belief with the later ID. Use 012's reason, and the chain rule applies. Repeat until the ledger is valid.
+   - On a `KnowledgeError`, quarantine only the **first-named record still present**. In 012 that is the record whose rule failed (for `reused_contribution`, the belief with the later ID). For a pair 012 names together (`conflicting_rulings`, forked or unsuperseded beliefs) it may be either one; the chain rule then takes both. Use 012's reason, and the chain rule applies. Repeat until the ledger is valid.
    - Evidence that a broken belief cites is kept.
+   - After each such removal, the linear reference pass runs again, so the removed record's dependents also go in linear time.
 5. **Report non-canonical entries** as problems: `unrecognized`, `name_mismatch`, `link`, `unreadable`.
 
 A record's reason is the first one assigned.

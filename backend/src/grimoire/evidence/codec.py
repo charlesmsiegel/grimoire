@@ -45,7 +45,8 @@ _ETAG = re.compile(r"sha256:[0-9a-f]{64}")
 class EvidenceCodecError(ValueError):
     """A record or batch this version cannot store or read; ``reason`` is machine-readable.
 
-    ``record`` is the record's ``"<family>:<id>"`` name (or ``None``); the message holds nothing else.
+    ``record`` is the record's ``"<family>:<id>"`` name, ``"batch"`` for a batch that could not be
+    built, or ``None``; the message holds nothing else.
     """
 
     def __init__(self, reason: str, record: str | None = None) -> None:
@@ -246,7 +247,7 @@ def _decode(ref: KnowledgeRef, schema: object, payload: object) -> tuple[Record,
         raise _Refused("invalid_field")
     spec = _SPEC[cls]
     known = {attribute for attribute, _, _ in spec} | {"chat"}
-    if "campaign_id" in payload or _ID_FIELD[cls] in payload and _ID_FIELD[cls] not in known:
+    if "campaign_id" in payload or _ID_FIELD[cls] in payload:  # no spec lists its own record's id
         raise _Refused("identity_in_payload")
     if not set(payload) <= known:
         raise _Refused("unknown_field")
@@ -379,7 +380,9 @@ def _decode_entry(campaign_id: str, name: object, raw: object) -> BatchEntry:
 def _decode_batch(ref: KnowledgeRef, schema: object, payload: object) -> Batch:
     if schema != BATCH_SCHEMA:
         raise _Refused("unsupported_schema")
-    if not isinstance(payload, Mapping) or not set(payload) <= {"seq", "previous", "records"}:
+    if not isinstance(payload, Mapping):
+        raise _Refused("invalid_field")
+    if not set(payload) <= {"seq", "previous", "records"}:
         raise _Refused("unknown_field")
     seq, previous, records = payload.get("seq"), payload.get("previous"), payload.get("records")
     if type(seq) is not int or seq != ref.seq:

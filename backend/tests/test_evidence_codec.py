@@ -197,6 +197,7 @@ def test_batches_round_trip():
     (1, None, {"ruling:r1": BatchEntry(ETAG, proposition="NOT AN ID !")}, "invalid_field"),  # chain keys are ids
     (0, None, ENTRIES, "invalid_field"),                                    # the ref itself, still a reason
     (1, None, {"event:e1": "not an entry"}, "invalid_field"),
+    (2, "garbage", ENTRIES, "invalid_field"),                                # previous must be an etag
 ])
 def test_bad_batches_are_never_written(seq, previous, entries, reason):
     with pytest.raises(EvidenceCodecError) as caught:

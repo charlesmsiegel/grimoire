@@ -186,28 +186,31 @@ def assemble(campaign_id: str, files: Mapping[KnowledgeRef, ScannedFile]) -> Ass
 
     candidates: dict[str, Record] = {name: value[0] for name, value in decoded.items() if name not in quarantined}
     sweep(candidates)
-    # A missing reference (one deleted event, a lost evidence folder) is common and cascades; remove
-    # every record whose reference is gone in linear passes, with 012's own reason, so the 012 loop
-    # below only meets genuine rule failures and a read stays near-linear.
-    while True:
-        dangling = _dangling(candidates)
-        if not dangling:
-            break
-        by_chain: dict[ChainKey, list[str]] = {}
-        for name, record in candidates.items():
-            key = chain_key(record)
-            if key is not None:
-                by_chain.setdefault(key, []).append(name)
-        for name in sorted(dangling):
-            if name in quarantined:
-                continue
-            key = chain_key(candidates[name])
-            quarantine(name, dangling[name], key)
-            for member in by_chain.get(key, ()) if key is not None else ():
-                quarantine(member, "chain_quarantined")
-        for name in [name for name in candidates if name in quarantined]:
-            del candidates[name]
-        sweep(candidates)
+    def drain_dangling() -> None:
+        # A missing reference (one deleted event, a lost evidence folder) is common and cascades;
+        # remove every record whose reference is gone in linear passes, with 012's own reason, so
+        # the 012 loop below only meets genuine rule failures and a read stays near-linear.
+        while True:
+            dangling = _dangling(candidates)
+            if not dangling:
+                return
+            by_chain: dict[ChainKey, list[str]] = {}
+            for name, record in candidates.items():
+                key = chain_key(record)
+                if key is not None:
+                    by_chain.setdefault(key, []).append(name)
+            for name in sorted(dangling):
+                if name in quarantined:
+                    continue
+                key = chain_key(candidates[name])
+                quarantine(name, dangling[name], key)
+                for member in by_chain.get(key, ()) if key is not None else ():
+                    quarantine(member, "chain_quarantined")
+            for name in [name for name in candidates if name in quarantined]:
+                del candidates[name]
+            sweep(candidates)
+
+    drain_dangling()
     knowledge = None
     for _ in range(len(candidates) + 2):
         try:
@@ -224,6 +227,7 @@ def assemble(campaign_id: str, files: Mapping[KnowledgeRef, ScannedFile]) -> Ass
         quarantine(named[0], reason, chain_key(candidates[named[0]]))
         del candidates[named[0]]
         sweep(candidates)
+        drain_dangling()  # its dependents now dangle: remove them linearly, not one rebuild each
     if knowledge is None:  # pragma: no cover - the loop always ends with an empty, valid ledger
         knowledge = Knowledge(campaign_id)
 
