@@ -27,10 +27,10 @@ from .facets import Agent
 from .identity import TEXT_MAX, InstanceRef, validate_segment
 
 Classification = Literal["known_capability", "attempted_feat", "extrapolation", "new_ability",
-                         "beyond_limits", "unavailable", "relabel", "needs_upgrade"]
+                         "beyond_limits", "unavailable", "relabel", "combination", "needs_upgrade"]
 Approval = Literal["not_needed", "not_approvable", "pending", "approved", "refused"]
 CLASSIFICATIONS = frozenset({"known_capability", "attempted_feat", "extrapolation", "new_ability",
-                             "beyond_limits", "unavailable", "relabel", "needs_upgrade"})
+                             "beyond_limits", "unavailable", "relabel", "combination", "needs_upgrade"})
 #: The only classifications an approval ruling can decide.
 APPROVABLE = frozenset({"extrapolation", "new_ability"})
 #: Classifications in which the power works as declared; no ruling is involved.
@@ -222,8 +222,7 @@ def _matching_rulings(attempt: AbilityAttempt, rulings: object):
 
 def _live(matching: list, classification: str) -> tuple[list, tuple[str, ...]]:
     """The rulings that decide this classification, and the ids of the rest."""
-    live = [ruling for ruling in matching if ruling.decides == classification] \
-        if classification in APPROVABLE else []
+    live = [ruling for ruling in matching if ruling.decides == classification]
     if len({ruling.decision for ruling in live}) > 1:
         raise AbilityError(f"rulings both approve and refuse this {classification}", "conflicting_rulings")
     rest = tuple(sorted(ruling.ruling_id for ruling in matching if ruling not in live))
@@ -322,12 +321,13 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
     others: list[tuple[str, str, tuple[str, ...]]] = []
     other_unrecognized: list[tuple[str, tuple[str, ...]]] = []
     other_candidates: list[str] = []
-    # Tags the named ability cannot provide. An effect of another ability that provides one of
-    # them means the attempt draws on that ability: a cross-ability combination, which this slice
-    # does not adjudicate. It must not escape that ability's limits, prerequisites and costs.
-    own = {tag for part in ability.effects for tag in part.tags} if ability is not None else set()
-    beyond_own = needs - own
+    # An effect of another ability sharing a needed tag means the attempt draws on that ability
+    # too. Unless the named effect fully covers the attempt (a declared use, which a sibling never
+    # blocks), that is a cross-ability combination, which this slice does not adjudicate: it must
+    # not escape that ability's limits, prerequisites or costs, so it fails closed.
     drawn: list[str] = []
+    drawn_from: set[str] = set()
+    binding: list[tuple[str, str, tuple[str, ...]]] = []
     if facet is None:
         unknown = sorted(needs)  # nothing is authored, so every needed tag is unknown
         reasons += [Reason("unknown_tag", f"no ability of {attempt.actor} uses the tag {tag!r}")
@@ -343,11 +343,12 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
                 continue
             other_unrecognized += _with_extras(each)
             for part in each.effects:
-                provided = tuple(sorted(part.tags & beyond_own))
-                if provided:
+                shared = tuple(sorted(part.tags & needs))
+                if shared:
                     drawn.append(f"{each.id}/{part.id}")
+                    drawn_from.add(each.id)
                     reasons.append(Reason("draws_on_other_ability", f"effect {part.id!r} of {each.id!r} "
-                                                                    f"provides {_tags(provided)}"))
+                                                                    f"shares {_tags(shared)}"))
                 if needs <= part.tags:
                     other_candidates.append(f"{each.id}/{part.id}")
                     reasons.append(Reason("covered_by_other_ability", f"effect {part.id!r} of {each.id!r} "
@@ -358,6 +359,8 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
                     others.append((each.id, limit.id, hit))
                     reasons.append(Reason("other_limit_excludes", f"limit {limit.id!r} of another ability "
                                                                   f"{each.id!r} excludes {_tags(hit)}"))
+                    if each.id in drawn_from:
+                        binding.append((each.id, limit.id, hit))
     found = _unrecognized(facet, ability)
     unrecognized = [path for path, _ in found]
     reasons += [Reason("unrecognized_constraint", f"{path} has fields this version does not understand: "
@@ -386,21 +389,35 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         # not turn a known (perhaps unavailable or costly) power into an approvable new one.
         # Naming an effect or a prerequisite, or drawing on another ability's effects, says the
         # attempt is a use of an existing power, not a new one.
+        # Drawing on exactly one existing ability: file it there. On several: a combination.
         if FACET_PATH in unrecognized:
             classification = "needs_upgrade"
-        elif stale or other_candidates or drawn:
+        elif stale or other_candidates:
+            classification = "relabel"
+        elif len(drawn_from) > 1:
+            classification = "combination"
+        elif drawn:
             classification = "relabel"
         else:
             classification = "new_ability"
-    elif conflicts:
+    elif not touched and drawn:
+        # Not a use of the named ability at all, but of another one: file it there, whatever the
+        # named ability's limits say.
+        classification = "relabel"
+        reasons.append(Reason("outside_ability", f"no effect of {ability.id!r} shares a needed tag; "
+                                                 "file the attempt under its own ability id"))
+    elif conflicts or (binding and not covers):
+        # The named ability's limits, or those of an ability a stretch draws on, exclude it.
         classification = "beyond_limits"
     elif stale:
         classification = "relabel"
-    elif drawn or (other_candidates and not candidates):
-        # Drawing on another ability is a combination this slice does not adjudicate. A sibling
-        # that also covers the attempt only matters when the named ability cannot: its own
-        # covering effect is the character's choice, so overlapping powers never deadlock.
+    elif other_candidates and not candidates:
+        # Another ability's declared effect covers it and the named one cannot: file it there.
+        # When both cover, the named effect is the character's choice (no deadlock).
         classification = "relabel"
+    elif drawn and not covers and not candidates:
+        # A covering effect of the named ability would make this a declared use (row 5 below).
+        classification = "combination"
     elif not touched:
         # No effect of the named ability shares a needed tag: this is not a use of it. File it
         # under its own ability id (a new ability, or the ability that covers it).

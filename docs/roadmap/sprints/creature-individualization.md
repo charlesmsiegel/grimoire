@@ -33,6 +33,10 @@ One goblin is named and remembers a conversation, another remains generic; chang
 ## Independence and interfaces
 Works in mechanics-free play without character sheets; ruleset conversion is a separate optional adapter. Capturing is a distinct workflow.
 
+## Obligations from 025
+
+Per-ability inherit/replace/clear for the single `abilities` facet ([fictional abilities](../../ABILITIES.md)) is a shared follow-up with 022: an individual should be able to evolve one species power without copying the rest.
+
 ## Open questions (answered by the first slice)
 - *Which scene evidence authorizes individualization?* An explicit human decision, never narrator or model output. If the actor has a controlling player, only that player decides; otherwise only the director (the table owner) does. Event ids are optional recorded grounds.
 - *What is the minimum encounter-instance identity?* An `EntityInstance` of the template, which is an `InstanceRef`. Promotion keeps it.

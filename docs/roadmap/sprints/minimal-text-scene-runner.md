@@ -41,6 +41,10 @@ Wave 5 **must not require** a world, realm, location graph, faction, ruleset, pr
 
 [Chat navigation and lifecycle](../CHAT_MODEL.md).
 
+## Obligations from 025
+
+When play runs ability attempts ([fictional abilities](../../ABILITIES.md)): take a player-controlled actor's attempt from that player's own contribution, obtain the controller's consent before an instance's powers change, and authenticate the ruling channel (with 029).
+
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove?
 - Which optional later integrations can stay outside the first slice?

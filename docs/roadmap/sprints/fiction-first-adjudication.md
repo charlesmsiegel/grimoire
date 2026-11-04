@@ -22,6 +22,14 @@ A PC tries to vault a collapsing bridge. Grimoire considers established ability,
 ## Interfaces and independence
 Requires the [Player Sovereignty](player-sovereignty.md) intent/authority contract; can prototype against existing scene facts and an isolated test harness. [Mechanical Resolution](mechanical-resolution.md) remains authoritative when a ruleset is selected.
 
+## Obligations from 025
+
+The first slice of 025 ([fictional abilities](../../ABILITIES.md)) produces a deterministic `AbilityAssessment` that this sprint consumes. 029 must:
+- produce the attempt's labels with a labeller that is **not the narrator**, and put every intended outcome *and* the mechanism it uses into `needs` (the classification follows the labels; under-labelling is undetectable);
+- gate "the power works" on `assessment.permitted` only, never on `approval == "not_needed"`, and treat `combination` as not adjudicated (milestone 3);
+- authenticate who issues an `AbilityRuling` (adjudication channel only, never narration), and for a player-controlled actor take the attempt from that player's own contribution (`attempt_id` is its `contribution_id`);
+- decide supersede/revoke for rulings and whether a ruling pins the entity's `resolved_source`; `AbilityRuling` is provisional and may be replaced here.
+
 ## Open questions
 - What standard of evidence distinguishes obvious success from uncertain success?
 - Who accepts a freeform high-stakes result?

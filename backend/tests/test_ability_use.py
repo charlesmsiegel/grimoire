@@ -375,7 +375,7 @@ def test_assessment_is_a_pure_function_of_its_inputs():
     baseline = assess_attempt(flight(), effective(person("iris", "Iris", light_bending(force_limit=False),
                                                          speak_with_dead(), thruster_pack())), rulings)
     # With the thruster pack present, flight draws on its `lift`: a cross-ability combination.
-    assert (baseline.classification, baseline.other_drawn) == ("relabel", ("thruster_pack/lift",))
+    assert (baseline.classification, baseline.other_drawn) == ("combination", ("thruster_pack/lift",))
     for reorder_abilities in itertools.permutations([reordered, speak_with_dead(), thruster_pack()]):
         entity = effective(person("iris", "Iris", *reorder_abilities))
         assert assess_attempt(flight(), entity, rulings) == baseline
@@ -597,14 +597,16 @@ def test_an_attempt_drawing_on_another_ability_is_never_approvable():
     both = effective(person("iris", "Iris", light_bending(), thruster_pack()))
     radiant = attempt(ability_id="thruster_pack", needs=("light", "force", "flight"), conditions=("fuel",))
     result = assess_attempt(radiant, both, [ruling(radiant)])
-    assert (result.classification, result.permitted) == ("relabel", False)
+    # The stretch draws on light bending (`light`), whose `no_force` limit binds it.
+    assert (result.classification, result.permitted) == ("beyond_limits", False)
     assert "draws_on_other_ability" in codes(result)
-    assert refusal(lambda: check_ruling(ruling(radiant, ruling_id="r2"), both)) == "not_approvable"
+    assert refusal(lambda: check_ruling(ruling(radiant, ruling_id="r2"), both)) == "limit_not_approvable"
     # A partial stretch of light bending filed under the thruster pack, in the dark.
     dark = attempt(ability_id="thruster_pack", needs=("light", "flight"), conditions=("fuel",))
-    assert assess_attempt(dark, both).classification == "relabel"
+    assert assess_attempt(dark, both).classification == "combination"
     honest = attempt(ability_id="light_bending", needs=("light", "flight"), conditions=())
-    assert assess_attempt(honest, both).classification == "relabel"  # draws on `lift` for flight
+    assert assess_attempt(honest, both).classification == "combination"  # draws on `lift` for flight
+    assert refusal(lambda: check_ruling(ruling(honest), both)) == "not_approvable"
     # A partial stretch filed under an invented id.
     hidden = attempt(ability_id="light_bending_2", needs=("light", "concealment", "motion"), conditions=())
     assert assess_attempt(hidden, IRIS).classification == "relabel"
@@ -671,3 +673,61 @@ def test_an_overlapping_sibling_does_not_bypass_the_named_effects_constraints():
     seen = assess_attempt(attempt("sefa", "telepathy", ("speech",), effect_id="mindspeak",
                                   conditions=("line_of_sight",)), sefa)
     assert seen.classification == "known_capability" and [c.id for c in seen.costs] == ["headache"]
+
+
+# --- round 6 of independent review --------------------------------------------------------
+
+SUNLANCE = Ability("sunlance", "Sunlance", [Effect("lance", "t", {"light", "heat"})])
+
+
+def test_a_stretch_cannot_escape_a_sibling_sharing_its_mechanism_tag():
+    # The proving scenario filed under another light-based power: light bending's `no_force`,
+    # `ambient_light` and `eye_strain` still bind, because the flight draws on its `light`.
+    entity = effective(person("iris", "Iris", light_bending(), SUNLANCE))
+    dark = attempt(ability_id="sunlance", needs=("light", "force", "flight"), conditions=())
+    result = assess_attempt(dark, entity, [ruling(dark)])
+    assert (result.classification, result.permitted) == ("beyond_limits", False)
+    assert refusal(lambda: check_ruling(ruling(dark, ruling_id="r2"), entity)) == "limit_not_approvable"
+    # Without the limit it is a combination of the two abilities: never approvable in this slice.
+    open_entity = effective(person("iris", "Iris", light_bending(force_limit=False), SUNLANCE))
+    combo = assess_attempt(dark, open_entity, [ruling(dark)])
+    assert (combo.classification, combo.approval) == ("combination", "not_approvable")
+    # A declared use of either power is untouched by the other.
+    lance = attempt(ability_id="sunlance", needs=("light", "heat"), effect_id="lance", conditions=())
+    assert assess_attempt(lance, entity).classification == "known_capability"
+
+
+def test_an_attempt_outside_the_named_ability_is_relabelled_before_its_limits():
+    telekinesis = Ability("telekinesis", "Telekinesis", [Effect("push", "t", {"force", "telekinesis"})])
+    entity = effective(person("iris", "Iris", light_bending(), telekinesis))
+    misfiled = assess_attempt(attempt(needs=("force", "telekinesis"), conditions=()), entity)
+    assert (misfiled.classification, misfiled.other_candidates) == ("relabel", ("telekinesis/push",))
+    filed = attempt(ability_id="telekinesis", needs=("force", "telekinesis"), effect_id="push", conditions=())
+    assert assess_attempt(filed, entity).classification == "known_capability"
+
+
+def test_a_sibling_covering_what_the_named_ability_only_stretches_needs_a_relabel():
+    bending = Ability("light_bending", "Light bending", [Effect("veil", "t", {"light", "concealment"}),
+                                                         Effect("dazzle", "t", {"light", "glare"})])
+    cloak = Ability("flash_cloak", "Flash cloak", [Effect("cloak", "t", {"concealment", "glare"})],
+                    costs=[Cost("burnout", "t")], prerequisites=[Prerequisite("darkness", "t")])
+    entity = effective(person("iris", "Iris", bending, cloak))
+    misfiled = attempt(needs=("concealment", "glare"), conditions=())
+    result = assess_attempt(misfiled, entity, [ruling(misfiled)])
+    assert (result.classification, result.other_candidates) == ("relabel", ("flash_cloak/cloak",))
+    honest = attempt(ability_id="flash_cloak", needs=("concealment", "glare"), effect_id="cloak", conditions=())
+    assert assess_attempt(honest, entity).classification == "unavailable"
+
+
+def test_a_named_effect_stretch_pays_every_touched_effects_costs():
+    stretch = attempt(needs=("light", "concealment", "flight"), effect_id="veil")
+    approved = assess_attempt(stretch, OPEN_IRIS, [ruling(stretch)])
+    assert approved.permitted and [c.id for c in approved.costs] == ["eye_strain", "migraine"]
+
+
+def test_a_missing_ability_drawing_on_one_or_several_abilities():
+    entity = effective(person("iris", "Iris", light_bending(force_limit=False), thruster_pack()))
+    one = attempt(ability_id="solar_sail", needs=("light", "drift"), conditions=())
+    assert assess_attempt(one, entity).classification == "relabel"      # file it under light bending
+    two = attempt(ability_id="solar_sail", needs=("light", "flight"), conditions=())
+    assert assess_attempt(two, entity).classification == "combination"  # light bending and the pack

@@ -158,3 +158,18 @@ def test_a8_the_ability_modules_load_no_provider_or_store():
     assert not {m for m in loaded if m.split(".")[:2] in (["grimoire", "providers"], ["grimoire", "store"],
                                                           ["grimoire", "capture"])}
     assert "grimoire.core.ability_use" in loaded  # positive control
+
+
+def test_a6_a_head_gaining_the_facet_breaks_an_instance_that_added_one():
+    # The whole-facet limitation, through 009's source-drift rule: once the definition's head has
+    # an `abilities` trait, an unpinned instance that *added* its own facet no longer resolves.
+    import pytest
+    from grimoire.core.entity import EntityError
+    r1 = person("iris", "Iris")
+    r2 = person("iris", "Iris", speak_with_dead(), revision="r2")
+    added = EntityInstance(actor("iris"), SourceRef(EMBER, "character", "iris"),
+                           added=FacetBundle([Abilities([light_bending()])]))
+    assert effective_entity(added, index_of(r1, heads={SourceRef(EMBER, "character", "iris"): "r1"}))
+    with pytest.raises(EntityError) as caught:
+        effective_entity(added, index_of(r1, r2, heads={SourceRef(EMBER, "character", "iris"): "r2"}))
+    assert caught.value.reason == "added_shadows_trait"

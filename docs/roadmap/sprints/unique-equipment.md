@@ -20,6 +20,10 @@ Two same-named swords remain different instances; equipping a sword owned by ano
 ## Independence and interfaces
 Can consume existing inventory storage and item definition lookup through a narrow adapter; does not require a complete economy.
 
+## Obligations from 025
+
+In [fictional abilities](../../ABILITIES.md) only an agent attempts an ability, and an object may merely *describe* powers. Wielded or item-granted abilities (a sword's power used by its wielder) are this sprint's to define.
+
 ## Open questions
 - Which unique properties are first-class?
 - How does equipment inheritance work?
