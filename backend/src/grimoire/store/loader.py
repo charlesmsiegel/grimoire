@@ -72,8 +72,9 @@ class KnowledgeScan:
 
     ``damaged`` holds a code (``malformed``, ``unsupported_format``, ``address_mismatch``, ``link``)
     for each canonically named file that cannot be read. ``entries`` is the snapshot a writer
-    compares before committing: every file and link under both trees, canonical or not, as
-    ``(path, type, etag)`` (OS/editor noise and empty directories are not state).
+    compares before committing: every file and link at a canonical or stray position under both
+    trees, as ``(path, type, etag)``. A non-canonical folder appears only in ``problems`` (and any
+    problem already refuses an append); OS/editor noise and empty directories are not state.
     """
 
     records: Mapping[KnowledgeRef, StoredKnowledgeRecord]
@@ -208,11 +209,14 @@ def read_knowledge_record(access: Access, parts: Parts) -> StoredKnowledgeRecord
         unreadable = None
     if unreadable is not None:
         raise MalformedRecord(f"{_text(parts)}: not a readable knowledge record (malformed)", unreadable.etag)
+    code = None
     try:
         record, _ = parse_knowledge_record(document)
-    except EnvelopeError as error:  # a fixed detail: the file's own values are never echoed
-        kind = UnsupportedFormat if error.code == "unsupported_format" else MalformedRecord
-        raise kind(f"{_text(parts)}: not a readable knowledge record ({error.code})", tag) from None
+    except EnvelopeError as error:  # keep only the code: the detail (and __context__) can echo file text
+        code = error.code
+    if code is not None:
+        kind = UnsupportedFormat if code == "unsupported_format" else MalformedRecord
+        raise kind(f"{_text(parts)}: not a readable knowledge record ({code})", tag)
     found = classify(parts)
     if found is None or found[1] != record.address:
         raise AddressMismatch(f"{_text(parts)} holds another knowledge record than its path names", tag,

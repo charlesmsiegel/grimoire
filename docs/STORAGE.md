@@ -154,7 +154,7 @@ All of these take the store lock, require a consistent library, and read listing
 | `schema` | caller | The payload's schema id. |
 | `payload` | caller | Opaque JSON. |
 | `owner` | caller, optional | Attribution. |
-| `previous` | store | Always `null`: a knowledge record is never replaced. A non-null value reads as `malformed`. |
+| `previous` | store | Always `null`: this store never replaces a knowledge record. A non-null value reads as `malformed`. |
 | *other keys* | preserved | Unknown authored fields. |
 
 A distinct format, rather than an extension of `scope-record/1`, keeps a parser from ever treating one as a mutable scope record.
@@ -174,6 +174,8 @@ A distinct format, rather than an extension of `scope-record/1`, keeps a parser 
 - An absent campaign scans empty. A look-alike campaign reports `name_mismatch`, and a linked `campaigns/` raises `LinkRefused`.
 - It never follows links, and never copies file content into a problem.
 - **Director-level and store-internal:** graph, index and retrieval builders must not read it ([EVIDENCE](EVIDENCE.md#trust-boundaries-documented-not-checked-here)).
+
+**Create-only means against this store's own writers.** Another program that creates the same file in the instant between the commit's absence check and its publish is overwritten, as for every family (the residual race R7 under [Writing](#writing)). The knowledge log then reports the loss as `edited` or `missing`; closing R7 with a no-replace publish is store work for 019.
 
 **Rollback:** a pre-020 build skips both trees, which were already reserved, and never writes there. It cannot recover a journal that names knowledge paths: use a 020+ build, or `discard_journal` (tested).
 

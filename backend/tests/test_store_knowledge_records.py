@@ -142,17 +142,23 @@ def test_a_newer_format_on_disk_reads_as_unsupported(library):
         _commit(library, record())
 
 
-def test_a_journal_that_would_replace_a_knowledge_record_fails_recovery(tmp_path):
+@pytest.mark.parametrize("consistent", [False, True], ids=["arbitrary-etags", "would-publish"])
+def test_a_journal_that_would_replace_a_knowledge_record_fails_recovery(tmp_path, consistent):
+    from grimoire.store import etag
     lib = tmp_path / "lib"
     with LibraryStore.create(lib) as store:
         seed(store)
         _commit(store, record())
     target = "campaigns/c1/events/e1.json"
+    replacement = b'{"forged": true}\n'
     (lib / ".txn").mkdir(exist_ok=True)
-    (lib / ".txn" / "a.new").write_bytes(b"{}")
+    (lib / ".txn" / "a.new").write_bytes(replacement)
+    # "would-publish": old is the target's real etag and the temp matches new, so without the
+    # create-only refusal recovery would publish the replacement over the stored record.
+    old = etag((lib / target).read_bytes()) if consistent else "sha256:" + "1" * 64
+    new = etag(replacement) if consistent else "sha256:" + "2" * 64
     journal = {"format": "grimoire.journal/1", "state": "commit", "entries": [
-        {"kind": "publish", "target": target, "temp": "a.new", "old": "sha256:" + "1" * 64,
-         "new": "sha256:" + "2" * 64}]}
+        {"kind": "publish", "target": target, "temp": "a.new", "old": old, "new": new}]}
     (lib / ".txn" / "journal.json").write_bytes(render(journal))
     before = (lib / target).read_bytes()
     with pytest.raises(RecoveryFailed):
@@ -185,8 +191,8 @@ def test_scan_reads_both_trees_and_snapshots_every_file(library):
 
 
 def test_an_absent_or_look_alike_campaign_scans_empty(library, tmp_path):
-    assert library.campaign_knowledge("nobody") == library.campaign_knowledge("nobody")
-    assert library.campaign_knowledge("nobody").entries == ()
+    nobody = library.campaign_knowledge("nobody")
+    assert nobody.records == {} and nobody.damaged == {} and nobody.problems == () and nobody.entries == ()
     (library.root / "campaigns" / "Zed").mkdir()
     (library.root / "campaigns" / "Zed" / "x.json").write_text("{}")
     scan = library.campaign_knowledge("zed")
@@ -336,3 +342,4 @@ def test_errors_never_carry_malformed_content(library):
     with pytest.raises(MalformedRecord) as caught:
         library.read(EVENT)
     assert "SENTINEL" not in str(caught.value)
+    assert caught.value.__context__ is None and caught.value.__cause__ is None  # nothing chained carries it
