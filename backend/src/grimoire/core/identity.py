@@ -36,6 +36,9 @@ _CHAT_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#chat/(?P<chat_
 _RELATION_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#relation/(?P<relation_id>{_SEGMENT})")
 _ACCEPTED_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#accepted/(?P<event_id>{_SEGMENT})")
 _WRAPUP_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#wrapup/(?P<wrapup_id>{_SEGMENT})")
+_HOLDINGS_REF_RE = re.compile(
+    rf"campaign:(?P<campaign_id>{_SEGMENT})/(?P<kind>{_SEGMENT})/(?P<instance_id>{_SEGMENT})#holdings"
+)
 _IMAGE_REF_RE = re.compile(
     rf"(?P<scope>campaign:{_SEGMENT}|{_SOURCE_RE.pattern})#image/(?P<image_id>{_SEGMENT})"
 )
@@ -496,3 +499,42 @@ def parse_ref(text: object) -> SourceRef | InstanceRef | LegacyId:
     if text.startswith("campaign:"):
         return InstanceRef.parse(text)
     return SourceRef.parse(text)
+
+
+@dataclass(frozen=True, slots=True)
+class HoldingsRef:
+    """The counted holdings (Sprint 023) of one campaign instance; never the instance itself.
+
+    ``campaign:<campaign_id>/<kind>/<instance_id>#holdings``. Not returned by ``parse_ref``.
+    """
+
+    campaign_id: str
+    kind: str
+    instance_id: str
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.kind, "kind")
+        validate_segment(self.instance_id, "instance_id")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"campaign:{self.campaign_id}/{self.kind}/{self.instance_id}#holdings"
+
+    @classmethod
+    def parse(cls, text: object) -> HoldingsRef:
+        match = _HOLDINGS_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not a holdings reference: {text!r}")
+        return cls(**match.groupdict())
+
+    @classmethod
+    def of(cls, holder: InstanceRef) -> HoldingsRef:
+        if not isinstance(holder, InstanceRef):
+            raise TypeError(f"holdings belong to an InstanceRef, not {type(holder).__name__}")
+        return cls(holder.campaign_id, holder.kind, holder.instance_id)
+
+    @property
+    def holder(self) -> InstanceRef:
+        return InstanceRef(self.campaign_id, self.kind, self.instance_id)

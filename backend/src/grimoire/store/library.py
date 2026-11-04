@@ -21,8 +21,8 @@ from pathlib import Path
 from types import MappingProxyType
 
 from grimoire.core.identity import (
-    AcceptedRef, ChatRef, IdentityConflict, ImageRef, InstanceRef, KnowledgeRef, PlacementRef, RelationRef, ScopeRef,
-    SourceRef, WrapUpRef,
+    AcceptedRef, ChatRef, HoldingsRef, IdentityConflict, ImageRef, InstanceRef, KnowledgeRef, PlacementRef,
+    RelationRef, ScopeRef, SourceRef, WrapUpRef,
     validate_segment,
 )
 from grimoire.core.index import DefinitionIndex, SourceDescriptor
@@ -54,8 +54,8 @@ from .layout import (
 )
 from .ledger import Head, Ledger, read_ledger, render_batches
 from .loader import (
-    CampaignRecords, CampaignRelations, KnowledgeScan, LibraryView, LoadProblem, StoredAssetRecord, StoredDefinition,
-    StoredKnowledgeRecord, StoredRecord, StoredScopeRecord, StoredSource,
+    CampaignHoldingRecords, CampaignRecords, CampaignRelations, KnowledgeScan, LibraryView, LoadProblem,
+    StoredAssetRecord, StoredDefinition, StoredKnowledgeRecord, StoredRecord, StoredScopeRecord, StoredSource,
 )
 from .media import MAX_BLOB_BYTES, ImageBlob
 from .lock import Locker, OsLocker
@@ -454,14 +454,14 @@ class LibraryStore:
 
     # -- reading -----------------------------------------------------------------
     def read(self, ref: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef | ImageRef
-             | PlacementRef | AcceptedRef | WrapUpRef
+             | PlacementRef | AcceptedRef | WrapUpRef | HoldingsRef
              ) -> StoredRecord | StoredScopeRecord | StoredKnowledgeRecord | StoredAssetRecord:
         """One record by exact address (a definition must be pinned)."""
         if isinstance(ref, SourceRef) and not ref.pinned:
             raise ValueError("read a pinned revision; resolve unpinned references with load().index")
         with self.lock:  # reads wait for this process's commits, so they never see one half-done
             self._require_consistent()
-            if isinstance(ref, (ScopeRef, ChatRef, RelationRef, AcceptedRef, WrapUpRef)):
+            if isinstance(ref, (ScopeRef, ChatRef, RelationRef, AcceptedRef, WrapUpRef, HoldingsRef)):
                 return loader.read_scope_record(self._access, address_parts(ref))
             if isinstance(ref, KnowledgeRef):
                 return loader.read_knowledge_record(self._access, address_parts(ref))
@@ -644,6 +644,27 @@ class LibraryStore:
             self._require_consistent()
             with self._access.cached_listings():
                 return loader.campaign_family(self._access, campaign_id, family)
+
+    def campaign_holding_names(self, campaign_id: str) -> tuple[tuple[HoldingsRef, ...], bool]:
+        """One campaign's canonically named holder files (023) from listings only, and whether the
+        listing was complete (``False`` if the folder or a kind folder is a link or unreadable)."""
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return loader.campaign_holding_names(self._access, campaign_id)
+
+    def campaign_holdings(self, campaign_id: str) -> CampaignHoldingRecords:
+        """One campaign's holdings records (023) and their problems, contained per file as ``load()``
+        contains the other families (``load()`` itself skips ``holdings/``).
+
+        Reads only that campaign's ``holdings/`` folder, so its cost does not grow with other campaigns.
+        """
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return loader.campaign_holdings(self._access, campaign_id)
 
     def source_facts(self) -> SourceFacts:
         """One verified answer to "which sources would ``load()`` exclude?", reusable by a caller.

@@ -17,10 +17,8 @@ import unicodedata
 from typing import Literal
 
 from grimoire.core.identity import (
-    KNOWLEDGE_FAMILIES, AcceptedRef, ChatRef, ImageRef, InstanceRef, KnowledgeRef, PlacementRef, RelationRef, ScopeRef,
-    SourceRef, WrapUpRef,
-    validate_segment,
-    validate_source_id,
+    KNOWLEDGE_FAMILIES, AcceptedRef, ChatRef, HoldingsRef, ImageRef, InstanceRef, KnowledgeRef, PlacementRef,
+    RelationRef, ScopeRef, SourceRef, WrapUpRef, validate_segment, validate_source_id,
 )
 from grimoire.security import InvalidResourcePath, ResourcePath
 
@@ -61,16 +59,18 @@ ASSETS = "assets"  # assets/blobs/<sha[:2]>/<sha256>.<ext>: content-addressed by
 BLOBS = "blobs"
 BLOB_EXTS = tuple(MEDIA)  # the sniffer's formats are the only blob extensions
 _BLOB_NAME = re.compile(rf"(?P<sha>[0-9a-f]{{64}})\.(?P<ext>{'|'.join(map(re.escape, BLOB_EXTS))})")
+HOLDINGS = "holdings"  # campaigns/<id>/holdings/<kind>/<instance_id>.json: counted holdings (023)
 
 ROOT_ENTRIES = frozenset({MARKER, SOURCES, CAMPAIGNS, TXN, CONFLICTS})
 #: Reserved for later record families; the loader skips them. ``events``/``evidence`` belong to
-#: 020 and are read only by ``campaign_knowledge``, so ``load()``'s cost never grows with history.
+#: 020 and are read only by ``campaign_knowledge``, and ``holdings`` (023, whose per-holder operation
+#: logs are history too) only by ``campaign_holdings``, so ``load()``'s cost never grows with history.
 RESERVED_ROOTS = frozenset({"authority", "config", "assets", "secrets"})
-RESERVED_CAMPAIGN_ENTRIES = frozenset({"scenes", "events", "evidence"})
+RESERVED_CAMPAIGN_ENTRIES = frozenset({"scenes", "events", "evidence", HOLDINGS})
 _NOISE = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
 
 Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat", "relation", "knowledge", "blob",
-               "image", "placement", "accepted", "wrapup"]
+               "image", "placement", "accepted", "wrapup", "holdings"]
 
 
 def is_noise(name: str) -> bool:
@@ -162,8 +162,12 @@ def blob_parts(sha256: str, ext: str) -> Parts:
     return _checked((ASSETS, BLOBS, sha256[:2], f"{sha256}.{ext}"))
 
 
+def holdings_parts(ref: HoldingsRef) -> Parts:
+    return _checked((CAMPAIGNS, ref.campaign_id, HOLDINGS, ref.kind, ref.instance_id + SUFFIX))
+
+
 Address = (SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef | ImageRef | PlacementRef
-           | AcceptedRef | WrapUpRef)
+           | AcceptedRef | WrapUpRef | HoldingsRef)
 
 
 def address_parts(address: Address) -> Parts:
@@ -185,6 +189,8 @@ def address_parts(address: Address) -> Parts:
         return accepted_parts(address)
     if isinstance(address, WrapUpRef):
         return wrapup_parts(address)
+    if isinstance(address, HoldingsRef):
+        return holdings_parts(address)
     return definition_parts(address)
 
 
@@ -258,6 +264,10 @@ def classify(parts: Parts) -> tuple[Kind, object] | None:
                 found = ("instance", InstanceRef(parts[1], parts[3], stem))
         elif len(parts) == 3 and parts[0] == CAMPAIGNS and parts[2] == SCOPE:
             found = ("scope", ScopeRef(parts[1]))
+        elif len(parts) == 5 and parts[0] == CAMPAIGNS and parts[2] == HOLDINGS:
+            stem = _stem(parts[4])
+            if stem is not None:
+                found = ("holdings", HoldingsRef(parts[1], parts[3], stem))
         elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == CHATS:
             stem = _stem(parts[3])
             if stem is not None:

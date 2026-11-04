@@ -1,7 +1,8 @@
 """V2 fiction-first domain core (no I/O, UI, or model provider dependencies)."""
 
 from .identity import (
-    ChatRef, IdentityConflict, InstanceRef, KnowledgeRef, LegacyId, RelationRef, ScopeRef, SourceRef, parse_ref,
+    ChatRef, HoldingsRef, IdentityConflict, InstanceRef, KnowledgeRef, LegacyId, RelationRef, ScopeRef, SourceRef,
+    parse_ref,
 )
 from .index import (
     BrokenReference,
@@ -143,7 +144,8 @@ from .resolve import MissingDefinition, actor_view
 
 __all__ = [
     "ActorView", "CampaignActor", "CharacterDefinition", "ControlAssignment", "SourceRef",
-    "ChatRef", "IdentityConflict", "InstanceRef", "KnowledgeRef", "LegacyId", "RelationRef", "ScopeRef", "parse_ref",
+    "ChatRef", "HoldingsRef", "IdentityConflict", "InstanceRef", "KnowledgeRef", "LegacyId", "RelationRef",
+    "ScopeRef", "parse_ref",
     "BrokenReference", "DefinitionIndex", "DefinitionLink", "LegacyIdMap",
     "SourceDescriptor", "UnmappedLegacyId",
     "MissingDefinition", "actor_view",
