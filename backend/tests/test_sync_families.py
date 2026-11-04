@@ -147,3 +147,137 @@ def test_021_a_held_relation_keeps_its_uncertainty_until_the_hold_lifts(tmp_path
     finally:
         desktop.close()
         phone.close()
+
+
+# -- round 7: every reference, not only manifest heads, is a dependency ------------------------------
+
+def _mara_r2_pair(tmp_path):
+    from grimoire.store import RecordEnvelope, SourceManifest
+    from chat_fixtures import CARDS, MARA, seed_sources
+    desktop, phone = LibraryStore.create(tmp_path / DESKTOP), LibraryStore.create(tmp_path / PHONE)
+    seed_sources(desktop)
+    identify(desktop, DESKTOP)
+    identify(phone, PHONE)
+    sync(desktop, phone, handles())
+    for store, bio in ((desktop, "a pirate"), (phone, "a sailor")):  # one revision id, two contents
+        txn = store.transaction()
+        txn.put(RecordEnvelope(MARA.at("r2"), {"bio": bio}, name="Mara"), None)
+        txn.put(SourceManifest(CARDS, OWNER, "Cards", {"scenario/storm": "r2", "character/mara": "r2"}),
+                store.read_source(CARDS).etag)
+        txn.commit(owner_handle())
+    return desktop, phone
+
+
+MARA_R2 = "sources/catalog/cards/_source/records/character/mara/r2.json"
+
+
+def test_107_a_chat_waits_for_its_actor_and_the_revision_it_binds(tmp_path):
+    """A chat binding a revision that differs on the destination, or naming an actor it lacks, never lands:
+    it would mean other bytes there, and pin a revision conflict so that no resolve could end it."""
+    from grimoire.chats.model import Launch
+    from chat_fixtures import MARA, chat_library
+    desktop, phone = _mara_r2_pair(tmp_path)
+    try:
+        chat_library(desktop).start_chat(Launch("character", MARA.at("r2"))).commit()
+        report = sync(desktop, phone, handles())
+        assert not [path for path, _ in report.copied if "/chats/" in path]  # (the scope names nothing: it may go)
+        assert {conflict.code for conflict in report.conflicts if "/chats/" in conflict.path} == {"head_dependency"}
+        mine, theirs = (desktop.root / MARA_R2).read_bytes(), (phone.root / MARA_R2).read_bytes()
+        assert resolve(desktop, phone, MARA_R2, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)},
+                       handles()) == PHONE
+        later = sync(desktop, phone, handles())  # now the revision agrees: actor, chat and scope travel
+        assert any("/chats/" in path for path, _ in later.copied)
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_a_denied_revision_holds_back_the_instance_that_pins_it(tmp_path):
+    from grimoire.core.identity import InstanceRef
+    from store_helpers import HARBOR, WREN_R2, harbor_manifest, instance, wren
+    from sync_helpers import handle, make_pair
+    desktop, phone = make_pair(tmp_path)
+    try:
+        txn = desktop.transaction()
+        txn.put(wren("r2", "a pirate"), None)
+        txn.put(harbor_manifest({"character/wren": "r2"}), desktop.read_source(HARBOR).etag)
+        txn.put(instance(InstanceRef("c1", "character", "zed"), WREN_R2, base=WREN_R2), None)
+        txn.commit(handle())
+        report = sync(desktop, phone, {DESKTOP: handle(), PHONE: owner_handle("campaigns", "kept")})  # no sources
+        zed = "campaigns/c1/instances/character/zed.json"
+        assert report.conflict(zed).code == "denied" and not (phone.root / zed).exists()
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_resolve_refuses_a_record_whose_pinned_revision_still_differs(tmp_path):
+    from grimoire.core.identity import InstanceRef
+    from store_helpers import WREN, WREN_R2, instance
+    from sync_helpers import PATHS, make_pair, new_revision, put
+    desktop, phone = make_pair(tmp_path)
+    try:
+        new_revision(desktop, "r2", "a captain")
+        new_revision(phone, "r2", "a pirate")
+        zed = "campaigns/c1/instances/character/zed.json"
+        put(desktop, instance(InstanceRef("c1", "character", "zed"), WREN, base=WREN_R2), None)
+        assert sync(desktop, phone, handles()).conflict(zed).code == "head_dependency"
+        data = (desktop.root / zed).read_bytes()
+        with pytest.raises(ResolveRefused, match="resolve it first"):
+            resolve(desktop, phone, zed, etag(data), {DESKTOP: etag(data), PHONE: None}, handles())
+        assert not (phone.root / zed).exists()
+        assert PATHS["r2"]  # resolving the revision first is the way out (see test_sync_scenarios)
+    finally:
+        desktop.close()
+        phone.close()
+
+
+@pytest.mark.parametrize("crash", [True, False])
+def test_an_interrupted_first_sync_never_undoes_a_later_deletion(tmp_path, monkeypatch, crash):
+    """Two copies of one library: what they already agree on is marked in the first sync's data commits,
+    so a crash before the archives never leaves a "first" base that would re-create a deletion."""
+    from grimoire.sync import session as sync_session
+    from store_helpers import seed
+    from sync_helpers import PATHS, WREN_A, edit_instance, handle
+    desktop = LibraryStore.create(tmp_path / DESKTOP)
+    seed(desktop, handle())
+    desktop.close()
+    shutil.copytree(tmp_path / DESKTOP, tmp_path / PHONE)
+    desktop, phone = LibraryStore.open(tmp_path / DESKTOP), LibraryStore.open(tmp_path / PHONE)
+    try:
+        identify(desktop, DESKTOP)
+        identify(phone, PHONE)
+        edit_instance(desktop, WREN_A, 9)
+        if crash:
+            def die(*args, **kwargs):
+                raise RuntimeError("power loss before the archives")
+            monkeypatch.setattr(sync_session, "_commit_archive", die)
+            with pytest.raises(RuntimeError):
+                sync(desktop, phone, handles())
+            monkeypatch.undo()
+        else:
+            sync(desktop, phone, handles())
+        (phone.root / PATHS["wren_b"]).unlink()  # a record both devices agreed on
+        report = sync(desktop, phone, handles())
+        assert not (phone.root / PATHS["wren_b"]).exists() and report.conflict(PATHS["wren_b"]) is not None
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_021_a_held_relation_keeps_archive_borne_uncertainty_too(tmp_path):
+    """The same promise when only the (damaged) archives make the base uncertain and the markers are valid."""
+    desktop, phone, keys, relations = _effects_pair(tmp_path)
+    try:
+        victim = relations[0]
+        (phone.root / victim).unlink()
+        for store, peer in ((phone, DESKTOP), (desktop, PHONE)):
+            (store.root / ".sync" / "peers" / peer / "archive.json").write_bytes(b"{")
+        _accept(desktop, keys)
+        assert any("archive ignored" in notice for notice in sync(desktop, phone, handles()).notices)
+        shutil.move(str(desktop.root / "campaigns" / EFFECTS_C / "accepted"), str(tmp_path / "moved-away"))
+        report = sync(desktop, phone, handles())  # the hold lifts
+        assert not (phone.root / victim).exists() and report.conflict(victim) is not None
+    finally:
+        desktop.close()
+        phone.close()

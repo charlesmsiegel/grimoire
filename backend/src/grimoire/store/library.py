@@ -1185,7 +1185,11 @@ class Transaction:
             current = access.etag_of(target)
             if current == tag:
                 self._kept[parts] = tag
-                return "/".join(target)  # already kept: nothing to stage
+                if not regenerable:  # possibly the only copy: re-verify the reused slot at commit (a no-op CAS)
+                    address = kept_address(parts, tag, attempt)
+                    self._add(_Put(target, address, bytes(data), tag, None, "keep", str(address),
+                                   regenerable=False, record=parts))
+                return "/".join(target)  # already kept
             if current is None:
                 address = kept_address(parts, tag, attempt)
                 self._add(_Put(target, address, bytes(data), None, None, "keep", str(address),

@@ -267,6 +267,50 @@ def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str
             raise RevisionReferenced(f"{path} pins {ref} in its payload")
 
 
+def pinned_by(parts: Parts, data: bytes) -> frozenset[SourceRef]:
+    """Every pinned revision the record at ``parts`` can mean: exactly what ``check_unreferenced``
+    counts as a reference, read from one record (sync's dependency rule, 019)."""
+    envelope = parse_exact(parts, data)
+    found: set[SourceRef] = set()
+    if isinstance(envelope, SourceManifest):
+        found |= {head.at(revision) for head, revision in envelope.head_refs().items()}
+        for link in envelope.links:
+            found |= {ref for ref in (_pinned(link.subject), _pinned(link.object)) if ref is not None}
+            found |= _payload_refs(link.extra)
+        found |= _payload_refs(envelope.extra)
+    elif isinstance(envelope, (ScopeRecord, KnowledgeRecord)):
+        found |= _payload_refs(envelope.payload) | _payload_refs(envelope.extra)
+    else:
+        if isinstance(envelope.address, InstanceRef):
+            found |= {ref for ref in (_pinned(envelope.derived_from), _pinned(envelope.base)) if ref is not None}
+        found |= _payload_refs(envelope.payload) | _payload_refs(envelope.extra)
+        found.discard(envelope.address)  # type: ignore[arg-type]
+    return frozenset(found)
+
+
+def instances_named(parts: Parts, data: bytes) -> frozenset[InstanceRef]:
+    """The campaign instances a scope or chat record names anywhere in its payload (107's roster
+    actors): sync never delivers such a record to a device that lacks one of them."""
+    envelope = parse_exact(parts, data)
+    if not isinstance(envelope, ScopeRecord):
+        return frozenset()
+    found: set[InstanceRef] = set()
+    stack: list[object] = [envelope.payload, envelope.extra]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str) and item.startswith("campaign:"):
+            try:
+                found.add(InstanceRef.parse(item))
+            except ValueError:
+                pass
+        elif isinstance(item, Mapping):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+    return frozenset(found)
+
+
 def _payload_refs(value: object) -> set[SourceRef]:
     """Every pinned revision an opaque payload can mean, conservatively.
 
@@ -308,4 +352,5 @@ def _pinned(text: object) -> SourceRef | None:
     return ref if ref.pinned else None
 
 
-__all__ = ["CanonicalScan", "check_unreferenced", "parse_exact", "previous_of", "scan"]
+__all__ = ["CanonicalScan", "check_unreferenced", "instances_named", "parse_exact", "pinned_by", "previous_of",
+           "scan"]

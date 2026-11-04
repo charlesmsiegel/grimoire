@@ -171,7 +171,7 @@ def test_a_kept_version_lands_in_its_slot_under_its_own_address(pair):
     assert (phone.root / kept).read_bytes() == theirs
     assert (phone.root / WREN_A_PATH).read_bytes() != theirs  # the canonical file is untouched
     reuse = phone.transaction()
-    assert reuse.keep_version(WREN_A_PATH, theirs) == kept and reuse.preview() == {}  # nothing staged
+    assert reuse.keep_version(WREN_A_PATH, theirs, regenerable=True) == kept and reuse.preview() == {}  # nothing staged
 
 
 def test_a_kept_address_is_a_valid_resource_and_distinct_per_slot():
@@ -827,13 +827,15 @@ def test_a_pin_in_a_scope_records_extra_fields_counts(pair):
         _replace_r1(phone)
 
 
-@pytest.mark.parametrize("folder", ["images", "placements"])
+@pytest.mark.parametrize("folder", ["sources/world/harbor/_source/images", "sources/world/harbor/_source/placements",
+                                    "campaigns/c1/images", "campaigns/c1/placements", "campaigns/c1/scenes"])
 def test_a_linked_018_folder_under_a_source_never_blocks_a_revision_replace(pair, tmp_path, folder):
     phone = pair[1]
     _cards(phone)
     outside = tmp_path / "art"
     outside.mkdir()
-    make_dir_link(phone.root / "sources/world/harbor/_source" / folder, outside)
+    (phone.root / folder).parent.mkdir(parents=True, exist_ok=True)
+    make_dir_link(phone.root / folder, outside)
     _replace_r1(phone)  # images and placements attach to entities, never to revisions
 
 
@@ -942,3 +944,36 @@ def test_on_denied_may_only_return_valid_sync_state(pair):
     key = txn.put_sync_state("device.json", b'{"format": "grimoire.sync.device/1", "device": "phone"}\n', None)
     with pytest.raises(InvalidEnvelope, match="must be JSON"):
         txn.commit(owner_handle("sources"), on_denied=lambda keys: {key: b"\xff not json"})
+
+
+
+def test_a_reused_hold_slot_is_re_verified_at_commit(pair):
+    """A revision replace whose old bytes are already kept: if that kept file vanishes before the commit,
+    the commit stops (compare-and-swap on the reused slot) instead of destroying the only copy."""
+    phone = pair[1]
+    current, other = _r1_now_history(phone)
+    first = phone.transaction()
+    slot = first.keep_version(R1_FILE, current)
+    first.commit(owner_handle(*ALL))  # the old bytes are kept already
+    txn = phone.transaction()
+    txn.put_exact(R1_FILE, other, etag(current), replace_unreferenced=True)
+    assert txn.keep_version(R1_FILE, current) == slot  # reused: staged as a no-op guard
+    txn.check()
+    (phone.root / slot).unlink()  # deleted by hand between planning and commit
+    with pytest.raises(StaleWrite):
+        txn.commit(owner_handle(*ALL))
+    assert (phone.root / R1_FILE).read_bytes() == current
+
+
+
+def test_put_exact_never_overwrites_a_knowledge_record(pair):
+    from grimoire.core.identity import KnowledgeRef
+    from grimoire.store import KnowledgeRecord
+    phone = pair[1]
+    txn = phone.transaction()
+    txn.put(KnowledgeRecord(KnowledgeRef("c9", "evidence", "e-1"), "grimoire.test/0", {"n": 1}), None)
+    txn.commit(owner_handle())
+    path = "campaigns/c9/evidence/evidence/e-1.json"
+    current = (phone.root / path).read_bytes()
+    with pytest.raises(ImmutableRevision, match="create-only"):
+        phone.transaction().put_exact(path, current.replace(b'"n": 1', b'"n": 2'), etag(current))

@@ -98,7 +98,7 @@ def parse(data: bytes) -> Journal:
         found = classify(tuple(target.split("/")))
         if found is not None and found[0] == "knowledge" and raw["old"] is not None:  # create-only
             raise RecoveryFailed(f"journal would replace a create-only knowledge record: {target!r}")
-        if kind in ("keep", "hold") and raw["old"] is not None:  # a kept version is only ever created
+        if kind in ("keep", "hold") and raw["old"] not in (None, raw["new"]):  # created, or re-verified unchanged
             raise RecoveryFailed(f"journal would replace an existing kept version: {target!r}")
         if type(temp) is not str or not is_staging_name(temp):
             raise RecoveryFailed(f"journal temp is not a staging name: {temp!r}")

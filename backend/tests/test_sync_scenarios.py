@@ -1575,3 +1575,30 @@ def test_an_instance_waits_for_the_revision_it_pins_and_the_conflict_stays_resol
     assert resolve(desktop, phone, PATHS["r2"], etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)},
                    handles()) == PHONE
     assert (pinned, PHONE) in sync(desktop, phone, handles()).copied  # now the pinned revision agrees
+
+
+
+def test_sync_until_quiet_reports_what_landed_even_when_the_last_attempt_fails_while_planning(pair, monkeypatch):
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    real, calls = sync_session.sync, []
+
+    def flaky(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return real(*args, **kwargs)  # the first attempt copies wren-a
+        raise SyncInterrupted("a library changed while it was planned")  # planning errors carry no report
+    monkeypatch.setattr(sync_session, "sync", flaky)
+    with pytest.raises(SyncInterrupted) as caught:
+        sync_until_quiet(desktop, phone, handles(), attempts=3)
+    assert (PATHS["wren_a"], PHONE) in caught.value.report.copied
+
+
+def test_021_wrapups_are_held_back(pair):
+    from grimoire.core.identity import WrapUpRef
+    from grimoire.store import ScopeRecord
+    desktop, phone = pair
+    path = "campaigns/c1/wrapups/w-1.json"
+    put(desktop, ScopeRecord(WrapUpRef("c1", "w-1"), "grimoire.wrapup/1", {"through": 1}), None)
+    report = sync(desktop, phone, handles())
+    assert path in report.skipped[DESKTOP] and not (phone.root / path).exists()

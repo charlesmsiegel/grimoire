@@ -14,14 +14,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from grimoire.core.identity import SourceRef, parse_ref
+from grimoire.core.identity import SourceRef
 from grimoire.store import (
     CrossDevice, ImmutableRevision, InvalidEnvelope, InvalidSourceState, LibraryStore, LinkRefused,
     NameCollision, RevisionReferenced, StaleWrite, StoreError, UnstorableIdentifier, WriteConflict, etag,
 )
 from grimoire.store.jsonfmt import MAX_FILE_BYTES
-from grimoire.store.layout import classify, conflict_parts, definition_parts, kept_address, manifest_parts
-from grimoire.store.replica import CanonicalScan, parse_exact, previous_of
+from grimoire.store.layout import classify, conflict_parts, definition_parts, instance_parts, kept_address, manifest_parts
+from grimoire.store.replica import CanonicalScan, instances_named, parse_exact, pinned_by, previous_of
 
 from .decide import decide, derive_base
 from .documents import (
@@ -298,18 +298,44 @@ def _manifest_heads(copy: Copy) -> list[str]:
     return ["/".join(definition_parts(ref.at(revision))) for ref, revision in envelope.head_refs().items()]  # type: ignore[union-attr]
 
 
-def _instance_pins(copy: Copy) -> list[str]:
-    """The revision files an instance pins by its structural fields (``base``, ``derived_from``)."""
-    envelope = parse_exact(tuple(copy.path.split("/")), copy.data)
-    found = []
-    for text in (getattr(envelope, "base", None), getattr(envelope, "derived_from", None)):
-        try:
-            ref = parse_ref(text) if isinstance(text, str) else None
-        except ValueError:
-            continue
-        if isinstance(ref, SourceRef) and ref.pinned:
-            found.append("/".join(definition_parts(ref)))
-    return found
+def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[Copy], dict[str, str]]:
+    """The copies whose dependencies hold on ``dest``, and why each other one is held (a fixpoint).
+
+    A copy lands only if, once this commit is applied, ``dest`` means what the origin means:
+    - every revision it pins (``replica.pinned_by``, the same set the store's reference check uses:
+      manifest heads and links, instance ``base``/``derived_from``, any pin in a payload) holds the
+      origin's bytes on ``dest``, already or copied in the same commit; a manifest's heads must
+      exist on the origin too;
+    - every campaign instance a scope or chat names (107's roster actors) that the origin holds is
+      present on ``dest``, already or copied in the same commit.
+    Holding one copy can unmeet another's dependency, so this repeats until nothing changes.
+    """
+    kept = list(copies)
+    held: dict[str, str] = {}
+    dest_files = plan.scans[dest].files  # type: ignore[attr-defined]
+    while True:
+        by_path = {copy.path: copy for copy in kept}
+
+        def final(path: str) -> bytes | None:
+            return by_path[path].data if path in by_path else dest_files.get(path)
+        newly = {}
+        for copy in kept:
+            origin_files = plan.scans[copy.origin].files  # type: ignore[attr-defined]
+            parts = tuple(copy.path.split("/"))
+            heads = set(_manifest_heads(copy)) if syncable(copy.path) == "manifest" else set()
+            pins = {"/".join(definition_parts(ref)) for ref in pinned_by(parts, copy.data)}
+            missing = sorted(path for path in pins if final(path) != origin_files.get(path)
+                             or (path in heads and origin_files.get(path) is None))
+            actors = sorted(path for path in ("/".join(instance_parts(ref)) for ref in instances_named(parts, copy.data))
+                            if path in origin_files and final(path) is None)
+            if missing or actors:
+                what = (["pinned revisions not identical on " + dest + ": " + ", ".join(missing)] if missing else [])
+                what += (["named instances missing on " + dest + ": " + ", ".join(actors)] if actors else [])
+                newly[copy.path] = "; ".join(what)
+        if not newly:
+            return kept, held
+        held.update(newly)
+        kept = [copy for copy in kept if copy.path not in newly]
 
 
 def _admit(plan: SyncPlan, dest: str) -> None:
@@ -321,22 +347,9 @@ def _admit(plan: SyncPlan, dest: str) -> None:
             plan.conflicts[copy.path] = Conflict(copy.path, "name_collision", "a differently spelled entry exists")
         else:
             copies.append(copy)
-    by_path = {copy.path: copy for copy in copies}
-    for copy in list(copies):
-        kind = syncable(copy.path)
-        if kind not in ("manifest", "instance"):
-            continue
-        origin_files, dest_files = origin_scans[copy.origin].files, origin_scans[dest].files  # type: ignore[attr-defined]
-        needs = _manifest_heads(copy) if kind == "manifest" else _instance_pins(copy)
-        missing = [path for path in needs if origin_files.get(path) is None or not (
-            dest_files.get(path) == origin_files.get(path)
-            or (path in by_path and by_path[path].data == origin_files.get(path)))]
-        if missing:
-            copies.remove(copy)
-            del by_path[copy.path]
-            plan.conflicts[copy.path] = Conflict(copy.path, "head_dependency",
-                                                 f"{'heads' if kind == 'manifest' else 'pinned revisions'} "
-                                                 f"not identical on {dest}: {', '.join(missing)}")
+    copies, held = _dependencies(plan, dest, copies)
+    for path, why in held.items():
+        plan.conflicts[path] = Conflict(path, "head_dependency", why)
     everything = store.transaction()
     _stage(everything, copies, [])
     if not copies or _preflight(everything, f"the copies to {dest}") is None:
@@ -347,6 +360,9 @@ def _admit(plan: SyncPlan, dest: str) -> None:
     admitted, rejected = _admit_units(store, copies)
     for copy, error in rejected:
         plan.conflicts[copy.path] = Conflict(copy.path, "unapplicable", str(error))
+    admitted, held = _dependencies(plan, dest, admitted)  # what depended on a refused unit stays too
+    for path, why in held.items():
+        plan.conflicts[path] = Conflict(path, "head_dependency", why)
     plan.copies[dest] = admitted
 
 
@@ -458,7 +474,7 @@ def _plan_keeps(plan: SyncPlan, device: str) -> None:
         data = plan.scans[other].files[path]  # type: ignore[attr-defined]
         txn = store.transaction()
         try:
-            target = txn.keep_version(path, data)
+            target = txn.keep_version(path, data, regenerable=True)  # the peer still holds these bytes
         except StoreError as error:
             _kept(plan, path, device, False, str(error))
             continue
@@ -519,6 +535,12 @@ def _pending_entries(plan: SyncPlan, device: str) -> dict[str, Mapping[str, obje
         if path not in entries and plan.bases[path].kind == "uncertain" and (
                 path not in plan.agreed or _both_absent_uncertain(plan, path)):
             entries[path] = {"uncertain": True}
+        elif path not in entries and plan.bases[path].kind == "first" and path in plan.agreed:
+            # agreed now, on a first sync: mark it, so a crash before the archives are written never
+            # leaves a "first" base behind (a later one-sided deletion would be undone)
+            side = plan.sides[path][device]
+            if side.state == "present":
+                entries[path] = {"from": side.etag, "to": side.etag}
     return entries
 
 
@@ -653,6 +675,19 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
                         plan.conflicts[copy.path] = Conflict(
                             copy.path, "denied", "its knowledge log's other records were not authorized",
                             MappingProxyType({device: False}))
+        while True:  # nothing may land whose dependency or knowledge log was just dropped
+            remaining = [copy for copy in copies if copy.path not in dropped]
+            _, held = _dependencies(plan, device, remaining)
+            broken = {_knowledge_campaign(path) for path in dropped} - {None}
+            held.update({copy.path: "its knowledge log's other records were not authorized" for copy in remaining
+                         if copy.path not in held and _knowledge_campaign(copy.path) in broken})
+            if not held:
+                break
+            for path, why in held.items():
+                dropped.add(path)
+                changes[path] = None
+                plan.conflicts[path] = Conflict(path, "denied", f"depends on a write that was not authorized: {why}",
+                                                MappingProxyType({device: False}))
         for keep in keeps:
             if str(_kept_key(keep)) in keys:
                 _kept(plan, keep.path, device, False, "keeping it was not authorized")
@@ -832,7 +867,7 @@ def sync_until_quiet(left: LibraryStore, right: LibraryStore, handles: Mapping[s
             return _merged(reports)
         last = None
     if last is not None:
-        if isinstance(getattr(last, "report", None), SyncReport):
+        if reports and hasattr(last, "report"):  # even an error raised while planning carries what landed
             last.report = _merged(reports)  # type: ignore[attr-defined]
         raise last
     raise SyncNotQuiet(f"every one of {attempts} syncs still wrote something", _merged(reports))
@@ -916,6 +951,14 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
                 resolved.append(head)
             elif ours != theirs:
                 raise ResolveRefused(f"{head} differs between the devices; resolve it first")
+    heads = set(_manifest_heads(Copy(path, winner, receiver, data, None))) if kind == "manifest" else set()
+    for pinned in sorted({"/".join(definition_parts(ref)) for ref in pinned_by(tuple(path.split("/")), data)} - heads):
+        if scans[winner].files.get(pinned) != scans[receiver].files.get(pinned):
+            raise ResolveRefused(f"{pinned}, which {path} pins, differs between the devices; resolve it first")
+    for ref in instances_named(tuple(path.split("/")), data):
+        named = "/".join(instance_parts(ref))
+        if named in scans[winner].files and named not in scans[receiver].files:
+            raise ResolveRefused(f"{named}, which {path} names, is missing on {receiver}; sync or resolve it first")
     if mine is not None:
         txn.keep_version(path, mine)
     # Like a sync's copy, the resolve's copy is marked in the same commit: if the archives are not
