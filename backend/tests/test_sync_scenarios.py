@@ -1711,3 +1711,19 @@ def test_a_sync_file_under_a_lookalike_spelling_stops_the_sync(pair, name):
     with pytest.raises(SyncInterrupted, match="another spelling"):
         sync(desktop, phone, handles())
     assert (phone.root / PATHS["wren_a"]).read_bytes() == before
+
+
+def test_renaming_a_device_away_and_back_retires_its_pending_markers_too(pair, monkeypatch):
+    """identify retires markers as well as archives: one left from an interrupted sync never decides later."""
+    desktop, phone = pair
+    edit_instance(phone, WREN_A, 9)
+    _crash_before(monkeypatch, "_commit_archive")
+    with pytest.raises(RuntimeError):
+        sync(desktop, phone, handles())  # the copy landed on the desktop, with its marker
+    monkeypatch.undo()
+    identify(desktop, "tablet", replace=True)
+    identify(desktop, DESKTOP, replace=True)  # and back, with no sync in between
+    edit_instance(phone, WREN_A, 4)
+    report = sync(desktop, phone, handles())
+    assert (PATHS["wren_a"], DESKTOP) not in report.copied
+    assert report.conflict(PATHS["wren_a"]).code == "missing_ancestor"

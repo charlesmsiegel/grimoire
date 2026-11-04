@@ -1050,3 +1050,38 @@ def test_a_stray_lookalike_of_the_source_folder_never_blocks_the_source(pair):
     found = phone.scan()
     assert R1_PATH in found.files and found.blocked_reason(R1_PATH) is None
     assert found.blocked.get("sources/world/harbor/_Source") == "lookalike"
+
+
+def test_a_lone_misspelled_file_makes_its_canonical_spelling_unknown(pair):
+    """``R9.json`` alone: every reference names ``r9.json``, which on a folding filesystem *is* that file, so
+    the canonical path is blocked too, and sync never reads it as "absent here" (round 12)."""
+    phone = pair[1]
+    folder = phone.root / R1_PATH.rsplit("/", 1)[0]
+    (folder / "R9.json").write_bytes((phone.root / R1_PATH).read_bytes())
+    found = phone.scan()
+    canonical = R1_PATH.replace("r1.json", "r9.json")
+    assert found.blocked_reason(canonical) == "shadowed" and canonical not in found.files
+    assert R1_PATH in found.files and found.blocked_reason(R1_PATH) is None
+
+
+@pytest.mark.parametrize("rename", [("campaigns/c9", "campaigns/C9"), ("campaigns", "Campaigns"),
+                                    ("campaigns/c9/instances", "campaigns/c9/Instances"),
+                                    ("campaigns/c9/scope.json", "campaigns/c9/Scope.json")])
+def test_a_pin_under_a_case_renamed_folder_still_blocks_a_revision_replace(pair, rename):
+    """A case-only rename (Finder, a git checkout, a cloud tool) leaves one non-canonical spelling, which on a
+    case-insensitive filesystem *is* the folder: its pins must still count (as load() reports name_mismatch)."""
+    from grimoire.core.identity import ScopeRef
+    from grimoire.store import ScopeRecord
+    phone = pair[1]
+    _cards(phone)
+    txn = phone.transaction()
+    if rename[0].endswith("scope.json"):
+        txn.put(ScopeRecord(ScopeRef("c9"), "grimoire.scope/0", {"pin": str(R1)}), None)
+    else:
+        txn.put(RecordEnvelope(InstanceRef("c9", "lore", "copy"), {}, base=str(R1)), None)
+    txn.commit(owner_handle())
+    with pytest.raises(RevisionReferenced):
+        _replace_r1(phone)  # the control: refused
+    (phone.root / rename[0]).rename(phone.root / rename[1])
+    with pytest.raises(RevisionReferenced, match="lookalike"):
+        _replace_r1(phone)

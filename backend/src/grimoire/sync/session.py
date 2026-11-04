@@ -20,8 +20,10 @@ from grimoire.store import (
     NameCollision, RevisionReferenced, StaleWrite, StoreError, UnstorableIdentifier, WriteConflict, etag,
 )
 from grimoire.store.jsonfmt import MAX_FILE_BYTES
-from grimoire.store.layout import classify, conflict_parts, definition_parts, instance_parts, kept_address, manifest_parts
-from grimoire.store.replica import CanonicalScan, instances_named, parse_exact, pinned_by, previous_of
+from grimoire.store.layout import (
+    chat_parts, classify, conflict_parts, definition_parts, instance_parts, kept_address, manifest_parts,
+)
+from grimoire.store.replica import SHADOWED, CanonicalScan, chats_named, instances_named, parse_exact, pinned_by, previous_of
 
 from .decide import archive_candidate, decide, derive_base
 from .documents import (
@@ -245,7 +247,9 @@ def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
         if decision.action == "agreed":
             plan.agreed.add(path)
         elif decision.action == "conflict":
-            plan.conflicts[path] = Conflict(path, decision.code or "conflict")
+            shadowed = decision.code == "blocked" and any(side.reason == SHADOWED for side in sides[path].values())
+            plan.conflicts[path] = (Conflict(path, "name_collision", "a differently spelled entry exists") if shadowed
+                                    else Conflict(path, decision.code or "conflict"))
         else:
             origin = a if decision.origin == "left" else b
             dest = other[origin]
@@ -315,15 +319,21 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
       manifest heads and links, instance ``base``/``derived_from``, any pin in a payload) holds the
       origin's bytes on ``dest``, already or copied in the same commit; a manifest's heads must
       exist on the origin too;
-    - every campaign instance a scope or chat names (107's roster actors) that the origin holds is
-      present on ``dest``, already or copied in the same commit.
+    - every campaign instance or chat a record names (107's roster actors, 020's holders and the
+      chat a batch came from) that the origin holds is present on ``dest``, already or copied in
+      the same commit;
+    - a 020 knowledge record's campaign exists on ``dest`` (a scope or an instance, 020's own test)
+      whenever it exists on the origin.
+    A path blocked on either side is never read as present or absent: the dependency is unmet.
     Holding one copy can unmeet another's dependency, so this repeats until nothing changes.
     """
     kept = list(copies)
     held: dict[str, str] = {}
     dest_files = plan.scans[dest].files  # type: ignore[attr-defined]
+    origins = {device: _campaigns_with_state(plan.scans[device].files) for device in {c.origin for c in copies}}  # type: ignore[attr-defined]
     while True:
         by_path = {copy.path: copy for copy in kept}
+        here = _campaigns_with_state([*dest_files, *by_path])
 
         def final(path: str) -> bytes | None:
             return by_path[path].data if path in by_path else dest_files.get(path)
@@ -339,16 +349,31 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
                 return origin_scan.blocked_reason(path) is not None or dest_scan.blocked_reason(path) is not None
             missing = sorted(path for path in pins | heads if final(path) != origin_files.get(path) or blocked(path)
                              or (path in heads and origin_files.get(path) is None))
-            actors = sorted(path for path in ("/".join(instance_parts(ref)) for ref in instances_named(parts, copy.data))
+            actors = sorted(path for path in _named_paths(parts, copy.data)
                             if (path in origin_files and final(path) is None) or blocked(path))
+            campaign = _knowledge_campaign(copy.path)
+            if campaign is not None and campaign not in here and (
+                    campaign in origins[copy.origin] or blocked(f"campaigns/{campaign}/scope.json")):
+                actors.append(f"campaigns/{campaign} (no scope or instance)")
             if missing or actors:
                 what = (["pinned revisions not identical on " + dest + ": " + ", ".join(missing)] if missing else [])
-                what += (["named instances missing on " + dest + ": " + ", ".join(actors)] if actors else [])
+                what += (["named campaign state missing on " + dest + ": " + ", ".join(actors)] if actors else [])
                 newly[copy.path] = "; ".join(what)
         if not newly:
             return kept, held
         held.update(newly)
         kept = [copy for copy in kept if copy.path not in newly]
+
+
+def _named_paths(parts: tuple[str, ...], data: bytes) -> list[str]:
+    """The instance and chat files a record names (``replica.instances_named``/``chats_named``)."""
+    return sorted({*("/".join(instance_parts(ref)) for ref in instances_named(parts, data)),
+                   *("/".join(chat_parts(ref)) for ref in chats_named(parts, data))})
+
+
+def _campaigns_with_state(paths) -> set[str]:  # type: ignore[no-untyped-def]
+    """The campaigns with real state among ``paths``: a scope or an instance (020's existence test)."""
+    return {path.split("/")[1] for path in paths if syncable(path) in ("scope", "instance")}
 
 
 def _admit(plan: SyncPlan, dest: str) -> None:
@@ -1019,11 +1044,15 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             if scans[winner].files.get(pinned) != scans[receiver].files.get(pinned) or any(
                     scans[device].blocked_reason(pinned) is not None for device in pair):
                 raise ResolveRefused(f"{pinned}, which {done} pins, differs between the devices; resolve it first")
-        for ref in instances_named(tuple(done.split("/")), written):
-            named = "/".join(instance_parts(ref))
+        for named in _named_paths(tuple(done.split("/")), written):
             if (named in scans[winner].files and named not in scans[receiver].files) or any(
                     scans[device].blocked_reason(named) is not None for device in pair):
                 raise ResolveRefused(f"{named}, which {done} names, is missing on {receiver}; sync or resolve it first")
+        campaign = _knowledge_campaign(done)
+        if campaign is not None and campaign not in _campaigns_with_state(scans[receiver].files) and (
+                campaign in _campaigns_with_state(scans[winner].files) or any(
+                    scans[device].blocked_reason(f"campaigns/{campaign}/scope.json") is not None for device in pair)):
+            raise ResolveRefused(f"campaign {campaign}, which {done} belongs to, is missing on {receiver}; sync it first")
     if mine is not None:
         txn.keep_version(path, mine)
     # Like a sync's copy, the resolve's copy is marked in the same commit: if the archives are not

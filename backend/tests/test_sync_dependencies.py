@@ -402,3 +402,73 @@ def test_an_ignored_marker_keeps_a_both_absent_path_uncertain(tmp_path):
     finally:
         desktop.close()
         phone.close()
+
+
+def _chat_knowledge(tmp_path, chat):
+    """A started chat on the desktop, then a 020 batch that came from it (or from no chat)."""
+    from chat_fixtures import MARA, chat_library
+    from grimoire.chats.model import Launch
+    from grimoire.core import Event
+    from grimoire.core.identity import ChatRef
+    from grimoire.evidencestore import EvidenceLibrary
+    from evidence_fixtures import m
+    desktop, phone = _chat_pair(tmp_path)
+    chat_library(desktop).start_chat(Launch("character", MARA)).commit()
+    if chat == "deleted":
+        sync(desktop, phone, handles())
+        (phone.root / "campaigns" / "q-1" / "chats" / "t-1.json").unlink()  # the phone user deletes it
+    EvidenceLibrary(desktop, owner_handle("sources", "campaigns", "kept"), owner=OWNER).append(
+        "q-1", [Event("q-1", "e-1", "a meeting in the chat", m(1), "director")],
+        chat=None if chat == "none" else ChatRef("q-1", "t-1")).commit()
+    return desktop, phone
+
+
+@pytest.mark.parametrize("case", ["chat_denied", "chat_deleted", "campaign_denied"])
+def test_020_knowledge_never_lands_without_its_chat_or_campaign(tmp_path, case):
+    """EVIDENCE.md step 3: the campaign and the chat a batch came from exist before its knowledge does;
+    sync never creates the state 020 itself refuses (a chat, deleted on the phone, stays a conflict)."""
+    from test_sync_scenarios import _grants
+    desktop, phone = _chat_knowledge(tmp_path, {"chat_deleted": "deleted", "campaign_denied": "none"}.get(case, "t-1"))
+    try:
+        grants = handles()
+        if case == "chat_denied":  # the campaign's scope, actors and knowledge, but not its chats
+            grants = {DESKTOP: handle(), PHONE: _grants("sources", "campaigns/q-1/scope.json", "campaigns/q-1/instances",
+                                                         "campaigns/q-1/events", "campaigns/q-1/evidence", "kept")}
+        elif case == "campaign_denied":  # only the knowledge folders
+            grants = {DESKTOP: handle(), PHONE: _grants("sources", "campaigns/q-1/events",
+                                                         "campaigns/q-1/evidence", "kept")}
+        report = sync(desktop, phone, grants)
+        assert not (phone.root / "campaigns" / "q-1" / "chats" / "t-1.json").exists()
+        landed = [path for path, device in report.copied if device == PHONE]
+        assert not [path for path in landed if "/events/" in path or "/evidence/" in path], landed
+        knowledge = sorted(path for path in desktop.scan().files if "/events/" in path or "/evidence/" in path)
+        assert knowledge and all(report.conflict(path) is not None or path in report.skipped[DESKTOP]
+                                 for path in knowledge)  # reported: the dependency, or held with its unit
+        assert any(report.conflict(path) is not None and report.conflict(path).code == "head_dependency"
+                   for path in knowledge) or case != "chat_deleted"
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_resolve_refuses_a_record_pinning_a_revision_blocked_on_the_receiver(tmp_path):
+    """The winner pins a revision it does not hold; the receiver's copy of it is a look-alike spelling
+    (blocked): "absent on both" is never read from a blocked path."""
+    from store_helpers import WREN
+    from sync_helpers import PATHS, WREN_A, edit_instance
+    desktop, phone = make_pair(tmp_path)
+    try:
+        edit_instance(desktop, WREN_A, 9)
+        put(phone, instance(WREN_A, WREN.at("r9"), base=WREN.at("r9")))  # pins a revision the phone lacks
+        r9 = desktop.root / PATHS["r1"].replace("r1.json", "R9.json")
+        r9.write_bytes((desktop.root / PATHS["r1"]).read_bytes())
+        report = sync(desktop, phone, handles())
+        path = PATHS["wren_a"]
+        assert report.conflict(path).code == "concurrent"
+        mine, theirs = (desktop.root / path).read_bytes(), (phone.root / path).read_bytes()
+        with pytest.raises(ResolveRefused, match="pins"):
+            resolve(desktop, phone, path, etag(theirs), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+        assert (desktop.root / path).read_bytes() == mine
+    finally:
+        desktop.close()
+        phone.close()

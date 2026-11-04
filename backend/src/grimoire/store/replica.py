@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from grimoire.core.identity import InstanceRef, SourceRef, validate_segment
+from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, validate_segment
 
 from .diskops import is_link, lstat_or_none
 from .engine import Access
@@ -24,10 +24,12 @@ from .jsonfmt import MAX_FILE_BYTES, JsonError, parse_strict
 from .jsonfmt import etag as _etag
 from .layout import (
     CAMPAIGNS, CONFLICTS, IMAGES, MARKER, PLACEMENTS, SCOPE, SOURCE_DIR, SOURCES, SUFFIX, SYNC, TXN, Parts, classify,
-    definition_parts, instance_parts, is_noise, name_key,
+    chat_parts, definition_parts, instance_parts, is_noise, name_key,
 )
 
 SCOPE_FILE = SCOPE
+#: The blocked reason of a canonical spelling that exists here only as a look-alike (``R9.json`` for ``r9.json``).
+SHADOWED = "shadowed"
 
 #: Root entries a scan walks for canonical records.
 _RECORD_ROOTS = (SOURCES, CAMPAIGNS)
@@ -156,6 +158,12 @@ def _children(access: Access, parts: Parts, blocked: dict[str, str]) -> list[tup
         if name in noise:
             found.append((name, "skip"))
             continue
+        if _misspelled(name):  # the loader's name_mismatch: alone, it is still the folder on a folding filesystem
+            blocked[text] = "lookalike"
+            if _folded(name) not in names:  # and the canonical spelling every reference uses is unknown too
+                blocked["/".join(parts + (_folded(name),))] = SHADOWED
+            found.append((name, "skip"))
+            continue
         if is_link(access.path(child)):
             blocked[text] = "link"
             found.append((name, "skip"))
@@ -169,6 +177,18 @@ def _children(access: Access, parts: Parts, blocked: dict[str, str]) -> list[tup
             continue
         found.append((name, "dir" if stat.S_ISDIR(info.st_mode) else "file"))
     return found
+
+
+def _folded(name: str) -> str:
+    """``name`` as a case-insensitive or normalizing filesystem compares it (the ``.json`` suffix kept)."""
+    return name_key(name.removesuffix(SUFFIX)) + (SUFFIX if name.endswith(SUFFIX) else "")
+
+
+def _misspelled(name: str) -> bool:
+    """Not a spelling the store writes, but one that folds to one (``Campaigns``, ``C9``, ``Wren-a.json``):
+    exactly the loader's ``name_mismatch`` test."""
+    folded = _folded(name)
+    return folded != name and folded.isascii() and folded.lower() == folded and name != SOURCE_DIR
 
 
 def _valid_name(name: str) -> bool:
@@ -241,17 +261,22 @@ _RECORD_FOLDERS = frozenset({"instances", "chats", "relations", "events", "evide
                              "holdings"})
 
 
-def _may_hold_records(access: Access, parts: Parts) -> bool:
-    """Whether a blocked path could be, or contain, a canonical record (else it cannot pin anything)."""
-    if parts in ((), ("",)):
+def _may_hold_records(access: Access, original: Parts) -> bool:
+    """Whether a blocked path could be, or contain, a canonical record (else it cannot pin anything).
+
+    Judged by its folded spelling: on a case-insensitive filesystem ``Campaigns`` or ``C9`` *is* the
+    folder the store reads, so a look-alike can hold records exactly as its canonical spelling can.
+    """
+    if original in ((), ("",)):
         return True  # the root itself: anything could be below it
+    parts = tuple(_folded(part) for part in original)
     found = classify(parts)
     if found is not None:
         return found[0] in EXACT_KINDS  # 018 images and placements attach to entities, never revisions
     if parts[0] == SOURCES:
         if SOURCE_DIR in parts and parts[parts.index(SOURCE_DIR) + 1:][:1] in ((IMAGES,), (PLACEMENTS,)):
             return False  # 018's images and placements attach to entities, never to revisions
-        info = lstat_or_none(access.path(parts))  # by kind, not name: source folder names may hold dots
+        info = lstat_or_none(access.path(original))  # by kind, not name: source folder names may hold dots
         if info is not None and stat.S_ISREG(info.st_mode):
             return parts[-1].endswith(SUFFIX)  # a regular file pins only if it is JSON
         return True  # a folder, a link or something unreadable may hold records
@@ -352,16 +377,27 @@ def instances_named(parts: Parts, data: bytes) -> frozenset[InstanceRef]:
     """The campaign instances a scope, chat, relation or 020 knowledge record names anywhere in its
     payload (107's roster actors, 017 endpoints, 020 holders and participants): sync never delivers
     such a record to a device that lacks one of them."""
+    return frozenset(ref for ref in _named(parts, data, InstanceRef.parse) if _storable(instance_parts, ref))
+
+
+def chats_named(parts: Parts, data: bytes) -> frozenset[ChatRef]:
+    """The chats a scope, chat, relation or 020 knowledge record names anywhere in its payload
+    (020 records the chat a batch came from): sync never delivers such a record without them."""
+    return frozenset(ref for ref in _named(parts, data, ChatRef.parse) if _storable(chat_parts, ref))
+
+
+def _named(parts: Parts, data: bytes, parse) -> set:  # type: ignore[no-untyped-def,type-arg]
+    """Every ``campaign:`` text in the record's payload or extra that ``parse`` accepts."""
     envelope = parse_exact(parts, data)
     if not isinstance(envelope, (ScopeRecord, KnowledgeRecord)):
-        return frozenset()
-    found: set[InstanceRef] = set()
+        return set()
+    found: set = set()  # type: ignore[type-arg]
     stack: list[object] = [envelope.payload, envelope.extra]
     while stack:
         item = stack.pop()
         if isinstance(item, str) and item.startswith("campaign:"):
             try:
-                found.add(InstanceRef.parse(item))
+                found.add(parse(item))
             except ValueError:
                 pass
         elif isinstance(item, Mapping):
@@ -369,7 +405,7 @@ def instances_named(parts: Parts, data: bytes) -> frozenset[InstanceRef]:
             stack.extend(item.values())
         elif isinstance(item, (list, tuple)):
             stack.extend(item)
-    return frozenset(ref for ref in found if _storable(instance_parts, ref))
+    return found
 
 
 def _payload_refs(value: object) -> set[SourceRef]:

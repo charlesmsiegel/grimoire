@@ -323,9 +323,12 @@ def test_resolve_of_a_manifest_refuses_a_head_whose_own_pin_still_differs(tmp_pa
         phone.close()
 
 
-def test_021_a_relation_held_on_a_first_sync_is_recorded_as_agreed(tmp_path):
-    """Two copies of one library with an accepted event: the held relations already agree, and that is recorded,
-    so a later one-sided deletion stays a deletion once the hold lifts."""
+@pytest.mark.parametrize("crash", [False, True])
+def test_021_a_relation_held_on_a_first_sync_is_recorded_as_agreed(tmp_path, monkeypatch, crash):
+    """Two copies of one library with an accepted event: the held relations already agree, and that is recorded
+    (in the archives and in the data commits' markers, should the first sync stop before its archives), so a
+    later one-sided deletion stays a deletion once the hold lifts."""
+    from grimoire.sync import session as sync_session
     keys = Handles()
     desktop = LibraryStore.create(tmp_path / DESKTOP)
     seed_effects(desktop, keys)
@@ -336,16 +339,25 @@ def test_021_a_relation_held_on_a_first_sync_is_recorded_as_agreed(tmp_path):
     try:
         identify(desktop, DESKTOP)
         identify(phone, PHONE)
-        first = sync(desktop, phone, handles())
         relations = sorted(path for path in desktop.scan().files if "/relations/" in path)
-        assert relations and set(relations) <= set(first.skipped[DESKTOP])
+        if crash:
+            def die(*args, **kwargs):
+                raise RuntimeError("power loss before the archives")
+            monkeypatch.setattr(sync_session, "_commit_archive", die)
+            with pytest.raises(RuntimeError):
+                sync(desktop, phone, handles())
+            monkeypatch.undo()
+        else:
+            first = sync(desktop, phone, handles())
+            assert relations and set(relations) <= set(first.skipped[DESKTOP])
         victim = relations[0]
         (phone.root / victim).unlink()
         sync(desktop, phone, handles())  # still held
         for store, where in ((desktop, "d"), (phone, "p")):
             shutil.move(str(store.root / "campaigns" / EFFECTS_C / "accepted"), str(tmp_path / f"away-{where}"))
         report = sync(desktop, phone, handles())  # the hold lifts
-        assert not (phone.root / victim).exists() and report.conflict(victim).code == "deleted"
+        assert not (phone.root / victim).exists(), report.copied
+        assert report.conflict(victim).code == ("missing_ancestor" if crash else "deleted")  # never a silent copy
     finally:
         desktop.close()
         phone.close()
