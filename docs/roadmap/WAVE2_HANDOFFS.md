@@ -44,7 +44,7 @@ The exact Markdown/JSON filenames, field spellings and on-disk form are an **010
 - An actor's **access to evidence** is not equivalent to its **belief**, and neither is equivalent to world truth. Receiving a message does not make its assertion canonically true. A transcript line does not establish that an off-stage actor heard it.
 - The actor-only projection is deterministic and must fail closed for private/unknown evidence; no model call on ordinary filtering. The director projection is separate and explicitly authorized.
 - 017 builds typed graph traversal **on** 012's evidence access policy; a graph path to a hidden node never grants knowledge.
-- 020 persists immutable/correctable event and evidence records using 010's envelope contract; 012 itself has no file writer. 032 later owns actual delivery semantics.
+- 020 persists immutable/correctable event and evidence records using 010's envelope contract; 012 itself has no file writer. 032 later owns actual delivery semantics. **020's first slice is implemented** ([EVIDENCE](../EVIDENCE.md)): create-only records plus a hash-chained knowledge log, with read-time quarantine that can only remove knowledge.
 
 ### Provider/voice/quality boundaries (013 / 014 / 015 / 027)
 

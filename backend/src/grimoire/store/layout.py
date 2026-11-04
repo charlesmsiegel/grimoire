@@ -17,7 +17,8 @@ import unicodedata
 from typing import Literal
 
 from grimoire.core.identity import (
-    ChatRef, InstanceRef, RelationRef, ScopeRef, SourceRef, validate_segment, validate_source_id,
+    KNOWLEDGE_FAMILIES, ChatRef, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef, validate_segment,
+    validate_source_id,
 )
 from grimoire.security import InvalidResourcePath, ResourcePath
 
@@ -45,14 +46,19 @@ SUFFIX = ".json"
 CHATS = "chats"  # campaigns/<id>/chats/<chat_id>.json: one chat record (107)
 RELATIONS = "relations"  # campaigns/<id>/relations/<relation_id>.json: one relation record (017)
 SCOPE = "scope.json"  # campaigns/<id>/scope.json: the play-scope record (107)
+EVENTS = "events"  # campaigns/<id>/events/<event_id>.json: accepted events (020)
+EVIDENCE = "evidence"  # campaigns/<id>/evidence/<family>/<id>.json: everything else, and the batch log (020)
+#: families stored under ``evidence/`` (an event lives under ``events/``)
+EVIDENCE_FAMILIES = frozenset(KNOWLEDGE_FAMILIES) - {"event"}
 
 ROOT_ENTRIES = frozenset({MARKER, SOURCES, CAMPAIGNS, TXN, CONFLICTS})
-#: Reserved for later record families; the loader skips them.
+#: Reserved for later record families; the loader skips them. ``events``/``evidence`` belong to
+#: 020 and are read only by ``campaign_knowledge``, so ``load()``'s cost never grows with history.
 RESERVED_ROOTS = frozenset({"authority", "config", "assets", "secrets"})
 RESERVED_CAMPAIGN_ENTRIES = frozenset({"scenes", "events", "evidence"})
 _NOISE = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
 
-Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat", "relation"]
+Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat", "relation", "knowledge"]
 
 
 def is_noise(name: str) -> bool:
@@ -109,7 +115,15 @@ def relation_parts(ref: RelationRef) -> Parts:
     return _checked((CAMPAIGNS, ref.campaign_id, RELATIONS, ref.relation_id + SUFFIX))
 
 
-def address_parts(address: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef) -> Parts:
+def knowledge_parts(ref: KnowledgeRef) -> Parts:
+    if ref.family == "event":
+        return _checked((CAMPAIGNS, ref.campaign_id, EVENTS, ref.record_id + SUFFIX))
+    return _checked((CAMPAIGNS, ref.campaign_id, EVIDENCE, ref.family, ref.record_id + SUFFIX))
+
+
+def address_parts(address: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef) -> Parts:
+    if isinstance(address, KnowledgeRef):
+        return knowledge_parts(address)
     if isinstance(address, InstanceRef):
         return instance_parts(address)
     if isinstance(address, ScopeRef):
@@ -164,7 +178,7 @@ def _stem(name: str) -> str | None:
     return stem
 
 
-Address = SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef
+Address = SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef
 
 
 def classify(parts: Parts) -> tuple[Kind, Address | str] | None:
@@ -186,6 +200,14 @@ def classify(parts: Parts) -> tuple[Kind, Address | str] | None:
             stem = _stem(parts[3])
             if stem is not None:
                 found = ("relation", RelationRef(parts[1], stem))
+        elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == EVENTS:
+            stem = _stem(parts[3])
+            if stem is not None:
+                found = ("knowledge", KnowledgeRef(parts[1], "event", stem))
+        elif len(parts) == 5 and parts[0] == CAMPAIGNS and parts[2] == EVIDENCE and parts[3] in EVIDENCE_FAMILIES:
+            stem = _stem(parts[4])
+            if stem is not None:
+                found = ("knowledge", KnowledgeRef(parts[1], parts[3], stem))
         elif len(parts) >= 3 and parts[0] == LEDGERS:
             seq = ledger_seq(parts[-1])
             if seq is not None:
