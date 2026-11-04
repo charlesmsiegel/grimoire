@@ -170,3 +170,77 @@ def test_h1_an_accepted_folder_spelled_differently_still_holds_relations(tmp_pat
     finally:
         desktop.close()
         phone.close()
+
+
+# -- round 9: a path that is blocked is unknown, never "absent" ----------------------------------------
+
+@pytest.mark.parametrize("where", ["campaign", "campaigns"])
+def test_resolve_never_writes_a_held_relation_after_a_listing_error(tmp_path, monkeypatch, where):
+    """resolve decides the hold from the same scans it writes from; an unlistable campaign folder holds."""
+    from grimoire.store import engine
+    from test_sync_families import EFFECTS_C, _accept, _effects_pair
+    desktop, phone, keys, _ = _effects_pair(tmp_path)
+    try:
+        path = f"campaigns/{EFFECTS_C}/relations/r-seed-1.json"
+        _accept(desktop, keys)
+        assert path in sync(desktop, phone, handles()).skipped[DESKTOP]
+        mine, theirs = (desktop.root / path).read_bytes(), (phone.root / path).read_bytes()
+        folder = ("campaigns", EFFECTS_C) if where == "campaign" else ("campaigns",)
+        real, fired = engine.Access.list_dir, []
+
+        def busy_once(self, parts):
+            if tuple(parts) == folder and not fired and self.root == desktop._access.root:
+                fired.append(1)
+                raise PermissionError(13, "held by another program")
+            return real(self, parts)
+        monkeypatch.setattr(engine.Access, "list_dir", busy_once)
+        with pytest.raises(ResolveRefused):
+            resolve(desktop, phone, path, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+        monkeypatch.undo()
+        assert (phone.root / path).read_bytes() == theirs
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_an_instance_pinning_a_revision_blocked_on_the_origin_waits(tmp_path, monkeypatch):
+    from grimoire.store import engine
+    from store_helpers import WREN
+    from sync_helpers import PATHS, WREN_A, new_revision
+    desktop, phone = make_pair(tmp_path)
+    try:
+        new_revision(desktop, "r2", "a captain")
+        put(desktop, instance(WREN_A, WREN.at("r2"), base=WREN.at("r2")))
+        real, folder = engine.Access.list_dir, tuple(PATHS["r2"].split("/")[:-1])
+
+        def busy(self, parts):
+            if tuple(parts) == folder and self.root == desktop._access.root:
+                raise PermissionError(13, "held by another program")
+            return real(self, parts)
+        monkeypatch.setattr(engine.Access, "list_dir", busy)
+        report = sync(desktop, phone, handles())
+        monkeypatch.undo()
+        assert report.conflict(PATHS["wren_a"]).code == "head_dependency"
+        assert phone.read(WREN_A).envelope.base == str(WREN.at("r1"))
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_an_unlistable_library_root_blocks_every_path_it_holds(tmp_path, monkeypatch):
+    from grimoire.store import engine
+    desktop, phone = make_pair(tmp_path)
+    try:
+        real = engine.Access.list_dir
+
+        def busy(self, parts):
+            if tuple(parts) == () and self.root == desktop._access.root:
+                raise PermissionError(13, "held by another program")
+            return real(self, parts)
+        monkeypatch.setattr(engine.Access, "list_dir", busy)
+        found = desktop.scan()
+        monkeypatch.undo()
+        assert found.blocked_reason("campaigns/c1/instances/character/wren-a.json") == "unreadable"
+    finally:
+        desktop.close()
+        phone.close()

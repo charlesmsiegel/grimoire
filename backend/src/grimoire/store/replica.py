@@ -24,7 +24,7 @@ from .jsonfmt import MAX_FILE_BYTES, JsonError, parse_strict
 from .jsonfmt import etag as _etag
 from .layout import (
     CAMPAIGNS, CONFLICTS, IMAGES, MARKER, PLACEMENTS, SCOPE, SOURCE_DIR, SOURCES, SUFFIX, SYNC, TXN, Parts, classify,
-    is_noise, name_key,
+    definition_parts, instance_parts, is_noise, name_key,
 )
 
 SCOPE_FILE = SCOPE
@@ -56,6 +56,8 @@ class CanonicalScan:
         """Why ``path`` is unusable here: blocked itself or below a blocked directory."""
         if path in self.blocked:
             return self.blocked[path]
+        if "" in self.blocked:  # the library root itself could not be listed: nothing in it is known
+            return self.blocked[""]
         parts = path.split("/")
         for index in range(1, len(parts)):
             reason = self.blocked.get("/".join(parts[:index]))
@@ -220,6 +222,8 @@ _RECORD_FOLDERS = frozenset({"instances", "chats", "relations", "events", "evide
 
 def _may_hold_records(access: Access, parts: Parts) -> bool:
     """Whether a blocked path could be, or contain, a canonical record (else it cannot pin anything)."""
+    if parts in ((), ("",)):
+        return True  # the root itself: anything could be below it
     found = classify(parts)
     if found is not None:
         return found[0] in EXACT_KINDS  # 018 images and placements attach to entities, never revisions
@@ -311,7 +315,16 @@ def pinned_by(parts: Parts, data: bytes) -> frozenset[SourceRef]:
             found |= {ref for ref in (_pinned(envelope.derived_from), _pinned(envelope.base)) if ref is not None}
         found |= _payload_refs(envelope.payload) | _payload_refs(envelope.extra)
         found.discard(envelope.address)  # type: ignore[arg-type]
-    return frozenset(found)
+    return frozenset(ref for ref in found if _storable(definition_parts, ref))
+
+
+def _storable(parts_of, ref) -> bool:  # type: ignore[no-untyped-def]
+    """A reference no library can store (a reserved device name, say) names nothing that could exist."""
+    try:
+        parts_of(ref)
+    except (ValueError, UnstorableIdentifier):
+        return False
+    return True
 
 
 def instances_named(parts: Parts, data: bytes) -> frozenset[InstanceRef]:
@@ -334,7 +347,7 @@ def instances_named(parts: Parts, data: bytes) -> frozenset[InstanceRef]:
             stack.extend(item.values())
         elif isinstance(item, (list, tuple)):
             stack.extend(item)
-    return frozenset(found)
+    return frozenset(ref for ref in found if _storable(instance_parts, ref))
 
 
 def _payload_refs(value: object) -> set[SourceRef]:

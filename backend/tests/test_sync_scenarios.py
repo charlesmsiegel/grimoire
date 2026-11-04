@@ -1602,3 +1602,46 @@ def test_021_wrapups_are_held_back(pair):
     put(desktop, ScopeRecord(WrapUpRef("c1", "w-1"), "grimoire.wrapup/1", {"through": 1}), None)
     report = sync(desktop, phone, handles())
     assert path in report.skipped[DESKTOP] and not (phone.root / path).exists()
+
+
+# -- brutal-review round 9 -------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("record", ["chat", "knowledge"])
+def test_a_reference_no_library_can_store_never_blocks_the_sync(pair, record):
+    """Text that parses as a reference to an unstorable path (a reserved device name) names nothing that
+    could exist: it is no dependency, and it never stops the rest of the sync."""
+    from grimoire.core.identity import ChatRef, KnowledgeRef
+    from grimoire.store import KnowledgeRecord, ScopeRecord
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    if record == "chat":
+        put(desktop, ScopeRecord(ChatRef("c1", "talk"), "grimoire.test-chat/0",
+                                 {"history": ["hello", "campaign:c1/character/aux"]}), None)
+    else:
+        txn = desktop.transaction()
+        txn.put(KnowledgeRecord(KnowledgeRef("c1", "event", "e1"), "grimoire.test-knowledge/0",
+                                {"text": "world:harbor/character/nul@r1"}), None)
+        txn.commit(handle())
+    report = sync_until_quiet(desktop, phone, handles())
+    assert (PATHS["wren_a"], PHONE) in report.copied and len(report.copied) == 2
+
+
+def test_aba_after_two_interrupted_syncs_whose_copy_equals_the_archived_base(pair, monkeypatch):
+    """The stale-marker shortcut never applies when the archives already held the marker's ``to`` as it
+    was written: an exact restore of the older version is still a keep-both conflict."""
+    desktop, phone = pair
+    path = PATHS["wren_a"]
+    agreed = (phone.root / path).read_bytes()
+    edit_instance(phone, WREN_A, 4)
+    edited = (phone.root / path).read_bytes()
+    _crash_before(monkeypatch, "_verify")
+    with pytest.raises(RuntimeError):
+        sync(desktop, phone, handles())  # the desktop gets the edit; archives still say "agreed"
+    (phone.root / path).write_bytes(agreed)  # the phone restores the agreed bytes
+    with pytest.raises(RuntimeError):
+        sync(desktop, phone, handles())  # copies them back to the desktop; archives unchanged
+    monkeypatch.undo()
+    (desktop.root / path).write_bytes(edited)  # and the desktop restores the edit (ABA)
+    report = sync(desktop, phone, handles())
+    assert report.conflict(path).code == "missing_ancestor"
+    assert (phone.root / path).read_bytes() == agreed and agreed in kept(desktop)

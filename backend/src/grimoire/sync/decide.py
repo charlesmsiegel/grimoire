@@ -100,8 +100,12 @@ def derive_base(path: str, archives: tuple[ArchiveLike, ArchiveLike], pendings: 
             entries.append((entry, etag))
     if entries:
         targets = {entry.get("to") for entry, _ in entries}
-        if len(targets) == 1 and None not in targets and candidate == Base("agreed", next(iter(targets))):
-            return candidate  # a marker left by a crash after both archives agreed on its copy: stale
+        to = next(iter(targets)) if len(targets) == 1 else None
+        if to is not None and candidate == Base("agreed", to) and all(entry.get("base") != to for entry, _ in entries):
+            # a marker left by a crash after both archives agreed on its copy: stale. Not when the
+            # archives already said ``to`` when it was written (a copy back to an older agreed version):
+            # then they have not moved, and the marker still guards a restore.
+            return candidate
         if len(targets) == 1 and None not in targets and all(entry.get("to") == etag for entry, etag in entries):
             return Base("agreed", targets.pop())
         return UNCERTAIN

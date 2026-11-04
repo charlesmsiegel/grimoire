@@ -23,7 +23,7 @@ from grimoire.store.jsonfmt import MAX_FILE_BYTES
 from grimoire.store.layout import classify, conflict_parts, definition_parts, instance_parts, kept_address, manifest_parts
 from grimoire.store.replica import CanonicalScan, instances_named, parse_exact, pinned_by, previous_of
 
-from .decide import decide, derive_base
+from .decide import archive_candidate, decide, derive_base
 from .documents import (
     DEVICE_FILE, ArchiveView, PendingView, syncable, archive_name, check_device_id, parse_archive, parse_device,
     parse_pending, pending_name, render_archive, render_device, render_pending, render_retired,
@@ -324,10 +324,14 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
             parts = tuple(copy.path.split("/"))
             heads = set(_manifest_heads(copy)) if syncable(copy.path) == "manifest" else set()
             pins = {"/".join(definition_parts(ref)) for ref in pinned_by(parts, copy.data)}
-            missing = sorted(path for path in pins if final(path) != origin_files.get(path)
+            origin_scan, dest_scan = plan.scans[copy.origin], plan.scans[dest]
+
+            def blocked(path: str) -> bool:  # unknown on either side: never read as "absent on both"
+                return origin_scan.blocked_reason(path) is not None or dest_scan.blocked_reason(path) is not None
+            missing = sorted(path for path in pins if final(path) != origin_files.get(path) or blocked(path)
                              or (path in heads and origin_files.get(path) is None))
             actors = sorted(path for path in ("/".join(instance_parts(ref)) for ref in instances_named(parts, copy.data))
-                            if path in origin_files and final(path) is None)
+                            if (path in origin_files and final(path) is None) or blocked(path))
             if missing or actors:
                 what = (["pinned revisions not identical on " + dest + ": " + ", ".join(missing)] if missing else [])
                 what += (["named instances missing on " + dest + ": " + ", ".join(actors)] if actors else [])
@@ -566,6 +570,12 @@ def _held_campaigns(scans) -> set[str]:  # type: ignore[no-untyped-def]
             parts = path.split("/")
             if len(parts) >= 3 and parts[0] == "campaigns" and parts[2].casefold() == HOLDS_RELATIONS:
                 held.add(parts[1])
+        for path in scan.blocked:  # a campaign (or every campaign) whose contents cannot be listed
+            parts = path.split("/")
+            if path in ("", "campaigns"):
+                held.add("*")
+            elif len(parts) == 2 and parts[0] == "campaigns":
+                held.add(parts[1])
     return held
 
 
@@ -594,7 +604,7 @@ def _knowledge_campaign(path: str) -> str | None:
 
 def _held_relation(path: str, held: set[str]) -> bool:
     """A 017 relation of a campaign whose relations are held back (see ``model.HOLDS_RELATIONS``)."""
-    return syncable(path) == "relation" and path.split("/")[1] in held
+    return syncable(path) == "relation" and (path.split("/")[1] in held or "*" in held)
 
 
 def _both_absent_uncertain(plan: SyncPlan, path: str) -> bool:
@@ -727,8 +737,16 @@ def _marker_needed(plan: SyncPlan, data: bytes, old: bytes | None) -> bool:
 
 def _marker(plan: SyncPlan, device: str, copies: list[Copy]) -> bytes:
     entries = _pending_entries(plan, device)
-    entries.update({copy.path: {"from": copy.expected, "to": copy.etag} for copy in copies})
+    for copy in copies:
+        entries[copy.path] = {"from": copy.expected, "to": copy.etag,
+                              "base": _archived(archive_candidate(copy.path, *plan.archives.values()))}
     return render_pending(plan.devices, entries)
+
+
+def _archived(candidate: Base) -> str | None:
+    """The agreed etag both archives held when a marker was written (``None`` if none): with it, a
+    marker is stale only once the archives have moved on to its ``to`` (``decide.derive_base``)."""
+    return candidate.etag if candidate.kind == "agreed" else None
 
 
 def _kept_key(keep: Keep) -> object:
@@ -904,15 +922,15 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         raise ResolveRefused(f"{path} is not a synchronized record")
     if kind == "knowledge":
         raise ResolveRefused(f"{path} is a create-only knowledge record; correct it by appending, never replacing")
-    if kind == "relation" and path.split("/")[1] in _held_campaigns((left.scan(), right.scan())):
-        raise ResolveRefused(f"{path} is held back: its campaign has accepted events (021), and a relation "
-                             "they changed must never arrive without them")
     ids = device_of(left), device_of(right)
     if ids[0] == ids[1]:
         raise SameDevice(f"both libraries are device {ids[0]!r}")
     stores = dict(zip(ids, (left, right)))
     pair: tuple[str, str] = tuple(sorted(ids))  # type: ignore[assignment]
     scans = {device: stores[device].scan() for device in pair}
+    if kind == "relation" and _held_relation(path, _held_campaigns(scans.values())):  # the scans decided from
+        raise ResolveRefused(f"{path} is held back: its campaign has accepted events (021), and a relation "
+                             "they changed must never arrive without them")
     sides = {device: _side(scans[device], path) for device in pair}
     for device, side in sides.items():
         if side.state == "blocked":
@@ -920,9 +938,10 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         if set(expected) != set(pair) or _current(side) != expected[device]:
             raise ResolveRefused(f"{path} changed on {device} since the conflict was reported")
     other = {pair[0]: pair[1], pair[1]: pair[0]}
-    pendings = {}
+    pendings, archived = {}, []
     for device in pair:  # a rebuilt archive or marker would forget why every other path is uncertain
         archive = parse_archive(_state(stores[device], archive_name(other[device])), pair)
+        archived.append(archive)
         pendings[device] = parse_pending(_state(stores[device], pending_name(other[device])), pair)
         for what, state in (("archive", archive.state), ("pending marker", pendings[device].state)):
             if state == "ignored" or (what == "archive" and state != "valid"):
@@ -963,11 +982,13 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         written = scans[winner].files[done]
         for pinned in sorted({"/".join(definition_parts(ref)) for ref in pinned_by(tuple(done.split("/")), written)}
                              - set(resolved)):
-            if scans[winner].files.get(pinned) != scans[receiver].files.get(pinned):
+            if scans[winner].files.get(pinned) != scans[receiver].files.get(pinned) or any(
+                    scans[device].blocked_reason(pinned) is not None for device in pair):
                 raise ResolveRefused(f"{pinned}, which {done} pins, differs between the devices; resolve it first")
         for ref in instances_named(tuple(done.split("/")), written):
             named = "/".join(instance_parts(ref))
-            if named in scans[winner].files and named not in scans[receiver].files:
+            if (named in scans[winner].files and named not in scans[receiver].files) or any(
+                    scans[device].blocked_reason(named) is not None for device in pair):
                 raise ResolveRefused(f"{named}, which {done} names, is missing on {receiver}; sync or resolve it first")
     if mine is not None:
         txn.keep_version(path, mine)
@@ -977,7 +998,8 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     marked = dict(pendings[receiver].entries)
     for done in resolved:
         theirs, ours = scans[winner].files[done], scans[receiver].files.get(done)
-        marked[done] = {"from": None if ours is None else etag(ours), "to": etag(theirs)}
+        marked[done] = {"from": None if ours is None else etag(ours), "to": etag(theirs),
+                        "base": _archived(archive_candidate(done, *archived))}
     old_marker = pendings[receiver].data
     txn.put_sync_state(pending_name(other[receiver]), render_pending(pair, marked),
                        None if old_marker is None else etag(old_marker))

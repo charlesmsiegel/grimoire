@@ -184,8 +184,9 @@ def parse_pending(data: bytes | None, devices: tuple[str, str]) -> PendingView:
     for path, entry in entries.items():
         valid = isinstance(entry, Mapping) and _syncable(path) and (
             dict(entry) == {"uncertain": True}
-            or (set(entry) == {"from", "to"} and is_etag(entry["to"])
-                and (entry["from"] is None or is_etag(entry["from"]))))
+            or (set(entry) in ({"from", "to"}, {"from", "to", "base"}) and is_etag(entry["to"])
+                and (entry["from"] is None or is_etag(entry["from"]))
+                and (entry.get("base") is None or is_etag(entry["base"]))))
         if not valid:
             return _ignored(PendingView, f"bad entry for {path!r}", data)
         parsed[path] = MappingProxyType(dict(entry))
