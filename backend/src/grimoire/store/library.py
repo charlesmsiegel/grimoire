@@ -21,7 +21,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from grimoire.core.identity import (
-    ChatRef, IdentityConflict, InstanceRef, KnowledgeRef, ScopeRef, SourceRef, validate_segment,
+    ChatRef, IdentityConflict, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef, validate_segment,
 )
 from grimoire.core.index import DefinitionIndex, SourceDescriptor
 from grimoire.library import LibraryPathError, check_write_destination
@@ -50,7 +50,8 @@ from .layout import (
 )
 from .ledger import Head, Ledger, read_ledger, render_batches
 from .loader import (
-    KnowledgeScan, LibraryView, StoredDefinition, StoredKnowledgeRecord, StoredRecord, StoredScopeRecord, StoredSource,
+    CampaignRelations, KnowledgeScan, LibraryView, StoredDefinition, StoredKnowledgeRecord, StoredRecord,
+    StoredScopeRecord, StoredSource,
 )
 from .lock import Locker, OsLocker
 
@@ -434,14 +435,14 @@ class LibraryStore:
             return report
 
     # -- reading -----------------------------------------------------------------
-    def read(self, ref: SourceRef | InstanceRef | ScopeRef | ChatRef | KnowledgeRef
+    def read(self, ref: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef
              ) -> StoredRecord | StoredScopeRecord | StoredKnowledgeRecord:
         """One record by exact address (a definition must be pinned)."""
         if isinstance(ref, SourceRef) and not ref.pinned:
             raise ValueError("read a pinned revision; resolve unpinned references with load().index")
         with self.lock:  # reads wait for this process's commits, so they never see one half-done
             self._require_consistent()
-            if isinstance(ref, (ScopeRef, ChatRef)):
+            if isinstance(ref, (ScopeRef, ChatRef, RelationRef)):
                 return loader.read_scope_record(self._access, address_parts(ref))
             if isinstance(ref, KnowledgeRef):
                 return loader.read_knowledge_record(self._access, address_parts(ref))
@@ -462,6 +463,14 @@ class LibraryStore:
             self._require_consistent()
             with self._access.cached_listings():
                 return loader.campaign_instances(self._access, campaign_id)
+
+    def campaign_relations(self, campaign_id: str) -> CampaignRelations:
+        """One campaign's relation records (017) and their problems, as ``load()`` reports them."""
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return loader.campaign_relations(self._access, campaign_id)
 
     def campaign_knowledge(self, campaign_id: str) -> KnowledgeScan:
         """One campaign's events/evidence files as found (020): director-level, store-internal.

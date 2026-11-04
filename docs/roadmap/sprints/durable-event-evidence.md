@@ -26,6 +26,12 @@ The first proof includes a false report **with proof of delivery** and a bystand
 
 A 107 lightweight chat has a stable campaign namespace even without an authored world; event and evidence stores must accept that namespace and its chat/scene IDs. Character and scenario links identify **authoring sources**, not a grant to know the entire chat transcript. A newly added NPC begins with only explicitly introduced/delivered knowledge and cannot be assumed to have perceived earlier accepted events. Group chats and later world promotion retain their own source/actor/history provenance. [Chat model](../CHAT_MODEL.md).
 
+## Obligations from 017
+
+Persist 017's claim shapes (see [GRAPH](../../GRAPH.md#claims-what-an-actor-thinks-is-connected)) with the propositions they shape. Run `check_subjects` before persisting propositions and rulings. Own definition-subject and future-instance validity, which 017's check does not cover.
+
+**Status:** not yet met by 020's first slice, which was specified before 017 landed. That slice checks only that instance subjects exist at write time. These obligations are the next 020 step and need their own spec.
+
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove? *Answered for the first slice:* every append is previewed, approved and committed once, or refused with a reason. Read-time damage only removes knowledge. Manual rollback of the knowledge log is documented. See [EVIDENCE](../../EVIDENCE.md#correction-and-repair).
 - Which optional later integrations can stay outside the first slice? *Answered:* see the [EVIDENCE deferrals](../../EVIDENCE.md#deferrals).

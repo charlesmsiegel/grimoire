@@ -216,3 +216,4 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 | Export redaction | the export owner |
 | Graph traversal | 017 |
 | Persisted control assignments | 009/035 |
+| 017's claim shapes stored with their propositions; `check_subjects` before persisting propositions and rulings; definition-subject and future-instance validity | 020, next step ([obligations from 017](roadmap/sprints/durable-event-evidence.md#obligations-from-017)) |

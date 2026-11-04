@@ -18,6 +18,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   campaigns/<campaign_id>/instances/<kind>/<instance_id>.json     # one campaign instance
   campaigns/<campaign_id>/scope.json                              # the play scope (107)
   campaigns/<campaign_id>/chats/<chat_id>.json                    # one chat record (107)
+  campaigns/<campaign_id>/relations/<relation_id>.json            # one relation record (017)
   campaigns/<campaign_id>/events/<event_id>.json                  # one accepted event (020)
   campaigns/<campaign_id>/evidence/<family>/<id>.json             # proposition|ruling|evidence|belief|disclosure (020)
   campaigns/<campaign_id>/evidence/batch/<seq:010d>.json          # the campaign's knowledge log (020)
@@ -38,9 +39,9 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   - a source ID deeper than 26 segments.
 - **Reserved names for later families**, which the loader skips silently:
   - at the root: `authority`, `config`, `assets`, `secrets`;
-  - inside a campaign: `scenes`, `events`, `evidence`, `relations`.
+  - inside a campaign: `scenes`, `events`, `evidence`.
 
-  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section).
+  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), and `relations/` since 017 (see relation records).
 
   `events/` and `evidence/` belong to 020 and stay skipped by `load()`, so `load()`'s cost never grows with campaign history. They are read only by `campaign_knowledge` (see [events and evidence](#events-and-evidence-020)).
 
@@ -115,6 +116,20 @@ Fields:
 - **Entity instances written by 107** carry the payload schema as a preserved top-level `"schema": "grimoire.entity/0"` key in `record/1`. See [ENTITIES](ENTITIES.md#provisional-payload-codec).
 
 **Rollback:** a pre-107 build reports `scope.json` and `chats/` as `unrecognized` and never writes or deletes them. It **cannot recover a journal that names them**: it raises `RecoveryFailed`, and reads then raise `PendingRecovery`. Recover with a 107+ build, or run `LibraryStore.discard_journal`, which does not interpret paths (tested).
+
+### Relation records (017)
+
+<a id="relation-records-017"></a>Added by [Typed Relationship Graph](roadmap/sprints/typed-relationship-graph.md). Interpreted by [`grimoire.graph`](GRAPH.md), never by the store.
+
+- **An additive 010 envelope amendment, recorded here as 107's was.** `grimoire.scope-record/1`'s address union widens to `ScopeRef | ChatRef | RelationRef`. The relation address is `campaign:<id>#relation/<relation_id>`, at `campaigns/<id>/relations/<relation_id>.json`. `parse_scope_record` chooses the family by the exact `#chat/` or `#relation/` fragment; any other `#…` is `malformed`. No new file format is added, and `record/1` and `source/1` are unchanged.
+- `relations` is no longer a reserved campaign entry. `classify` recognises exactly the new path, so recovery accepts journals that name it.
+- A `relation_id` is limited to 123 characters.
+- `load()` adds `LibraryView.relations`. Bad files are contained per file, as for chats. Anything else under `relations/` (a sub-directory, another suffix, a look-alike name) is `unrecognized` or `name_mismatch`, and a `relations` that is a file is `unrecognized`.
+- `read(RelationRef)` returns a `StoredScopeRecord`. `campaign_relations(id)` returns `CampaignRelations(records, problems)` for **one** campaign, contained exactly as `load()` contains it (a parity test). Links are reported and never followed.
+- Writes read every relation file of the campaign (no cap; O(n)).
+- **Instance allocators must use `grimoire.graphstore.relation_endpoint_ids`** (see [GRAPH](GRAPH.md#endpoint-ids-stay-taken)), so the id of a hand-deleted relation endpoint is never reused.
+
+**Rollback:** a pre-017 build skips `relations/` (it is reserved there), and never writes or deletes it. Its allocators do not protect relation endpoint ids. It **cannot recover a journal that names a relation path**: it raises `RecoveryFailed`, and reads then raise `PendingRecovery`. Recover with a 017+ build, or run `LibraryStore.discard_journal` (tested).
 
 ### Read-only helpers (107)
 

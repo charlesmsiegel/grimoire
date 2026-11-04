@@ -16,13 +16,13 @@ from .errors import (
 from .jsonfmt import etag
 from .library import CommitResult, LibraryStore, RecoveryReport, Transaction
 from .loader import (
-    BrokenRef, KnowledgeScan, LibraryView, LoadProblem, StoredDefinition, StoredKnowledgeRecord, StoredRecord,
-    StoredScopeRecord, StoredSource,
+    BrokenRef, CampaignRelations, KnowledgeScan, LibraryView, LoadProblem, StoredDefinition, StoredKnowledgeRecord,
+    StoredRecord, StoredScopeRecord, StoredSource,
 )
 from .lock import Locker, OsLocker, ProcessLocker
 
 __all__ = [
-    "BrokenRef", "CommitIncomplete", "CommitResult", "CrossDevice", "DiskOps", "FileOps",
+    "BrokenRef", "CampaignRelations", "CommitIncomplete", "CommitResult", "CrossDevice", "DiskOps", "FileOps",
     "ImmutableRevision", "InvalidEnvelope", "InvalidSourceState", "LibraryLocked", "LibraryStore",
     "KnowledgeRecord", "KnowledgeScan",
     "LibraryView", "LinkRefused", "LinkSpec", "LoadProblem", "LockUnavailable", "Locker",

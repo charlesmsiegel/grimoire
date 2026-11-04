@@ -14,7 +14,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from grimoire.core.identity import (
-    ChatRef, InstanceRef, KnowledgeRef, ScopeRef, SourceRef, parse_ref, validate_segment, validate_source_id,
+    ChatRef, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef, parse_ref, validate_segment,
+    validate_source_id,
 )
 from grimoire.core.index import DIRECTED_RELATIONS, SYMMETRIC_RELATIONS
 
@@ -131,12 +132,13 @@ def _parse_source_ref(text: str, label: str) -> SourceRef:
         raise InvalidEnvelope(f"{label}: {error}") from None
 
 
-ScopeAddress = ScopeRef | ChatRef
+ScopeAddress = ScopeRef | ChatRef | RelationRef
 
 
 @dataclass(frozen=True)
 class ScopeRecord:
-    """A play-scope (``ScopeRef``) or chat (``ChatRef``) record with an opaque payload.
+    """A campaign-scoped record with an opaque payload: the play scope (``ScopeRef``), a chat
+    (``ChatRef``, 107) or a relation (``RelationRef``, 017).
 
     The envelope owns the address and the payload's schema id; the store never
     interprets either payload. Unknown top-level fields are preserved in ``extra``.
@@ -149,8 +151,8 @@ class ScopeRecord:
     extra: Mapping[str, object] = field(default_factory=_empty)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.address, (ScopeRef, ChatRef)):
-            raise InvalidEnvelope("a scope record's address must be a ScopeRef or ChatRef")
+        if not isinstance(self.address, (ScopeRef, ChatRef, RelationRef)):
+            raise InvalidEnvelope("a scope record's address must be a ScopeRef, ChatRef or RelationRef")
         if type(self.schema) is not str or not self.schema.strip() or len(self.schema) > SCHEMA_MAX:
             raise InvalidEnvelope(f"schema must be nonempty text of at most {SCHEMA_MAX} characters")
         _optional_text(self.owner, "owner", nonempty=True)
@@ -383,12 +385,21 @@ def parse_source(document: Mapping[str, object]) -> tuple[SourceManifest, str | 
     return manifest, _previous(document)
 
 
+def _scope_address(text: object) -> ScopeAddress:
+    """Choose the family by its exact fragment; any other ``#...`` is not an address."""
+    if isinstance(text, str) and "#" in text:
+        if "#relation/" in text:
+            return RelationRef.parse(text)
+        return ChatRef.parse(text)
+    return ScopeRef.parse(text)
+
+
 def parse_scope_record(document: Mapping[str, object]) -> tuple[ScopeRecord, str | None]:
     _format(document, SCOPE_RECORD_FORMAT)
     text = document.get("address")
     address: ScopeAddress
     try:
-        address = ChatRef.parse(text) if isinstance(text, str) and "#" in text else ScopeRef.parse(text)
+        address = _scope_address(text)
     except ValueError as error:
         raise EnvelopeError("malformed", f"address: {error}") from None
     if "payload" not in document:

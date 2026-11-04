@@ -1,5 +1,7 @@
 # Typed relationships and bounded graph traversal
 
+**Status:** **first slice implemented**, headless: `grimoire.graph` (pure), `grimoire.graphstore` (service) and an additive `campaigns/<id>/relations/` record family in `grimoire.store`. The contract is in [GRAPH.md](../../GRAPH.md). The proving scenario, the negative tests and the crash exploration are executable. The actor side is per-node claims with no multi-hop expansion, so 012's contract is unchanged. Deferrals and owners are under *Boundaries and deferrals* in GRAPH.md. The milestones below are unchanged.
+
 **Outcome:** Represent source links, organizations, places, ownership, emotions and events as typed, dated, source-qualified relations.
 
 ## Scope and first proof

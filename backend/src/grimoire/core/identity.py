@@ -33,6 +33,7 @@ _INSTANCE_REF_RE = re.compile(
 )
 _SCOPE_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})")
 _CHAT_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#chat/(?P<chat_id>{_SEGMENT})")
+_RELATION_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#relation/(?P<relation_id>{_SEGMENT})")
 
 
 class IdentityConflict(ValueError):
@@ -263,6 +264,38 @@ class KnowledgeRef:
         match = _KNOWLEDGE_REF_RE.fullmatch(_require_text(text))
         if match is None:
             raise ValueError(f"not a knowledge record reference: {text!r}")
+        return cls(**match.groupdict())
+
+
+@dataclass(frozen=True, slots=True)
+class RelationRef:
+    """One canonical relation record of a campaign's typed graph (017); never an actor or a claim.
+
+    ``campaign:<campaign_id>#relation/<relation_id>``. ``relation_id`` is the segment that a
+    knowledge ``Subject("relation", ...)`` names. Not returned by ``parse_ref``.
+    """
+
+    campaign_id: str
+    relation_id: str
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.relation_id, "relation_id")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"campaign:{self.campaign_id}#relation/{self.relation_id}"
+
+    @property
+    def scope(self) -> ScopeRef:
+        return ScopeRef(self.campaign_id)
+
+    @classmethod
+    def parse(cls, text: object) -> RelationRef:
+        match = _RELATION_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not a relation reference: {text!r}")
         return cls(**match.groupdict())
 
 

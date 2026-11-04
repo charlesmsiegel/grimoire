@@ -17,7 +17,8 @@ import unicodedata
 from typing import Literal
 
 from grimoire.core.identity import (
-    KNOWLEDGE_FAMILIES, ChatRef, InstanceRef, KnowledgeRef, ScopeRef, SourceRef, validate_segment, validate_source_id,
+    KNOWLEDGE_FAMILIES, ChatRef, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef, validate_segment,
+    validate_source_id,
 )
 from grimoire.security import InvalidResourcePath, ResourcePath
 
@@ -43,6 +44,7 @@ RECORDS = "records"
 INSTANCES = "instances"
 SUFFIX = ".json"
 CHATS = "chats"  # campaigns/<id>/chats/<chat_id>.json: one chat record (107)
+RELATIONS = "relations"  # campaigns/<id>/relations/<relation_id>.json: one relation record (017)
 SCOPE = "scope.json"  # campaigns/<id>/scope.json: the play-scope record (107)
 EVENTS = "events"  # campaigns/<id>/events/<event_id>.json: accepted events (020)
 EVIDENCE = "evidence"  # campaigns/<id>/evidence/<family>/<id>.json: everything else, and the batch log (020)
@@ -53,10 +55,10 @@ ROOT_ENTRIES = frozenset({MARKER, SOURCES, CAMPAIGNS, TXN, CONFLICTS})
 #: Reserved for later record families; the loader skips them. ``events``/``evidence`` belong to
 #: 020 and are read only by ``campaign_knowledge``, so ``load()``'s cost never grows with history.
 RESERVED_ROOTS = frozenset({"authority", "config", "assets", "secrets"})
-RESERVED_CAMPAIGN_ENTRIES = frozenset({"scenes", "events", "evidence", "relations"})
+RESERVED_CAMPAIGN_ENTRIES = frozenset({"scenes", "events", "evidence"})
 _NOISE = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
 
-Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat", "knowledge"]
+Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat", "relation", "knowledge"]
 
 
 def is_noise(name: str) -> bool:
@@ -109,13 +111,17 @@ def chat_parts(ref: ChatRef) -> Parts:
     return _checked((CAMPAIGNS, ref.campaign_id, CHATS, ref.chat_id + SUFFIX))
 
 
+def relation_parts(ref: RelationRef) -> Parts:
+    return _checked((CAMPAIGNS, ref.campaign_id, RELATIONS, ref.relation_id + SUFFIX))
+
+
 def knowledge_parts(ref: KnowledgeRef) -> Parts:
     if ref.family == "event":
         return _checked((CAMPAIGNS, ref.campaign_id, EVENTS, ref.record_id + SUFFIX))
     return _checked((CAMPAIGNS, ref.campaign_id, EVIDENCE, ref.family, ref.record_id + SUFFIX))
 
 
-def address_parts(address: SourceRef | InstanceRef | ScopeRef | ChatRef | KnowledgeRef) -> Parts:
+def address_parts(address: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef) -> Parts:
     if isinstance(address, KnowledgeRef):
         return knowledge_parts(address)
     if isinstance(address, InstanceRef):
@@ -124,6 +130,8 @@ def address_parts(address: SourceRef | InstanceRef | ScopeRef | ChatRef | Knowle
         return scope_parts(address)
     if isinstance(address, ChatRef):
         return chat_parts(address)
+    if isinstance(address, RelationRef):
+        return relation_parts(address)
     return definition_parts(address)
 
 
@@ -170,10 +178,13 @@ def _stem(name: str) -> str | None:
     return stem
 
 
-def classify(parts: Parts) -> tuple[Kind, SourceRef | InstanceRef | ScopeRef | ChatRef | KnowledgeRef | str] | None:
+Address = SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef
+
+
+def classify(parts: Parts) -> tuple[Kind, Address | str] | None:
     """The record a canonical path holds, or ``None``; exact inverse of the mappings."""
     parts = tuple(parts)
-    found: tuple[Kind, SourceRef | InstanceRef | ScopeRef | ChatRef | KnowledgeRef | str] | None = None
+    found: tuple[Kind, Address | str] | None = None
     try:
         if len(parts) == 5 and parts[0] == CAMPAIGNS and parts[2] == INSTANCES:
             stem = _stem(parts[4])
@@ -185,6 +196,10 @@ def classify(parts: Parts) -> tuple[Kind, SourceRef | InstanceRef | ScopeRef | C
             stem = _stem(parts[3])
             if stem is not None:
                 found = ("chat", ChatRef(parts[1], stem))
+        elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == RELATIONS:
+            stem = _stem(parts[3])
+            if stem is not None:
+                found = ("relation", RelationRef(parts[1], stem))
         elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == EVENTS:
             stem = _stem(parts[3])
             if stem is not None:
