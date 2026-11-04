@@ -239,7 +239,7 @@ def test_f6_receipt_mismatch_is_reported_refused_and_repairable(world):
     event, _ = library.read(done.ref, requested_by=DIRECTOR)
     assert [(s.op, s.why) for s in event.revocation.skipped] == [(0, "not ended by this event")]
     view = library.continuity(C, as_of=8, requested_by=DIRECTOR)
-    assert [(p.code, p.op) for p in view.problems] == [("partial_revocation", 0)]  # partly undone, and said so
+    assert view.problems == ()  # the skipped end was already undone by hand, so nothing is left in force
     assert view.graph.index.relation("r-1", requested_by=DIRECTOR).retracted
 
 
@@ -712,3 +712,85 @@ def test_an_accepted_event_id_never_reuses_a_020_event_id(world):
     write(store.root, "/".join(address_parts(KnowledgeRef(C, "event", "e-1"))), b"{}")  # a 020 event named e-1
     done = library.accept(give(KEY2, to=TAM, agent=TAM, backed=None, sequence=8), controls=CONTROLS).commit()
     assert done.ref.event_id == "e-2"
+
+
+
+# -- brutal-review round 3 -------------------------------------------------------------------------
+
+def test_a_retry_after_control_changed_hands_is_still_a_duplicate(world):
+    store, handles, library = world
+    done = accept(library, handles).commit()
+    moved = (ControlAssignment(C, "wren", BOB), ControlAssignment(C, "tam", DIRECTOR))
+    retry = accept(library, handles, controls=moved)  # Ana's stale keys: no authority needed for a no-op
+    assert retry.duplicate_of == done.ref and retry.preview() == {}
+
+
+def test_text_that_could_never_be_stored_is_refused_by_name(world):
+    from grimoire.effects import EffectError
+    store, handles, library = world
+    with pytest.raises(EffectError, match="invalid_field"):
+        give(summary="bad \ud800 summary")
+    assert reason(lambda: accept(library, handles, contributions=[contribution(text="I give \udfff")])) == \
+        "invalid_field"
+
+
+def test_an_agent_file_replaced_after_preview_makes_the_acceptance_stale(world):
+    store, handles, library = world
+    pact = EffectProposal(C, CHAT, moment(), "Tam makes Ines and the guild allies.",
+                          (Op("begin", "allied_with", INES, GUILD, TAM),), "director")
+    change = library.accept(pact, controls=CONTROLS)
+    (store.root / "campaigns/c/instances/character/tam.json").unlink()
+    _stale(store, change)
+
+
+def test_a_020_event_taking_the_id_after_preview_makes_the_acceptance_stale(world):
+    from grimoire.core.identity import KnowledgeRef
+    from grimoire.store.layout import address_parts
+    store, handles, library = world
+    change = library.accept(give(KEY2, to=TAM, agent=TAM, backed=None, sequence=8), controls=CONTROLS)
+    write(store.root, "/".join(address_parts(KnowledgeRef(C, "event", change.ref.event_id))), b"{}")
+    _stale(store, change)
+
+
+def test_ids_stay_taken_even_when_the_event_file_fails_validation(world):
+    from grimoire.effectstore import accepted_instance_ids
+    store, handles, library = world
+    pact = EffectProposal(C, CHAT, moment(), "Ines makes Wren and the guild allies.",
+                          (Op("begin", "allied_with", WREN, GUILD, INES),), "director")
+    done = library.accept(pact, controls=CONTROLS).commit()
+    path = store.root / "campaigns/c/accepted" / f"{done.ref.event_id}.json"
+    document = json.loads(path.read_bytes())
+    document["payload"]["summary"] = "x" * 5000  # over the limit: undecodable, but still readable JSON
+    path.write_bytes(json.dumps(document).encode())
+    assert "ines" in accepted_instance_ids(store, C)
+
+
+def test_a_partial_revocation_stops_being_reported_once_resolved_by_hand(world):
+    store, handles, library = world
+    done = accept(library, handles).commit()
+    rel = relations(store, handles)
+    tam = RelationRef(C, "r-1")
+    rel.end(tam, until=Moment(9), provenance="editor", expected=rel.read(tam)[1]).commit()
+    _, etag = library.read(done.ref, requested_by=DIRECTOR)
+    library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.undo(done.ref)], partial=True).commit()
+    assert [p.code for p in library.continuity(C, as_of=8, requested_by=DIRECTOR).problems] == ["partial_revocation"]
+    rel.retract(tam, provenance="editor: Tam never had it", expected=rel.read(tam)[1]).commit()
+    assert library.continuity(C, as_of=8, requested_by=DIRECTOR).problems == ()
+
+
+def test_a_malformed_event_file_landing_during_the_snapshot_makes_the_change_stale(world, monkeypatch):
+    store, handles, library = world
+    original = RelationLibrary.graph
+    target = store.root / "campaigns/c/accepted/e-77.json"
+
+    def graph_then_damage(self, campaign_id, *, requested_by):
+        found = original(self, campaign_id, requested_by=requested_by)
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"{half-synced")
+        return found
+
+    monkeypatch.setattr(RelationLibrary, "graph", graph_then_damage)
+    change = library.accept(give(KEY2, to=TAM, agent=TAM, backed=None, sequence=8), controls=CONTROLS)
+    monkeypatch.setattr(RelationLibrary, "graph", original)
+    _stale(store, change)

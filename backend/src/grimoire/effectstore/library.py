@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
-from grimoire.core.identity import AcceptedRef, ChatRef, KnowledgeRef, WrapUpRef, validate_segment
+from grimoire.core.identity import AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, WrapUpRef, validate_segment
 from grimoire.core.knowledge import Moment
 from grimoire.core.model import ControlAssignment
 from grimoire.effects import (
@@ -133,6 +133,7 @@ class EffectChange:
     chat: ChatRef | None = None
     duplicate_of: AcceptedRef | None = None
     checks_relations: bool = False  # an acceptance: its preconditions need every relation file readable
+    agent_etags: Mapping = field(default_factory=dict)  # an acceptance: each agent's instance file as checked
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -162,6 +163,12 @@ class EffectChange:
             found.append(("/".join(address_parts(self.chat)), "chat missing"))
         if self.checks_relations and unreadable:
             found.append((f"campaigns/{self.campaign_id}/relations", "a relation file cannot be read"))
+        for agent, etag in self.agent_etags.items():  # a replaced file may be a different individual
+            if self.library._etag(agent) != etag:
+                found.append(("/".join(address_parts(agent)), "agent missing or changed"))
+        if self.checks_relations and not self.library._absent(KnowledgeRef(self.campaign_id, "event", self.ref.event_id)):  # type: ignore[union-attr]
+            found.append((f"campaigns/{self.campaign_id}/events/{self.ref.event_id}.json",  # type: ignore[union-attr]
+                          "a 020 event took this id"))
         return found
 
     def commit(self, approvals: Mapping[str, str] | None = None) -> EffectCommit:
@@ -245,7 +252,7 @@ class TurnEffectsLibrary:
             problems += verify_receipts(event, snap.graph.index)
         problems += orphans(events, snap.relations())
         problems += edited_effects(events, snap.graph.index)
-        problems += partial_revocations(events)
+        problems += partial_revocations(events, snap.graph.index)
         problems += wrapup_problems(snap.wrapups.values(), events)
         active = sorted((e for e in events if e.active and e.moment.sequence <= as_of),
                         key=lambda e: (e.moment.sequence, e.ordinal, e.event_id))
@@ -268,24 +275,26 @@ class TurnEffectsLibrary:
             self._require_campaign(campaign)
             if not self._chat_exists(proposal.chat):
                 raise InvalidEffect(f"{proposal.chat} does not exist", "missing_chat")
-            try:
-                authorization = authorize(proposal, controls, contributions)
-            except EffectError as error:
-                raise _refused(error) from None
-            records = self._check_endorsements(authorization.endorsers, endorsements, proposal.fingerprint)
             snap = self._snapshot(campaign)
             self._require_trustworthy(snap)
-            if _relations_unreadable(snap.graph):
-                raise InvalidEffect("a relation file cannot be read, so preconditions cannot be checked",
-                                    "undecodable_relation")
             wanted = proposal.fingerprint
             for event in snap.active():
+                # A duplicate writes nothing, so it needs no keys: a retry after control changed hands, or with a
+                # stale endorsement, is still told that the effect is in force rather than refused for authority.
                 if event.fingerprint == wanted:
                     if verify_receipts(event, snap.graph.index):
                         raise InvalidEffect(f"{event.ref} is accepted but its receipts do not match the relations",
                                             "receipt_mismatch", (event.event_id,))
                     return EffectChange(self, event.ref, campaign_id=campaign, state=snap.state,
                                         duplicate_of=event.ref)
+            try:
+                authorization = authorize(proposal, controls, contributions)
+            except EffectError as error:
+                raise _refused(error) from None
+            records = self._check_endorsements(authorization.endorsers, endorsements, proposal.fingerprint)
+            if _relations_unreadable(snap.graph):
+                raise InvalidEffect("a relation file cannot be read, so preconditions cannot be checked",
+                                    "undecodable_relation")
             turn = (proposal.chat, proposal.moment.scene_id, proposal.moment.turn_id)
             same_turn = [e.event_id for e in snap.active()
                          if (e.chat, e.moment.scene_id, e.moment.turn_id) == turn]
@@ -330,8 +339,9 @@ class TurnEffectsLibrary:
             except EffectError as error:
                 raise _refused(error) from None
             record = ScopeRecord(ref, ACCEPTED_SCHEMA, accepted_to_payload(event), owner=self._owner)
+            agents = {op.agent: self._etag(op.agent) for op in proposal.operations if op.agent is not None}
             return EffectChange(self, ref, ((record, None),), tuple(changes), campaign, snap.state, proposal.chat,
-                                checks_relations=True)
+                                checks_relations=True, agent_etags=agents)
 
     # -- revoking -----------------------------------------------------------------------------
 
@@ -504,6 +514,12 @@ class TurnEffectsLibrary:
             return ref
         raise StoreError("could not allocate an unused accepted-event id")
 
+    def _etag(self, ref) -> str | None:  # type: ignore[no-untyped-def]
+        try:
+            return self.store.read(ref).etag
+        except (StoreError, LibraryPathError, ValueError):
+            return None
+
     def _absent(self, ref: AcceptedRef | KnowledgeRef) -> bool:
         """Exact presence only: a look-alike fails the commit with NameCollision; an unreadable file counts."""
         try:
@@ -596,22 +612,35 @@ def _relation_files(store: LibraryStore, campaign_id: str) -> tuple[list[Relatio
 
 
 def accepted_instance_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
-    """Instance ids named by the campaign's decodable accepted events: operation subjects, objects and agents,
-    and the actors whose control was recorded.
+    """Instance ids named by the campaign's accepted-event files: every instance reference of this campaign
+    in a payload (operation subjects, objects, agents) and every recorded ``actor_id``.
 
     Like 017's ``relation_endpoint_ids``, every instance allocator must treat these as taken, so a
     hand-deleted individual's id never goes to a different one that would silently inherit its past
-    effects. Ids named only by an undecodable file are not protected (a documented limit).
+    effects. It scans the raw payloads without decoding them, so an event that fails validation still
+    protects its ids. Only a file the store cannot read at all is not protected (a documented limit).
+    It reads every accepted-event file of the campaign: an allocator's cost grows with play history.
     """
     taken: set[str] = set()
-    for ref, stored in store.campaign_accepted(campaign_id).records.items():
-        try:
-            event = accepted_from_payload(ref, stored.record.schema, stored.record.payload)  # type: ignore[arg-type]
-        except EffectCodecError:
-            continue
-        for item in event.operations:
-            taken |= {item.op.subject.instance_id, item.op.object.instance_id}
-            if item.op.agent is not None:
-                taken.add(item.op.agent.instance_id)
-        taken |= {control.actor_id for control in event.controls}
+    for stored in store.campaign_accepted(campaign_id).records.values():
+        _collect_ids(stored.record.payload, campaign_id, taken)
     return frozenset(taken)
+
+
+def _collect_ids(value: object, campaign_id: str, into: set[str]) -> None:
+    if isinstance(value, str):
+        try:
+            ref = InstanceRef.parse(value)
+        except ValueError:
+            return
+        if ref.campaign_id == campaign_id:
+            into.add(ref.instance_id)
+    elif isinstance(value, Mapping):
+        for key, item in value.items():
+            if key == "actor_id" and isinstance(item, str):
+                into.add(item)
+            else:
+                _collect_ids(item, campaign_id, into)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _collect_ids(item, campaign_id, into)

@@ -114,17 +114,28 @@ def edited_effects(events: Iterable[AcceptedEvent], index: GraphIndex) -> tuple[
     return tuple(found)
 
 
-def partial_revocations(events: Iterable[AcceptedEvent]) -> tuple[EffectProblem, ...]:
-    """``partial_revocation``: a revoked event whose revocation skipped operations. Those operations still
-    hold as a human left them, so the event is only partly undone (half a transfer may remain, an item
-    held twice); it stays reported until a human resolves it."""
+def partial_revocations(events: Iterable[AcceptedEvent], index: GraphIndex) -> tuple[EffectProblem, ...]:
+    """``partial_revocation``: a revoked event's skipped operation whose change is **still in force**: a
+    relation it began that is still unretracted, or an ending it made that is still there. The event is
+    then only partly undone (half a transfer may remain, an item held twice). Once a human undoes that
+    change by hand (retracts the relation, reopens the ending), it is no longer reported."""
     found = []
     for event in events:
         if event.revocation is None:
             continue
+        accepted = accepted_token(event.event_id)
         for item in event.revocation.skipped:
-            found.append(EffectProblem("partial_revocation", event.event_id, item.op, item.why,
-                                       event.receipts[item.op].relation.relation_id))
+            relation = _relation(index, event.receipts[item.op].relation)
+            if isinstance(relation, str) or relation.retraction is not None:
+                continue
+            kind = event.operations[item.op].op.kind
+            in_force = (relation.provenance == accepted and relation.since.sequence == event.moment.sequence
+                        if kind == "begin" else
+                        relation.ending is not None and relation.ending.provenance == accepted
+                        and relation.ending.until.sequence == event.moment.sequence)
+            if in_force:
+                found.append(EffectProblem("partial_revocation", event.event_id, item.op, item.why,
+                                           relation.ref.relation_id))
     return tuple(found)
 
 

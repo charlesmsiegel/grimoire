@@ -2,8 +2,9 @@
 
 Covers the additive families ``campaigns/<id>/accepted/<event_id>.json`` and
 ``campaigns/<id>/wrapups/<wrapup_id>.json`` on ``grimoire.scope-record/1``: canonical paths, the widened
-address union, CAS, authorization, collisions, links, containment on load, ``campaign_accepted`` /
-``campaign_wrapups`` parity with ``load()``, recovery and the rollback path. Synthetic fixtures only.
+address union, CAS, authorization, collisions, links, per-file containment in ``campaign_accepted`` /
+``campaign_wrapups``, ``load()`` never reading them (they grow with every turn), recovery and the
+rollback path. Synthetic fixtures only.
 """
 
 from __future__ import annotations
@@ -112,12 +113,14 @@ def test_a_bad_fragment_is_malformed(address):
 # -- the guarded transaction ------------------------------------------------------------------
 
 def test_round_trip_and_load(library, family):
-    ref, path, _, attribute = family
+    ref, path, lister, _ = family
     txn = library.transaction()
     assert txn.put(record(ref), None) == path
     txn.commit(owner_handle())
     assert library.read(ref).record == record(ref)
-    assert set(getattr(library.load(), attribute)) == {ref}
+    assert set(lister(library, "c1").records) == {ref}
+    view = library.load()  # history families are never walked by load()
+    assert view.problems == () and not hasattr(view, "accepted") and not hasattr(view, "wrapups")
 
 
 def test_cas_guarded(library, family):
@@ -141,8 +144,8 @@ def test_needs_apply_permission(library, family):
 def test_mixed_transaction_with_a_relation(library):
     rel = ScopeRecord(RelationRef("c1", "r-1"), "test.relation/1", {}, owner=OWNER)
     _commit(library, (record(ACC), None), (rel, None))
-    view = library.load()
-    assert set(view.accepted) == {ACC} and set(view.relations) == {RelationRef("c1", "r-1")}
+    assert set(library.campaign_accepted("c1").records) == {ACC}
+    assert set(library.load().relations) == {RelationRef("c1", "r-1")}
 
 
 def test_a_look_alike_existing_entry_is_a_collision(library, family):
@@ -164,9 +167,6 @@ def test_a_linked_folder_is_never_written_or_followed(library, family, tmp_path)
     make_dir_link(library.root / folder, outside)
     with pytest.raises(LibraryPathError):
         _commit(library, (record(ref), None))
-    view = library.load()
-    assert (folder, "link") in {(p.path, p.code) for p in view.problems}
-    assert getattr(view, attribute) == {}
     found = lister(library, "c1")
     assert found.records == {} and (folder, "link") in {(p.path, p.code) for p in found.problems}
     with pytest.raises(LinkRefused):
@@ -190,29 +190,29 @@ def _bad_files(library, ref, path) -> str:
 
 
 def test_bad_files_are_contained(library, family):
-    ref, path, _, attribute = family
+    ref, path, lister, _ = family
     folder = _bad_files(library, ref, path)
-    view = library.load()
-    codes = {(p.path, p.code) for p in view.problems}
+    found = lister(library, "c1")
+    codes = {(p.path, p.code) for p in found.problems}
     assert (f"{folder}/broken.json", "malformed") in codes
     assert (f"{folder}/newer.json", "unsupported_format") in codes
     assert (f"{folder}/x-2.json", "address_mismatch") in codes
     assert (f"{folder}/X-3.json", "name_mismatch") in codes
     assert (f"{folder}/notes.txt", "unrecognized") in codes
-    assert set(getattr(view, attribute)) == {ref, other(ref, "c2", "x-9")}
+    assert set(found.records) == {ref}
+    assert set(lister(library, "c2").records) == {other(ref, "c2", "x-9")}
+    assert library.load().problems == ()  # load() never reads these folders, damaged or not
     with pytest.raises(RecordNotFound):
         library.read(other(ref, rid="absent"))
 
 
-def test_campaign_listing_matches_load(library, family):
-    ref, path, lister, attribute = family
-    folder = _bad_files(library, ref, path)
-    view = library.load()
+def test_campaign_listing_contains_per_file_and_never_crosses_campaigns(library, family):
+    ref, path, lister, _ = family
+    _bad_files(library, ref, path)
     found = lister(library, "c1")
     assert isinstance(found, CampaignRecords)
-    assert dict(found.records) == {k: v for k, v in getattr(view, attribute).items() if k.campaign_id == "c1"}
-    assert sorted((p.path, p.code) for p in found.problems) == sorted(
-        (p.path, p.code) for p in view.problems if p.path.startswith(folder))
+    assert all(key.campaign_id == "c1" for key in found.records)
+    assert len(found.problems) == 5
     assert lister(library, "nowhere") == CampaignRecords({}, ())
 
 
@@ -227,8 +227,8 @@ def test_look_alike_folder_and_file_not_folder_are_reported(library, name):
 
 
 def test_libraries_without_them_load_as_before(library):
-    view = library.load()
-    assert view.accepted == {} and view.wrapups == {} and view.problems == ()
+    assert library.load().problems == ()
+    assert library.campaign_accepted("c1") == CampaignRecords({}, ())
 
 
 # -- recovery and rollback ----------------------------------------------------------------------
@@ -263,7 +263,7 @@ def test_a_journal_naming_them_recovers_or_can_be_discarded(tmp_path):
     locker = ProcessLocker()
     LibraryStore.discard_journal(lib, locker=locker)  # what a pre-021 build's user runs
     with LibraryStore.open(lib, locker=locker) as store:
-        assert store.load().accepted == {}
+        assert store.campaign_accepted("c1").records == {}
         assert any("discarded" in path for path in store.conflicts())
 
 
@@ -273,7 +273,5 @@ def test_a_linked_look_alike_folder_is_reported_as_load_reports_it(library, tmp_
     outside.mkdir()
     (library.root / "campaigns" / "c1").mkdir(parents=True, exist_ok=True)
     make_dir_link(library.root / "campaigns" / "c1" / "Accepted", outside)
-    entries = {(p.path, p.code) for p in library.load().problems}
     found = {(p.path, p.code) for p in library.campaign_accepted("c1").problems}
-    assert ("campaigns/c1/Accepted", "link") in entries
     assert ("campaigns/c1/Accepted", "link") in found

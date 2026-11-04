@@ -58,6 +58,10 @@ def _invalid(*records: str) -> EffectError:
 def _text(value: object, limit: int = TEXT_MAX) -> None:
     if type(value) is not str or not value.strip() or len(value) > limit:
         raise _invalid()
+    try:
+        value.encode("utf-8")  # a lone surrogate could never be stored: refuse it by name, here
+    except UnicodeEncodeError:
+        raise _invalid() from None
 
 
 def _segment(value: object, reason: str = "invalid_field") -> None:

@@ -146,3 +146,19 @@ def test_as_knowledge_event_is_a_valid_012_event():
     assert isinstance(found, Event)
     assert (found.event_id, found.moment, found.provenance) == ("e-1", moment(), ACC)
     assert found.participants == tuple(sorted({WREN, TAM, KEY1}, key=str))
+
+
+
+def test_hand_edited_sequences_and_provenances_never_verify():
+    """Each guard pinned by a hand edit: the active end's sequence, the revoked end's reopening sequence and
+    the revoked begin's retraction provenance."""
+    moved_end = r1(ending=Ending(Moment(5), ACC, "t"))
+    assert ("receipt_mismatch", 0, "not ended by this event") in codes(verify_receipts(event(), index(moved_end, r2())))
+    wrong_reopen = r1(ending=None, reopenings=(Reopening(Ending(Moment(5), ACC, "t"), REV, "t2"),))
+    begun_undone = r2(retraction=Retraction(REV, "t2"))
+    assert ("receipt_mismatch", 0, "not reopened by this revocation") in codes(
+        verify_receipts(revoked(), index(wrong_reopen, begun_undone)))
+    reopened = r1(ending=None, reopenings=(Reopening(END7, REV, "t2"),))
+    foreign_retraction = r2(retraction=Retraction("editor", "t2"))
+    assert ("receipt_mismatch", 1, "not retracted by this revocation") in codes(
+        verify_receipts(revoked(), index(reopened, foreign_retraction)))

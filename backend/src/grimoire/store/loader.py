@@ -133,9 +133,6 @@ class LibraryView:
     chats: Mapping[ChatRef, StoredScopeRecord] = field(default_factory=lambda: MappingProxyType({}))
     #: relation records (017); an empty mapping where a library has none
     relations: Mapping[RelationRef, StoredScopeRecord] = field(default_factory=lambda: MappingProxyType({}))
-    #: accepted events and scene wrap-ups (021); empty mappings where a library has none
-    accepted: Mapping[AcceptedRef, StoredScopeRecord] = field(default_factory=lambda: MappingProxyType({}))
-    wrapups: Mapping[WrapUpRef, StoredScopeRecord] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True)
@@ -589,6 +586,8 @@ def _discover_chats(access: Access, base: Parts, found: _Campaigns, problems: li
 
 #: campaign-scoped record families stored one file per record: folder -> (classified kind, ``_Campaigns`` field)
 _FAMILIES = {RELATIONS: ("relation", "relations"), ACCEPTED: ("accepted", "accepted"), WRAPUPS: ("wrapup", "wrapups")}
+#: families that grow with every played turn (021): like 020's events/evidence, ``load()`` skips them
+_HISTORY = frozenset({ACCEPTED, WRAPUPS})
 
 
 def _discover_family(access: Access, base: Parts, family: str, found: _Campaigns,
@@ -654,6 +653,8 @@ def _discover_campaign(access: Access, campaign: str, into: _Campaigns, problems
             continue
         if entry == CHATS and _is_dir(access, base + (entry,)):
             _discover_chats(access, base, into, problems)
+            continue
+        if entry in _HISTORY:  # 021's per-turn history; read only by campaign_family, so load() never grows with it
             continue
         if entry in _FAMILIES and _is_dir(access, base + (entry,)):
             _discover_family(access, base, entry, into, problems)
@@ -762,8 +763,7 @@ def _load(access: Access) -> LibraryView:
     return LibraryView(index, MappingProxyType(sources), MappingProxyType(instances), tuple(problems),
                        tuple(broken), tuple(sorted(reported_excluded)), dropped_refs,
                        scopes=MappingProxyType(campaigns.scopes), chats=MappingProxyType(campaigns.chats),
-                       relations=MappingProxyType(campaigns.relations),
-                       accepted=MappingProxyType(campaigns.accepted), wrapups=MappingProxyType(campaigns.wrapups))
+                       relations=MappingProxyType(campaigns.relations))
 
 
 def _broken(index: DefinitionIndex, links: list[DefinitionLink], excluded: set[str],

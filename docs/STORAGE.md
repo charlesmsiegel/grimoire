@@ -43,9 +43,9 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   - at the root: `authority`, `config`, `assets`, `secrets`;
   - inside a campaign: `scenes`, `events`, `evidence`.
 
-  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), `relations/` since 017 (see relation records), and `accepted/` and `wrapups/` since 021 (see accepted events and wrap-ups).
+  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), and `relations/` since 017 (see relation records). `accepted/` and `wrapups/` (021) are recognised but read only through `campaign_accepted`/`campaign_wrapups` (see accepted events and wrap-ups).
 
-  `events/` and `evidence/` belong to 020 and stay skipped by `load()`, so `load()`'s cost never grows with campaign history. They are read only by `campaign_knowledge` (see [events and evidence](#events-and-evidence-020)).
+  `events/` and `evidence/` belong to 020, and `accepted/` and `wrapups/` to 021; all four stay skipped by `load()`, so `load()`'s cost never grows with campaign history. They are read only by `campaign_knowledge` (see [events and evidence](#events-and-evidence-020)).
 
   These follow the [architecture layout](ARCHITECTURE.md#storage-root-and-provisional-organization) and are a deliberate deviation from an earlier draft that reserved root-level `events`/`evidence`. No root entry is a [V1 marker name](ARCHITECTURE.md#library-location-and-v1-isolation-implemented-grimoirelibrary).
 - **Ignored silently:** OS and editor droppings (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `*~`, `*.swp`, `*.swo`, `.#*`) and directories with no file below them. Empty directories are not state: a failed commit can leave some behind, and nothing can remove them through the file seam. Per-target `.conflicts/<hash16>/` folders accumulate in the same way.
@@ -143,8 +143,7 @@ Fields:
 
   `parse_scope_record` dispatches by the exact fragment. No file format is added.
 - These two names were never reserved. `classify` recognises exactly the new paths, so recovery accepts journals that name them.
-- `load()` adds `LibraryView.accepted` and `LibraryView.wrapups`, with per-file containment as for relations.
-- `campaign_accepted(id)` and `campaign_wrapups(id)` each return `CampaignRecords(records, problems)` for **one** campaign, contained exactly as `load()` contains it (parity tests). `CampaignRecords` generalizes 017's `CampaignRelations`, which remains its name for relations.
+- **`load()` skips both**, as it skips 020's `events/` and `evidence/`: one accepted file is written per played turn, so walking them would make `load()` (and 107's navigation, which is built from it) grow with play history. They are read only through `campaign_accepted(id)` and `campaign_wrapups(id)`, which return `CampaignRecords(records, problems)` for **one** campaign, contained per file as `campaign_relations` contains relations (links, look-alikes and damage reported, never followed). `CampaignRecords` generalizes 017's `CampaignRelations`, which remains its name for relations.
 - One transaction may mix accepted-event, wrap-up and relation records. 021 uses that to commit an acceptance and its relation changes together.
 
 **Rollback:** a pre-021 build reports `accepted/` and `wrapups/` as `unrecognized` load problems (no crash) and never writes them. It **cannot recover a journal that names them**: recover with a 021+ build, or run `LibraryStore.discard_journal` (tested).
