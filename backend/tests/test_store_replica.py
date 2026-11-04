@@ -1030,7 +1030,10 @@ def test_a_reused_regenerable_kept_slot_never_satisfies_a_replace(pair):
 def test_a_stray_empty_lookalike_folder_never_blocks_the_canonical_one(pair):
     """An empty ``Campaigns`` beside ``campaigns`` (a case-sensitive phone) must not stop the real folder."""
     phone = pair[1]
-    (phone.root / "Campaigns").mkdir()
+    try:
+        (phone.root / "Campaigns").mkdir()
+    except FileExistsError:  # a case-insensitive filesystem (Windows, default macOS): no such pair can exist
+        pytest.skip("this filesystem folds case: 'Campaigns' is 'campaigns'")
     found = phone.scan()
     assert WREN_A_PATH in found.files and found.blocked_reason(WREN_A_PATH) is None
     assert found.blocked.get("Campaigns") == "lookalike"
