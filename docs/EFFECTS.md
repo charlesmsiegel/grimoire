@@ -46,7 +46,7 @@ director/adjudication ──the library's trusted handle─────┤   out
 
 ## Operations
 
-In this slice, state changes are changes to [017 relations](GRAPH.md), the only merged play-state family. Holdings ([Counted Inventory, 023](roadmap/sprints/counted-inventory.md)) are not handled yet; see the obligations below.
+In this slice, state changes are changes to [017 relations](GRAPH.md). Holdings ([Counted Inventory, 023](roadmap/sprints/counted-inventory.md)) merged after this slice and are not handled yet; see the obligations below.
 
 | `Op.kind` | Meaning | Written as |
 |---|---|---|
@@ -292,7 +292,7 @@ How it is read and written:
 
 | Not here | Owner |
 |---|---|
-| Holdings operations from accepted effects (the [023 obligation](roadmap/sprints/turn-effects-and-wrap-up.md#obligation-holdings-operations-023)) | 021, after 023 merges |
+| Holdings operations from accepted effects (the [023 obligation](roadmap/sprints/turn-effects-and-wrap-up.md#obligation-holdings-operations-023)) | 021's next slice (023 has merged) |
 | Persisting the 012 `Event`, witnesses, evidence and beliefs of an accepted event | 020 / 032 |
 | Extracting and labelling narration into proposals; mislabel review | 035 / Narration Continuity Referee |
 | When director acceptance needs human review | 035 |

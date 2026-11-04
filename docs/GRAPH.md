@@ -199,7 +199,7 @@ Writers must also follow these rules, which the text is not checked for, as in 0
 
 `relation_endpoint_ids(store, campaign_id)` returns every instance id named by the campaign's decodable and unsupported relation files. [107's actor allocator](CHATS.md) treats those ids as taken. A hand-deleted endpoint's id is therefore never given to a different individual, who would otherwise silently inherit the relations.
 
-**Obligation:** every future instance allocator (024, 026, 037) must use it.
+**Obligation:** every future instance allocator (024, 026, 037) must use it, together with 023's `holdings_holder_ids` ([HOLDINGS](HOLDINGS.md)), which protects holder ids from file names alone (so an unreadable holder file still claims its id, unlike a relation's) and fails closed when the folder cannot be fully listed (where a linked `relations/` protects nothing).
 
 **Limits (pinned by tests):**
 - an id named only by an undecodable file is not protected;
@@ -212,7 +212,7 @@ Writers must also follow these rules, which the text is not checked for, as in 0
 | Relations authored inside sources or worlds | 022/026 |
 | Events as nodes; persisting claim shapes with propositions; running `check_subjects` on write; definition-subject and future-instance validity | 020 |
 | Play-derived relation changes and their undo | [021](EFFECTS.md) |
-| Endpoint facet constraints (`located_in` a `spatial`, `carries` a `portable`), functional predicates (one location at a time). Known gap: an item may be recorded in two places at once, and nothing reports it | 059/023 |
+| Endpoint facet constraints (`located_in` a `spatial`, `carries` a `portable`), functional predicates (one location at a time). Known gap: an item may be recorded in two places at once, and nothing reports it | 059/034 (023 shipped counted stacks only, not individual items) |
 | Species membership | 024 |
 | Emotions, trust, reputation | 078 |
 | A multi-hop actor-side mental graph | not planned; it would need an amendment to 012 |

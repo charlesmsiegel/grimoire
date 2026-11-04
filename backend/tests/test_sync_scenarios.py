@@ -1461,3 +1461,18 @@ def test_a_manifest_whose_head_is_missing_on_its_origin_is_a_head_dependency(pai
     report = sync(desktop, phone, handles())
     assert report.conflict(PATHS["manifest"]).code == "head_dependency"
     assert (desktop.root / PATHS["manifest"]).read_bytes() == before
+
+
+def test_023_holdings_are_synced_and_concurrent_counts_conflict(pair):
+    """One file per holder: copied like any campaign record, and two devices' counts are kept both."""
+    from grimoire.core.identity import HoldingsRef
+    from grimoire.store import ScopeRecord
+    desktop, phone = pair
+    ref = HoldingsRef("c1", "character", "wren-a")
+    path = "campaigns/c1/holdings/character/wren-a.json"
+    put(desktop, ScopeRecord(ref, "grimoire.holdings/1", {"coins": 3}), None)
+    assert (path, PHONE) in sync(desktop, phone, handles()).copied
+    put(desktop, ScopeRecord(ref, "grimoire.holdings/1", {"coins": 5}))
+    put(phone, ScopeRecord(ref, "grimoire.holdings/1", {"coins": 1}))
+    report = sync(desktop, phone, handles())
+    assert report.conflict(path).code == "concurrent" and dict(report.conflict(path).kept) == {DESKTOP: True, PHONE: True}

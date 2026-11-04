@@ -58,6 +58,7 @@ A derived portrayal names its pinned base in its own payload and composes over i
     instances/                        # individual entities and overrides
     scope.json                        # the play scope; world optional (107, see CHATS.md)
     chats/                            # one record per chat thread (107)
+    holdings/<kind>/                  # counted stacks per holder instance (023, see HOLDINGS.md)
     scenes/                           # accepted authored contributions, exact text
     events/                           # committed happenings and consequences
     evidence/                         # observations, reports, beliefs and provenance

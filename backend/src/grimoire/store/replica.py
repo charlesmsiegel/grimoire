@@ -34,7 +34,7 @@ _RECORD_ROOTS = (SOURCES, CAMPAIGNS)
 #: The record kinds this module reads, copies and checks: every kind sync may own. 018's blobs,
 #: images and placements are not among them yet (a later slice); ledgers never are.
 EXACT_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge",
-                         "accepted", "wrapup"})
+                         "accepted", "wrapup", "holdings"})
 #: Root entries that are device-local or the library's own marker: never transferred, never reported.
 _LOCAL = frozenset({TXN, CONFLICTS, SYNC, MARKER})
 
@@ -84,7 +84,7 @@ def parse_exact(parts: Parts, data: bytes) -> RecordEnvelope | SourceManifest | 
             envelope = parse_knowledge_record(document)[0]
             if envelope.address != found[1]:
                 raise _invalid("address_mismatch", f"{'/'.join(parts)} holds {envelope.address}")
-        elif found[0] in ("scope", "chat", "relation", "accepted", "wrapup"):  # 107, 017 and 021 records
+        elif found[0] in ("scope", "chat", "relation", "accepted", "wrapup", "holdings"):  # 107/017/021/023
             envelope = parse_scope_record(document)[0]
             if envelope.address != found[1]:
                 raise _invalid("address_mismatch", f"{'/'.join(parts)} holds {envelope.address}")
@@ -202,7 +202,8 @@ def _walk(access: Access, parts: Parts, files: dict[str, bytes], blocked: dict[s
             files[text] = data
 
 
-_RECORD_FOLDERS = frozenset({"instances", "chats", "relations", "events", "evidence", "accepted", "wrapups"})
+_RECORD_FOLDERS = frozenset({"instances", "chats", "relations", "events", "evidence", "accepted", "wrapups",
+                             "holdings"})
 
 
 def _may_hold_records(access: Access, parts: Parts) -> bool:

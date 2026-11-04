@@ -17,7 +17,8 @@ from .errors import (
 from .jsonfmt import etag
 from .library import CommitResult, LibraryStore, RecoveryReport, SourceFacts, Transaction
 from .loader import (
-    BrokenRef, CampaignRecords, CampaignRelations, KnowledgeScan, LibraryView, LoadProblem, StoredAssetRecord, StoredDefinition,
+    BrokenRef, CampaignHoldingRecords, CampaignRecords, CampaignRelations, KnowledgeScan, LibraryView, LoadProblem,
+    StoredAssetRecord, StoredDefinition,
     StoredKnowledgeRecord, StoredRecord, StoredScopeRecord, StoredSource,
 )
 from .media import MAX_BLOB_BYTES, MEDIA, ImageBlob, sniff
@@ -27,7 +28,8 @@ from .replica import CanonicalScan
 __all__ = [
     "AssetRecord", "BlobCorrupt", "ImageBlob", "ImmutableBlob", "ImmutableImage", "InvalidBlob", "MAX_BLOB_BYTES",
     "MEDIA", "SourceFacts", "StoredAssetRecord", "sniff",
-    "BrokenRef", "CampaignRecords", "CampaignRelations", "CanonicalScan", "CommitIncomplete", "CommitResult",
+    "BrokenRef", "CampaignHoldingRecords", "CampaignRecords", "CampaignRelations", "CanonicalScan",
+    "CommitIncomplete", "CommitResult",
     "CrossDevice", "DiskOps", "FileOps",
     "ImmutableRevision", "InvalidEnvelope", "InvalidSourceState", "LibraryLocked", "LibraryStore",
     "KnowledgeRecord", "KnowledgeScan",
