@@ -1,5 +1,7 @@
 # Image identity, placements and expression lineage
 
+**Status:** **first slice implemented**, headless: `grimoire.images` (pure), `grimoire.imagestore` (service) and an additive blob/asset-record family in `grimoire.store`. The contract, the V0.2.1 mapping and the unmapped list are in [IMAGES.md](../../IMAGES.md). The proving scenario (one blob, two portrayals with distinct roles, crops and provenance), the missing and wrong-source refusals, campaign hide/adjust without fallback, the 011-inventory handoff and crash exploration are executable. There is no importer or UI yet: that is 026/037. The *Subsequent milestones* below are unchanged.
+
 **Outcome:** Keep image bytes deduplicated and image/asset placements linked to source-qualified V2 entities and portrayals.
 
 ## Scope and first proof

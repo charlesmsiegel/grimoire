@@ -1,5 +1,7 @@
 # V0.2.1 image, gallery and expression migration mapping
 
+**V2 target (implemented, 018):** the blob / image object / placement model, its rules and the V0.2.1 mapping table are in [docs/IMAGES.md](../../../../docs/IMAGES.md). The import itself is 026.
+
 V1's media model is **not** just `images/<filename>`. The migration must preserve two separate identities: **picture objects** and **placements of those pictures**.
 
 ## V1 layout
@@ -33,6 +35,6 @@ An object (same picture/pixels) is not the same as its encoded blob (byte-for-by
 
 ### Example, synthetic
 
-Source picture `px1-A` has an avatar placement on character version `young`, and a neutral-expression placement on version `adult`. Both reference one V1 object and potentially one blob. The importer produces one V2 picture object with **two different placement links**. The adult version's outfit remains distinct, with its own crop, fallback and source provenance.
+Source picture `px1-A` has an avatar placement on character version `young`, and a neutral-expression placement on version `adult`. Both reference one V1 object and potentially one blob. Within one owning source, the importer produces one V2 picture object with **two different placement links**. (V2 image objects belong to one source: a V1 object placed from several worlds becomes one image object per owning source, all sharing one blob and the same `provenance.legacy_id`; see [IMAGES](../../../../docs/IMAGES.md).) The adult version's outfit remains distinct, with its own crop, fallback and source provenance.
 
 **Do not put binary image data in the graph itself.** Store blobs/content-addressed assets and connect them through typed placement relations.
