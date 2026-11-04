@@ -70,8 +70,8 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
                                          "datetime", "uuid", "secrets")
 
 #: grimoire packages that are adapters or test infrastructure, not pure.
-ADAPTERS = frozenset({"grimoire.capture", "grimoire.chatstore", "grimoire.graphstore", "grimoire.ledgers",
-                      "grimoire.library", "grimoire.migrate_v1", "grimoire.providers", "grimoire.store", "grimoire.testing"})
+ADAPTERS = frozenset({"grimoire.capture", "grimoire.chatstore", "grimoire.effectstore", "grimoire.graphstore",
+                      "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1", "grimoire.providers", "grimoire.store", "grimoire.testing"})
 
 
 @dataclass(frozen=True)
@@ -102,6 +102,9 @@ PURE_PACKAGES = (
     PurePackage("grimoire.chats", ("grimoire.chats", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Typed relationship graph (017): values, codec, derived index and actor claims; the service is an adapter.
     PurePackage("grimoire.graph", ("grimoire.graph", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # Accepted turn effects (021): values, codecs, authority, planning and checks; the service is an adapter.
+    PurePackage("grimoire.effects", ("grimoire.effects", "grimoire.graph", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
     PurePackage("grimoire.security", ("grimoire.security",)),
     # Voice evidence: shares the gate's text matcher so screening and scoring agree.
     PurePackage("grimoire.voice", ("grimoire.voice", "grimoire.core", "grimoire.evals.text",
