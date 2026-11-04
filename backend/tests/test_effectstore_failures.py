@@ -190,7 +190,7 @@ def test_f5_a_duplicate_revoked_before_its_commit_is_stale(world):
     retry = accept(library, handles)
     assert retry.duplicate_of == done.ref
     _, etag = library.read(done.ref, requested_by=DIRECTOR)
-    library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.endorse(give())]).commit()
+    library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.undo(done.ref)]).commit()
     with pytest.raises(StaleWrite):
         retry.commit()
 
@@ -233,8 +233,8 @@ def test_f6_receipt_mismatch_is_reported_refused_and_repairable(world):
     assert reason(lambda: accept(library, handles)) == "receipt_mismatch"
     _, etag = library.read(done.ref, requested_by=DIRECTOR)
     assert reason(lambda: library.revoke(done.ref, reason="r", expected=etag,
-                                         endorsements=[handles.endorse(give())])) == "receipt_mismatch"
-    library.revoke(done.ref, reason="repair", expected=etag, endorsements=[handles.endorse(give())],
+                                         endorsements=[handles.undo(done.ref)])) == "receipt_mismatch"
+    library.revoke(done.ref, reason="repair", expected=etag, endorsements=[handles.undo(done.ref)],
                    partial=True).commit()
     event, _ = library.read(done.ref, requested_by=DIRECTOR)
     assert [(s.op, s.why) for s in event.revocation.skipped] == [(0, "not ended by this event")]
@@ -292,15 +292,15 @@ def test_f7_revocation_refusals(world):
     done = accept(library, handles).commit()
     _, etag = library.read(done.ref, requested_by=DIRECTOR)
     with pytest.raises(StaleWrite):
-        library.revoke(done.ref, reason="r", expected="sha256:" + "0" * 64, endorsements=[handles.endorse(give())])
+        library.revoke(done.ref, reason="r", expected="sha256:" + "0" * 64, endorsements=[handles.undo(done.ref)])
     assert reason(lambda: library.revoke(done.ref, reason="r", expected=etag)) == "not_endorsed"
     moved = Endorsement("c7", handles.player(BOB), give().fingerprint)  # the current controller is not the endorser
     assert reason(lambda: library.revoke(done.ref, reason="r", expected=etag, endorsements=[moved])) == \
         "invalid_endorsement"
-    library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.endorse(give())]).commit()
+    library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.undo(done.ref)]).commit()
     _, etag = library.read(done.ref, requested_by=DIRECTOR)
     assert reason(lambda: library.revoke(done.ref, reason="r", expected=etag,
-                                         endorsements=[handles.endorse(give())])) == "already_revoked"
+                                         endorsements=[handles.undo(done.ref)])) == "already_revoked"
 
 
 def test_f7_an_editorially_ended_relation_is_a_dependent(world):
@@ -311,8 +311,8 @@ def test_f7_an_editorially_ended_relation_is_a_dependent(world):
     rel.end(tam, until=Moment(9), provenance="director", expected=rel.read(tam)[1]).commit()
     _, etag = library.read(done.ref, requested_by=DIRECTOR)
     assert reason(lambda: library.revoke(done.ref, reason="r", expected=etag,
-                                         endorsements=[handles.endorse(give())])) == "has_dependents"
-    library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.endorse(give())], partial=True).commit()
+                                         endorsements=[handles.undo(done.ref)])) == "has_dependents"
+    library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.undo(done.ref)], partial=True).commit()
     event, _ = library.read(done.ref, requested_by=DIRECTOR)
     assert [s.op for s in event.revocation.skipped] == [1]
 
@@ -323,8 +323,8 @@ def test_f7_a_reopen_that_would_overlap_is_a_dependent(world):
     relations(store, handles).add(C, "carries", WREN, KEY1, since=Moment(9), provenance="director").commit()
     _, etag = library.read(done.ref, requested_by=DIRECTOR)
     assert reason(lambda: library.revoke(done.ref, reason="r", expected=etag,
-                                         endorsements=[handles.endorse(give())])) == "has_dependents"
-    library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.endorse(give())], partial=True).commit()
+                                         endorsements=[handles.undo(done.ref)])) == "has_dependents"
+    library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.undo(done.ref)], partial=True).commit()
     event, _ = library.read(done.ref, requested_by=DIRECTOR)
     assert [(s.op, s.why) for s in event.revocation.skipped] == [(0, "has_dependents: duplicate_relation")]
 
@@ -352,7 +352,7 @@ def test_f8_wrap_up_refusals_and_problems(world):
     _, etag = library.read_wrapup(first.ref, requested_by=DIRECTOR)
     wrap(["e-1"], expected=etag).commit()
     _, event_etag = library.read(done.ref, requested_by=DIRECTOR)
-    library.revoke(done.ref, reason="r", expected=event_etag, endorsements=[handles.endorse(give())]).commit()
+    library.revoke(done.ref, reason="r", expected=event_etag, endorsements=[handles.undo(done.ref)]).commit()
     assert reason(lambda: wrap(["e-1"])) == "revoked_event"
 
 
@@ -445,7 +445,7 @@ def test_f13_damage_under_accepted_blocks_accept_revoke_and_wrap_up(world, damag
     except Exception:
         current = etag
     assert reason(lambda: library.revoke(done.ref, reason="r", expected=current,
-                                         endorsements=[handles.endorse(give())])) == "undecodable_event"
+                                         endorsements=[handles.undo(done.ref)])) == "undecodable_event"
     assert "undecodable_event" in {p.code for p in library.continuity(C, as_of=8, requested_by=DIRECTOR).problems}
 
 
@@ -481,7 +481,7 @@ def test_f13_duplicate_ordinals_are_an_inconsistent_ledger(world):
                                          controls=CONTROLS)) == "inconsistent_ledger"
     _, etag = library.read(done.ref, requested_by=DIRECTOR)
     assert reason(lambda: library.revoke(done.ref, reason="r", expected=etag,
-                                         endorsements=[handles.endorse(give())])) == "inconsistent_ledger"
+                                         endorsements=[handles.undo(done.ref)])) == "inconsistent_ledger"
     assert "duplicate_ordinal" in {p.code for p in library.continuity(C, as_of=9, requested_by=DIRECTOR).problems}
 
 
@@ -497,3 +497,99 @@ def test_f13_an_ordinal_contradicting_the_sequence_is_an_inconsistent_ledger(wor
                                          controls=CONTROLS)) == "inconsistent_ledger"
     assert "inconsistent_ledger" in {p.code for p in
                                      library.continuity(C, as_of=9, requested_by=DIRECTOR).problems}
+
+
+# -- brutal-review round 1 -------------------------------------------------------------------------
+
+def test_an_acceptance_endorsement_cannot_be_replayed_as_consent_to_undo(world):
+    store, handles, library = world
+    p = give()
+    done = accept(library, handles, p, endorsements=[handles.endorse(p)]).commit()
+    _, etag = library.read(done.ref, requested_by=DIRECTOR)
+    assert reason(lambda: library.revoke(done.ref, reason="r", expected=etag,
+                                         endorsements=[handles.endorse(p)])) == "invalid_endorsement"
+    library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.undo(done.ref)]).commit()
+    event, _ = library.read(done.ref, requested_by=DIRECTOR)
+    assert event.revocation.endorsements[0].fingerprint != event.endorsements[0].fingerprint
+
+
+def test_two_endorsements_for_one_contribution_are_ambiguous(world):
+    store, handles, library = world
+    p = give()
+    assert reason(lambda: accept(library, handles, endorsements=[handles.endorse(p), handles.endorse(p)])) == \
+        "invalid_endorsement"
+    assert not (store.root / "campaigns" / C / "accepted").exists()
+
+
+def test_an_overlong_contribution_is_named(world):
+    store, handles, library = world
+    long_text = contribution(text="I give Tam the iron key. " * 900)
+    assert reason(lambda: accept(library, handles, contributions=[long_text])) == "contribution_too_long"
+
+
+@pytest.mark.parametrize("cites", [[1, "e-1"], [["e-1"]], [None], None, 7])
+def test_wrap_up_refuses_non_text_cites(world, cites):
+    store, handles, library = world
+    assert reason(lambda: library.wrap_up(CHAT, "s1", through=moment(8), summary="x", cites=cites,
+                                          written_by="d", requested_by=DIRECTOR)) == "invalid_field"
+
+
+def test_continuity_of_a_missing_campaign_is_an_error(world):
+    store, handles, library = world
+    assert reason(lambda: library.continuity("nope", as_of=1, requested_by=DIRECTOR)) == "missing_campaign"
+
+
+def test_a_direct_end_of_a_begun_relation_is_reported_as_edited(world):
+    store, handles, library = world
+    done = accept(library, handles).commit()
+    rel = relations(store, handles)
+    tam = RelationRef(C, "r-1")
+    rel.end(tam, until=Moment(9), provenance="editor: Tam lost it", expected=rel.read(tam)[1]).commit()
+    found = {(p.code, p.event_id, p.op) for p in library.continuity(C, as_of=9, requested_by=DIRECTOR).problems}
+    assert found == {("edited_since", done.ref.event_id, 1)}
+
+
+def test_a_later_event_ending_a_begun_relation_is_not_an_edit(world):
+    store, handles, library = world
+    accept(library, handles).commit()
+    library.accept(give(KEY1, giver=TAM, to=INES, agent=TAM, backed=None, sequence=9), controls=CONTROLS).commit()
+    assert library.continuity(C, as_of=9, requested_by=DIRECTOR).problems == ()
+
+
+def test_an_event_file_landing_during_the_snapshot_makes_the_change_stale(world, tmp_path, monkeypatch):
+    store, handles, library = world
+    done = accept(library, handles).commit()  # e-1 at sequence 7
+    path = store.root / "campaigns/c/accepted" / f"{done.ref.event_id}.json"
+    saved = path.read_bytes()
+    path.unlink()  # as if a sync tool had not delivered it yet
+    original = RelationLibrary.graph
+
+    def graph_then_deliver(self, campaign_id, *, requested_by):
+        found = original(self, campaign_id, requested_by=requested_by)
+        if not path.exists():
+            path.write_bytes(saved)  # it lands while the snapshot is being taken
+        return found
+
+    monkeypatch.setattr(RelationLibrary, "graph", graph_then_deliver)
+    join = EffectProposal(C, CHAT, moment(5, turn="t5"), "Ines joins.", (Op("begin", "member_of", INES, GUILD),),
+                          "director")
+    change = library.accept(join, controls=CONTROLS)  # decided without e-1 (floor 0)
+    monkeypatch.setattr(RelationLibrary, "graph", original)
+    _stale(store, change)
+
+
+def test_accept_and_commit_read_the_relation_folder_once_not_per_operation(world, monkeypatch):
+    import grimoire.graphstore.library as graphstore_library
+    store, handles, library = world
+    calls = []
+    original = graphstore_library._decoded
+    monkeypatch.setattr(graphstore_library, "_decoded", lambda *a: calls.append(1) or original(*a))
+    items = [InstanceRef(C, "item", f"coin-{n}") for n in range(8)]
+    for item in items:
+        txn = store.transaction()
+        txn.put(instance_record(item), None)
+        txn.commit(handles.app)
+    many = EffectProposal(C, CHAT, moment(), "Tam finds coins.",
+                          tuple(Op("begin", "carries", TAM, item) for item in items), "director")
+    library.accept(many, controls=CONTROLS).commit()
+    assert calls == []  # every overlap check used the one snapshot (accept) or one read (commit)

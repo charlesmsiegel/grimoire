@@ -18,7 +18,9 @@ from dataclasses import dataclass
 from grimoire.core.authority import DIRECTOR, PlayerContribution, controller_of
 from grimoire.core.model import ControlAssignment
 
-from .model import ContributionSnapshot, ControlSnapshot, EffectError, EffectProposal, Op
+from .model import (
+    CONTRIBUTION_TEXT_MAX, TEXT_MAX, ContributionSnapshot, ControlSnapshot, EffectError, EffectProposal, Op,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +34,11 @@ class Authorization:
 
 
 def _snapshot(contribution: PlayerContribution) -> ContributionSnapshot:
+    """003 puts no length cap on a contribution; an audit record does, and says so by name."""
+    if len(contribution.text) > CONTRIBUTION_TEXT_MAX or any(
+            len(value) > TEXT_MAX for value in (contribution.contribution_id, contribution.submitted_by,
+                                                contribution.scene_id, contribution.turn_id)):
+        raise EffectError("contribution_too_long", (contribution.contribution_id[:64],))
     return ContributionSnapshot(contribution.contribution_id, contribution.actor_id, contribution.submitted_by,
                                 contribution.kind, contribution.scene_id, contribution.turn_id, contribution.text)
 

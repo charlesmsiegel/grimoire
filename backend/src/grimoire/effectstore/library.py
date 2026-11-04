@@ -26,10 +26,12 @@ from grimoire.effects import (
     ACCEPTED_SCHEMA, WRAPUP_SCHEMA, AcceptedEvent, AcceptedOperation, EffectCodecError, EffectError, EffectProblem,
     EffectProposal, EndorsementRecord, EndStep, Receipt, Revocation, SceneWrapUp, Skipped, accepted_from_payload,
     accepted_to_payload, accepted_token, authorize, check_citations, ledger_problems, orphans, plan,
-    receipt_failure, revoked_token, verify_receipts, wrapup_from_payload, wrapup_id, wrapup_problems,
+    edited_effects, receipt_failure, revocation_fingerprint, revoked_token, verify_receipts, wrapup_from_payload,
+    wrapup_id, wrapup_problems,
     wrapup_to_payload,
 )
 from grimoire.graph import Relation
+from grimoire.graph.codec import RelationCodecError, relation_from_payload
 from grimoire.graph.index import check_as_of, require_director
 from grimoire.graphstore import CampaignGraph, InvalidRelation, RelationChange, RelationLibrary
 from grimoire.library import LibraryPathError
@@ -151,13 +153,14 @@ class EffectChange:
     def stale(self) -> list[tuple[str, str]]:
         """Why this change can no longer be committed as previewed (call under the store lock)."""
         found = []
+        relations, unreadable = _relation_files(self.library.store, self.campaign_id)  # one read for every check
         for change in self.relation_changes:
-            found += change.stale()
+            found += change.stale(relations)
         if self.library._state(self.campaign_id) != self.state:
             found.append((f"campaigns/{self.campaign_id}/accepted", "accepted events changed"))
         if self.chat is not None and not self.library._chat_exists(self.chat):
             found.append(("/".join(address_parts(self.chat)), "chat missing"))
-        if self.checks_relations and _relations_unreadable(self.library._graph(self.campaign_id)):
+        if self.checks_relations and unreadable:
             found.append((f"campaigns/{self.campaign_id}/relations", "a relation file cannot be read"))
         return found
 
@@ -233,14 +236,15 @@ class TurnEffectsLibrary:
     def continuity(self, campaign_id: str, *, as_of: int, requested_by: str) -> Continuity:
         """Director-only. The accepted events up to ``as_of``, the graph and every problem found."""
         require_director(requested_by)
-        validate_segment(campaign_id, "campaign_id")
         as_of = check_as_of(as_of)
+        self._require_campaign(campaign_id)  # a mistyped campaign is an error, never an empty "all clear"
         snap = self._snapshot(campaign_id)
         events = list(snap.events.values())
         problems = list(snap.undecodable) + list(snap.wrapup_problems) + list(ledger_problems(events))
         for event in events:
             problems += verify_receipts(event, snap.graph.index)
         problems += orphans(events, snap.relations())
+        problems += edited_effects(events, snap.graph.index)
         problems += wrapup_problems(snap.wrapups.values(), events)
         active = sorted((e for e in events if e.active and e.moment.sequence <= as_of),
                         key=lambda e: (e.moment.sequence, e.ordinal, e.event_id))
@@ -292,6 +296,7 @@ class TurnEffectsLibrary:
             ref = self._allocate(campaign)
             token = accepted_token(ref.event_id)
             relations = self._relations()
+            known = snap.relations()  # decoded once, under this lock; no per-operation re-read
             changes, receipts = [], []
             for step, op in zip(steps, proposal.operations):
                 try:
@@ -300,7 +305,7 @@ class TurnEffectsLibrary:
                                                expected=snap.graph.etags[step.relation])
                     else:
                         change = relations.add(campaign, op.predicate, op.subject, op.object, since=proposal.moment,
-                                               provenance=token)
+                                               provenance=token, relations=known)
                 except InvalidRelation as error:
                     reason = "precondition_failed" if error.reason == "duplicate_relation" else error.reason
                     raise InvalidEffect(f"operation {step.op} is refused: {error.reason}", reason,
@@ -351,7 +356,8 @@ class TurnEffectsLibrary:
             if later:
                 raise InvalidEffect(f"{ref} is not the latest accepted event", "not_latest", sorted(later))
             needed = {item.contribution_id: item.principal for item in event.endorsements}
-            records = self._check_endorsements(needed, endorsements, event.fingerprint)
+            records = self._check_endorsements(needed, endorsements,
+                                               revocation_fingerprint(event.ref, event.fingerprint))
             relations = self._relations()
             token = revoked_token(ref.event_id)
             changes, skipped = [], []
@@ -370,7 +376,8 @@ class TurnEffectsLibrary:
                                                            expected=snap.graph.etags[relation_ref])
                             else:
                                 change = relations.reopen(relation_ref, provenance=token,
-                                                          expected=snap.graph.etags[relation_ref])
+                                                          expected=snap.graph.etags[relation_ref],
+                                                          relations=snap.relations())
                         except InvalidRelation as error:
                             why = f"has_dependents: {error.reason}"
                 elif not partial:
@@ -411,8 +418,12 @@ class TurnEffectsLibrary:
             if snap.undecodable:
                 raise InvalidEffect("an accepted-event file cannot be read, so citations cannot be checked",
                                     "undecodable_event")
-            if isinstance(cites, str):
-                raise InvalidEffect("cites must be an iterable of event ids, not text", "invalid_field")
+            try:
+                cites = None if isinstance(cites, str) else tuple(cites)  # type: ignore[arg-type]
+            except TypeError:
+                cites = None  # type: ignore[assignment]
+            if cites is None or not all(type(cite) is str for cite in cites):
+                raise InvalidEffect("cites must be an iterable of event ids (text)", "invalid_field")
             cites = tuple(sorted(set(cites)))
             try:
                 ref = WrapUpRef(campaign, wrapup_id(chat, scene_id))
@@ -457,7 +468,10 @@ class TurnEffectsLibrary:
         for item in given:
             if type(item) is not Endorsement:
                 raise InvalidEffect("endorsements must be Endorsement values", "invalid_endorsement")
-            by_id.setdefault(item.contribution_id, item)
+            if item.contribution_id in by_id:  # two credentials for one contribution: ambiguous, never pick one
+                raise InvalidEffect(f"contribution {item.contribution_id} has more than one endorsement",
+                                    "invalid_endorsement", (item.contribution_id,))
+            by_id[item.contribution_id] = item
         records = []
         for contribution_id, principal in sorted(needed.items()):
             item = by_id.get(contribution_id)
@@ -501,16 +515,14 @@ class TurnEffectsLibrary:
         return self._relations().graph(campaign_id, requested_by=DIRECTOR)
 
     def _state(self, campaign_id: str) -> tuple:
-        found = self.store.campaign_accepted(campaign_id)
-        return (tuple(sorted((str(ref), stored.etag) for ref, stored in found.records.items())),
-                tuple(sorted((p.path, p.code) for p in found.problems)))
+        return _state_of(self.store.campaign_accepted(campaign_id))
 
     def _snapshot(self, campaign_id: str) -> _Snapshot:
         with self.store.lock:
             accepted = self.store.campaign_accepted(campaign_id)
             wrapped = self.store.campaign_wrapups(campaign_id)
             graph = self._relations().graph(campaign_id, requested_by=DIRECTOR)
-            state = self._state(campaign_id)
+        state = _state_of(accepted)  # from the very read the decision uses, never a second one
         events, etags, stored, undecodable = {}, {}, {}, []
         for ref, found in accepted.records.items():
             etags[ref], stored[ref] = found.etag, found
@@ -545,3 +557,25 @@ def _relations_unreadable(graph: CampaignGraph) -> bool:
     """A relation file that cannot be decoded, or any store problem under the campaign's relations
     (a link, a look-alike folder), could hide the fact a precondition must see."""
     return bool(graph.problems) or any(problem.code == "undecodable" for problem in graph.index.problems)
+
+
+def _state_of(found) -> tuple:  # type: ignore[no-untyped-def]
+    """The accepted-event files and problems of one read, as a comparable value."""
+    return (tuple(sorted((str(ref), stored.etag) for ref, stored in found.records.items())),
+            tuple(sorted((p.path, p.code) for p in found.problems)))
+
+
+def _relation_files(store: LibraryStore, campaign_id: str) -> tuple[list[Relation], bool]:
+    """One read of a campaign's relation files: the decodable relations, and whether any file (or the
+    folder) could not be read."""
+    found = store.campaign_relations(campaign_id)
+    decoded, unreadable = [], bool(found.problems)
+    for ref, stored in found.records.items():
+        try:
+            relation = relation_from_payload(ref, stored.record.schema, stored.record.payload)  # type: ignore[arg-type]
+        except RelationCodecError:
+            unreadable = True
+            continue
+        if isinstance(relation, Relation):
+            decoded.append(relation)
+    return decoded, unreadable

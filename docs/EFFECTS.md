@@ -88,12 +88,12 @@ It is a sha256 over a hand-rolled canonical text, pinned by a golden-vector test
     - None → `not_endorsed`.
     - Anything wrong → `invalid_endorsement`.
 
-    The record stores `{contribution_id, principal, fingerprint}`, so the endorsement is bound to exactly these operations.
+    The record stores `{contribution_id, principal, fingerprint}`, so the endorsement is bound to exactly these operations. Two endorsements for one contribution are refused as ambiguous (`invalid_endorsement`). A contribution longer than the record can hold (text over 20 000 characters, an id over 512) is refused with `contribution_too_long`, since 003 itself caps neither.
 - **Director-domain ops** (an NPC or unassigned agent, or `agent=None`) need only the outcome key, and refuse `backed_by` (`unexpected_backing`). Sovereignty never guarantees success: an NPC taking the PC's key is the director's to accept.
 
 Narration holds neither key. A player alone can never make their character's action succeed (a theft, joining a guild that refuses): the outcome needs the director key.
 
-**Strength, stated plainly.** As with 010b, the guarantee is only as strong as 035's handle minting: any trusted code that holds the authorizer can mint `human:ana`, and the library itself cannot. In **solo play** one human holds both keys. The rule then guarantees two explicit, separately recorded decisions (endorse the mapping, approve the outcome), not two people.
+**Strength, stated plainly.** An `Endorsement` is a statement, not a one-time token. Code that kept one could present it again to re-accept the *same* operations after they were revoked. It can never be used to revoke: revocation needs a separate endorsement, over a fingerprint bound to that event (see Revoking). As with 010b, the guarantee is only as strong as 035's handle minting: any trusted code that holds the authorizer can mint `human:ana`, and the library itself cannot. In **solo play** one human holds both keys. The rule then guarantees two explicit, separately recorded decisions (endorse the mapping, approve the outcome), not two people.
 
 **Recorded for audit:** the backing contributions, the endorsements, and the control in force for every agent (`controls`). `controls` comes from the caller. **Obligation on 035:** load it from 010b's `SovereigntyLedger`.
 
@@ -153,7 +153,7 @@ Exactly-once recovery across files belongs to 030.
 
 ## Continuity: the next response
 
-`continuity(campaign_id, *, as_of, requested_by)` is **director-only** (`requested_by` must be `DIRECTOR`). It returns `Continuity`:
+`continuity(campaign_id, *, as_of, requested_by)` is **director-only** (`requested_by` must be `DIRECTOR`). A campaign that does not exist is `missing_campaign`, never an empty, problem-free answer. It returns `Continuity`:
 
 | Field | Contents |
 |---|---|
@@ -169,6 +169,7 @@ Problem codes (reported, never repaired):
 - `duplicate_ordinal` and `inconsistent_ledger`;
 - `receipt_mismatch`;
 - `orphan_effect`;
+- `edited_since`: a relation an active event began was ended by something other than a later active accepted event (a direct 017 edit). The receipt itself still matches, but undoing that event will be refused (`has_dependents`) until the edit is resolved;
 - `stale_wrapup`: it cites a revoked or vanished event;
 - `incomplete_wrapup`: an active event of that chat and scene, within its range, that it does not cite.
 
@@ -200,7 +201,7 @@ A revoked event is checked by these permanent marks only. Revoking an earlier ev
 
 - **Inputs.** CAS on `expected`. A repeat is `already_revoked`. The same fail-closed checks as accepting apply (`undecodable_event`, `inconsistent_ledger`).
 - **Latest first.** While another active event has a higher ordinal, revoke refuses with `not_latest`. Undo is a stack, so history behind a later accepted event never changes under it. To revise turn 7 after events at 8 and 9: revoke 9, then 8, then 7; accept the revision; then re-accept whatever still applies.
-- **Keys.** The outcome key, plus an endorsement from **the original endorser**, the principal recorded for each contribution, with the event's fingerprint.
+- **Keys.** The outcome key, plus an endorsement from **the original endorser**, the principal recorded for each contribution. Its fingerprint is `revocation_fingerprint(event_ref, event_fingerprint)`, a sha256 over `revoke`, the event's reference and its fingerprint. An acceptance endorsement is therefore never consent to undo, and the record shows which decision each endorsement was.
   - Current control does not matter. A new controller cannot undo a previous player's action, and the director cannot erase it alone.
   - **Limit:** an action whose endorser is gone cannot be revoked. Because undo is latest first, that also freezes the stack below it. A recorded director override is deferred to 102/035.
 - **Receipts must verify** (`receipt_mismatch`), and nothing may depend on the operation (`has_dependents`). A dependent is one of these:
@@ -269,7 +270,7 @@ How it is read and written:
 | A 003 player `Correction` | Strikes a narration claim and never revokes an accepted event automatically. A player who objects to an effect on their character asks for revocation, which needs the director key. A mislabel goes to the referee. |
 | Deleting a scene's transcript | Never deletes accepted events. To undo state, revoke its events; 035 owns the UX. |
 | Forks and branches | Not here. Accepted events belong to one campaign scope and are never copied implicitly. Owner: [Scenes, Forks And Retcons](roadmap/sprints/scenes-forks-and-retcons.md) (054). |
-| A direct 017 `end`, `retract` or `reopen` of an effect-managed relation | Allowed, because 017 edits are editorial. 021 reports `receipt_mismatch` or `orphan_effect`. Re-accepting that same effect is refused (`receipt_mismatch`), unrelated acceptances proceed, and revoke refuses (`receipt_mismatch` or `has_dependents`) unless `partial=True`. |
+| A direct 017 `end`, `retract` or `reopen` of an effect-managed relation | Allowed, because 017 edits are editorial. Undoing one of the event's own changes (retracting a relation it began, reopening an ending it made) is `receipt_mismatch`: re-accepting that effect is refused, and revoke refuses unless `partial=True`. Ending a relation the event began is `edited_since`: the effect still counts as applied, so a re-acceptance is a duplicate, but revoke refuses `has_dependents` unless `partial=True`. Unrelated acceptances proceed either way. |
 
 ## Migration, privacy and rollback
 
@@ -297,3 +298,5 @@ How it is read and written:
 | Actor memory; long-form consolidation over wrap-ups | [Memory Consolidation](roadmap/sprints/memory-consolidation.md) (053), deriving actor memory from 020 evidence |
 | Mechanics legality | 029 / mechanics modules |
 | Event-id allocators treating each other's ids as taken, so the 012 bridge can be persisted | whichever of 020/021 merges second |
+| **One linear writer per campaign.** Ordinals are `1 + max` on one replica. Two devices that each accept an event offline and are then merged produce a duplicate ordinal: acceptance and revocation then refuse (`inconsistent_ledger`) until it is resolved. A merge rule for accepted events (rebasing one device's events on the other's, with review) is needed before sync carries `accepted/` | 019 / 028 |
+| Performance at scale: each accept, and each commit, reads the campaign's accepted events and relation files once (not once per operation). Cost still grows linearly with campaign history, and nothing is cached | later 021 / 022 |

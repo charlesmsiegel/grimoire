@@ -81,7 +81,7 @@ def _revoke(ops, root, locker, partial):
         handles = Handles()
         library = effects_library(store, handles)
         _, etag = library.read(EVENT, requested_by=DIRECTOR)
-        library.revoke(EVENT, reason="rewind", expected=etag, endorsements=[handles.endorse(give())],
+        library.revoke(EVENT, reason="rewind", expected=etag, endorsements=[handles.undo(EVENT)],
                        partial=partial).commit()
 
 

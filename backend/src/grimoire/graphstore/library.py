@@ -79,6 +79,15 @@ def _decoded(store: LibraryStore, campaign_id: str) -> list[Relation | Unsupport
     return found
 
 
+def decoded_relations(store: LibraryStore, campaign_id: str) -> list[Relation | UnsupportedRelation]:
+    """One campaign's decodable and unsupported relations, from one read of its folder.
+
+    For callers that check several changes against the same files (021), so each check need not
+    re-read the folder. Undecodable files are skipped, exactly as a single write skips them.
+    """
+    return _decoded(store, campaign_id)
+
+
 def relation_endpoint_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     """Instance ids named as endpoints by the campaign's decodable and unsupported relation files.
 
@@ -115,18 +124,20 @@ class RelationChange:
         """The exact bytes the relation file will hold, keyed by logical path."""
         return self._transaction().preview()
 
-    def stale(self) -> list[tuple[str, str]]:
+    def stale(self, relations: list | None = None) -> list[tuple[str, str]]:
         """Why this change can no longer be committed as previewed; empty when it still can.
 
         For an add, exactly the check ``commit`` makes. For a rewrite (end, retract, reopen), whether
         the relation file still has the etag the change expects (``absent``/``changed``, the store's
         own CAS words), and for a reopen also whether the reopened interval now overlaps a duplicate.
-        Callers folding this change into a larger transaction (021) call it under the store lock.
+        Callers folding this change into a larger transaction (021) call it under the store lock,
+        and may pass ``relations`` (``decoded_relations`` read under that lock) to check many
+        changes against one read.
         """
         store = self.library.store
         with store.lock:
             if self.new is not None:
-                return self.library._stale_add(self.new, self.endpoint_etags)
+                return self.library._stale_add(self.new, self.endpoint_etags, relations)
             stale = []
             for record, expected in self.puts:
                 try:
@@ -138,7 +149,7 @@ class RelationChange:
                 if current != expected:
                     stale.append((_path(record.address), "absent" if current is None else "changed"))
             if self.reopen is not None:
-                stale += self.library._stale_reopen(self.reopen)
+                stale += self.library._stale_reopen(self.reopen, relations)
             return stale
 
     def commit(self, approvals: Mapping[str, str] | None = None) -> RelationCommit:
@@ -207,7 +218,7 @@ class RelationLibrary:
     # -- writing ------------------------------------------------------------------------------
 
     def add(self, campaign_id: str, predicate: str, subject: InstanceRef, object: InstanceRef, *, since: Moment,
-            provenance: str, until: Moment | None = None) -> RelationChange:
+            provenance: str, until: Moment | None = None, relations: list | None = None) -> RelationChange:
         """A new relation; with ``until``, a past or bounded stint written already ended."""
         validate_segment(campaign_id, "campaign_id")
         if self.store.campaign_presence(campaign_id) != "present":  # a look-alike folder is not the campaign
@@ -234,7 +245,7 @@ class RelationLibrary:
         except GraphError as error:
             raise _refused(error) from None
         if any(isinstance(other, Relation) and other.overlaps(relation)
-               for other in _decoded(self.store, campaign_id)):
+               for other in (_decoded(self.store, campaign_id) if relations is None else relations)):
             raise InvalidRelation("the same relation is already recorded for an overlapping time",
                                   "duplicate_relation")
         record = ScopeRecord(ref, RELATION_SCHEMA, relation_to_payload(relation), owner=self._owner)
@@ -258,7 +269,8 @@ class RelationLibrary:
             raise _refused(error) from None
         return self._rewrite(changed, stored, expected)
 
-    def reopen(self, ref: RelationRef, *, provenance: str, expected: str) -> RelationChange:
+    def reopen(self, ref: RelationRef, *, provenance: str, expected: str, relations: list | None = None
+               ) -> RelationChange:
         """Cancel the relation's ending (021's undo): it holds again from ``since``; the ending is kept.
 
         Refused when it has no ending (``not_ended``), is retracted, or would then overlap another
@@ -271,7 +283,7 @@ class RelationLibrary:
             changed = current.reopened(Reopening(current.ending, provenance, self._clock()))
         except GraphError as error:
             raise _refused(error) from None
-        if self._stale_reopen(changed):
+        if self._stale_reopen(changed, relations):
             raise InvalidRelation("the same relation is already recorded for an overlapping time",
                                   "duplicate_relation")
         change = self._rewrite(changed, stored, expected)
@@ -317,14 +329,15 @@ class RelationLibrary:
         except (StoreError, LibraryPathError):
             return None  # an unreadable file still names the endpoint; its bytes are pinned as "unreadable"
 
-    def _stale_reopen(self, relation: Relation) -> list[tuple[str, str]]:
+    def _stale_reopen(self, relation: Relation, relations: list | None = None) -> list[tuple[str, str]]:
         campaign = relation.ref.campaign_id
         if any(isinstance(other, Relation) and other.ref != relation.ref and other.overlaps(relation)
-               for other in _decoded(self.store, campaign)):
+               for other in (_decoded(self.store, campaign) if relations is None else relations)):
             return [(_path(relation.ref), "duplicate recorded")]
         return []
 
-    def _stale_add(self, relation: Relation, etags: Mapping[InstanceRef, str | None]) -> list[tuple[str, str]]:
+    def _stale_add(self, relation: Relation, etags: Mapping[InstanceRef, str | None],
+                   relations: list | None = None) -> list[tuple[str, str]]:
         """Why an add previewed earlier may no longer be written (checked under the store lock).
 
         An endpoint file that was replaced since the preview may hold a different individual
@@ -337,6 +350,6 @@ class RelationLibrary:
         stale += [(_path(end), "endpoint changed") for end in (relation.subject, relation.object)
                   if end in existing and end in etags and self._instance_etag(end) != etags[end]]
         if any(isinstance(other, Relation) and other.ref != relation.ref and other.overlaps(relation)
-               for other in _decoded(self.store, campaign)):
+               for other in (_decoded(self.store, campaign) if relations is None else relations)):
             stale.append((_path(relation.ref), "duplicate recorded"))
         return stale

@@ -14,6 +14,7 @@ from grimoire.effects import (
     ACCEPTED_SCHEMA, WRAPUP_SCHEMA, EffectCodecError, EndorsementRecord, Revocation, SceneWrapUp, Skipped,
     accepted_from_payload, accepted_to_payload, wrapup_from_payload, wrapup_id, wrapup_to_payload,
 )
+from grimoire.effects import revocation_fingerprint
 
 from effects_fixtures import ANA, C, CHAT
 from test_effects_model import event
@@ -44,7 +45,7 @@ def test_accepted_round_trip_is_canonical():
 def test_revoked_round_trip():
     item = event()
     revoked = replace(item, revocation=Revocation("edited", "t2", "human:owner",
-                                                  (EndorsementRecord("c7", ANA, item.fingerprint),),
+                                                  (EndorsementRecord("c7", ANA, revocation_fingerprint(item.ref, item.fingerprint)),),
                                                   (Skipped(1, "receipt changed"),)))
     assert accepted_from_payload(REF, ACCEPTED_SCHEMA, accepted_to_payload(revoked)) == revoked
 

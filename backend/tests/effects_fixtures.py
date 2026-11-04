@@ -12,7 +12,7 @@ from grimoire.core import DIRECTOR, Moment
 from grimoire.core.authority import PlayerContribution
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef
 from grimoire.core.model import ControlAssignment
-from grimoire.effects import EffectProposal, Op
+from grimoire.effects import EffectProposal, Op, revocation_fingerprint
 from grimoire.effectstore import Endorsement, TurnEffectsLibrary
 from grimoire.graphstore import RelationLibrary
 from grimoire.store import LibraryStore
@@ -70,6 +70,10 @@ class Handles:
 
     def endorse(self, proposal: EffectProposal, cid: str = "c7", principal: str = ANA) -> Endorsement:
         return Endorsement(cid, self.player(principal), proposal.fingerprint)
+
+    def undo(self, ref, proposal: EffectProposal | None = None, cid: str = "c7", principal: str = ANA) -> Endorsement:
+        """The player's consent to revoke ``ref``: bound to that event, never the acceptance endorsement."""
+        return Endorsement(cid, self.player(principal), revocation_fingerprint(ref, (proposal or give()).fingerprint))
 
 
 def seed(store: LibraryStore, handles: Handles) -> None:

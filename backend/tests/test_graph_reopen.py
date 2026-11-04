@@ -83,7 +83,7 @@ def test_a_pre_021_build_reads_a_reopened_file_as_holding():
 
 
 @pytest.mark.parametrize("value", [
-    [], {}, "x", [{"ending": {"until": {"sequence": 7}, "provenance": "p", "at": "t"}, "provenance": "p"}],
+    {}, "x", [{"ending": {"until": {"sequence": 7}, "provenance": "p", "at": "t"}, "provenance": "p"}],
     [{"ending": {"until": {"sequence": 7}, "provenance": "p", "at": "t"}, "provenance": "p", "at": "t", "x": 1}],
     [{"ending": {"until": {"sequence": 1}, "provenance": "p", "at": "t"}, "provenance": "p", "at": "t"}],
 ])
@@ -102,6 +102,13 @@ def test_reopenings_whose_clock_text_runs_backwards_still_round_trip():
     second = first.ended(early).reopened(Reopening(early, "d", "2026-01-01T00:00:00Z"))
     payload = relation_to_payload(second)
     assert relation_from_payload(REF, RELATION_SCHEMA, payload) == second
+
+
+@pytest.mark.parametrize("value", [[], None])
+def test_a_cleared_reopenings_key_means_never_reopened(value):
+    payload = {**relation_to_payload(relation(ending=END7)), "reopenings": value}
+    decoded = relation_from_payload(REF, RELATION_SCHEMA, payload)
+    assert decoded == relation(ending=END7) and "reopenings" not in relation_to_payload(decoded)
 
 
 def test_index_flags_and_exposes_reopenings():

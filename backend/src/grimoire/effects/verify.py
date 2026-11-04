@@ -91,6 +91,29 @@ def verify_receipts(event: AcceptedEvent, index: GraphIndex) -> tuple[EffectProb
     return tuple(found)
 
 
+def edited_effects(events: Iterable[AcceptedEvent], index: GraphIndex) -> tuple[EffectProblem, ...]:
+    """``edited_since``: a relation an active event began was ended by something other than a later active
+    accepted event (a direct 017 edit). Nothing is wrong with the receipt itself, but undoing the event will
+    be refused (``has_dependents``) until the edit is resolved, so it is surfaced now."""
+    events = list(events)
+    active = {e.event_id for e in events if e.active}
+    found = []
+    for event in events:
+        if not event.active:
+            continue
+        for number, item in enumerate(event.operations):
+            if item.op.kind != "begin":
+                continue
+            relation = _relation(index, event.receipts[number].relation)
+            if isinstance(relation, str) or relation.ending is None:
+                continue
+            ender = parse_token(relation.ending.provenance)
+            if ender is None or ender[0] != "accepted" or ender[1] not in active or ender[1] == event.event_id:
+                found.append(EffectProblem("edited_since", event.event_id, number, "ended outside 021",
+                                           relation.ref.relation_id))
+    return tuple(found)
+
+
 def _tokens(relation: Relation) -> list[str]:
     tokens = [relation.provenance]
     if relation.ending is not None:

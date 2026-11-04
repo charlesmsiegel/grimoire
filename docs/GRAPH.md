@@ -89,7 +89,7 @@ Reopening is the third non-destructive operation:
 
 Nothing is deleted, so 012/020 subjects that cite the relation stay valid. 021 reopens only endings it made; a relation that was added already bounded (`add(until=…)`) can be reopened only editorially.
 
-- **Codec.** The optional payload key is `reopenings: [{ending: {until, provenance, at}, provenance, at}]`. It is written only when nonempty, so a never-reopened file is byte-identical to 017's. Decoding refuses an empty list, unknown keys and `until <= since`. List order is the order the reopenings were made; their `at` clock text is never compared, since clocks can step back.
+- **Codec.** The optional payload key is `reopenings: [{ending: {until, provenance, at}, provenance, at}]`. It is written only when nonempty, so a never-reopened file is byte-identical to 017's. An absent, `null` or empty `reopenings` all mean never reopened (as an absent or `null` ending means not ended), and re-encoding omits the key. Decoding refuses unknown keys and `until <= since`. List order is the order the reopenings were made; their `at` clock text is never compared, since clocks can step back.
 - **Older builds.** A 017-only build keeps `reopenings` as a preserved unknown key and sees no ending, so it answers `holds_at` correctly. This is tested against the verbatim 017 codec.
 - **The index** flags `RelationEntry.reopened`. `history`, `relation` and `to_json` expose the reopenings.
 - **The service.** `RelationLibrary.reopen(ref, *, provenance, expected)` mirrors `end`, works on a relation with a missing endpoint, and refuses with `duplicate_relation` when the reopened interval would overlap another unretracted record of the fact. Its overlap is re-checked at commit.
@@ -99,6 +99,7 @@ Nothing is deleted, so 012/020 subjects that cite the relation stay valid. 021 r
   - for a reopen, also an overlap.
 
   021 calls it under the store lock before folding relation changes into its own transaction. `commit` is unchanged for add, end and retract.
+- **Checking many changes against one read.** `add`, `reopen` and `RelationChange.stale` take an optional `relations` list (from `decoded_relations(store, campaign_id)`, read under the same lock), so 021 checks up to 32 operations against one read of the folder instead of one read each. Omitted, they read the folder as before.
 
 ## The index (director-only)
 

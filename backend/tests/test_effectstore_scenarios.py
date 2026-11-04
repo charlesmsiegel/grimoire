@@ -146,7 +146,7 @@ def test_a2_revoke_then_accept_the_revision(world):
                     written_by="director", requested_by=DIRECTOR).commit()
     _, etag = library.read(done.ref, requested_by=DIRECTOR)
     library.revoke(done.ref, reason="Ana edited her turn", expected=etag,
-                   endorsements=[handles.endorse(give())]).commit()
+                   endorsements=[handles.undo(done.ref)]).commit()
     view = continuity(library)
     assert view.events == () and [e.event_id for e in view.revoked] == ["e-1"]
     assert [p.code for p in view.problems] == ["stale_wrapup"]
@@ -178,8 +178,8 @@ def test_a2b_the_stack_is_undone_latest_first(world):
     e9 = library.accept(onward, controls=CONTROLS).commit()
     _, etag7 = library.read(e7.ref, requested_by=DIRECTOR)
     assert reason(lambda: library.revoke(e7.ref, reason="r", expected=etag7,
-                                         endorsements=[handles.endorse(give())])) == "not_latest"
-    for done, endorse in ((e9, []), (e8, []), (e7, [handles.endorse(give())])):
+                                         endorsements=[handles.undo(e7.ref)])) == "not_latest"
+    for done, endorse in ((e9, []), (e8, []), (e7, [handles.undo(e7.ref)])):
         _, etag = library.read(done.ref, requested_by=DIRECTOR)
         library.revoke(done.ref, reason="rewind", expected=etag, endorsements=endorse).commit()
         assert [p for p in continuity(library, as_of=20).problems if p.code == "receipt_mismatch"] == []

@@ -14,6 +14,7 @@ from grimoire.effects import (
     EndorsementRecord, Op, Receipt, Revocation, SceneWrapUp, Skipped, accepted_token, fingerprint, parse_token,
     revoked_token, wrapup_id,
 )
+from grimoire.effects import revocation_fingerprint
 
 from effects_fixtures import ANA, C, CHAT, INES, KEY1, TAM, WREN, give, moment
 
@@ -155,7 +156,8 @@ def test_domain_must_match_backing():
 
 def test_revocation_invariants():
     item = event()
-    good = Revocation("edited", "t2", "human:owner", (EndorsementRecord("c7", ANA, item.fingerprint),))
+    good = Revocation("edited", "t2", "human:owner",
+                      (EndorsementRecord("c7", ANA, revocation_fingerprint(item.ref, item.fingerprint)),))
     assert not replace(item, revocation=good).active
     assert reason(lambda: replace(item, revocation=replace(good, endorsements=()))) == "invalid_endorsement"
     assert reason(lambda: replace(item, revocation=replace(good, skipped=(Skipped(2, "x"),)))) == "invalid_receipts"

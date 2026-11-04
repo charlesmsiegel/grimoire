@@ -138,7 +138,11 @@ def relation_from_payload(ref: RelationRef, schema: str, payload: object) -> Rel
     ending = retraction = None
     if payload.get("ending") is not None:
         ending = _decode_ending(payload["ending"], "ending")
-    reopenings = _decode_reopenings(payload["reopenings"]) if "reopenings" in payload else ()
+    raw = payload.get("reopenings")
+    # Absent, null or empty all mean "never reopened", as an absent or null ending means "not ended":
+    # a hand edit that clears the list must not make the relation undecodable.
+    empty = raw is None or (isinstance(raw, (list, tuple)) and not raw)
+    reopenings = () if empty else _decode_reopenings(raw)
     if payload.get("retraction") is not None:
         data = _object(payload["retraction"], "retraction", frozenset({"provenance", "at"}),
                        frozenset({"provenance", "at"}))
@@ -161,9 +165,9 @@ def _decode_ending(value: object, label: str) -> Ending:
 
 
 def _decode_reopenings(value: object) -> tuple[Reopening, ...]:
-    """A nonempty list in the order the reopenings were made; an explicit empty list is not canonical."""
-    if not isinstance(value, (list, tuple)) or not value:  # a stored payload is frozen: lists arrive as tuples
-        raise _invalid("reopenings must be a nonempty list")
+    """A list in the order the reopenings were made (a stored payload is frozen: lists arrive as tuples)."""
+    if not isinstance(value, (list, tuple)):
+        raise _invalid("reopenings must be a list")
     found = []
     for index, item in enumerate(value):
         data = _object(item, f"reopenings[{index}]", _REOPENING, _REOPENING)

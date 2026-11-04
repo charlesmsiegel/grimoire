@@ -13,6 +13,7 @@ from grimoire.effects import (
     EffectError, EndorsementRecord, Revocation, SceneWrapUp, Skipped, as_knowledge_event, check_citations,
     ledger_problems, orphans, verify_receipts, wrapup_id, wrapup_problems,
 )
+from grimoire.effects import revocation_fingerprint
 from grimoire.graph import Ending, GraphIndex, Relation, Reopening, Retraction
 
 from effects_fixtures import ANA, C, CAST, CHAT, KEY1, TAM, WREN, moment
@@ -47,7 +48,8 @@ def codes(problems) -> list[tuple]:
 def revoked(item=None, skipped=()):
     item = item or event()
     return replace(item, revocation=Revocation("edited", "t2", "human:owner",
-                                               (EndorsementRecord("c7", ANA, item.fingerprint),), tuple(skipped)))
+                                               (EndorsementRecord("c7", ANA, revocation_fingerprint(item.ref, item.fingerprint)),),
+                                               tuple(skipped)))
 
 
 def director_event(eid: str, ordinal: int, sequence: int, turn: str | None = None):

@@ -44,7 +44,7 @@ class EffectError(ValueError):
 
     def __init__(self, reason: str, records: Iterable[str] = ()) -> None:
         self.reason = reason
-        self.records: tuple[str, ...] = tuple(records)
+        self.records: tuple[str, ...] = tuple(str(record) for record in records)  # never fails on a bad input
         super().__init__(f"{reason}: {', '.join(self.records)}" if self.records else reason)
 
     def __reduce__(self) -> tuple[object, ...]:
@@ -165,6 +165,17 @@ def fingerprint(chat: ChatRef, moment: Moment, operations: Iterable[Op]) -> str:
         ops.append("|".join((op.kind, predicate, str(first), str(second), "" if op.agent is None else str(op.agent))))
     lines += sorted(ops)  # the same operations in another order are the same effect
     return "sha256:" + hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def revocation_fingerprint(ref: AcceptedRef, event_fingerprint: str) -> str:
+    """What a player endorses to undo ``ref``: bound to that event, and distinct from accepting it.
+
+    An acceptance endorsement can therefore never be replayed as consent to undo, and the record
+    shows which decision each endorsement was.
+    """
+    if type(ref) is not AcceptedRef:
+        raise _invalid()
+    return "sha256:" + hashlib.sha256(f"revoke\n{ref}\n{event_fingerprint}".encode("utf-8")).hexdigest()
 
 
 def _check_operations(campaign_id: str, operations: object) -> tuple[Op, ...]:
@@ -380,13 +391,13 @@ class AcceptedEvent:
                 raise _invalid()
             if any(item.op >= len(self.operations) for item in self.revocation.skipped):
                 raise EffectError("invalid_receipts")
-            self._check_endorsements(self.revocation.endorsements)
+            self._check_endorsements(self.revocation.endorsements,
+                                     revocation_fingerprint(self.ref, self.fingerprint))
         if type(self.extras) is not JsonObject:
             raise _invalid()
 
-    def _check_endorsements(self, endorsements: tuple[EndorsementRecord, ...]) -> None:
+    def _check_endorsements(self, endorsements: tuple[EndorsementRecord, ...], expected: str) -> None:
         by_id = {c.contribution_id: c for c in self.contributions}
-        expected = self.fingerprint
         ids = [e.contribution_id for e in endorsements]
         if sorted(ids) != sorted(by_id) or len(set(ids)) != len(ids):
             raise EffectError("invalid_endorsement")
@@ -420,7 +431,7 @@ class AcceptedEvent:
             used.add(contribution.contribution_id)
         if used != set(by_id):
             raise EffectError("invalid_expression")
-        self._check_endorsements(self.endorsements)
+        self._check_endorsements(self.endorsements, self.fingerprint)
 
     @property
     def fingerprint(self) -> str:
