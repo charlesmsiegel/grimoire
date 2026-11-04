@@ -13,6 +13,13 @@ present    = new        = new       drop the temp
 present    = new        other       preserve (external edit is kept)
 =========  ===========  ==========  =====================================
 
+"Preserve" applies to ``publish`` and ``hold`` entries. A ``replica`` (another
+library's exact bytes), ``keep`` (a kept copy of another library's version) or
+``state`` (``.sync``) entry that would be preserved is *dropped* instead: its bytes
+are regenerable, and preserving them would leave copies nobody asked to keep, or
+nest conflict copies of conflict copies. A ``hold`` (a kept version whose bytes
+exist nowhere else, such as the version ``resolve`` replaces) is preserved.
+
 An ``abort`` journal never publishes. A commit journal whose temps are all
 still present and which would preserve any entry is first rewritten as
 ``abort``, so a crash part-way through preserving can never resume as a
@@ -34,7 +41,7 @@ from grimoire.library import LibraryPathError
 from .diskops import FileOps, is_link, lstat_or_none
 from .errors import LinkRefused, NameCollision, RecoveryFailed, StoreError, UnstorableIdentifier
 from .guard import Guard
-from .journal import Entry, Journal, is_staging_name, parse
+from .journal import REGENERABLE_KINDS, Entry, Journal, is_staging_name, parse
 from .jsonfmt import MAX_FILE_BYTES, etag
 from .layout import DISCARD_MARKER, JOURNAL, REPAIR_MARKER, TXN, Parts, conflict_parts, name_key
 
@@ -187,6 +194,7 @@ class Settlement:
     published: list[tuple[str, str]] = field(default_factory=list)  # (target, etag)
     preserved: list[str] = field(default_factory=list)  # conflict paths
     incomplete: list[str] = field(default_factory=list)  # targets whose staging vanished
+    dropped: list[str] = field(default_factory=list)  # keep/state targets set aside unpublished
     aborted: bool = False
 
 
@@ -206,8 +214,9 @@ def check_entry_paths(access: Access, journal: Journal) -> None:
         if entry.temp in staged:
             access.check_staged_file(entry.temp)
         access.guard.check_write(entry.target, staging_device=device)
-        access.guard.check_write(conflict_parts(entry.target, entry.new), staging_device=device)
-        access.check_conflict_folder(conflict_parts(entry.target, entry.new))
+        if entry.kind not in REGENERABLE_KINDS and entry.kind != "hold":  # dropped, or (a hold) own slots
+            access.guard.check_write(conflict_parts(entry.target, entry.new), staging_device=device)
+            access.check_conflict_folder(conflict_parts(entry.target, entry.new))
 
 
 def _replace_journal(access: Access, journal: Journal) -> None:
@@ -218,7 +227,17 @@ def _replace_journal(access: Access, journal: Journal) -> None:
 
 
 def _preserve(access: Access, entry: Entry, settlement: Settlement, digest: str) -> None:
-    """Move a staged version into ``.conflicts``, named by its *actual* digest; never drop distinct bytes."""
+    """Move a staged version into ``.conflicts``, named by its *actual* digest; never drop distinct bytes.
+
+    A replica, keep or state entry is dropped instead (its temp removed): see the module docstring.
+    """
+    if entry.kind in REGENERABLE_KINDS:
+        access.ops.remove(access.path((TXN, entry.temp)))
+        settlement.dropped.append(_text(entry.target))
+        return
+    if entry.kind == "hold":  # a kept version: preserve it beside its record's other versions
+        _preserve_hold(access, entry, settlement, digest)
+        return
     staging = lstat_or_none(access.path((TXN,)))
     temp = access.path((TXN, entry.temp))
     for attempt in range(MAX_CONFLICT_ATTEMPTS):
@@ -238,10 +257,44 @@ def _preserve(access: Access, entry: Entry, settlement: Settlement, digest: str)
     settlement.preserved.append(_text(conflict))
 
 
+def _prepare(access: Access, entry: Entry) -> None:
+    """Before the per-entry guard read: re-check the path and create a new file's directories.
+
+    Doing this first keeps the window between the guard read and the ``replace`` to the
+    ``replace`` alone (R7). An update never creates directories: its present target proves
+    the parent exists, and a parent deleted while the app was down is not re-created.
+    """
+    staging = lstat_or_none(access.path((TXN,)))
+    access.guard.check_write(entry.target, staging_device=staging.st_dev if staging else None)
+    if entry.old is None and access.presence(entry.target[:-1]) == "absent":
+        access.make_parent(entry.target)  # a look-alike parent is never shadowed: the guard reads LOOKALIKE
+
+
+def _preserve_hold(access: Access, entry: Entry, settlement: Settlement, digest: str) -> None:
+    """A ``hold`` that cannot take its planned slot takes the record's next free one, never a nested name."""
+    folder, name = entry.target[:-1], entry.target[-1]
+    base = name.rsplit(".", 1)[0] if name.rsplit(".", 1)[-1].isdigit() else name
+    staging = lstat_or_none(access.path((TXN,)))
+    temp = access.path((TXN, entry.temp))
+    for attempt in range(MAX_CONFLICT_ATTEMPTS):
+        slot = folder + ((base if not attempt else f"{base}.{attempt}"),)
+        access.guard.check_write(slot, staging_device=staging.st_dev if staging else None)
+        access.check_conflict_folder(slot)
+        if access.presence(slot) == "absent":
+            access.make_parent(slot)
+            access.ops.replace(temp, access.path(slot))
+            break
+        if access.etag_of(slot) == digest:
+            access.ops.remove(temp)
+            break
+    else:
+        raise StoreError(f"no free kept-version slot for {_text(entry.target)} after {MAX_CONFLICT_ATTEMPTS} tries")
+    settlement.preserved.append(_text(slot))
+
+
 def _publish(access: Access, entry: Entry, settlement: Settlement) -> None:
     staging = lstat_or_none(access.path((TXN,)))
     access.guard.check_write(entry.target, staging_device=staging.st_dev if staging else None)
-    access.make_parent(entry.target)
     access.ops.replace(access.path((TXN, entry.temp)), access.path(entry.target))
     settlement.published.append((_text(entry.target), entry.new))
 
@@ -270,6 +323,17 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
                 journal = journal.aborted()
                 _replace_journal(access, journal)
                 break
+    if journal.state == "commit" and any(entry.kind == "hold" for entry in journal.entries):
+        # A revision replace publishes only with the hold of the bytes it replaces (019). Live, a
+        # vanished staged file means nothing is published yet; in recovery, a hold that vanished
+        # unpublished while another entry is still staged proves the same. Either way the pair is
+        # abandoned whole, so the replaced bytes are never lost.
+        vanished = [entry for entry in journal.entries
+                    if entry.temp not in staged and access.etag_of(entry.target) != entry.new]
+        if vanished and (live or (any(entry.kind == "hold" for entry in vanished)
+                                  and any(entry.temp in staged for entry in journal.entries))):
+            journal = journal.aborted()
+            _replace_journal(access, journal)
     for entry in journal.entries:
         if entry.temp not in staged:
             current = access.etag_of(entry.target)
@@ -281,6 +345,7 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
         if journal.state == "abort" or digest != entry.new:
             _preserve(access, entry, settlement, digest)
             continue
+        _prepare(access, entry)
         current = access.etag_of(entry.target)  # per-entry guard, immediately before acting
         if current == entry.old:
             _publish(access, entry, settlement)

@@ -2,7 +2,7 @@
 
 from grimoire.testing import (
     CrashOutcome, FileOp, Target, atomic_outcome, completes_after, idempotent_recovery,
-    no_residue, preserves_meddle, untouched,
+    no_residue, preserves_interleave, preserves_meddle, untouched,
 )
 
 BEFORE = {"a.json": b"1", "b.json": b"1"}
@@ -68,3 +68,38 @@ def test_preserves_meddle():
     meddled = frozenset({"b.json"})
     assert check(outcome(edit, meddled=meddled, after_meddle=edit)) is None
     assert "overwrote" in check(outcome(DONE, meddled=meddled, after_meddle=edit))
+
+
+def test_preserves_interleave():
+    check = preserves_interleave().check
+
+    def raced(recovered, interleaved, paths):
+        return CrashOutcome(point="test", before=BEFORE, completed=DONE, recovered=recovered,
+                            recovered_twice=recovered, interleaved=interleaved, interleaved_paths=frozenset(paths))
+
+    assert check(raced(DONE, {}, ())) is None  # no interleave: nothing to preserve
+    assert check(raced({**DONE, "a.json": b"human"}, {"a.json": b"human"}, {"a.json"})) is None
+    assert "lost an interleaved edit" in check(raced(DONE, {"a.json": b"human"}, {"a.json"}))
+    # a removal must stay a removal; an interleaved directory must stay a directory
+    assert check(raced({"b.json": b"2"}, {}, {"a.json"})) is None
+    assert "lost" in check(raced(DONE, {}, {"a.json"}))
+    assert check(raced({**DONE, "d": None}, {"d": None}, {"d"})) is None
+    assert "lost" in check(raced({**DONE, "d": b"file"}, {"d": None}, {"d"}))
+
+
+def test_preserves_interleave_defers_to_a_later_meddle_and_normalized_directories():
+    check = preserves_interleave().check
+    # a meddle edited the same path later: the meddled edit is the one to keep (preserves_meddle)
+    later = CrashOutcome(point="test", before=BEFORE, completed=DONE, recovered={**DONE, "a.json": b"meddle"},
+                         recovered_twice=DONE, interleaved={"a.json": b"interleave"},
+                         interleaved_paths=frozenset({"a.json"}), meddled_paths=frozenset({"a.json"}))
+    assert check(later) is None
+    # an interleaved directory a normalizer dropped while the writer filled it later
+    filled = CrashOutcome(point="test", before=BEFORE, completed=DONE,
+                          recovered={**DONE, "box": None, "box/f.json": b"x"}, recovered_twice=DONE,
+                          interleaved={}, interleaved_paths=frozenset({"box"}))
+    assert check(filled) is None
+    # but a removed file still has to stay removed
+    removed = CrashOutcome(point="test", before=BEFORE, completed=DONE, recovered={**DONE, "gone.json": b"x"},
+                           recovered_twice=DONE, interleaved={}, interleaved_paths=frozenset({"gone.json"}))
+    assert "lost" in check(removed)

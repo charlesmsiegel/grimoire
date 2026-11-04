@@ -10,7 +10,8 @@ from .envelope import AssetRecord, KnowledgeRecord, LinkSpec, RecordEnvelope, Sc
 from .errors import (
     BlobCorrupt, CommitIncomplete, CrossDevice, ImmutableBlob, ImmutableImage, ImmutableRevision, InvalidBlob, InvalidEnvelope, InvalidSourceState, LibraryLocked,
     LinkRefused, LockUnavailable, MalformedRecord, NameCollision, NotALibrary, PendingRecovery,
-    RecordNotFound, RecoveryBlocked, RecoveryFailed, StaleWrite, StoreError, UnstorableIdentifier,
+    RecordNotFound, RecoveryBlocked, RecoveryFailed, RevisionReferenced, StaleWrite, StoreError,
+    UnstorableIdentifier,
     UnsupportedFormat, WriteConflict, WriteDenied,
 )
 from .jsonfmt import etag
@@ -22,18 +23,20 @@ from .loader import (
 )
 from .media import MAX_BLOB_BYTES, MEDIA, ImageBlob, sniff
 from .lock import Locker, OsLocker, ProcessLocker
+from .replica import CanonicalScan
 
 __all__ = [
     "AssetRecord", "BlobCorrupt", "ImageBlob", "ImmutableBlob", "ImmutableImage", "InvalidBlob", "MAX_BLOB_BYTES",
     "MEDIA", "SourceFacts", "StoredAssetRecord", "sniff",
-    "BrokenRef", "CampaignHoldingRecords", "CampaignRecords", "CampaignRelations", "CommitIncomplete", "CommitResult",
+    "BrokenRef", "CampaignHoldingRecords", "CampaignRecords", "CampaignRelations", "CanonicalScan",
+    "CommitIncomplete", "CommitResult",
     "CrossDevice", "DiskOps", "FileOps",
     "ImmutableRevision", "InvalidEnvelope", "InvalidSourceState", "LibraryLocked", "LibraryStore",
     "KnowledgeRecord", "KnowledgeScan",
     "LibraryView", "LinkRefused", "LinkSpec", "LoadProblem", "LockUnavailable", "Locker",
     "MalformedRecord", "NameCollision", "NotALibrary", "OsLocker", "PendingRecovery", "ProcessLocker",
     "RecordEnvelope", "RecordNotFound", "RecoveryBlocked", "RecoveryFailed", "RecoveryReport",
-    "ScopeRecord", "SourceManifest", "StaleWrite", "StoreError", "StoredDefinition", "StoredRecord",
-    "StoredKnowledgeRecord", "StoredScopeRecord", "StoredSource",
+    "RevisionReferenced", "ScopeRecord", "SourceManifest", "StaleWrite", "StoreError", "StoredDefinition",
+    "StoredKnowledgeRecord", "StoredRecord", "StoredScopeRecord", "StoredSource",
     "Transaction", "UnstorableIdentifier", "UnsupportedFormat", "WriteConflict", "WriteDenied", "etag",
 ]

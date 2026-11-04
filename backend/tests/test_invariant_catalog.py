@@ -11,7 +11,7 @@ BACKEND = Path(__file__).resolve().parents[1]
 PACKAGE = BACKEND / "src" / "grimoire"
 CATALOG = BACKEND.parent / "docs" / "TESTING.md"
 BUILT_INS = ("atomic_outcome", "idempotent_recovery", "no_residue", "completes_after", "untouched",
-             "preserves_meddle")
+             "preserves_meddle", "preserves_interleave")
 
 
 def _imports(tree):

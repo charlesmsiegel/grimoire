@@ -16,7 +16,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 
 from .faults import (
-    At, Crash, Fail, Fault, FileOp, OperationBudgetExceeded, RootedFileOps, SimulatedCrash,
+    At, Crash, Fail, Fault, FileOp, Interleave, OperationBudgetExceeded, RootedFileOps, SimulatedCrash,
     nth_match, validate_plan,
 )
 from .fileops import FileOps, SandboxViolation, Tree, snapshot, wipe
@@ -56,6 +56,8 @@ class CrashOutcome:
     after_meddle: Tree = field(default_factory=dict)
     meddled_paths: frozenset[str] = frozenset()
     interleaved_paths: frozenset[str] = frozenset()
+    #: What the action's interleaves left at the paths they changed (removed paths have no key).
+    interleaved: Tree = field(default_factory=dict)
     action_outcome: str = "returned"
     action_index: int | None = None
     action_timing: str | None = None
@@ -113,6 +115,8 @@ class FaultRun:
     recovered_twice: Tree
     recovery_error: str | None
     violations: tuple[Violation, ...]
+    #: What the action's interleaves left at the paths they changed (removed paths have no key).
+    interleaved: Tree = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -242,6 +246,39 @@ def preserves_meddle() -> Invariant:
     return Invariant("preserves_meddle", check)
 
 
+def preserves_interleave() -> Invariant:
+    """An external edit made while the action ran (an ``Interleave``) survives recovery in place.
+
+    Each path an interleave changed holds the interleave's content afterwards, and a path it
+    removed is still absent. A path a later meddle also edited is left to ``preserves_meddle``,
+    and a directory is compared as "present" whether a normalizer dropped it or files below it
+    imply it. This is an *in-place* rule: a writer that legitimately merges or moves an
+    interleaved edit needs its own scenario invariant. 010's pinned R7 window (an edit
+    landing on a target's own ``replace``) violates it.
+    """
+    def check(outcome: CrashOutcome) -> str | None:
+        def implied(tree: Tree, key: str) -> bool:  # a directory that files below it imply
+            return any(name.startswith(key + "/") for name in tree)
+
+        lost = []
+        for key in sorted(outcome.interleaved_paths - outcome.meddled_paths):  # a later meddle wins
+            expected = outcome.interleaved.get(key, _MISSING)
+            actual = outcome.recovered.get(key, _MISSING)
+            if actual == expected:
+                continue
+            if expected in (None, _MISSING) and actual in (None, _MISSING) and (
+                    implied(outcome.recovered, key) or (expected is None and implied(outcome.interleaved, key))):
+                continue  # a normalized directory: present either way
+            lost.append(key)
+        if not lost:
+            return None
+        return "recovery lost an interleaved edit: " + _difference(
+            {key: outcome.recovered[key] for key in lost if key in outcome.recovered},
+            {key: outcome.interleaved[key] for key in lost if key in outcome.interleaved},
+        )
+    return Invariant("preserves_interleave", check)
+
+
 # -- running ---------------------------------------------------------------
 
 class _Abort(Exception):
@@ -257,8 +294,11 @@ class _Phase:
 class _Run:
     def __init__(self, scenario: CrashScenario, workdir: Path, *, action_plan: Sequence[Fault],
                  recover_plan: Sequence[Fault], meddle: bool, max_ops: int,
-                 baseline: FaultRun | None, expected_recover: tuple[FileOp, ...] | None) -> None:
+                 baseline: FaultRun | None, expected_recover: tuple[FileOp, ...] | None,
+                 shared_interleaves: bool = False) -> None:
         self.scenario = scenario
+        #: The baseline ran the same interleaves (``explore_crashes(interleaves=...)``).
+        self.shared_interleaves = shared_interleaves
         self.workdir = Path(workdir)
         self.action_plan = tuple(action_plan)
         self.recover_plan = tuple(recover_plan)
@@ -429,17 +469,27 @@ class _Run:
             if not any(op.mutating for op in self.action_ops.trace):
                 self.flag(BASELINE_COMPLETES, "action performed no mutating file operation")
                 raise _Abort
+            if not self.action_ops.fired:  # a shared interleave must fire in the baseline
+                self.flag(FAULT_FIRED, f"baseline interleaves never triggered: {list(self.action_ops.unfired)!r}")
+                raise _Abort
             return
         self._check_fired(self.action_ops)
         self._check_deterministic(self.action_ops, self.baseline.action_trace)
 
+    def _excused(self, ops: RootedFileOps, fault: Fault) -> bool:
+        """A shared interleave whose operation never ran because a crash or failure came first."""
+        return (self.shared_interleaves and isinstance(fault, Interleave) and ops.crash_index is not None
+                and nth_match(ops.trace, fault.at) is None)
+
     def _check_fired(self, ops: RootedFileOps) -> None:
-        if not ops.fired:
-            self.flag(FAULT_FIRED, f"{ops.phase} faults never triggered: {list(ops.unfired)!r}")
+        unfired = [fault for fault in ops.unfired if not self._excused(ops, fault)]
+        if unfired:
+            self.flag(FAULT_FIRED, f"{ops.phase} faults never triggered: {unfired!r}")
 
     def _check_deterministic(self, ops: RootedFileOps, expected: tuple[FileOp, ...]) -> None:
         trace = ops.trace
-        length = ops.fault_index + 1 if ops.fault_index is not None else max(len(trace), len(expected))
+        fault = ops.crash_index if self.shared_interleaves and ops.crash_index is not None else ops.fault_index
+        length = fault + 1 if fault is not None else max(len(trace), len(expected))
         for index in range(length):
             actual = trace[index] if index < len(trace) else None
             wanted = expected[index] if index < len(expected) else None
@@ -471,6 +521,7 @@ class _Run:
             after_meddle=normalize(self.trees["after_meddle"]),
             meddled_paths=self.meddled,
             interleaved_paths=frozenset(action_ops.interleaved_paths),
+            interleaved=normalize(dict(action_ops.interleaved)),
             action_outcome=self.action.outcome,
             action_index=action_ops.crash_index if self.baseline else None,
             action_timing=action_ops.fault_timing if self.baseline else None,
@@ -499,14 +550,40 @@ class _Run:
             recovered_twice=self.trees.get("recovered_twice", {}),
             recovery_error=self.recovery_error,
             violations=tuple(self.violations),
+            interleaved=dict(action_ops.interleaved) if action_ops else {},
         )
 
 
 def _run(scenario: CrashScenario, workdir: Path, *, action_plan: Sequence[Fault] = (),
          recover_plan: Sequence[Fault] = (), meddle: bool = False, max_ops: int,
-         baseline: FaultRun | None = None, expected_recover: tuple[FileOp, ...] | None = None) -> FaultRun:
+         baseline: FaultRun | None = None, expected_recover: tuple[FileOp, ...] | None = None,
+         shared_interleaves: bool = False) -> FaultRun:
     return _Run(scenario, workdir, action_plan=action_plan, recover_plan=recover_plan, meddle=meddle,
-                max_ops=max_ops, baseline=baseline, expected_recover=expected_recover).execute()
+                max_ops=max_ops, baseline=baseline, expected_recover=expected_recover,
+                shared_interleaves=shared_interleaves).execute()
+
+
+def _timings(op: FileOp, select: Callable[[FileOp], object] | None, *, torn: bool, errors: bool) -> frozenset[str]:
+    """The fault timings to try at ``op``: every eligible one, narrowed by ``select``."""
+    if not op.mutating:
+        return frozenset()
+    eligible = {"before", "after"}
+    if torn and op.kind == "write_bytes" and op.size:
+        eligible.add("torn")
+    if errors:
+        eligible.add("fail")
+    chosen = True if select is None else select(op)
+    if chosen is True:
+        return frozenset(eligible)
+    if not chosen:
+        return frozenset()
+    unknown = set(chosen) - {"before", "after", "torn", "fail"}  # type: ignore[arg-type]
+    if unknown:
+        raise ValueError(f"unknown fault timings: {sorted(unknown)}")
+    disabled = set(chosen) & ({"fail"} if not errors else set()) | set(chosen) & ({"torn"} if not torn else set())
+    if disabled:  # asking for a timing whose flag is off would explore nothing and still pass
+        raise ValueError(f"select asks for {sorted(disabled)} but that fault is not enabled (errors=/torn=)")
+    return frozenset(eligible & set(chosen))  # type: ignore[arg-type]
 
 
 def run_with_fault(scenario: CrashScenario, plan: Sequence[Fault], workdir: Path, *,
@@ -519,35 +596,62 @@ def run_with_fault(scenario: CrashScenario, plan: Sequence[Fault], workdir: Path
     return _run(scenario, workdir, action_plan=plan, meddle=True, max_ops=max_ops, baseline=baseline)
 
 
-def explore_crashes(scenario: CrashScenario, workdir: Path, *, torn: bool = True, errors: bool = False,
-                    recovery_crashes: bool = False, max_ops: int = 10_000) -> CrashReport:
-    """Crash (and optionally fail) every mutating operation of the action in turn."""
+def run_plans(scenario: CrashScenario, plans: Sequence[Sequence[Fault]], workdir: Path, *,
+              max_ops: int = 10_000) -> CrashReport:
+    """One fault-free baseline, then one run per plan, each checked as ``run_with_fault`` checks it.
+
+    Sharing the baseline halves the cost of exploring many single-fault plans (for example an
+    ``Interleave`` at each of many positions).
+    """
+    checked = [validate_plan(plan) for plan in plans]
     baseline = _run(scenario, workdir, max_ops=max_ops)
     runs = [baseline]
     if not baseline.violations:
+        runs.extend(_run(scenario, workdir, action_plan=plan, meddle=True, max_ops=max_ops, baseline=baseline)
+                    for plan in checked)
+    violations = tuple(violation for run in runs for violation in run.violations)
+    return CrashReport(scenario.name, tuple(runs), violations)
+
+
+def explore_crashes(scenario: CrashScenario, workdir: Path, *, torn: bool = True, errors: bool = False,
+                    recovery_crashes: bool = False, max_ops: int = 10_000,
+                    interleaves: Sequence[Interleave] = (),
+                    select: Callable[[FileOp], object] | None = None,
+                    recovery_select: Callable[[FileOp], object] | None = None) -> CrashReport:
+    """Crash (and optionally fail) every mutating operation of the action in turn.
+
+    ``interleaves`` (external edits during the action) join the baseline and every plan; one
+    that never fires because an earlier crash or failure ended the action before its operation is
+    excused, and determinism is then compared up to the crash or failure. ``select`` and
+    ``recovery_select`` restrict which action (resp. recovery) operations are faulted, so one
+    scenario can be explored in shards: each returns ``True`` (every timing), ``False`` (none) or
+    a collection of timings out of ``before``, ``after``, ``torn`` and ``fail``.
+    """
+    shared = tuple(interleaves)
+    if not all(isinstance(fault, Interleave) for fault in shared):
+        raise ValueError("interleaves must be Interleave faults")
+    baseline = _run(scenario, workdir, action_plan=shared, max_ops=max_ops, shared_interleaves=bool(shared))
+    runs = [baseline]
+    if not baseline.violations:
         for op in baseline.action_trace:
-            if not op.mutating:
-                continue
-            plans: list[Fault] = [Crash(op.index, "before"), Crash(op.index, "after")]
-            if torn and op.kind == "write_bytes" and op.size:
-                plans.append(Crash(op.index, "torn"))
-            if errors:
+            wanted = _timings(op, select, torn=torn, errors=errors)
+            plans: list[Fault] = [Crash(op.index, timing) for timing in ("before", "after", "torn")
+                                  if timing in wanted]
+            if "fail" in wanted:
                 plans.append(Fail(op.index))
             for fault in plans:
-                run = _run(scenario, workdir, action_plan=[fault], meddle=True, max_ops=max_ops, baseline=baseline)
+                run = _run(scenario, workdir, action_plan=[fault, *shared], meddle=True, max_ops=max_ops,
+                           baseline=baseline, shared_interleaves=bool(shared))
                 runs.append(run)
                 if recovery_crashes and isinstance(fault, Crash) and run.recovery_error is None:
                     for recover_op in run.recover_trace:
-                        if not recover_op.mutating:
-                            continue
-                        timings = ["before", "after"]
-                        if torn and recover_op.kind == "write_bytes" and recover_op.size:
-                            timings.append("torn")
-                        for timing in timings:
+                        recover_wanted = _timings(recover_op, recovery_select, torn=torn, errors=False)
+                        for timing in [timing for timing in ("before", "after", "torn") if timing in recover_wanted]:
                             runs.append(_run(
-                                scenario, workdir, action_plan=[fault],
+                                scenario, workdir, action_plan=[fault, *shared],
                                 recover_plan=[Crash(recover_op.index, timing)], meddle=True,
                                 max_ops=max_ops, baseline=baseline, expected_recover=run.recover_trace,
+                                shared_interleaves=bool(shared),
                             ))
     violations = tuple(violation for run in runs for violation in run.violations)
     return CrashReport(scenario.name, tuple(runs), violations)

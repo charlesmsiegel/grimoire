@@ -92,12 +92,15 @@ class WriteDenied(StoreError):
 class WriteConflict(StoreError):
     """An external edit raced the commit; it was kept and the store's bytes preserved."""
 
-    def __init__(self, preserved: Sequence[str], published: Sequence[tuple[str, str]]) -> None:
+    def __init__(self, preserved: Sequence[str], published: Sequence[tuple[str, str]],
+                 dropped: Sequence[str] = ()) -> None:
         self.preserved = tuple(preserved)
         self.published = tuple(published)
+        self.dropped = tuple(dropped)  # kept versions and sync state set aside unpublished
         published_text = ", ".join(path for path, _ in self.published) or "nothing"
-        super().__init__(f"external edit kept; store version preserved at {', '.join(self.preserved)}; "
-                         f"published: {published_text}")
+        dropped_text = f"; set aside: {', '.join(self.dropped)}" if self.dropped else ""
+        super().__init__(f"external edit kept; store version preserved at {', '.join(self.preserved) or 'nothing'}; "
+                         f"published: {published_text}{dropped_text}")
 
 
 class CommitIncomplete(StoreError):
@@ -176,3 +179,7 @@ class LedgerInvalid(StoreError):
 
 class AuthorityUnavailable(StoreError):
     """The durable authority failed to persist and refuses everything until it is reopened."""
+
+
+class RevisionReferenced(StoreError):
+    """A definition revision cannot be replaced: something on this library may pin it."""

@@ -3,7 +3,7 @@
 **Status:** first slice of [Native File Store And Revisions](roadmap/sprints/native-file-store-and-revisions.md) (Wave 2, #010), implemented as the filesystem adapter `grimoire.store`. It persists **facet-neutral record envelopes** for source-qualified definitions and campaign instances. It never interprets a payload, and it does not decide whether a record is a character, a PC, a creature or an item; that meaning belongs to [Entity Facets (009)](roadmap/sprints/entity-facets-and-instance-model.md), which joins through codecs in Wave 3. There is no application or UI yet. A green test suite proves this contract, not a playable app.
 
 Not in this slice:
-- sync (019) and effective views (022). Events and evidence (020) and image blobs and placements (018) are additive families, documented below ([020](#events-and-evidence-020), [018](#images-and-blobs-018));
+- effective views (022). Device sync (019) is [`grimoire.sync`](SYNC.md); the store extensions it uses are described [below](#synchronization-extensions-019). Events and evidence (020) and image blobs and placements (018) are additive families, documented below ([020](#events-and-evidence-020), [018](#images-and-blobs-018));
 - **Markdown.** The sprint's outcome names "Markdown/JSON" records. By the requester's decision this slice is JSON-only (stdlib, no YAML dependency); a Markdown payload codec is a remaining 010 obligation, re-homed by the requester to its own later pull request.
 
 The security audit, grants and approvals, and player sovereignty are persisted as [authority ledgers](#authority-ledgers-010b) (010b).
@@ -34,6 +34,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   .txn/discard.json                                               # an unfinished discard_journal
   .conflicts/<hash16>/<name>~<digest12>[.N]                       # preserved versions awaiting a human
   .conflicts/discarded-<N>/…                                      # output of discard_journal (first unused N)
+  .sync/device.json, .sync/peers/<device>/{archive,pending}.json # device-local sync bookkeeping (019)
 ```
 
 - **One directory per source segment; a source's own files live under its own `_source/`.** An ID segment can never start with `_`, so `_source` never collides with a sub-source. `world:harbor:dlc` lives at `sources/world/harbor/dlc/_source/`, a *sibling* of harbor's `_source/`.
@@ -46,7 +47,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   - a file name with no room left for `.json` (IDs used as file names are limited to 123 characters);
   - a source ID deeper than 26 segments.
 - **Reserved names for later families**, which the loader skips silently:
-  - at the root: `authority`, `config`, `assets`, `secrets`;
+  - at the root: `authority`, `config`, `assets`, `secrets`, and `kept` (never a folder: it is the authorization namespace of kept versions, so no record root may alias it);
   - inside a campaign: `scenes`, `events`, `evidence`, `holdings`.
 
   `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), and `relations/` since 017 (see relation records). `accepted/` and `wrapups/` (021) are recognised but read only through `campaign_accepted`/`campaign_wrapups` (see accepted events and wrap-ups). `holdings/` (023) is skipped by `load()` and read only by `campaign_holdings` and `read(HoldingsRef)` (see counted holdings).
@@ -55,7 +56,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
 
   These follow the [architecture layout](ARCHITECTURE.md#storage-root-and-provisional-organization) and are a deliberate deviation from an earlier draft that reserved root-level `events`/`evidence`. No root entry is a [V1 marker name](ARCHITECTURE.md#library-location-and-v1-isolation-implemented-grimoirelibrary).
 - **Ignored silently:** OS and editor droppings (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `*~`, `*.swp`, `*.swo`, `.#*`) and directories with no file below them. Empty directories are not state: a failed commit can leave some behind, and nothing can remove them through the file seam. Per-target `.conflicts/<hash16>/` folders accumulate in the same way.
-- **Device-local:** `.txn/` and `.conflicts/` must never be transferred by sync (019/028).
+- **Device-local:** `.txn/`, `.conflicts/` and `.sync/` are never transferred by sync (019/028); `load` ignores them.
 - **Root entries the store does not own** (for example the `worlds/` or `catalogs/` of the [architecture's example tree](ARCHITECTURE.md#storage-root-and-provisional-organization), including a `worlds` link into V1) are reported by `load` and never written, because no store address maps to them.
 
 ## File formats
@@ -87,7 +88,7 @@ All files are JSON: UTF-8 without a BOM, a top-level object, at most 8 MiB.
 | `previous` | store | The etag of the file this write replaced (`null` on create). This is the per-record lineage for 019. |
 | *other keys* | preserved | Unknown authored fields. |
 
-The store retains **definition revisions** (they are immutable through the store) and the `base`/`previous` *identifiers* of instances. It does **not** retain the *content* an instance write replaced; ancestor-content retention for three-way merges belongs to 019/022.
+The store retains **definition revisions** (they are immutable through the store; sync's one exception, `put_exact(replace_unreferenced=True)`, must keep the replaced bytes under `.conflicts` in the same commit) and the `base`/`previous` *identifiers* of instances. It does **not** retain the *content* an instance write replaced; ancestor-content retention for three-way merges belongs to 019/022.
 
 ### Source manifest (`grimoire.source/1`)
 
@@ -317,6 +318,44 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
 12. The journal is removed. Any failure in steps 10–12 raises `CommitIncomplete`, and the on-disk journal then blocks reads and commits until recovery. If staged files vanished before publication (removed by another program), commit also raises `CommitIncomplete` naming the targets that were not written; it never reports success for them.
 
 **Residual race (R7, pinned by a test):** an external edit landing between step 11's per-entry re-hash and its `replace` is overwritten. Multi-file atomicity holds only when no external edit happens concurrently.
+
+## Synchronization extensions (019)
+
+[`grimoire.sync`](SYNC.md) copies another device's file byte for byte and keeps both versions of a conflict. It does so only through these store operations, all of them riding the same journal, preflight, recovery and crash guarantees as `put`:
+
+- **`Transaction.put_exact(path, data, expected, *, replace_unreferenced=False, regenerable=False, allowed_manifests=frozenset())`** stages exact bytes at a canonical definition, manifest, instance, play-scope, chat, relation, knowledge, accepted-event, wrap-up or holdings path (`replica.EXACT_KINDS`; knowledge records are create-only, like revisions). Sync itself copies only the first seven: 021's and 023's families are held back until their merge rules exist ([SYNC](SYNC.md)).
+  - The bytes are validated as the envelope they hold: strict JSON, supported format, address equal to the path, writable values. A failure is `InvalidEnvelope` with a `code`.
+  - They are published **verbatim**: `previous` is not rewritten, so two libraries converge on one etag.
+  - With `regenerable=True` (sync passes it: the bytes still exist on the other device), the entry's journal kind is `replica`, which an abort or an external edit of the target drops instead of preserving. Without it, the bytes are preserved like any `put`.
+  - Definition revisions stay create-only (`ImmutableRevision`). The one exception is `replace_unreferenced`. The store enforces how it is used: the transaction must also `keep_version` exactly the bytes being replaced as a `hold` (`regenerable=False`: it may be the only copy; a reused slot is staged as a guarded no-op, so a hold is always staged), and hold nothing else but sync state, so no write can add a pin that step 6b, which reads the disk, would miss (`InvalidEnvelope` otherwise). In partial mode a replace whose kept copy is denied is dropped with it. Step 6b then refuses with `RevisionReferenced` unless nothing on the library can pin the revision. That covers a manifest head (declared, or implicit: the entity's only revision, which the loader resolves as its head), a link endpoint, text naming it in a manifest's or a link's unknown fields, an instance's `derived_from`, `base` or a pinned payload reference, a pinned reference in another revision's payload, and any text naming it in a scope, chat, relation or knowledge record (payload or unknown top-level fields), across every parsable record including excluded sources. A blocked path that could be or hold a record means "cannot prove"; a blocked entry that cannot hold one does not (including 018's `images/` and `placements/` under a source: they never name a revision). That is decided by what the entry is, not by its name (source ids may hold dots): a regular file that is no record path (`README.md`, `Desktop.ini`, a stray `Notes.json` in a source folder) holds and pins nothing, under `sources/` and `campaigns/` alike; a folder, a link or an entry that cannot be inspected always counts under `sources/`, and under a campaign's own folders; a canonical spelling blocked only because a look-alike shadows it (`shadowed`) is judged by that look-alike. If a staged file of a revision replace vanishes after the commit point (removed by another program), the committing process abandons the whole commit (`WriteConflict`): nothing is published yet, so the replace never lands without the hold of what it replaced. Recovery does the same when the hold's staged file vanished unpublished while another entry is still staged. Manifests whose etag is in `allowed_manifests` are exempt (sync's `resolve` passes the winner's manifest when both devices hold it byte for byte).
+- **`Transaction.keep_version(path, data, slot=None, *, regenerable=False)`** stages a kept version of a canonical record under `.conflicts/<hash16>/<name>~<digest12>[.N]`. With `regenerable=True` (another library still holds the bytes, as for sync) its journal kind is `keep`, dropped on abort; otherwise it is `hold`, preserved like a `put` because it may be the only copy.
+  - A slot already holding those bytes is reused. For a regenerable `keep` nothing is staged; a reused `hold` is staged as a no-op compare-and-swap (old equals new), so the commit re-verifies under the lock that the possibly-only copy is still there and stops with `StaleWrite` if it vanished. Recovery accepts such an entry; any other `keep` or `hold` entry naming an existing file is refused.
+  - A planned `slot` that now holds other bytes is `StaleWrite`. A `slot` must be an int from 0 to `MAX_CONFLICT_ATTEMPTS - 1`, else `InvalidEnvelope`.
+  - If a `hold` must be preserved (an abort), it goes into the next free slot of the same record's folder, never into a nested conflict folder.
+  - It is authorized as `APPLY` on its own address, `kept/<hash16>/<digest12>[-N]/<name>`, never on the record's.
+  - At most one kept version per record per transaction, and only for the record kinds sync copies (`replica.EXACT_KINDS`): recovery accepts only `.json` kept paths, so a blob or 018 record is refused up front (`InvalidEnvelope`).
+  - A `hold` that must be preserved goes into the next free slot of its own folder, so only that folder's slots are path-checked, never a nested conflict name.
+- **`Transaction.put_sync_state(name, data, expected)`** stages `.sync/device.json` or `.sync/peers/<device>/{archive,pending}.json`. This is trusted bookkeeping like the journal: it is not authorized, and a commit of state alone needs no issued handle. It may share a transaction with records, never with ledger batches.
+- **`LibraryStore.scan()`** walks `sources/` and `campaigns/` as `load()` does: a noise-looking name (`desktop.ini`, `x.swp`) is skipped only when it is not a folder or link whose folded spelling is a valid identifier (so a case-renamed `Notes.swp` is still `world:notes.swp`'s look-alike; a link is blocked as `link`), an entry that can be listed but not inspected is `unreadable`, and nothing deeper than any canonical path can be is walked, so every record `load()` reads is scanned, copied and reference-checked A spelling the store never writes but that folds to one (`Campaigns`, `C9`, `Scope.json`, `_Source`) is blocked as a look-alike even when it is the only one (on a case-insensitive filesystem it is the folder), as `load()` reports `name_mismatch`, and then its canonical spelling, the one every reference names, is blocked too (reason `shadowed`), so it is never read as absent; beside its canonical spelling, only the look-alike is blocked. The reference check judges a blocked look-alike by its folded spelling, so pins below it still count.
+- **`LibraryStore.sync_peers()`** lists the names under `.sync/peers/`, read only (`identify` retires each peer's files when a device's ID changes). A folder that exists only as a look-alike (`.sync/Peers`) is `NameCollision`, never "no peers".
+- **`Transaction.check()`** runs steps 1–6 (and 6b) read-only and raises exactly what `commit` would before authorizing. It consumes nothing. With no puts, it checks the library itself: root, V1 isolation, `.txn`, and that `.conflicts` and `.sync` are exactly spelled and not links. A commit checks `.sync` only when it holds sync state and `.conflicts` only when it holds a kept version, so a stray sync folder never blocks an ordinary write. A commit inside `cached_reads()` is refused: its checks would see stale listings.
+- **`Transaction.commit(handle, approvals=None, *, on_denied=None)`**: the *partial mode*. State bytes `on_denied` returns are checked exactly as `put_sync_state` checks them.
+  - Every put is authorized exactly once.
+  - A put denied for its path (`not_granted`, `approval_required`, `reserved_resource`) is dropped before staging.
+  - `on_denied(denied_keys)` may drop more puts (map them to `None`) or replace the bytes of *state* puts. Steps 4–6 then run again on what remains, without authorizing again.
+  - Denials that are not about a path still raise `WriteDenied`: an unissued handle, or `internal_error`.
+  - `CommitResult` lists `denied`, `dropped` and every consumed approval, including those of dropped dependents.
+- **`preview()` keys** are what is approved: a record's logical address, a kept version's `kept/…` address, or a `.sync/…` path.
+- **Journal entry kinds:** `publish` (canonical targets, via `classify`), `replica` (a canonical target holding another library's exact bytes, from `put_exact`), `keep` and `hold` (kept-version slots: regenerable, or possibly the only copy) and `state` (a sync-state file). Recovery validates each target against its kind, and refuses a `keep` or `hold` entry that names an existing file (kept versions are only ever created). A `replica`, `keep` or `state` entry that would be preserved (an abort, or an external edit of its target) is **dropped** instead: its bytes are regenerable, and preserving them would leave copies nobody asked to keep, or nest conflict copies. A live commit whose settlement aborted or dropped anything raises `WriteConflict` (with `dropped`).
+- **Reads:**
+  - `LibraryStore.scan()` returns every canonical file's exact bytes. It also names blocked paths (`link`, `lookalike`, `unreadable`, `malformed`, `unsupported_format`, `address_mismatch`; a directory blocks its subtree) and skipped non-record entries. It never follows a link.
+  - `read_exact(path)` reads a canonical or kept-version file, and `read_sync_state(name)` a `.sync` file. Both return `None` only when the file is absent; a read error propagates (a folder above it that is a file is `NotADirectoryError`), and a look-alike spelling of the file or of a folder above it is `NameCollision`.
+  - `collides(path)` checks for a differently spelled existing entry.
+  - `cached_reads()` reuses directory listings for a read-only phase such as a sync plan.
+
+**R7 narrowed.** For an entry that creates a file, `settle` now re-checks the path and creates the missing directories *before* the per-entry guard read. Only the publish step's own path re-check (a stat, no read of the file) and the `replace` remain between that read and the publish (`backend/tests/test_store_replica.py::test_r7_window_is_only_the_replace_when_a_file_is_created`). An update never creates directories, so a parent deleted while the app was down is not re-created, and a parent that exists only under a look-alike spelling is never shadowed by a second folder: the guard reads the look-alike and the version is preserved.
+
+**Rollback.** A pre-019 build cannot recover an unfinished journal that contains `replica`, `keep`, `hold` or `state` entries (`RecoveryFailed`, unknown kind). Finish recovery with a 019 build, or use `discard_journal`.
 
 ## Recovery
 

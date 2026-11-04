@@ -33,11 +33,16 @@ SOURCES = "sources"
 CAMPAIGNS = "campaigns"
 TXN = ".txn"
 CONFLICTS = ".conflicts"
+SYNC = ".sync"  # device-local sync state (019): never transferred, never loaded as records
 LOCK = "lock"
 JOURNAL = "journal.json"
 DISCARD_MARKER = "discard.json"  # an interrupted discard_journal: never publish, finish the discard
 REPAIR_MARKER = "repair.json"  # an unfinished repair_ledger: the ledger is undefined until it finishes
 LEDGERS = "authority"
+KEPT = "kept"
+SYNC_DEVICE = "device.json"
+SYNC_PEERS = "peers"
+SYNC_PEER_FILES = frozenset({"archive.json", "pending.json"})
 _LEDGER_FILE = re.compile(r"[0-9]{10}\.json")
 SOURCE_DIR = "_source"
 MANIFEST = "manifest.json"
@@ -61,11 +66,13 @@ BLOB_EXTS = tuple(MEDIA)  # the sniffer's formats are the only blob extensions
 _BLOB_NAME = re.compile(rf"(?P<sha>[0-9a-f]{{64}})\.(?P<ext>{'|'.join(map(re.escape, BLOB_EXTS))})")
 HOLDINGS = "holdings"  # campaigns/<id>/holdings/<kind>/<instance_id>.json: counted holdings (023)
 
-ROOT_ENTRIES = frozenset({MARKER, SOURCES, CAMPAIGNS, TXN, CONFLICTS})
-#: Reserved for later record families; the loader skips them. ``events``/``evidence`` belong to
-#: 020 and are read only by ``campaign_knowledge``, and ``holdings`` (023, whose per-holder operation
-#: logs are history too) only by ``campaign_holdings``, so ``load()``'s cost never grows with history.
-RESERVED_ROOTS = frozenset({"authority", "config", "assets", "secrets"})
+ROOT_ENTRIES = frozenset({MARKER, SOURCES, CAMPAIGNS, TXN, CONFLICTS, SYNC})
+#: Reserved for later record families; the loader skips them. ``kept`` is never a folder: it
+#: is the authorization namespace of kept versions (``kept_address``), so no record root may alias it.
+#: ``events``/``evidence`` belong to 020 and are read only by ``campaign_knowledge``, and ``holdings``
+#: (023, whose per-holder operation logs are history too) only by ``campaign_holdings``, so ``load()``'s
+#: cost never grows with history.
+RESERVED_ROOTS = frozenset({"authority", "config", "assets", "secrets", KEPT})
 RESERVED_CAMPAIGN_ENTRIES = frozenset({"scenes", "events", "evidence", HOLDINGS})
 _NOISE = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
 
@@ -343,3 +350,58 @@ def conflict_parts(target: Parts, new_etag: str, attempt: int = 0) -> Parts:
     folder = hashlib.sha256("/".join(target).encode("utf-8")).hexdigest()[:16]
     name = f"{target[-1]}~{new_etag.removeprefix('sha256:')[:12]}"
     return (CONFLICTS, folder, name if not attempt else f"{name}.{attempt}")
+
+
+def kept_address(target: Parts, new_etag: str, attempt: int = 0) -> ResourcePath:
+    """The authorization address of a kept version: one-to-one with its ``conflict_parts`` slot.
+
+    ``kept/<hash16>/<digest12>[-N]/<file name>``: four valid segments, distinct from the record's
+    own address, so "keep these bytes beside p" and "overwrite p" are different approvals.
+    """
+    folder, name = conflict_parts(target, new_etag, attempt)[1:]
+    digest = new_etag.removeprefix("sha256:")[:12]
+    return logical((KEPT, folder, digest if not attempt else f"{digest}-{attempt}", target[-1]))
+
+
+_KEPT_NAME = re.compile(r"(?P<base>.+)~[0-9a-f]{12}(?:\.[1-9][0-9]{0,8})?")
+
+
+def is_kept_target(parts: Parts) -> bool:
+    """A path the store itself could give a kept version: ``.conflicts/<16 hex>/<name>~<12 hex>[.N]``."""
+    parts = tuple(parts)
+    if len(parts) != 3 or parts[0] != CONFLICTS or not re.fullmatch(r"[0-9a-f]{16}", parts[1]):
+        return False
+    found = _KEPT_NAME.fullmatch(parts[2])
+    if found is None or not found["base"].endswith(SUFFIX):
+        return False
+    try:
+        ResourcePath((found["base"],))
+    except InvalidResourcePath:
+        return False
+    return True
+
+
+def sync_state_parts(name: str) -> Parts:
+    """``device.json`` or ``peers/<device>/{archive,pending}.json`` under ``.sync``; refuses anything else."""
+    if name == SYNC_DEVICE:
+        return (SYNC, SYNC_DEVICE)
+    pieces = name.split("/") if isinstance(name, str) else []
+    if len(pieces) == 3 and pieces[0] == SYNC_PEERS and pieces[2] in SYNC_PEER_FILES:
+        try:
+            validate_segment(pieces[1], "device")
+            ResourcePath((pieces[1],))
+        except (ValueError, InvalidResourcePath):
+            pass
+        else:
+            return (SYNC, *pieces)
+    raise ValueError(f"not a sync state name: {name!r}")
+
+
+def is_sync_state(parts: Parts) -> bool:
+    parts = tuple(parts)
+    if not parts or parts[0] != SYNC:
+        return False
+    try:
+        return sync_state_parts("/".join(parts[1:])) == parts
+    except ValueError:
+        return False

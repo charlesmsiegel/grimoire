@@ -1,7 +1,8 @@
 """The commit journal: which staged files a transaction publishes, and whether it aborted.
 
 Replacing ``.txn/journal.json`` is the commit point. Recovery trusts nothing in
-it: targets must be canonical record or manifest paths, temps bare staging
+it: targets must be canonical record or manifest paths (or, by entry kind, a
+kept-version slot or a ``.sync`` state file), temps bare staging
 names in ``.txn/``. Entries are typed so later record families can commit
 other kinds atomically with publication.
 """
@@ -15,13 +16,29 @@ from typing import Literal
 
 from .errors import RecoveryFailed
 from .jsonfmt import JsonError, is_etag, parse_strict, render
-from .layout import Parts, classify
+from .layout import Parts, classify, is_kept_target, is_sync_state
 
 JOURNAL_FORMAT = "grimoire.journal/1"
 STAGING_SUFFIX = ".new"
 _TEMP = re.compile(r"[A-Za-z0-9][A-Za-z0-9_~-]*\.new")
 
 State = Literal["commit", "abort"]
+#: ``publish`` a canonical record; ``replica`` a canonical record holding another library's exact
+#: bytes; ``keep`` a kept copy of another library's version under ``.conflicts``; ``hold`` a kept
+#: version whose bytes exist nowhere else; ``state`` a device-local ``.sync`` file. Replica, keep
+#: and state entries are never preserved: dropped instead (their bytes are regenerable).
+Kind = Literal["publish", "replica", "keep", "hold", "state"]
+KINDS = ("publish", "replica", "keep", "hold", "state")
+#: Entries whose bytes exist elsewhere: dropped, never preserved, when they cannot publish.
+REGENERABLE_KINDS = frozenset({"replica", "keep", "state"})
+
+
+def valid_target(kind: str, target: Parts) -> bool:
+    if kind in ("publish", "replica"):
+        return classify(target) is not None
+    if kind in ("keep", "hold"):
+        return is_kept_target(target)
+    return kind == "state" and is_sync_state(target)
 
 
 @dataclass(frozen=True)
@@ -30,6 +47,7 @@ class Entry:
     temp: str
     old: str | None
     new: str
+    kind: Kind = "publish"
 
 
 @dataclass(frozen=True)
@@ -41,7 +59,7 @@ class Journal:
         return render({
             "format": JOURNAL_FORMAT,
             "state": self.state,
-            "entries": [{"kind": "publish", "target": "/".join(entry.target), "temp": entry.temp,
+            "entries": [{"kind": entry.kind, "target": "/".join(entry.target), "temp": entry.temp,
                          "old": entry.old, "new": entry.new} for entry in self.entries],
         })
 
@@ -71,19 +89,22 @@ def parse(data: bytes) -> Journal:
     for raw in raw_entries:
         if not isinstance(raw, Mapping) or set(raw) != {"kind", "target", "temp", "old", "new"}:
             raise RecoveryFailed("a journal entry has unexpected fields")
-        if raw["kind"] != "publish":
-            raise RecoveryFailed(f"unknown journal entry kind {raw['kind']!r}")
+        kind = raw["kind"]
+        if kind not in KINDS:
+            raise RecoveryFailed(f"unknown journal entry kind {kind!r}")
         target, temp = raw["target"], raw["temp"]
-        found = classify(tuple(target.split("/"))) if type(target) is str else None
-        if found is None:
-            raise RecoveryFailed(f"journal target is not a record path: {target!r}")
-        if found[0] == "knowledge" and raw["old"] is not None:  # create-only: never replace one
+        if type(target) is not str or not valid_target(kind, tuple(target.split("/"))):
+            raise RecoveryFailed(f"journal target is not a {kind} path: {target!r}")
+        found = classify(tuple(target.split("/")))
+        if found is not None and found[0] == "knowledge" and raw["old"] is not None:  # create-only
             raise RecoveryFailed(f"journal would replace a create-only knowledge record: {target!r}")
+        if kind in ("keep", "hold") and raw["old"] not in (None, raw["new"]):  # created, or re-verified unchanged
+            raise RecoveryFailed(f"journal would replace an existing kept version: {target!r}")
         if type(temp) is not str or not is_staging_name(temp):
             raise RecoveryFailed(f"journal temp is not a staging name: {temp!r}")
         if not (raw["old"] is None or is_etag(raw["old"])) or not is_etag(raw["new"]):
             raise RecoveryFailed("journal etags are malformed")
-        entries.append(Entry(tuple(target.split("/")), temp, raw["old"], raw["new"]))
+        entries.append(Entry(tuple(target.split("/")), temp, raw["old"], raw["new"], kind))
     if len({entry.target for entry in entries}) != len(entries) or len({e.temp for e in entries}) != len(entries):
         raise RecoveryFailed("the journal names a target or temp twice")
     return Journal(state, tuple(entries))  # type: ignore[arg-type]

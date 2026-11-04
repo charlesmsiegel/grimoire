@@ -11,12 +11,13 @@ guarded decision table (see ``engine``). See ``docs/STORAGE.md``.
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
 import re
 import stat
 import threading
-from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
@@ -29,7 +30,7 @@ from grimoire.core.index import DefinitionIndex, SourceDescriptor
 from grimoire.library import LibraryPathError, check_write_destination
 from grimoire.security import Permission, ResourcePath
 
-from . import engine, loader
+from . import engine, loader, replica
 from .diskops import DiskOps, FileOps, is_link, lstat_or_none
 from .engine import Access, Settlement
 from .envelope import (
@@ -43,14 +44,15 @@ from .errors import (
     InvalidSourceState, LinkRefused, NameCollision, NotALibrary, LedgerBusy, PendingRecovery, RecordNotFound,
     RecoveryBlocked, RecoveryFailed, StaleWrite, StoreError, UnstorableIdentifier, WriteConflict, WriteDenied,
 )
+from .replica import CanonicalScan
 from .guard import Guard, Limits, RootIdentity
 from .journal import Entry, Journal, is_staging_name
-from .jsonfmt import JsonError, etag, is_etag, parse_strict, render
+from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, render
 from .layout import (
-    ACCEPTED, CAMPAIGNS, CONFLICTS, DISCARD_MARKER, INSTANCES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER, REPAIR_MARKER, TXN, Parts,
-    IMAGES, PLACEMENTS, address_parts, blob_parts, classify, conflict_parts, definition_parts, image_parts,
-    name_key,
-    instance_parts, ledger_folder, WRAPUPS, ledger_name, ledger_parts, ledger_seq, logical, manifest_parts,
+    ACCEPTED, CAMPAIGNS, CONFLICTS, DISCARD_MARKER, IMAGES, INSTANCES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
+    PLACEMENTS, REPAIR_MARKER, SYNC, SYNC_PEERS, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify, conflict_parts,
+    definition_parts, image_parts, instance_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
+    ledger_parts, ledger_seq, logical, manifest_parts, name_key, sync_state_parts,
 )
 from .ledger import Head, Ledger, read_ledger, render_batches
 from .loader import (
@@ -60,6 +62,8 @@ from .loader import (
 from .media import MAX_BLOB_BYTES, ImageBlob
 from .lock import Locker, OsLocker
 
+#: Authorization outcomes that concern one path; a partial commit drops those puts (019).
+_PATH_DENIALS = frozenset({"not_granted", "approval_required", "reserved_resource"})
 DISCARD_FORMAT = "grimoire.discard/1"
 DISCARD_PREFIX = "discard"  # staging names the store gives a marker before it is committed
 REPAIR_FORMAT = "grimoire.repair/1"
@@ -72,18 +76,38 @@ class RecoveryReport:
     preserved: tuple[str, ...] = ()
     incomplete: tuple[str, ...] = ()
     aborted: bool = False
+    dropped: tuple[str, ...] = ()  # kept versions and sync state set aside unpublished
 
     @classmethod
     def of(cls, settlement: Settlement) -> RecoveryReport:
         return cls(tuple(settlement.published), tuple(settlement.preserved), tuple(settlement.incomplete),
-                   settlement.aborted)
+                   settlement.aborted, tuple(settlement.dropped))
 
 
 @dataclass(frozen=True)
 class CommitResult:
-    """The new content revision of every target, by logical path."""
+    """The new content revision of every written target, by preview key.
+
+    A partial commit (``on_denied``) also lists the ``denied`` keys and every approval it
+    consumed, including those of puts it dropped as dependents.
+    """
 
     etags: Mapping[str, str]
+    denied: frozenset[str] = frozenset()
+    consumed_approvals: tuple[str, ...] = ()
+    dropped: frozenset[str] = field(default_factory=frozenset)
+
+
+def _check_state_bytes(data: object) -> None:
+    """Sync state is strict JSON bytes within the file size limit (``put_sync_state`` and ``on_denied``)."""
+    if type(data) is not bytes:
+        raise InvalidEnvelope("sync state must be bytes")
+    try:
+        parse_strict(data)
+    except JsonError as error:
+        raise InvalidEnvelope(f"sync state must be JSON: {error}") from None
+    if len(data) > MAX_FILE_BYTES:
+        raise InvalidEnvelope("sync state exceeds the file size limit")
 
 
 def _absolute(path: str | os.PathLike[str]) -> Path:
@@ -852,6 +876,76 @@ class LibraryStore:
                     found.append("/".join(child))
         return tuple(sorted(found))
 
+    # -- synchronization (019) --------------------------------------------------
+    @contextlib.contextmanager
+    def cached_reads(self) -> Iterator[None]:
+        """Reuse directory listings for a read-only phase of this thread (a sync plan).
+
+        Nothing may be written through this store inside the block; a commit's own compare-and-swap
+        still re-reads every target, so a change made meanwhile by another program is caught there.
+        """
+        with self.lock, self._access.cached_listings():
+            yield
+
+    def scan(self) -> CanonicalScan:
+        """Every canonical record file's exact bytes; blocked and skipped paths are named."""
+        with self.lock:
+            self._require_consistent()
+            return replica.scan(self._access)
+
+    def read_sync_state(self, name: str) -> bytes | None:
+        """The exact bytes of ``.sync/<name>`` (``device.json``, ``peers/<id>/{archive,pending}.json``).
+
+        ``None`` only when the file does not exist; a read error propagates (an unreadable marker
+        must never look like a missing one). A look-alike spelling of the file or of a folder above
+        it (``Pending.json``; on a case-insensitive filesystem it *is* the file) is ``NameCollision``.
+        """
+        parts = sync_state_parts(name)
+        with self.lock:
+            self._require_consistent()
+            for depth in range(1, len(parts) + 1):
+                if self._access.presence(parts[:depth]) == "mismatch":
+                    raise NameCollision(f"{'/'.join(parts[:depth])} exists only under another spelling")
+            for depth in range(1, len(parts)):  # a damaged folder (a file there) is unreadable, never absent
+                info = lstat_or_none(self._access.path(parts[:depth]))
+                if info is not None and not stat.S_ISDIR(info.st_mode) and not is_link(self._access.path(parts[:depth])):
+                    raise NotADirectoryError(errno.ENOTDIR, f"{'/'.join(parts[:depth])} is not a folder")
+            return self._access.read(parts)
+
+    def sync_peers(self) -> tuple[str, ...]:
+        """The names under ``.sync/peers/`` (sync, 019), sorted; empty when there is none.
+
+        Only names are returned; ``read_sync_state`` decides whether each holds valid state.
+        """
+        with self.lock:
+            self._require_consistent()
+            presence = self._access.presence((SYNC, SYNC_PEERS))
+            if presence == "mismatch":  # on a case-insensitive filesystem it *is* the folder
+                raise NameCollision(f"{SYNC}/{SYNC_PEERS} exists only under another spelling")
+            if presence != "present":
+                return ()
+            return tuple(sorted(self._access.list_dir((SYNC, SYNC_PEERS))))
+
+    def read_exact(self, path: str) -> bytes | None:
+        """The exact bytes of a canonical record or kept-version file, or ``None`` when it is absent;
+        never through a link. A look-alike spelling of it or of a folder above it is ``NameCollision``."""
+        parts = tuple(path.split("/"))
+        found = classify(parts)
+        if (found is None or found[0] == "ledger") and not is_kept_target(parts):
+            raise ValueError(f"{path} is not a canonical record or kept-version path")
+        with self.lock:
+            self._require_consistent()
+            data = self._access.read(parts)
+            if data is None and self._access.presence(parts) == "mismatch":
+                raise NameCollision(f"{path} exists only under another spelling")
+            return data
+
+    def collides(self, path: str) -> bool:
+        """Whether ``path`` (or a missing ancestor) would collide with a differently spelled entry."""
+        with self.lock:
+            self._require_consistent()
+            return self._access.presence(tuple(path.split("/"))) == "mismatch"
+
     # -- writing -----------------------------------------------------------------
     def transaction(self) -> Transaction:
         self._require_open()
@@ -891,14 +985,29 @@ def _scan_verdict(scan: loader.SourceScan) -> str | None:
 @dataclass(frozen=True)
 class _Put:
     parts: Parts
-    address: ResourcePath
+    address: ResourcePath | None  # what is authorized; None for trusted ledger batches and sync state
     data: bytes
     expected: str | None
-    envelope: RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord | AssetRecord | ImageBlob | None  # None: a ledger batch
+    #: records only; None for ledger batches, kept versions and sync state
+    envelope: RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord | AssetRecord | ImageBlob | None
+    kind: str = "record"  # record | ledger | keep (a kept version) | state (``.sync``)
+    key: str = ""  # the preview / approval / result key
+    replace_unreferenced: bool = False
+    regenerable: bool = False  # exact bytes another library still holds: dropped, never preserved
+    allowed: frozenset[str] = frozenset()  # manifest etags whose references a replace may ignore
+    record: Parts = ()  # a kept version: the record it keeps a version of
 
     @property
     def ledger(self) -> bool:
-        return self.envelope is None
+        return self.kind == "ledger"
+
+    @property
+    def journal_kind(self) -> str:
+        if self.kind == "record" and self.regenerable:
+            return "replica"
+        if self.kind == "keep":
+            return "keep" if self.regenerable else "hold"
+        return {"state": "state"}.get(self.kind, "publish")
 
 
 class LedgerWriter:
@@ -931,7 +1040,7 @@ class LedgerWriter:
                 found = classify(parts)
                 if found is None or found[0] != "ledger" or found[1][0] != self.name:
                     raise StoreError(f"{'/'.join(parts)} is not a batch of ledger {self.name}")
-                puts.append(_Put(parts, logical(parts), data, None, None))
+                puts.append(_Put(parts, logical(parts), data, None, None, "ledger", str(logical(parts))))
             _Commit(store, tuple(puts), None, {}).run()
             self.head = (int(puts[-1].parts[-1][:10]), etag(puts[-1].data))
             return self.head
@@ -955,6 +1064,8 @@ class Transaction:
     def __init__(self, store: LibraryStore) -> None:
         self._store = store
         self._puts: dict[Parts, _Put] = {}
+        self._kept: dict[Parts, str] = {}  # record -> the bytes kept beside it (staged or already there)
+        self._keys: set[str] = set()  # preview keys staged so far
         self._committed = False
 
     def put(self, envelope: RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord | AssetRecord | ImageBlob,
@@ -1003,29 +1114,191 @@ class Transaction:
             raise InvalidEnvelope(f"{'/'.join(parts)} is written twice in one transaction")
         address = logical(parts)
         data = envelope.data if isinstance(envelope, ImageBlob) else render(document)  # type: ignore[arg-type]
-        self._puts[parts] = _Put(parts, address, data, expected, envelope)
+        self._add(_Put(parts, address, data, expected, envelope, "record", str(address)))
         return str(address)
 
-    def preview(self) -> dict[str, bytes]:
-        """The exact bytes each target will hold, keyed by logical path: what a human approves."""
-        return {str(put.address): put.data for put in self._puts.values()}
+    def _add(self, put: _Put) -> None:
+        if self._committed:
+            raise StoreError("this transaction was already committed")
+        if put.parts in self._puts:
+            raise InvalidEnvelope(f"{'/'.join(put.parts)} is written twice in one transaction")
+        if put.key in self._keys:
+            raise InvalidEnvelope(f"{put.key} is written twice in one transaction")
+        self._puts[put.parts] = put
+        self._keys.add(put.key)
 
-    def commit(self, handle: object, approvals: Mapping[str, str] | None = None) -> CommitResult:
+    def put_exact(self, path: str, data: bytes, expected: str | None, *,
+                  replace_unreferenced: bool = False, regenerable: bool = False,
+                  allowed_manifests: frozenset[str] = frozenset()) -> str:
+        """Stage another library's exact bytes at canonical ``path`` (sync, 019).
+
+        The bytes are validated as ``put`` would validate the envelope they hold (strict JSON,
+        supported format, address equal to the path) and published verbatim, so two libraries
+        converge on one etag. With ``regenerable`` (the bytes still exist in another library, as for
+        sync), an aborted commit or an external edit of the target drops them rather than
+        preserving them under ``.conflicts`` (journal kind ``replica``); without it they are
+        preserved like any ``put``. A definition revision is create-only unless
+        ``replace_unreferenced``: then ``expected`` must be its current etag, and the commit
+        refuses (``RevisionReferenced``) unless nothing on this library can pin it; references in
+        manifests whose etag is in ``allowed_manifests`` are accepted (resolve: identical manifests).
+        """
+        if expected is not None and not is_etag(expected):
+            raise InvalidEnvelope("expected must be None or an etag")
+        if type(path) is not str:
+            raise InvalidEnvelope("path must be text")
+        parts = tuple(path.split("/"))
+        envelope = replica.parse_exact(parts, data)
+        if isinstance(envelope, KnowledgeRecord):
+            if expected is not None or replace_unreferenced:
+                raise ImmutableRevision(f"{envelope.address} is create-only; correct it by appending")
+        elif isinstance(envelope, RecordEnvelope) and envelope.is_definition:
+            if replace_unreferenced and expected is None:
+                raise InvalidEnvelope("replacing a revision needs its current etag")
+            if expected is not None and not replace_unreferenced:
+                raise ImmutableRevision(f"{envelope.address} exists; add a new revision and move the head")
+        elif replace_unreferenced:
+            raise InvalidEnvelope("only a definition revision is replaced as unreferenced")
+        address = logical(parts)
+        self._add(_Put(parts, address, bytes(data), expected, envelope, "record", str(address),
+                       replace_unreferenced, regenerable=regenerable,
+                       allowed=frozenset(allowed_manifests) if replace_unreferenced else frozenset()))
+        return str(address)
+
+    def keep_version(self, path: str, data: bytes, slot: int | None = None, *, regenerable: bool = False) -> str:
+        """Stage ``data`` as a kept version of canonical ``path`` under ``.conflicts``; returns its path.
+
+        With ``slot=None`` the first slot that is absent or already holds these bytes is used (a
+        reused slot stages nothing). A planned ``slot`` holding other bytes is ``StaleWrite``.
+        Authorized as ``APPLY`` on its own ``kept/...`` address, never the record's. With
+        ``regenerable`` (another library still holds these bytes, as for sync) an aborted commit
+        drops the kept version (journal kind ``keep``); without it, it is preserved like a
+        ``put`` (``hold``), because it may be the only copy (``resolve``'s replaced version).
+        """
+        if type(path) is not str:
+            raise InvalidEnvelope("path must be text")
+        parts = tuple(path.split("/"))
+        found = classify(parts)
+        if found is None or found[0] not in replica.EXACT_KINDS:  # recovery accepts only these kept paths
+            raise InvalidEnvelope(f"{path} is not a record that can have kept versions")
+        if type(data) is not bytes or len(data) > MAX_FILE_BYTES:
+            raise InvalidEnvelope("a kept version is bytes within the file size limit")
+        try:
+            parse_strict(data)
+        except JsonError as error:
+            raise InvalidEnvelope(f"a kept version must be readable JSON: {error}") from None
+        if slot is not None and (type(slot) is not int or not 0 <= slot < engine.MAX_CONFLICT_ATTEMPTS):
+            raise InvalidEnvelope(f"a kept-version slot is an int from 0 to {engine.MAX_CONFLICT_ATTEMPTS - 1}")
+        if parts in self._kept:
+            raise InvalidEnvelope(f"{path} already has a kept version in this transaction")
+        tag, access = etag(data), self._store._access
+        attempts = range(engine.MAX_CONFLICT_ATTEMPTS) if slot is None else (slot,)
+        for attempt in attempts:
+            target = conflict_parts(parts, tag, attempt)
+            current = access.etag_of(target)
+            if current == tag:
+                self._kept[parts] = tag
+                if not regenerable:  # possibly the only copy: re-verify the reused slot at commit (a no-op CAS)
+                    address = kept_address(parts, tag, attempt)
+                    self._add(_Put(target, address, bytes(data), tag, None, "keep", str(address),
+                                   regenerable=False, record=parts))
+                return "/".join(target)  # already kept
+            if current is None:
+                address = kept_address(parts, tag, attempt)
+                self._add(_Put(target, address, bytes(data), None, None, "keep", str(address),
+                               regenerable=regenerable, record=parts))
+                self._kept[parts] = tag
+                return "/".join(target)
+            if slot is not None:
+                raise StaleWrite([("/".join(target), "changed")])
+        raise StoreError(f"no free kept-version slot for {path}")
+
+    def put_sync_state(self, name: str, data: bytes, expected: str | None) -> str:
+        """Stage a device-local ``.sync`` file (trusted bookkeeping: not authorized)."""
+        if expected is not None and not is_etag(expected):
+            raise InvalidEnvelope("expected must be None or an etag")
+        parts = sync_state_parts(name)
+        _check_state_bytes(data)
+        key = "/".join(parts)
+        self._add(_Put(parts, None, bytes(data), expected, None, "state", key))
+        return key
+
+    def preview(self) -> dict[str, bytes]:
+        """The exact bytes each target will hold, keyed by what is approved: a record's logical
+        address, a kept version's ``kept/...`` address, or a ``.sync/...`` path (not authorized)."""
+        return {put.key: put.data for put in self._puts.values()}
+
+    def check(self) -> None:
+        """Run commit steps 1-6 read-only; raises what ``commit`` would raise before authorizing.
+
+        Consumes no approval and writes nothing. With no puts it checks the library itself
+        (root, V1, ``.txn``, ``.conflicts`` and ``.sync``).
+        """
+        store = self._store
+        store._require_open()
+        if not store._writable:
+            raise StoreError("the library was opened read-only")
+        with store.lock:
+            puts = tuple(self._puts.values())
+            self._check_replaces(puts)
+            if any(put.kind != "state" for put in puts) or not puts:
+                self._require_writable_records(None, check_handle=False)
+            _Commit(store, puts, None, {}).preflight()
+
+    def _require_writable_records(self, handle: object, *, check_handle: bool = True) -> None:
+        store = self._store
+        authority = store._authority
+        if check_handle and authority is not None and not authority.issued(handle):  # type: ignore[attr-defined]
+            raise WriteDenied("the handle was not issued by this library's authority; nothing was written",
+                              (), ())
+        if authority is None and store._access.presence(ledger_parts("security", 1)) != "absent":
+            raise StoreError("this library has a security ledger: open its durable authority before writing")
+
+    def _check_replaces(self, puts: tuple[_Put, ...]) -> None:
+        """A revision replace commits alone with the kept copy of the bytes it replaces.
+
+        Its kept version may be the only copy left anywhere, so the store enforces the pairing
+        rather than trusting the caller; and since step 6b checks references on disk only, no
+        other write may add a pin in the same transaction.
+        """
+        replaces = [put for put in puts if put.replace_unreferenced]
+        if not replaces:
+            return
+        first = replaces[0]
+        if len(replaces) > 1 or any(put is not first and put.record != first.parts and put.kind != "state"
+                                    for put in puts):  # sync bookkeeping can pin nothing
+            raise InvalidEnvelope("a revision replace is committed alone, with only its kept version and sync state")
+        if self._kept.get(first.parts) != first.expected:
+            raise InvalidEnvelope(f"replacing {'/'.join(first.parts)} needs its current bytes kept in the same "
+                                  "transaction (keep_version)")
+        if not any(put.record == first.parts and not put.regenerable for put in puts):  # may be the only copy
+            raise InvalidEnvelope(f"the kept copy of {'/'.join(first.parts)} must be a hold (regenerable=False)")
+
+    def commit(self, handle: object, approvals: Mapping[str, str] | None = None, *,
+               on_denied: Callable[[frozenset[str]], Mapping[str, bytes | None]] | None = None) -> CommitResult:
+        """Commit every put, or none.
+
+        With ``on_denied`` (partial mode, 019) each put is still authorized exactly once, but a
+        put denied for its path (not granted, approval required, reserved) is dropped instead
+        of failing the commit. ``on_denied(denied_keys)`` may drop more puts (``None``) or replace
+        the bytes of state puts; steps 4-6 then run again on what remains. Denials that are not
+        about a path (an unissued handle, an unavailable authority) still raise ``WriteDenied``.
+        """
         if self._committed:
             raise StoreError("this transaction was already committed")
         if not self._puts:
             raise InvalidEnvelope("nothing to commit")
         store = self._store
         with store.lock:  # the binding cannot change between these checks and the commit
-            authority = store._authority
-            if authority is not None and not authority.issued(handle):  # type: ignore[attr-defined]
-                raise WriteDenied("the handle was not issued by this library's authority; nothing was written",
-                                  (), ())
-            if authority is None and store._access.presence(ledger_parts("security", 1)) != "absent":
-                raise StoreError("this library has a security ledger: open its durable authority before writing")
+            if store._access._listings is not None:
+                raise StoreError("a commit cannot run inside a read-only phase (cached_reads): its checks would "
+                                 "see stale listings")
+            puts = tuple(self._puts.values())
+            self._check_replaces(puts)
+            if any(put.kind != "state" for put in puts):  # sync state alone is trusted bookkeeping
+                self._require_writable_records(handle)
             self._committed = True
             try:
-                return _Commit(store, tuple(self._puts.values()), handle, dict(approvals or {})).run()
+                return _Commit(store, puts, handle, dict(approvals or {}), on_denied).run()
             finally:
                 store.generation += 1  # a commit may change admission: callers' facts expire
                 store._pass_facts = None
@@ -1033,13 +1306,46 @@ class Transaction:
 
 class _Commit:
     def __init__(self, store: LibraryStore, puts: tuple[_Put, ...], handle: object,
-                 approvals: dict[str, str]) -> None:
+                 approvals: dict[str, str],
+                 on_denied: Callable[[frozenset[str]], Mapping[str, bytes | None]] | None = None) -> None:
         self.store = store
         self.access: Access = store._access
         self.puts = puts
         self.handle = handle
         self.approvals = approvals
+        self.on_denied = on_denied
         self.consumed: list[str] = []
+        self.denied: frozenset[str] = frozenset()
+        self.dropped: frozenset[str] = frozenset()
+
+    def preflight(self) -> int:
+        """Steps 1-6 (and 6b): everything decidable before authorization; reads only."""
+        self.store._require_consistent()                 # 1. no pending journal
+        with self.access.cached_listings():
+            staging = self._check_paths()                 # 3. root, links, V1, preflight
+            self._check_local_roots()
+            self._check_revisions()                       # 4. compare-and-swap
+            self._check_names()                           # 5. collisions
+            if not any(put.ledger for put in self.puts):
+                self._check_sources()                     # 6. loader-consistent sources
+        return staging
+
+    def _check_local_roots(self) -> None:
+        """``.conflicts`` / ``.sync`` are spelled exactly and are not links, where this commit needs them.
+
+        A transaction with no puts checks both (the library check); otherwise ``.sync`` only for
+        sync-state puts and ``.conflicts`` only for kept versions, so a stray sync folder never
+        blocks an ordinary write.
+        """
+        names = []
+        if not self.puts or any(put.kind == "state" for put in self.puts):
+            names.append(SYNC)
+        if not self.puts or any(put.kind == "keep" for put in self.puts):
+            names.append(CONFLICTS)
+        for name in names:
+            if self.access.presence((name,)) == "mismatch":
+                raise NameCollision(f"{name} collides with a differently spelled folder")
+            self.access.guard.check_read((name,))
 
     def run(self) -> CommitResult:
         with self.store.lock:
@@ -1053,18 +1359,21 @@ class _Commit:
                 self.store._staging = outer
 
     def _run(self, ledger: bool) -> CommitResult:
-        self.store._require_consistent()                 # 1. no pending journal
-        with self.access.cached_listings():               # steps 3-6 only read
-            staging = self._check_paths()                 # 3. root, links, V1, preflight
-            self._check_revisions()                       # 4. compare-and-swap
-            self._check_names()                           # 5. collisions
-            if not ledger:
-                self._check_sources()                     # 6. loader-consistent sources
+        staging = self.preflight()                        # 1-6, read only
         if not ledger:                                    # 7. authorization (ledgers: trusted)
             authority = self.store._authority
             scope = authority.consequential_scope() if authority is not None else contextlib.nullcontext()
             with scope:  # type: ignore[attr-defined]
-                self._authorize()
+                denied = self._authorize()
+            if denied:
+                self._prune(denied)
+                if not self.puts:
+                    return self._result()
+                try:
+                    staging = self.preflight()            # 4-6 again on what remains; never re-authorized
+                except BaseException as error:
+                    self._note(error)
+                    raise
         self.store._staging = True                        # nested ledger commits are refused from here
         entries = self._stage(staging)                    # 8. directories and temps
         journal = Journal("commit", entries)
@@ -1074,12 +1383,51 @@ class _Commit:
             settlement = engine.settle(self.access, journal, live=True)  # 10-12
         except (OSError, StoreError, ValueError) as error:
             raise CommitIncomplete(f"failed after the commit point; recovery will finish it: {error}") from error
-        if settlement.preserved:
-            raise WriteConflict(settlement.preserved, settlement.published)
+        if settlement.preserved or settlement.dropped or settlement.aborted:
+            raise WriteConflict(settlement.preserved, settlement.published, settlement.dropped)
         if settlement.incomplete:
             raise CommitIncomplete("staged files vanished before publication (removed by another program?); "
                                    f"not written: {', '.join(settlement.incomplete)}")
-        return CommitResult(MappingProxyType({str(put.address): etag(put.data) for put in self.puts}))
+        return self._result()
+
+    def _result(self) -> CommitResult:
+        return CommitResult(MappingProxyType({put.key: etag(put.data) for put in self.puts}),
+                            self.denied, tuple(self.consumed), self.dropped)
+
+    def _prune(self, denied: list[int]) -> None:
+        """Partial mode: drop the denied puts and whatever the caller says depends on them."""
+        assert self.on_denied is not None
+        denied = set(denied)  # membership below is per put
+        keys = frozenset(self.puts[index].key for index in denied)
+        try:
+            changes = dict(self.on_denied(keys))
+        except BaseException as error:
+            self._note(error)
+            raise
+        known = {put.key for put in self.puts}
+        if not set(changes) <= known:
+            raise InvalidEnvelope(f"on_denied named unknown puts: {sorted(set(changes) - known)}")
+        remaining, dropped = [], set(keys)
+        for index, put in enumerate(self.puts):
+            if index in denied:
+                continue
+            if put.key in changes:
+                data = changes[put.key]
+                if data is None:
+                    dropped.add(put.key)
+                    continue
+                if put.kind != "state":
+                    raise InvalidEnvelope("on_denied may replace the bytes of sync state only")
+                _check_state_bytes(bytes(data))  # exactly what put_sync_state would accept
+                put = replace(put, data=bytes(data))
+            remaining.append(put)
+        held = {put.record for put in remaining if put.kind == "keep"}
+        staged = {put.record for put in self.puts if put.kind == "keep"}
+        for put in list(remaining):  # a replace never outlives the kept copy of what it replaces
+            if put.replace_unreferenced and put.parts in staged and put.parts not in held:
+                remaining.remove(put)
+                dropped.add(put.key)
+        self.puts, self.denied, self.dropped = tuple(remaining), keys, frozenset(dropped - keys)
 
     def _check_paths(self) -> int:
         guard = self.access.guard
@@ -1091,7 +1439,8 @@ class _Commit:
         guard.check_write((TXN, "x.new"), staging_device=None)
         for put in self.puts:
             guard.check_write(put.parts, staging_device=staging.st_dev)
-            guard.check_write(conflict_parts(put.parts, etag(put.data)), staging_device=staging.st_dev)
+            if put.journal_kind == "publish":  # replicas, keeps and state are dropped; a hold takes its own slots
+                guard.check_write(conflict_parts(put.parts, etag(put.data)), staging_device=staging.st_dev)
         return staging.st_dev
 
     def _check_revisions(self) -> None:
@@ -1102,7 +1451,7 @@ class _Commit:
             if current != put.expected:
                 stale.append(("/".join(put.parts), "exists" if put.expected is None else
                               "absent" if current is None else "changed"))
-            elif data is not None and not put.ledger and _unsupported(data, put.envelope):
+            elif data is not None and put.kind == "record" and _unsupported(data, put.envelope):
                 stale.append(("/".join(put.parts), "unsupported_format"))
         if stale:
             raise StaleWrite(stale)
@@ -1111,12 +1460,19 @@ class _Commit:
         for put in self.puts:
             if self.access.presence(put.parts) == "mismatch":
                 raise NameCollision(f"{'/'.join(put.parts)} collides with a differently spelled existing entry")
-            self.access.check_conflict_folder(conflict_parts(put.parts, etag(put.data)))
+            if put.journal_kind == "publish":  # a hold is preserved into its own folder's next slot
+                self.access.check_conflict_folder(conflict_parts(put.parts, etag(put.data)))
 
     def _check_sources(self) -> None:
         touched: dict[str, tuple[SourceManifest | None, list[SourceRef]]] = {}
         art: set[str] = set()  # sources receiving images or placements
         for put in self.puts:
+            if put.kind != "record":
+                continue
+            if put.replace_unreferenced:  # 6b: nothing on this library may pin the replaced revision
+                ref = put.envelope.address  # type: ignore[union-attr]
+                assert isinstance(ref, SourceRef)
+                replica.check_unreferenced(self.access, ref, allowed=put.allowed)
             if isinstance(put.envelope, SourceManifest):
                 entry = touched.setdefault(put.envelope.source, (None, []))
                 touched[put.envelope.source] = (put.envelope, entry[1])
@@ -1163,9 +1519,12 @@ class _Commit:
         if not loader.campaign_exists(self.access, campaign):
             raise InvalidSourceState(f"campaign {campaign} does not exist: create its scope or an instance first")
 
-    def _authorize(self) -> None:
-        decisions, denied = [], []
-        for put in self.puts:
+    def _authorize(self) -> list[int]:
+        """Authorize every put once; the positions denied in partial mode (else raise)."""
+        decisions, denied, positions, partial = [], [], [], self.on_denied is not None
+        for index, put in enumerate(self.puts):
+            if put.address is None:  # sync state: trusted bookkeeping, like the journal
+                continue
             text = str(put.address)
             decision = self.handle.authorize(Permission.APPLY, text, payload=put.data,  # type: ignore[attr-defined]
                                              approval_id=self.approvals.get(text))
@@ -1174,15 +1533,21 @@ class _Commit:
                 self.consumed.append(decision.approval_id)
             if not getattr(decision, "allowed", False) or decision.resource != put.address:
                 denied.append(text)
-        if denied:
+                positions.append(index)
+                if str(getattr(decision, "reason", "")) not in _PATH_DENIALS:
+                    partial = False  # not about this path: never drop silently
+        if denied and not partial:
             unavailable = any(getattr(d, "reason", None) == "internal_error" for d in decisions)
             why = "the authority is unavailable (reopen it)" if unavailable else "not authorized"
             raise WriteDenied(f"{why} to write {', '.join(denied)}; nothing was written",
                               decisions, self.consumed)
+        return positions
 
     def _note(self, error: BaseException) -> None:
         if self.consumed:
             error.add_note(f"approvals consumed without a write: {', '.join(self.consumed)}")
+            if not hasattr(error, "consumed_approvals"):
+                error.consumed_approvals = tuple(self.consumed)  # type: ignore[attr-defined]
 
     def _recheck(self, staging: int) -> None:
         """Repeat the point-in-time checks just before a phase that mutates (authorization or
@@ -1202,7 +1567,8 @@ class _Commit:
                 temp = access.ops.make_temp(access.path((TXN,)), prefix="rec", suffix=".new")
                 temps.append(temp)
                 access.ops.write_bytes(temp, put.data)
-                entries.append(Entry(put.parts, os.path.basename(temp), put.expected, etag(put.data)))
+                entries.append(Entry(put.parts, os.path.basename(temp), put.expected, etag(put.data),
+                                     put.journal_kind))  # type: ignore[arg-type]
             return tuple(entries)
         except OSError as error:
             self._discard(temps)

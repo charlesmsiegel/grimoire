@@ -192,6 +192,8 @@ class RootedFileOps:
         record: bool = True,
     ) -> None:
         self.root = os.path.realpath(os.fspath(root))
+        self._root_case = os.path.normcase(self.root)
+        self._root_prefix = self._root_case if self._root_case.endswith(os.sep) else self._root_case + os.sep
         if not os.path.isdir(self.root):
             raise ValueError(f"test root is not a directory: {self.root}")
         self.phase = phase
@@ -209,6 +211,8 @@ class RootedFileOps:
         self.crash_index: int | None = None  # the fired Crash or Fail
         self.fault_timing: str | None = None
         self.interleaved_paths: set[str] = set()
+        #: What the interleaves left at the paths they changed (a removed path has no key).
+        self.interleaved: dict[str, bytes | None] = {}
         self.mediation_gap: str | None = None  # shadow vs disk mismatch seen before an interleave
         self.interleave_error: BaseException | None = None
         self._fired = [False] * len(self.plan)
@@ -239,10 +243,18 @@ class RootedFileOps:
             self._sandbox(f"path escapes test root: {os.fspath(path)!r}")
         if mutating and not allow_root and os.path.normcase(normalized) == os.path.normcase(self.root):
             self._sandbox("refusing to mutate the test root itself")
-        # The normalized path is what executes; the raw walk also catches ``link/../x``.
-        for spelling in (normalized, raw):
+        # The normalized path is what executes: walk its components below the root. The raw
+        # spelling, when it differs, is walked too, which also catches ``link/../x``.
+        below = normalized[len(self.root):] if self._inside(normalized, strict=True) else ""
+        prefix = self.root
+        for part in below.split(os.sep):
+            if part:
+                prefix = os.path.join(prefix, part)
+                if is_link(prefix):
+                    self._sandbox(f"link inside test root: {self._rel(prefix)}")
+        if raw != normalized:
             prefix = ""
-            for part in PurePath(spelling).parts:
+            for part in PurePath(raw).parts:
                 prefix = os.path.join(prefix, part) if prefix else part
                 candidate = os.path.normpath(prefix)
                 if self._inside(candidate, strict=True) and is_link(prefix):
@@ -250,12 +262,11 @@ class RootedFileOps:
         return normalized
 
     def _inside(self, path: str, *, strict: bool = False) -> bool:
-        root, path = os.path.normcase(self.root), os.path.normcase(path)
-        try:
-            common = os.path.commonpath([root, path])
-        except ValueError:  # different drives
-            return False
-        return common == root and not (strict and path == root)
+        """``path`` (normalized, absolute) is the root or below it; ``strict`` excludes the root."""
+        path = os.path.normcase(path)
+        if path == self._root_case:
+            return not strict
+        return path.startswith(self._root_prefix)
 
     def _sandbox(self, message: str) -> None:
         if self.sandbox_violation is None:
@@ -263,6 +274,8 @@ class RootedFileOps:
         raise SandboxViolation(message)
 
     def _rel(self, absolute: str) -> str:
+        if os.path.normcase(absolute).startswith(self._root_prefix):  # the common case: a plain slice
+            return absolute[len(self._root_prefix):].replace(os.sep, "/")
         return Path(os.path.relpath(absolute, self.root)).as_posix()
 
     # -- the operation pipeline ---------------------------------------
@@ -305,8 +318,10 @@ class RootedFileOps:
                 for key in changed:
                     if key in after:
                         self.shadow[key] = after[key]
+                        self.interleaved[key] = after[key]
                     else:
                         self.shadow.pop(key, None)
+                        self.interleaved.pop(key, None)
                 self.interleaved_paths |= changed
         if fatal is not None:
             self.crash_index = op.index
