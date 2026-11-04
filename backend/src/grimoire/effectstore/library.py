@@ -26,7 +26,8 @@ from grimoire.effects import (
     ACCEPTED_SCHEMA, WRAPUP_SCHEMA, AcceptedEvent, AcceptedOperation, EffectCodecError, EffectError, EffectProblem,
     EffectProposal, EndorsementRecord, EndStep, Receipt, Revocation, SceneWrapUp, Skipped, accepted_from_payload,
     accepted_to_payload, accepted_token, authorize, check_citations, ledger_problems, orphans, plan,
-    edited_effects, partial_revocations, receipt_failure, revocation_fingerprint, revoked_token, verify_receipts, wrapup_from_payload,
+    edited_effects, partial_revocations, receipt_failure, revocation_fingerprint, revoked_token, verify_receipts,
+    wrapup_from_payload,
     wrapup_id, wrapup_problems,
     wrapup_to_payload,
 )
@@ -134,6 +135,7 @@ class EffectChange:
     duplicate_of: AcceptedRef | None = None
     checks_relations: bool = False  # an acceptance: its preconditions need every relation file readable
     agent_etags: Mapping = field(default_factory=dict)  # an acceptance: each agent's instance file as checked
+    rechecks_readability: bool = False  # a revocation: every relation file must still be readable at commit
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -161,13 +163,14 @@ class EffectChange:
             found.append((f"campaigns/{self.campaign_id}/accepted", "accepted events changed"))
         if self.chat is not None and not self.library._chat_exists(self.chat):
             found.append(("/".join(address_parts(self.chat)), "chat missing"))
-        if self.checks_relations and unreadable:
+        if (self.checks_relations or self.rechecks_readability) and unreadable:
             found.append((f"campaigns/{self.campaign_id}/relations", "a relation file cannot be read"))
         for agent, etag in self.agent_etags.items():  # a replaced file may be a different individual
             if self.library._etag(agent) != etag:
                 found.append(("/".join(address_parts(agent)), "agent missing or changed"))
-        if self.checks_relations and not self.library._absent(KnowledgeRef(self.campaign_id, "event", self.ref.event_id)):  # type: ignore[union-attr]
-            found.append((f"campaigns/{self.campaign_id}/events/{self.ref.event_id}.json",  # type: ignore[union-attr]
+        event_id = getattr(self.ref, "event_id", None)
+        if self.checks_relations and not self.library._absent(KnowledgeRef(self.campaign_id, "event", event_id)):
+            found.append((f"campaigns/{self.campaign_id}/events/{event_id}.json",
                           "a 020 event took this id"))
         return found
 
@@ -257,7 +260,8 @@ class TurnEffectsLibrary:
         active = sorted((e for e in events if e.active and e.moment.sequence <= as_of),
                         key=lambda e: (e.moment.sequence, e.ordinal, e.event_id))
         revoked = sorted((e for e in events if not e.active), key=lambda e: (e.ordinal, e.event_id))
-        wrapups = tuple(snap.wrapups[ref] for ref in sorted(snap.wrapups, key=str))
+        wrapups = tuple(snap.wrapups[ref] for ref in sorted(snap.wrapups, key=str)  # never narration from after as_of
+                        if snap.wrapups[ref].through.sequence <= as_of)
         return Continuity(campaign_id, as_of, tuple(active), tuple(revoked), wrapups, snap.graph,
                           tuple(sorted(set(problems), key=EffectProblem.sort_key)), snap.store_problems)
 
@@ -277,6 +281,9 @@ class TurnEffectsLibrary:
                 raise InvalidEffect(f"{proposal.chat} does not exist", "missing_chat")
             snap = self._snapshot(campaign)
             self._require_trustworthy(snap)
+            if _relations_unreadable(snap.graph):  # before the duplicate check, so damage is named, never a mismatch
+                raise InvalidEffect("a relation file cannot be read, so preconditions cannot be checked",
+                                    "undecodable_relation")
             wanted = proposal.fingerprint
             for event in snap.active():
                 # A duplicate writes nothing, so it needs no keys: a retry after control changed hands, or with a
@@ -292,9 +299,6 @@ class TurnEffectsLibrary:
             except EffectError as error:
                 raise _refused(error) from None
             records = self._check_endorsements(authorization.endorsers, endorsements, proposal.fingerprint)
-            if _relations_unreadable(snap.graph):
-                raise InvalidEffect("a relation file cannot be read, so preconditions cannot be checked",
-                                    "undecodable_relation")
             turn = (proposal.chat, proposal.moment.scene_id, proposal.moment.turn_id)
             same_turn = [e.event_id for e in snap.active()
                          if (e.chat, e.moment.scene_id, e.moment.turn_id) == turn]
@@ -361,6 +365,9 @@ class TurnEffectsLibrary:
         with self.store.lock:
             snap = self._snapshot(campaign)
             self._require_trustworthy(snap)
+            if _relations_unreadable(snap.graph):  # a hidden relation could be overlapped by a reopen, or be a receipt
+                raise InvalidEffect("a relation file cannot be read, so the undo cannot be checked",
+                                    "undecodable_relation")
             if ref not in snap.events:
                 self.store.read(ref)  # raises the store's own error (RecordNotFound ...)
                 raise InvalidEffect(f"{ref} cannot be read", "undecodable_event")
@@ -415,7 +422,8 @@ class TurnEffectsLibrary:
             stored = snap.stored[ref].record
             record = ScopeRecord(ref, ACCEPTED_SCHEMA, accepted_to_payload(revoked), owner=stored.owner,
                                  extra=stored.extra)
-            return EffectChange(self, ref, ((record, expected),), tuple(changes), campaign, snap.state)
+            return EffectChange(self, ref, ((record, expected),), tuple(changes), campaign, snap.state,
+                                rechecks_readability=True)
 
     # -- wrapping up --------------------------------------------------------------------------
 
@@ -491,13 +499,17 @@ class TurnEffectsLibrary:
             by_id[item.contribution_id] = item
         records = []
         for contribution_id, principal in sorted(needed.items()):
+            if not is_human(principal):  # only an authenticated human authors a PC's action (003/010b)
+                raise InvalidEffect(f"contribution {contribution_id}'s controller is not a human: principal",
+                                    "non_human_controller", (contribution_id,))
             item = by_id.get(contribution_id)
             if item is None:
                 raise InvalidEffect(f"contribution {contribution_id} needs its player's endorsement", "not_endorsed",
                                     (contribution_id,))
             handle = item.handle
             if not (self._issued(handle) and getattr(handle, "trusted", False) is True
-                    and is_human(getattr(handle, "principal", None)) and handle.principal == principal  # type: ignore[attr-defined]
+                    and is_human(getattr(handle, "principal", None))
+                    and handle.principal == principal  # type: ignore[attr-defined]
                     and item.fingerprint == wanted):
                 raise InvalidEffect(f"the endorsement of {contribution_id} is not valid", "invalid_endorsement",
                                     (contribution_id,))

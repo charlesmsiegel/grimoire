@@ -13,6 +13,7 @@ from grimoire.effects import (
     EffectError, EndorsementRecord, Revocation, SceneWrapUp, Skipped, as_knowledge_event, check_citations,
     ledger_problems, orphans, verify_receipts, wrapup_id, wrapup_problems,
 )
+from grimoire.effects import partial_revocations
 from grimoire.effects import revocation_fingerprint
 from grimoire.graph import Ending, GraphIndex, Relation, Reopening, Retraction
 
@@ -162,3 +163,12 @@ def test_hand_edited_sequences_and_provenances_never_verify():
     foreign_retraction = r2(retraction=Retraction("editor", "t2"))
     assert ("receipt_mismatch", 1, "not retracted by this revocation") in codes(
         verify_receipts(revoked(), index(reopened, foreign_retraction)))
+
+
+
+def test_a_skipped_begin_is_in_force_only_with_its_own_since_and_token():
+    skipped = revoked(skipped=(Skipped(1, "edited"),))
+    reopened = r1(ending=None, reopenings=(Reopening(END7, REV, "t2"),))
+    assert [p.code for p in partial_revocations([skipped], index(reopened, r2()))] == ["partial_revocation"]
+    assert partial_revocations([skipped], index(reopened, r2(since=Moment(6)))) == ()  # not this event's begin
+    assert partial_revocations([skipped], index(reopened, r2(provenance="director"))) == ()

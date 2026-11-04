@@ -231,7 +231,11 @@ def wrapup_problems(wrapups: Iterable[SceneWrapUp], events: Iterable[AcceptedEve
 
 
 def as_knowledge_event(event: AcceptedEvent) -> Event:
-    """The 012 ``Event`` an accepted event corresponds to, for 020 to persist. Participants are description only."""
+    """The 012 ``Event`` an accepted event corresponds to, for 020 to persist. Participants are description only.
+
+    A revoked event is refused (``revoked_event``): an undone turn must never be stored as objective fact."""
+    if not event.active:
+        raise EffectError("revoked_event", (event.event_id,))
     people = {item.op.subject for item in event.operations} | {item.op.object for item in event.operations}
     people |= {item.op.agent for item in event.operations if item.op.agent is not None}
     return Event(event.ref.campaign_id, event.event_id, event.summary, event.moment, accepted_token(event.event_id),

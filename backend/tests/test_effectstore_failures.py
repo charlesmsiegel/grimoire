@@ -640,7 +640,7 @@ def test_a_trusted_handle_of_a_non_human_controller_cannot_endorse(world):
     p = give()
     endorsement = Endorsement("c7", handles.authorizer.handle_for(bot, trusted=True), p.fingerprint)
     assert reason(lambda: library.accept(p, controls=controls, contributions=[contribution(by=bot)],
-                                         endorsements=[endorsement])) == "invalid_endorsement"
+                                         endorsements=[endorsement])) == "non_human_controller"
 
 
 @pytest.mark.parametrize("token", ["effect:accepted/e-9", "effect:accepted/e-1", "effect:revoked/e-1"])
@@ -794,3 +794,66 @@ def test_a_malformed_event_file_landing_during_the_snapshot_makes_the_change_sta
     change = library.accept(give(KEY2, to=TAM, agent=TAM, backed=None, sequence=8), controls=CONTROLS)
     monkeypatch.setattr(RelationLibrary, "graph", original)
     _stale(store, change)
+
+
+
+# -- brutal-review round 4 -------------------------------------------------------------------------
+
+def _damage_relation(store, rid: str) -> None:
+    path = store.root / f"campaigns/c/relations/{rid}.json"
+    document = json.loads(path.read_bytes())
+    document["schema"] = "grimoire.relation/9"
+    path.write_bytes(json.dumps(document).encode())
+
+
+def test_revoke_fails_closed_on_an_unreadable_relation_file(world):
+    store, handles, library = world
+    done = accept(library, handles).commit()
+    relations(store, handles).add(C, "carries", WREN, KEY1, since=Moment(9), provenance="director").commit()
+    _damage_relation(store, "r-hand")  # it would make the reopen of Wren's key overlap, if it could be read
+    _, etag = library.read(done.ref, requested_by=DIRECTOR)
+    for partial in (False, True):
+        assert reason(lambda: library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.undo(done.ref)],
+                                             partial=partial)) == "undecodable_relation"
+
+
+def test_a_relation_damaged_after_a_revoke_preview_makes_it_stale(world):
+    store, handles, library = world
+    done = accept(library, handles).commit()
+    _, etag = library.read(done.ref, requested_by=DIRECTOR)
+    change = library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.undo(done.ref)])
+    write(store.root, "campaigns/c/relations/r-zz.json", b"{broken")
+    _stale(store, change)
+
+
+def test_a_retry_over_a_damaged_receipt_names_the_damage(world):
+    store, handles, library = world
+    accept(library, handles).commit()
+    _damage_relation(store, "r-1")
+    assert reason(lambda: accept(library, handles)) == "undecodable_relation"
+
+
+def test_continuity_never_returns_a_wrap_up_from_after_as_of(world):
+    store, handles, library = world
+    accept(library, handles).commit()
+    library.wrap_up(CHAT, "s1", through=moment(9), summary="x", cites=["e-1"], written_by="d",
+                    requested_by=DIRECTOR).commit()
+    assert library.continuity(C, as_of=8, requested_by=DIRECTOR).wrapups == ()
+    assert len(library.continuity(C, as_of=9, requested_by=DIRECTOR).wrapups) == 1
+
+
+def test_load_reports_an_accepted_entry_that_is_a_file(world):
+    store, handles, library = world
+    write(store.root, "campaigns/c/accepted", b"a file, not a folder")
+    assert ("campaigns/c/accepted", "unrecognized") in {(p.path, p.code) for p in store.load().problems}
+
+
+def test_a_revoked_event_is_never_bridged_as_objective_fact(world):
+    from grimoire.effects import EffectError, as_knowledge_event
+    store, handles, library = world
+    done = accept(library, handles).commit()
+    _, etag = library.read(done.ref, requested_by=DIRECTOR)
+    library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.undo(done.ref)]).commit()
+    event, _ = library.read(done.ref, requested_by=DIRECTOR)
+    with pytest.raises(EffectError, match="revoked_event"):
+        as_knowledge_event(event)

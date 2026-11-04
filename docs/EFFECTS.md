@@ -85,6 +85,7 @@ It is a sha256 over a hand-rolled canonical text, pinned by a golden-vector test
     - None → `pc_authorship`.
     - One that mismatches → `invalid_expression`.
   - **An `Endorsement(contribution_id, handle, fingerprint)`.** The handle must be a trusted `human:` handle that `issued` recognizes, whose principal is the submitter. The fingerprint must be the one the player was shown.
+    - The controller must itself be a `human:` principal; otherwise `non_human_controller` (only an authenticated human authors a PC's act, as 010b mints trusted handles only for humans). **Obligation on 035/010b:** record player controllers as `human:` ids.
     - None → `not_endorsed`.
     - Anything wrong → `invalid_endorsement`.
 
@@ -121,7 +122,7 @@ Narration holds neither key. A player alone can never make their character's act
 5. **Authorize** (two keys, above).
    - Also fail closed on a relation file of the campaign that cannot be decoded, or any store problem under its `relations/` (a link, a look-alike `Relations/`), with code `undecodable_relation`, because it could hide the fact a precondition must see. Unlike 017's own writes, which an undecodable file never blocks, an acceptance fails closed. The commit re-checks it too.
 
-   **Limit:** `revoke` and 017's `reopen` overlap check do not block on undecodable relation files.
+   `revoke` fails closed the same way (`undecodable_relation`, also with `partial=True`), so a damaged receipt or a hidden overlap is never skipped silently. **Limit:** 017's own `reopen`, called directly, does not block on undecodable files.
 
    The repair for any of these is to fix the file or move it out of the library by hand.
 6. **One accepted effect per turn.** An active event for the same chat, scene and turn with a *different* fingerprint refuses the acceptance (`turn_already_accepted`). Another swipe's effect needs the accepted one revoked first, and several things that happen in one turn are one proposal (up to 32 operations). This also stops a turn retried at a newly allocated sequence after a later event restored the state, which the preconditions alone would let through.
@@ -165,7 +166,7 @@ Exactly-once recovery across files belongs to 030.
 |---|---|
 | `events` | active events with `sequence <= as_of`, ordered by `(sequence, ordinal)` |
 | `revoked` | revoked events |
-| `wrapups` | the campaign's wrap-ups |
+| `wrapups` | the campaign's wrap-ups with `through <= as_of`, so nothing from after `as_of` is narrated |
 | `graph` | the 017 `CampaignGraph`, to be queried at `as_of` |
 | `problems` | the codes below |
 | `store_problems` | problems the store reported |
@@ -209,7 +210,7 @@ A revoked event is checked by these permanent marks only. Revoking an earlier ev
 - **Inputs.** A repeat is `already_revoked`, checked before the CAS on `expected`, so a retry of a revoke that landed is told so. The same fail-closed checks as accepting apply (`undecodable_event`, `inconsistent_ledger`).
 - **Latest first.** While another active event has a higher ordinal, revoke refuses with `not_latest`. Undo is a stack, so history behind a later accepted event never changes under it. To revise turn 7 after events at 8 and 9: revoke 9, then 8, then 7; accept the revision; then re-accept whatever still applies.
 - **Keys.** The outcome key, plus an endorsement from **the original endorser**, the principal recorded for each contribution. Its fingerprint is `revocation_fingerprint(event_ref, event_fingerprint)`, a sha256 over `revoke`, the event's reference and its fingerprint. An acceptance endorsement is therefore never consent to undo, and the record shows which decision each endorsement was.
-  - Current control does not matter. A new controller cannot undo a previous player's action, and the director cannot erase it alone.
+  - Current control does not matter. Through this API a new controller cannot undo a previous player's action, and the director cannot revoke it alone. That protects the record of the event; 017 editorial edits (`retract`, `reopen`) can still change the relation state by hand, and are then reported (`receipt_mismatch`, `edited_since`), never hidden.
   - **Limit:** an action whose endorser is gone cannot be revoked. Because undo is latest first, that also freezes the stack below it. A recorded director override is deferred to 102/035.
 - **Receipts must verify** (`receipt_mismatch`), and nothing may depend on the operation (`has_dependents`). A dependent is one of these:
   - a relation the event began that has since been ended;
@@ -282,7 +283,7 @@ How it is read and written:
 ## Migration, privacy and rollback
 
 - **Additive.** Libraries without `accepted/` or `wrapups/` load identically.
-- **A pre-021 build** reports those two campaign entries as `unrecognized` load problems. It cannot recover a journal that names them; use a 021+ build or `discard_journal` (tested).
+- **A pre-021 build** reports those two campaign entries as `unrecognized` load problems, and its allocators do not protect the instance ids accepted events name. It cannot recover a journal that names them; use a 021+ build or `discard_journal` (tested).
 - **A pre-021 build reading a reopened relation** keeps `reopenings` as a preserved unknown key and sees no ending, so it answers `holds_at` correctly. This is tested with the verbatim 017 codec.
 - **After trying a newer build** that wrote a newer accepted-event schema, an older build stops accepting until that file is removed or the newer build is used again.
 - All fixtures are synthetic. Neither package imports a provider or network module (tested), and `grimoire.effects` is on the purity allowlist. The store's import set is unchanged.

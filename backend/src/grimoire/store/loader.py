@@ -654,7 +654,7 @@ def _discover_campaign(access: Access, campaign: str, into: _Campaigns, problems
         if entry == CHATS and _is_dir(access, base + (entry,)):
             _discover_chats(access, base, into, problems)
             continue
-        if entry in _HISTORY:  # 021's per-turn history; read only by campaign_family, so load() never grows with it
+        if entry in _HISTORY and _is_dir(access, base + (entry,)):  # 021's per-turn history: never walked here
             continue
         if entry in _FAMILIES and _is_dir(access, base + (entry,)):
             _discover_family(access, base, entry, into, problems)
