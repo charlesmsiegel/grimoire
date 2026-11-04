@@ -29,7 +29,7 @@ jobs:
   compat:
     name: compat (${{ matrix.os }}, py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 30  # the Windows cell runs the whole suite in ~14-15 minutes
     strategy:
       fail-fast: false
       matrix:

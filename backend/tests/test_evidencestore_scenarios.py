@@ -297,8 +297,10 @@ def test_standing_of_a_quarantined_proposition_is_refused_not_guessed(store, evi
     assert caught.value.reason == "unknown_proposition"  # 012's answer for an id the ledger does not hold
 
 
-def test_an_oversized_record_is_refused_with_a_reason(store, evidence):
-    subjects = tuple(Subject("relation", f"relation-{n:07d}") for n in range(140_000))  # renders past 8 MiB
+def test_an_oversized_record_is_refused_with_a_reason(store, evidence, monkeypatch):
+    import grimoire.store.jsonfmt as jsonfmt
+    monkeypatch.setattr(jsonfmt, "MAX_FILE_BYTES", 16_384)  # the store's 8 MiB limit, scaled down to stay fast
+    subjects = tuple(Subject("relation", f"relation-{n:07d}") for n in range(400))  # renders past the limit
     refused(store, evidence, [Proposition(C, "p9", "x", m(1), "director", about=subjects)], "too_large")
 
 
