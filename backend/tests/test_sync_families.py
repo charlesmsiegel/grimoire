@@ -281,3 +281,69 @@ def test_021_a_held_relation_keeps_archive_borne_uncertainty_too(tmp_path):
     finally:
         desktop.close()
         phone.close()
+
+
+# -- round 8 -------------------------------------------------------------------------------------------
+
+def test_resolve_of_a_manifest_refuses_a_head_whose_own_pin_still_differs(tmp_path):
+    """resolve applies sync's dependency rule to every record it writes, the heads it copies included."""
+    from grimoire.core.identity import SourceRef
+    from grimoire.store import RecordEnvelope
+    from store_helpers import HARBOR, harbor_manifest
+    from sync_helpers import handle, make_pair
+    mira, wren = SourceRef(HARBOR, "character", "mira"), SourceRef(HARBOR, "character", "wren")
+    manifest = "sources/world/harbor/_source/manifest.json"
+    m2 = "sources/world/harbor/_source/records/character/mira/m2.json"
+    r2 = "sources/world/harbor/_source/records/character/wren/r2.json"
+    desktop, phone = make_pair(tmp_path)
+
+    def commit(store, puts):
+        txn = store.transaction()
+        for envelope, expected in puts:
+            txn.put(envelope, expected)
+        txn.commit(handle())
+    try:
+        commit(desktop, [(RecordEnvelope(mira.at("m2"), {"bio": "desk"}), None),
+                         (RecordEnvelope(mira.at("m3"), {"bio": "desk later"}), None),
+                         (RecordEnvelope(wren.at("r2"), {"friend": str(mira.at("m2"))}), None),
+                         (harbor_manifest({"character/wren": "r2", "character/mira": "m3"}),
+                          desktop.read_source(HARBOR).etag)])
+        commit(phone, [(RecordEnvelope(mira.at("m2"), {"bio": "phone"}), None),
+                       (harbor_manifest({"character/mira": "m2"}), phone.read_source(HARBOR).etag)])
+        codes = {conflict.path: conflict.code for conflict in sync(desktop, phone, handles()).conflicts}
+        assert codes[r2] == "head_dependency" and codes[m2] == "missing_ancestor"
+        mine, theirs = (desktop.root / manifest).read_bytes(), (phone.root / manifest).read_bytes()
+        with pytest.raises(ResolveRefused, match="m2.json, which .*r2.json pins"):
+            resolve(desktop, phone, manifest, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+        assert not (phone.root / r2).exists()
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_021_a_relation_held_on_a_first_sync_is_recorded_as_agreed(tmp_path):
+    """Two copies of one library with an accepted event: the held relations already agree, and that is recorded,
+    so a later one-sided deletion stays a deletion once the hold lifts."""
+    keys = Handles()
+    desktop = LibraryStore.create(tmp_path / DESKTOP)
+    seed_effects(desktop, keys)
+    _accept(desktop, keys)
+    desktop.close()
+    shutil.copytree(tmp_path / DESKTOP, tmp_path / PHONE)
+    desktop, phone = LibraryStore.open(tmp_path / DESKTOP), LibraryStore.open(tmp_path / PHONE)
+    try:
+        identify(desktop, DESKTOP)
+        identify(phone, PHONE)
+        first = sync(desktop, phone, handles())
+        relations = sorted(path for path in desktop.scan().files if "/relations/" in path)
+        assert relations and set(relations) <= set(first.skipped[DESKTOP])
+        victim = relations[0]
+        (phone.root / victim).unlink()
+        sync(desktop, phone, handles())  # still held
+        for store, where in ((desktop, "d"), (phone, "p")):
+            shutil.move(str(store.root / "campaigns" / EFFECTS_C / "accepted"), str(tmp_path / f"away-{where}"))
+        report = sync(desktop, phone, handles())  # the hold lifts
+        assert not (phone.root / victim).exists() and report.conflict(victim).code == "deleted"
+    finally:
+        desktop.close()
+        phone.close()

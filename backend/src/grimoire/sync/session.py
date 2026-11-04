@@ -340,7 +340,7 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
 
 def _admit(plan: SyncPlan, dest: str) -> None:
     """Overrides for every copy to ``dest``: name collision, head dependency, then preflight units."""
-    store, origin_scans = plan.stores[dest], plan.scans
+    store = plan.stores[dest]
     copies = []
     for copy in plan.copies[dest]:
         if store.collides(copy.path):
@@ -535,7 +535,8 @@ def _pending_entries(plan: SyncPlan, device: str) -> dict[str, Mapping[str, obje
         if path not in entries and plan.bases[path].kind == "uncertain" and (
                 path not in plan.agreed or _both_absent_uncertain(plan, path)):
             entries[path] = {"uncertain": True}
-        elif path not in entries and plan.bases[path].kind == "first" and path in plan.agreed:
+        elif path not in entries and plan.bases[path].kind == "first" and (
+                path in plan.agreed or _held_agreed(plan, path)):
             # agreed now, on a first sync: mark it, so a crash before the archives are written never
             # leaves a "first" base behind (a later one-sided deletion would be undone)
             side = plan.sides[path][device]
@@ -549,6 +550,13 @@ def _kind(path: str) -> str | None:
     return found[0] if found is not None else None
 
 
+def _held_agreed(plan: SyncPlan, path: str) -> bool:
+    """A held path both devices already hold with identical bytes: a verified agreement, recorded so
+    that lifting the hold later can never read "never agreed" and re-create a deletion."""
+    sides = list(plan.sides[path].values())
+    return path in plan.held and all(side.state == "present" for side in sides) and len({side.etag for side in sides}) == 1
+
+
 def _held_campaigns(scans) -> set[str]:  # type: ignore[no-untyped-def]
     """Campaigns whose relations 021 effects may have changed: any accepted event, or an ``accepted``
     folder (any spelling) that cannot be listed, on either device. Fails closed."""
@@ -556,7 +564,7 @@ def _held_campaigns(scans) -> set[str]:  # type: ignore[no-untyped-def]
     for scan in scans:
         for path in (*scan.files, *scan.blocked, *scan.skipped):
             parts = path.split("/")
-            if len(parts) >= 3 and parts[0] == "campaigns" and parts[2].casefold() == "accepted":
+            if len(parts) >= 3 and parts[0] == "campaigns" and parts[2].casefold() == HOLDS_RELATIONS:
                 held.add(parts[1])
     return held
 
@@ -759,8 +767,8 @@ def _resolved(plan: SyncPlan, applied: _Applied) -> dict[str, tuple[str, str] | 
     a, b = plan.devices
     found: dict[str, tuple[str, str] | None] = {}
     for path in plan.paths:
-        if path in plan.held:
-            continue
+        if path in plan.held and not _held_agreed(plan, path):
+            continue  # a held path is never decided; only an agreement both devices already hold is recorded
         left, right = _final(plan, applied, path, a), _final(plan, applied, path, b)
         if "blocked" in (left.state, right.state) or left.state != right.state:
             continue
@@ -951,14 +959,16 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
                 resolved.append(head)
             elif ours != theirs:
                 raise ResolveRefused(f"{head} differs between the devices; resolve it first")
-    heads = set(_manifest_heads(Copy(path, winner, receiver, data, None))) if kind == "manifest" else set()
-    for pinned in sorted({"/".join(definition_parts(ref)) for ref in pinned_by(tuple(path.split("/")), data)} - heads):
-        if scans[winner].files.get(pinned) != scans[receiver].files.get(pinned):
-            raise ResolveRefused(f"{pinned}, which {path} pins, differs between the devices; resolve it first")
-    for ref in instances_named(tuple(path.split("/")), data):
-        named = "/".join(instance_parts(ref))
-        if named in scans[winner].files and named not in scans[receiver].files:
-            raise ResolveRefused(f"{named}, which {path} names, is missing on {receiver}; sync or resolve it first")
+    for done in resolved:  # every record resolve writes, head revisions included: sync's dependency rule
+        written = scans[winner].files[done]
+        for pinned in sorted({"/".join(definition_parts(ref)) for ref in pinned_by(tuple(done.split("/")), written)}
+                             - set(resolved)):
+            if scans[winner].files.get(pinned) != scans[receiver].files.get(pinned):
+                raise ResolveRefused(f"{pinned}, which {done} pins, differs between the devices; resolve it first")
+        for ref in instances_named(tuple(done.split("/")), written):
+            named = "/".join(instance_parts(ref))
+            if named in scans[winner].files and named not in scans[receiver].files:
+                raise ResolveRefused(f"{named}, which {done} names, is missing on {receiver}; sync or resolve it first")
     if mine is not None:
         txn.keep_version(path, mine)
     # Like a sync's copy, the resolve's copy is marked in the same commit: if the archives are not
