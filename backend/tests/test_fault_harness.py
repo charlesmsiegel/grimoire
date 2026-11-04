@@ -806,3 +806,36 @@ def test_an_interleaved_write_then_remove_is_not_a_lost_edit(tmp_path):
     plan = [Interleave(0, lambda ops, root: ops.write_bytes(root / "ext.json", b"x")),
             Interleave(1, lambda ops, root: ops.remove(root / "ext.json"))]
     run_plans(scenario, [plan], tmp_path).assert_ok()
+
+
+def test_a_sibling_whose_name_starts_with_the_root_is_outside_the_sandbox(tmp_path):
+    """The string-prefix confinement must not treat ``root-evil`` as inside ``root``."""
+    from grimoire.testing import SandboxViolation
+    root = tmp_path / "root"
+    root.mkdir()
+    (tmp_path / "root-evil").mkdir()
+    with pytest.raises(SandboxViolation):
+        RootedFileOps(root).write_bytes(tmp_path / "root-evil" / "f.json", b"x")
+    assert not (tmp_path / "root-evil" / "f.json").exists()
+
+
+@pytest.mark.parametrize("chosen", ["before", {"later"}])
+def test_select_returning_an_unknown_timing_is_an_error(tmp_path, chosen):
+    """A bare string (read as its letters) or a misspelt timing would explore nothing and still pass."""
+    from grimoire.testing import CrashScenario, atomic_outcome, explore_crashes
+
+    def setup(ops, root):
+        ops.write_bytes(root / "a.json", b"1")
+
+    def action(ops, root):
+        ops.write_bytes(root / "a.json", b"2")
+    scenario = CrashScenario("s", setup, action, lambda ops, root: None, (atomic_outcome(),))
+    with pytest.raises(ValueError, match="unknown fault timings"):
+        explore_crashes(scenario, tmp_path, select=lambda op: chosen)
+
+
+def test_interleaves_also_join_the_recovery_crash_runs(tmp_path):
+    from grimoire.testing import Interleave, Target, explore_crashes
+    edit = Interleave(Target("write_bytes", "a.json.~tmp1.new"), _external_edit)
+    explore_crashes(_interleave_scenario(guarded_read_modify_write), tmp_path, interleaves=[edit],
+                    recovery_crashes=True).assert_ok()

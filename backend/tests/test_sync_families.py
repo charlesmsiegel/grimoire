@@ -395,3 +395,18 @@ def test_an_instance_whose_payload_pins_a_differing_revision_waits(tmp_path):
     finally:
         desktop.close()
         phone.close()
+
+
+def test_021_an_unlistable_campaigns_folder_holds_every_relation(tmp_path):
+    """When ``campaigns/`` itself cannot be listed on one device, no relation is decided or kept from it."""
+    desktop, phone, keys, relations = _effects_pair(tmp_path)
+    try:
+        shutil.move(str(phone.root / "campaigns"), str(tmp_path / "phone-campaigns"))
+        make_dir_link(phone.root / "campaigns", tmp_path / "phone-campaigns")
+        report = sync(desktop, phone, handles())
+        assert set(relations) <= set(report.skipped[DESKTOP])
+        assert not [conflict for conflict in report.conflicts if conflict.path in relations]
+        assert not any("/relations/" in str(path) for path in phone.conflicts())
+    finally:
+        desktop.close()
+        phone.close()

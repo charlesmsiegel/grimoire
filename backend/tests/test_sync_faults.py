@@ -491,3 +491,75 @@ def test_an_aborted_copy_is_dropped_never_parked_as_a_kept_version(tmp_path):
     finally:
         desktop.close()
         phone.close()
+
+
+# -- resolve under the harness (brutal-review round 10): every commit boundary ---------------------------
+
+R9 = PATHS["r1"].replace("r1.json", "r9.json")
+
+
+@functools.cache
+def _resolve_fixture(kind: str):
+    """Two synced devices whose ``path`` differs: an instance edit, or a same-id definition revision."""
+    from grimoire.core.identity import SourceRef
+    from grimoire.store import RecordEnvelope, SourceManifest
+    from sync_helpers import handle
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        desktop, phone = make_pair(root)
+        if kind == "instance":
+            edit_instance(desktop, WREN_A, 9)
+            edit_instance(phone, WREN_A, 4)
+            path = PATHS["wren_a"]
+        else:
+            for store, bio in ((desktop, "captain"), (phone, "pirate")):
+                txn = store.transaction()
+                txn.put(RecordEnvelope(SourceRef("world:harbor", "character", "wren", "r9"), {"bio": bio}), None)
+                current = store.read_source("world:harbor")
+                txn.put(SourceManifest(current.manifest.source, current.manifest.owner, current.manifest.title,
+                                       {"character/wren": "r1"}, current.manifest.links,
+                                       extra=current.manifest.extra), current.etag)
+                txn.commit(handle())
+            path = R9
+        sync(desktop, phone, handles())
+        mine, theirs = (desktop.root / path).read_bytes(), (phone.root / path).read_bytes()
+        desktop.close(), phone.close()
+        return tuple(snapshot(root).items()), path, mine, theirs
+
+
+def _resolve_scenario(kind: str):
+    from grimoire.sync import resolve
+    tree, path, mine, theirs = _resolve_fixture(kind)
+    locker = ProcessLocker()
+
+    def setup(ops, root):
+        for key, data in tree:
+            ops.make_dirs(root / key) if data is None else ops.write_bytes(root / key, data)
+
+    # toward the phone's version: the desktop receives it and must keep its own (a hold)
+    action = _with_both(lambda desktop, phone: resolve(desktop, phone, path, etag(theirs),
+                                                       {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles()))
+
+    def survives(outcome):
+        if not any(value == mine for value in outcome.recovered.values() if value is not None):
+            return "the desktop's replaced version is gone from every device"
+        if any(outcome.recovered.get(f"{device}/{path}") is None for device in DEVICES):
+            return f"{path} vanished"
+        return None
+    return CrashScenario(f"resolve-{kind}", setup, lambda ops, root: action(ops, root, locker),
+                         lambda ops, root: _recover(ops, root, locker),
+                         (Invariant("replaced_version_survives", survives), idempotent_recovery(), RESIDUE),
+                         normalize=drop_empty_dirs)
+
+
+@pytest.mark.parametrize("kind", ["instance", "revision"])
+def test_resolve_survives_a_crash_or_error_at_every_commit_boundary(tmp_path, kind):
+    with tempfile.TemporaryDirectory() as folder:
+        baseline = run_plans(_resolve_scenario(kind), [], Path(folder))
+        baseline.assert_ok()
+        trace = baseline.runs[0].action_trace
+    points = commit_boundaries(trace)
+    report = explore_crashes(_resolve_scenario(kind), tmp_path, errors=True, torn=False,
+                             select=_select(points, {"before", "after", "fail"}))
+    report.assert_ok()
+    assert report.points_explored >= 8  # data, archive(b), archive(a), pending(b), pending(a)
