@@ -396,7 +396,10 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         classification = "beyond_limits"
     elif stale:
         classification = "relabel"
-    elif drawn or other_candidates:
+    elif drawn or (other_candidates and not candidates):
+        # Drawing on another ability is a combination this slice does not adjudicate. A sibling
+        # that also covers the attempt only matters when the named ability cannot: its own
+        # covering effect is the character's choice, so overlapping powers never deadlock.
         classification = "relabel"
     elif not touched:
         # No effect of the named ability shares a needed tag: this is not a use of it. File it

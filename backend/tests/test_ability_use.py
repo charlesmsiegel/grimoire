@@ -637,3 +637,37 @@ def test_no_facet_and_an_empty_facet_report_the_same_reasons():
                            effective(person("blank", "B", facet_extras={})))
     assert [r.code for r in plain.reasons] == [r.code for r in blank.reasons]
     assert plain.unknown_tags == blank.unknown_tags == ("fire",)
+
+
+# --- round 5 of independent review --------------------------------------------------------
+
+@pytest.mark.parametrize("first, second, needs", [
+    # A narrow power and a broad one covering it.
+    (Ability("cantrips", "Cantrips", [Effect("spark", "t", {"fire"})]),
+     Ability("firebolt", "Firebolt", [Effect("bolt", "t", {"fire", "projectile"})]), ("fire",)),
+    # Two powers with the same tags.
+    (Ability("wings", "Wings", [Effect("fly", "t", {"flight"})]),
+     Ability("jetpack", "Jetpack", [Effect("hop", "t", {"flight"})]), ("flight",)),
+])
+def test_overlapping_abilities_never_deadlock_a_declared_use(first, second, needs):
+    entity = effective(person("iris", "Iris", first, second))
+    for own, other in ((first, second), (second, first)):
+        use = attempt(ability_id=own.id, needs=needs, effect_id=own.effects[0].id, conditions=())
+        result = assess_attempt(use, entity)
+        assert (result.classification, result.permitted) == ("known_capability", True)
+        assert result.other_candidates == (f"{other.id}/{other.effects[0].id}",)  # still advisory
+    # Naming no effect still needs a relabel to the named ability's own covering effect.
+    vague = attempt(ability_id=first.id, needs=needs, conditions=())
+    assert assess_attempt(vague, entity).candidates == (first.effects[0].id,)
+    assert assess_attempt(vague, entity).classification == "relabel"
+
+
+def test_an_overlapping_sibling_does_not_bypass_the_named_effects_constraints():
+    telepathy = Ability("telepathy", "Telepathy", [Effect("mindspeak", "t", {"speech"})],
+                        costs=[Cost("headache", "t")], prerequisites=[Prerequisite("line_of_sight", "t")])
+    sefa = effective(person("sefa", "Sefa", speak_with_dead(), telepathy))
+    blind = assess_attempt(attempt("sefa", "telepathy", ("speech",), effect_id="mindspeak", conditions=()), sefa)
+    assert blind.classification == "unavailable" and blind.unmet_prerequisites == ("line_of_sight",)
+    seen = assess_attempt(attempt("sefa", "telepathy", ("speech",), effect_id="mindspeak",
+                                  conditions=("line_of_sight",)), sefa)
+    assert seen.classification == "known_capability" and [c.id for c in seen.costs] == ["headache"]

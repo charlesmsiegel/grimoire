@@ -79,7 +79,7 @@ Abilities therefore persist in any record that carries an entity payload, such a
 **Labelling is the trust boundary.** These fields come from a labeller that is **not the narrator**, the same rule as for `NarrationClaim`. The assessment is only as good as the labels and the shared vocabulary.
 - A labeller that writes `push` for `force` escapes `no_force`. The unused tag then shows up in `unknown_tags`.
 - Filing an attempt under an invented id, or a sibling ability, does **not** escape another ability: an attempt that needs a tag only another of the actor's abilities provides (`other_drawn`), or that another ability's declared effect covers (`other_candidates`), reads `relabel`. Combinations across abilities are out of scope for this slice, so they fail closed. Only a genuinely new vocabulary is a `new_ability`. A limit of another ability on a tag no effect provides (`force`) is still advisory (`other_conflicts`): a new power may legitimately produce it.
-- A labeller that leaves the outcome out of `needs` (`{light}` with `veil`, for the radiation-pressure flight) gets a plain `known_capability`, and nothing shows. **Every intended outcome must be a needed tag:** this is a labeller obligation for 029/035.
+- A labeller that leaves the outcome out of `needs` (`{light}` with `veil`, for the radiation-pressure flight) gets a plain `known_capability`, and nothing shows. **Every intended outcome, and the mechanism it uses (`light` for a light-based flight), must be a needed tag:** this is a labeller obligation for 029/035.
 
 All three escapes are pinned by tests that state what is and is not guaranteed: the classification follows the labels.
 
@@ -112,7 +112,7 @@ Let `A` be the named ability and `E` the named effect, if they exist. Then:
   - `other_candidates`: `<ability>/<effect>` of declared effects in the actor's *other* abilities that cover `needs`;
   - `other_drawn`: `<ability>/<effect>` of other abilities' effects that provide a needed tag the named ability's effects do not.
 
-  A non-empty `other_candidates` or `other_drawn` makes the attempt `relabel` (rows 1 and 2c).
+  A non-empty `other_drawn` makes the attempt `relabel` (rows 1 and 2c). A non-empty `other_candidates` does so only when the named ability has no covering effect of its own: when two abilities overlap, each one's covering effect stays usable under its own id, so overlapping powers never deadlock.
 - `unrecognized`: paths of values carrying extras. These are `#facet`, `<ability>` and `<ability>/<part>`, for every part of the named ability.
 
 **Classification**, first match:
@@ -122,7 +122,7 @@ Let `A` be the named ability and `E` the named effect, if they exist. Then:
 | 1 | no `A` | `needs_upgrade` if the facet has extras; `relabel` if there are stale references, `other_candidates` or `other_drawn`; else `new_ability` | `not_approvable`, or `pending` |
 | 2 | `conflicts` | `beyond_limits` | `not_approvable` |
 | 2a | `stale_references` | `relabel` | `not_approvable` |
-| 2c | `other_drawn` or `other_candidates` | `relabel`: the attempt draws on another ability (a combination, not adjudicated in this slice) | `not_approvable` |
+| 2c | `other_drawn`, or `other_candidates` while `A` has no covering effect | `relabel`: the attempt draws on, or belongs to, another ability (a combination is not adjudicated in this slice) | `not_approvable` |
 | 2d | no effect of `A` shares a needed tag | `relabel`: this is not a use of `A`; file it under its own ability id | `not_approvable` |
 | 3 | unmet prerequisites | `unavailable` | `not_approvable` |
 | 3a | `unrecognized` | `needs_upgrade` | `not_approvable` |
