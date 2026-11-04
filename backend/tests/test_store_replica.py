@@ -892,3 +892,53 @@ def test_recovery_refuses_a_journal_that_would_overwrite_a_kept_version():
              "new": "sha256:" + "2" * 64}]}
         with pytest.raises(RecoveryFailed, match="existing kept version"):
             parse(render(document))
+
+
+@pytest.mark.parametrize("where", ["manifest-extra", "link-extra", "instance-extra", "definition-extra",
+                                   "payload-key"])
+def test_pins_in_unknown_fields_and_dict_keys_count(pair, where):
+    """Any text naming the revision pins it, wherever an envelope keeps it (round 6: extra and keys)."""
+    from store_helpers import OWNER as owner
+    phone = pair[1]
+    _cards(phone)
+    txn = phone.transaction()
+    if where == "manifest-extra":
+        txn.put(SourceManifest("catalog:cards", owner, "Cards", {"lore/notes": "r2"}, extra={"x-pin": [str(R1)]}),
+                phone.read_source("catalog:cards").etag)
+    elif where == "link-extra":
+        other, third = (SourceRef("catalog:cards", "lore", name, "r1") for name in ("other", "third"))
+        txn.put(RecordEnvelope(other, {}), None)
+        txn.put(RecordEnvelope(third, {}), None)
+        txn.put(SourceManifest("catalog:cards", owner, "Cards", {"lore/notes": "r2"}, (
+            LinkSpec(str(other), "derived_variant", str(third), extra={"via": str(R1)}),)),
+            phone.read_source("catalog:cards").etag)
+    elif where == "instance-extra":
+        txn.put(RecordEnvelope(InstanceRef("c9", "lore", "copy"), {}, extra={"x-pin": str(R1)}), None)
+    elif where == "definition-extra":
+        txn.put(RecordEnvelope(SourceRef("catalog:cards", "lore", "sequel", "r1"), {}, extra={"x-after": str(R1)}),
+                None)
+    else:
+        txn.put(RecordEnvelope(InstanceRef("c9", "lore", "copy"), {"by_source": {str(R1): 1}}), None)
+    txn.commit(owner_handle())
+    with pytest.raises(RevisionReferenced):
+        _replace_r1(phone)
+
+
+def test_a_linked_campaign_record_folder_blocks_a_revision_replace(pair, tmp_path):
+    phone = pair[1]
+    _cards(phone)
+    outside = tmp_path / "chats-elsewhere"
+    outside.mkdir()
+    (phone.root / "campaigns" / "c1").mkdir(parents=True, exist_ok=True)
+    make_dir_link(phone.root / "campaigns" / "c1" / "chats", outside)
+    with pytest.raises(RevisionReferenced, match="cannot prove"):
+        _replace_r1(phone)
+
+
+def test_on_denied_may_only_return_valid_sync_state(pair):
+    phone = pair[1]
+    txn = phone.transaction()
+    txn.put(instance(InstanceRef("c9", "character", "x"), WREN_R1), None)
+    key = txn.put_sync_state("device.json", b'{"format": "grimoire.sync.device/1", "device": "phone"}\n', None)
+    with pytest.raises(InvalidEnvelope, match="must be JSON"):
+        txn.commit(owner_handle("sources"), on_denied=lambda keys: {key: b"\xff not json"})

@@ -459,3 +459,34 @@ def test_exhaustive_an_edit_at_every_operation(tmp_path):
         own = {op.index for op in trace if op.kind == "replace" and op.target == target}
         plans = [[Interleave(op.index, _edit(target, data_of))] for op in trace if op.index not in own]
         run_plans(_scenario(S10), plans, tmp_path / name.replace(" ", "-")).assert_ok()
+
+
+def test_an_aborted_copy_is_dropped_never_parked_as_a_kept_version(tmp_path):
+    """Sync passes ``regenerable=True``: when 010 keeps a human's racing edit, the copy is dropped, not kept."""
+    from grimoire.sync import SyncInterrupted
+    from grimoire.testing import RootedFileOps
+    from sync_helpers import kept
+    target = f"{PHONE}/{PATHS['wren_a']}"
+    trace = _baseline_trace(quiet=False)
+    commit = [op.index for op in trace if _is_journal_replace(op)][1]  # data(phone)'s commit point
+    guard = next(op.index for op in trace[commit + 1:] if op.kind == "read_bytes" and op.path == target)
+    root = tmp_path / "root"
+    root.mkdir()
+    _setup(RootedFileOps(root), root)
+    copied = (root / DESKTOP / PATHS["wren_a"]).read_bytes()  # the desktop's version the sync copies
+    ops, locker = RootedFileOps(root, plan=[Interleave(guard, _edit(target, _human))]), ProcessLocker()
+    desktop = LibraryStore.open(root / DESKTOP, ops=ops, locker=locker)
+    phone = LibraryStore.open(root / PHONE, ops=ops, locker=locker)
+    with pytest.raises(SyncInterrupted):  # 010 kept the human's file (WriteConflict)
+        sync(desktop, phone, handles())
+    assert ops.fired
+    desktop.close()
+    phone.close()
+    desktop, phone = LibraryStore.open(root / DESKTOP), LibraryStore.open(root / PHONE)
+    try:
+        edit_instance(desktop, WREN_A, 2)  # the desktop moves on before the next sync
+        sync(desktop, phone, handles())
+        assert copied not in kept(phone)
+    finally:
+        desktop.close()
+        phone.close()

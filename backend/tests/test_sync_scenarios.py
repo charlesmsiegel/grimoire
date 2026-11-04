@@ -1532,3 +1532,46 @@ def test_a_marker_only_data_commit_survives_a_crash_before_the_pending_step(pair
     report = sync(desktop, phone, renamed)
     assert (PATHS["wren_b"], "tablet") not in report.copied
     assert not (desktop.root / PATHS["wren_b"]).exists()
+
+
+def test_resolve_refuses_when_only_one_archive_is_missing(pair):
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    edit_instance(phone, WREN_A, 4)
+    assert sync(desktop, phone, handles()).conflict(PATHS["wren_a"]).code == "concurrent"
+    (desktop.root / ".sync" / "peers" / PHONE / "archive.json").unlink()  # missing on one device only
+    mine, theirs = (desktop.root / PATHS["wren_a"]).read_bytes(), (phone.root / PATHS["wren_a"]).read_bytes()
+    before = _tree(desktop.root), _tree(phone.root)
+    with pytest.raises(ResolveRefused, match="sync the devices once first"):
+        resolve(desktop, phone, PATHS["wren_a"], etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+    assert (_tree(desktop.root), _tree(phone.root)) == before
+
+
+def test_f6_denials_are_coarse_a_denied_revision_drops_every_copy_of_its_source(pair):
+    """SYNC.md, "Denials are coarse": one denied revision drops the other independent revisions of its source."""
+    desktop, phone = pair
+    for name in ("ada", "bo"):
+        put(desktop, RecordEnvelope(SourceRef("world:harbor", "character", name, "r1"), {"bio": name}), None)
+    ada = next(key for key in plan_sync(desktop, phone).preview()[PHONE] if "/ada" in key)
+    report = sync(desktop, phone, {DESKTOP: handle(), PHONE: _grants("campaigns", "kept", ada)})
+    codes = {found.path: found.code for found in report.conflicts}
+    ada_path, bo_path = (PATHS["r1"].replace("/wren/", f"/{name}/") for name in ("ada", "bo"))
+    assert codes.get(bo_path) == "denied" and codes.get(ada_path) == "denied"
+    assert not (phone.root / ada_path).exists()
+
+
+def test_an_instance_waits_for_the_revision_it_pins_and_the_conflict_stays_resolvable(pair):
+    """Like a manifest's heads: an instance whose pinned base differs on the destination is a
+    head_dependency, so it never silently means other bytes there, and resolve is never blocked by it."""
+    from store_helpers import WREN, WREN_R2
+    desktop, phone = pair
+    new_revision(desktop, "r2", "a captain")
+    new_revision(phone, "r2", "a pirate")
+    pinned = "campaigns/c1/instances/character/wren-z.json"
+    put(desktop, instance(InstanceRef("c1", "character", "wren-z"), WREN, base=WREN_R2), None)
+    report = sync(desktop, phone, handles())
+    assert report.conflict(pinned).code == "head_dependency" and not (phone.root / pinned).exists()
+    mine, theirs = (desktop.root / PATHS["r2"]).read_bytes(), (phone.root / PATHS["r2"]).read_bytes()
+    assert resolve(desktop, phone, PATHS["r2"], etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)},
+                   handles()) == PHONE
+    assert (pinned, PHONE) in sync(desktop, phone, handles()).copied  # now the pinned revision agrees

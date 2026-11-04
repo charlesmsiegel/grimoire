@@ -97,6 +97,18 @@ class CommitResult:
     dropped: frozenset[str] = field(default_factory=frozenset)
 
 
+def _check_state_bytes(data: object) -> None:
+    """Sync state is strict JSON bytes within the file size limit (``put_sync_state`` and ``on_denied``)."""
+    if type(data) is not bytes:
+        raise InvalidEnvelope("sync state must be bytes")
+    try:
+        parse_strict(data)
+    except JsonError as error:
+        raise InvalidEnvelope(f"sync state must be JSON: {error}") from None
+    if len(data) > MAX_FILE_BYTES:
+        raise InvalidEnvelope("sync state exceeds the file size limit")
+
+
 def _absolute(path: str | os.PathLike[str]) -> Path:
     return Path(os.path.abspath(os.fspath(path)))
 
@@ -1189,12 +1201,7 @@ class Transaction:
         if expected is not None and not is_etag(expected):
             raise InvalidEnvelope("expected must be None or an etag")
         parts = sync_state_parts(name)
-        try:
-            parse_strict(data)
-        except JsonError as error:
-            raise InvalidEnvelope(f"sync state must be JSON: {error}") from None
-        if len(data) > MAX_FILE_BYTES:
-            raise InvalidEnvelope("sync state exceeds the file size limit")
+        _check_state_bytes(data)
         key = "/".join(parts)
         self._add(_Put(parts, None, bytes(data), expected, None, "state", key))
         return key
@@ -1395,6 +1402,7 @@ class _Commit:
                     continue
                 if put.kind != "state":
                     raise InvalidEnvelope("on_denied may replace the bytes of sync state only")
+                _check_state_bytes(bytes(data))  # exactly what put_sync_state would accept
                 put = replace(put, data=bytes(data))
             remaining.append(put)
         held = {put.record for put in remaining if put.kind == "keep"}

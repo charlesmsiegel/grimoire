@@ -251,8 +251,10 @@ def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str
                    for head, revision in envelope.head_refs().items()):
                 raise RevisionReferenced(f"{path} names {ref} as its head")
             for link in envelope.links:
-                if ref in (_pinned(link.subject), _pinned(link.object)):
+                if ref in {_pinned(link.subject), _pinned(link.object)} | _payload_refs(link.extra):
                     raise RevisionReferenced(f"{path} links {ref}")
+            if ref in _payload_refs(envelope.extra):
+                raise RevisionReferenced(f"{path} pins {ref} in its unknown fields")
         elif isinstance(envelope, (ScopeRecord, KnowledgeRecord)):
             if ref in _payload_refs(envelope.payload) | _payload_refs(envelope.extra):
                 raise RevisionReferenced(f"{path} binds {ref}")

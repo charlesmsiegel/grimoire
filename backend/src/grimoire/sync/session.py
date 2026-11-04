@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from grimoire.core.identity import SourceRef
+from grimoire.core.identity import SourceRef, parse_ref
 from grimoire.store import (
     CrossDevice, ImmutableRevision, InvalidEnvelope, InvalidSourceState, LibraryStore, LinkRefused,
     NameCollision, RevisionReferenced, StaleWrite, StoreError, UnstorableIdentifier, WriteConflict, etag,
@@ -167,6 +167,7 @@ class SyncPlan:
     notices: list[str] = field(default_factory=list)
     fallback: set[str] = field(default_factory=set)  # devices whose copies were admitted unit by unit
     skipped: dict[str, tuple[str, ...]] = field(default_factory=dict)  # per device: reported, never touched
+    held: set[str] = field(default_factory=set)  # held-back paths still tracked: no decision, no archive change
 
     def other(self, device: str) -> str:
         return self.devices[1] if device == self.devices[0] else self.devices[0]
@@ -225,20 +226,21 @@ def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
         paths |= {path for path in (*scan.files, *scan.blocked) if syncable(path)}
         paths |= set(archives[device].entries) | set(pendings[device].entries)
         paths |= archives[device].named | pendings[device].named  # ignored: uncertain, never forgotten
-    held = {path.split("/")[1] for device in pair for path in (*scans[device].files, *scans[device].blocked)
-            if _kind(path) == HOLDS_RELATIONS}  # campaigns whose relations 021 effects may have changed
-    paths = {path for path in paths if not _held_relation(path, held)}
+    held = _held_campaigns(scans.values())
     skipped = {device: tuple(sorted({*scans[device].skipped, *(
         path for path in (*scans[device].files, *scans[device].blocked)
         if _kind(path) in HELD_BACK_KINDS or _held_relation(path, held))})) for device in pair}
-    ordered = tuple(sorted(paths))
+    ordered = tuple(sorted(paths))  # held relations stay: no decision, but their bookkeeping is kept
     _check_archive_size(pair, ordered)
     sides = {path: {device: _side(scans[device], path) for device in pair} for path in ordered}
     bases = {path: derive_base(path, (archives[a], archives[b]), (pendings[a], pendings[b]),
                                (_current(sides[path][a]), _current(sides[path][b]))) for path in ordered}
     plan = SyncPlan(pair, stores, scans, archives, pendings, ordered, sides, bases,
-                    copies={a: [], b: []}, keeps={a: [], b: []}, notices=notices, skipped=skipped)
+                    copies={a: [], b: []}, keeps={a: [], b: []}, notices=notices, skipped=skipped,
+                    held={path for path in ordered if _held_relation(path, held)})
     for path in ordered:
+        if path in plan.held:  # never decided, copied or archived; an uncertain base stays pending
+            continue
         decision = decide(syncable(path), bases[path], sides[path][a], sides[path][b])  # type: ignore[arg-type]
         if decision.action == "agreed":
             plan.agreed.add(path)
@@ -251,6 +253,7 @@ def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
                                           _current(sides[path][dest])))
     for device in pair:
         _admit(plan, device)
+    _group_knowledge(plan)
     for device in pair:
         _plan_keeps(plan, device)
     for device in pair:  # the whole planned commit, once: interactions between units are caught here
@@ -295,6 +298,20 @@ def _manifest_heads(copy: Copy) -> list[str]:
     return ["/".join(definition_parts(ref.at(revision))) for ref, revision in envelope.head_refs().items()]  # type: ignore[union-attr]
 
 
+def _instance_pins(copy: Copy) -> list[str]:
+    """The revision files an instance pins by its structural fields (``base``, ``derived_from``)."""
+    envelope = parse_exact(tuple(copy.path.split("/")), copy.data)
+    found = []
+    for text in (getattr(envelope, "base", None), getattr(envelope, "derived_from", None)):
+        try:
+            ref = parse_ref(text) if isinstance(text, str) else None
+        except ValueError:
+            continue
+        if isinstance(ref, SourceRef) and ref.pinned:
+            found.append("/".join(definition_parts(ref)))
+    return found
+
+
 def _admit(plan: SyncPlan, dest: str) -> None:
     """Overrides for every copy to ``dest``: name collision, head dependency, then preflight units."""
     store, origin_scans = plan.stores[dest], plan.scans
@@ -306,17 +323,20 @@ def _admit(plan: SyncPlan, dest: str) -> None:
             copies.append(copy)
     by_path = {copy.path: copy for copy in copies}
     for copy in list(copies):
-        if syncable(copy.path) != "manifest":
+        kind = syncable(copy.path)
+        if kind not in ("manifest", "instance"):
             continue
         origin_files, dest_files = origin_scans[copy.origin].files, origin_scans[dest].files  # type: ignore[attr-defined]
-        missing = [path for path in _manifest_heads(copy) if origin_files.get(path) is None or not (
+        needs = _manifest_heads(copy) if kind == "manifest" else _instance_pins(copy)
+        missing = [path for path in needs if origin_files.get(path) is None or not (
             dest_files.get(path) == origin_files.get(path)
             or (path in by_path and by_path[path].data == origin_files.get(path)))]
         if missing:
             copies.remove(copy)
             del by_path[copy.path]
             plan.conflicts[copy.path] = Conflict(copy.path, "head_dependency",
-                                                 f"heads not identical on {dest}: {', '.join(missing)}")
+                                                 f"{'heads' if kind == 'manifest' else 'pinned revisions'} "
+                                                 f"not identical on {dest}: {', '.join(missing)}")
     everything = store.transaction()
     _stage(everything, copies, [])
     if not copies or _preflight(everything, f"the copies to {dest}") is None:
@@ -507,6 +527,41 @@ def _kind(path: str) -> str | None:
     return found[0] if found is not None else None
 
 
+def _held_campaigns(scans) -> set[str]:  # type: ignore[no-untyped-def]
+    """Campaigns whose relations 021 effects may have changed: any accepted event, or an ``accepted``
+    folder (any spelling) that cannot be listed, on either device. Fails closed."""
+    held = set()
+    for scan in scans:
+        for path in (*scan.files, *scan.blocked, *scan.skipped):
+            parts = path.split("/")
+            if len(parts) >= 3 and parts[0] == "campaigns" and parts[2].casefold() == "accepted":
+                held.add(parts[1])
+    return held
+
+
+def _group_knowledge(plan: SyncPlan) -> None:
+    """020 commits an append as its records plus one batch: a campaign's knowledge log is one unit.
+
+    If any knowledge path of a campaign is a conflict (diverged batches, a refused or blocked
+    record), no knowledge copy of that campaign lands: half an append would leave records no batch
+    lists, and the log would refuse every later append. The held copies are reported as skipped.
+    """
+    stuck = {_knowledge_campaign(path) for path in plan.conflicts} - {None}
+    if not stuck:
+        return
+    for device in plan.devices:
+        kept, held = [], []
+        for copy in plan.copies[device]:
+            (held if _knowledge_campaign(copy.path) in stuck else kept).append(copy)
+        plan.copies[device] = kept
+        for copy in held:
+            plan.skipped[copy.origin] = tuple(sorted({*plan.skipped.get(copy.origin, ()), copy.path}))
+
+
+def _knowledge_campaign(path: str) -> str | None:
+    return path.split("/")[1] if syncable(path) == "knowledge" else None
+
+
 def _held_relation(path: str, held: set[str]) -> bool:
     """A 017 relation of a campaign whose relations are held back (see ``model.HOLDS_RELATIONS``)."""
     return syncable(path) == "relation" and path.split("/")[1] in held
@@ -567,10 +622,11 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
     def on_denied(keys: frozenset[str]) -> dict[str, bytes | None]:
         denied = {key for key in keys if not key.startswith("kept/")}
         sources = {_source_of(path) for path in denied if syncable(path) not in CAMPAIGN_LOCAL}
+        logs = {_knowledge_campaign(path) for path in denied} - {None}  # a log is one unit, too
         changes: dict[str, bytes | None] = {}
         for copy in copies:
             if copy.path in denied or (syncable(copy.path) not in CAMPAIGN_LOCAL
-                                       and _source_of(copy.path) in sources):
+                                       and _source_of(copy.path) in sources) or _knowledge_campaign(copy.path) in logs:
                 dropped.add(copy.path)
                 if copy.path not in denied:
                     changes[copy.path] = None
@@ -589,6 +645,14 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
                     plan.conflicts[copy.path] = Conflict(
                         copy.path, "denied", f"depends on a write that was not authorized: {error}",
                         MappingProxyType({device: False}))
+                broken = {_knowledge_campaign(copy.path) for copy, _ in refused} - {None}
+                for copy in copies:  # the rest of a refused knowledge log's append stays behind too
+                    if copy.path not in dropped and _knowledge_campaign(copy.path) in broken:
+                        dropped.add(copy.path)
+                        changes[copy.path] = None
+                        plan.conflicts[copy.path] = Conflict(
+                            copy.path, "denied", "its knowledge log's other records were not authorized",
+                            MappingProxyType({device: False}))
         for keep in keeps:
             if str(_kept_key(keep)) in keys:
                 _kept(plan, keep.path, device, False, "keeping it was not authorized")
@@ -660,6 +724,8 @@ def _resolved(plan: SyncPlan, applied: _Applied) -> dict[str, tuple[str, str] | 
     a, b = plan.devices
     found: dict[str, tuple[str, str] | None] = {}
     for path in plan.paths:
+        if path in plan.held:
+            continue
         left, right = _final(plan, applied, path, a), _final(plan, applied, path, b)
         if "blocked" in (left.state, right.state) or left.state != right.state:
             continue
@@ -795,6 +861,9 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         raise ResolveRefused(f"{path} is not a synchronized record")
     if kind == "knowledge":
         raise ResolveRefused(f"{path} is a create-only knowledge record; correct it by appending, never replacing")
+    if kind == "relation" and path.split("/")[1] in _held_campaigns((left.scan(), right.scan())):
+        raise ResolveRefused(f"{path} is held back: its campaign has accepted events (021), and a relation "
+                             "they changed must never arrive without them")
     ids = device_of(left), device_of(right)
     if ids[0] == ids[1]:
         raise SameDevice(f"both libraries are device {ids[0]!r}")
