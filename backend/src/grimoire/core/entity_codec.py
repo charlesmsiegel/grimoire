@@ -24,7 +24,9 @@ from collections.abc import Mapping
 from dataclasses import MISSING, fields
 
 from .abilities import Abilities, Ability, Cost, Effect, Limit, Prerequisite
-from .entity import ADDRESS_KEYS, STATE_TYPES, EntityDefinition, EntityInstance, StateValue
+from .entity import (
+    ADDRESS_KEYS, STATE_TYPES, EntityDefinition, EntityInstance, Individuality, StateValue,
+)
 from .facets import KNOWN_FACETS, Communicative, Facet, FacetBundle, FacetSet, UnknownFacet
 from .identity import InstanceRef, SourceRef
 from .json_value import JsonValueError, freeze_object, thaw
@@ -41,6 +43,8 @@ _ABILITY_NAMES = frozenset({"tags", "excludes", "applies_to"})
 _ABILITY_NULLABLE = frozenset({"description", "range"})
 #: Field values that are the default and so are omitted when encoding.
 _ABILITY_DEFAULTS = {"certainty": "reliable", "description": ""}
+_INDIVIDUALITY_FIELDS = frozenset({"decision_id", "given_name", "decided_by", "scene_id", "template",
+                                   "event_ids"})
 
 
 class CodecError(ValueError):
@@ -117,7 +121,18 @@ def instance_to_payload(instance: EntityInstance) -> dict:
             payload[label] = [_facet_payload(facet) for facet in bundle]
     if instance.state:
         payload["state"] = [_state_payload(value) for value in instance.state]
+    if instance.individuality is not None:
+        payload["individuality"] = _individuality_payload(instance.individuality)
     return {**payload, **thaw(instance.extras)}
+
+
+def _individuality_payload(value: Individuality) -> dict:
+    payload: dict = {"decision_id": value.decision_id, "given_name": value.given_name,
+                     "decided_by": value.decided_by, "scene_id": value.scene_id,
+                     "template": str(value.template)}
+    if value.event_ids:
+        payload["event_ids"] = list(value.event_ids)
+    return payload
 
 
 # --- decoding -------------------------------------------------------------------
@@ -248,6 +263,26 @@ def _required(payload: dict, key: str) -> object:
     return payload.pop(key)
 
 
+def _individuality(entry: object) -> Individuality | None:
+    if entry is None:
+        return None
+    if not isinstance(entry, Mapping) or any(not isinstance(key, str) for key in entry):
+        raise _invalid(f"individuality must be an object with text keys: {entry!r}")
+    unknown = sorted(set(entry) - _INDIVIDUALITY_FIELDS)
+    if unknown:
+        raise CodecError(f"individuality has unknown fields {unknown}", "unknown_individuality_field")
+    missing = sorted(_INDIVIDUALITY_FIELDS - {"event_ids"} - set(entry))
+    if missing:
+        raise _invalid(f"individuality is missing {missing}")
+    try:
+        template = SourceRef.parse(entry["template"])
+    except ValueError as error:
+        raise _invalid(f"individuality template: {error}") from None
+    return Individuality(entry["decision_id"], entry["given_name"], entry["decided_by"],
+                         entry["scene_id"], template,
+                         tuple(_entries(entry.get("event_ids", []), "event_ids")))
+
+
 def definition_from_payload(address: SourceRef, schema: str, payload: object) -> EntityDefinition:
     rest = _open(payload, schema, address, SourceRef)
     name, nature = _required(rest, "name"), _required(rest, "nature")
@@ -268,7 +303,9 @@ def instance_from_payload(address: InstanceRef, schema: str, payload: object) ->
     added = FacetBundle(_facets(rest.pop("added", []), "added"))
     replaced = FacetBundle(_facets(rest.pop("replaced", []), "replaced"))
     state = tuple(_state(entry) for entry in _entries(rest.pop("state", []), "state"))
-    return EntityInstance(address, source, local_name, added, replaced, state, _extras(rest))
+    individuality = _individuality(rest.pop("individuality", None))
+    return EntityInstance(address, source, local_name, added, replaced, state, _extras(rest),
+                          individuality)
 
 
 __all__ = [

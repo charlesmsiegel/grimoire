@@ -14,7 +14,7 @@ import pytest
 from purity import GRIMOIRE, PURE_STDLIB, SRC
 
 ENTITY_MODULES = ("json_value", "facet_errors", "abilities", "facets", "entity", "roster",
-                  "entity_codec", "ability_use")
+                  "entity_codec", "ability_use", "individual")
 CORE = GRIMOIRE / "core"
 _STUB = (
     "import sys, types\n"
@@ -61,6 +61,7 @@ ALLOWED = {
     "roster": {"authority", "entity", "identity", "index", "model"},
     "entity_codec": {"abilities", "entity", "facets", "identity", "json_value"},
     "ability_use": {"abilities", "entity", "facets", "identity"},
+    "individual": {"authority", "entity", "identity", "index", "model", "roster"},
 }
 
 

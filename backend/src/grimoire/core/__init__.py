@@ -109,6 +109,7 @@ from .entity import (
     EntityDefinition,
     EntityError,
     EntityInstance,
+    Individuality,
     Integrity,
     can_be_addressed,
     can_be_carried,
@@ -145,6 +146,7 @@ from .ability_use import (
 )
 from .json_value import JsonObject
 from .roster import CampaignRoster, ControlProblem, UnknownInstance
+from .individual import Individualization, IndividualizationDecision, individualize, is_generic
 from .resolve import MissingDefinition, actor_view
 
 __all__ = [
@@ -173,10 +175,11 @@ __all__ = [
     "rule_themes", "visible_boundaries",
     "Agent", "Biological", "Communicative", "Durable", "FacetBundle", "FacetError", "FacetSet",
     "Physical", "Portable", "Spatial", "UnknownFacet", "JsonObject",
-    "EffectiveEntity", "EntityDefinition", "EntityError", "EntityInstance", "Integrity",
+    "EffectiveEntity", "EntityDefinition", "EntityError", "EntityInstance", "Individuality", "Integrity",
     "can_be_addressed", "can_be_carried", "can_be_damaged", "can_be_heard", "effective_entity",
     "entity_from_character", "instance_from_actor", "integrity", "is_agent", "propose_damage",
     "CampaignRoster", "ControlProblem", "UnknownInstance",
     "Abilities", "Ability", "AbilityAssessment", "AbilityAttempt", "AbilityError", "AbilityRuling",
     "assess_attempt", "check_ruling",
+    "Individualization", "IndividualizationDecision", "individualize", "is_generic",
 ]
