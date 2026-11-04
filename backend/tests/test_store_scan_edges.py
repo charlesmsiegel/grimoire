@@ -192,3 +192,165 @@ def test_recovery_with_one_entry_published_never_shadows_a_lookalike_parent(tmp_
         report = store.last_recovery
     assert sorted(os.listdir(root / "campaigns")) == ["C3", "c1", "c2"]
     assert report.preserved and "/".join(pup_parts) not in dict(report.published)
+
+
+# -- round 14 -------------------------------------------------------------------------------------
+
+def _refusing_lstat(monkeypatch, target):
+    real = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        if os.fspath(path) == str(target):
+            raise PermissionError(13, "Permission denied", str(target))
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(os, "lstat", lstat)
+
+
+def test_an_uninspectable_entry_under_sources_means_cannot_prove_not_a_crash(tmp_path, monkeypatch):
+    a, b = _diverged_r2(tmp_path)
+    try:
+        (b.root / "sources" / "world" / "stray").mkdir()
+        _refusing_lstat(monkeypatch, b.root / "sources" / "world" / "stray")
+        assert b.scan().blocked_reason("sources/world/stray") == "unreadable"
+        txn, _, _ = _replace(a, b)
+        with pytest.raises(RevisionReferenced):
+            txn.check()
+    finally:
+        monkeypatch.undo()
+        a.close()
+        b.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="needs dir_fd to build a tree longer than the path limit")
+def test_a_tree_longer_than_the_path_limit_under_sources_means_cannot_prove(tmp_path):
+    a, b = _diverged_r2(tmp_path)
+    try:
+        fd = os.open(b.root / "sources", os.O_RDONLY)
+        try:
+            for _ in range(20):
+                os.mkdir("d" * 250, dir_fd=fd)
+                deeper = os.open("d" * 250, os.O_RDONLY, dir_fd=fd)
+                os.close(fd)
+                fd = deeper
+        finally:
+            os.close(fd)
+        assert "unreadable" in b.scan().blocked.values()
+        txn, _, _ = _replace(a, b)
+        with pytest.raises(RevisionReferenced):
+            txn.check()
+    finally:
+        a.close()
+        b.close()
+
+
+@pytest.mark.parametrize("source", ["world:notes.swp", "world:thumbs.db"])
+def test_a_case_renamed_noise_named_source_is_blocked_never_absent(tmp_path, source):
+    """``Notes.swp`` is a noise name, but it folds to the valid source folder ``notes.swp``."""
+    path = "sources/" + "/".join(source.split(":")) + "/_source/manifest.json"
+    with LibraryStore.create(tmp_path / "lib") as store:
+        txn = store.transaction()
+        txn.put(SourceManifest(source, OWNER, "N", {}, ()), None)
+        txn.commit(owner_handle())
+        folder = store.root / "sources" / "world" / source.split(":")[1]
+        os.rename(folder, folder.with_name(folder.name.capitalize()))
+        assert store.scan().blocked_reason(path) is not None
+
+
+def test_a_case_rename_of_a_noise_named_source_is_never_read_as_a_deletion(tmp_path):
+    desktop, phone = make_pair(tmp_path)
+    try:
+        txn = desktop.transaction()
+        txn.put(SourceManifest("world:notes.swp", OWNER, "N", {}, ()), None)
+        txn.commit(handle())
+        sync(desktop, phone, handles())
+        folder = phone.root / "sources" / "world" / "notes.swp"
+        os.rename(folder, folder.with_name("Notes.swp"))
+        conflict = sync(desktop, phone, handles()).conflict("sources/world/notes.swp/_source/manifest.json")
+        assert conflict is not None and conflict.code != "deleted"
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_a_pin_below_a_case_renamed_noise_named_source_still_counts(tmp_path):
+    a, b = _diverged_r2(tmp_path)
+    try:
+        txn = b.transaction()
+        txn.put(SourceManifest("world:notes.swp", OWNER, "N", {}, (), extra={"x-pin": f"{HARBOR}/character/wren@r2"}),
+                None)
+        txn.commit(owner_handle())
+        with pytest.raises(RevisionReferenced):
+            _replace(a, b)[0].check()
+        folder = b.root / "sources" / "world" / "notes.swp"
+        os.rename(folder, folder.with_name("Notes.swp"))
+        with pytest.raises(RevisionReferenced):
+            _replace(a, b)[0].check()
+    finally:
+        a.close()
+        b.close()
+
+
+def test_an_uninspectable_noise_named_identifier_folder_is_unreadable_not_skipped(tmp_path, monkeypatch):
+    with LibraryStore.create(tmp_path / "lib") as store:
+        txn = store.transaction()
+        txn.put(SourceManifest("world:notes.swp", OWNER, "N", {}, ()), None)
+        txn.commit(owner_handle())
+        _refusing_lstat(monkeypatch, store.root / "sources" / "world" / "notes.swp")
+        assert store.scan().blocked_reason("sources/world/notes.swp/_source/manifest.json") == "unreadable"
+
+
+def test_recovery_never_publishes_a_replace_whose_hold_vanished(tmp_path):
+    """A crash after a replace's commit point, then the hold's staged file removed while the app is
+    down: the replace's own temp is still staged, so nothing was published, and recovery abandons both."""
+    from grimoire.store.layout import conflict_parts
+    a, b = _diverged_r2(tmp_path)
+    chosen, replaced = (a.root / R2).read_bytes(), (b.root / R2).read_bytes()
+    a.close()
+    root = b.root
+    b.close()
+    r2 = tuple(R2.split("/"))
+    slot = conflict_parts(r2, etag(replaced))
+    (root / ".txn" / "recr2.new").write_bytes(chosen)  # the hold's "rechold.new" is gone
+    journal = Journal("commit", (Entry(r2, "recr2.new", etag(replaced), etag(chosen), "replica"),
+                                 Entry(slot, "rechold.new", None, etag(replaced), "hold")))
+    (root / ".txn" / "journal.json").write_bytes(journal.render())
+    with LibraryStore.open(root):
+        pass
+    assert (root / R2).read_bytes() == replaced
+
+
+_STRAY = ["README.md", "Desktop.ini", "Notes.txt", *([] if os.name == "nt" else ["Icon\r"])]  # NTFS forbids \r
+
+
+@pytest.mark.parametrize("folder, name", [*(("campaigns/c1/instances/character", name) for name in _STRAY),
+                                          *(("sources/world/harbor", name) for name in [*_STRAY, "Notes.json"])])
+def test_a_stray_file_anywhere_never_blocks_a_revision_replace(tmp_path, folder, name):
+    """A regular file that is no record path cannot hold or pin one, wherever it sits. (``Notes.json``
+    in an instances folder is different: on a folding filesystem it is the instance ``notes``.)"""
+    a, b = _diverged_r2(tmp_path)
+    try:
+        (b.root / folder / name).write_bytes(b"note")
+        txn, chosen, _ = _replace(a, b)
+        txn.commit(owner_handle("sources", "campaigns", "kept"))
+        assert (b.root / R2).read_bytes() == chosen
+    finally:
+        a.close()
+        b.close()
+
+
+def test_a_peer_folder_that_is_a_file_is_unreadable_not_absent(tmp_path):
+    with LibraryStore.create(tmp_path / "lib") as store:
+        (store.root / ".sync" / "peers").mkdir(parents=True)
+        (store.root / ".sync" / "peers" / "phone").write_bytes(b"junk")
+        with pytest.raises(OSError):
+            store.read_sync_state("peers/phone/pending.json")
+
+
+def test_check_refuses_a_lookalike_conflicts_folder(tmp_path):
+    with LibraryStore.create(tmp_path / "lib") as store:
+        (store.root / ".Conflicts").mkdir()
+        try:
+            with pytest.raises(NameCollision):
+                store.transaction().check()
+        finally:
+            (store.root / ".Conflicts").rmdir()

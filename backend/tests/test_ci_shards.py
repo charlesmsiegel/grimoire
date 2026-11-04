@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -38,7 +39,14 @@ def test_collection_under_each_shard_is_disjoint_and_complete():
 
 
 def test_the_workflow_runs_both_windows_shards():
+    """Read structurally (no YAML dependency): the compat matrix has exactly one windows-latest entry per
+    shard, no other entry is sharded, and the compat job's pytest step passes the shard on."""
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "GRIMOIRE_TEST_SHARD: ${{ matrix.shard }}" in text
-    for shard in SHARDS:
-        assert f"shard: {shard}" in text
+    compat = text[text.index("\n  compat:"):]
+    entries = re.findall(r"- os: (\S+)\n((?:\s+\w+: .+\n)*)", compat)
+    sharded = sorted((os_name, match.group(1)) for os_name, body in entries
+                     for match in [re.search(r"shard: (\S+)", body)] if match)
+    assert sharded == sorted(("windows-latest", shard) for shard in SHARDS)
+    assert not [os_name for os_name, body in entries if os_name == "windows-latest" and "shard:" not in body]
+    step = compat[compat.index("run: python -m pytest"):]
+    assert re.match(r"run: python -m pytest backend/tests -q\n\s+env:\n\s+GRIMOIRE_TEST_SHARD: \$\{\{ matrix.shard \}\}", step)

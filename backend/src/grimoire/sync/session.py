@@ -349,7 +349,7 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
                 return origin_scan.blocked_reason(path) is not None or dest_scan.blocked_reason(path) is not None
             missing = sorted(path for path in pins | heads if final(path) != origin_files.get(path) or blocked(path)
                              or (path in heads and origin_files.get(path) is None))
-            actors = sorted(path for path in _named_paths(parts, copy.data)
+            actors = sorted(path for path in [*_named_paths(parts, copy.data), *_home_scope(copy.path)]
                             if (path in origin_files and final(path) is None) or blocked(path))
             campaign = _knowledge_campaign(copy.path)
             if campaign is not None and campaign not in here and (
@@ -369,6 +369,11 @@ def _named_paths(parts: tuple[str, ...], data: bytes) -> list[str]:
     """The instance and chat files a record names (``replica.instances_named``/``chats_named``)."""
     return sorted({*("/".join(instance_parts(ref)) for ref in instances_named(parts, data)),
                    *("/".join(chat_parts(ref)) for ref in chats_named(parts, data))})
+
+
+def _home_scope(path: str) -> list[str]:
+    """A 107 chat's own play scope: a chat never lands without the scope the origin homes it in."""
+    return [f"campaigns/{path.split('/')[1]}/scope.json"] if syncable(path) == "chat" else []
 
 
 def _campaigns_with_state(paths) -> set[str]:  # type: ignore[no-untyped-def]
@@ -579,10 +584,11 @@ def _pending_entries(plan: SyncPlan, device: str) -> dict[str, Mapping[str, obje
         if path not in entries and plan.bases[path].kind == "uncertain" and (
                 path not in plan.agreed or _both_absent_uncertain(plan, path)):
             entries[path] = {"uncertain": True}
-        elif path not in entries and plan.bases[path].kind == "first" and (
+        elif path not in entries and plan.bases[path].kind in ("first", "none", "deleted") and (
                 path in plan.agreed or _held_agreed(plan, path)):
-            # agreed now, on a first sync: mark it, so a crash before the archives are written never
-            # leaves a "first" base behind (a later one-sided deletion would be undone)
+            # agreed now on a base that does not say so (a first sync, a conflict ended by hand, a
+            # tombstone): mark it, so a crash before the archives are written never leaves that base
+            # behind (a later one-sided deletion would be undone)
             side = plan.sides[path][device]
             if side.state == "present":
                 entries[path] = {"from": side.etag, "to": side.etag}
@@ -1042,7 +1048,7 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             if scans[winner].files.get(pinned) != scans[receiver].files.get(pinned) or any(
                     scans[device].blocked_reason(pinned) is not None for device in pair):
                 raise ResolveRefused(f"{pinned}, which {done} pins, differs between the devices; resolve it first")
-        for named in _named_paths(tuple(done.split("/")), written):
+        for named in [*_named_paths(tuple(done.split("/")), written), *_home_scope(done)]:
             if (named in scans[winner].files and named not in scans[receiver].files) or any(
                     scans[device].blocked_reason(named) is not None for device in pair):
                 raise ResolveRefused(f"{named}, which {done} names, is missing on {receiver}; sync or resolve it first")

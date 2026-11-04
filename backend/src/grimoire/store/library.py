@@ -11,6 +11,7 @@ guarded decision table (see ``engine``). See ``docs/STORAGE.md``.
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
 import re
 import stat
@@ -905,6 +906,10 @@ class LibraryStore:
             for depth in range(1, len(parts) + 1):
                 if self._access.presence(parts[:depth]) == "mismatch":
                     raise NameCollision(f"{'/'.join(parts[:depth])} exists only under another spelling")
+            for depth in range(1, len(parts)):  # a damaged folder (a file there) is unreadable, never absent
+                info = lstat_or_none(self._access.path(parts[:depth]))
+                if info is not None and not stat.S_ISDIR(info.st_mode) and not is_link(self._access.path(parts[:depth])):
+                    raise NotADirectoryError(errno.ENOTDIR, f"{'/'.join(parts[:depth])} is not a folder")
             return self._access.read(parts)
 
     def sync_peers(self) -> tuple[str, ...]:

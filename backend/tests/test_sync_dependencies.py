@@ -130,7 +130,8 @@ def test_k_a_denied_knowledge_record_holds_back_its_whole_append(tmp_path):
 
 
 def test_r1_resolve_refuses_a_chat_whose_actor_the_receiver_lacks(tmp_path):
-    """Kills R1 (resolve's named-actor check removed)."""
+    """A look-alike of the actor on the receiver: its canonical path is blocked (`shadowed`), so this pins
+    the blocked branch of resolve's named-actor check (`test_sync_guards.py` pins the plain absent one)."""
     from chat_fixtures import ANYA, MARA, chat_library
     from grimoire.chats.model import Launch
     desktop, phone = _chat_pair(tmp_path)

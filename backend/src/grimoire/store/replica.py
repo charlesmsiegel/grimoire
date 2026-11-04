@@ -220,9 +220,10 @@ def _canonical(name: str) -> bool:
 
 def _real_identifier(access: Access, parts: Parts) -> bool:
     """The loader's rule: every file the store writes ends in ``.json``, so a noise-looking name
-    (``desktop.ini``, ``test.swp``) is real only as a directory with a valid identifier name."""
+    (``desktop.ini``, ``test.swp``) is real only as a directory (or link) whose name, as a folding
+    filesystem compares it, is a valid identifier: ``Notes.swp`` can be ``world:notes.swp``."""
     try:
-        validate_segment(parts[-1], "name")
+        validate_segment(_folded(parts[-1]), "name")
     except ValueError:
         return False
     try:
@@ -294,21 +295,24 @@ def _may_hold_records(access: Access, original: Parts) -> bool:
     if parts[0] == SOURCES:
         if SOURCE_DIR in parts and parts[parts.index(SOURCE_DIR) + 1:][:1] in ((IMAGES,), (PLACEMENTS,)):
             return False  # 018's images and placements attach to entities, never to revisions
-        info = lstat_or_none(access.path(original))  # by kind, not name: source folder names may hold dots
-        if info is not None and stat.S_ISREG(info.st_mode):
-            return parts[-1].endswith(SUFFIX)  # a regular file pins only if it is JSON
-        return True  # a folder, a link or something unreadable may hold records
+        return not _regular_file(access, original)  # by kind, not name: source folder names may hold dots
     if parts[0] != CAMPAIGNS:
         return False  # the library root's other entries never hold records
-    if len(parts) == 2:
-        try:
-            info = lstat_or_none(access.path(original))
-        except OSError:
-            return True
-        return info is None or not stat.S_ISREG(info.st_mode)  # a regular file is never a campaign folder
     if len(parts) < 2:
         return True  # campaigns/ itself
-    return parts[2] in _RECORD_FOLDERS or parts[2] == SCOPE_FILE
+    if _regular_file(access, original):
+        return False  # a regular file that is no record path (``README.md``, ``Desktop.ini``) holds none
+    return len(parts) == 2 or parts[2] in _RECORD_FOLDERS or parts[2] == SCOPE_FILE
+
+
+def _regular_file(access: Access, original: Parts) -> bool:
+    """Whether ``original`` is certainly a regular file (one that is no canonical record path, here):
+    a folder, a link, or anything that cannot be inspected may hold records."""
+    try:
+        info = lstat_or_none(access.path(original))
+    except OSError:
+        return False
+    return info is not None and stat.S_ISREG(info.st_mode)
 
 
 def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str] = frozenset()) -> None:
