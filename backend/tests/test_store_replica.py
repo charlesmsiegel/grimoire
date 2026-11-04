@@ -520,6 +520,8 @@ def test_a_mixed_commit_survives_every_crash_and_error(tmp_path, regenerable):
          completes_after(Target("replace", target="lib/.txn/journal.json"))),
         normalize=drop_empty_dirs)
     explore_crashes(scenario, tmp_path / "errors", errors=True).assert_ok()
+    if not regenerable:
+        return  # publish/hold recovery is the store's ordinary table, crash-explored in test_store_recovery
     report = explore_crashes(scenario, tmp_path / "recovery", recovery_crashes=True,
                              select=lambda op: op.kind == "replace")
     report.assert_ok()

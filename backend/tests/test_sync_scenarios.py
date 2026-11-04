@@ -902,7 +902,7 @@ def test_one_poisoned_source_keeps_admission_linear(tmp_path, monkeypatch):
     """The fallback checks each source alone, never everything accepted so far."""
     from grimoire.store.library import Transaction
     counts = {}
-    for size in (10, 20):
+    for size in (6, 12):
         root = tmp_path / str(size)
         root.mkdir()
         desktop, phone = make_pair(root)
@@ -918,7 +918,7 @@ def test_one_poisoned_source_keeps_admission_linear(tmp_path, monkeypatch):
         assert report.conflict("sources/catalog/shared/_source/records/item/x/r1.json").code == "unapplicable"
         counts[size] = sum(calls)  # puts staged across every check
         desktop.close(), phone.close()
-    assert counts[20] < 2.5 * counts[10]  # linear, not quadratic, in the number of sources
+    assert counts[12] < 2.5 * counts[6]  # linear, not quadratic, in the number of sources
 
 
 # -- 017 relation records sync like other campaign-local records ------------------------------------

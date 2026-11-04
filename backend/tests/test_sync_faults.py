@@ -93,13 +93,18 @@ def _with_both(function):
     return phase
 
 
-_action = _with_both(lambda desktop, phone: sync_until_quiet(desktop, phone, handles()))
-_recover = _with_both(lambda desktop, phone: sync(desktop, phone, handles()))
+_until_quiet = _with_both(lambda desktop, phone: sync_until_quiet(desktop, phone, handles()))
+_once = _with_both(lambda desktop, phone: sync(desktop, phone, handles()))
+_recover = _once
 
 
-def _scenario(invariants, *, meddle=None, name="sync"):
+def _scenario(invariants, *, meddle=None, name="sync", quiet=True):
+    """``quiet``: the action syncs until a sync writes nothing (needed when an interleave makes the
+    first sync stop). Without external edits one sync is already followed by a quiet one, so the
+    crash-only S9 scenarios use a single sync: the same fault points at a fraction of the cost."""
     locker = ProcessLocker()  # one per scenario: a lock leaked by a crashed phase is visible
-    return CrashScenario(name, _setup, lambda ops, root: _action(ops, root, locker),
+    action = _until_quiet if quiet else _once
+    return CrashScenario(name, _setup, lambda ops, root: action(ops, root, locker),
                          lambda ops, root: _recover(ops, root, locker), invariants,
                          meddle=meddle, normalize=drop_empty_dirs)
 
@@ -204,9 +209,9 @@ def _recovery_boundary(op: FileOp) -> object:
 
 
 @functools.cache
-def _baseline_trace() -> tuple[FileOp, ...]:
+def _baseline_trace(quiet: bool = True) -> tuple[FileOp, ...]:
     with tempfile.TemporaryDirectory() as folder:
-        report = run_plans(_scenario(()), [], Path(folder))
+        report = run_plans(_scenario((), quiet=quiet), [], Path(folder))
         report.assert_ok()
         return report.runs[0].action_trace
 
@@ -217,7 +222,7 @@ S9 = (CONVERGES, VERSIONS_SURVIVE, KEEPS_BOTH, idempotent_recovery(), RESIDUE)
 
 
 def test_s9_the_baseline_sync_does_everything_once():
-    trace = _baseline_trace()
+    trace = _baseline_trace(quiet=False)
     commits = [op for op in trace if _is_journal_replace(op)]
     assert len(commits) == 6  # data(a), data(b), archive(b), archive(a), pending(b), pending(a)
     assert [op.target.split("/")[0] for op in commits] == [DESKTOP, PHONE, PHONE, DESKTOP, PHONE, DESKTOP]
@@ -225,28 +230,28 @@ def test_s9_the_baseline_sync_does_everything_once():
 
 
 def test_s9_a_crash_at_any_commit_boundary_converges(tmp_path):
-    points = commit_boundaries(_baseline_trace())
-    report = explore_crashes(_scenario(S9), tmp_path, torn=False, select=_select(points, {"before", "after"}))
+    points = commit_boundaries(_baseline_trace(quiet=False))
+    report = explore_crashes(_scenario(S9, quiet=False), tmp_path, torn=False, select=_select(points, {"before", "after"}))
     report.assert_ok()
     assert report.points_explored == sum(len(timings - {"fail"}) for timings in points.values()) == 18
 
 
 def test_s9_an_io_error_at_any_commit_boundary_converges(tmp_path):
-    points = commit_boundaries(_baseline_trace())
-    report = explore_crashes(_scenario(S9), tmp_path, errors=True, torn=False,
+    points = commit_boundaries(_baseline_trace(quiet=False))
+    report = explore_crashes(_scenario(S9, quiet=False), tmp_path, errors=True, torn=False,
                              select=_select(points, {"fail"}))
     report.assert_ok()
     assert report.points_explored == 12
 
 
 def test_s9_a_crash_while_recovering_still_converges(tmp_path):
-    trace = _baseline_trace()
+    trace = _baseline_trace(quiet=False)
     commits = [op.index for op in trace if _is_journal_replace(op)]
     # crash right after the phone's data commit point (the desktop's data already published), and
     # right before the desktop's archive commit point (the phone's archive already written); then
     # crash the recovering sync before and after each of its own commit points
     chosen = {commits[1]: frozenset({"after"}), commits[3]: frozenset({"before"})}
-    report = explore_crashes(_scenario(S9), tmp_path, torn=False, recovery_crashes=True,
+    report = explore_crashes(_scenario(S9, quiet=False), tmp_path, torn=False, recovery_crashes=True,
                              select=_select(chosen, {"before", "after"}), recovery_select=_recovery_boundary)
     report.assert_ok()
     assert any(run.recover_trace for run in report.runs[1:])
@@ -369,7 +374,7 @@ EXHAUSTIVE = pytest.mark.skipif(not os.environ.get("GRIMOIRE_EXHAUSTIVE_SYNC"),
 @EXHAUSTIVE
 def test_exhaustive_every_mutating_operation_crashed_torn_and_failed(tmp_path):
     """No commit-outcome reduction: every mutating operation, every timing (about 220 points)."""
-    report = explore_crashes(_scenario(S9), tmp_path, errors=True)
+    report = explore_crashes(_scenario(S9, quiet=False), tmp_path, errors=True)
     report.assert_ok()
     assert report.points_explored > 200
 

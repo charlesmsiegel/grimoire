@@ -57,11 +57,15 @@ def _oracle(kind, base, left, right):
     return Decision("conflict", "concurrent")
 
 
-@pytest.mark.parametrize("kind, base, left, right", COMBOS)
-def test_every_combination_follows_the_table_and_is_mirror_symmetric(kind, base, left, right):
-    decision = decide(kind, base, left, right)
-    assert decision == _oracle(kind, base, left, right)
-    assert decide(kind, base, right, left) == decision.mirrored()
+def test_every_combination_follows_the_table_and_is_mirror_symmetric():
+    """All combinations in one test (one pytest item each is slow on Windows runners)."""
+    wrong = []
+    for kind, base, left, right in COMBOS:
+        decision = decide(kind, base, left, right)
+        if decision != _oracle(kind, base, left, right) or decide(kind, base, right, left) != decision.mirrored():
+            wrong.append((kind, base, left, right, decision))
+    assert not wrong, f"{len(wrong)} of {len(COMBOS)} combinations disagree, e.g. {wrong[:3]}"
+    assert len(COMBOS) == len(KINDS) * len(BASES) * len(SIDES) ** 2
 
 
 def test_a_copy_only_ever_lands_on_an_absent_file_or_the_base_or_a_proven_ancestor():
