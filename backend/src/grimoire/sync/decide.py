@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from .model import FIRST, NONE, UNCERTAIN, Base, Decision, Side
+from .model import FIRST, IMMUTABLE_KINDS, NONE, UNCERTAIN, Base, Decision, Side
 
 AGREED = Decision("agreed")
 
@@ -20,7 +20,8 @@ def _copy(origin: str) -> Decision:
 def decide(kind: str, base: Base, left: Side, right: Side) -> Decision:
     """Rows 1-14 of the decision table, plus the immutable-revision override.
 
-    ``kind`` is the canonical record kind (``definition``, ``manifest`` or ``instance``).
+    ``kind`` is the canonical record kind (``syncable``); ``definition`` and ``knowledge`` records
+    are immutable (create-only).
     Swapping ``left`` and ``right`` mirrors the decision.
     """
     if "blocked" in (left.state, right.state):                                     # 1
@@ -35,7 +36,7 @@ def decide(kind: str, base: Base, left: Side, right: Side) -> Decision:
     if base.kind in ("first", "none"):
         if one_absent:                                                             # 4, 6
             return _copy(present)
-        if base.kind == "first" and kind != "definition":                          # 5
+        if base.kind == "first" and kind not in IMMUTABLE_KINDS:                          # 5
             left_descends = left.previous == right.etag
             right_descends = right.previous == left.etag
             if left_descends != right_descends:
@@ -48,7 +49,7 @@ def decide(kind: str, base: Base, left: Side, right: Side) -> Decision:
             other = "right" if "left" in unchanged else "left"
             if (right if other == "right" else left).state == "absent":            # 9
                 return _conflict("deleted")
-            if kind == "definition":                                               # 8 (immutable)
+            if kind in IMMUTABLE_KINDS:                                               # 8 (immutable)
                 return _conflict("revision_modified")
             return _copy(other)                                                    # 8
         if one_absent:                                                             # 10

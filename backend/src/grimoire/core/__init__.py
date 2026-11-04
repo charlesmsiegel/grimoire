@@ -1,7 +1,7 @@
 """V2 fiction-first domain core (no I/O, UI, or model provider dependencies)."""
 
 from .identity import (
-    ChatRef, IdentityConflict, InstanceRef, LegacyId, RelationRef, ScopeRef, SourceRef, parse_ref,
+    ChatRef, IdentityConflict, InstanceRef, KnowledgeRef, LegacyId, RelationRef, ScopeRef, SourceRef, parse_ref,
 )
 from .index import (
     BrokenReference,
@@ -109,6 +109,7 @@ from .entity import (
     EntityDefinition,
     EntityError,
     EntityInstance,
+    Individuality,
     Integrity,
     can_be_addressed,
     can_be_carried,
@@ -136,11 +137,12 @@ from .facets import (
 )
 from .json_value import JsonObject
 from .roster import CampaignRoster, ControlProblem, UnknownInstance
+from .individual import Individualization, IndividualizationDecision, individualize, is_generic
 from .resolve import MissingDefinition, actor_view
 
 __all__ = [
     "ActorView", "CampaignActor", "CharacterDefinition", "ControlAssignment", "SourceRef",
-    "ChatRef", "IdentityConflict", "InstanceRef", "LegacyId", "RelationRef", "ScopeRef", "parse_ref",
+    "ChatRef", "IdentityConflict", "InstanceRef", "KnowledgeRef", "LegacyId", "RelationRef", "ScopeRef", "parse_ref",
     "BrokenReference", "DefinitionIndex", "DefinitionLink", "LegacyIdMap",
     "SourceDescriptor", "UnmappedLegacyId",
     "MissingDefinition", "actor_view",
@@ -164,8 +166,9 @@ __all__ = [
     "rule_themes", "visible_boundaries",
     "Agent", "Biological", "Communicative", "Durable", "FacetBundle", "FacetError", "FacetSet",
     "Physical", "Portable", "Spatial", "UnknownFacet", "JsonObject",
-    "EffectiveEntity", "EntityDefinition", "EntityError", "EntityInstance", "Integrity",
+    "EffectiveEntity", "EntityDefinition", "EntityError", "EntityInstance", "Individuality", "Integrity",
     "can_be_addressed", "can_be_carried", "can_be_damaged", "can_be_heard", "effective_entity",
     "entity_from_character", "instance_from_actor", "integrity", "is_agent", "propose_damage",
     "CampaignRoster", "ControlProblem", "UnknownInstance",
+    "Individualization", "IndividualizationDecision", "individualize", "is_generic",
 ]

@@ -189,3 +189,83 @@ def test_the_envelope_fixture_depends_on_no_grimoire_module():
     imported = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
     imported |= {node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
     assert not any(name.startswith("grimoire") for name in imported)
+
+
+# --- individuality (024) ---------------------------------------------------------
+
+GOBLIN_1 = InstanceRef("c1", "creature", "goblin-1")
+
+
+def snik(**fields):
+    from grimoire.core.entity import Individuality
+    values = dict(decision_id="d-snik", given_name="Snik", decided_by="director", scene_id="s3",
+                  template=ref("species", "goblin"), event_ids=("evt-talk",))
+    return EntityInstance(GOBLIN_1, ref("species", "goblin").unpinned(), "Snik the Bold",
+                          individuality=Individuality(**{**values, **fields}))
+
+
+def test_individuality_round_trips_canonically_through_an_envelope():
+    for value in (snik(), snik(event_ids=())):
+        payload = instance_to_payload(value)
+        envelope = NeutralEnvelope.wrap(GOBLIN_1, "user", ENTITY_SCHEMA, "rev-1", payload)
+        assert instance_from_payload(envelope.address, envelope.schema, envelope.payload) == value
+        assert strict_equal(instance_to_payload(instance_from_payload(GOBLIN_1, ENTITY_SCHEMA, payload)),
+                            payload)
+    assert instance_to_payload(snik()) == {
+        "source": "world:emberfall/species/goblin", "local_name": "Snik the Bold",
+        "individuality": {"decision_id": "d-snik", "given_name": "Snik", "decided_by": "director",
+                          "scene_id": "s3", "template": "world:emberfall/species/goblin@r1",
+                          "event_ids": ["evt-talk"]},
+    }
+    assert "event_ids" not in instance_to_payload(snik(event_ids=()))["individuality"]
+
+
+def test_individuality_decodes_from_frozen_mappings_and_tuples():
+    from types import MappingProxyType
+    payload = instance_to_payload(snik())
+    frozen = {**payload, "individuality": MappingProxyType(
+        {**payload["individuality"], "event_ids": ("evt-talk",)})}
+    assert instance_from_payload(GOBLIN_1, ENTITY_SCHEMA, frozen) == snik()
+
+
+def test_a_pre_024_payload_decodes_without_individuality():
+    decoded = instance_from_payload(GOBLIN_1, ENTITY_SCHEMA, {"source": "world:emberfall/species/goblin"})
+    assert decoded.individuality is None and not decoded.extras
+
+
+def individuality_reason(**changes):
+    payload = instance_to_payload(snik())
+    entry = {**payload["individuality"], **changes}
+    entry = {key: value for key, value in entry.items() if value is not ...}
+    with pytest.raises(ValueError) as caught:
+        instance_from_payload(GOBLIN_1, ENTITY_SCHEMA, {**payload, "individuality": entry})
+    return caught.value.reason
+
+
+def test_individuality_unknown_fields_are_refused_not_dropped():
+    assert individuality_reason(**{"x-mood": "smug"}) == "unknown_individuality_field"
+
+
+@pytest.mark.parametrize("changes", [
+    {"template": "world:emberfall/species/goblin"},   # unpinned
+    {"template": "not a ref"},
+    {"template": ...},
+    {"decision_id": ...},
+    {"scene_id": ""},
+    {"event_ids": "evt-talk"},
+    {"event_ids": ["evt-talk", "evt-talk"]},
+])
+def test_malformed_individuality_is_refused(changes):
+    assert individuality_reason(**changes) == "invalid_field"
+
+
+def test_individuality_shape_and_consistency_errors():
+    payload = instance_to_payload(snik())
+    for value, expected in (("snik", "invalid_field"), (["x"], "invalid_field")):
+        with pytest.raises(ValueError) as caught:
+            instance_from_payload(GOBLIN_1, ENTITY_SCHEMA, {**payload, "individuality": value})
+        assert caught.value.reason == expected
+    assert individuality_reason(template="world:emberfall/species/orc@r1") == "template_mismatch"
+    with pytest.raises(ValueError) as caught:
+        instance_from_payload(GOBLIN_1, ENTITY_SCHEMA, {k: v for k, v in payload.items() if k != "local_name"})
+    assert caught.value.reason == "individual_needs_name"

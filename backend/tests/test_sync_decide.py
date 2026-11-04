@@ -18,7 +18,7 @@ E, X, Y = (etag(text) for text in (b"base", b"x", b"y"))
 BASES = [FIRST, NONE, UNCERTAIN, Base("agreed", E), Base("deleted", E)]
 SIDES = [Side.absent(), Side.present(E), Side.present(X), Side.present(Y), Side.present(X, previous=E),
          Side.present(E, previous=X), Side.present(Y, previous=X), Side.blocked("link")]
-KINDS = ["definition", "manifest", "instance", "scope", "chat", "relation"]
+KINDS = ["definition", "manifest", "instance", "scope", "chat", "relation", "knowledge"]
 COMBOS = list(itertools.product(KINDS, BASES, SIDES, SIDES))
 
 
@@ -35,7 +35,7 @@ def _oracle(kind, base, left, right):
     if base.kind in ("first", "none") and absent:
         return Decision("copy", origin=present)
     if base.kind == "first":
-        if kind != "definition":
+        if kind not in ("definition", "knowledge"):
             if left.previous == right.etag and right.previous != left.etag:
                 return Decision("copy", origin="left")
             if right.previous == left.etag and left.previous != right.etag:
@@ -49,7 +49,7 @@ def _oracle(kind, base, left, right):
             origin = "right" if left.etag == base.etag else "left"
             if changed.state == "absent":
                 return Decision("conflict", "deleted")
-            return Decision("conflict", "revision_modified") if kind == "definition" else Decision("copy", origin=origin)
+            return Decision("conflict", "revision_modified") if kind in ("definition", "knowledge") else Decision("copy", origin=origin)
         return Decision("conflict", "edit_delete" if absent else "concurrent")
     if absent:
         survivor = right if absent == ["left"] else left
@@ -81,7 +81,7 @@ def test_a_copy_only_ever_lands_on_an_absent_file_or_the_base_or_a_proven_ancest
         if dest.state == "absent":
             assert not (base.kind == "deleted" and origin.etag == base.etag)  # never resurrect
             continue
-        assert kind != "definition"  # revisions are only ever created
+        assert kind not in ("definition", "knowledge")  # immutable records are only ever created
         assert (base.kind == "agreed" and dest.etag == base.etag) or (
             base.kind == "first" and origin.previous == dest.etag)
     assert copies > 50

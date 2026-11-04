@@ -95,6 +95,9 @@ def parse(data: bytes) -> Journal:
         target, temp = raw["target"], raw["temp"]
         if type(target) is not str or not valid_target(kind, tuple(target.split("/"))):
             raise RecoveryFailed(f"journal target is not a {kind} path: {target!r}")
+        found = classify(tuple(target.split("/")))
+        if found is not None and found[0] == "knowledge" and raw["old"] is not None:  # create-only
+            raise RecoveryFailed(f"journal would replace a create-only knowledge record: {target!r}")
         if type(temp) is not str or not is_staging_name(temp):
             raise RecoveryFailed(f"journal temp is not a staging name: {temp!r}")
         if not (raw["old"] is None or is_etag(raw["old"])) or not is_etag(raw["new"]):

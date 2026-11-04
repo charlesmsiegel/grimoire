@@ -943,3 +943,39 @@ def test_relations_travel_and_concurrent_relation_edits_keep_both(tmp_path):
     for store in (desktop, phone):
         assert store.load().problems == ()
         assert len(kept(store)) == 1
+
+
+# -- 020 knowledge records are create-only on both devices ---------------------------------------------
+
+def _knowledge(store, family, record_id, payload):
+    from grimoire.core.identity import KnowledgeRef
+    from grimoire.store import KnowledgeRecord
+    ref = KnowledgeRef("c1", family, record_id)
+    txn = store.transaction()
+    txn.put(KnowledgeRecord(ref, "grimoire.test-knowledge/0", payload), None)
+    txn.commit(handle())
+    return "/".join(("campaigns", "c1", "events" if family == "event" else f"evidence/{family}",
+                     f"{record_id}.json"))
+
+
+def test_knowledge_records_travel_create_only_and_are_never_replaced(pair):
+    desktop, phone = pair
+    event = _knowledge(desktop, "event", "e-1", {"what": "the lighthouse went dark"})
+    belief = _knowledge(phone, "belief", "b-1", {"who": "wren"})
+    report = sync(desktop, phone, handles())
+    assert {(event, PHONE), (belief, DESKTOP)} <= set(report.copied)
+    assert canonical(desktop) == canonical(phone)
+    # a hand edit of an immutable record is a conflict, never copied over the other device's file
+    original = (phone.root / event).read_bytes()
+    (desktop.root / event).write_bytes(original.replace(b"went dark", b"was relit"))
+    assert sync(desktop, phone, handles()).conflict(event).code == "revision_modified"
+    assert (phone.root / event).read_bytes() == original
+    # both devices appending the same log batch number keeps both, never merges or overwrites
+    mine = _knowledge(desktop, "batch", "0000000001", {"entries": ["desktop"]})
+    _knowledge(phone, "batch", "0000000001", {"entries": ["phone"]})
+    found = sync(desktop, phone, handles()).conflict(mine)
+    assert found.code == "missing_ancestor" and dict(found.kept) == {DESKTOP: True, PHONE: True}
+    with pytest.raises(ResolveRefused, match="create-only"):
+        resolve(desktop, phone, mine, etag((desktop.root / mine).read_bytes()),
+                {DESKTOP: etag((desktop.root / mine).read_bytes()), PHONE: etag((phone.root / mine).read_bytes())},
+                handles())

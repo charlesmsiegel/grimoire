@@ -16,7 +16,8 @@ from grimoire.core.identity import InstanceRef, SourceRef
 from .diskops import is_link, lstat_or_none
 from .engine import Access
 from .envelope import (
-    EnvelopeError, RecordEnvelope, ScopeRecord, SourceManifest, parse_record, parse_scope_record, parse_source,
+    EnvelopeError, KnowledgeRecord, RecordEnvelope, ScopeRecord, SourceManifest, parse_knowledge_record,
+    parse_record, parse_scope_record, parse_source,
 )
 from .errors import InvalidEnvelope, LinkRefused, RevisionReferenced, UnstorableIdentifier
 from .jsonfmt import MAX_FILE_BYTES, JsonError, parse_strict
@@ -55,7 +56,7 @@ class CanonicalScan:
         return None
 
 
-def parse_exact(parts: Parts, data: bytes) -> RecordEnvelope | SourceManifest | ScopeRecord:
+def parse_exact(parts: Parts, data: bytes) -> RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord:
     """The envelope ``data`` holds at canonical ``parts``; ``InvalidEnvelope`` (with ``code``) otherwise."""
     found = classify(parts)
     if found is None or found[0] == "ledger":
@@ -68,9 +69,13 @@ def parse_exact(parts: Parts, data: bytes) -> RecordEnvelope | SourceManifest | 
         raise _invalid("malformed", f"{'/'.join(parts)}: {error}") from None
     try:
         if found[0] == "manifest":
-            envelope: RecordEnvelope | SourceManifest | ScopeRecord = parse_source(document)[0]
+            envelope: RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord = parse_source(document)[0]
             if envelope.source != found[1]:
                 raise _invalid("address_mismatch", f"{'/'.join(parts)} holds the manifest of {envelope.source}")
+        elif found[0] == "knowledge":  # 020's create-only events, evidence and log batches
+            envelope = parse_knowledge_record(document)[0]
+            if envelope.address != found[1]:
+                raise _invalid("address_mismatch", f"{'/'.join(parts)} holds {envelope.address}")
         elif found[0] in ("scope", "chat", "relation"):  # 107's scope and chat, 017's relation records
             envelope = parse_scope_record(document)[0]
             if envelope.address != found[1]:
@@ -201,7 +206,7 @@ def check_unreferenced(access: Access, ref: SourceRef) -> None:
     found = scan(access)
     for path, reason in found.blocked.items():
         kind = classify(tuple(path.split("/")))
-        if kind is None or kind[0] in ("manifest", "instance", "scope", "chat"):
+        if kind is None or kind[0] in ("manifest", "instance", "scope", "chat", "relation", "knowledge"):
             raise RevisionReferenced(f"cannot prove {ref} is unreferenced: {path} is {reason}")
     for path, data in found.files.items():
         envelope = parse_exact(tuple(path.split("/")), data)
@@ -212,7 +217,7 @@ def check_unreferenced(access: Access, ref: SourceRef) -> None:
             for link in envelope.links:
                 if ref in (_pinned(link.subject), _pinned(link.object)):
                     raise RevisionReferenced(f"{path} links {ref}")
-        elif isinstance(envelope, ScopeRecord):
+        elif isinstance(envelope, (ScopeRecord, KnowledgeRecord)):
             if ref in _payload_refs(envelope.payload):
                 raise RevisionReferenced(f"{path} binds {ref}")
         elif isinstance(envelope.address, InstanceRef):

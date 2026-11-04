@@ -1,5 +1,7 @@
 # Accepted events, observations and actor evidence
 
+**Status:** **first slice implemented**, headless. It consists of `grimoire.evidence` (a pure codec and assembly), `grimoire.evidencestore` (the service), and an additive, create-only `events/`/`evidence/` record family in `grimoire.store` with a hash-chained knowledge log. The contract is in [EVIDENCE.md](../../EVIDENCE.md). The proving scenario, the failure cases, an in-memory and an on-disk damage property test, and the crash exploration are executable. Retcon-aware references, materialized projections and guided repair are still later milestones. There is no playable app yet.
+
 **Outcome:** Canonical events are different from actor-specific observations, reports, hypotheses and false beliefs.
 
 ## Scope and first proof
@@ -28,6 +30,8 @@ A 107 lightweight chat has a stable campaign namespace even without an authored 
 
 Persist 017's claim shapes (see [GRAPH](../../GRAPH.md#claims-what-an-actor-thinks-is-connected)) with the propositions they shape. Run `check_subjects` before persisting propositions and rulings. Own definition-subject and future-instance validity, which 017's check does not cover.
 
+**Status:** not yet met by 020's first slice, which was specified before 017 landed. That slice checks only that instance subjects exist at write time. These obligations are the next 020 step and need their own spec.
+
 ## Open questions
-- What user-visible review, failure and rollback flows must the implementation spec prove?
-- Which optional later integrations can stay outside the first slice?
+- What user-visible review, failure and rollback flows must the implementation spec prove? *Answered for the first slice:* every append can be previewed, its approvals are enforced by the handle's authority, it commits at most once, or it is refused with a reason before anything is written. Read-time damage only removes knowledge. Manual rollback of the knowledge log is documented. See [EVIDENCE](../../EVIDENCE.md#correction-and-repair).
+- Which optional later integrations can stay outside the first slice? *Answered:* see the [EVIDENCE deferrals](../../EVIDENCE.md#deferrals).

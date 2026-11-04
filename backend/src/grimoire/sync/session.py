@@ -729,6 +729,8 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     kind = syncable(path)
     if kind is None:
         raise ResolveRefused(f"{path} is not a synchronized record")
+    if kind == "knowledge":
+        raise ResolveRefused(f"{path} is a create-only knowledge record; correct it by appending, never replacing")
     ids = device_of(left), device_of(right)
     if ids[0] == ids[1]:
         raise SameDevice(f"both libraries are device {ids[0]!r}")
