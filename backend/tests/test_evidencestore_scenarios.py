@@ -16,7 +16,7 @@ import pytest
 
 from grimoire.chats import Launch
 from grimoire.core import (
-    DIRECTOR, AuthorityError, Belief, BeliefAuthorityError, ChatRef, Event, InstanceRef, KnowledgeError,
+    DIRECTOR, AuthorityError, Belief, BeliefAuthorityError, ChatRef, Event, InstanceRef, KnowledgeError, Ruling,
     KnowledgeRef, Perception, PlayerContribution, Proposition, Report, Subject, actor_knowledge,
     director_knowledge, knowledge_about, player_knowledge, standing,
 )
@@ -262,11 +262,52 @@ def test_f3_shape_campaign_chat_and_actors(store, evidence):
     assert caught.value.reason == "unknown_campaign"
 
 
+@pytest.mark.parametrize("make", [
+    lambda who: Perception(C, "v9", who, "e9", "witnessed", "x", m(1), "director", confirmed=True),
+    lambda who: Report(C, "v9", TAVI, "p9", "told", m(1), "director", confirmed=True, sender=who, addressed=True,
+                       sent_at=m(1)),
+    lambda who: Report(C, "v9", TAVI, "p9", "told", m(1), "director", confirmed=True, attributed_to=who),
+    lambda who: Ruling(C, "r9", "p9", "established", m(1), "director", grounds=(Subject("instance", str(who)),)),
+], ids=["holder", "sender", "attributed_to", "grounds"])
+def test_f3_every_actor_slot_must_exist(store, evidence, make):
+    stranger = InstanceRef(C, "character", "stranger")
+    context = [Event(C, "e9", "x", m(1), "director"), Proposition(C, "p9", "x", m(1), "director")]
+    error = refused(store, evidence, [*context, make(stranger)], "unknown_actor")
+    assert len(error.records) == 1
+
+
+def test_f3_an_existing_chat_of_another_campaign_is_unknown_here(store, evidence):
+    from grimoire.store import ScopeRecord
+    txn = store.transaction()
+    txn.put(ScopeRecord(ChatRef("c2", "t1"), "test.chat/1", {}), None)
+    txn.commit(owner_handle())
+    refused(store, evidence, [Event(C, "e9", "x", m(1), "director")], "unknown_chat", chat=ChatRef("c2", "t1"))
+
+
+def test_reading_an_absent_campaign_says_so(evidence):
+    assert "campaigns/c-typo:absent" in evidence.read("c-typo", requested_by=DIRECTOR).problems
+    assert evidence.read(C, requested_by=DIRECTOR).problems == ()
+
+
+def test_standing_of_a_quarantined_proposition_is_refused_not_guessed(store, evidence):
+    append_u(evidence)
+    (store.root / "campaigns" / C / "evidence" / "proposition" / "p-truth.json").unlink()
+    with pytest.raises(KnowledgeError) as caught:
+        evidence.standing(C, "p-truth", as_of=9)
+    assert caught.value.reason == "unknown_proposition"  # 012's answer for an id the ledger does not hold
+
+
+def test_an_oversized_record_is_refused_with_a_reason(store, evidence):
+    subjects = tuple(Subject("relation", f"relation-{n:07d}") for n in range(140_000))  # renders past 8 MiB
+    refused(store, evidence, [Proposition(C, "p9", "x", m(1), "director", about=subjects)], "too_large")
+
+
 def test_f4_f5_fresh_ids_and_no_backdating(store, evidence):
     append_u(evidence)  # high-water mark 8
     refused(store, evidence, [Event(C, "e1", "again", m(9), "director")], "duplicate_id")
     refused(store, evidence, [Event(C, "e9", "late", m(7), "director")], "backdated")
     refused(store, evidence, [Event(C, "e9", "far", m(8 + 1_000_001), "director")], "sequence_jump")
+    evidence.append(C, [Event(C, "e-edge", "the largest allowed step", m(8 + 1_000_000), "director")])
     with pytest.raises(KnowledgeError) as caught:  # a delayed letter needs its proposition already stored
         evidence.append(C, [Proposition(C, "p-new", "x", m(8), "director"),
                             Report(C, "v-new", TAVI, "p-new", "written", m(9), "director", confirmed=True,
@@ -302,6 +343,12 @@ def test_f7_anything_changing_between_append_and_commit_is_stale(store, evidence
     pending = evidence.append(C, [Event(C, "e9", "z", m(1), "director")])
     (store.root / "campaigns" / C / "evidence" / "belief").mkdir(parents=True, exist_ok=True)
     (store.root / "campaigns" / C / "evidence" / "belief" / "stray.txt").write_text("x")
+    with pytest.raises(StaleWrite):
+        pending.commit()
+    (store.root / "campaigns" / C / "evidence" / "belief" / "stray.txt").unlink()
+    pending = evidence.append(C, [Event(C, "e9", "z", m(1), "director")])
+    (store.root / "campaigns" / C / "evidence" / "unknown").mkdir()  # a change only the problem list shows
+    (store.root / "campaigns" / C / "evidence" / "unknown" / "x.json").write_text("{}")
     with pytest.raises(StaleWrite):
         pending.commit()
 

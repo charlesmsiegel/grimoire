@@ -33,5 +33,5 @@ Persist 017's claim shapes (see [GRAPH](../../GRAPH.md#claims-what-an-actor-thin
 **Status:** not yet met by 020's first slice, which was specified before 017 landed. That slice checks only that instance subjects exist at write time. These obligations are the next 020 step and need their own spec.
 
 ## Open questions
-- What user-visible review, failure and rollback flows must the implementation spec prove? *Answered for the first slice:* every append is previewed, approved and committed once, or refused with a reason. Read-time damage only removes knowledge. Manual rollback of the knowledge log is documented. See [EVIDENCE](../../EVIDENCE.md#correction-and-repair).
+- What user-visible review, failure and rollback flows must the implementation spec prove? *Answered for the first slice:* every append can be previewed, its approvals are enforced by the handle's authority, it commits at most once, or it is refused with a reason before anything is written. Read-time damage only removes knowledge. Manual rollback of the knowledge log is documented. See [EVIDENCE](../../EVIDENCE.md#correction-and-repair).
 - Which optional later integrations can stay outside the first slice? *Answered:* see the [EVIDENCE deferrals](../../EVIDENCE.md#deferrals).

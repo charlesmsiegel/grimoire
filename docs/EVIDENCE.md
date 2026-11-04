@@ -19,7 +19,7 @@ It persists [012's records](KNOWLEDGE.md) exactly, and their meaning does not ch
 
 Behaviour:
 - **Reopening reproduces every projection exactly.** Each actor knows what it knew before, and nothing more:
-  - `actor_knowledge`, `knowledge_about`, `player_knowledge`, `standing` and `director_knowledge` over the stored ledger equal the in-memory ones (tested for every actor and moment).
+  - `actor_knowledge`, `knowledge_about`, `player_knowledge`, `standing` and `director_knowledge` over the stored ledger equal the in-memory ones (tested for every actor and moment; `knowledge_about` for the private event's subject).
 - **Events and evidence are stored apart.** An event file has no field for a witness, percept, report or belief. The director's record therefore cannot leak a private witness's evidence. The free-text `summary` and `provenance` are the writer's responsibility (012's neutral-text guidance).
 - **Evidence belongs to the play scope, never to a world.**
   - A [107](CHATS.md) world-less chat's campaign namespace takes records directly. A record may carry its chat as provenance.
@@ -126,7 +126,7 @@ A record's reason is the first one assigned.
 These are tested against the undamaged ledger U, for every actor, the player and every `as_of`. They are tested on a 300-seed in-memory property test and a 40-seed on-disk one, under any visible damage: a deleted, edited, added, truncated, linked, newer-schema or look-alike-renamed record, and an edited or deleted middle batch.
 
 - **Monotone fail-closed.** Every bucket of every actor and player projection is a subset of U's, `inherited` included, and so are `table_events`.
-- **Never promotes.** A standing is U's, or `reported`/`unasserted`. An older ruling never resurfaces.
+- **Never promotes.** A standing is U's, or `reported`/`unasserted`. An older ruling never resurfaces. A proposition that is itself quarantined has no standing: `standing` raises 012's `unknown_proposition`, exactly as for an id the ledger never held.
 - **No resurfacing.** No current belief is ever an older belief of its chain, and a disclosure's moment never moves.
 - **Nothing silently dropped.**
   - Every record on disk is in the ledger or in `quarantined`.
@@ -148,7 +148,7 @@ These are tested against the undamaged ledger U, for every actor, the player and
 
 | Method | Returns |
 |---|---|
-| `read(campaign, *, requested_by)` | `CampaignKnowledge(knowledge, quarantined, problems, origins)`; `requested_by` must be `DIRECTOR`, else `AuthorityError` |
+| `read(campaign, *, requested_by)` | `CampaignKnowledge(knowledge, quarantined, problems, origins)`; `requested_by` must be `DIRECTOR`, else `AuthorityError`. A campaign with no real state reports `campaigns/<id>:absent`, so a typo'd id is not mistaken for "nothing known" |
 | `actor_knowledge(campaign, actor, *, as_of)` | 012's projection over the assembled ledger |
 | `knowledge_about(…)` | 012's projection over the assembled ledger |
 | `player_knowledge(…)` | 012's projection over the assembled ledger |
@@ -162,16 +162,16 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 
 1. **Read-only.** A read-only store, or no handle → `read_only`.
 2. **Shape.** 1–500 012 records of this campaign (`empty`, `too_many`, `invalid_record`, `campaign_mismatch`).
-3. **Existence.** The campaign, the chat and every actor named must already exist as files (`unknown_campaign`, `unknown_chat`, `unknown_actor`). That covers holder, sender, `attributed_to`, participants and instance subjects. There is no name lookup, and a typo never creates a campaign.
+3. **Existence.** The campaign (a play scope or an instance file; an empty leftover folder is not one), the chat (of this campaign) and every actor named must already exist as files (`unknown_campaign`, `unknown_chat`, `unknown_actor`). That covers holder, sender, `attributed_to`, participants and instance subjects. There is no name lookup, and a typo never creates a campaign.
 4. **Integrity.** Only an intact ledger is extended. Any quarantine or problem → `ledger_damaged`, naming the quarantined records and the problem paths. A write validated against a partial ledger could change meaning once a human repairs it.
-5. **Fresh IDs.** An ID already on disk, in any state → `duplicate_id`.
+5. **Fresh IDs.** An ID already on disk → `duplicate_id`. (A damaged or look-alike file has already been refused at step 4.)
 6. **No backdating.**
    - Every new `moment.sequence` must be at least the ledger's high-water mark H (`backdated`), and at most H + 1 000 000 (`sequence_jump`).
    - **Single exception:** a delayed letter. An addressed report's `sent_at` may be earlier than H; its proposition must already be stored, otherwise `before_proposition`. Only that exception changes projections at `as_of < H`: the sender's `sent` bucket and the director view.
    - Campaign-wide sequence allocation belongs to 021/035.
 7. **012's ledger rules.** `KnowledgeError` propagates unchanged.
 8. **Sovereignty.** Each new belief goes through `admit_belief`; `BeliefAuthorityError` propagates.
-9. **Symmetry.** Each record must read back exactly, at an address every platform can hold (`too_long`, `unstorable_id`).
+9. **Symmetry.** Each record must read back exactly, at an address every platform can hold (`too_long`, `unstorable_id`), in a file the store accepts (`too_large`: over 8 MiB rendered).
 10. **The write.** The records and their batch are staged. The assembled post-state must quarantine nothing.
 
 `KnowledgeChange.preview()` gives the exact bytes per logical path. **Previews are director-facing:** they hold raw records. Do not show a player a batch that holds director-only records; batch a player-approved belief alone.
@@ -179,7 +179,7 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 `commit(approvals=None)` runs under the store lock:
 - It re-checks the campaign, the chat, the actors and the full snapshot of both knowledge trees (every file and link, and every problem; OS noise and empty folders are not state). Any difference → `StaleWrite`.
 - It then commits one transaction. The batch's create-only CAS also stops a concurrent append.
-- A refusal before the commit point leaves the change retryable: `StaleWrite`, `WriteDenied`, `UnstorableIdentifier` (a Windows `MAX_PATH` overflow is only caught here), `NameCollision`, or an `OSError` while staging (which may leave empty folders; those are not state). A change commits at most once.
+- A refusal before the commit point (`StaleWrite`, `WriteDenied`, `UnstorableIdentifier` — a Windows `MAX_PATH` overflow is only caught here — `NameCollision`, or an `OSError` while staging, which may leave empty folders that are not state) writes nothing. After `WriteDenied`, register fresh approvals for any it consumed and commit again. After `StaleWrite`, build a fresh `append`: the change's snapshot no longer matches. A change commits at most once.
 - After a `WriteConflict` partial publish, the next read reports `unlisted`/`missing` and appends refuse until the damage is repaired. The `.conflicts/` copies hold director-private evidence and stay on the device.
 
 ### Trust boundaries (documented, not checked here)

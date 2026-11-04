@@ -29,7 +29,7 @@ from grimoire.evidence import (
     build_ledger, decode, encode, encode_batch,
 )
 from grimoire.store import (
-    CommitIncomplete, KnowledgeRecord, KnowledgeScan, LibraryStore, RecordNotFound, StaleWrite, StoreError,
+    CommitIncomplete, InvalidEnvelope, KnowledgeRecord, KnowledgeScan, LibraryStore, RecordNotFound, StaleWrite, StoreError,
     UnstorableIdentifier, WriteConflict, etag,
 )
 from grimoire.store.layout import address_parts, logical
@@ -176,8 +176,10 @@ class EvidenceLibrary:
         if requested_by != DIRECTOR:
             raise AuthorityError("the stored ledger is the director's; read an actor projection instead")
         assembly, scan, _ = self._assembly(campaign_id)
-        return CampaignKnowledge(assembly.knowledge, assembly.quarantined, _problems(assembly, scan),
-                                 assembly.origins)
+        problems = _problems(assembly, scan)
+        if not self._campaign_exists(campaign_id):  # a typo'd id is not the same as "nothing known"
+            problems = tuple(sorted({*problems, f"campaigns/{campaign_id}:absent"}))
+        return CampaignKnowledge(assembly.knowledge, assembly.quarantined, problems, assembly.origins)
 
     def actor_knowledge(self, campaign_id: str, actor: InstanceRef, *, as_of: int) -> ActorKnowledge:
         return actor_knowledge(self._assembly(campaign_id)[0].knowledge, actor, as_of=as_of)
@@ -238,7 +240,7 @@ class EvidenceLibrary:
         if foreign:
             raise EvidenceWriteError("campaign_mismatch", foreign)
         names = [_name(record) for record in new]
-        # 2-4: the campaign, chat and every actor named must already exist (no name lookup).
+        # 3: the campaign, chat and every actor named must already exist (no name lookup).
         if not self._campaign_exists(campaign_id):
             raise EvidenceWriteError("unknown_campaign")
         if chat is not None and (not isinstance(chat, ChatRef) or chat.campaign_id != campaign_id
@@ -249,17 +251,17 @@ class EvidenceLibrary:
         unknown = sorted(_name(r) for r in new if _actors(r) - present)
         if unknown:
             raise EvidenceWriteError("unknown_actor", unknown)
-        # 5: only an intact ledger is extended.
+        # 4: only an intact ledger is extended.
         assembly, scan, files = self._assembly(campaign_id)
         if not assembly.clean or scan.problems:
             raise EvidenceWriteError("ledger_damaged", sorted({q.name for q in assembly.quarantined}
                                                               | set(_problems(assembly, scan))))
-        # 6: fresh ids only.
+        # 5: fresh ids only.
         on_disk = {ref.name for ref in files}
         taken = sorted(set(names) & on_disk)
         if taken:
             raise EvidenceWriteError("duplicate_id", taken)
-        # 7: no backdating; a delayed letter's sent_at is the single exception.
+        # 6: no backdating; a delayed letter's sent_at is the single exception.
         high = assembly.high_water
         late = sorted(_name(r) for r in new if r.moment.sequence < high)  # type: ignore[attr-defined]
         if late:
@@ -267,25 +269,26 @@ class EvidenceLibrary:
         jump = sorted(_name(r) for r in new if r.moment.sequence > high + MAX_SEQUENCE_STEP)  # type: ignore[attr-defined]
         if jump:
             raise EvidenceWriteError("sequence_jump", jump)
-        # 8-9: 012's ledger rules, then sovereignty for every new belief.
+        # 7-8: 012's ledger rules, then sovereignty for every new belief.
         combined = build_ledger(campaign_id, (*assembly.records.values(), *new))
         contributions = dict(contributions or {})
         controls = tuple(controls)
         for record in new:
             if isinstance(record, Belief):
                 admit_belief(record, combined, controls, contributions.get(record.belief_id))
-        # 10: store only what reads back exactly, at an address every platform can hold.
+        # 9: store only what reads back exactly, at an address every platform can hold.
         stored = []
         for record in new:
             outcome = _encoded(record, chat)
             if isinstance(outcome, str):
                 raise EvidenceWriteError(outcome, (_name(record),))
             stored.append(outcome)
-        # 11: the records, then one batch accounting for their exact bytes.
+        # 10: the records, then one batch accounting for their exact bytes.
         puts = [KnowledgeRecord(ref, schema, payload, owner=self.owner) for ref, schema, payload in stored]
         transaction = self.store.transaction()
-        for put in puts:
-            transaction.put(put, None)
+        oversized = _staged(transaction, puts)
+        if oversized is not None:
+            raise EvidenceWriteError("too_large", (oversized,))
         preview = transaction.preview()
         tags = {put.address: etag(preview[str(logical(address_parts(put.address)))]) for put in puts}
         entries = {ref.name: batch_entry(record, tags[ref]) for record, (ref, _, _) in zip(new, stored)}
@@ -294,7 +297,7 @@ class EvidenceLibrary:
         batch = KnowledgeRecord(batch_ref, batch_schema, batch_payload, owner=self.owner)
         transaction.put(batch, None)
         batch_tag = etag(transaction.preview()[str(logical(address_parts(batch_ref)))])
-        # 12: the post-state must assemble with nothing quarantined.
+        # and the post-state must assemble with nothing quarantined.
         after = dict(files)
         after.update({ref: ScannedFile(tags[ref], schema, payload) for ref, schema, payload in stored})
         after[batch_ref] = ScannedFile(batch_tag, batch_schema, batch_payload)
@@ -303,6 +306,16 @@ class EvidenceLibrary:
             raise AssertionError("an append would not read back as an intact ledger")
         return KnowledgeChange(self, campaign_id, (*puts, batch), (scan.entries, scan.problems), chat,
                                actors, batch_ref)
+
+
+def _staged(transaction, puts) -> str | None:  # type: ignore[no-untyped-def]
+    """Stage every put, or name the first whose rendered file the store refuses (over 8 MiB)."""
+    for put in puts:
+        try:
+            transaction.put(put, None)
+        except InvalidEnvelope:
+            return put.address.name
+    return None
 
 
 def _encoded(record: object, chat: ChatRef | None) -> tuple[KnowledgeRef, str, dict[str, object]] | str:
