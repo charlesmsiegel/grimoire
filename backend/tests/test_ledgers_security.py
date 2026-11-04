@@ -573,6 +573,8 @@ def test_readers_in_other_threads_see_whole_states(library, reads):
     interval = sys.getswitchinterval()
     failures, done = [], threading.Event()
 
+    reads_done, committing = [], threading.Event()
+
     def read_loop():
         while not done.is_set():
             try:
@@ -584,19 +586,29 @@ def test_readers_in_other_threads_see_whole_states(library, reads):
             except Exception as error:  # noqa: BLE001
                 failures.append(error)
                 return
+            if committing.is_set():
+                reads_done.append(1)
+            # Pause without holding the store lock. Python's RLock is not fair: a reader that
+            # re-acquires it back to back can starve the committing thread for minutes on a
+            # loaded CI runner (seen once as a 120 s faulthandler timeout).
+            done.wait(0.0005)
     sys.setswitchinterval(1e-6)  # interleave as often as possible
     try:
         reader = threading.Thread(target=read_loop)
         reader.start()
+        committing.set()
         for number in range(150):  # each registration is a commit that grows the approvals
             approve(authority, b"%d" % number, aid=f"a{number}", permission=Permission.EXECUTE)
             if failures:
                 break
+        committing.clear()
         done.set()
         reader.join(10)
     finally:
         sys.setswitchinterval(interval)
+    assert not reader.is_alive()
     assert failures == [] and not authority.poisoned
+    assert reads_done  # reads really happened while the commits were in flight
 
 
 def test_a_deliberate_exit_still_flushes(library):
