@@ -483,7 +483,8 @@ def test_an_aborted_commit_drops_kept_versions_and_state_instead_of_nesting_them
     # a kept version that may be the only copy (resolve's replaced version: ``hold``) is preserved
     REGENERABLE_KEEP[0] = False
     run = run_plans(scenario, [[Interleave(guard, human)]], tmp_path / "hold").runs[1]
-    assert theirs in [value for key, value in run.recovered.items() if key.startswith("lib/.conflicts/")]
+    held = [key for key, value in run.recovered.items() if key.startswith("lib/.conflicts/") and value == theirs]
+    assert len(held) == 1 and is_kept_target(tuple(held[0].split("/")[1:]))  # in the record's own folder
 
 
 def _replay(ops, root, template):
@@ -669,7 +670,8 @@ def test_an_unreferenced_old_revision_can_be_replaced(pair):
     _replace_r1(pair[1])  # nothing pins r1 any more
 
 
-@pytest.mark.parametrize("pin", ["head", "link", "instance", "chat-pinned", "chat-resolved"])
+@pytest.mark.parametrize("pin", ["head", "link", "link-subject", "instance", "derived-from", "instance-payload",
+                                 "definition-payload", "chat-pinned", "chat-resolved", "knowledge"])
 def test_each_reference_rule_alone_pins_a_revision(pair, pin):
     """One pin per case, so every rule in check_unreferenced is proven on its own."""
     from store_helpers import OWNER as owner
@@ -688,9 +690,29 @@ def test_each_reference_rule_alone_pins_a_revision(pair, pin):
         txn.put(SourceManifest("catalog:cards", owner, "Cards", {"lore/notes": "r2"}, (
             LinkSpec(str(other), "derived_variant", str(R1)),)), phone.read_source("catalog:cards").etag)
         message = "links"
+    elif pin == "link-subject":
+        other = SourceRef("catalog:cards", "lore", "other", "r1")
+        txn.put(RecordEnvelope(other, {}), None)
+        txn.put(SourceManifest("catalog:cards", owner, "Cards", {"lore/notes": "r2"}, (
+            LinkSpec(str(R1), "derived_variant", str(other)),)), phone.read_source("catalog:cards").etag)
+        message = "links"
     elif pin == "instance":
         txn.put(RecordEnvelope(InstanceRef("c9", "lore", "copy"), {}, base=str(R1)), None)
         message = "is based on"
+    elif pin == "derived-from":
+        txn.put(RecordEnvelope(InstanceRef("c9", "lore", "copy"), {}, derived_from=str(R1)), None)
+        message = "is based on"
+    elif pin == "instance-payload":  # 009's codec stores a pinned source inside the payload
+        txn.put(RecordEnvelope(InstanceRef("c9", "lore", "copy"), {"source": str(R1)}), None)
+        message = "in its payload"
+    elif pin == "definition-payload":
+        txn.put(RecordEnvelope(SourceRef("catalog:cards", "lore", "sequel", "r1"), {"after": str(R1)}), None)
+        message = "in its payload"
+    elif pin == "knowledge":
+        from grimoire.core.identity import KnowledgeRef
+        from grimoire.store import KnowledgeRecord
+        txn.put(KnowledgeRecord(KnowledgeRef("c9", "evidence", "e-1"), "grimoire.test/0", {"about": str(R1)}), None)
+        message = "binds"
     else:
         binding = ({"ref": str(R1)} if pin == "chat-pinned"
                    else {"ref": str(R1.unpinned()), "resolved_revision": "r1"})
@@ -699,3 +721,26 @@ def test_each_reference_rule_alone_pins_a_revision(pair, pin):
     txn.commit(owner_handle())
     with pytest.raises(RevisionReferenced, match=message):
         _replace_r1(phone)
+
+
+
+def test_only_a_blocked_path_that_could_hold_records_blocks_a_revision_replace(pair, tmp_path):
+    desktop, phone = pair
+    _cards(phone)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    make_dir_link(phone.root / "backup", outside)  # a root-level link: holds no records
+    (phone.root / "sources/catalog/cards/notes.md").write_text("mine")
+    (phone.root / "sources/catalog/cards/Notes.md").write_text("look-alike")
+    _replace_r1(phone)  # neither can pin anything
+    make_dir_link(phone.root / "campaigns" / "c8", outside)  # could hold instances
+    with pytest.raises(RevisionReferenced, match="cannot prove"):
+        _replace_r1(phone)
+
+
+def test_a_kept_slot_must_be_a_small_non_negative_int(pair):
+    desktop, phone = pair
+    data = (phone.root / WREN_A_PATH).read_bytes()
+    for slot in (-1, 10 ** 10, True, "0"):
+        with pytest.raises(InvalidEnvelope, match="slot"):
+            phone.transaction().keep_version(WREN_A_PATH, data, slot=slot)

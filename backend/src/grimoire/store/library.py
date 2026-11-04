@@ -635,6 +635,7 @@ class _Put:
     key: str = ""  # the preview / approval / result key
     replace_unreferenced: bool = False
     regenerable: bool = False  # exact bytes another library still holds: dropped, never preserved
+    allowed: frozenset[str] = frozenset()  # manifest etags whose references a replace may ignore
 
     @property
     def ledger(self) -> bool:
@@ -757,7 +758,8 @@ class Transaction:
         self._keys.add(put.key)
 
     def put_exact(self, path: str, data: bytes, expected: str | None, *,
-                  replace_unreferenced: bool = False, regenerable: bool = False) -> str:
+                  replace_unreferenced: bool = False, regenerable: bool = False,
+                  allowed_manifests: frozenset[str] = frozenset()) -> str:
         """Stage another library's exact bytes at canonical ``path`` (sync, 019).
 
         The bytes are validated as ``put`` would validate the envelope they hold (strict JSON,
@@ -767,7 +769,8 @@ class Transaction:
         preserving them under ``.conflicts`` (journal kind ``replica``); without it they are
         preserved like any ``put``. A definition revision is create-only unless
         ``replace_unreferenced``: then ``expected`` must be its current etag, and the commit
-        refuses (``RevisionReferenced``) unless nothing on this library can pin it.
+        refuses (``RevisionReferenced``) unless nothing on this library can pin it; references in
+        manifests whose etag is in ``allowed_manifests`` are accepted (resolve: identical manifests).
         """
         if expected is not None and not is_etag(expected):
             raise InvalidEnvelope("expected must be None or an etag")
@@ -787,7 +790,8 @@ class Transaction:
             raise InvalidEnvelope("only a definition revision is replaced as unreferenced")
         address = logical(parts)
         self._add(_Put(parts, address, bytes(data), expected, envelope, "record", str(address),
-                       replace_unreferenced, regenerable=regenerable))
+                       replace_unreferenced, regenerable=regenerable,
+                       allowed=frozenset(allowed_manifests) if replace_unreferenced else frozenset()))
         return str(address)
 
     def keep_version(self, path: str, data: bytes, slot: int | None = None, *, regenerable: bool = False) -> str:
@@ -815,6 +819,8 @@ class Transaction:
         if parts in self._kept:
             raise InvalidEnvelope(f"{path} already has a kept version in this transaction")
         self._kept.add(parts)
+        if slot is not None and (type(slot) is not int or not 0 <= slot < engine.MAX_CONFLICT_ATTEMPTS):
+            raise InvalidEnvelope(f"a kept-version slot is an int from 0 to {engine.MAX_CONFLICT_ATTEMPTS - 1}")
         tag, access = etag(data), self._store._access
         attempts = range(engine.MAX_CONFLICT_ATTEMPTS) if slot is None else (slot,)
         for attempt in attempts:
@@ -995,6 +1001,7 @@ class _Commit:
     def _prune(self, denied: list[int]) -> None:
         """Partial mode: drop the denied puts and whatever the caller says depends on them."""
         assert self.on_denied is not None
+        denied = set(denied)  # membership below is per put
         keys = frozenset(self.puts[index].key for index in denied)
         try:
             changes = dict(self.on_denied(keys))
@@ -1061,7 +1068,7 @@ class _Commit:
             if put.replace_unreferenced:  # 6b: nothing on this library may pin the replaced revision
                 ref = put.envelope.address  # type: ignore[union-attr]
                 assert isinstance(ref, SourceRef)
-                replica.check_unreferenced(self.access, ref)
+                replica.check_unreferenced(self.access, ref, allowed=put.allowed)
             if isinstance(put.envelope, SourceManifest):
                 entry = touched.setdefault(put.envelope.source, (None, []))
                 touched[put.envelope.source] = (put.envelope, entry[1])

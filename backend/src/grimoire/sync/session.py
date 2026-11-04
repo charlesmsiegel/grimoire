@@ -20,12 +20,12 @@ from grimoire.store import (
     NameCollision, RevisionReferenced, StaleWrite, StoreError, UnstorableIdentifier, WriteConflict, etag,
 )
 from grimoire.store.jsonfmt import MAX_FILE_BYTES
-from grimoire.store.layout import classify, conflict_parts, definition_parts, kept_address
-from grimoire.store.replica import parse_exact, previous_of
+from grimoire.store.layout import classify, conflict_parts, definition_parts, kept_address, manifest_parts
+from grimoire.store.replica import CanonicalScan, parse_exact, previous_of
 
 from .decide import decide, derive_base
 from .documents import (
-    DEVICE_FILE, ArchiveView, PendingView, archive_name, check_device_id, parse_archive, parse_device,
+    DEVICE_FILE, ArchiveView, PendingView, syncable, archive_name, check_device_id, parse_archive, parse_device,
     parse_pending, pending_name, render_archive, render_device, render_pending,
 )
 from .errors import (
@@ -44,29 +44,27 @@ ARCHIVE_LIMIT = MAX_FILE_BYTES
 
 
 
-def syncable(path: str) -> str | None:
-    """The record kind sync owns at ``path``, or ``None``: the one extension point for later families.
-
-    018 assets, 021/035 scenes and ledgers add their paths and decision overrides here. 107's
-    scope and chat records are included; derived reverse indexes (107's navigation index) are
-    never synchronized.
-    """
-    found = classify(tuple(path.split("/")))
-    return found[0] if found is not None and found[0] in SYNCED_KINDS else None
-
-
 # -- identity ------------------------------------------------------------------------
 
 def _state(store: LibraryStore, name: str) -> bytes | None:
-    """A ``.sync`` file's bytes; an unreadable one stops the sync (it must never look missing)."""
+    """A ``.sync`` file's bytes; an unreadable one stops the sync (it must never look missing).
+
+    An I/O error, a directory where the file belongs, or a link all stop the sync the same way.
+    """
     try:
         return store.read_sync_state(name)
-    except OSError as error:
+    except (OSError, UnstorableIdentifier, LinkRefused) as error:
         raise SyncInterrupted(f"cannot read .sync/{name} on {store.root}: {error}") from error
 
 
 def device_of(store: LibraryStore) -> str:
-    device = parse_device(_state(store, DEVICE_FILE))
+    try:
+        data = store.read_sync_state(DEVICE_FILE)
+    except (UnstorableIdentifier, LinkRefused) as error:  # not a file: no usable identity
+        raise NoDeviceIdentity(f"{store.root}/.sync/{DEVICE_FILE} is not a readable file: {error}") from error
+    except OSError as error:
+        raise SyncInterrupted(f"cannot read .sync/{DEVICE_FILE} on {store.root}: {error}") from error
+    device = parse_device(data)
     if device is None:
         raise NoDeviceIdentity(f"{store.root} has no readable .sync/{DEVICE_FILE}; call identify first")
     return device
@@ -144,7 +142,7 @@ class SyncReport:
 class SyncPlan:
     devices: tuple[str, str]
     stores: dict[str, LibraryStore]
-    scans: dict[str, object]
+    scans: dict[str, CanonicalScan]
     archives: dict[str, ArchiveView]
     pendings: dict[str, PendingView]
     paths: tuple[str, ...]
@@ -414,6 +412,9 @@ def _plan_keeps(plan: SyncPlan, device: str) -> None:
         mine = plan.sides[path][device]
         if side.state != "present" or (mine.state == "blocked" and mine.reason == "unreadable"):
             continue  # nothing to keep, or this device's own file could not even be read
+        base = plan.bases[path]
+        if base.kind == "agreed" and side.etag == base.etag and mine.state == "present":
+            continue  # the other device holds the version this device already moved on from
         data = plan.scans[other].files[path]  # type: ignore[attr-defined]
         txn = store.transaction()
         try:
@@ -463,11 +464,20 @@ class _Applied:
 
 
 def _pending_entries(plan: SyncPlan, device: str) -> dict[str, Mapping[str, object]]:
-    """The device's marker entries before this sync's own copies are added."""
+    """The device's marker entries before this sync's own copies are added.
+
+    Uncertainty is persisted: every path not agreed now whose base was ``uncertain`` (a missing,
+    damaged or disagreeing archive, an unreadable marker) keeps an ``{"uncertain": true}`` entry
+    until it resolves, because the fresh archives this sync writes no longer say why it was.
+    """
     view = plan.pendings[device]
     if view.state == "ignored":  # unknown entries: every path not already agreed stays uncertain
         return {path: {"uncertain": True} for path in plan.paths if path not in plan.agreed}
-    return dict(view.entries)
+    entries = dict(view.entries)
+    for path in plan.paths:
+        if path not in plan.agreed and path not in entries and plan.bases[path].kind == "uncertain":
+            entries[path] = {"uncertain": True}
+    return entries
 
 
 def _report(plan: SyncPlan, applied: _Applied) -> SyncReport:
@@ -501,7 +511,10 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
         applied.published[device], applied.kept[device] = [], []
         return
     txn = store.transaction()
-    _stage(txn, copies, keeps)
+    try:
+        _stage(txn, copies, keeps)
+    except StaleWrite as error:  # a planned kept-version slot was taken meanwhile
+        raise SyncInterrupted(f"the data commit on {device} stopped: {error}", _report(plan, applied)) from error
     marker_key = None
     marker: list[bytes] = []  # the bytes the marker will hold (on_denied may change them)
     if copies:
@@ -755,8 +768,13 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     txn = stores[receiver].transaction()
     resolved = [path]
     if kind == "definition":
+        # A manifest byte-identical on both devices names the same revision id on both: once the
+        # receiver holds the winner's bytes, that reference means the same thing everywhere.
+        manifest = "/".join(manifest_parts(_source_of(path)))
+        same = scans[receiver].files.get(manifest)
+        allowed = frozenset({etag(same)}) if same is not None and same == scans[winner].files.get(manifest) else frozenset()
         txn.put_exact(path, data, None if mine is None else etag(mine), replace_unreferenced=mine is not None,
-                      regenerable=True)
+                      regenerable=True, allowed_manifests=allowed)
     else:
         txn.put_exact(path, data, None if mine is None else etag(mine), regenerable=True)
     if kind == "manifest":

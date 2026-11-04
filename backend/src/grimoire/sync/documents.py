@@ -67,11 +67,20 @@ def _digest(devices: tuple[str, str], entries: Mapping[str, object]) -> str:
     return "sha256:" + hashlib.sha256(render({"devices": list(devices), "entries": dict(entries)})).hexdigest()
 
 
-def _syncable(path: object) -> bool:
+def syncable(path: object) -> str | None:
+    """The record kind sync owns at ``path``, or ``None``: the one definition of the synced set.
+
+    The extension point for later families (018 assets, 021/035 scenes, ledgers): add the kind to
+    ``model.SYNCED_KINDS`` and its decision overrides. Derived reverse indexes (107's navigation
+    index) are never synchronized.
+    """
     if type(path) is not str:
-        return False
+        return None
     found = classify(tuple(path.split("/")))
-    return found is not None and found[0] in SYNCED_KINDS
+    return found[0] if found is not None and found[0] in SYNCED_KINDS else None
+
+
+_syncable = syncable
 
 
 @dataclass(frozen=True)

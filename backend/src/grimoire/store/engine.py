@@ -235,6 +235,9 @@ def _preserve(access: Access, entry: Entry, settlement: Settlement, digest: str)
         access.ops.remove(access.path((TXN, entry.temp)))
         settlement.dropped.append(_text(entry.target))
         return
+    if entry.kind == "hold":  # a kept version: preserve it beside its record's other versions
+        _preserve_hold(access, entry, settlement, digest)
+        return
     staging = lstat_or_none(access.path((TXN,)))
     temp = access.path((TXN, entry.temp))
     for attempt in range(MAX_CONFLICT_ATTEMPTS):
@@ -265,6 +268,28 @@ def _prepare(access: Access, entry: Entry) -> None:
     access.guard.check_write(entry.target, staging_device=staging.st_dev if staging else None)
     if entry.old is None and access.presence(entry.target[:-1]) == "absent":
         access.make_parent(entry.target)  # a look-alike parent is never shadowed: the guard reads LOOKALIKE
+
+
+def _preserve_hold(access: Access, entry: Entry, settlement: Settlement, digest: str) -> None:
+    """A ``hold`` that cannot take its planned slot takes the record's next free one, never a nested name."""
+    folder, name = entry.target[:-1], entry.target[-1]
+    base = name.rsplit(".", 1)[0] if name.rsplit(".", 1)[-1].isdigit() else name
+    staging = lstat_or_none(access.path((TXN,)))
+    temp = access.path((TXN, entry.temp))
+    for attempt in range(MAX_CONFLICT_ATTEMPTS):
+        slot = folder + ((base if not attempt else f"{base}.{attempt}"),)
+        access.guard.check_write(slot, staging_device=staging.st_dev if staging else None)
+        access.check_conflict_folder(slot)
+        if access.presence(slot) == "absent":
+            access.make_parent(slot)
+            access.ops.replace(temp, access.path(slot))
+            break
+        if access.etag_of(slot) == digest:
+            access.ops.remove(temp)
+            break
+    else:
+        raise StoreError(f"no free kept-version slot for {_text(entry.target)} after {MAX_CONFLICT_ATTEMPTS} tries")
+    settlement.preserved.append(_text(slot))
 
 
 def _publish(access: Access, entry: Entry, settlement: Settlement) -> None:

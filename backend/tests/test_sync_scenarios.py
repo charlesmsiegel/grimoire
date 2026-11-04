@@ -181,8 +181,7 @@ def test_s5b_lineage_is_ignored_once_the_pair_has_an_archive(pair):
     put(desktop, instance(zed, WREN_R1, hp=1), None)
     (phone.root / path).parent.mkdir(parents=True)
     shutil.copy(desktop.root / path, phone.root / path)  # copied by hand, never synced
-    edit_instance(phone, zed, 2)  # its previous names the desktop's bytes
-    edit_instance(desktop, zed, 3)
+    edit_instance(phone, zed, 2)  # its previous names exactly the desktop's bytes: lineage would copy
     assert sync(desktop, phone, handles()).conflict(path).code == "missing_ancestor"
 
 
@@ -399,13 +398,25 @@ def test_f3_an_ignored_archive_is_conservative(pair, damage):
         archive.write_text(json.dumps(document))
     edit_instance(desktop, WREN_A, 9)  # an ordinary fast-forward with a trusted archive
     (desktop.root / PATHS["wren_b"]).unlink()
-    report = sync(desktop, phone, handles())
-    assert report.copied == ()
-    assert report.conflict(PATHS["wren_a"]).code == "missing_ancestor"
-    assert report.conflict(PATHS["wren_b"]).code == "missing_ancestor"  # not re-created on the desktop
-    assert not (desktop.root / PATHS["wren_b"]).exists()
-    if damage != "missing-one":
-        assert any("archive ignored" in notice for notice in report.notices)
+    for attempt in range(2):  # the second sync sees fresh archives: it must stay conservative too
+        report = sync(desktop, phone, handles())
+        assert report.copied == ()
+        assert report.conflict(PATHS["wren_a"]).code == "missing_ancestor"
+        assert report.conflict(PATHS["wren_b"]).code == "missing_ancestor"  # not re-created on the desktop
+        assert not (desktop.root / PATHS["wren_b"]).exists()
+        if damage != "missing-one" and attempt == 0:
+            assert any("archive ignored" in notice for notice in report.notices)
+
+
+def test_f3_one_archive_damaged_and_the_other_lost_stays_conservative(pair):
+    desktop, phone = pair
+    (phone.root / ".sync" / "peers" / DESKTOP / "archive.json").write_bytes(b"{")
+    (desktop.root / ".sync" / "peers" / PHONE / "archive.json").unlink()
+    (phone.root / PATHS["wren_b"]).unlink()
+    for _ in range(3):
+        report = sync(desktop, phone, handles())
+        assert report.conflict(PATHS["wren_b"]).code == "missing_ancestor"
+        assert not (phone.root / PATHS["wren_b"]).exists()
 
 
 def test_f4_blocked_paths_are_never_copied_or_overwritten(pair, tmp_path):
@@ -686,15 +697,20 @@ def test_s8_resolving_a_manifest_brings_its_absent_heads_and_refuses_differing_o
         resolve(desktop, phone, PATHS["manifest"], etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
 
 
-def test_f1_a_replaced_identity_makes_the_next_sync_conservative(pair):
+@pytest.mark.parametrize("renamed", [PHONE, DESKTOP])
+def test_f1_a_replaced_identity_makes_every_later_sync_conservative(pair, renamed):
     desktop, phone = pair
-    identify(phone, "tablet", replace=True)
+    store = phone if renamed == PHONE else desktop
+    identify(store, "tablet", replace=True)
+    handles_now = {(PHONE if renamed == DESKTOP else DESKTOP): handle(), "tablet": handle()}
     edit_instance(desktop, WREN_A, 9)
     (desktop.root / PATHS["wren_b"]).unlink()
-    report = sync(desktop, phone, {DESKTOP: handle(), "tablet": handle()})
-    assert report.copied == ()  # not a first sync: nothing is copied, nothing re-created
-    assert report.conflict(PATHS["wren_a"]).code == "missing_ancestor"
-    assert report.conflict(PATHS["wren_b"]).code == "missing_ancestor"
+    for _ in range(3):  # stays conservative: the uncertainty is persisted, not forgotten
+        report = sync(desktop, phone, handles_now)
+        assert report.copied == ()  # not a first sync: nothing is copied, nothing re-created
+        assert report.conflict(PATHS["wren_a"]).code == "missing_ancestor"
+        assert report.conflict(PATHS["wren_b"]).code == "missing_ancestor"
+        assert not (desktop.root / PATHS["wren_b"]).exists()
 
 
 def test_f4_a_record_at_the_wrong_address_is_blocked(pair):
@@ -979,3 +995,112 @@ def test_knowledge_records_travel_create_only_and_are_never_replaced(pair):
         resolve(desktop, phone, mine, etag((desktop.root / mine).read_bytes()),
                 {DESKTOP: etag((desktop.root / mine).read_bytes()), PHONE: etag((phone.root / mine).read_bytes())},
                 handles())
+
+
+
+# -- brutal-review round 2 regressions -----------------------------------------------------------------
+
+def test_both_devices_adding_the_same_revision_id_can_be_resolved(pair):
+    desktop, phone = pair
+    new_revision(desktop, "r2", "a captain")
+    new_revision(phone, "r2", "a pirate")  # identical manifests: both head their own r2
+    report = sync(desktop, phone, handles())
+    assert report.conflict(PATHS["r2"]).code == "missing_ancestor"
+    mine, theirs = (desktop.root / PATHS["r2"]).read_bytes(), (phone.root / PATHS["r2"]).read_bytes()
+    resolve(desktop, phone, PATHS["r2"], etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+    assert (phone.root / PATHS["r2"]).read_bytes() == mine and theirs in kept(phone)
+    assert sync(desktop, phone, handles()).conflicts == () and canonical(desktop) == canonical(phone)
+
+
+@pytest.mark.parametrize("where", ["archive-dir", "peers-link", "device-dir"])
+def test_a_sync_file_that_is_not_a_file_is_a_named_outcome(pair, tmp_path, where):
+    desktop, phone = pair
+    sync_dir = desktop.root / ".sync"
+    if where == "archive-dir":
+        (sync_dir / "peers" / PHONE / "archive.json").unlink()
+        (sync_dir / "peers" / PHONE / "archive.json").mkdir()
+        expected = SyncInterrupted
+    elif where == "peers-link":
+        outside = tmp_path / "elsewhere"
+        shutil.copytree(sync_dir / "peers", outside)
+        shutil.rmtree(sync_dir / "peers")
+        make_dir_link(sync_dir / "peers", outside)
+        expected = SyncInterrupted
+    else:
+        (sync_dir / "device.json").unlink()
+        (sync_dir / "device.json").mkdir()
+        expected = NoDeviceIdentity
+    with pytest.raises(expected):
+        sync(desktop, phone, handles())
+
+
+def test_a_kept_slot_taken_after_planning_interrupts_the_sync(pair):
+    from grimoire.store.layout import conflict_parts
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    edit_instance(phone, WREN_A, 4)
+    plan = plan_sync(desktop, phone)
+    theirs = (phone.root / PATHS["wren_a"]).read_bytes()
+    slot = desktop.root.joinpath(*conflict_parts(tuple(PATHS["wren_a"].split("/")), etag(theirs)))
+    slot.parent.mkdir(parents=True, exist_ok=True)
+    slot.write_bytes(b'{"someone": "else"}')
+    with pytest.raises(SyncInterrupted):
+        sync_session.apply_sync(plan, handles())
+    report = sync(desktop, phone, handles())  # a fresh plan takes the next slot
+    assert dict(report.conflict(PATHS["wren_a"]).kept) == {DESKTOP: True, PHONE: True}
+
+
+def test_a_device_is_never_handed_its_own_older_version(pair):
+    desktop, phone = pair
+    base = (phone.root / PATHS["manifest"]).read_bytes()
+    new_revision(desktop, "r2", "a captain")  # the desktop moves on; the phone's manifest is the base
+    (phone.root / PATHS["r2"]).parent.mkdir(parents=True, exist_ok=True)
+    (phone.root / PATHS["r2"]).write_bytes(b"{damaged")  # blocks the manifest's head on the phone
+    report = sync(desktop, phone, handles())
+    assert report.conflict(PATHS["manifest"]).code == "head_dependency"
+    assert base not in kept(desktop)  # the desktop already superseded it
+
+
+def test_a_reused_kept_slot_still_counts_as_kept(pair):
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    edit_instance(phone, WREN_A, 4)
+    sync(desktop, phone, handles())
+    again = sync(desktop, phone, handles())
+    assert dict(again.conflict(PATHS["wren_a"]).kept) == {DESKTOP: True, PHONE: True}
+
+
+def test_resolve_keeps_the_replaced_version_as_a_preserved_hold(pair, monkeypatch):
+    from grimoire.store.library import Transaction
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    edit_instance(phone, WREN_A, 4)
+    sync(desktop, phone, handles())
+    flags = []
+    real = Transaction.keep_version
+    monkeypatch.setattr(Transaction, "keep_version", lambda self, *args, **kwargs: (
+        flags.append(kwargs.get("regenerable", False)), real(self, *args, **kwargs))[1])
+    mine, theirs = (desktop.root / PATHS["wren_a"]).read_bytes(), (phone.root / PATHS["wren_a"]).read_bytes()
+    resolve(desktop, phone, PATHS["wren_a"], etag(theirs), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+    assert flags == [False]  # its only copy: preserved, never dropped (hold, not keep)
+
+
+def test_concurrent_syncs_in_opposite_order_never_deadlock(pair):
+    import threading
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    errors = []
+
+    def run(left, right):
+        try:
+            sync(left, right, handles())
+        except Exception as error:  # noqa: BLE001 - a race may interrupt one; only a hang fails
+            errors.append(error)
+
+    threads = [threading.Thread(target=run, args=args) for args in ((desktop, phone), (phone, desktop))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+    assert not any(thread.is_alive() for thread in threads)
+    assert all(isinstance(error, SyncInterrupted) for error in errors)

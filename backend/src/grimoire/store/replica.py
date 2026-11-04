@@ -21,9 +21,12 @@ from .envelope import (
 )
 from .errors import InvalidEnvelope, LinkRefused, RevisionReferenced, UnstorableIdentifier
 from .jsonfmt import MAX_FILE_BYTES, JsonError, parse_strict
+from .jsonfmt import etag as _etag
 from .layout import (
-    CAMPAIGNS, CONFLICTS, MARKER, SOURCES, SYNC, TXN, Parts, classify, is_noise, name_key,
+    CAMPAIGNS, CONFLICTS, MARKER, SCOPE, SOURCES, SUFFIX, SYNC, TXN, Parts, classify, is_noise, name_key,
 )
+
+SCOPE_FILE = SCOPE
 
 #: Root entries a scan walks for canonical records.
 _RECORD_ROOTS = (SOURCES, CAMPAIGNS)
@@ -194,23 +197,44 @@ def _walk(access: Access, parts: Parts, files: dict[str, bytes], blocked: dict[s
             files[text] = data
 
 
-def check_unreferenced(access: Access, ref: SourceRef) -> None:
+_RECORD_FOLDERS = frozenset({"instances", "chats", "relations", "events", "evidence"})
+
+
+def _may_hold_records(parts: Parts) -> bool:
+    """Whether a blocked path could be, or contain, a canonical record (else it cannot pin anything)."""
+    if classify(parts) is not None:
+        return True
+    if parts[0] == SOURCES:
+        return "." not in parts[-1] or parts[-1].endswith(SUFFIX)  # a folder, or a JSON file
+    if parts[0] != CAMPAIGNS:
+        return False  # the library root's other entries never hold records
+    if len(parts) <= 2:
+        return True  # campaigns/ itself, or one campaign folder
+    return parts[2] in _RECORD_FOLDERS or parts[2] == SCOPE_FILE
+
+
+def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str] = frozenset()) -> None:
     """``RevisionReferenced`` unless nothing on this library can pin ``ref`` (a pinned revision).
 
-    Every parsable manifest (also of an excluded source) and instance is checked: heads, link
-    endpoints, ``derived_from`` and ``base``. A 107 scope or chat record's payload is opaque to the
-    store, so any text in it that names the exact pinned revision counts as a reference (a chat's
-    source bindings). A blocked manifest, instance, scope or chat, or a blocked directory under
-    ``sources``/``campaigns``, means "cannot prove unreferenced".
+    Checked across every parsable canonical record, those of excluded sources included:
+    - manifests: heads and both link endpoints;
+    - instances: ``derived_from``, ``base``, and any pinned reference in the payload or extra fields;
+    - definitions: any pinned reference in another revision's payload;
+    - 107 scope/chat, 017 relation and 020 knowledge records: any text in the opaque payload that
+      names the revision (a pinned reference, or an unpinned one beside a ``resolved_revision``).
+    A blocked path that could be or hold such a record means "cannot prove unreferenced"; a blocked
+    entry that cannot (a root-level link, a non-JSON note) does not. ``allowed`` names manifest
+    etags whose references are accepted (``resolve``: manifests identical to the winner's).
     """
     found = scan(access)
     for path, reason in found.blocked.items():
-        kind = classify(tuple(path.split("/")))
-        if kind is None or kind[0] in ("manifest", "instance", "scope", "chat", "relation", "knowledge"):
+        if _may_hold_records(tuple(path.split("/"))):
             raise RevisionReferenced(f"cannot prove {ref} is unreferenced: {path} is {reason}")
     for path, data in found.files.items():
         envelope = parse_exact(tuple(path.split("/")), data)
         if isinstance(envelope, SourceManifest):
+            if _etag(data) in allowed:
+                continue
             if any(head == SourceRef(ref.source, ref.kind, ref.entity_id) and revision == ref.revision
                    for head, revision in envelope.head_refs().items()):
                 raise RevisionReferenced(f"{path} names {ref} as its head")
@@ -223,6 +247,10 @@ def check_unreferenced(access: Access, ref: SourceRef) -> None:
         elif isinstance(envelope.address, InstanceRef):
             if ref in (_pinned(envelope.derived_from), _pinned(envelope.base)):
                 raise RevisionReferenced(f"{path} is based on {ref}")
+            if ref in _payload_refs(envelope.payload) | _payload_refs(envelope.extra):
+                raise RevisionReferenced(f"{path} pins {ref} in its payload")
+        elif envelope.address != ref and ref in _payload_refs(envelope.payload) | _payload_refs(envelope.extra):
+            raise RevisionReferenced(f"{path} pins {ref} in its payload")
 
 
 def _payload_refs(value: object) -> set[SourceRef]:

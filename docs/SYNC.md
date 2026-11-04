@@ -25,13 +25,13 @@ Reported as `skipped` and never touched:
 - ledgers under `authority/`;
 - the library marker;
 - unknown root entries such as `worlds/`;
-- the reserved campaign families (`scenes/`, `events/`, `evidence/`, `relations/`);
+- the reserved campaign family `scenes/`, and 020's batch log under `evidence/` (only `events/` and `evidence/<family>/` knowledge records are synced);
 - non-record files.
 
 Sync compares whole files. It never interprets payloads, never merges inside a file, and never treats source inheritance (`derived_from`, `base`, portrayals) as device ancestry. Three structural readings are the only exceptions:
 - a manifest's `heads`, for the head-dependency rule;
 - on a true first sync only, a record's `previous` field, for one-hop lineage;
-- when `resolve` replaces a definition revision, the store's reference check reads every manifest's heads and links, every instance's `derived_from` and `base`, and every string in 107 scope and chat payloads (a pinned reference, or an unpinned one beside a `resolved_revision`).
+- when `resolve` replaces a definition revision, the store's reference check reads every manifest's heads and links, every instance's `derived_from`, `base` and pinned payload references, other revisions' pinned payload references, and every string in scope, chat, relation and knowledge payloads (a pinned reference, or an unpinned one beside a `resolved_revision`).
 
 ## Device identity
 
@@ -47,7 +47,7 @@ A damaged identity file is replaced by `identify`. After a new ID, the old peer 
 ## Bookkeeping (`.sync/peers/<peer>/`)
 
 - **`archive.json`** holds the last agreed state per path. `{"agreed": E}` means both devices verifiably held exactly E. `{"deleted": E}` is a **tombstone**: both devices were absent after last agreeing on E. Tombstones are kept; there is no compaction yet.
-- **`pending.json`** records what an unfinished sync published on this device: `{"from": E0, "to": E1}` per path, or `{"uncertain": true}`. It is written in the **same transaction** as the data. An entry is removed only after both archives are written and its path is resolved.
+- **`pending.json`** records what an unfinished sync published on this device: `{"from": E0, "to": E1}` per path, or `{"uncertain": true}`. It is written in the **same transaction** as the data. An entry is removed only after both archives are written and its path is resolved. A path whose base was `uncertain` and that did not end agreed keeps (or gains) `{"uncertain": true}`, so the uncertainty survives the sync that saw it: otherwise the next sync would see a `none` base, and a one-sided deletion would be undone by a create-only copy.
 
 Both files carry a `check` digest of their own content. A file that is not strictly valid is **ignored and reported** (`SyncReport.notices`), never partially trusted. This covers bad JSON, a wrong format, an archive for another pair of devices, and a failed `check`.
 
@@ -85,10 +85,10 @@ The rows are evaluated top to bottom, and swapping the devices mirrors every dec
 | 2 | any | equal etags, or both absent | agreed |
 | 3 | `uncertain` | differ | conflict `missing_ancestor` |
 | 4 | `first` | one absent | copy (create-only) |
-| 5 | `first` | both present | copy if exactly one side's `previous` is the other's etag (not for revisions), else `missing_ancestor` |
+| 5 | `first` | both present | copy if exactly one side's `previous` is the other's etag (not for immutable records: revisions and knowledge), else `missing_ancestor` |
 | 6 | `none` | one absent | copy (create-only) |
 | 7 | `none` | both present | conflict `missing_ancestor` |
-| 8 | `agreed E` | one is E, the other present | copy the other over E; a definition revision is `revision_modified` |
+| 8 | `agreed E` | one is E, the other present | copy the other over E; an immutable record (revision or knowledge) is `revision_modified` |
 | 9 | `agreed E` | one is E, the other absent | conflict `deleted` (deletion is not propagated) |
 | 10 | `agreed E` | one absent, the other not E | conflict `edit_delete` |
 | 11 | `agreed E` | both present, neither E | conflict `concurrent` |
@@ -99,7 +99,7 @@ The rows are evaluated top to bottom, and swapping the devices mirrors every dec
 A copy publishes the other device's **exact bytes** (`Transaction.put_exact`), so both devices converge on one etag. Those bytes still exist on the other device, so an aborted commit drops the copy rather than parking it under `.conflicts/` (journal kind `replica`). Before it is admitted, three overrides apply:
 - **Head dependency.** A manifest copies only if every head it names will hold the origin's bytes on the destination: either already equal, or copied in the same commit. Otherwise the conflict is `head_dependency`.
 - **Name collision.** A destination path that collides with a differently spelled entry gives `name_collision`.
-- **Destination preflight.** The destination's writes are checked once with 010's read-only `Transaction.check()`. Only if that check fails are they admitted unit by unit, and a unit the store refuses becomes `unapplicable`. A unit is one instance, one manifest with its head revisions, or the other revisions of one entity. Instances are checked alone; source units are checked cumulatively, so cross-source link cycles are caught. In that fallback, one final combined check runs before the commit. Library-wide problems propagate and are never blamed on one path.
+- **Destination preflight.** The destination's writes are checked once with 010's read-only `Transaction.check()`. Only if that check fails are they admitted unit by unit, and a unit the store refuses becomes `unapplicable`. A unit is one instance, one manifest with its head revisions, or the other revisions of one entity. Instances are checked alone; source units are checked cumulatively, so cross-source link cycles are caught. In that fallback, one final combined check of everything admitted runs before the commit, defensively: by construction it should accept what the units accepted, and if it does not the error propagates. Library-wide problems propagate and are never blamed on one path.
 
 **Denied writes.** Authorization cannot be dry-run without consuming approvals, so a data commit uses 010's partial mode (`commit(..., on_denied=...)`). Each write is authorized exactly once. A write denied for its path (not granted, approval required, reserved) is dropped together with every copy of the same source, becomes conflict `denied`, and its pending entry is removed. What remains is checked again. If it is no longer acceptable on its own (for example, another source's manifest needed the denied one), it is re-admitted unit by unit, and each refused unit is also `denied`, so a denial never stalls the rest. A denial that is not about a path propagates: an unissued handle, or an unavailable authority. Approvals consumed by dropped dependents are reported in `SyncReport.consumed_approvals`.
 
@@ -107,7 +107,7 @@ A copy publishes the other device's **exact bytes** (`Transaction.put_exact`), s
 
 For every conflict except `denied`, each device whose peer has a present, usable version receives that version as a **kept version**. It goes under `.conflicts/<hash16>/<name>~<digest12>[.N]`, through `Transaction.keep_version`. The authorization address is distinct from the record's own: `kept/<hash16>/<digest12>[-N]/<name>`. So "keep these bytes beside p" and "overwrite p" are different approvals, and they appear under different `preview()` keys.
 
-A slot already holding those bytes is reused, so kept versions are never duplicated, and a conflict stays reported on every sync until a human ends it. A kept version that cannot be written (for example, because of path limits) is reported as `kept: false`. A device whose own file could not even be read receives nothing: there is nothing to keep it beside, and the next readable sync decides the path. A `denied` conflict keeps nothing either: the denial is only known while committing, after kept versions were planned. Both versions stay canonical on their own device, and the conflict is reported on every sync until the grant changes. Kept versions are not indexed: `load()` still shows one record per path.
+A slot already holding those bytes is reused, so kept versions are never duplicated, and a conflict stays reported on every sync until a human ends it. A kept version that cannot be written (for example, because of path limits) is reported as `kept: false`. A device that has moved on from the base is never handed that base as a kept copy: it is not the peer's version. A device whose own file could not even be read receives nothing: there is nothing to keep it beside, and the next readable sync decides the path. A `denied` conflict keeps nothing either: the denial is only known while committing, after kept versions were planned. Both versions stay canonical on their own device, and the conflict is reported on every sync until the grant changes. Kept versions are not indexed: `load()` still shows one record per path.
 
 Dismissing a kept version by deleting it is not supported yet: the next sync delivers it again. While a conflict stays open and one device keeps editing the record, every new version it sends lands in a new slot, so kept versions accumulate (one per sync, up to the record's size each) until compaction exists.
 
@@ -117,7 +117,8 @@ Kept copies of the **other device's** version are regenerable (journal kind `kee
 
 - `resolve(left, right, path, keep=<etag>, expected={device: etag | None}, handles, approvals=None)` makes the device that does not hold `keep` receive it. Its replaced version is kept under `.conflicts/` in the same transaction, and both archives then record `agreed keep`.
   - **Manifest:** absent head revisions are copied with it. A head revision that differs must be resolved first.
-  - **Definition revision:** allowed only if nothing on the receiving device can pin it: a manifest head, a link endpoint, an instance's `derived_from` or `base`, or any text in a 107 scope or chat record that names it (a chat's source bindings). Every parsable manifest and instance is checked, those of excluded sources included. An unreadable manifest or instance means "cannot prove unreferenced" (`RevisionReferenced`), so any blocked manifest or instance anywhere in the library blocks revision resolves until it is fixed.
+  - **Definition revision:** allowed only if nothing on the receiving device can pin it: a manifest head, a link endpoint, an instance's `derived_from`, `base` or a pinned reference in its payload, a pinned reference in another revision's payload, or any text in a scope, chat, relation or knowledge record that names it (a chat's source bindings). Every parsable record is checked, those of excluded sources included. A manifest byte-identical to the receiving device's copy of the winner's manifest is exempt: it is the winner's own manifest, which names the revision being replaced by ID. A blocked path that could be or hold a record means "cannot prove unreferenced" (`RevisionReferenced`), so it blocks revision resolves until it is fixed; a blocked entry that cannot hold records (a root-level link, a non-JSON note under `sources/`) does not.
+  - **Knowledge records** cannot be resolved (`ResolveRefused`): they are immutable evidence, and choosing one version would rewrite history. Both versions stay, and the conflict stays reported.
   - **Refused (`ResolveRefused`, nothing written):** a deletion choice, a blocked side, `keep` matching neither device, or either device differing from `expected`.
 - Deleting a record on both devices by hand ends a `deleted` conflict, and a tombstone is archived.
 
@@ -144,7 +145,7 @@ Errors:
 
 `sync_until_quiet` retries `SyncInterrupted` until a sync completes and writes nothing. Its report merges every attempt: all copies, notices and consumed approvals, and the conflicts of the final sync. After `attempts` it raises the last error, or `SyncNotQuiet`, carrying the merged report.
 
-Planning takes the two libraries' locks in a fixed order (by root path), so two syncs of the same pair in opposite argument order cannot deadlock.
+Planning takes the two libraries' locks in a fixed order (by root path), so two syncs of the same pair in opposite argument order cannot deadlock (pinned by a test running both orders concurrently).
 
 ## Limits
 

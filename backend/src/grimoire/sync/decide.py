@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Protocol
 
 from .model import FIRST, IMMUTABLE_KINDS, NONE, UNCERTAIN, Base, Decision, Side
 
@@ -107,11 +108,11 @@ def derive_base(path: str, archives: tuple[ArchiveLike, ArchiveLike], pendings: 
     return candidate
 
 
-class ArchiveLike:  # structural: documents.ArchiveView
+class ArchiveLike(Protocol):  # documents.ArchiveView
     state: str
     entries: Mapping[str, tuple[str, str]]
 
 
-class PendingLike:  # structural: documents.PendingView
+class PendingLike(Protocol):  # documents.PendingView
     state: str
     entries: Mapping[str, Mapping[str, object]]
