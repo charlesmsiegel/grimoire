@@ -1,5 +1,12 @@
 # Turn-Level Effect Authority and Scene Wrap-Up
 
+**Status:** **first slice implemented**, headless. It is `grimoire.effects` (pure) and `grimoire.effectstore` (service), on additive `accepted/` and `wrapups/` record families in `grimoire.store`, plus an additive 017 `reopen`. The contract is in [EFFECTS.md](../../EFFECTS.md). The proving scenario, the failure cases and the crash exploration are executable. The requester decided:
+- the work is done on a topic branch, with a PR into `v2`;
+- independent reviewer subagents stand in for the Codex gates;
+- revocation (undo of a revised turn) is in scope.
+
+State changes are 017 relation changes. The 023 holdings handoff below is still open; it waits for 023 to merge.
+
 > **V2 scope correction:** V2 has no V1 wrap-up API. Own the acceptance boundary for canonical events in native storage; once resolved, narration retry cannot reroll or reapply the outcome. Long-form memory consolidation is a separate consumer. See the [V2 ordered roadmap](../README.md) for prerequisites, waves and current first-slice proof. Older references to shipped V1 APIs describe behavior to *port*, not V2 capabilities.
 
 
@@ -29,6 +36,18 @@ Owns timing and acceptance policy, not file journaling internals or mechanics le
 Consume generic 010 record revisions and the Wave 1 PC-authority decision policy. Do not reinterpret 012's witnessed claims as committed physical events. An effect must have a stable accepted operation/event identity, preconditions and one-time publication; speculative narrator prose and a proposed player action cannot write canonical state. Durable event receipts become compatible with 020's independent evidence persistence after Wave 3 interfaces land; 030 owns cross-file exactly-once crash recovery. The first step must not require a V1 wrap-up API (none exists on V2).
 
 ## Open questions
-- Which narrations imply immediate accepted truth, and which require player review?
-- What is the undo contract for rewinding an earlier turn?
-- How do existing ledger facts coexist with real-time state?
+- Which narrations imply immediate accepted truth, and which require player review? **Partly answered:**
+  - none does by itself; narration only proposes;
+  - a player character's voluntary operation always needs its controller's own contribution and an endorsement of the exact operations;
+  - every outcome needs the director's key.
+
+  *When* director acceptance needs a human's review is 035's policy.
+- ~~What is the undo contract for rewinding an earlier turn?~~ Revocation:
+  - it is strictly latest first;
+  - it needs the same keys as accepting, with the original endorser;
+  - it restores relations in place (retract what was begun, reopen what was ended);
+  - it is refused when something depends on it;
+  - `partial=True` is the repair path.
+
+  Cascading undo is the moonshot; forks belong to 054.
+- ~~How do existing ledger facts coexist with real-time state?~~ The accepted events are the ledger and the relations are the state. Receipts tie each operation to a relation id, and `continuity` reports any disagreement (`receipt_mismatch`, `orphan_effect`) instead of trusting either side.

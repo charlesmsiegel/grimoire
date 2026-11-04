@@ -19,6 +19,8 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   campaigns/<campaign_id>/scope.json                              # the play scope (107)
   campaigns/<campaign_id>/chats/<chat_id>.json                    # one chat record (107)
   campaigns/<campaign_id>/relations/<relation_id>.json            # one relation record (017)
+  campaigns/<campaign_id>/accepted/<event_id>.json                # one accepted fictional event (021)
+  campaigns/<campaign_id>/wrapups/<wrapup_id>.json                # one scene wrap-up (021)
   .txn/lock, .txn/journal.json, .txn/*.new                        # writer lock, journal, staging
   .txn/discard.json                                               # an unfinished discard_journal
   .conflicts/<hash16>/<name>~<digest12>[.N]                       # preserved versions awaiting a human
@@ -38,7 +40,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   - at the root: `authority`, `config`, `assets`, `secrets`;
   - inside a campaign: `scenes`, `events`, `evidence`.
 
-  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), and `relations/` since 017 (see relation records).
+  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), `relations/` since 017 (see relation records), and `accepted/` and `wrapups/` since 021 (see accepted events and wrap-ups).
 
   These follow the [architecture layout](ARCHITECTURE.md#storage-root-and-provisional-organization) and are a deliberate deviation from an earlier draft that reserved root-level `events`/`evidence`. No root entry is a [V1 marker name](ARCHITECTURE.md#library-location-and-v1-isolation-implemented-grimoirelibrary).
 - **Ignored silently:** OS and editor droppings (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `*~`, `*.swp`, `*.swo`, `.#*`) and directories with no file below them. Empty directories are not state: a failed commit can leave some behind, and nothing can remove them through the file seam. Per-target `.conflicts/<hash16>/` folders accumulate in the same way.
@@ -125,6 +127,22 @@ Fields:
 - **Instance allocators must use `grimoire.graphstore.relation_endpoint_ids`** (see [GRAPH](GRAPH.md#endpoint-ids-stay-taken)), so the id of a hand-deleted relation endpoint is never reused.
 
 **Rollback:** a pre-017 build skips `relations/` (it is reserved there), and never writes or deletes it. Its allocators do not protect relation endpoint ids. It **cannot recover a journal that names a relation path**: it raises `RecoveryFailed`, and reads then raise `PendingRecovery`. Recover with a 017+ build, or run `LibraryStore.discard_journal` (tested).
+
+### Accepted events and wrap-ups (021)
+
+<a id="accepted-events-and-wrap-ups-021"></a>Added by [Turn Effects And Wrap Up](roadmap/sprints/turn-effects-and-wrap-up.md). Interpreted by [`grimoire.effects`](EFFECTS.md), never by the store.
+
+- **Another additive 010 envelope amendment.** `grimoire.scope-record/1`'s address union widens to `ScopeRef | ChatRef | RelationRef | AcceptedRef | WrapUpRef`. The new addresses are:
+  - `campaign:<id>#accepted/<event_id>`, at `campaigns/<id>/accepted/<event_id>.json`;
+  - `campaign:<id>#wrapup/<wrapup_id>`, at `campaigns/<id>/wrapups/<wrapup_id>.json`.
+
+  `parse_scope_record` dispatches by the exact fragment. No file format is added.
+- These two names were never reserved. `classify` recognises exactly the new paths, so recovery accepts journals that name them.
+- `load()` adds `LibraryView.accepted` and `LibraryView.wrapups`, with per-file containment as for relations.
+- `campaign_accepted(id)` and `campaign_wrapups(id)` each return `CampaignRecords(records, problems)` for **one** campaign, contained exactly as `load()` contains it (parity tests). `CampaignRecords` generalizes 017's `CampaignRelations`, which remains its name for relations.
+- One transaction may mix accepted-event, wrap-up and relation records. 021 uses that to commit an acceptance and its relation changes together.
+
+**Rollback:** a pre-021 build reports `accepted/` and `wrapups/` as `unrecognized` load problems (no crash) and never writes them. It **cannot recover a journal that names them**: recover with a 021+ build, or run `LibraryStore.discard_journal` (tested).
 
 ### Read-only helpers (107)
 

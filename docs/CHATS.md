@@ -170,7 +170,7 @@ Actor instances are written as `grimoire.record/1` with:
 
 | Not here | Owner |
 |---|---|
-| Messages, scene segments, events, evidence and what an added actor learns | 020/021/027 |
+| Messages, scene segments, events, evidence and what an added actor learns | 020/027 (accepted turn effects are 021's: [EFFECTS](EFFECTS.md); a chat is their provenance and must exist) |
 | Control assignment for the persona's actor | 003/035 |
 | Effective portrayal composition and derivation-aware navigation filters | 022/065 |
 | Card import | 037 |
