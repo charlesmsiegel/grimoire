@@ -28,11 +28,13 @@ from .identity import TEXT_MAX, InstanceRef, validate_segment
 
 Classification = Literal["known_capability", "attempted_feat", "extrapolation", "new_ability",
                          "beyond_limits", "unavailable", "relabel", "needs_upgrade"]
-Approval = Literal["not_needed", "pending", "approved", "refused"]
+Approval = Literal["not_needed", "not_approvable", "pending", "approved", "refused"]
 CLASSIFICATIONS = frozenset({"known_capability", "attempted_feat", "extrapolation", "new_ability",
                              "beyond_limits", "unavailable", "relabel", "needs_upgrade"})
 #: The only classifications an approval ruling can decide.
 APPROVABLE = frozenset({"extrapolation", "new_ability"})
+#: Classifications in which the power works as declared; no ruling is involved.
+DECLARED = frozenset({"known_capability", "attempted_feat"})
 DECISIONS = frozenset({"approved", "refused"})
 #: Rulings on one attempt id; others in the input are not counted.
 MAX_RULINGS = 256
@@ -100,7 +102,9 @@ class AbilityAttempt:
     conditions_met: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
-        _text(self.attempt_id, "attempt_id")
+        # Any nonempty text, like ``Resolution.attempt_id`` and ``PlayerContribution.contribution_id``.
+        if type(self.attempt_id) is not str or not self.attempt_id.strip():
+            raise _invalid("attempt_id must be nonempty plain text")
         if type(self.actor) is not InstanceRef:  # a subclass could redefine equality
             raise _invalid("an attempt's actor must be an InstanceRef")
         _segment(self.ability_id, "ability_id")
@@ -161,6 +165,7 @@ class AbilityAssessment:
     unknown_tags: tuple[str, ...]
     other_conflicts: tuple[tuple[str, str, tuple[str, ...]], ...]
     unrecognized: tuple[str, ...]
+    other_unrecognized: tuple[str, ...]
     stale_references: tuple[str, ...]
     inapplicable_rulings: tuple[str, ...]
     mismatched_rulings: tuple[str, ...]
@@ -170,26 +175,44 @@ class AbilityAssessment:
     def needs_approval(self) -> bool:
         return self.approval == "pending"
 
+    @property
+    def permitted(self) -> bool:
+        """Whether the power may be narrated as working: declared, or an approved ruling.
+
+        ``approval == "not_needed"`` alone is not permission: refusals say ``not_approvable``.
+        """
+        return self.classification in DECLARED or self.approval == "approved"
+
 
 # --- rulings --------------------------------------------------------------------
 
+def _label(attempt: AbilityAttempt) -> tuple:
+    """What a ruling decides: the attempt's labels. ``provenance`` is attribution, not a label."""
+    return (attempt.attempt_id, attempt.actor, attempt.ability_id, attempt.needs, attempt.effect_id,
+            attempt.conditions_met)
+
+
 def _matching_rulings(attempt: AbilityAttempt, rulings: object):
-    """Same-campaign rulings on this attempt id: (matching, mismatched ids)."""
+    """``(mine, same, matching, mismatched ids)``: same-campaign rulings, those on this attempt id,
+    those on these exact labels, and the ids of those on other labels."""
     given = _collection(rulings, "rulings")
     for ruling in given:
         if type(ruling) is not AbilityRuling:
             raise _invalid(f"not an AbilityRuling: {ruling!r}")
     campaign = attempt.actor.campaign_id
     mine = [ruling for ruling in given if ruling.attempt.actor.campaign_id == campaign]
-    ids = [ruling.ruling_id for ruling in mine]
-    if len(set(ids)) != len(ids):
-        raise AbilityError("a ruling id appears twice", "duplicate_ruling")
     same = [ruling for ruling in mine if ruling.attempt.attempt_id == attempt.attempt_id]
+    # Only this attempt's rulings are checked here: one bad record elsewhere in the campaign
+    # must not block every other use. Campaign-wide id uniqueness is ``check_ruling``'s job.
+    ids = [ruling.ruling_id for ruling in same]
+    if len(set(ids)) != len(ids):
+        raise AbilityError("a ruling id appears twice on this attempt", "duplicate_ruling")
     if len(same) > MAX_RULINGS:
         raise _invalid(f"more than {MAX_RULINGS} rulings on attempt {attempt.attempt_id!r}")
-    matching = [ruling for ruling in same if ruling.attempt == attempt]
-    mismatched = tuple(sorted(ruling.ruling_id for ruling in same if ruling.attempt != attempt))
-    return mine, matching, mismatched
+    label = _label(attempt)
+    matching = [ruling for ruling in same if _label(ruling.attempt) == label]
+    mismatched = tuple(sorted(ruling.ruling_id for ruling in same if _label(ruling.attempt) != label))
+    return mine, same, matching, mismatched
 
 
 def _live(matching: list, classification: str) -> tuple[list, tuple[str, ...]]:
@@ -208,17 +231,19 @@ def _tags(tags: Iterable[str]) -> str:
     return ", ".join(sorted(tags))
 
 
-def _unrecognized(facet: Abilities | None, ability: Ability | None) -> list[str]:
+def _with_extras(ability: Ability) -> list[tuple[str, tuple[str, ...]]]:
+    """``(path, unknown keys)`` for the ability and each of its parts that carries extras."""
+    found = [(ability.id, tuple(ability.extras))] if ability.extras else []
+    parts = [*ability.effects, *ability.limits, *ability.costs, *ability.prerequisites]
+    return found + [(f"{ability.id}/{part.id}", tuple(part.extras)) for part in parts if part.extras]
+
+
+def _unrecognized(facet: Abilities | None, ability: Ability | None) -> list[tuple[str, tuple[str, ...]]]:
     """Values carrying extras on the facet or anywhere in the named ability (fail closed)."""
-    paths = []
-    if facet is not None and facet.extras:
-        paths.append(FACET_PATH)
+    found = [(FACET_PATH, tuple(facet.extras))] if facet is not None and facet.extras else []
     if ability is not None:
-        if ability.extras:
-            paths.append(ability.id)
-        parts = [*ability.effects, *ability.limits, *ability.costs, *ability.prerequisites]
-        paths += [f"{ability.id}/{part.id}" for part in parts if part.extras]
-    return sorted(paths)
+        found += _with_extras(ability)
+    return sorted(found)
 
 
 def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
@@ -226,13 +251,13 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
     """Classify a labelled attempt against the entity's effective abilities."""
     if type(attempt) is not AbilityAttempt:
         raise TypeError(f"expected an AbilityAttempt, not {type(attempt).__name__}")
-    if not isinstance(entity, EffectiveEntity):
+    if type(entity) is not EffectiveEntity:
         raise TypeError(f"expected an EffectiveEntity, not {type(entity).__name__}")
     if entity.ref != attempt.actor:
         raise AbilityError(f"the attempt is by {attempt.actor}, not {entity.ref}", "actor_mismatch")
     if not entity.facets.has(Agent):
         raise AbilityError(f"{entity.ref} is not an agent and cannot attempt an ability", "not_agent")
-    _, matching, mismatched = _matching_rulings(attempt, rulings)
+    _, _, matching, mismatched = _matching_rulings(attempt, rulings)
 
     needs = attempt.needs
     facet = entity.facets.get(Abilities)
@@ -253,6 +278,19 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
             reasons.append(Reason("stale_prerequisite",
                                   f"{attempt.ability_id!r} has no prerequisite {condition!r}"))
 
+    covers = effect is not None and needs <= effect.tags
+    # Effects whose scoped prerequisites and costs apply. A covering named effect is exact. A
+    # stretch (no covering named effect) also counts the effects it is closest to: those sharing
+    # the most needed tags, all of them on a tie. So leaving out or misnaming the effect never
+    # drops the constraints of the effect being stretched.
+    scope: set[str] = set()
+    if effect is not None:
+        scope.add(effect.id)
+    if ability is not None and not covers:
+        best = max(len(each.tags & needs) for each in ability.effects)
+        if best:
+            scope |= {each.id for each in ability.effects if len(each.tags & needs) == best}
+
     conflicts: list[tuple[str, tuple[str, ...]]] = []
     unmet: list[str] = []
     candidates: list[str] = []
@@ -264,7 +302,7 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
                 reasons.append(Reason("limit_excludes", f"limit {limit.id!r} of {ability.id!r} "
                                                         f"excludes {_tags(hit)}"))
         for prerequisite in ability.prerequisites:
-            applies = not prerequisite.applies_to or (effect is not None and effect.id in prerequisite.applies_to)
+            applies = not prerequisite.applies_to or bool(prerequisite.applies_to & scope)
             if applies and prerequisite.id not in attempt.conditions_met:
                 unmet.append(prerequisite.id)
                 reasons.append(Reason("prerequisite_unmet", f"prerequisite {prerequisite.id!r} of "
@@ -275,6 +313,7 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
 
     unknown: list[str] = []
     others: list[tuple[str, str, tuple[str, ...]]] = []
+    other_unrecognized: list[tuple[str, tuple[str, ...]]] = []
     if facet is not None:
         used = {tag for each in facet.abilities for part in each.effects for tag in part.tags}
         used |= {tag for each in facet.abilities for part in each.limits for tag in part.excludes}
@@ -284,17 +323,20 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         for each in facet.abilities:
             if each.id == attempt.ability_id:
                 continue
+            other_unrecognized += _with_extras(each)
             for limit in each.limits:
                 hit = tuple(sorted(limit.excludes & needs))
                 if hit:
                     others.append((each.id, limit.id, hit))
                     reasons.append(Reason("other_limit_excludes", f"limit {limit.id!r} of another ability "
                                                                   f"{each.id!r} excludes {_tags(hit)}"))
-    unrecognized = _unrecognized(facet, ability)
-    reasons += [Reason("unrecognized_constraint", f"{path} has fields this version does not understand")
-                for path in unrecognized]
-
-    covers = effect is not None and needs <= effect.tags
+    found = _unrecognized(facet, ability)
+    unrecognized = [path for path, _ in found]
+    reasons += [Reason("unrecognized_constraint", f"{path} has fields this version does not understand: "
+                                                  f"{', '.join(keys)}") for path, keys in found]
+    reasons += [Reason("other_unrecognized_constraint", f"another ability's {path} has fields this version "
+                                                        f"does not understand: {', '.join(keys)}")
+                for path, keys in sorted(other_unrecognized)]
     if ability is not None:
         if covers:
             reasons.append(Reason("effect_covers", f"effect {effect.id!r} provides {_tags(needs)}"))
@@ -330,8 +372,10 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
 
     live, inapplicable = _live(matching, classification)
     ruling_id = None
-    if classification not in APPROVABLE:
+    if classification in DECLARED:
         approval = "not_needed"
+    elif classification not in APPROVABLE:
+        approval = "not_approvable"
     elif live:
         approval = live[0].decision
         ruling_id = min(ruling.ruling_id for ruling in live)
@@ -346,8 +390,7 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
 
     charged = classification in ("known_capability", "attempted_feat") or (
         classification == "extrapolation" and approval == "approved")
-    costs = tuple(cost for cost in ability.costs
-                  if not cost.applies_to or (effect is not None and effect.id in cost.applies_to)) \
+    costs = tuple(cost for cost in ability.costs if not cost.applies_to or cost.applies_to & scope) \
         if charged else ()
     uncertain = classification == "attempted_feat" or (
         classification in APPROVABLE and approval == "approved")
@@ -364,6 +407,7 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         unknown_tags=tuple(unknown),
         other_conflicts=tuple(sorted(others)),
         unrecognized=tuple(unrecognized),
+        other_unrecognized=tuple(path for path, _ in sorted(other_unrecognized)),
         stale_references=tuple(sorted(stale)),
         inapplicable_rulings=inapplicable,
         mismatched_rulings=mismatched,
@@ -381,12 +425,17 @@ def check_ruling(ruling: AbilityRuling, entity: EffectiveEntity,
     if classification == "beyond_limits":
         raise AbilityError("an authored limit excludes this attempt; only an authored change to the "
                            "ability can alter it", "limit_not_approvable")
-    if classification not in APPROVABLE:
+    if classification in DECLARED:
         raise AbilityError(f"a {classification} needs no ruling", "ruling_not_needed")
+    if classification not in APPROVABLE:
+        raise AbilityError(f"a {classification} cannot be ruled on as labelled", "not_approvable")
     if ruling.decides != classification:
         raise AbilityError(f"the attempt is a {classification}, not a {ruling.decides}",
                            "wrong_classification")
-    mine, matching, _ = _matching_rulings(ruling.attempt, existing)
+    mine, same, matching, _ = _matching_rulings(ruling.attempt, existing)
+    if len(same) >= MAX_RULINGS:
+        raise AbilityError(f"attempt {ruling.attempt.attempt_id!r} already has {MAX_RULINGS} rulings",
+                           "too_many_rulings")
     if ruling.ruling_id in {each.ruling_id for each in mine}:
         raise AbilityError(f"ruling id {ruling.ruling_id!r} is already used", "duplicate_ruling")
     if any(each.decides == classification and each.decision != ruling.decision for each in matching):
@@ -395,7 +444,7 @@ def check_ruling(ruling: AbilityRuling, entity: EffectiveEntity,
 
 
 __all__ = [
-    "APPROVABLE", "CLASSIFICATIONS", "DECISIONS", "FACET_PATH", "MAX_RULINGS",
+    "APPROVABLE", "CLASSIFICATIONS", "DECISIONS", "DECLARED", "FACET_PATH", "MAX_RULINGS",
     "AbilityAssessment", "AbilityAttempt", "AbilityError", "AbilityRuling", "Reason",
     "assess_attempt", "check_ruling",
 ]

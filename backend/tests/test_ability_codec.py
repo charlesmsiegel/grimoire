@@ -70,6 +70,14 @@ def test_explicit_defaults_decode_equal_and_reencode_without_them():
                                              "effects": [{"id": "e", "text": "t", "tags": ["x"]}]}]}
 
 
+def test_explicit_nulls_of_defaulted_fields_mean_absent():
+    entry = {"facet": "abilities", "abilities": [{"id": "a", "name": "A", "description": None,
+                                                  "costs": None, "effects": [
+        {"id": "e", "text": "t", "tags": ["x"], "certainty": None, "range": None}]}]}
+    ability = decode_traits(entry).traits.get(Abilities).abilities[0]
+    assert ability.description == "" and ability.costs == () and ability.effects[0].certainty == "reliable"
+
+
 def test_an_empty_facet_round_trips():
     definition = person("blank", "Blank", facet_extras={})
     payload = definition_to_payload(definition)
@@ -137,7 +145,7 @@ def test_malformed_entries_are_refused_with_invalid_field(entry):
     ({"facet": "abilities", "abilities": [{"id": "a", "name": "A", "effects": [
         {"id": "e", "text": "t", "tags": ["x"]}, {"id": "e", "text": "u", "tags": ["y"]}]}]},
      "duplicate_ability_part"),
-    ({"facet": "abilities", "abilities": [{"id": "a", "name": "A", "description": None, "effects": [
+    ({"facet": "abilities", "abilities": [{"id": "a", "name": None, "effects": [
         {"id": "e", "text": "t", "tags": ["x"]}]}]}, "invalid_field"),
 ])
 def test_domain_refusals_propagate_with_their_reason(entry, expected):

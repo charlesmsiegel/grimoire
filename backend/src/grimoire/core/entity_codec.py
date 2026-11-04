@@ -189,6 +189,8 @@ def _ability_value(cls: type, entry: object, label: str) -> object:
         if item.name == "extras" or item.name not in rest:
             continue
         value = rest.pop(item.name)
+        if value is None and (item.default is not MISSING or item.default_factory is not MISSING):
+            continue  # an explicit null of a defaulted field means "absent", as encoding omits it
         if item.name in _ABILITY_NAMES:
             value = _names(value, f"{label} {item.name}")
         elif item.name in _ABILITY_PARTS:

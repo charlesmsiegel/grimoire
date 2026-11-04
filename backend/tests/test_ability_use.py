@@ -39,6 +39,7 @@ OPEN_IRIS = effective(iris(force_limit=False))
 def test_a_declared_reliable_effect_is_a_known_capability():
     result = assess_attempt(attempt(effect_id="veil"), IRIS)
     assert (result.classification, result.approval, result.uncertain) == ("known_capability", "not_needed", False)
+    assert result.permitted
     assert [cost.id for cost in result.costs] == ["eye_strain"]
     assert result.candidates == ("veil",) and "effect_covers" in codes(result)
 
@@ -71,7 +72,8 @@ def test_an_entity_without_the_facet_is_a_new_ability():
 
 def test_a_limit_puts_an_attempt_beyond_limits():
     result = assess_attempt(flight(), IRIS)
-    assert result.classification == "beyond_limits" and result.approval == "not_needed"
+    assert result.classification == "beyond_limits" and result.approval == "not_approvable"
+    assert not result.permitted and not result.needs_approval
     assert result.conflicts == (("no_force", ("force",)),) and result.costs == ()
 
 
@@ -87,11 +89,11 @@ def test_omitting_or_misnaming_a_covering_effect_needs_a_relabel_not_an_approval
     # F13: leaving out the effect must not turn a known power into an approvable extrapolation.
     for label in (None, "dazzle"):
         result = assess_attempt(attempt(effect_id=label), IRIS)
-        assert (result.classification, result.approval) == ("relabel", "not_needed")
+        assert (result.classification, result.approval, result.costs) == ("relabel", "not_approvable", ())
         assert result.candidates == ("veil",) and "covered_by_other_effect" in codes(result)
         with pytest.raises(AbilityError) as caught:
             check_ruling(ruling(attempt(effect_id=label)), IRIS)
-        assert caught.value.reason == "ruling_not_needed"
+        assert caught.value.reason == "not_approvable"
 
 
 def test_stale_references_never_raise():
@@ -133,7 +135,7 @@ def test_precedence_between_findings_is_fixed():
     # an absent ability with facet extras needs an upgrade, not an approval (M-d)
     facet_extras = effective(person("iris", "Iris", light_bending(), facet_extras={"x-limit": "no fire"}))
     result = assess_attempt(attempt(ability_id="pyrokinesis", needs=("fire",), conditions=()), facet_extras)
-    assert (result.classification, result.approval, result.unrecognized) == ("needs_upgrade", "not_needed",
+    assert (result.classification, result.approval, result.unrecognized) == ("needs_upgrade", "not_approvable",
                                                                             ("#facet",))
 
 
@@ -160,9 +162,9 @@ def _bending_with(part):
 def test_unknown_fields_on_the_named_ability_fail_closed(part, path):
     entity = effective(person("iris", "Iris", _bending_with(part)))
     result = assess_attempt(attempt(effect_id="veil"), entity)
-    assert (result.classification, result.approval, result.costs) == ("needs_upgrade", "not_needed", ())
+    assert (result.classification, result.approval, result.costs) == ("needs_upgrade", "not_approvable", ())
     assert result.unrecognized == (path,) and "unrecognized_constraint" in codes(result)
-    assert refusal(lambda: check_ruling(ruling(attempt(effect_id="veil")), entity)) == "ruling_not_needed"
+    assert refusal(lambda: check_ruling(ruling(attempt(effect_id="veil")), entity)) == "not_approvable"
 
 
 def test_unknown_fields_on_any_effect_of_the_named_ability_fail_closed():
@@ -172,9 +174,9 @@ def test_unknown_fields_on_any_effect_of_the_named_ability_fail_closed():
     entity = effective(person("iris", "Iris", glow))
     for label in (attempt(effect_id="veil"), attempt(needs=("light", "flight"))):
         result = assess_attempt(label, entity, [ruling(label)])
-        assert (result.classification, result.approval, result.costs) == ("needs_upgrade", "not_needed", ())
+        assert (result.classification, result.approval, result.costs) == ("needs_upgrade", "not_approvable", ())
         assert result.unrecognized == ("light_bending/glow",)
-        assert refusal(lambda: check_ruling(ruling(label, ruling_id="r2"), entity)) == "ruling_not_needed"
+        assert refusal(lambda: check_ruling(ruling(label, ruling_id="r2"), entity)) == "not_approvable"
 
 
 def test_unknown_fields_on_another_ability_do_not_matter():
@@ -205,7 +207,7 @@ def test_relabelling_around_a_limit_is_reported():
 def test_an_approval_lets_this_extrapolation_count_and_a_refusal_closes_it():
     approved = assess_attempt(flight(), OPEN_IRIS, [ruling(flight())])
     assert (approved.approval, approved.ruling_id, approved.uncertain) == ("approved", "r1", True)
-    assert [cost.id for cost in approved.costs] == ["eye_strain"]
+    assert [cost.id for cost in approved.costs] == ["eye_strain", "migraine"]
     refused = assess_attempt(flight(), OPEN_IRIS, [ruling(flight(), decision="refused")])
     assert (refused.approval, refused.costs, refused.uncertain) == ("refused", (), False)
 
@@ -276,10 +278,12 @@ def test_check_ruling_refuses_rulings_that_cannot_decide_this_attempt():
     # F8, in its fixed order
     for decision in ("approved", "refused"):
         assert refusal(lambda: check_ruling(ruling(flight(), decision=decision), IRIS)) == "limit_not_approvable"
-    for label in (attempt(effect_id="veil"), attempt(needs=("light", "illusion"), effect_id="mirage"),
-                  attempt(), attempt(effect_id="veil", conditions=())):
+    for label, expected in ((attempt(effect_id="veil"), "ruling_not_needed"),
+                            (attempt(needs=("light", "illusion"), effect_id="mirage"), "ruling_not_needed"),
+                            (attempt(), "not_approvable"),
+                            (attempt(effect_id="veil", conditions=()), "not_approvable")):
         for decision in ("approved", "refused"):
-            assert refusal(lambda: check_ruling(ruling(label, decision=decision), IRIS)) == "ruling_not_needed"
+            assert refusal(lambda: check_ruling(ruling(label, decision=decision), IRIS)) == expected
     assert refusal(lambda: check_ruling(ruling(flight(), decides="new_ability"), OPEN_IRIS)) == \
         "wrong_classification"
     check_ruling(ruling(flight()), OPEN_IRIS, [ruling(flight(), ruling_id="r0")])  # agreeing is fine
@@ -307,7 +311,6 @@ def test_the_attempt_must_be_by_this_agent():
     lambda: attempt(needs=("Light",)),
     lambda: attempt(needs=[f"t{n}" for n in range(33)]),
     lambda: attempt(attempt_id=""),
-    lambda: attempt(attempt_id="x" * (TEXT_MAX + 1)),
     lambda: attempt(ability_id="Light Bending"),
     lambda: attempt(effect_id=""),
     lambda: AbilityAttempt("t1", "campaign:c1/character/iris-1", "a", frozenset({"x"}), "p"),
@@ -337,7 +340,7 @@ def test_the_ruling_bound_counts_only_rulings_on_this_attempt():
 
 def test_any_contribution_id_shaped_text_is_an_attempt_id():
     # F17
-    for attempt_id in ("T4-a", "c/17", "turn 4: vault"):
+    for attempt_id in ("T4-a", "c/17", "turn 4: vault", "c" * (TEXT_MAX + 1)):
         assert assess_attempt(attempt(attempt_id=attempt_id, effect_id="veil"), IRIS).attempt.attempt_id == attempt_id
 
 
@@ -367,3 +370,79 @@ def test_assessment_is_a_pure_function_of_its_inputs():
         assert assess_attempt(flight(), entity, rulings) == baseline
         assert assess_attempt(flight(), entity, list(reversed(rulings))) == baseline
     assert assess_attempt(flight(), OPEN_IRIS, rulings) == expected
+
+
+# --- effect-scoped prerequisites and costs (brutal review) -------------------------------
+
+def _scoped_bending():
+    return Ability("light_bending", "Light bending", [
+        Effect("veil", "t", {"light", "concealment"}),
+        Effect("mirage", "t", {"light", "illusion"}, certainty="uncertain"),
+    ], costs=[Cost("eye_strain", "t"), Cost("migraine", "t", {"mirage"})],
+        prerequisites=[Prerequisite("ambient_light", "t"), Prerequisite("still_air", "t", {"mirage"})])
+
+
+SCOPED = effective(person("iris", "Iris", _scoped_bending()))
+
+
+def test_an_effect_scoped_prerequisite_binds_its_effect_only():
+    mirage = attempt(needs=("light", "illusion"), effect_id="mirage")
+    blocked = assess_attempt(mirage, SCOPED)
+    assert (blocked.classification, blocked.unmet_prerequisites) == ("unavailable", ("still_air",))
+    calm = assess_attempt(attempt(needs=("light", "illusion"), effect_id="mirage",
+                                  conditions=("ambient_light", "still_air")), SCOPED)
+    assert calm.classification == "attempted_feat" and [c.id for c in calm.costs] == ["eye_strain", "migraine"]
+    veil = assess_attempt(attempt(effect_id="veil"), SCOPED)
+    assert veil.classification == "known_capability" and [c.id for c in veil.costs] == ["eye_strain"]
+
+
+def test_leaving_out_the_effect_never_drops_a_stretched_effects_constraints():
+    # A moving mirage is a stretch of `mirage`, whichever way it is labelled.
+    for label in (None, "mirage", "veil"):
+        moving = attempt(needs=("light", "illusion", "motion"), effect_id=label)
+        result = assess_attempt(moving, SCOPED)
+        assert (result.classification, result.unmet_prerequisites) == ("unavailable", ("still_air",))
+        assert refusal(lambda: check_ruling(ruling(moving), SCOPED)) == "not_approvable"
+    approved_label = attempt(needs=("light", "illusion", "motion"), conditions=("ambient_light", "still_air"))
+    approved = assess_attempt(approved_label, SCOPED, [ruling(approved_label)])
+    assert approved.approval == "approved" and [c.id for c in approved.costs] == ["eye_strain", "migraine"]
+    # The closest effect counts, not every effect sharing a generic tag: a concealing stretch
+    # is closest to `veil`, so the mirage's still air is not required.
+    hidden = attempt(needs=("light", "concealment", "motion"))
+    assert assess_attempt(hidden, SCOPED).classification == "extrapolation"
+
+
+def test_issuing_the_ruling_past_the_bound_is_refused():
+    existing = [ruling(flight(), ruling_id=f"r{n:03}") for n in range(256)]
+    assert refusal(lambda: check_ruling(ruling(flight(), ruling_id="r999"), OPEN_IRIS, existing)) == \
+        "too_many_rulings"
+
+
+def test_a_duplicate_ruling_id_elsewhere_does_not_block_this_attempt():
+    # Two devices reused an id on two other attempts; this attempt is unaffected.
+    elsewhere = [ruling(flight(attempt_id="t3-a"), ruling_id="r7"), ruling(flight(attempt_id="t5-b"), ruling_id="r7")]
+    assert assess_attempt(attempt(effect_id="veil", attempt_id="t9-z"), IRIS, elsewhere).permitted
+    assert assess_attempt(flight(), OPEN_IRIS, elsewhere).approval == "pending"
+    # Issuing a new ruling under an already used id is still refused.
+    assert refusal(lambda: check_ruling(ruling(flight(), ruling_id="r7"), OPEN_IRIS, elsewhere)) == \
+        "duplicate_ruling"
+
+
+def test_provenance_is_attribution_not_part_of_what_a_ruling_decides():
+    approval = ruling(flight())
+    relabelled = AbilityAttempt(flight().attempt_id, flight().actor, "light_bending", flight().needs,
+                                "labeller:v2", None, flight().conditions_met)
+    result = assess_attempt(relabelled, OPEN_IRIS, [approval])
+    assert (result.approval, result.mismatched_rulings) == ("approved", ())
+
+
+def test_unknown_fields_on_other_abilities_are_reported():
+    other = Ability("solar_sail", "Solar sail", [Effect("drift", "t", {"drift"})], extras={"x-forbids": ["flight"]})
+    entity = effective(person("iris", "Iris", light_bending(force_limit=False), other))
+    result = assess_attempt(attempt(ability_id="pyrokinesis", needs=("fire",), conditions=()), entity)
+    assert result.classification == "new_ability" and result.other_unrecognized == ("solar_sail",)
+    assert "other_unrecognized_constraint" in codes(result)
+    assert assess_attempt(flight(), entity).other_unrecognized == ("solar_sail",)
+    with pytest.raises(TypeError):
+        sub = type("Sub", (type(entity),), {})
+        assess_attempt(flight(), sub(**{f.name: getattr(entity, f.name) for f in dataclasses.fields(entity)}))

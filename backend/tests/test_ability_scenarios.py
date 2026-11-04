@@ -20,7 +20,8 @@ def test_a1_flight_by_radiation_pressure_is_beyond_her_limits():
     result = assess_attempt(flight(), effective(iris()))
     assert result.classification == "beyond_limits"
     assert result.conflicts == (("no_force", ("force",)),)
-    assert (result.approval, result.costs, result.uncertain) == ("not_needed", (), False)
+    assert (result.approval, result.costs, result.uncertain, result.permitted) == ("not_approvable", (), False, False)
+    assert result.other_conflicts == () and "force" not in result.unknown_tags
     assert "limit_excludes" in {reason.code for reason in result.reasons}
     # Nothing about it is mechanical: no roll, no ruleset, and no ruling can grant it.
     with pytest.raises(AbilityError) as caught:
@@ -36,7 +37,9 @@ def test_a2_without_the_limit_flight_is_an_extrapolation_that_waits_for_a_ruling
     check_ruling(approval, entity)
     approved = assess_attempt(flight(), entity, [approval])
     assert (approved.approval, approved.uncertain) == ("approved", True)
-    assert [cost.id for cost in approved.costs] == ["eye_strain"]
+    # Flight shares only `light` with every effect, so all tie as the closest and their scoped
+    # costs apply too: a stretch never pays less than the effects it stretches.
+    assert [cost.id for cost in approved.costs] == ["eye_strain", "migraine"]
     refused = assess_attempt(flight(), entity, [ruling(flight(), decision="refused")])
     assert (refused.approval, refused.costs) == ("refused", ())
 
