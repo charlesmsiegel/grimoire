@@ -14,12 +14,12 @@ is a named error, never a silent repair, and pinning is the remedy.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import ClassVar, Literal
 
 from .facets import Agent, Communicative, Durable, Facet, FacetBundle, FacetError, FacetSet, Portable
-from .identity import InstanceRef, SourceRef
+from .identity import InstanceRef, SourceRef, validate_segment
 from .index import DefinitionIndex
 from .json_value import JsonObject, JsonValueError, freeze_object
 from .model import CampaignActor, CharacterDefinition
@@ -111,6 +111,51 @@ StateValue = Integrity
 STATE_TYPES: dict[str, type] = {"integrity": Integrity}
 
 
+def _segment(value: object, label: str) -> None:
+    try:
+        validate_segment(value, label)
+    except ValueError as error:
+        raise _invalid(str(error)) from None
+
+
+def _segments(values: object, label: str) -> tuple[str, ...]:
+    """Distinct identity segments as a sorted tuple; any problem is ``invalid_field``."""
+    if isinstance(values, (str, bytes, Mapping)) or not isinstance(values, Iterable):
+        raise _invalid(f"{label} must be a collection of ids")
+    items = list(values)
+    for item in items:
+        _segment(item, label)
+    if len(set(items)) != len(items):
+        raise _invalid(f"{label} lists an id twice")
+    return tuple(sorted(items))
+
+
+@dataclass(frozen=True, slots=True)
+class Individuality:
+    """Provenance of a template instance made an individual (024): who, where and from what.
+
+    ``given_name`` is the name given at promotion; the display name is the
+    instance's ``local_name`` and may change later. ``template`` is the exact
+    template revision the source resolved to then. It is provenance only: the
+    live source remains ``EntityInstance.source`` with its pin semantics.
+    """
+
+    decision_id: str
+    given_name: str
+    decided_by: str
+    scene_id: str
+    template: SourceRef
+    event_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _segment(self.decision_id, "decision_id")
+        for label in ("given_name", "decided_by", "scene_id"):
+            _text(getattr(self, label), label)
+        if type(self.template) is not SourceRef or not self.template.pinned:
+            raise _invalid("an individuality template must be a pinned SourceRef")
+        object.__setattr__(self, "event_ids", _segments(self.event_ids, "event_ids"))
+
+
 @dataclass(frozen=True, slots=True)
 class EntityInstance:
     """One individual in one campaign, whoever controls it."""
@@ -122,8 +167,10 @@ class EntityInstance:
     replaced: FacetBundle = FacetBundle()
     state: tuple[StateValue, ...] = ()
     extras: JsonObject = JsonObject()
+    individuality: Individuality | None = None
 
-    FIELDS: ClassVar[frozenset[str]] = frozenset({"source", "local_name", "added", "replaced", "state"})
+    FIELDS: ClassVar[frozenset[str]] = frozenset({"source", "local_name", "added", "replaced", "state",
+                                                 "individuality"})
 
     def __post_init__(self) -> None:
         if not isinstance(self.ref, InstanceRef):
@@ -143,6 +190,22 @@ class EntityInstance:
         object.__setattr__(self, "replaced", replaced)
         object.__setattr__(self, "state", _state(self.state))
         object.__setattr__(self, "extras", _extras(self.extras, self.FIELDS))
+        if self.individuality is not None:
+            _check_individuality(self)
+
+
+def _check_individuality(instance: EntityInstance) -> None:
+    individuality = instance.individuality
+    if type(individuality) is not Individuality:
+        raise _invalid(f"individuality must be an Individuality, not {type(individuality).__name__}")
+    if instance.source is None:
+        raise EntityError("a campaign original is already an individual; individuality needs a "
+                          "template source", "individuality_without_template")
+    if instance.local_name is None:
+        raise EntityError("an individualized instance needs a local_name", "individual_needs_name")
+    if individuality.template.entity_key != instance.source.entity_key:
+        raise EntityError(f"individuality template {individuality.template} is not the instance's "
+                          f"source {instance.source}", "template_mismatch")
 
 
 def _state(values: object) -> tuple[StateValue, ...]:
@@ -183,6 +246,10 @@ def _definition(instance: EntityInstance, index: DefinitionIndex) -> EntityDefin
     if definition.nature == "individual" and instance.ref.kind != definition.ref.kind:
         raise EntityError(f"an instance of individual {definition.ref} must have kind "
                           f"{definition.ref.kind!r}, not {instance.ref.kind!r}", "kind_mismatch")
+    if definition.nature == "individual" and instance.individuality is not None:
+        raise EntityError(f"{instance.ref} was individualized from a template, but {definition.ref} "
+                          "is an individual; pin the instance to its source's last template revision",
+                          "not_template")
     return definition
 
 
