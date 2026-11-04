@@ -788,3 +788,21 @@ def test_select_asking_for_a_disabled_fault_timing_is_an_error(tmp_path):
     with _pytest.raises(ValueError, match="not enabled"):
         _timings(op, lambda _: {"torn"}, torn=False, errors=True)
     assert _timings(op, lambda _: {"fail"}, torn=False, errors=True) == {"fail"}
+
+
+
+def test_an_interleaved_write_then_remove_is_not_a_lost_edit(tmp_path):
+    """faults: a path an interleave removed stays absent (TESTING.md), so the earlier write is not "lost"."""
+    from grimoire.testing import CrashScenario, Interleave, preserves_interleave, run_plans
+
+    def setup(ops, root):
+        ops.write_bytes(root / "a.json", b"1")
+
+    def action(ops, root):
+        ops.write_bytes(root / "a.json", b"2")
+        ops.write_bytes(root / "a.json", b"3")
+
+    scenario = CrashScenario("write-then-remove", setup, action, lambda ops, root: None, (preserves_interleave(),))
+    plan = [Interleave(0, lambda ops, root: ops.write_bytes(root / "ext.json", b"x")),
+            Interleave(1, lambda ops, root: ops.remove(root / "ext.json"))]
+    run_plans(scenario, [plan], tmp_path).assert_ok()

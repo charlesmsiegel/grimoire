@@ -1645,3 +1645,48 @@ def test_aba_after_two_interrupted_syncs_whose_copy_equals_the_archived_base(pai
     report = sync(desktop, phone, handles())
     assert report.conflict(path).code == "missing_ancestor"
     assert (phone.root / path).read_bytes() == agreed and agreed in kept(desktop)
+
+
+
+def test_s7_a_poisoned_source_never_blocks_another_sources_head_move(pair):
+    """Fallback admission keeps a manifest with its head revisions as one unit."""
+    desktop, phone = pair
+    _source(desktop, "catalog:shared", "character")
+    _source(phone, "catalog:shared", "item")
+    new_revision(desktop, "r2", "a captain")
+    report = sync(desktop, phone, handles())
+    assert (PATHS["manifest"], PHONE) in report.copied and (PATHS["r2"], PHONE) in report.copied
+
+
+def test_a_path_blocked_on_both_devices_is_never_archived(pair):
+    import json as _json
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    before = _json.loads(desktop.read_sync_state(f"peers/{PHONE}/archive.json"))["entries"][path]
+    original = (desktop.root / path).read_bytes()
+    for store in (desktop, phone):  # another program replaced the record by a folder on both devices
+        (store.root / path).unlink()
+        (store.root / path).mkdir()
+    assert sync(desktop, phone, handles()).conflict(path).code == "blocked"
+    assert _json.loads(desktop.read_sync_state(f"peers/{PHONE}/archive.json"))["entries"][path] == before
+    for store in (desktop, phone):
+        (store.root / path).rmdir()
+    (phone.root / path).write_bytes(original)
+    edit_instance(phone, WREN_B, 1)  # repaired and edited on the phone; still missing on the desktop
+    assert sync(desktop, phone, handles()).conflict(path).code == "edit_delete"
+
+
+def test_sync_until_quiet_merges_what_an_interrupted_attempt_copied(pair, monkeypatch):
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    edit_instance(phone, WREN_B, 7)
+    real, calls = sync_session._verify, []
+
+    def verify(plan, applied):
+        calls.append(1)
+        if len(calls) == 1:  # the first attempt's verification read fails
+            raise SyncInterrupted("verification failed", sync_session._report(plan, applied))
+        return real(plan, applied)
+    monkeypatch.setattr(sync_session, "_verify", verify)
+    report = sync_until_quiet(desktop, phone, handles())
+    assert {(PATHS["wren_a"], PHONE), (PATHS["wren_b"], DESKTOP)} <= set(report.copied)

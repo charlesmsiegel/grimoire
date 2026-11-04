@@ -1,4 +1,4 @@
-"""Sync's dependency rule, end to end (brutal-review round 8): each test fails if one rule is removed.
+"""Sync's dependency rule, end to end (brutal-review rounds 8-9): each rule here is pinned by a test.
 
 A copy lands only if what it pins and names holds on the destination (docs/SYNC.md, "Head
 dependency"), rechecked to a fixpoint after refused units and denials; knowledge logs move as one
@@ -241,6 +241,36 @@ def test_an_unlistable_library_root_blocks_every_path_it_holds(tmp_path, monkeyp
         found = desktop.scan()
         monkeypatch.undo()
         assert found.blocked_reason("campaigns/c1/instances/character/wren-a.json") == "unreadable"
+    finally:
+        desktop.close()
+        phone.close()
+
+
+
+def test_a_knowledge_record_held_by_a_denied_pin_holds_back_its_whole_append(tmp_path):
+    """A record held by the dependency rule in a partial commit (it pins a denied revision) keeps its batch back."""
+    from grimoire.core import Event
+    from grimoire.evidencestore import EvidenceLibrary
+    from evidence_fixtures import C, m
+    from store_helpers import seed
+    from sync_helpers import new_revision
+    from test_evidencestore_scenarios import seed_actors
+    from test_sync_scenarios import _grants
+    desktop, phone = LibraryStore.create(tmp_path / DESKTOP), LibraryStore.create(tmp_path / PHONE)
+    try:
+        seed(desktop, handle())
+        seed_actors(desktop)
+        identify(desktop, DESKTOP)
+        identify(phone, PHONE)
+        sync(desktop, phone, handles())
+        new_revision(desktop, "r2", "a captain")
+
+        def log(store):
+            return EvidenceLibrary(store, owner_handle("sources", "campaigns", "kept"), owner=OWNER)
+        log(desktop).append(C, [Event(C, "e-desk", "world:harbor/character/wren@r2", m(1), "director")]).commit()
+        report = sync(desktop, phone, {DESKTOP: handle(), PHONE: _grants("campaigns", "kept")})
+        assert not [path for path, device in report.copied if device == PHONE and "/evidence/" in path]
+        log(phone).append(C, [Event(C, "e-phone", "phone event", m(2), "director")]).commit()  # still healthy
     finally:
         desktop.close()
         phone.close()

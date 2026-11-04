@@ -49,6 +49,8 @@ def test_020_two_offline_appends_never_freeze_either_knowledge_log(tmp_path):
         report = sync(desktop, phone, handles())
         assert [conflict.code for conflict in report.conflicts] == ["missing_ancestor"]  # the batch
         assert not [path for path, _ in report.copied if "/events/" in path or "/evidence/" in path]
+        assert any("/events/" in path for path in report.skipped[DESKTOP])  # reported, never silently gone
+        assert any("/events/" in path for path in report.skipped[PHONE])
         for store, device in ((desktop, DESKTOP), (phone, PHONE)):
             log = _evidence(store).read(EVIDENCE_C, requested_by="director")
             assert log.problems == () and log.quarantined == ()

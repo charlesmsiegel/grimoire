@@ -353,7 +353,7 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
   - `collides(path)` checks for a differently spelled existing entry.
   - `cached_reads()` reuses directory listings for a read-only phase such as a sync plan.
 
-**R7 narrowed.** For an entry that creates a file, `settle` now re-checks the path and creates the missing directories *before* the per-entry guard read. Only the `replace` itself remains between that read and the publish (`backend/tests/test_store_replica.py::test_r7_window_is_only_the_replace_when_a_file_is_created`). An update never creates directories, so a parent deleted while the app was down is not re-created, and a parent that exists only under a look-alike spelling is never shadowed by a second folder: the guard reads the look-alike and the version is preserved.
+**R7 narrowed.** For an entry that creates a file, `settle` now re-checks the path and creates the missing directories *before* the per-entry guard read. Only the publish step's own path re-check (a stat, no read of the file) and the `replace` remain between that read and the publish (`backend/tests/test_store_replica.py::test_r7_window_is_only_the_replace_when_a_file_is_created`). An update never creates directories, so a parent deleted while the app was down is not re-created, and a parent that exists only under a look-alike spelling is never shadowed by a second folder: the guard reads the look-alike and the version is preserved.
 
 **Rollback.** A pre-019 build cannot recover an unfinished journal that contains `replica`, `keep`, `hold` or `state` entries (`RecoveryFailed`, unknown kind). Finish recovery with a 019 build, or use `discard_journal`.
 
