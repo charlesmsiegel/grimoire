@@ -82,7 +82,7 @@ class CampaignHoldings:
 class HoldingsChange:
     """One planned operation, not yet committed: ``summary``/``preview`` for a human, then ``commit``.
 
-    ``puts`` lets a larger writer (030) fold these files into its own transaction. It must then hold
+    ``puts`` lets a larger writer (021's accepted effects, 030) fold these files into its own transaction. It must then hold
     ``store.lock`` from ``recheck()`` through its own commit, must not put another change for the same
     holder in that transaction (merge them into one operation instead), and approvals stay pinned to
     these bytes.
@@ -93,8 +93,8 @@ class HoldingsChange:
     summary: tuple[SummaryRow, ...] = ()
     entries: Mapping[InstanceRef, LogEntry] = field(default_factory=dict)
     puts: tuple[tuple[ScopeRecord, str | None], ...] = ()
-    #: each holder's instance-file etag when planned (``None``: unreadable); a replaced file may be another individual
-    holder_etags: Mapping[InstanceRef, str | None] = field(default_factory=dict)
+    #: each holder's instance-file etag when planned; a replaced file may be another individual
+    holder_etags: Mapping[InstanceRef, str] = field(default_factory=dict)
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -117,9 +117,11 @@ class HoldingsChange:
             for envelope, _ in self.puts:
                 holder = envelope.address.holder  # type: ignore[union-attr]
                 path = "/".join(address_parts(holder))
-                if holder not in store.campaign_instances(holder.campaign_id):
+                etag = (self.library._instance_etag(holder)
+                        if holder in store.campaign_instances(holder.campaign_id) else None)
+                if etag is None:  # vanished, or no longer readable (a link, an I/O error): no holder to pin
                     gone.append((path, "holder gone"))
-                elif self.library._instance_etag(holder) != self.holder_etags.get(holder):
+                elif etag != self.holder_etags.get(holder):
                     changed.append((path, "holder changed"))
             if changed:
                 raise HolderReplaced(changed + gone)
@@ -146,8 +148,9 @@ class HolderReplaced(StaleWrite):
 
 
 class HoldingsUnlisted(StoreError):
-    """A campaign's holdings folder (or a kind folder in it) is a link or cannot be listed, so the
-    holder ids it may contain cannot be reserved: allocation fails closed rather than guess."""
+    """A folder that could hold the campaign's holder files is a link or cannot be listed (or the
+    campaign folder exists only as a look-alike), so the holder ids it may contain cannot be reserved:
+    allocation fails closed rather than guess."""
 
 
 def holdings_holder_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
@@ -160,8 +163,8 @@ def holdings_holder_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]
     """
     refs, complete = store.campaign_holding_names(campaign_id)
     if not complete:
-        raise HoldingsUnlisted(f"campaigns/{campaign_id}/holdings cannot be fully listed (a link or an unreadable "
-                               "folder), so holder ids cannot be reserved")
+        raise HoldingsUnlisted(f"campaigns/{campaign_id}/holdings cannot be fully listed (a linked or unlistable "
+                               "folder, or a look-alike campaign folder), so holder ids cannot be reserved")
     return frozenset(ref.instance_id for ref in refs)
 
 
@@ -210,7 +213,7 @@ class HoldingsLibrary:
         except MalformedRecord as error:  # malformed, newer-format or misaddressed: pin its exact bytes
             return error.etag
         except (StoreError, LibraryPathError):
-            return None  # no bytes to pin (an OS error, a link): pinned as "unreadable"
+            return None  # no bytes to pin (an OS error, a link): not a usable holder (``missing_holder``)
 
     def _view(self, holder: InstanceRef) -> HoldingsView:
         if type(holder) is not InstanceRef:
@@ -224,7 +227,7 @@ class HoldingsLibrary:
                             record)
 
     def apply(self, op: Operation, *, basis: Mapping[InstanceRef, int] | None = None,
-              holders: Mapping[InstanceRef, str | None] | None = None) -> HoldingsChange:
+              holders: Mapping[InstanceRef, str] | None = None) -> HoldingsChange:
         """Plan ``op`` against the holders' current files; refusals raise ``HoldingsRefused``.
 
         ``holders`` is a retry's pin: the ``holder_etags`` of the change first planned for this
@@ -232,24 +235,32 @@ class HoldingsLibrary:
         """
         if type(op) is not Operation:
             raise TypeError("apply takes an Operation")
+        pins = _pins(holders, op.holders)
         with self.store.lock:  # one consistent read: no commit in this process can land between two holders
             views = {holder: self._view(holder) for holder in op.holders}  # an undecodable holder refuses here
             instances = set(self.store.campaign_instances(op.campaign_id))
-            holder_etags = {holder: self._instance_etag(holder) for holder in op.holders if holder in instances}
-        replaced = sorted(str(holder) for holder, pinned in (holders or {}).items()
-                          if holder in instances and holder_etags.get(holder) != pinned)
-        if replaced:
-            raise HoldingsRefused("holder_replaced", f"instance files changed since first planned: {replaced}")
+            holder_etags = {holder: etag for holder in op.holders if holder in instances
+                            if (etag := self._instance_etag(holder)) is not None}  # unreadable: no holder
+        replaced = sorted(str(holder) for holder, pinned in pins.items()
+                          if holder in holder_etags and holder_etags[holder] != pinned)
         envelopes = {}
         for holder, view in views.items():
             if view.envelope is None:
                 envelopes[holder] = (self._owner, {}, None)
             else:
                 envelopes[holder] = (view.envelope.owner, view.envelope.extra, view.etag)
-        result = plan(op, {holder: view.holdings if view.etag else None for holder, view in views.items()},
-                      self._clock(), exists=instances.__contains__, size=_StoreSizer(envelopes), basis=basis)
+        try:  # replay first: an operation that landed is already_applied whatever its holders became since
+            result = plan(op, {holder: view.holdings if view.etag else None for holder, view in views.items()},
+                          self._clock(), exists=holder_etags.__contains__, size=_StoreSizer(envelopes), basis=basis)
+        except HoldingsRefused:
+            if not replaced:
+                raise
+            result = None
         if isinstance(result, AlreadyApplied):
             return HoldingsChange(self, result.outcome, entries=result.entries)
+        if replaced:
+            raise HoldingsRefused("holder_replaced", f"instance files changed since first planned: {replaced}")
+        assert result is not None
         puts = []
         for holder in sorted(result.values, key=str):  # a pinned order: the files publish in this order
             owner, extra, previous = envelopes[holder]
@@ -289,3 +300,17 @@ class HoldingsLibrary:
                 problems.append(HoldingsProblem(problem.path, None, "unrecognized", problem.code))
         return CampaignHoldings(dict(sorted(views.items(), key=lambda pair: str(pair[0]))),
                                 tuple(sorted(problems, key=lambda p: (p.path, p.code))))
+
+
+def _pins(holders: Mapping[InstanceRef, str] | None, touched: tuple[InstanceRef, ...]) -> Mapping[InstanceRef, str]:
+    """A retry's ``holders`` pin: every key is a holder the operation touches, every value an etag."""
+    if holders is None:
+        return {}
+    if not isinstance(holders, Mapping):
+        raise HoldingsRefused("invalid_field", "holders must be a mapping of holder to instance etag")
+    for holder, pinned in holders.items():
+        if holder not in touched:
+            raise HoldingsRefused("invalid_field", f"holders names {holder!r}, which the operation does not touch")
+        if type(pinned) is not str:
+            raise HoldingsRefused("invalid_field", f"the pinned etag for {holder} must be text")
+    return holders

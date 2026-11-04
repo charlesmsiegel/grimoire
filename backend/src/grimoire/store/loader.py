@@ -790,53 +790,66 @@ def campaign_holdings(access: Access, campaign: str) -> CampaignHoldingRecords:
 
 
 def campaign_holding_names(access: Access, campaign: str) -> tuple[tuple[HoldingsRef, ...], bool]:
-    """Canonically named holder files of one campaign, from listings only (no file is read), and
-    whether the listing was complete: ``False`` when the ``holdings`` folder, or a kind folder in
-    it, is a link or cannot be listed, so ids could be hidden there."""
+    """The holder files of one campaign, from listings only (no file is read), and whether the
+    listing was complete.
+
+    A look-alike name that a case-insensitive or normalizing filesystem, or a case-only rename, could
+    turn into a holder file (``Holdings/``, ``Character/``, ``Mara-2.json``) counts under the name it
+    folds to, so its id stays taken; a folder whose name can never fold to a kind (``New folder``,
+    ``@eaDir``) cannot hold one and is ignored. ``False`` only when something that could hold holder
+    files cannot be listed: the campaign folder exists only as a look-alike, or a holdings or kind folder
+    is a link, cannot be inspected or cannot be listed.
+    """
     base = (CAMPAIGNS, campaign)
-    folder = base + (HOLDINGS,)
     try:
-        if access.presence(base) != "present":
-            return (), True
-        if is_link(access.path(base)) or is_link(access.path(folder)):
-            return (), False
-        presence = access.presence(folder)
+        presence = access.presence(base)
         if presence == "mismatch":
-            return (), False  # only a look-alike ("Holdings"): a case-only rename can hide holder files
-        if presence != "present" or not _is_dir(access, folder):
-            return (), True  # no holdings folder (or a stray file by that name): no holder files
-        kinds = access.list_dir(folder)
+            return (), False  # only a look-alike campaign folder: its holder files are not listed here
+        if presence != "present":
+            return (), True
+        if is_link(access.path(base)):
+            return (), False
+        if not _is_dir(access, base):
+            return (), True  # a stray file named like a campaign holds no holder files
+        tops = [name for name in access.list_dir(base) if name_key(name) == HOLDINGS]
     except (OSError, LinkRefused):
         return (), False
-    found: list[HoldingsRef] = []
+    found: set[HoldingsRef] = set()
     complete = True
-    for kind in kinds:
-        path = folder + (kind,)
-        try:  # one lstat decides; an entry that cannot even be inspected may hide ids
-            info = lstat_or_none(access.path(path))
-        except OSError:
+    for top in tops:  # the canonical ``holdings`` and any look-alike of it
+        listed = _folder_names(access, base + (top,))
+        if listed is None:
             complete = False
             continue
-        if info is None:
-            continue  # vanished since the listing
-        if stat.S_ISLNK(info.st_mode) or is_link(access.path(path)):
-            complete = False  # never followed (a link or junction), so whatever it holds is unknown
-            continue
-        if not stat.S_ISDIR(info.st_mode):
-            continue  # a stray file cannot hold holder files
-        if not _valid_segment(kind):
-            complete = False  # a look-alike kind folder ("Character") can hide holder files
-            continue
-        try:
-            names = access.list_dir(path)
-        except (OSError, LinkRefused):
-            complete = False
-            continue
-        for name in names:
-            hit = classify(path + (name,))
-            if hit is not None and hit[0] == "holdings":
-                found.append(hit[1])  # type: ignore[arg-type]
+        for kind in listed:
+            folded_kind = name_key(kind)
+            if not _valid_segment(folded_kind):
+                continue  # a name no kind folds from: it cannot hold holder files
+            names = _folder_names(access, base + (top, kind))
+            if names is None:
+                complete = False
+                continue
+            for name in names:
+                hit = classify(base + (HOLDINGS, folded_kind, name_key(name)))
+                if hit is not None and hit[0] == "holdings":
+                    found.add(hit[1])  # type: ignore[arg-type]
     return tuple(sorted(found, key=str)), complete
+
+
+def _folder_names(access: Access, parts: Parts) -> list[str] | None:
+    """A folder's entries by one lstat and one listing: ``[]`` for a file or a vanished entry, ``None``
+    when it is a link (never followed) or cannot be inspected or listed, so ids could hide in it."""
+    try:
+        info = lstat_or_none(access.path(parts))
+        if info is None:
+            return []  # vanished since the listing
+        if stat.S_ISLNK(info.st_mode) or is_link(access.path(parts)):  # a link or a junction
+            return None
+        if not stat.S_ISDIR(info.st_mode):
+            return []  # a stray file holds no holder files
+        return access.list_dir(parts)
+    except (OSError, LinkRefused):
+        return None
 
 
 def _discover_holdings(access: Access, base: Parts, found: _Campaigns, problems: list[LoadProblem]) -> None:

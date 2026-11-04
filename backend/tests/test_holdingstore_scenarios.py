@@ -360,6 +360,66 @@ def test_an_unreadable_holder_is_pinned_by_its_bytes(store, library):
     assert library.read(MARA).counts() == {"gold-coin": 1}
 
 
+def test_a_landed_retry_is_already_applied_whatever_its_holder_became(store, library):
+    """Replay comes before the retry pin: an operation that landed is never escalated as replaced."""
+    operation = op("g1", Line.add(MARA, "gold-coin", 500))
+    change = library.apply(operation)
+    change.commit()
+    instance = store.root / "campaigns/c1/instances/character/mara-1.json"
+    document = json.loads(instance.read_bytes())
+    document["payload"] = {"note": "edited after the operation landed"}
+    instance.write_bytes(json.dumps(document).encode())
+    assert library.apply(operation, holders=change.holder_etags).outcome == "already_applied"
+    assert library.read(MARA).counts() == {"gold-coin": 500}
+
+
+def test_a_replaced_holder_outranks_any_other_refusal_on_retry(store, library):
+    """A human must decide about a replaced holder even when the counts alone would also refuse."""
+    done(library, op("g0", Line.add(MARA, "gold-coin", 5)))
+    operation = op("g1", Line.move(MARA, TOMA, "gold-coin", 5))
+    change = library.apply(operation)
+    done(library, op("g2", Line.consume(MARA, "gold-coin", 5)))  # the stock is gone before the retry
+    instance = store.root / "campaigns/c1/instances/character/toma-1.json"
+    document = json.loads(instance.read_bytes())
+    document["payload"] = {"note": "a different individual"}
+    instance.write_bytes(json.dumps(document).encode())
+    assert refused(library, operation).reason == "insufficient"  # without the pin: only the counts speak
+    assert refused(library, operation, holders=change.holder_etags).reason == "holder_replaced"
+
+
+def test_a_retry_pin_names_only_touched_holders(store, library):
+    operation = op("g1", Line.add(TOMA, "gold-coin", 5))
+    for holders in ({MARA: "x"}, {TOMA: None}, [TOMA]):
+        assert refused(library, operation, holders=holders).reason == "invalid_field"
+
+
+def _link_instance(store, tmp_path):
+    instance = store.root / "campaigns/c1/instances/character/mara-1.json"
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_bytes(instance.read_bytes())
+    instance.unlink()
+    try:
+        os.symlink(elsewhere, instance)
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot create file links here")
+    return elsewhere
+
+
+def test_a_linked_instance_file_is_no_holder(store, library, tmp_path):
+    """The store never follows a link, so there are no bytes to pin: the holder is refused, not pinned as None."""
+    _link_instance(store, tmp_path)
+    assert refused(library, op("g1", Line.add(MARA, "gold-coin", 5))).reason == "missing_holder"
+    assert not (store.root / MARA_FILE).exists()
+
+
+def test_an_instance_file_that_became_a_link_is_gone_at_commit(store, library, tmp_path):
+    change = library.apply(op("g1", Line.add(MARA, "gold-coin", 5)))
+    _link_instance(store, tmp_path)
+    with pytest.raises(StaleWrite, match="holder gone"):
+        change.commit()
+    assert not (store.root / MARA_FILE).exists()
+
+
 def test_kind_reuse_does_not_inherit(store, library):
     done(library, op("a1", Line.add(MARA, ORDINARY, 5)))
     item_mara = InstanceRef("c1", "item", "mara-1")

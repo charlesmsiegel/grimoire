@@ -194,7 +194,7 @@ Fields:
 <a id="counted-holdings-023"></a>Added by [Counted Inventory](roadmap/sprints/counted-inventory.md) on the same `grimoire.scope-record/1` envelope; interpreted by [`grimoire.holdings`](HOLDINGS.md), never by the store.
 
 - The address is a `HoldingsRef`: `campaign:<id>/<kind>/<instance_id>#holdings`, at `campaigns/<id>/holdings/<kind>/<instance_id>.json`.
-- The address union widens to `ScopeRef | ChatRef | RelationRef | HoldingsRef`. `parse_scope_record` picks the family by the address's exact form (`…#holdings`, `#relation/`, another `#`, or a bare scope) and applies that family's strict grammar; the four grammars are disjoint:
+- The address union widens to `ScopeRef | ChatRef | RelationRef | AcceptedRef | WrapUpRef | HoldingsRef`. `parse_scope_record` picks the family by the address's exact form (`…#holdings`, `#relation/`, `#accepted/`, `#wrapup/`, another `#`, or a bare scope) and applies that family's strict grammar; the six grammars are disjoint:
   - a non-text address is `malformed` with only its type named, never its value;
   - anything else, such as `campaign:x#other/y`, is `malformed`.
 - Writes run the same guarded transaction:
@@ -204,8 +204,8 @@ Fields:
 - `classify` recognises exactly that path shape. Anything else under `holdings/` is `unrecognized`, including a file directly in `holdings/`, a deeper folder, or a `holdings` that is a file.
 - **`load()` skips `holdings/`**, as it skips 020's `events/` and `evidence/`: a holder's operation log is campaign history (up to 7 MiB per holder), so whole-library loads such as opening a chat never pay for it. There is no `LibraryView.holdings`.
 - `campaign_holdings(id)` returns `CampaignHoldingRecords(records, problems)` for **one** campaign, contained per file in the same way `load()` contains the other families: bad files, links (including a linked look-alike `Holdings`), look-alikes and an unreadable campaign folder are problems, never a crashed read. `read(HoldingsRef)` reads one file. `grimoire.holdingstore` uses only these and never loads the whole library (tested).
-- `campaign_holding_names(id)` returns `(refs, complete)`: the campaign's canonically named holder files from **listings only** (no file is read), and `complete=False` when the campaign folder, the `holdings` folder or a kind folder in it is a link, cannot be listed or inspected, or exists only as a look-alike (`Holdings`, `Character`).
-- **Instance allocators must treat ids with a holdings file as taken** (`grimoire.holdingstore.holdings_holder_ids`, built on `campaign_holding_names`, which 107's allocator uses alongside 017's `relation_endpoint_ids`), so a hand-deleted holder's id never goes to a different individual.
+- `campaign_holding_names(id)` returns `(refs, complete)`: the campaign's holder files from **listings only** (no file is read). A look-alike that a case-insensitive filesystem or a case-only rename could turn into a holder file (`Holdings/`, `Character/`, `Mara-2.json`) counts under the name it folds to; a folder whose name can fold to no kind (`New folder`, `@eaDir`) is ignored. `complete=False` only when something that could hold holder files cannot be listed: the campaign folder exists only as a look-alike, or a holdings or kind folder is a link or cannot be listed or inspected.
+- **Instance allocators must treat ids with a holdings file as taken** (`grimoire.holdingstore.holdings_holder_ids`, built on `campaign_holding_names`, which 107's allocator uses alongside 017's `relation_endpoint_ids` and 021's `accepted_instance_ids`), so a hand-deleted holder's id never goes to a different individual.
 - **Rollback:**
   - A pre-023 build reports `holdings/` as `unrecognized` and never touches it. Its allocators do not protect holder ids.
   - It **cannot recover a journal naming a holdings path** (`RecoveryFailed`). Recover with a 023+ build, or run `discard_journal` (both tested).
@@ -214,7 +214,7 @@ Fields:
 
 All of these take the store lock, require a consistent library, and read listings and files only:
 
-- `read(ScopeRef | ChatRef)` returns a `StoredScopeRecord` (and since 017/023, `read(RelationRef | HoldingsRef)` too).
+- `read(ScopeRef | ChatRef)` returns a `StoredScopeRecord` (and since 017/021/023, `read(RelationRef | AcceptedRef | WrapUpRef | HoldingsRef)` too).
 - `campaign_presence(id)` returns `absent`, `present`, or `mismatch` when only a look-alike folder exists.
 - `campaign_instances(id)` returns canonically named instance files across kinds. It reads names only and refuses links.
 - `excluded_sources()` returns every source `load()` would report as excluded, including by a cross-source `identity_conflict`. It runs `load()`'s own exclusion algorithm (`loader.admit`, shared with `load()` and given read-only scans) without reading campaigns. It is **incremental and cached**:

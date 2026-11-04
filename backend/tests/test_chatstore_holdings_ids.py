@@ -116,11 +116,6 @@ def _damage(store, tmp_path, monkeypatch, damage):
             make_dir_link(store.root.joinpath(*folder), elsewhere)
         else:
             make_dir_link(store.root.joinpath(*folder, "character"), elsewhere)
-    elif damage in ("look-alike folder", "look-alike kind folder"):  # a case-only rename, as a sync tool might
-        if damage == "look-alike folder":
-            store.root.joinpath(*folder).rename(store.root.joinpath("campaigns", Q, "Holdings"))
-        else:
-            store.root.joinpath(*folder, "character").rename(store.root.joinpath(*folder, "Character"))
     elif damage == "uninspectable kind folder":  # listed, but lstat fails (permissions on the parent)
         import grimoire.store.loader as loader
         real_lstat = loader.lstat_or_none
@@ -144,7 +139,50 @@ def _damage(store, tmp_path, monkeypatch, damage):
 
 
 DAMAGE = ["unreadable folder", "unreadable kind folder", "uninspectable kind folder", "linked folder",
-          "linked kind folder", "look-alike folder", "look-alike kind folder"]
+          "linked kind folder"]
+
+
+def _rename_case(store, look_alike):  # a case-only rename, as a person or a sync tool might make it
+    folder = store.root / "campaigns" / Q
+    if look_alike == "folder":
+        (folder / "holdings").rename(folder / "Holdings")
+    elif look_alike == "kind folder":
+        (folder / "holdings" / "character").rename(folder / "holdings" / "Character")
+    else:
+        (folder / "holdings" / "character" / "mara-2.json").rename(folder / "holdings" / "character" / "Mara-2.json")
+
+
+@pytest.mark.parametrize("look_alike", ["folder", "kind folder", "file"])
+def test_a_look_alike_holder_file_still_reserves_its_id(tmp_path, look_alike):
+    """A case-insensitive filesystem, or the next case fix, would hand the new individual these holdings."""
+    with LibraryStore.create(tmp_path / "lib") as store:
+        _setup(store, "decodable")
+        _rename_case(store, look_alike)
+        assert holdings_holder_ids(store, Q) == {"mara-2"}
+        chats = chat_library(store)
+        chats._new_id.counts.update({"q": 1, "t": 2})
+        change = chats.start_chat(Launch("character", MARA), scope=ScopeRef(Q))
+        assert [actor.instance_id for actor in change.new_actors] == ["mara-3"]
+
+
+def test_a_look_alike_beside_the_real_holdings_folder_is_listed_too(tmp_path):
+    with LibraryStore.create(tmp_path / "lib") as store:
+        _setup(store, "decodable")
+        twin = store.root / "campaigns" / Q / "HOLDINGS" / "character"
+        if (store.root / "campaigns" / Q / "HOLDINGS").exists():
+            pytest.skip("a case-insensitive filesystem: HOLDINGS is the real folder")
+        twin.mkdir(parents=True)
+        (twin / "Zed-1.json").write_bytes(b"{}")
+        assert holdings_holder_ids(store, Q) == {"mara-2", "zed-1"}
+
+
+@pytest.mark.parametrize("junk", ["New folder", "@eaDir", ".DS_Store", "x~"])
+def test_a_folder_that_cannot_hold_holder_files_never_blocks_allocation(tmp_path, junk):
+    with LibraryStore.create(tmp_path / "lib") as store:
+        _setup(store, "decodable")
+        (store.root / "campaigns" / Q / "holdings" / junk).mkdir()
+        (store.root / "campaigns" / Q / "holdings" / junk / "mara-9.json").write_bytes(b"{}")
+        assert holdings_holder_ids(store, Q) == {"mara-2"}
 
 
 @pytest.mark.parametrize("damage", DAMAGE)
@@ -230,3 +268,13 @@ def test_holder_and_accepted_event_ids_are_both_taken(tmp_path):
         chats._new_id.counts.update({"q": 1, "t": 2})
         change = chats.start_chat(Launch("character", MARA), scope=ScopeRef(Q))
         assert [actor.instance_id for actor in change.new_actors] == ["mara-4"]
+
+
+def test_a_look_alike_campaign_folder_is_an_incomplete_listing(tmp_path):
+    with LibraryStore.create(tmp_path / "lib") as store:
+        _setup(store, "decodable")
+        assert store.campaign_holding_names("q-2") == ((), True)  # no campaign: nothing to list
+        (store.root / "campaigns" / "q-2").write_bytes(b"")
+        assert store.campaign_holding_names("q-2") == ((), True)  # a stray file holds no holder files
+        (store.root / "campaigns" / Q).rename(store.root / "campaigns" / "Q-1")
+        assert store.campaign_holding_names(Q) == ((), False)

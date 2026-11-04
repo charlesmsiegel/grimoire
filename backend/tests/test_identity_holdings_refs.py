@@ -24,6 +24,13 @@ def test_holdings_ref_rejects_look_alikes(text):
         HoldingsRef.parse(text)
 
 
+@pytest.mark.parametrize("parts", [("C1", "character", "m"), ("c1", "Character", "m"), ("c1", "character", "M"),
+                                   ("c1", "", "m"), ("c1", "character", "a/b")])
+def test_holdings_ref_constructor_validates_every_segment(parts):
+    with pytest.raises(ValueError):
+        HoldingsRef(*parts)
+
+
 def test_parse_ref_and_the_other_families_never_return_holdings():
     with pytest.raises(ValueError):
         parse_ref(str(REF))

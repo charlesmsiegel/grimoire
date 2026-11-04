@@ -59,6 +59,9 @@ def _edit(change):
     (lambda d: d["ops"][0]["lines"][0].update(extra=1), "unknown_field"),
     (lambda d: d["stacks"][0].update(label="x"), "unknown_field"),
     (lambda d: d["stacks"].append({"item": ORDINARY, "count": 1}), "invalid_field"),
+    (lambda d: d["stacks"].insert(0, {"item": ORDINARY, "count": 0}), "invalid_field"),  # duplicates either way
+    (lambda d: d["stacks"].append({"item": ORDINARY, "count": 0}), "invalid_field"),
+    (lambda d: d["stacks"].append({"item": "NOT valid!", "count": 0}), "invalid_field"),  # never dropped silently
     (lambda d: d["ops"][1].update(op="a1"), "invalid_field"),
     (lambda d: d["ops"][1].update(seq=3), "invalid_field"),
     (lambda d: d.update(evicted_through=1), "invalid_field"),

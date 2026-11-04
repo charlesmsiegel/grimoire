@@ -302,6 +302,7 @@ def test_context_lines_are_holder_only_sorted_and_bounded():
     assert context_lines(mara) == (f"{ORDINARY}: 9", f"{STRONG}: 2")
     three = Holdings(MARA, stacks={"c": 3, "a": 1, "b": 2})
     assert context_lines(three, limit=2) == ("a: 1", "b: 2", "… and 1 more")
+    assert context_lines(three, limit=3) == ("a: 1", "b: 2", "c: 3")  # exactly the limit: nothing elided
     noted = apply(op("n1", Line.add(MARA, ORDINARY, 1), note="from the smuggler"), mara)[MARA]
     assert not any("smuggler" in line or "n1" in line for line in context_lines(noted))
     with pytest.raises(ValueError):

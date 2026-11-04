@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from grimoire.core.identity import InstanceRef
+from grimoire.core.identity import InstanceRef, validate_segment
 from grimoire.core.json_value import thaw
 
 from .model import (
@@ -133,12 +133,18 @@ def holdings_from_payload(holder: InstanceRef, schema: object, payload: object) 
         raise _fail("invalid_field", f"the payload is missing {missing}")
     try:
         stacks: dict[str, object] = {}
+        seen: set[str] = set()
         for n, value in enumerate(_list(payload["stacks"], "stacks")):
             stack = _object(value, f"stacks[{n}]", _STACK, _STACK)
-            if not isinstance(stack["item"], str) or stack["item"] in stacks:
+            if not isinstance(stack["item"], str) or stack["item"] in seen:
                 raise _fail("invalid_field", f"stacks[{n}]: a missing or duplicate item {stack['item']!r}")
+            seen.add(stack["item"])
             if type(stack["count"]) is int and stack["count"] == 0:
-                continue  # a hand edit to 0 means "has none": no stack, dropped on the next write
+                try:  # a hand edit to 0 means "has none" (dropped on the next write), but only for a valid key
+                    validate_segment(stack["item"], "item")
+                except ValueError as error:
+                    raise _fail("invalid_field", f"stacks[{n}]: {error}") from None
+                continue
             stacks[stack["item"]] = stack["count"]
         entries = [_entry(value, holder.campaign_id, f"ops[{n}]")
                    for n, value in enumerate(_list(payload["ops"], "ops"))]
