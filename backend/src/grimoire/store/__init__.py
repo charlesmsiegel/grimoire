@@ -17,13 +17,15 @@ from .errors import (
 from .jsonfmt import etag
 from .library import CommitResult, LibraryStore, RecoveryReport, Transaction
 from .loader import (
-    BrokenRef, LibraryView, LoadProblem, StoredDefinition, StoredRecord, StoredScopeRecord, StoredSource,
+    BrokenRef, CampaignRelations, LibraryView, LoadProblem, StoredDefinition, StoredRecord, StoredScopeRecord,
+    StoredSource,
 )
 from .lock import Locker, OsLocker, ProcessLocker
 from .replica import CanonicalScan
 
 __all__ = [
-    "BrokenRef", "CanonicalScan", "CommitIncomplete", "CommitResult", "CrossDevice", "DiskOps", "FileOps",
+    "BrokenRef", "CampaignRelations", "CanonicalScan", "CommitIncomplete", "CommitResult", "CrossDevice",
+    "DiskOps", "FileOps",
     "ImmutableRevision", "InvalidEnvelope", "InvalidSourceState", "LibraryLocked", "LibraryStore",
     "LibraryView", "LinkRefused", "LinkSpec", "LoadProblem", "LockUnavailable", "Locker",
     "MalformedRecord", "NameCollision", "NotALibrary", "OsLocker", "PendingRecovery", "ProcessLocker",

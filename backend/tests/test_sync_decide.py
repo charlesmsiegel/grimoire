@@ -18,7 +18,7 @@ E, X, Y = (etag(text) for text in (b"base", b"x", b"y"))
 BASES = [FIRST, NONE, UNCERTAIN, Base("agreed", E), Base("deleted", E)]
 SIDES = [Side.absent(), Side.present(E), Side.present(X), Side.present(Y), Side.present(X, previous=E),
          Side.present(E, previous=X), Side.present(Y, previous=X), Side.blocked("link")]
-KINDS = ["definition", "manifest", "instance", "scope", "chat"]
+KINDS = ["definition", "manifest", "instance", "scope", "chat", "relation"]
 COMBOS = list(itertools.product(KINDS, BASES, SIDES, SIDES))
 
 

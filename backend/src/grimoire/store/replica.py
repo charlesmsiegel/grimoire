@@ -71,7 +71,7 @@ def parse_exact(parts: Parts, data: bytes) -> RecordEnvelope | SourceManifest | 
             envelope: RecordEnvelope | SourceManifest | ScopeRecord = parse_source(document)[0]
             if envelope.source != found[1]:
                 raise _invalid("address_mismatch", f"{'/'.join(parts)} holds the manifest of {envelope.source}")
-        elif found[0] in ("scope", "chat"):  # 107's play-scope and chat records
+        elif found[0] in ("scope", "chat", "relation"):  # 107's scope and chat, 017's relation records
             envelope = parse_scope_record(document)[0]
             if envelope.address != found[1]:
                 raise _invalid("address_mismatch", f"{'/'.join(parts)} holds {envelope.address}")

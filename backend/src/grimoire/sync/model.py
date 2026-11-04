@@ -11,10 +11,10 @@ Action = Literal["agreed", "copy", "conflict"]
 
 #: The record kinds sync owns (the store's ``classify`` kinds); later families extend this set,
 #: and archive and pending documents accept exactly these paths. ``scope`` and ``chat`` are
-#: 107's campaign-local play-scope and chat records.
-SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat"})
+#: 107's campaign-local play-scope and chat records; ``relation`` is 017's typed relation record.
+SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation"})
 #: Campaign-local kinds: independent of sources and of each other at commit time.
-CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat"})
+CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation"})
 
 #: Conflict codes, each named in docs/SYNC.md.
 CONFLICT_CODES = frozenset({

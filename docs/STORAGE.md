@@ -18,6 +18,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   campaigns/<campaign_id>/instances/<kind>/<instance_id>.json     # one campaign instance
   campaigns/<campaign_id>/scope.json                              # the play scope (107)
   campaigns/<campaign_id>/chats/<chat_id>.json                    # one chat record (107)
+  campaigns/<campaign_id>/relations/<relation_id>.json            # one relation record (017)
   .txn/lock, .txn/journal.json, .txn/*.new                        # writer lock, journal, staging
   .txn/discard.json                                               # an unfinished discard_journal
   .conflicts/<hash16>/<name>~<digest12>[.N]                       # preserved versions awaiting a human
@@ -36,9 +37,9 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   - a source ID deeper than 26 segments.
 - **Reserved names for later families**, which the loader skips silently:
   - at the root: `authority`, `config`, `assets`, `secrets`, and `kept` (never a folder: it is the authorization namespace of kept versions, so no record root may alias it);
-  - inside a campaign: `scenes`, `events`, `evidence`, `relations`.
+  - inside a campaign: `scenes`, `events`, `evidence`.
 
-  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section).
+  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), and `relations/` since 017 (see relation records).
 
   These follow the [architecture layout](ARCHITECTURE.md#storage-root-and-provisional-organization) and are a deliberate deviation from an earlier draft that reserved root-level `events`/`evidence`. No root entry is a [V1 marker name](ARCHITECTURE.md#library-location-and-v1-isolation-implemented-grimoirelibrary).
 - **Ignored silently:** OS and editor droppings (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `*~`, `*.swp`, `*.swo`, `.#*`) and directories with no file below them. Empty directories are not state: a failed commit can leave some behind, and nothing can remove them through the file seam. Per-target `.conflicts/<hash16>/` folders accumulate in the same way.
@@ -112,6 +113,20 @@ Fields:
 
 **Rollback:** a pre-107 build reports `scope.json` and `chats/` as `unrecognized` and never writes or deletes them. It **cannot recover a journal that names them**: it raises `RecoveryFailed`, and reads then raise `PendingRecovery`. Recover with a 107+ build, or run `LibraryStore.discard_journal`, which does not interpret paths (tested).
 
+### Relation records (017)
+
+<a id="relation-records-017"></a>Added by [Typed Relationship Graph](roadmap/sprints/typed-relationship-graph.md). Interpreted by [`grimoire.graph`](GRAPH.md), never by the store.
+
+- **An additive 010 envelope amendment, recorded here as 107's was.** `grimoire.scope-record/1`'s address union widens to `ScopeRef | ChatRef | RelationRef`. The relation address is `campaign:<id>#relation/<relation_id>`, at `campaigns/<id>/relations/<relation_id>.json`. `parse_scope_record` chooses the family by the exact `#chat/` or `#relation/` fragment; any other `#…` is `malformed`. No new file format is added, and `record/1` and `source/1` are unchanged.
+- `relations` is no longer a reserved campaign entry. `classify` recognises exactly the new path, so recovery accepts journals that name it.
+- A `relation_id` is limited to 123 characters.
+- `load()` adds `LibraryView.relations`. Bad files are contained per file, as for chats. Anything else under `relations/` (a sub-directory, another suffix, a look-alike name) is `unrecognized` or `name_mismatch`, and a `relations` that is a file is `unrecognized`.
+- `read(RelationRef)` returns a `StoredScopeRecord`. `campaign_relations(id)` returns `CampaignRelations(records, problems)` for **one** campaign, contained exactly as `load()` contains it (a parity test). Links are reported and never followed.
+- Writes read every relation file of the campaign (no cap; O(n)).
+- **Instance allocators must use `grimoire.graphstore.relation_endpoint_ids`** (see [GRAPH](GRAPH.md#endpoint-ids-stay-taken)), so the id of a hand-deleted relation endpoint is never reused.
+
+**Rollback:** a pre-017 build skips `relations/` (it is reserved there), and never writes or deletes it. Its allocators do not protect relation endpoint ids. It **cannot recover a journal that names a relation path**: it raises `RecoveryFailed`, and reads then raise `PendingRecovery`. Recover with a 017+ build, or run `LibraryStore.discard_journal` (tested).
+
 ### Read-only helpers (107)
 
 All of these take the store lock, require a consistent library, and read listings and files only:
@@ -171,7 +186,7 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
 
 [`grimoire.sync`](SYNC.md) copies another device's file byte for byte and keeps both versions of a conflict. It does so only through these store operations, all of them riding the same journal, preflight, recovery and crash guarantees as `put`:
 
-- **`Transaction.put_exact(path, data, expected, *, replace_unreferenced=False, regenerable=False)`** stages exact bytes at a canonical definition, manifest, instance, play-scope or chat path.
+- **`Transaction.put_exact(path, data, expected, *, replace_unreferenced=False, regenerable=False)`** stages exact bytes at a canonical definition, manifest, instance, play-scope, chat or relation path.
   - The bytes are validated as the envelope they hold: strict JSON, supported format, address equal to the path, writable values. A failure is `InvalidEnvelope` with a `code`.
   - They are published **verbatim**: `previous` is not rewritten, so two libraries converge on one etag.
   - With `regenerable=True` (sync passes it: the bytes still exist on the other device), the entry's journal kind is `replica`, which an abort or an external edit of the target drops instead of preserving. Without it, the bytes are preserved like any `put`.

@@ -62,7 +62,7 @@ Planned, authorized, fully booked OpenAI-compatible model calls. Endpoints are t
   .cache/                             # disposable derived graph, search, embeddings
 ```
 
-The native store's accepted first-slice layout (`sources/<segments>/_source/…`, `campaigns/<id>/instances/…`) and its revision, recovery and isolation contract are in [STORAGE.md](STORAGE.md); the graph schema remains open. Data files must remain usable by humans and external agents. Derived indexes, embeddings and cached actor views are disposable and may not become a second canonical store.
+The native store's accepted first-slice layout (`sources/<segments>/_source/…`, `campaigns/<id>/instances/…`) and its revision, recovery and isolation contract are in [STORAGE.md](STORAGE.md); the first-slice relation schema (`campaigns/<id>/relations/`) and graph semantics are in [GRAPH.md](GRAPH.md). Data files must remain usable by humans and external agents. Derived indexes, embeddings and cached actor views are disposable and may not become a second canonical store.
 
 ## Wave 2 independent domain and storage contracts (planned)
 

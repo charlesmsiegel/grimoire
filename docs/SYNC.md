@@ -12,7 +12,7 @@
 
 ## What is synchronized
 
-`grimoire.sync.syncable(path)` is the single definition of the synced set, and the extension point for later families (018 assets, 021/035 scenes, ledgers). In this slice it covers the canonical records of 010 and of [107](CHATS.md): source manifests, definition revisions, campaign instances, and 107's play-scope (`campaigns/<id>/scope.json`) and chat (`campaigns/<id>/chats/<chat_id>.json`) records. Instances, scopes and chats are campaign-local: each is its own admission unit, never grouped with a source. S3 is proven both on a synthetic instance-shaped chat and on real 107 chats made by `grimoire.chatstore`:
+`grimoire.sync.syncable(path)` is the single definition of the synced set, and the extension point for later families (018 assets, 021/035 scenes, ledgers). In this slice it covers the canonical records of 010 and of [107](CHATS.md): source manifests, definition revisions, campaign instances, 107's play-scope (`campaigns/<id>/scope.json`) and chat (`campaigns/<id>/chats/<chat_id>.json`) records, and [017](GRAPH.md)'s relation records (`campaigns/<id>/relations/<relation_id>.json`). Instances, scopes, chats and relations are campaign-local: each is its own admission unit, never grouped with a source. S3 is proven both on a synthetic instance-shaped chat and on real 107 chats made by `grimoire.chatstore`:
 - a lorebook attached on one device and a world attached on the other touch different files, so both merge;
 - concurrent edits of one chat record are a keep-both conflict, and the new participant's actor still travels;
 - after either, each device's navigation index still finds exactly one chat.

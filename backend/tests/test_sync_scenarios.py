@@ -919,3 +919,27 @@ def test_one_poisoned_source_keeps_admission_linear(tmp_path, monkeypatch):
         counts[size] = sum(calls)  # puts staged across every check
         desktop.close(), phone.close()
     assert counts[20] < 2.5 * counts[10]  # linear, not quadratic, in the number of sources
+
+
+# -- 017 relation records sync like other campaign-local records ------------------------------------
+
+def test_relations_travel_and_concurrent_relation_edits_keep_both(tmp_path):
+    from grimoire.graph.model import Moment
+    from graph_fixtures import C, GUILD, WREN, relation_library, seed_campaign
+    desktop, phone = LibraryStore.create(tmp_path / DESKTOP), LibraryStore.create(tmp_path / PHONE)
+    seed_campaign(desktop)
+    added = relation_library(desktop).add(C, "member_of", WREN, GUILD, since=Moment(3), provenance="director").commit()
+    identify(desktop, DESKTOP), identify(phone, PHONE)
+    report = sync(desktop, phone, handles())
+    path = f"campaigns/{C}/relations/{added.relation.relation_id}.json"
+    assert (path, PHONE) in report.copied and canonical(desktop) == canonical(phone)
+    ref = added.relation
+    on_desktop, on_phone = relation_library(desktop), relation_library(phone)
+    on_desktop.end(ref, until=Moment(7), provenance="director", expected=on_desktop.read(ref)[1]).commit()
+    on_phone.retract(ref, provenance="player", expected=on_phone.read(ref)[1]).commit()
+    report = sync(desktop, phone, handles())
+    found = report.conflict(path)
+    assert found.code == "concurrent" and dict(found.kept) == {DESKTOP: True, PHONE: True}
+    for store in (desktop, phone):
+        assert store.load().problems == ()
+        assert len(kept(store)) == 1
