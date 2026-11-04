@@ -173,7 +173,7 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
    - Campaign-wide sequence allocation belongs to 021/035.
 7. **012's ledger rules.** `KnowledgeError` propagates unchanged.
 8. **Sovereignty.** Each new belief goes through `admit_belief`; `BeliefAuthorityError` propagates.
-9. **Symmetry.** Each record must read back exactly, at an address every platform can hold (`too_long`, `unstorable_id`), in a file the store accepts (`too_large`: over 8 MiB rendered).
+9. **Symmetry.** Each record must read back exactly, at an address every platform can hold (`too_long`, `invalid_field` for text UTF-8 cannot hold, `unstorable_id`), in a file the store accepts (`too_large`: over 8 MiB rendered).
 10. **The write.** The records and their batch are staged. The assembled post-state must quarantine nothing.
 
 `KnowledgeChange.preview()` gives the exact bytes per logical path. **Previews are director-facing:** they hold raw records. Do not show a player a batch that holds director-only records; batch a player-approved belief alone.
@@ -188,7 +188,7 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 
 - **Rulings, events and disclosures** must reach the service only from director or adjudication paths (021/035).
 - **`controls` and contributions come from the caller,** because Wave 1 control is not persisted. 035 must take them from the authenticated session; a caller that names the director as a persona's controller can author its beliefs. After reopen, a PC belief's authorship cannot be re-verified. `player_knowledge`'s `inherited` bucket surfaces any belief the current controller did not author.
-- **`Transaction.put` of a `KnowledgeRecord` is not a supported writer.** Its file reads as `unlisted`, is quarantined, and blocks appends (tested).
+- **`Transaction.put` of a `KnowledgeRecord` is not a supported writer.** A put without its batch entry reads as `unlisted`, is quarantined, and blocks appends (tested). A put together with a correctly chained forged batch is the undetectable case under Limits, as is editing a `KnowledgeChange`'s staged records before `commit`: trusted code only.
 - **Graph, index and retrieval builders** (017, 031, 065) must not derive anything from these files or from `store.campaign_knowledge`. They consume actor projections or the explicit director read only. Connectivity never grants knowledge.
 
 ## Correction and repair

@@ -98,9 +98,10 @@ _ID = {cls: label for cls, label in (
 class KnowledgeChange:
     """One append, not yet committed: ``preview`` for a human, then ``commit``.
 
-    A fresh store transaction is built for every preview and commit, so a refusal before the
-    commit point (``StaleWrite``, ``WriteDenied``, ``UnstorableIdentifier``, ``NameCollision``,
-    an ``OSError`` while staging) leaves the change retryable.
+    A fresh store transaction is built for every preview and commit. A refusal before the commit
+    point writes nothing. Only ``WriteDenied`` (with fresh approvals) and a transient ``OSError``
+    are worth retrying on the same change; after ``StaleWrite``, ``UnstorableIdentifier`` or
+    ``NameCollision``, build a fresh ``append``.
     """
 
     library: EvidenceLibrary
@@ -160,6 +161,8 @@ class EvidenceLibrary:
     """Durable events and evidence over one ``LibraryStore`` (read-only stores can read)."""
 
     def __init__(self, store: LibraryStore, handle: object = None, *, owner: str | None = None) -> None:
+        if owner is not None and (type(owner) is not str or not owner.strip()):
+            raise ValueError("owner must be None or nonempty text")
         self.store = store
         self.handle = handle
         self.owner = owner

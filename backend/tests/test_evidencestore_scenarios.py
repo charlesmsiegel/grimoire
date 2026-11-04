@@ -396,6 +396,48 @@ def _names(records):
     return [record_ref(record).name for record in records]
 
 
+def test_a_change_past_the_commit_point_is_never_resent(store, evidence, monkeypatch):
+    from grimoire.store import CommitIncomplete
+    from grimoire.store.library import Transaction
+    change = evidence.append(C, [Event(C, "e9", "x", m(1), "director")])
+
+    def incomplete(self, handle, approvals=None):  # type: ignore[no-untyped-def]
+        raise CommitIncomplete("simulated: failed after the commit point")
+
+    monkeypatch.setattr(Transaction, "commit", incomplete)
+    with pytest.raises(CommitIncomplete):
+        change.commit()
+    monkeypatch.undo()
+    with pytest.raises(StoreError):  # the bytes may already be on disk: never sent twice
+        change.commit()
+
+
+def test_a_campaign_removed_before_commit_is_stale(store, evidence):
+    import shutil
+    pending = evidence.append(C, [Proposition(C, "p9", "an actor-less record", m(1), "director")])
+    shutil.rmtree(store.root / "campaigns" / C / "instances")
+    with pytest.raises(StaleWrite):
+        pending.commit()
+
+
+def test_unreadable_scope_and_chat_files_still_exist(chat_store):
+    chats = chat_library(chat_store)
+    started = chats.start_chat(Launch("premise", premise="a quiet harbour")).commit()  # a scope, no actors
+    campaign = started.scope.campaign_id
+    evidence = EvidenceLibrary(chat_store, owner_handle(), owner=OWNER)
+    (chat_store.root / "campaigns" / campaign / "scope.json").write_text("{not json")
+    (chat_store.root / "campaigns" / campaign / "chats" / f"{started.chat.chat_id}.json").write_text("{not json")
+    change = evidence.append(campaign, [Event(campaign, "e1", "x", m(1), "director")], chat=started.chat)
+    change.commit()  # an unreadable scope or chat is still there (107 reports it); never "absent"
+    assert [e.event_id for e in evidence.read(campaign, requested_by=DIRECTOR).knowledge.events] == ["e1"]
+
+
+def test_an_invalid_owner_is_refused_up_front(store):
+    for owner in ("", "   ", 7):
+        with pytest.raises(ValueError):
+            EvidenceLibrary(store, owner_handle(), owner=owner)  # type: ignore[arg-type]
+
+
 def test_f10_a_store_level_put_is_not_a_supported_writer(store, evidence):
     append_u(evidence, upto=3)
     sneaky = Belief(C, "b-sneak", INES, "p-lie", "believed", m(5), DIRECTOR, ("v-ines",))

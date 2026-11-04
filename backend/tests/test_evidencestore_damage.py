@@ -19,15 +19,16 @@ import tempfile
 from pathlib import Path
 
 from grimoire.core import DIRECTOR, Ruling, actor_knowledge, standing
-from grimoire.evidence import encode
+from grimoire.evidence import assemble, encode
 from grimoire.evidencestore import EvidenceLibrary
+from grimoire.evidencestore.library import _files
 from grimoire.store import LibraryStore
 from grimoire.store.jsonfmt import render
 from grimoire.testing.fileops import snapshot
 
 from evidence_fixtures import C, E1, INES, MARA, m
 from store_helpers import OWNER, owner_handle
-from test_evidence_assemble import U, _names, check_projections
+from test_evidence_assemble import U, check_guarantees, check_projections
 from test_evidencestore_scenarios import append_u, seed_actors
 
 KNOWLEDGE = f"campaigns/{C}/"
@@ -127,11 +128,10 @@ def test_real_damage_never_teaches_anyone_anything(tmp_path):
             evidence = EvidenceLibrary(store)
             stored = evidence.read(C, requested_by=DIRECTOR)
             check_projections(stored.knowledge)
-            scan = store.campaign_knowledge(C)
-            accounted = _names(stored.knowledge) | {q.name for q in stored.quarantined}
-            for ref in (*scan.records, *scan.damaged):  # nothing on disk silently dropped
-                if ref.family != "batch":
-                    assert ref.name in accounted, (seed, ref.name)
+            files = _files(store.campaign_knowledge(C))
+            assembly = assemble(C, files)
+            assert assembly.knowledge == stored.knowledge
+            check_guarantees(assembly, files)  # nothing dropped silently; absent listed records are missing
             # spot checks through the service's own projection methods
             assert evidence.actor_knowledge(C, INES, as_of=9) == actor_knowledge(stored.knowledge, INES, as_of=9)
             kept = {p.proposition_id for p in stored.knowledge.propositions}
