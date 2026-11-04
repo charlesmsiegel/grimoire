@@ -26,7 +26,7 @@ from grimoire.effects import (
     ACCEPTED_SCHEMA, WRAPUP_SCHEMA, AcceptedEvent, AcceptedOperation, EffectCodecError, EffectError, EffectProblem,
     EffectProposal, EndorsementRecord, EndStep, Receipt, Revocation, SceneWrapUp, Skipped, accepted_from_payload,
     accepted_to_payload, accepted_token, authorize, check_citations, ledger_problems, orphans, plan,
-    edited_effects, receipt_failure, revocation_fingerprint, revoked_token, verify_receipts, wrapup_from_payload,
+    edited_effects, partial_revocations, receipt_failure, revocation_fingerprint, revoked_token, verify_receipts, wrapup_from_payload,
     wrapup_id, wrapup_problems,
     wrapup_to_payload,
 )
@@ -245,6 +245,7 @@ class TurnEffectsLibrary:
             problems += verify_receipts(event, snap.graph.index)
         problems += orphans(events, snap.relations())
         problems += edited_effects(events, snap.graph.index)
+        problems += partial_revocations(events)
         problems += wrapup_problems(snap.wrapups.values(), events)
         active = sorted((e for e in events if e.active and e.moment.sequence <= as_of),
                         key=lambda e: (e.moment.sequence, e.ordinal, e.event_id))
@@ -285,6 +286,12 @@ class TurnEffectsLibrary:
                                             "receipt_mismatch", (event.event_id,))
                     return EffectChange(self, event.ref, campaign_id=campaign, state=snap.state,
                                         duplicate_of=event.ref)
+            turn = (proposal.chat, proposal.moment.scene_id, proposal.moment.turn_id)
+            same_turn = [e.event_id for e in snap.active()
+                         if (e.chat, e.moment.scene_id, e.moment.turn_id) == turn]
+            if same_turn:  # one accepted effect per turn: another swipe's effect needs a revocation first
+                raise InvalidEffect(f"turn {proposal.moment.turn_id} already has an accepted effect",
+                                    "turn_already_accepted", same_turn)
             floor = max((e.moment.sequence for e in snap.active()), default=0)
             if proposal.moment.sequence < floor:
                 raise InvalidEffect(f"sequence {proposal.moment.sequence} is behind an accepted event at {floor}",
@@ -348,10 +355,10 @@ class TurnEffectsLibrary:
                 self.store.read(ref)  # raises the store's own error (RecordNotFound ...)
                 raise InvalidEffect(f"{ref} cannot be read", "undecodable_event")
             event, etag = snap.events[ref], snap.etags[ref]
+            if not event.active:  # before the CAS, so a retry of a revoke that landed is told so
+                raise InvalidEffect(f"{ref} is already revoked", "already_revoked")
             if etag != expected:
                 raise StaleWrite([("/".join(address_parts(ref)), "changed")])
-            if not event.active:
-                raise InvalidEffect(f"{ref} is already revoked", "already_revoked")
             later = [e.event_id for e in snap.active() if e.ordinal > event.ordinal]
             if later:
                 raise InvalidEffect(f"{ref} is not the latest accepted event", "not_latest", sorted(later))
@@ -579,3 +586,25 @@ def _relation_files(store: LibraryStore, campaign_id: str) -> tuple[list[Relatio
         if isinstance(relation, Relation):
             decoded.append(relation)
     return decoded, unreadable
+
+
+def accepted_instance_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+    """Instance ids named by the campaign's decodable accepted events: operation subjects, objects and agents,
+    and the actors whose control was recorded.
+
+    Like 017's ``relation_endpoint_ids``, every instance allocator must treat these as taken, so a
+    hand-deleted individual's id never goes to a different one that would silently inherit its past
+    effects. Ids named only by an undecodable file are not protected (a documented limit).
+    """
+    taken: set[str] = set()
+    for ref, stored in store.campaign_accepted(campaign_id).records.items():
+        try:
+            event = accepted_from_payload(ref, stored.record.schema, stored.record.payload)  # type: ignore[arg-type]
+        except EffectCodecError:
+            continue
+        for item in event.operations:
+            taken |= {item.op.subject.instance_id, item.op.object.instance_id}
+            if item.op.agent is not None:
+                taken.add(item.op.agent.instance_id)
+        taken |= {control.actor_id for control in event.controls}
+    return frozenset(taken)

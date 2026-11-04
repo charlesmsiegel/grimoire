@@ -265,3 +265,15 @@ def test_a_journal_naming_them_recovers_or_can_be_discarded(tmp_path):
     with LibraryStore.open(lib, locker=locker) as store:
         assert store.load().accepted == {}
         assert any("discarded" in path for path in store.conflicts())
+
+
+
+def test_a_linked_look_alike_folder_is_reported_as_load_reports_it(library, tmp_path):
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (library.root / "campaigns" / "c1").mkdir(parents=True, exist_ok=True)
+    make_dir_link(library.root / "campaigns" / "c1" / "Accepted", outside)
+    entries = {(p.path, p.code) for p in library.load().problems}
+    found = {(p.path, p.code) for p in library.campaign_accepted("c1").problems}
+    assert ("campaigns/c1/Accepted", "link") in entries
+    assert ("campaigns/c1/Accepted", "link") in found

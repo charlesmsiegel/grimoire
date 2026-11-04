@@ -575,8 +575,11 @@ def campaign_family(access: Access, campaign: str, family: str) -> CampaignRecor
             else:
                 _unrecognized(access, folder, problems, None)
         for name in access.list_dir(base):  # a look-alike ("Relations") is reported, as load() reports it
-            if name != family and name_key(name) == family and not is_link(access.path(base + (name,))):
-                _unrecognized(access, base + (name,), problems, None)
+            if name != family and name_key(name) == family:
+                if is_link(access.path(base + (name,))):
+                    problems.append(LoadProblem(_text(base + (name,)), "link", "links are never followed"))
+                else:
+                    _unrecognized(access, base + (name,), problems, None)
     return CampaignRecords(MappingProxyType(getattr(found, attribute)), tuple(problems))
 
 

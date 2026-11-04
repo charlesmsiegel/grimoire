@@ -79,15 +79,6 @@ def _decoded(store: LibraryStore, campaign_id: str) -> list[Relation | Unsupport
     return found
 
 
-def decoded_relations(store: LibraryStore, campaign_id: str) -> list[Relation | UnsupportedRelation]:
-    """One campaign's decodable and unsupported relations, from one read of its folder.
-
-    For callers that check several changes against the same files (021), so each check need not
-    re-read the folder. Undecodable files are skipped, exactly as a single write skips them.
-    """
-    return _decoded(store, campaign_id)
-
-
 def relation_endpoint_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     """Instance ids named as endpoints by the campaign's decodable and unsupported relation files.
 
@@ -131,7 +122,7 @@ class RelationChange:
         the relation file still has the etag the change expects (``absent``/``changed``, the store's
         own CAS words), and for a reopen also whether the reopened interval now overlaps a duplicate.
         Callers folding this change into a larger transaction (021) call it under the store lock,
-        and may pass ``relations`` (``decoded_relations`` read under that lock) to check many
+        and may pass ``relations`` (the campaign's decoded relations, read under that lock) to check many
         changes against one read.
         """
         store = self.library.store

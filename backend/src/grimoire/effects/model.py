@@ -483,6 +483,8 @@ class SceneWrapUp:
             raise EffectError("wrapup_mismatch")
         if type(self.through) is not Moment:
             raise _invalid()
+        if self.through.scene_id is not None and self.through.scene_id != self.scene_id:
+            raise EffectError("invalid_moment")  # only its sequence counts; its labels may not name another scene
         _text(self.summary, WRAPUP_SUMMARY_MAX)
         if type(self.cites) is not tuple:
             raise _invalid()

@@ -57,6 +57,8 @@ def plan(proposal: EffectProposal, index: GraphIndex) -> tuple[Step, ...]:
     as_of = proposal.moment.sequence
     steps: list[Step] = []
     for number, op in enumerate(proposal.operations):
+        if op.agent is not None and op.agent not in index.instances:  # never a namesake, never a future instance
+            raise EffectError("missing_agent", (str(number),))
         entries = candidates(index, op)
         if op.kind == "end":
             walkable = [e for e in entries if e.traversable and e.relation.holds_at(as_of)]

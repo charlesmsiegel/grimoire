@@ -88,7 +88,7 @@ It is a sha256 over a hand-rolled canonical text, pinned by a golden-vector test
     - None → `not_endorsed`.
     - Anything wrong → `invalid_endorsement`.
 
-    The record stores `{contribution_id, principal, fingerprint}`, so the endorsement is bound to exactly these operations. Two endorsements for one contribution are refused as ambiguous (`invalid_endorsement`). A contribution longer than the record can hold (text over 20 000 characters, an id over 512) is refused with `contribution_too_long`, since 003 itself caps neither.
+    The record stores `{contribution_id, principal, fingerprint}`, so the endorsement is bound to exactly these operations. Two endorsements for one contribution are refused as ambiguous (`invalid_endorsement`). A contribution whose text is over 20 000 characters, or whose submitter is over 512, is refused with `contribution_too_long`, since 003 caps neither. (A `backed_by` over 512 is already refused when the proposal is built.)
 - **Director-domain ops** (an NPC or unassigned agent, or `agent=None`) need only the outcome key, and refuse `backed_by` (`unexpected_backing`). Sovereignty never guarantees success: an NPC taking the PC's key is the director's to accept.
 
 Narration holds neither key. A player alone can never make their character's action succeed (a theft, joining a guild that refuses): the outcome needs the director key.
@@ -122,16 +122,18 @@ Narration holds neither key. A player alone can never make their character's act
    - **they do not:** refused `receipt_mismatch`. The way out is `revoke(..., partial=True)`.
 
    A receipt mismatch on any *other* event does not block an unrelated acceptance. It stays reported by `continuity` until it is repaired: revoke back to that event with `partial=True`, or hand-repair the relation file. One editorial edit therefore never freezes a campaign's play.
-6. **Sequence floor.** The sequence must be at least the highest sequence of any active event (`stale_sequence`); equal sequences are allowed. Sequences are campaign-wide. **Obligation on 035:** allocate one non-decreasing sequence across all chats of a scope.
-7. **Ordinal.** The new event gets `ordinal = 1 + max` over every event file, active or revoked. This is the order of the undo stack.
-8. **Plan** against the graph at `as_of = sequence`:
+6. **One accepted effect per turn.** An active event for the same chat, scene and turn with a *different* fingerprint refuses the acceptance (`turn_already_accepted`). Another swipe's effect needs the accepted one revoked first, and several things that happen in one turn are one proposal (up to 32 operations). This also stops a turn retried at a newly allocated sequence after a later event restored the state, which the preconditions alone would let through.
+7. **Sequence floor.** The sequence must be at least the highest sequence of any active event (`stale_sequence`); equal sequences are allowed (different turns or chats at one moment). Sequences are campaign-wide. **Obligation on 035:** allocate one non-decreasing sequence across all chats of a scope.
+8. **Ordinal.** The new event gets `ordinal = 1 + max` over every event file, active or revoked. This is the order of the undo stack.
+9. **Plan** against the graph at `as_of = sequence`:
    - **`end`:** needs exactly one walkable relation recording the fact, with no ending and `since < as_of`.
      - None, a bounded stint or a same-sequence start → `precondition_failed`.
      - Two → `ambiguous_relation`.
    - **`begin`:** both endpoints must have instance files (`missing_endpoint`), and no unretracted relation of the fact may overlap `[as_of, ∞)` (`precondition_failed`).
+   - **any operation:** an `agent` must have an instance file (`missing_agent`).
 
    **Nothing is ever matched by name**: key-2 is never "the key".
-9. **Commit.** One transaction writes:
+10. **Commit.** One transaction writes:
    - the new `accepted/<event_id>.json`, create-only;
    - each 017 end rewrite, under CAS on the etag read;
    - each 017 add, create-only.
@@ -169,6 +171,7 @@ Problem codes (reported, never repaired):
 - `duplicate_ordinal` and `inconsistent_ledger`;
 - `receipt_mismatch`;
 - `orphan_effect`;
+- `partial_revocation`: a revoked event whose revocation skipped operations. They still hold as a human left them, so the event is only partly undone (half a transfer may remain, an item held twice). It stays reported until resolved by hand;
 - `edited_since`: a relation an active event began was ended by something other than a later active accepted event (a direct 017 edit). The receipt itself still matches, but undoing that event will be refused (`has_dependents`) until the edit is resolved;
 - `stale_wrapup`: it cites a revoked or vanished event;
 - `incomplete_wrapup`: an active event of that chat and scene, within its range, that it does not cite.
@@ -199,7 +202,7 @@ A revoked event is checked by these permanent marks only. Revoking an earlier ev
 
 `revoke(ref, *, reason, expected, endorsements=(), partial=False) -> EffectChange`:
 
-- **Inputs.** CAS on `expected`. A repeat is `already_revoked`. The same fail-closed checks as accepting apply (`undecodable_event`, `inconsistent_ledger`).
+- **Inputs.** A repeat is `already_revoked`, checked before the CAS on `expected`, so a retry of a revoke that landed is told so. The same fail-closed checks as accepting apply (`undecodable_event`, `inconsistent_ledger`).
 - **Latest first.** While another active event has a higher ordinal, revoke refuses with `not_latest`. Undo is a stack, so history behind a later accepted event never changes under it. To revise turn 7 after events at 8 and 9: revoke 9, then 8, then 7; accept the revision; then re-accept whatever still applies.
 - **Keys.** The outcome key, plus an endorsement from **the original endorser**, the principal recorded for each contribution. Its fingerprint is `revocation_fingerprint(event_ref, event_fingerprint)`, a sha256 over `revoke`, the event's reference and its fingerprint. An acceptance endorsement is therefore never consent to undo, and the record shows which decision each endorsement was.
   - Current control does not matter. A new controller cannot undo a previous player's action, and the director cannot erase it alone.
@@ -221,7 +224,7 @@ A revoked event is checked by these permanent marks only. Revoking an earlier ev
 
 `wrap_up(chat, scene_id, *, through, summary, cites, written_by, requested_by, expected=None)` is director-only.
 
-- **One per chat scene.** The id is `w-` plus 24 hex digits of sha256(chat_id NUL scene_id). A new wrap-up is created with `expected=None`; a revised one rewrites it under CAS.
+- **One per chat scene.** The id is `w-` plus 24 hex digits of sha256(chat_id NUL scene_id). A new wrap-up is created with `expected=None`; a revised one rewrites it under CAS, so a retried create is `StaleWrite` and must re-read the wrap-up. Only `through.sequence` counts; a `through` whose scene label names another scene is refused (`invalid_moment`).
 - **It remembers every accepted event.** `cites` must contain exactly the active events of that chat and scene with `sequence <= through`:
   - one of them missing → `uncited_event`;
   - any other id → `unknown_event`;
@@ -264,7 +267,7 @@ How it is read and written:
 
 | Flow | Contract |
 |---|---|
-| Reroll, alternate response (swipe) | Draft narration only. The same operations are a duplicate no-op. Choosing a swipe that implies a *different* effect means revoke, then accept. |
+| Reroll, alternate response (swipe) | Draft narration only. The same operations are a duplicate no-op. A swipe that implies a *different* effect is refused (`turn_already_accepted`) until the accepted one is revoked. |
 | Retrying the same acceptance | A duplicate no-op if the receipts verify; `receipt_mismatch` otherwise, repaired with `revoke(partial=True)`. |
 | Editing a past turn | Revoke back to it, latest first, then accept the revision. |
 | A 003 player `Correction` | Strikes a narration claim and never revokes an accepted event automatically. A player who objects to an effect on their character asks for revocation, which needs the director key. A mislabel goes to the referee. |
@@ -297,6 +300,7 @@ How it is read and written:
 | Summary-only accepted events (with no operations) | 020 (012 `Event`) |
 | Actor memory; long-form consolidation over wrap-ups | [Memory Consolidation](roadmap/sprints/memory-consolidation.md) (053), deriving actor memory from 020 evidence |
 | Mechanics legality | 029 / mechanics modules |
+| **Instance ids named by accepted events stay taken.** `accepted_instance_ids(store, campaign_id)` (operation subjects, objects, agents and controlled actors) is part of 107's allocator; every future allocator (024, 026, 037) must use it too, as with 017's `relation_endpoint_ids`. Ids named only by an undecodable event file are not protected | 024 / 026 / 037 |
 | Event-id allocators treating each other's ids as taken, so the 012 bridge can be persisted | whichever of 020/021 merges second |
 | **One linear writer per campaign.** Ordinals are `1 + max` on one replica. Two devices that each accept an event offline and are then merged produce a duplicate ordinal: acceptance and revocation then refuse (`inconsistent_ledger`) until it is resolved. A merge rule for accepted events (rebasing one device's events on the other's, with review) is needed before sync carries `accepted/` | 019 / 028 |
 | Performance at scale: each accept, and each commit, reads the campaign's accepted events and relation files once (not once per operation). Cost still grows linearly with campaign history, and nothing is cached | later 021 / 022 |

@@ -99,7 +99,7 @@ Nothing is deleted, so 012/020 subjects that cite the relation stay valid. 021 r
   - for a reopen, also an overlap.
 
   021 calls it under the store lock before folding relation changes into its own transaction. `commit` is unchanged for add, end and retract.
-- **Checking many changes against one read.** `add`, `reopen` and `RelationChange.stale` take an optional `relations` list (from `decoded_relations(store, campaign_id)`, read under the same lock), so 021 checks up to 32 operations against one read of the folder instead of one read each. Omitted, they read the folder as before.
+- **Checking many changes against one read.** `add`, `reopen` and `RelationChange.stale` take an optional `relations` list (the campaign's decoded relations, read under the same lock), so 021 checks up to 32 operations against one read of the folder instead of one read each. Omitted, they read the folder as before.
 
 ## The index (director-only)
 

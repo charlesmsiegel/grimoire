@@ -180,4 +180,4 @@ Actor instances are written as `grimoire.record/1` with:
 
 Binding a source creates no event, belief or evidence record and never makes anyone aware of its content.
 
-New actor ids skip every id named by the campaign's relation files (`relation_endpoint_ids`, 017), at allocation and again under the store lock at commit, so a hand-deleted endpoint's id never goes to a different individual. See [GRAPH](GRAPH.md#endpoint-ids-stay-taken).
+New actor ids skip every id named by the campaign's relation files (`relation_endpoint_ids`, 017) and accepted events (`accepted_instance_ids`, [021](EFFECTS.md)), at allocation and again under the store lock at commit, so a hand-deleted endpoint's id never goes to a different individual. See [GRAPH](GRAPH.md#endpoint-ids-stay-taken).

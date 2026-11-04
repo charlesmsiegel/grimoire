@@ -239,7 +239,8 @@ def test_f6_receipt_mismatch_is_reported_refused_and_repairable(world):
     event, _ = library.read(done.ref, requested_by=DIRECTOR)
     assert [(s.op, s.why) for s in event.revocation.skipped] == [(0, "not ended by this event")]
     view = library.continuity(C, as_of=8, requested_by=DIRECTOR)
-    assert view.problems == () and view.graph.index.relation("r-1", requested_by=DIRECTOR).retracted
+    assert [(p.code, p.op) for p in view.problems] == [("partial_revocation", 0)]  # partly undone, and said so
+    assert view.graph.index.relation("r-1", requested_by=DIRECTOR).retracted
 
 
 def test_f6_a_mismatched_earlier_event_is_reported_but_does_not_block_other_effects(world):
@@ -593,3 +594,111 @@ def test_accept_and_commit_read_the_relation_folder_once_not_per_operation(world
                           tuple(Op("begin", "carries", TAM, item) for item in items), "director")
     library.accept(many, controls=CONTROLS).commit()
     assert calls == []  # every overlap check used the one snapshot (accept) or one read (commit)
+
+
+
+# -- brutal-review round 2 -------------------------------------------------------------------------
+
+def test_a_second_swipe_of_an_accepted_turn_is_refused(world):
+    store, handles, library = world
+    accept(library, handles).commit()
+    other = give(KEY2)  # the same turn t7, a different effect
+    assert reason(lambda: accept(library, handles, other, endorsements=[handles.endorse(other)])) == \
+        "turn_already_accepted"
+
+
+def test_a_turn_retried_at_a_new_sequence_after_a_reversal_is_refused(world):
+    store, handles, library = world
+    accept(library, handles).commit()  # e-1: t7, Wren gives key-1 to Tam
+    back = give(KEY1, giver=TAM, to=WREN, agent=TAM, backed=None, sequence=9)
+    library.accept(back, controls=CONTROLS).commit()  # e-2: Tam gives it back, so the precondition holds again
+    retry = give(sequence=10, turn="t7")
+    assert reason(lambda: accept(library, handles, retry, endorsements=[handles.endorse(retry)])) == \
+        "turn_already_accepted"
+
+
+def test_retrying_a_revoke_that_landed_says_already_revoked(world):
+    store, handles, library = world
+    done = accept(library, handles).commit()
+    _, etag = library.read(done.ref, requested_by=DIRECTOR)
+    library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.undo(done.ref)]).commit()
+    assert reason(lambda: library.revoke(done.ref, reason="r", expected=etag,
+                                         endorsements=[handles.undo(done.ref)])) == "already_revoked"
+
+
+def test_a_chat_deleted_after_preview_makes_the_acceptance_stale(world):
+    store, handles, library = world
+    change = library.accept(give(KEY2, to=TAM, agent=TAM, backed=None, sequence=8), controls=CONTROLS)
+    (store.root / "campaigns/c/chats/t-1.json").unlink()
+    _stale(store, change)
+
+
+def test_a_trusted_handle_of_a_non_human_controller_cannot_endorse(world):
+    store, handles, library = world
+    bot = "app:bot"
+    controls = (ControlAssignment(C, "wren", bot), ControlAssignment(C, "tam", DIRECTOR))
+    p = give()
+    endorsement = Endorsement("c7", handles.authorizer.handle_for(bot, trusted=True), p.fingerprint)
+    assert reason(lambda: library.accept(p, controls=controls, contributions=[contribution(by=bot)],
+                                         endorsements=[endorsement])) == "invalid_endorsement"
+
+
+@pytest.mark.parametrize("token", ["effect:accepted/e-9", "effect:accepted/e-1", "effect:revoked/e-1"])
+def test_an_ending_with_a_token_of_no_later_active_event_is_an_edit(world, token):
+    store, handles, library = world
+    accept(library, handles).commit()
+    rel = relations(store, handles)
+    tam = RelationRef(C, "r-1")
+    rel.end(tam, until=Moment(9), provenance=token, expected=rel.read(tam)[1]).commit()
+    codes = {p.code for p in library.continuity(C, as_of=9, requested_by=DIRECTOR).problems}
+    assert "edited_since" in codes
+
+
+def test_a_duplicate_whose_ledger_moved_on_before_commit_is_stale(world):
+    store, handles, library = world
+    accept(library, handles).commit()
+    retry = accept(library, handles)
+    library.accept(give(KEY2, to=TAM, agent=TAM, backed=None, sequence=8), controls=CONTROLS).commit()
+    with pytest.raises(StaleWrite):
+        retry.commit()
+
+
+def test_an_agent_that_does_not_exist_is_refused(world):
+    store, handles, library = world
+    ghost = InstanceRef(C, "character", "ghost-1")
+    join = EffectProposal(C, CHAT, moment(), "Wren joins.", (Op("begin", "member_of", WREN, GUILD, ghost),),
+                          "director")
+    assert reason(lambda: library.accept(join, controls=CONTROLS)) == "missing_agent"
+
+
+def test_ids_named_by_accepted_events_stay_taken_for_new_actors(world):
+    from grimoire.chatstore import ChatLibrary
+    from grimoire.effectstore import accepted_instance_ids
+    store, handles, library = world
+    pact = EffectProposal(C, CHAT, moment(), "Ines makes Wren and the guild allies.",
+                          (Op("begin", "allied_with", WREN, GUILD, INES),), "director")
+    library.accept(pact, controls=CONTROLS).commit()
+    (store.root / "campaigns/c/instances/character/ines.json").unlink()  # ines is named only as an agent now
+    assert "ines" in accepted_instance_ids(store, C)
+    chats = ChatLibrary(store, handles.app, clock=Clock(), new_id=Ids(), owner=OWNER)
+    assert "ines" in chats._campaign_taken(C)
+
+
+def test_a_wrap_up_through_another_scene_is_refused(world):
+    store, handles, library = world
+    assert reason(lambda: library.wrap_up(CHAT, "s1", through=Moment(8, "s2", "t99"), summary="x", cites=[],
+                                          written_by="d", requested_by=DIRECTOR)) == "invalid_moment"
+
+
+def test_a_partial_revocation_that_leaves_an_item_held_twice_is_reported(world):
+    store, handles, library = world
+    done = accept(library, handles).commit()
+    rel = relations(store, handles)
+    tam = RelationRef(C, "r-1")
+    rel.end(tam, until=Moment(9), provenance="editor", expected=rel.read(tam)[1]).commit()
+    _, etag = library.read(done.ref, requested_by=DIRECTOR)
+    library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.undo(done.ref)], partial=True).commit()
+    view = library.continuity(C, as_of=8, requested_by=DIRECTOR)
+    assert view.graph.index.recorded("carries", TAM, KEY1, as_of=8, requested_by=DIRECTOR)
+    assert view.graph.index.recorded("carries", WREN, KEY1, as_of=8, requested_by=DIRECTOR)
+    assert [(p.code, p.op) for p in view.problems] == [("partial_revocation", 1)]

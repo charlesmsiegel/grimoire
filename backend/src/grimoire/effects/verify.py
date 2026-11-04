@@ -114,6 +114,20 @@ def edited_effects(events: Iterable[AcceptedEvent], index: GraphIndex) -> tuple[
     return tuple(found)
 
 
+def partial_revocations(events: Iterable[AcceptedEvent]) -> tuple[EffectProblem, ...]:
+    """``partial_revocation``: a revoked event whose revocation skipped operations. Those operations still
+    hold as a human left them, so the event is only partly undone (half a transfer may remain, an item
+    held twice); it stays reported until a human resolves it."""
+    found = []
+    for event in events:
+        if event.revocation is None:
+            continue
+        for item in event.revocation.skipped:
+            found.append(EffectProblem("partial_revocation", event.event_id, item.op, item.why,
+                                       event.receipts[item.op].relation.relation_id))
+    return tuple(found)
+
+
 def _tokens(relation: Relation) -> list[str]:
     tokens = [relation.provenance]
     if relation.ending is not None:
