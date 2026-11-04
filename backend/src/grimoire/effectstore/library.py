@@ -163,7 +163,10 @@ class EffectChange:
         with store.lock:  # nothing can write between these checks and the commit
             if self._committed:
                 raise StoreError("this change was already committed")
-            if self.duplicate_of is not None:
+            if self.duplicate_of is not None:  # still accepted, unchanged, and still applied?
+                stale = self.library._stale_duplicate(self)
+                if stale:
+                    raise StaleWrite(stale)
                 self._committed = True
                 return EffectCommit({}, self.duplicate_of)
             stale = self.stale()
@@ -264,6 +267,9 @@ class TurnEffectsLibrary:
             records = self._check_endorsements(authorization.endorsers, endorsements, proposal.fingerprint)
             snap = self._snapshot(campaign)
             self._require_trustworthy(snap)
+            if any(problem.code == "undecodable" for problem in snap.graph.index.problems):
+                raise InvalidEffect("a relation file cannot be read, so preconditions cannot be checked",
+                                    "undecodable_relation")
             wanted = proposal.fingerprint
             for event in snap.active():
                 if event.fingerprint == wanted:
@@ -272,6 +278,10 @@ class TurnEffectsLibrary:
                                             "receipt_mismatch", (event.event_id,))
                     return EffectChange(self, event.ref, campaign_id=campaign, state=snap.state,
                                         duplicate_of=event.ref)
+            for event in snap.active():
+                if verify_receipts(event, snap.graph.index):
+                    raise InvalidEffect(f"{event.ref} does not match the relations; repair it first",
+                                        "receipt_mismatch", (event.event_id,))
             floor = max((e.moment.sequence for e in snap.active()), default=0)
             if proposal.moment.sequence < floor:
                 raise InvalidEffect(f"sequence {proposal.moment.sequence} is behind an accepted event at {floor}",
@@ -475,6 +485,17 @@ class TurnEffectsLibrary:
             except (StoreError, LibraryPathError):
                 continue
         raise StoreError("could not allocate an unused accepted-event id")
+
+    def _stale_duplicate(self, change: EffectChange) -> list[tuple[str, str]]:
+        """A duplicate decision rests on the event being active, unchanged and applied; re-check all three."""
+        path = "/".join(address_parts(change.duplicate_of))  # type: ignore[arg-type]
+        if self._state(change.campaign_id) != change.state:
+            return [(path, "accepted events changed")]
+        snap = self._snapshot(change.campaign_id)
+        event = snap.events.get(change.duplicate_of)  # type: ignore[arg-type]
+        if event is None or not event.active or verify_receipts(event, snap.graph.index):
+            return [(path, "no longer accepted as it was")]
+        return []
 
     def _state(self, campaign_id: str) -> tuple:
         found = self.store.campaign_accepted(campaign_id)

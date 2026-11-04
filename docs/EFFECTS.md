@@ -68,7 +68,7 @@ Examples: a transfer ("Wren gives key-1 to Tam") is `end(carries, wren, key-1)` 
 - `proposed_by` is one of `narration | player | director | adjudication`. It is attribution only.
 
 **Fingerprint.** The fingerprint identifies the effect, so a reroll that words it differently is still a duplicate:
-- **It covers:** the chat, the moment's sequence, scene and turn, and each operation's kind, fact and agent.
+- **It covers:** the chat, the moment's sequence, scene and turn, and each operation's kind, fact and agent. Operations are hashed in sorted order, so the same operations in another order are the same effect.
 - **It does not cover:** the summary, the proposer or the backing.
 
 It is a sha256 over a hand-rolled canonical text, pinned by a golden-vector test, because stored endorsements carry it.
@@ -111,12 +111,15 @@ Narration holds neither key. A player alone can never make their character's act
 4. **Fail closed.** Each of these blocks acceptance:
    - an accepted-event file that cannot be decoded (`undecodable_event`), including a newer schema;
    - any store problem under `campaigns/<c>/accepted`, at the campaign folder, or a look-alike `Accepted/`;
-   - a duplicate ordinal, or active events whose ordinal order contradicts their sequence order (`inconsistent_ledger`).
+   - a duplicate ordinal, or active events whose ordinal order contradicts their sequence order (`inconsistent_ledger`);
+   - a relation file of the campaign that cannot be decoded (`undecodable_relation`), because it could hide the fact a precondition must see.
 
    The repair is to fix the file or move it out of the library by hand.
 5. **Duplicate.** Look for an active event with the same fingerprint:
    - **its receipts verify:** a no-op. `duplicate_of` is set, `preview()` is `{}`, and `commit()` writes nothing and returns that event. This is the path for a reroll, an alternate response or a retry after a crash;
    - **they do not:** refused `receipt_mismatch`. The way out is `revoke(..., partial=True)`.
+
+   After that, **any** active event whose receipts do not verify also blocks a new acceptance (`receipt_mismatch`): the ledger and the state must agree before anything is built on them.
 6. **Sequence floor.** The sequence must be at least the highest sequence of any active event (`stale_sequence`); equal sequences are allowed. Sequences are campaign-wide. **Obligation on 035:** allocate one non-decreasing sequence across all chats of a scope.
 7. **Ordinal.** The new event gets `ordinal = 1 + max` over every event file, active or revoked. This is the order of the undo stack.
 8. **Plan** against the graph at `as_of = sequence`:
@@ -136,7 +139,7 @@ Narration holds neither key. A player alone can never make their character's act
    - that the set and etags of the accepted-event files are unchanged;
    - that the chat still exists.
 
-   If anything changed, it raises `StaleWrite`, writes nothing and reallocates nothing.
+   If anything changed, it raises `StaleWrite`, writes nothing and reallocates nothing. Committing a **duplicate** re-checks the same way: the accepted-event files must be unchanged, and the event must still be active with receipts that verify against a fresh graph. A retry is therefore never told that a since-revoked or hand-undone event is in force.
 
 **Backstops.** Preconditions are the real guard against double application: once a fact has ended it cannot be ended again, whatever the ledger says. If someone moves an event file away, a re-acceptance still fails `precondition_failed`.
 

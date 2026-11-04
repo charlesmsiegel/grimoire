@@ -80,8 +80,14 @@ def test_fingerprint_golden_vector():
     assert fingerprint(CHAT, Moment(7, "s1", "t7"), ops) == (
         "sha256:" + hashlib.sha256(
             "chat=campaign:c#chat/t-1\nsequence=7\nscene=s1\nturn=t7\n"
-            "end|carries|campaign:c/character/wren|campaign:c/item/key-1|campaign:c/character/wren\n"
-            "begin|has_met|campaign:c/character/tam|campaign:c/character/wren|".encode()).hexdigest())
+            "begin|has_met|campaign:c/character/tam|campaign:c/character/wren|\n"
+            "end|carries|campaign:c/character/wren|campaign:c/item/key-1|campaign:c/character/wren".encode()).hexdigest())
+
+
+def test_fingerprint_ignores_operation_order():
+    forward = give()
+    backward = EffectProposal(C, forward.chat, forward.moment, forward.summary, forward.operations[::-1], "narration")
+    assert backward.fingerprint == forward.fingerprint
 
 
 def test_tokens_are_exact():

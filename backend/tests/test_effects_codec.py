@@ -71,6 +71,13 @@ def test_stored_payload_with_tuples_decodes():
     (lambda p: p.update(revocation={"reason": "r", "at": "t", "committed_by": "p", "endorsements": [],
                                     "skipped": []}), "invalid_endorsement"),
     (lambda p: p.update(chat="campaign:c#chat/T"), "invalid_field"),
+    (lambda p: p["operations"][0].update(backed_by=None), "invalid_field"),  # an explicit null is not canonical
+    (lambda p: p["operations"][0].update(agent=None), "invalid_field"),
+    (lambda p: p["moment"].update(turn_id=None), "invalid_field"),
+    # a PC's voluntary act relabelled director-domain by hand, its backing dropped, its control left in place
+    (lambda p: (p["operations"][0].update(domain="director"), p["operations"][0].pop("backed_by"),
+                p["operations"][1].update(domain="director"), p["operations"][1].pop("backed_by"),
+                p.update(contributions=[], endorsements=[])), "invalid_domain"),
 ])
 def test_accepted_decoding_is_strict(mutate, expected):
     payload = copy.deepcopy(accepted_to_payload(event()))
@@ -98,6 +105,8 @@ def test_wrapup_round_trip_and_strictness():
     assert decode_reason({**payload, "wrapup_id": "w"}, WRAPUP_SCHEMA, wrapup_from_payload, WREF) == \
         "identity_in_payload"
     assert decode_reason({**payload, "scene_id": "s2"}, WRAPUP_SCHEMA, wrapup_from_payload, WREF) == "wrapup_mismatch"
+    nulled = {**payload, "through": {"sequence": 8, "scene_id": None}}
+    assert decode_reason(nulled, WRAPUP_SCHEMA, wrapup_from_payload, WREF) == "invalid_field"
     assert decode_reason(payload, "grimoire.scene-wrapup/9", wrapup_from_payload, WREF) == "unsupported_schema"
     missing = dict(payload)
     del missing["cites"]

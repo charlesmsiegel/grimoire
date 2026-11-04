@@ -86,14 +86,22 @@ def test_a_pre_021_build_reads_a_reopened_file_as_holding():
     [], {}, "x", [{"ending": {"until": {"sequence": 7}, "provenance": "p", "at": "t"}, "provenance": "p"}],
     [{"ending": {"until": {"sequence": 7}, "provenance": "p", "at": "t"}, "provenance": "p", "at": "t", "x": 1}],
     [{"ending": {"until": {"sequence": 1}, "provenance": "p", "at": "t"}, "provenance": "p", "at": "t"}],
-    [{"ending": {"until": {"sequence": 7}, "provenance": "p", "at": "t"}, "provenance": "p", "at": "t9"},
-     {"ending": {"until": {"sequence": 8}, "provenance": "p", "at": "t"}, "provenance": "p", "at": "t1"}],
 ])
 def test_codec_refuses_malformed_reopenings(value):
     payload = {**relation_to_payload(relation()), "reopenings": value}
     with pytest.raises(RelationCodecError) as caught:
         relation_from_payload(REF, RELATION_SCHEMA, payload)
     assert caught.value.reason in {"invalid_field", "invalid_until"}
+
+
+def test_reopenings_whose_clock_text_runs_backwards_still_round_trip():
+    """Two writers with different clocks (a restart, NTP stepping back): list order, not clock text, is history."""
+    late = Ending(Moment(7), "a", "t5")
+    first = relation(ending=late).reopened(Reopening(late, "b", "2026-12-01T00:00:00Z"))
+    early = Ending(Moment(9), "c", "t6")
+    second = first.ended(early).reopened(Reopening(early, "d", "2026-01-01T00:00:00Z"))
+    payload = relation_to_payload(second)
+    assert relation_from_payload(REF, RELATION_SCHEMA, payload) == second
 
 
 def test_index_flags_and_exposes_reopenings():

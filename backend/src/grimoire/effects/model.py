@@ -20,6 +20,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
+from grimoire.core.authority import DIRECTOR
 from grimoire.core.identity import (
     SEGMENT_MAX, AcceptedRef, ChatRef, InstanceRef, RelationRef, WrapUpRef, validate_segment,
 )
@@ -158,9 +159,11 @@ def fingerprint(chat: ChatRef, moment: Moment, operations: Iterable[Op]) -> str:
     contain ``|`` or a newline), hashed with sha256. Stored endorsements pin it, so it never changes.
     """
     lines = [f"chat={chat}", f"sequence={moment.sequence}", f"scene={moment.scene_id}", f"turn={moment.turn_id}"]
+    ops = []
     for op in operations:
         predicate, first, second = op.fact()
-        lines.append("|".join((op.kind, predicate, str(first), str(second), "" if op.agent is None else str(op.agent))))
+        ops.append("|".join((op.kind, predicate, str(first), str(second), "" if op.agent is None else str(op.agent))))
+    lines += sorted(ops)  # the same operations in another order are the same effect
     return "sha256:" + hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
 
 
@@ -403,6 +406,8 @@ class AcceptedEvent:
         for item in self.operations:
             op = item.op
             if item.domain != "voluntary_action":
+                if op.agent is not None and controls.get(op.agent.instance_id, DIRECTOR) != DIRECTOR:
+                    raise EffectError("invalid_domain")  # a player-controlled agent's act is never director-domain
                 continue
             contribution = by_id.get(op.backed_by)  # type: ignore[arg-type]
             if contribution is None:

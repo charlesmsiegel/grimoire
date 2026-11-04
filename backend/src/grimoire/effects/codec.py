@@ -132,8 +132,15 @@ def _list(value: object, label: str) -> tuple:
     return tuple(value)
 
 
+def _no_nulls(data: Mapping, label: str) -> None:
+    """An explicit ``null`` is not canonical: an absent optional field is simply not written."""
+    if any(value is None for value in data.values()):
+        raise _invalid(f"{label} holds an explicit null")
+
+
 def _decode_moment(value: object, label: str) -> Moment:
     data = _object(value, label, _MOMENT, frozenset({"sequence"}))
+    _no_nulls(data, label)
     try:
         return Moment(data["sequence"], data.get("scene_id"), data.get("turn_id"))
     except (KnowledgeError, ValueError, TypeError):
@@ -176,6 +183,7 @@ def _start(payload: object, schema: str, expected: str, identity: frozenset[str]
 def _decode_op(value: object, index: int) -> AcceptedOperation:
     label = f"operations[{index}]"
     data = _object(value, label, _OP, frozenset({"kind", "predicate", "subject", "object", "domain"}))
+    _no_nulls(data, label)
     agent = None if "agent" not in data else _ref(InstanceRef.parse, data["agent"], f"{label}.agent")
     op = _build(lambda: Op(data["kind"], data["predicate"], _ref(InstanceRef.parse, data["subject"], label),
                            _ref(InstanceRef.parse, data["object"], label), agent, data.get("backed_by")))

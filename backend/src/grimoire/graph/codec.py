@@ -161,7 +161,7 @@ def _decode_ending(value: object, label: str) -> Ending:
 
 
 def _decode_reopenings(value: object) -> tuple[Reopening, ...]:
-    """A nonempty list, oldest first: an explicit empty list is not canonical, so it is refused."""
+    """A nonempty list in the order the reopenings were made; an explicit empty list is not canonical."""
     if not isinstance(value, (list, tuple)) or not value:  # a stored payload is frozen: lists arrive as tuples
         raise _invalid("reopenings must be a nonempty list")
     found = []
@@ -169,9 +169,7 @@ def _decode_reopenings(value: object) -> tuple[Reopening, ...]:
         data = _object(item, f"reopenings[{index}]", _REOPENING, _REOPENING)
         ending = _decode_ending(data["ending"], f"reopenings[{index}].ending")
         found.append(_build(lambda: Reopening(ending, data["provenance"], data["at"])))
-    if any(type(r.at) is str and type(prev.at) is str and r.at < prev.at for prev, r in zip(found, found[1:])):
-        raise _invalid("reopenings must be in the order they were made")
-    return tuple(found)
+    return tuple(found)  # list order is the order they were made; clock text is never compared
 
 
 def _build(make):  # type: ignore[no-untyped-def]

@@ -184,6 +184,26 @@ def test_f5_a_later_event_committed_after_preview(world):
     _stale(store, change)
 
 
+def test_f5_a_duplicate_revoked_before_its_commit_is_stale(world):
+    store, handles, library = world
+    done = accept(library, handles).commit()
+    retry = accept(library, handles)
+    assert retry.duplicate_of == done.ref
+    _, etag = library.read(done.ref, requested_by=DIRECTOR)
+    library.revoke(done.ref, reason="r", expected=etag, endorsements=[handles.endorse(give())]).commit()
+    with pytest.raises(StaleWrite):
+        retry.commit()
+
+
+def test_f5_a_duplicate_whose_effect_was_undone_by_hand_is_stale(world):
+    store, handles, library = world
+    accept(library, handles).commit()
+    retry = accept(library, handles)
+    _break_receipt(store, handles)
+    with pytest.raises(StaleWrite):
+        retry.commit()
+
+
 def test_f5_two_begins_in_one_change_never_share_an_id(world):
     store, handles, _ = world
     values = iter(["e-1", "r-x", "r-x", "r-x", "r-y"])
@@ -220,6 +240,26 @@ def test_f6_receipt_mismatch_is_reported_refused_and_repairable(world):
     assert [(s.op, s.why) for s in event.revocation.skipped] == [(0, "not ended by this event")]
     view = library.continuity(C, as_of=8, requested_by=DIRECTOR)
     assert view.problems == () and view.graph.index.relation("r-1", requested_by=DIRECTOR).retracted
+
+
+def test_f6_a_mismatched_earlier_event_blocks_new_acceptances(world):
+    store, handles, library = world
+    accept(library, handles).commit()
+    _break_receipt(store, handles)
+    snatch = give(KEY2, to=TAM, agent=TAM, backed=None, sequence=8)
+    assert reason(lambda: library.accept(snatch, controls=CONTROLS)) == "receipt_mismatch"
+
+
+def test_f6_an_undecodable_relation_file_blocks_acceptance(world):
+    store, handles, library = world
+    join = EffectProposal(C, CHAT, moment(7), "Tam joins.", (Op("begin", "member_of", TAM, GUILD),), "director")
+    library.accept(join, controls=CONTROLS).commit()
+    path = store.root / "campaigns/c/relations/r-1.json"
+    document = json.loads(path.read_bytes())
+    document["schema"] = "grimoire.relation/9"  # a newer build's file, or a hand edit
+    path.write_bytes(json.dumps(document).encode())
+    again = EffectProposal(C, CHAT, moment(8), "Tam joins.", (Op("begin", "member_of", TAM, GUILD),), "director")
+    assert reason(lambda: library.accept(again, controls=CONTROLS)) == "undecodable_relation"
 
 
 def test_f6_orphan_effects_are_reported(world):
