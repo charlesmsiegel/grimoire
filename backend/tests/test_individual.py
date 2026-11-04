@@ -173,6 +173,17 @@ def test_two_individuals_keep_separate_names_and_wounds():
     assert is_generic(roster.instance(G3), INDEX)
 
 
+def test_the_recorded_template_is_the_revision_the_source_resolved_to():
+    """Provenance is the pinned revision for a pinned source, the head for an unpinned one."""
+    pinned_ref = InstanceRef(C, "creature", "goblin-pinned")
+    roster = CampaignRoster(C, (generic(G1), generic(pinned_ref, ref("species", "goblin"))))
+    moved = index_of(goblin(), goblin_r2(), heads={GOBLIN: "r2"})
+    roster = individualize(roster, decide(), moved, ()).roster
+    roster = individualize(roster, decide(pinned_ref, "Grub", "d-grub"), moved, ()).roster
+    assert roster.instance(G1).individuality.template == ref("species", "goblin", "r2")
+    assert roster.instance(pinned_ref).individuality.template == ref("species", "goblin", "r1")
+
+
 def test_a_head_update_flows_into_an_unpinned_individual_without_losing_identity():
     pinned_ref = InstanceRef(C, "creature", "goblin-pinned")
     roster = CampaignRoster(C, (generic(G1), generic(pinned_ref, ref("species", "goblin"))))
@@ -307,7 +318,8 @@ def test_individuals_and_originals_are_not_templates():
                                 EntityInstance(odd, grakka().ref)))
     index = index_of(goblin(), grakka())
     for target in (chief, hero, odd):
-        assert reason(lambda: individualize(roster, decide(target), index, ())) == "not_template"
+        assert reason(lambda target=target: individualize(roster, decide(target), index, ())) \
+            == "not_template"
 
 
 def test_unknown_targets_campaigns_and_sources():

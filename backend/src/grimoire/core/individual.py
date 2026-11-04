@@ -158,7 +158,14 @@ def individualize(roster: CampaignRoster, decision: IndividualizationDecision,
 
 
 def is_generic(instance: EntityInstance, index: DefinitionIndex) -> bool:
-    """A not-yet-individualized instance of a template; resolution errors propagate."""
+    """A not-yet-individualized instance of a template; ``MissingDefinition`` propagates.
+
+    This only classifies the instance. It does not run ``effective_entity``,
+    so it can answer ``True`` for an instance that still fails resolution
+    (for example ``added_shadows_trait`` after a head move) and that
+    ``individualize`` will refuse. Check ``effective_entity`` before offering
+    promotion.
+    """
     if not isinstance(instance, EntityInstance):
         raise TypeError(f"expected an EntityInstance, not {type(instance).__name__}")
     if not isinstance(index, DefinitionIndex):

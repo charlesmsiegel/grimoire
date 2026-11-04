@@ -7,6 +7,11 @@ because ``RecordEnvelope`` has no schema field. Instance envelopes carry only
 address and payload; mapping ``local_name``/``source`` onto the envelope's
 ``name``/``derived_from``/``base`` is the join's decision, not 024's, and
 ``Individuality.template`` is provenance, distinct from ``base``.
+
+Do not copy ``envelope()`` into a real adapter: it builds a fresh envelope and
+so drops the stored envelope's ``owner``, ``derived_from``, ``base`` and
+unknown fields on rewrite, which other subsystems (for example the chat
+store's actor reuse check) depend on.
 """
 
 import pytest
