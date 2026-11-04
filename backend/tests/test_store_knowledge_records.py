@@ -190,8 +190,7 @@ def test_an_absent_or_look_alike_campaign_scans_empty(library, tmp_path):
     (library.root / "campaigns" / "Zed").mkdir()
     (library.root / "campaigns" / "Zed" / "x.json").write_text("{}")
     scan = library.campaign_knowledge("zed")
-    if scan.problems:  # case-insensitive filesystems see the look-alike
-        assert [p.code for p in scan.problems] == ["name_mismatch"]
+    assert [(p.path, p.code) for p in scan.problems] == [("campaigns/zed", "name_mismatch")]  # decided by name, on every filesystem
     assert scan.records == {} and scan.entries == ()
 
 
@@ -221,6 +220,28 @@ def test_damaged_files_get_a_code_and_strangers_are_problems(library):
     assert all("secret" not in p.detail and "never" not in p.detail for p in scan.problems)
     paths = [path for path, _, _ in scan.entries]
     assert "campaigns/c1/evidence/belief/notes.txt" in paths and "campaigns/c1/events/.DS_Store" not in paths
+
+
+def test_an_empty_look_alike_tree_folder_is_not_state(library):
+    (library.root / "campaigns" / "c1" / "Events").mkdir(parents=True)
+    assert library.campaign_knowledge("c1").problems == ()
+
+
+def test_a_linked_look_alike_tree_is_a_link(library, tmp_path):
+    (library.root / "campaigns" / "c1").mkdir(parents=True, exist_ok=True)
+    make_dir_link(library.root / "campaigns" / "c1" / "Events", _outside(tmp_path))
+    assert ("campaigns/c1/Events", "link") in _codes(library.campaign_knowledge("c1"))
+
+
+def test_read_never_echoes_json_errors(library):
+    _write(library.root, "campaigns/c1/events/e1.json", b'{"SENTINEL-KEY": 1, "SENTINEL-KEY": 2}')
+    with pytest.raises(MalformedRecord) as caught:
+        library.read(EVENT)
+    assert "SENTINEL" not in str(caught.value) and caught.value.etag is not None
+    _write(library.root, "campaigns/c1/events/e1.json", b'{"n": 123456789012345678901234567890e999999}')
+    with pytest.raises(MalformedRecord) as caught:
+        library.read(EVENT)
+    assert "123456" not in str(caught.value)
 
 
 def test_a_look_alike_tree_folder_is_reported(library):

@@ -256,6 +256,10 @@ def test_f3_shape_campaign_chat_and_actors(store, evidence):
     with pytest.raises(EvidenceWriteError) as caught:
         evidence.append("nobody", [Event("nobody", "e1", "x", m(1), "director")])
     assert caught.value.reason == "unknown_campaign"
+    (store.root / "campaigns" / "typo" / "instances" / "character").mkdir(parents=True)  # an empty leftover
+    with pytest.raises(EvidenceWriteError) as caught:
+        evidence.append("typo", [Event("typo", "e1", "x", m(1), "director")])
+    assert caught.value.reason == "unknown_campaign"
 
 
 def test_f4_f5_fresh_ids_and_no_backdating(store, evidence):

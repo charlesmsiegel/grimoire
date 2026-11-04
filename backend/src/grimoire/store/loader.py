@@ -196,8 +196,18 @@ def read_scope_record(access: Access, parts: Parts) -> StoredScopeRecord:
 
 
 def read_knowledge_record(access: Access, parts: Parts) -> StoredKnowledgeRecord:
-    """The knowledge record at ``parts``; its address must be the one its path implies."""
-    document, tag = _document(access, parts)
+    """The knowledge record at ``parts``; its address must be the one its path implies.
+
+    Every refusal carries a fixed detail: the file's own values (a duplicate key, a number) are never echoed.
+    """
+    try:
+        document, tag = _document(access, parts)
+    except MalformedRecord as error:
+        unreadable = error
+    else:
+        unreadable = None
+    if unreadable is not None:
+        raise MalformedRecord(f"{_text(parts)}: not a readable knowledge record (malformed)", unreadable.etag)
     try:
         record, _ = parse_knowledge_record(document)
     except EnvelopeError as error:  # a fixed detail: the file's own values are never echoed
@@ -872,10 +882,15 @@ class _KnowledgeWalk:
         for name in self.listing(base):
             if name in _KNOWLEDGE_TREES:
                 self.tree(base + (name,))
-            elif name_key(name) in _KNOWLEDGE_TREES:
-                self.problem(base + (name,), "name_mismatch", "a look-alike of a knowledge folder")
-                if not _is_dir(access, base + (name,)):
-                    self.entries.append((_text(base + (name,)), "file", self.stray_etag(base + (name,))))
+            elif name_key(name) in _KNOWLEDGE_TREES:  # a look-alike, reported as load() would
+                child = base + (name,)
+                if is_link(access.path(child)):
+                    self.link(child)
+                elif not _is_dir(access, child):
+                    self.problem(child, "name_mismatch", "a look-alike of a knowledge folder")
+                    self.entries.append((_text(child), "file", self.stray_etag(child)))
+                elif _has_files(access, child):  # an empty folder is not state
+                    self.problem(child, "name_mismatch", "a look-alike of a knowledge folder")
 
 
 def campaign_knowledge(access: Access, campaign: str) -> KnowledgeScan:

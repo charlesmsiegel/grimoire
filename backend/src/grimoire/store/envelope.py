@@ -34,7 +34,7 @@ _INSTANCE_ONLY = ("derived_from", "base", "base_etag")
 _SOURCE_FIELDS = frozenset({"format", "source", "owner", "title", "heads", "links", "previous"})
 _LINK_FIELDS = frozenset({"subject", "relation", "object"})
 _SCOPE_RECORD_FIELDS = frozenset({"format", "address", "schema", "owner", "payload", "previous"})
-_KNOWLEDGE_RECORD_FIELDS = _SCOPE_RECORD_FIELDS
+_KNOWLEDGE_RECORD_FIELDS = frozenset({"format", "address", "schema", "owner", "payload", "previous"})
 RELATIONS = SYMMETRIC_RELATIONS | DIRECTED_RELATIONS
 
 Address = SourceRef | InstanceRef

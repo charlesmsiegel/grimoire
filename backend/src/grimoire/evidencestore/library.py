@@ -18,7 +18,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
-from grimoire.core.identity import ChatRef, InstanceRef, KnowledgeRef
+from grimoire.core.identity import ChatRef, InstanceRef, KnowledgeRef, ScopeRef
 from grimoire.core.knowledge import Belief, Knowledge, Subject
 from grimoire.core.model import ControlAssignment
 from grimoire.core.perspective import (
@@ -142,7 +142,7 @@ class KnowledgeChange:
         """Separate store reads, each with its own listing cache (never one around the commit)."""
         store, campaign = self.library.store, self.campaign_id
         base = f"campaigns/{campaign}"
-        if store.campaign_presence(campaign) != "present":
+        if not self.library._campaign_exists(campaign):
             return [(base, "absent")]
         if self.chat is not None and not self.library._chat_exists(self.chat):
             return [(str(self.chat), "absent")]
@@ -193,6 +193,20 @@ class EvidenceLibrary:
     def standing(self, campaign_id: str, proposition_id: str, *, as_of: int) -> str:
         return standing(self._assembly(campaign_id)[0].knowledge, proposition_id, as_of=as_of)
 
+    def _campaign_exists(self, campaign_id: str) -> bool:
+        """Real campaign state: a play scope or an instance file. An empty leftover folder is not one."""
+        if self.store.campaign_presence(campaign_id) != "present":
+            return False
+        if self.store.campaign_instances(campaign_id):
+            return True
+        try:
+            self.store.read(ScopeRef(campaign_id))
+        except RecordNotFound:
+            return False
+        except StoreError:
+            return True  # a scope file exists even if this version cannot read it
+        return True
+
     def _chat_exists(self, chat: ChatRef) -> bool:
         try:
             self.store.read(chat)
@@ -225,7 +239,7 @@ class EvidenceLibrary:
             raise EvidenceWriteError("campaign_mismatch", foreign)
         names = [_name(record) for record in new]
         # 2-4: the campaign, chat and every actor named must already exist (no name lookup).
-        if self.store.campaign_presence(campaign_id) != "present":
+        if not self._campaign_exists(campaign_id):
             raise EvidenceWriteError("unknown_campaign")
         if chat is not None and (not isinstance(chat, ChatRef) or chat.campaign_id != campaign_id
                                  or not self._chat_exists(chat)):

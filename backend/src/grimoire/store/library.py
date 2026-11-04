@@ -866,6 +866,8 @@ def _unsupported(data: bytes, envelope: object) -> bool:
     """Whether the current file is a format this store must not overwrite (a newer version)."""
     parse = (parse_source if isinstance(envelope, SourceManifest) else
              parse_scope_record if isinstance(envelope, ScopeRecord) else
+             # Unreachable for a create-only knowledge put (an existing file is already `exists`);
+             # kept so a future revisioned family cannot silently fall through to parse_record.
              parse_knowledge_record if isinstance(envelope, KnowledgeRecord) else parse_record)
     try:
         parse(parse_strict(data))
