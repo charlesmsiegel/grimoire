@@ -6,7 +6,7 @@ never interprets their payloads. See docs/STORAGE.md for the contract.
 """
 
 from .diskops import DiskOps, FileOps
-from .envelope import LinkSpec, RecordEnvelope, ScopeRecord, SourceManifest
+from .envelope import KnowledgeRecord, LinkSpec, RecordEnvelope, ScopeRecord, SourceManifest
 from .errors import (
     CommitIncomplete, CrossDevice, ImmutableRevision, InvalidEnvelope, InvalidSourceState, LibraryLocked,
     LinkRefused, LockUnavailable, MalformedRecord, NameCollision, NotALibrary, PendingRecovery,
@@ -16,8 +16,8 @@ from .errors import (
 from .jsonfmt import etag
 from .library import CommitResult, LibraryStore, RecoveryReport, Transaction
 from .loader import (
-    BrokenRef, CampaignRecords, CampaignRelations, LibraryView, LoadProblem, StoredDefinition, StoredRecord,
-    StoredScopeRecord, StoredSource,
+    BrokenRef, CampaignRecords, CampaignRelations, KnowledgeScan, LibraryView, LoadProblem, StoredDefinition,
+    StoredKnowledgeRecord, StoredRecord, StoredScopeRecord, StoredSource,
 )
 from .lock import Locker, OsLocker, ProcessLocker
 
@@ -25,10 +25,11 @@ __all__ = [
     "BrokenRef", "CampaignRecords", "CampaignRelations", "CommitIncomplete", "CommitResult", "CrossDevice",
     "DiskOps", "FileOps",
     "ImmutableRevision", "InvalidEnvelope", "InvalidSourceState", "LibraryLocked", "LibraryStore",
+    "KnowledgeRecord", "KnowledgeScan",
     "LibraryView", "LinkRefused", "LinkSpec", "LoadProblem", "LockUnavailable", "Locker",
     "MalformedRecord", "NameCollision", "NotALibrary", "OsLocker", "PendingRecovery", "ProcessLocker",
     "RecordEnvelope", "RecordNotFound", "RecoveryBlocked", "RecoveryFailed", "RecoveryReport",
     "ScopeRecord", "SourceManifest", "StaleWrite", "StoreError", "StoredDefinition", "StoredRecord",
-    "StoredScopeRecord", "StoredSource",
+    "StoredKnowledgeRecord", "StoredScopeRecord", "StoredSource",
     "Transaction", "UnstorableIdentifier", "UnsupportedFormat", "WriteConflict", "WriteDenied", "etag",
 ]

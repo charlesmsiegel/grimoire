@@ -3,7 +3,7 @@
 **Status:** first slice of [Native File Store And Revisions](roadmap/sprints/native-file-store-and-revisions.md) (Wave 2, #010), implemented as the filesystem adapter `grimoire.store`. It persists **facet-neutral record envelopes** for source-qualified definitions and campaign instances. It never interprets a payload, and it does not decide whether a record is a character, a PC, a creature or an item; that meaning belongs to [Entity Facets (009)](roadmap/sprints/entity-facets-and-instance-model.md), which joins through codecs in Wave 3. There is no application or UI yet. A green test suite proves this contract, not a playable app.
 
 Not in this slice:
-- the image blob store (018), sync (019), events and evidence (020), and effective views (022);
+- the image blob store (018), sync (019) and effective views (022). Events and evidence (020) are an additive family, documented [below](#events-and-evidence-020);
 - **Markdown.** The sprint's outcome names "Markdown/JSON" records. By the requester's decision this slice is JSON-only (stdlib, no YAML dependency); a Markdown payload codec is a remaining 010 obligation, re-homed by the requester to its own later pull request.
 
 The security audit, grants and approvals, and player sovereignty are persisted as [authority ledgers](#authority-ledgers-010b) (010b).
@@ -19,6 +19,9 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   campaigns/<campaign_id>/scope.json                              # the play scope (107)
   campaigns/<campaign_id>/chats/<chat_id>.json                    # one chat record (107)
   campaigns/<campaign_id>/relations/<relation_id>.json            # one relation record (017)
+  campaigns/<campaign_id>/events/<event_id>.json                  # one accepted event (020)
+  campaigns/<campaign_id>/evidence/<family>/<id>.json             # proposition|ruling|evidence|belief|disclosure (020)
+  campaigns/<campaign_id>/evidence/batch/<seq:010d>.json          # the campaign's knowledge log (020)
   campaigns/<campaign_id>/accepted/<event_id>.json                # one accepted fictional event (021)
   campaigns/<campaign_id>/wrapups/<wrapup_id>.json                # one scene wrap-up (021)
   .txn/lock, .txn/journal.json, .txn/*.new                        # writer lock, journal, staging
@@ -41,6 +44,8 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   - inside a campaign: `scenes`, `events`, `evidence`.
 
   `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), `relations/` since 017 (see relation records), and `accepted/` and `wrapups/` since 021 (see accepted events and wrap-ups).
+
+  `events/` and `evidence/` belong to 020 and stay skipped by `load()`, so `load()`'s cost never grows with campaign history. They are read only by `campaign_knowledge` (see [events and evidence](#events-and-evidence-020)).
 
   These follow the [architecture layout](ARCHITECTURE.md#storage-root-and-provisional-organization) and are a deliberate deviation from an earlier draft that reserved root-level `events`/`evidence`. No root entry is a [V1 marker name](ARCHITECTURE.md#library-location-and-v1-isolation-implemented-grimoirelibrary).
 - **Ignored silently:** OS and editor droppings (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `*~`, `*.swp`, `*.swo`, `.#*`) and directories with no file below them. Empty directories are not state: a failed commit can leave some behind, and nothing can remove them through the file seam. Per-target `.conflicts/<hash16>/` folders accumulate in the same way.
@@ -155,6 +160,44 @@ All of these take the store lock, require a consistent library, and read listing
   - `check_definition` returns the definition `load()` would resolve, or a reason: `missing_source`, `excluded_source`, `entity_dropped`, `missing_entity` or `missing_revision`.
   - Parity with `load()` is tested across bad and implicit heads, kind reuse, ownership, unreadable revisions and missing manifests.
   - A cross-source `identity_conflict` is visible only to `load()`.
+
+### Knowledge record (`grimoire.knowledge-record/1`) — events and evidence (020)
+
+<a id="events-and-evidence-020"></a>Added by [Durable Event Evidence](roadmap/sprints/durable-event-evidence.md) as an additive, **create-only** family. `record/1`, `source/1` and `scope-record/1` are unchanged. The payloads are interpreted by [`grimoire.evidence`](EVIDENCE.md), never by the store.
+
+| Field | Written by | Meaning |
+|---|---|---|
+| `format` | store | Exact version. |
+| `address` | caller | A `KnowledgeRef`: `campaign:<id>#<family>/<id>`. An `event` lives at `events/<id>.json`; any other family at `evidence/<family>/<id>.json`; a log batch at `evidence/batch/<seq:010d>.json`. Must equal what its path implies. |
+| `schema` | caller | The payload's schema id. |
+| `payload` | caller | Opaque JSON. |
+| `owner` | caller, optional | Attribution. |
+| `previous` | store | Always `null`: this store never replaces a knowledge record. A non-null value reads as `malformed`. |
+| *other keys* | preserved | Unknown authored fields. |
+
+A distinct format, rather than an extension of `scope-record/1`, keeps a parser from ever treating one as a mutable scope record.
+
+| Item | Behaviour |
+|---|---|
+| `Transaction.put(KnowledgeRecord, expected)` | `expected` must be `None`, otherwise `ImmutableRevision`. An existing file is `StaleWrite` (`exists`). Every other commit step applies as for a record put: guards, collisions, `Permission.APPLY` on `campaigns/<id>/…`, journal, recovery, conflict preservation. |
+| `classify` | recognises exactly the two path shapes. `evidence/event/…`, a batch name other than ten digits from 1, and look-alike families are not canonical. |
+| journal recovery | accepts knowledge targets, but refuses (`RecoveryFailed`) a knowledge target whose `old` is not null, so recovery can never replace an immutable record |
+| `read(KnowledgeRef)` | `StoredKnowledgeRecord(record, etag)` |
+| `campaign_knowledge(id)` | `KnowledgeScan(records, damaged, problems, entries)` for that campaign's two trees only; details below |
+
+`campaign_knowledge(id)` details:
+- `damaged` holds a code per unreadable canonical file: `malformed`, `unsupported_format`, `address_mismatch` or `link`.
+- `problems` holds `link`, `unrecognized`, `name_mismatch` and `unreadable`, at the campaign, tree, family and file levels. Look-alike tree names such as `Events/` are included.
+- `entries` is the snapshot a writer compares before committing: every file and link, canonical or not. OS noise and empty directories are not state.
+- An absent campaign scans empty. A look-alike campaign reports `name_mismatch`, and a linked `campaigns/` raises `LinkRefused`.
+- It never follows links, and never copies file content into a problem.
+- **Director-level and store-internal:** graph, index and retrieval builders must not read it ([EVIDENCE](EVIDENCE.md#trust-boundaries-documented-not-checked-here)).
+
+**Create-only means against this store's own writers.** Another program that creates the same file in the instant between the commit's absence check and its publish is overwritten, as for every family (the residual race R7 under [Writing](#writing)). The knowledge log then reports the loss as `edited` or `missing`; closing R7 with a no-replace publish is store work for 019.
+
+**Rollback:** a pre-020 build skips both trees, which were already reserved, and never writes there. It cannot recover a journal that names knowledge paths: use a 020+ build, or `discard_journal` (tested).
+
+**Sync:** knowledge files and the log are canonical user data that 019/028 will transfer. Merging two devices' logs belongs to 019.
 
 ## Writing
 

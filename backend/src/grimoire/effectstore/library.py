@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
-from grimoire.core.identity import AcceptedRef, ChatRef, WrapUpRef, validate_segment
+from grimoire.core.identity import AcceptedRef, ChatRef, KnowledgeRef, WrapUpRef, validate_segment
 from grimoire.core.knowledge import Moment
 from grimoire.core.model import ControlAssignment
 from grimoire.effects import (
@@ -499,13 +499,20 @@ class TurnEffectsLibrary:
             value = self._new_id("e")
             validate_segment(value, "generated id")
             ref = AcceptedRef(campaign_id, value)
-            try:
-                self.store.read(ref)
-            except RecordNotFound:  # exact presence only: a look-alike fails the commit with NameCollision
-                return ref
-            except (StoreError, LibraryPathError):
-                continue
+            if not self._absent(ref) or not self._absent(KnowledgeRef(campaign_id, "event", value)):
+                continue  # also never a 020 event id, so the 012 bridge can later be stored under the same id
+            return ref
         raise StoreError("could not allocate an unused accepted-event id")
+
+    def _absent(self, ref: AcceptedRef | KnowledgeRef) -> bool:
+        """Exact presence only: a look-alike fails the commit with NameCollision; an unreadable file counts."""
+        try:
+            self.store.read(ref)
+        except RecordNotFound:
+            return True
+        except (StoreError, LibraryPathError, ValueError):
+            return False
+        return False
 
     def _stale_duplicate(self, change: EffectChange) -> list[tuple[str, str]]:
         """A duplicate decision rests on the event being active, unchanged and applied; re-check all three."""

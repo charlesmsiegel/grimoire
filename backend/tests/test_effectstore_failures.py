@@ -702,3 +702,13 @@ def test_a_partial_revocation_that_leaves_an_item_held_twice_is_reported(world):
     assert view.graph.index.recorded("carries", TAM, KEY1, as_of=8, requested_by=DIRECTOR)
     assert view.graph.index.recorded("carries", WREN, KEY1, as_of=8, requested_by=DIRECTOR)
     assert [(p.code, p.op) for p in view.problems] == [("partial_revocation", 1)]
+
+
+
+def test_an_accepted_event_id_never_reuses_a_020_event_id(world):
+    from grimoire.core.identity import KnowledgeRef
+    from grimoire.store.layout import address_parts
+    store, handles, library = world
+    write(store.root, "/".join(address_parts(KnowledgeRef(C, "event", "e-1"))), b"{}")  # a 020 event named e-1
+    done = library.accept(give(KEY2, to=TAM, agent=TAM, backed=None, sequence=8), controls=CONTROLS).commit()
+    assert done.ref.event_id == "e-2"
