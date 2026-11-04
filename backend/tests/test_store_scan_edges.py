@@ -188,8 +188,6 @@ def test_recovery_with_one_entry_published_never_shadows_a_lookalike_parent(tmp_
                                  Entry(pup_parts, "recpup.new", None, etag(pup), "publish")))
     (root / ".txn" / "journal.json").write_bytes(journal.render())
     (root / "campaigns" / "C3" / "instances" / "creature").mkdir(parents=True)  # renamed by case while down
-    if (root / "campaigns" / "c3").exists():
-        pytest.skip("this filesystem folds case")
     with LibraryStore.open(root) as store:
         report = store.last_recovery
     assert sorted(os.listdir(root / "campaigns")) == ["C3", "c1", "c2"]

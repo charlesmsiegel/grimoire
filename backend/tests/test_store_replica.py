@@ -613,9 +613,7 @@ def test_recovery_never_shadows_a_parent_renamed_to_a_lookalike(tmp_path):
         txn.commit(owner_handle())
     store.close()
     campaigns = tmp_path / "lib" / "campaigns"
-    os.rename(campaigns / "c3", campaigns / "C3")
-    if (campaigns / "c3").exists():
-        pytest.skip("a case-insensitive filesystem: no look-alike folder can exist")
+    os.rename(campaigns / "c3", campaigns / "C3")  # a case-only rename works on folding filesystems too
     with LibraryStore.open(tmp_path / "lib", locker=locker) as store:
         report = store.last_recovery
     assert sorted(os.listdir(campaigns)) == ["C3", "c1", "c2"]

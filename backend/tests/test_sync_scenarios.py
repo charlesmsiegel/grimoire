@@ -1704,8 +1704,7 @@ def test_a_sync_file_under_a_lookalike_spelling_stops_the_sync(pair, name):
     data = current.read_bytes()
     current.unlink()
     (folder / name.capitalize()).write_bytes(data)
-    if (folder / name).exists():  # a case-insensitive filesystem: the spelling is the file
-        pytest.skip("this filesystem folds case")
+    assert name not in os.listdir(folder)  # decided from listings: on a folding filesystem too (where it matters)
     edit_instance(desktop, WREN_A, 9)
     before = (phone.root / PATHS["wren_a"]).read_bytes()
     with pytest.raises(SyncInterrupted, match="another spelling"):

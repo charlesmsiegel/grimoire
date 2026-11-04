@@ -472,3 +472,95 @@ def test_resolve_refuses_a_record_pinning_a_revision_blocked_on_the_receiver(tmp
     finally:
         desktop.close()
         phone.close()
+
+
+def _linked_harbor(desktop, catalog_kind="character"):
+    """The desktop moves wren to r2 and links r2 to catalog:shared's x (one commit), then edits an
+    unrelated instance that must still sync whatever happens to the sources."""
+    from grimoire.store import LinkSpec
+    from store_helpers import wren
+    from sync_helpers import WREN_A, edit_instance
+    target = str(SourceRef("catalog:shared", catalog_kind, "x", "r1"))
+    txn = desktop.transaction()
+    txn.put(wren("r2", "a captain"), None)
+    txn.put(SourceManifest("world:harbor", OWNER, "Harbor", {"character/wren": "r2"},
+                           (LinkSpec(str(SourceRef("world:harbor", "character", "wren", "r2")), "same_individual",
+                                     target),)), desktop.read_source("world:harbor").etag)
+    txn.commit(handle())
+    edit_instance(desktop, WREN_A, 8)
+
+
+@pytest.mark.parametrize("how", ["refused", "denied"])
+def test_a_manifest_dropped_for_its_link_takes_its_head_revision_and_the_rest_still_syncs(tmp_path, how):
+    """Holding a manifest back (its link target was refused, or denied) leaves its new head revision
+    alone in the source: that is refused too, and the unrelated edit lands. One bad record never
+    stops the pair."""
+    from sync_helpers import PATHS
+    from store_helpers import owner_handle as grants
+    desktop, phone = make_pair(tmp_path)
+    try:
+        _source(desktop, "catalog:shared", "character")
+        if how == "refused":
+            _source(phone, "catalog:shared", "item")  # S7: the same source made offline on both
+            keys = handles()
+        else:
+            keys = {DESKTOP: handle(), PHONE: grants("sources/world", "campaigns", "kept")}  # not the catalog
+        _linked_harbor(desktop)
+        for _ in range(2):  # and again: nothing is stuck
+            report = sync(desktop, phone, keys)
+            assert phone.read_exact(PATHS["wren_a"]) == desktop.read_exact(PATHS["wren_a"])
+            assert report.conflict(PATHS["manifest"]) is not None and report.conflict(PATHS["r2"]) is not None
+            assert not (phone.root / PATHS["r2"]).exists()
+            assert b'"r2"' not in (phone.root / PATHS["manifest"]).read_bytes()  # still headed at r1
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_two_units_of_one_source_that_refuse_each_other_never_stop_the_sync(tmp_path):
+    """One entity id under two kinds (a hand-copied file): each revision is acceptable alone, not both.
+    Units of a failing source are admitted cumulatively, so one lands, the other is `unapplicable`."""
+    from sync_helpers import PATHS, WREN_A, edit_instance
+    (tmp_path / "pair").mkdir()
+    (tmp_path / "scratch").mkdir()
+    desktop, phone = make_pair(tmp_path / "pair")
+    scratch, spare = make_pair(tmp_path / "scratch")
+    try:
+        txn = desktop.transaction()
+        txn.put(RecordEnvelope(SourceRef("world:harbor", "item", "zed", "r1"), {"n": 1}), None)
+        txn.commit(handle())
+        txn = scratch.transaction()
+        txn.put(RecordEnvelope(SourceRef("world:harbor", "location", "zed", "r1"), {"n": 2}), None)
+        txn.commit(handle())
+        location = "sources/world/harbor/_source/records/location/zed/r1.json"
+        (desktop.root / location).parent.mkdir(parents=True)
+        (desktop.root / location).write_bytes((scratch.root / location).read_bytes())  # by another tool
+        edit_instance(desktop, WREN_A, 8)
+        report = sync(desktop, phone, handles())
+        assert phone.read_exact(PATHS["wren_a"]) == desktop.read_exact(PATHS["wren_a"])
+        item = "sources/world/harbor/_source/records/item/zed/r1.json"
+        landed = [path for path in (item, location) if (phone.root / path).exists()]
+        assert len(landed) == 1
+        assert {report.conflict(path).code for path in (item, location) if path not in landed} == {"unapplicable"}
+    finally:
+        for store in (desktop, phone, scratch, spare):
+            store.close()
+
+
+def test_resolve_that_the_receivers_grant_refuses_is_a_resolve_refusal(tmp_path):
+    from sync_helpers import PATHS, WREN_A, edit_instance
+    from store_helpers import owner_handle as grants
+    desktop, phone = make_pair(tmp_path)
+    try:
+        edit_instance(desktop, WREN_A, 8)
+        edit_instance(phone, WREN_A, 9)
+        assert sync(desktop, phone, handles()).conflict(PATHS["wren_a"]).code == "concurrent"
+        mine = etag((desktop.root / PATHS["wren_a"]).read_bytes())
+        theirs = etag((phone.root / PATHS["wren_a"]).read_bytes())
+        with pytest.raises(ResolveRefused, match="cannot be resolved"):
+            resolve(desktop, phone, PATHS["wren_a"], mine, {DESKTOP: mine, PHONE: theirs},
+                    {DESKTOP: handle(), PHONE: grants("sources")})
+        assert etag((phone.root / PATHS["wren_a"]).read_bytes()) == theirs
+    finally:
+        desktop.close()
+        phone.close()

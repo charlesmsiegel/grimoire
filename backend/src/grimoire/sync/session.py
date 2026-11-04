@@ -17,7 +17,7 @@ from types import MappingProxyType
 from grimoire.core.identity import SourceRef
 from grimoire.store import (
     CrossDevice, ImmutableRevision, InvalidEnvelope, InvalidSourceState, LibraryStore, LinkRefused,
-    NameCollision, RevisionReferenced, StaleWrite, StoreError, UnstorableIdentifier, WriteConflict, etag,
+    NameCollision, RevisionReferenced, StaleWrite, StoreError, UnstorableIdentifier, WriteConflict, WriteDenied, etag,
 )
 from grimoire.store.jsonfmt import MAX_FILE_BYTES
 from grimoire.store.layout import (
@@ -395,13 +395,16 @@ def _admit(plan: SyncPlan, dest: str) -> None:
         return
     store.transaction().check()  # library-wide problems propagate; they are never blamed on one path
     plan.fallback.add(dest)
-    admitted, rejected = _admit_units(store, copies)
-    for copy, error in rejected:
-        plan.conflicts[copy.path] = Conflict(copy.path, "unapplicable", str(error))
-    admitted, held = _dependencies(plan, dest, admitted)  # what depended on a refused unit stays too
-    for path, why in held.items():
-        plan.conflicts[path] = Conflict(path, "head_dependency", why)
-    plan.copies[dest] = admitted
+    while True:  # admission and dependencies to a joint fixpoint: dropping either can refuse the other
+        admitted, rejected = _admit_units(store, copies)
+        for copy, error in rejected:
+            plan.conflicts[copy.path] = Conflict(copy.path, "unapplicable", str(error))
+        copies, held = _dependencies(plan, dest, admitted)  # what depended on a refused unit stays too
+        for path, why in held.items():
+            plan.conflicts[path] = Conflict(path, "head_dependency", why)
+        if not held:
+            break
+    plan.copies[dest] = copies
 
 
 def _admit_units(store: LibraryStore, copies: list[Copy]) -> tuple[list[Copy], list[tuple[Copy, BaseException]]]:
@@ -409,9 +412,10 @@ def _admit_units(store: LibraryStore, copies: list[Copy]) -> tuple[list[Copy], l
 
     A unit is one campaign-local record, one manifest with the head revisions it names among
     ``copies``, or the other revisions of one entity. Campaign-local units and sources are checked
-    on their own (a source's units only when the source as a whole fails); manifests that link to
-    other sources are then admitted cumulatively in sorted order, so a cross-source link cycle is
-    caught. The caller runs one combined check of everything admitted.
+    on their own; when a source fails as a whole, its units are admitted cumulatively (manifest
+    units first), so two units that are each acceptable but not together are never both admitted.
+    Manifests that link to other sources are then admitted cumulatively in sorted order, so a
+    cross-source link cycle is caught. The caller runs one combined check of everything admitted.
     """
     by_path = {copy.path: copy for copy in copies}
     heads = {copy.path: [path for path in _manifest_heads(copy) if path in by_path]
@@ -451,12 +455,14 @@ def _admit_units(store: LibraryStore, copies: list[Copy]) -> tuple[list[Copy], l
         if _preflight(txn, f"source {source}") is None:
             alone.extend(sources[source])
             continue
+        mine: list[Copy] = []  # cumulative within the source: its units can refuse each other
         for unit in sources[source]:
             txn = store.transaction()
-            _stage(txn, unit, [])
+            _stage(txn, mine + unit, [])
             error = _preflight(txn, f"source {source}")
             if error is None:
                 alone.append(unit)
+                mine += unit
             else:
                 rejected.extend((copy, error) for copy in unit)
     # Only manifests with cross-source links can make each other invalid (a link cycle across
@@ -730,39 +736,28 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
                 why = "not authorized" if copy.path in denied else "depends on a write that was not authorized"
                 plan.conflicts[copy.path] = Conflict(copy.path, "denied", why,
                                                      MappingProxyType({device: False}))
-        remaining = [copy for copy in copies if copy.path not in dropped]
-        if remaining:  # what is left must still be acceptable on its own (R1): re-admit it
+        def drop(path: str, why: str) -> None:
+            dropped.add(path)
+            changes[path] = None
+            plan.conflicts[path] = Conflict(path, "denied", f"depends on a write that was not authorized: {why}",
+                                            MappingProxyType({device: False}))
+        while True:  # to a joint fixpoint: a dropped dependency can make the rest unacceptable, and back
+            before = len(dropped)
+            remaining = [copy for copy in copies if copy.path not in dropped]
             check = store.transaction()
             _stage(check, remaining, [])
-            if _preflight(check, f"the authorized copies to {device}") is not None:
-                _, refused = _admit_units(store, remaining)
-                for copy, error in refused:
-                    dropped.add(copy.path)
-                    changes[copy.path] = None
-                    plan.conflicts[copy.path] = Conflict(
-                        copy.path, "denied", f"depends on a write that was not authorized: {error}",
-                        MappingProxyType({device: False}))
-                broken = {_knowledge_campaign(copy.path) for copy, _ in refused} - {None}
-                for copy in copies:  # the rest of a refused knowledge log's append stays behind too
-                    if copy.path not in dropped and _knowledge_campaign(copy.path) in broken:
-                        dropped.add(copy.path)
-                        changes[copy.path] = None
-                        plan.conflicts[copy.path] = Conflict(
-                            copy.path, "denied", "its knowledge log's other records were not authorized",
-                            MappingProxyType({device: False}))
-        while True:  # nothing may land whose dependency or knowledge log was just dropped
+            if remaining and _preflight(check, f"the authorized copies to {device}") is not None:
+                for copy, error in _admit_units(store, remaining)[1]:  # what is left must stand alone (R1)
+                    drop(copy.path, str(error))
             remaining = [copy for copy in copies if copy.path not in dropped]
             _, held = _dependencies(plan, device, remaining)
-            broken = {_knowledge_campaign(path) for path in dropped} - {None}
+            broken = {_knowledge_campaign(path) for path in dropped} - {None}  # a log is one unit
             held.update({copy.path: "its knowledge log's other records were not authorized" for copy in remaining
                          if copy.path not in held and _knowledge_campaign(copy.path) in broken})
-            if not held:
-                break
             for path, why in held.items():
-                dropped.add(path)
-                changes[path] = None
-                plan.conflicts[path] = Conflict(path, "denied", f"depends on a write that was not authorized: {why}",
-                                                MappingProxyType({device: False}))
+                drop(path, why)
+            if len(dropped) == before:
+                break
         for keep in keeps:
             if str(_kept_key(keep)) in keys:
                 _kept(plan, keep.path, device, False, "keeping it was not authorized")
@@ -1073,7 +1068,10 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         txn.check()
     except (StaleWrite, *PER_PATH_ERRORS) as error:
         raise ResolveRefused(f"{path} cannot be resolved on {receiver}: {error}") from error
-    txn.commit(handles[receiver], dict((approvals or {}).get(receiver, {})))
+    try:
+        txn.commit(handles[receiver], dict((approvals or {}).get(receiver, {})))
+    except WriteDenied as error:  # nothing was written: the grant refuses it, like any other refusal
+        raise ResolveRefused(f"{path} cannot be resolved on {receiver}: {error}") from error
     try:
         found = stores[receiver].read_exact(path)
     except NameCollision:  # renamed to a look-alike since it was written
