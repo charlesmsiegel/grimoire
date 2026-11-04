@@ -1,5 +1,13 @@
 # Counted Holdings for Freeform Roleplay
 
+**Status:** **first slice implemented**, headless: `grimoire.holdings` (pure) and `grimoire.holdingstore` (service), on an additive `holdings/` record family in `grimoire.store`. The contract is in [HOLDINGS.md](../../HOLDINGS.md). The proving scenario, the failure cases and the crash exploration are executable. The requester decided:
+- **storage:** per-holder sidecar files;
+- **history:** a bounded operation log;
+- **"stable IDs":** holder instance IDs plus stable item keys and operation IDs. A stack has no ID of its own.
+- **milestone 3:** re-homed to [021](turn-effects-and-wrap-up.md) (narrative extraction).
+
+Prompt context is a pure holder-only helper for 031, and the manual editor is the headless `adjust` line; the UI is later.
+
 **Outcome:** Track how many ordinary resources each actor owns without requiring any mechanics module.
 
 ## Scope
@@ -19,6 +27,6 @@ Start with 8 ordinary and 2 strong balls, spend 3 ordinary, acquire 4: reload sh
 Independent of equipment, crafting, shared catalog DAGs and mechanics; can use campaign-local simple item refs initially.
 
 ## Open questions
-- Ledger per campaign or holder sidecars?
-- What is the minimum operation history?
-- When does an item mention merit a proposed inventory edit?
+- ~~Ledger per campaign or holder sidecars?~~ Holder sidecars: `campaigns/<id>/holdings/<kind>/<instance_id>.json`, with a batch operation spanning holders in one transaction.
+- ~~What is the minimum operation history?~~ The newest 1000 operations per holder, and fewer when the holder's whole rendered file would exceed 7 MiB, with `evicted_through` and per-holder `peers` seqs, so that a replay is recognised while its entry is in the log and an ambiguous one is refused. After eviction, only a caller-supplied `basis` (recorded when the operation was created) prevents a re-application; see [HOLDINGS](../../HOLDINGS.md#known-limits).
+- When does an item mention merit a proposed inventory edit? Re-homed to 021.

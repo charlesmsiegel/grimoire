@@ -30,6 +30,7 @@ from grimoire.core.entity_codec import ENTITY_SCHEMA, instance_to_payload
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, validate_segment
 from grimoire.effectstore import accepted_instance_ids
 from grimoire.graphstore import relation_endpoint_ids
+from grimoire.holdingstore import holdings_holder_ids
 from grimoire.store import (
     LibraryStore, LibraryView, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
 )
@@ -116,6 +117,29 @@ class ChatChange:
             result = self._transaction().commit(self.library.handle, approvals)
             self._committed = True
         return ChatCommit(result.etags, self.chat, self.scope, self.new_actors)
+
+
+class _LazyTaken:
+    """Ids a new actor may not use, computed only when an actor id is actually allocated.
+
+    Binding a scenario or lorebook, or reusing an existing actor, never lists the campaign, so a
+    damaged history folder (023's ``HoldingsUnlisted``) only blocks the operations that allocate.
+    """
+
+    def __init__(self, compute: Callable[[], set[str]]) -> None:
+        self._compute = compute
+        self._ids: set[str] | None = None
+
+    def _get(self) -> set[str]:
+        if self._ids is None:
+            self._ids = set(self._compute())
+        return self._ids
+
+    def __contains__(self, value: object) -> bool:
+        return value in self._get()
+
+    def add(self, value: str) -> None:
+        self._get().add(value)
 
 
 class ChatLibrary:
@@ -218,7 +242,8 @@ class ChatLibrary:
         scope_puts: list[tuple[RecordEnvelope | ScopeRecord, str | None]] = []
         actor_puts: list[tuple[RecordEnvelope | ScopeRecord, str | None]] = []
         if scope is None:
-            scope, new_scope, taken = self._allocate_scope(), True, set()
+            taken: set[str] | _LazyTaken = set()
+            scope, new_scope = self._allocate_scope(), True
             scope_puts.append((self._scope_record(PlayScope(scope, at)), None))
         else:
             new_scope = False
@@ -228,7 +253,8 @@ class ChatLibrary:
                 self.store.read(scope)
             except RecordNotFound:  # a campaign from before 107 (or 026): give it a scope record now
                 scope_puts.append((self._scope_record(PlayScope(scope, at)), None))
-            taken = self._campaign_taken(scope.campaign_id)
+            campaign = scope.campaign_id
+            taken = _LazyTaken(lambda: self._campaign_taken(campaign))
         chat = ChatRef(scope.campaign_id, self._id("t"))
         bindings, actors = [], []
         for ref, role in wanted:
@@ -257,7 +283,7 @@ class ChatLibrary:
     def attach_source(self, chat: ChatRef, ref: SourceRef, role: str, *, expected: str,
                       actor: InstanceRef | None = None) -> ChatChange:
         record, base = self._current(chat, expected)
-        taken = self._taken(chat, record)
+        taken = _LazyTaken(lambda: self._taken(chat, record))
         binding, envelope = self._prepare(chat.campaign_id, ref, role, actor, taken)
         return self._chat_change(chat, record.attach(binding, self._clock()), base, expected, envelope)
 
@@ -278,7 +304,9 @@ class ChatLibrary:
             record = record.detach(current.ref, "persona", at)
         envelope = None
         if ref is not None:
-            binding, envelope = self._prepare(chat.campaign_id, ref, "persona", actor, self._taken(chat, record))
+            detached = record
+            binding, envelope = self._prepare(chat.campaign_id, ref, "persona", actor,
+                                              _LazyTaken(lambda: self._taken(chat, detached)))
             record = record.attach(binding, at)
         return self._chat_change(chat, record, base, expected, envelope)
 
@@ -325,10 +353,11 @@ class ChatLibrary:
         return self._campaign_taken(chat.campaign_id) | {entry.actor.instance_id for entry in record.roster}
 
     def _campaign_taken(self, campaign: str) -> set[str]:
-        """Every instance file's id, and every id a relation (017) or an accepted event (021) names: a vanished
-        individual's id stays taken."""
+        """Every instance file's id, and every id a relation (017), an accepted event (021) or a holdings
+        file (023) names: a vanished endpoint's, individual's or holder's id stays taken."""
         taken = {found.instance_id for found in self.store.campaign_instances(campaign)}
-        return taken | relation_endpoint_ids(self.store, campaign) | accepted_instance_ids(self.store, campaign)
+        return (taken | relation_endpoint_ids(self.store, campaign) | accepted_instance_ids(self.store, campaign)
+                | holdings_holder_ids(self.store, campaign))
 
     def _resolve(self, ref: SourceRef, role: str) -> tuple[str, str]:
         if role not in ROLE_KINDS or ref.kind != ROLE_KINDS[role]:
@@ -339,7 +368,7 @@ class ChatLibrary:
         return found.ref.revision, found.etag  # type: ignore[return-value]
 
     def _prepare(self, campaign: str, ref: SourceRef, role: str, reuse: InstanceRef | None,
-                 taken: set[str]) -> tuple[NewBinding, RecordEnvelope | None]:
+                 taken: set[str] | _LazyTaken) -> tuple[NewBinding, RecordEnvelope | None]:
         revision, definition_etag = self._resolve(ref, role)
         if role not in ACTOR_ROLES:
             if reuse is not None:

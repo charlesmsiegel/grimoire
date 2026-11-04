@@ -37,12 +37,19 @@ Consume generic 010 record revisions and the Wave 1 PC-authority decision policy
 
 ## Obligation: holdings operations (023)
 
-Holdings ([Counted Inventory](counted-inventory.md), 023) are not merged into `v2` with this slice, so accepted effects change only 017 relations. Once 023 lands:
-- an accepted effect that moves, uses or finds counted items carries a holdings operation;
+021's first slice merged before [Counted Inventory](counted-inventory.md) (023), so its accepted effects change only 017 relations. 023 has since merged; the obligation is open for 021's next slice:
+- an accepted effect that moves, uses or finds counted items carries a [holdings operation](../../HOLDINGS.md);
 - that operation's `op_id` is derived from the accepted event, and its `cause` is the event;
 - it is committed in the same transaction as the event record and its receipts, and checked by the same receipt and duplicate rules.
 
-023's own handoff to 021 then applies. A rerolled or retried turn can never spend or grant twice.
+023's handoff below then applies. A rerolled or retried turn can never spend or grant twice.
+
+### Handoff from Counted Inventory (023): item mentions become reviewed proposals
+
+023's milestone 3 is re-homed here by requester decision. When a narration or turn mentions items changing hands, being used or being found, 021 may *propose* a [holdings operation](../../HOLDINGS.md): an `Operation` with an `op_id` derived from the accepted event and `cause` set to that event's id. On acceptance, 021 plans it with `HoldingsLibrary.apply` and folds the resulting change's `puts` into its own transaction after `recheck()`, holding the store lock (or, for a holdings-only change, commits it with `commit(approvals)`). It is never an automatic, unverified grant. Two rules follow from 023's contract:
+
+- **Retries.** A retried turn reuses the same whole `Operation` (`op_id`, lines, `note` and `cause`), so 021 should persist the operation it proposed rather than regenerate it: a retry with a regenerated note is refused as `op_id_reused`. An identical retry is a no-op while the entry is in the holders' logs. To stay exactly-once after eviction, 021 must record each holder's `seq` when it creates the operation and pass it as `basis` on every retry (a stale retry is then refused as `beyond_history`), together with the first change's `holders=change.holder_etags` (a holder replaced in between is refused as `holder_replaced`, and `HolderReplaced` is never retried). This holds unless a holder's file was restored or recreated in between, which forgets the operation (see [HOLDINGS known limits](../../HOLDINGS.md#known-limits)).
+- **Rerolls and edits.** A rerolled turn whose effect has *different* lines cannot reuse the `op_id` (it is refused as `op_id_reused`), and a new `op_id` does not undo the first one. Either commit holdings only when a turn is finally accepted, or commit an explicit compensating operation under a fresh `op_id` (`cause` naming the reroll).
 
 ## Open questions
 - Which narrations imply immediate accepted truth, and which require player review? **Partly answered:**

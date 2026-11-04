@@ -26,6 +26,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   sources/<segs>/_source/placements/<kind>/<entity_id>/<slot>.json   # one placement (018)
   campaigns/<campaign_id>/images/<image_id>.json                  # a campaign's image object (018)
   campaigns/<campaign_id>/placements/<kind>/<instance_id>/<slot>.json  # a campaign placement (018)
+  campaigns/<campaign_id>/holdings/<kind>/<instance_id>.json      # one holder's counted holdings (023)
   assets/blobs/<sha256[:2]>/<sha256>.<png|jpg|gif|webp>           # content-addressed bytes (018)
   campaigns/<campaign_id>/accepted/<event_id>.json                # one accepted fictional event (021)
   campaigns/<campaign_id>/wrapups/<wrapup_id>.json                # one scene wrap-up (021)
@@ -46,9 +47,9 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   - a source ID deeper than 26 segments.
 - **Reserved names for later families**, which the loader skips silently:
   - at the root: `authority`, `config`, `assets`, `secrets`;
-  - inside a campaign: `scenes`, `events`, `evidence`.
+  - inside a campaign: `scenes`, `events`, `evidence`, `holdings`.
 
-  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), and `relations/` since 017 (see relation records). `accepted/` and `wrapups/` (021) are recognised but read only through `campaign_accepted`/`campaign_wrapups` (see accepted events and wrap-ups).
+  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), and `relations/` since 017 (see relation records). `accepted/` and `wrapups/` (021) are recognised but read only through `campaign_accepted`/`campaign_wrapups` (see accepted events and wrap-ups). `holdings/` (023) is skipped by `load()` and read only by `campaign_holdings` and `read(HoldingsRef)` (see counted holdings).
 
   `events/` and `evidence/` belong to 020, and `accepted/` and `wrapups/` to 021; all four stay skipped by `load()`, so `load()`'s cost never grows with campaign history. They are read only by `campaign_knowledge` (020, see [events and evidence](#events-and-evidence-020)) and by `campaign_accepted`/`campaign_wrapups` (021). An `accepted` or `wrapups` entry that is a file, not a folder, is still reported.
 
@@ -128,7 +129,7 @@ Fields:
 
 <a id="relation-records-017"></a>Added by [Typed Relationship Graph](roadmap/sprints/typed-relationship-graph.md). Interpreted by [`grimoire.graph`](GRAPH.md), never by the store.
 
-- **An additive 010 envelope amendment, recorded here as 107's was.** `grimoire.scope-record/1`'s address union widens to `ScopeRef | ChatRef | RelationRef`. The relation address is `campaign:<id>#relation/<relation_id>`, at `campaigns/<id>/relations/<relation_id>.json`. `parse_scope_record` chooses the family by the exact `#chat/` or `#relation/` fragment; any other `#…` is `malformed`. No new file format is added, and `record/1` and `source/1` are unchanged.
+- **An additive 010 envelope amendment, recorded here as 107's was.** `grimoire.scope-record/1`'s address union widens to `ScopeRef | ChatRef | RelationRef`. The relation address is `campaign:<id>#relation/<relation_id>`, at `campaigns/<id>/relations/<relation_id>.json`. `parse_scope_record` accepts only an exact chat or relation grammar (since 023 chosen by the address's exact form, then that family's strict grammar; see counted holdings); any other `#…` is `malformed`. No new file format is added, and `record/1` and `source/1` are unchanged.
 - `relations` is no longer a reserved campaign entry. `classify` recognises exactly the new path, so recovery accepts journals that name it.
 - A `relation_id` is limited to 123 characters.
 - `load()` adds `LibraryView.relations`. Bad files are contained per file, as for chats. Anything else under `relations/` (a sub-directory, another suffix, a look-alike name) is `unrecognized` or `name_mismatch`, and a `relations` that is a file is `unrecognized`.
@@ -188,11 +189,32 @@ Fields:
 - reports the new `images/` and `placements/` folders as `unrecognized`, and never writes them;
 - **cannot recover a journal that names them** (`RecoveryFailed`). Recover with an 018+ build, or use `discard_journal`.
 
+### Counted holdings (023)
+
+<a id="counted-holdings-023"></a>Added by [Counted Inventory](roadmap/sprints/counted-inventory.md) on the same `grimoire.scope-record/1` envelope; interpreted by [`grimoire.holdings`](HOLDINGS.md), never by the store.
+
+- The address is a `HoldingsRef`: `campaign:<id>/<kind>/<instance_id>#holdings`, at `campaigns/<id>/holdings/<kind>/<instance_id>.json`.
+- The address union widens to `ScopeRef | ChatRef | RelationRef | HoldingsRef`. `parse_scope_record` picks the family by the address's exact form (`…#holdings`, `#relation/`, another `#`, or a bare scope) and applies that family's strict grammar; the four grammars are disjoint:
+  - a non-text address is `malformed` with only its type named, never its value;
+  - anything else, such as `campaign:x#other/y`, is `malformed`.
+- Writes run the same guarded transaction:
+  - collisions such as `Holdings/` or `Character/`;
+  - `Permission.APPLY` on `campaigns/<id>/holdings/…`;
+  - journal, recovery and conflict preservation.
+- `classify` recognises exactly that path shape. Anything else under `holdings/` is `unrecognized`, including a file directly in `holdings/`, a deeper folder, or a `holdings` that is a file.
+- **`load()` skips `holdings/`**, as it skips 020's `events/` and `evidence/`: a holder's operation log is campaign history (up to 7 MiB per holder), so whole-library loads such as opening a chat never pay for it. There is no `LibraryView.holdings`.
+- `campaign_holdings(id)` returns `CampaignHoldingRecords(records, problems)` for **one** campaign, contained per file in the same way `load()` contains the other families: bad files, links (including a linked look-alike `Holdings`), look-alikes and an unreadable campaign folder are problems, never a crashed read. `read(HoldingsRef)` reads one file. `grimoire.holdingstore` uses only these and never loads the whole library (tested).
+- `campaign_holding_names(id)` returns `(refs, complete)`: the campaign's canonically named holder files from **listings only** (no file is read), and `complete=False` when the campaign folder, the `holdings` folder or a kind folder in it is a link, cannot be listed or inspected, or exists only as a look-alike (`Holdings`, `Character`).
+- **Instance allocators must treat ids with a holdings file as taken** (`grimoire.holdingstore.holdings_holder_ids`, built on `campaign_holding_names`, which 107's allocator uses alongside 017's `relation_endpoint_ids`), so a hand-deleted holder's id never goes to a different individual.
+- **Rollback:**
+  - A pre-023 build reports `holdings/` as `unrecognized` and never touches it. Its allocators do not protect holder ids.
+  - It **cannot recover a journal naming a holdings path** (`RecoveryFailed`). Recover with a 023+ build, or run `discard_journal` (both tested).
+
 ### Read-only helpers (107)
 
 All of these take the store lock, require a consistent library, and read listings and files only:
 
-- `read(ScopeRef | ChatRef)` returns a `StoredScopeRecord`.
+- `read(ScopeRef | ChatRef)` returns a `StoredScopeRecord` (and since 017/023, `read(RelationRef | HoldingsRef)` too).
 - `campaign_presence(id)` returns `absent`, `present`, or `mismatch` when only a look-alike folder exists.
 - `campaign_instances(id)` returns canonically named instance files across kinds. It reads names only and refuses links.
 - `excluded_sources()` returns every source `load()` would report as excluded, including by a cross-source `identity_conflict`. It runs `load()`'s own exclusion algorithm (`loader.admit`, shared with `load()` and given read-only scans) without reading campaigns. It is **incremental and cached**:
