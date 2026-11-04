@@ -11,9 +11,10 @@ far longer on Windows runners. The store's own tests already crash, tear and fai
 inside a commit (``test_store_recovery``, ``test_store_replica``) and prove that any crash inside
 one commit resolves, at recovery, to "the commit happened" or "it did not". What sync adds is
 *which commits happened*, so these tests use a **commit-outcome reduction**: for each of the six
-commits of a sync, crash just before its commit point (the journal replace; it did not happen),
-just after it (it happened) and just after its first publish (it happened, recovery finishes it),
-and inject an I/O error at its commit point and at its first publish.
+commits of a sync, crash just before its commit point (the journal replace; it did not happen)
+and just after it (it happened; a crash after its first publish resolves the same way, so it is not
+explored again), and inject an I/O error at its commit point and at its first publish (a live error
+mid-settle is a different case).
 
 Interleaves use an **observation-gap reduction**: two positions for an edit of an existing file F
 behave the same unless an operation between them observes F. An edit of an existing file changes
@@ -188,7 +189,7 @@ def _is_journal_replace(op: FileOp) -> bool:
 
 
 def commit_boundaries(trace) -> dict[int, frozenset[str]]:
-    """Per commit: before/after its commit point and after its first publish (errors at both)."""
+    """Per commit: crashes before/after its commit point; I/O errors there and at its first publish."""
     chosen: dict[int, frozenset[str]] = {}
     for op in trace:
         if not _is_journal_replace(op):
@@ -196,8 +197,8 @@ def commit_boundaries(trace) -> dict[int, frozenset[str]]:
         chosen[op.index] = frozenset({"before", "after", "fail"})
         publish = next((later for later in trace[op.index + 1:]
                         if later.kind == "replace" and "/.txn/" in later.path), None)
-        if publish is not None:
-            chosen[publish.index] = frozenset({"after", "fail"})
+        if publish is not None:  # a crash there resolves like "after" the commit point: only an error is new
+            chosen[publish.index] = frozenset({"fail"})
     return chosen
 
 
@@ -234,7 +235,7 @@ def test_s9_a_crash_at_any_commit_boundary_converges(tmp_path):
     points = commit_boundaries(_baseline_trace(quiet=False))
     report = explore_crashes(_scenario(S9, quiet=False), tmp_path, torn=False, select=_select(points, {"before", "after"}))
     report.assert_ok()
-    assert report.points_explored == sum(len(timings - {"fail"}) for timings in points.values()) == 18
+    assert report.points_explored == sum(len(timings - {"fail"}) for timings in points.values()) == 12
 
 
 def test_s9_an_io_error_at_any_commit_boundary_converges(tmp_path):
