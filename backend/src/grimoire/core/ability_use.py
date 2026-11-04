@@ -2,10 +2,11 @@
 
 ``assess_attempt`` is deterministic and calls no model. It reads only the
 ``EffectiveEntity`` it is given and the attempt's labels, and classifies the
-attempt as a known capability, an attempted feat, an extrapolation or a new
-ability (both needing approval), beyond the ability's limits, unavailable for
-lack of a prerequisite, needing a relabel, or needing a newer build. It also
-reports the costs that would apply and why.
+attempt as a known capability, an attempted feat, an extrapolation, a new
+ability or a combination of abilities (the last three needing an approval
+ruling), beyond the ability's limits, unavailable for lack of a prerequisite,
+needing a relabel, or needing a newer build. It also reports the costs that
+would apply and why.
 
 An assessment is **not an outcome**: it is not a ``Resolution``, commits no
 cost, writes nothing and narrates nothing. Fiction-first adjudication (029)
@@ -32,7 +33,7 @@ Approval = Literal["not_needed", "not_approvable", "pending", "approved", "refus
 CLASSIFICATIONS = frozenset({"known_capability", "attempted_feat", "extrapolation", "new_ability",
                              "beyond_limits", "unavailable", "relabel", "combination", "needs_upgrade"})
 #: The only classifications an approval ruling can decide.
-APPROVABLE = frozenset({"extrapolation", "new_ability"})
+APPROVABLE = frozenset({"extrapolation", "new_ability", "combination"})
 #: Classifications in which the power works as declared; no ruling is involved.
 DECLARED = frozenset({"known_capability", "attempted_feat"})
 DECISIONS = frozenset({"approved", "refused"})
@@ -79,6 +80,23 @@ def _collection(value: object, label: str) -> list:
     return list(value)
 
 
+def _paths(value: object, label: str, limit: int, *, bare: bool) -> frozenset[str]:
+    """``<ability>/<part>`` references (and, when ``bare``, plain segments of the named ability)."""
+    entries = _collection(value, label)
+    for entry in entries:
+        if type(entry) is not str:
+            raise _invalid(f"{label} entries must be plain text: {entry!r}")
+        parts = entry.split("/")
+        if len(parts) > 2 or (len(parts) == 1 and not bare):
+            raise _invalid(f"{label} entry must be {'a segment or ' if bare else ''}<ability>/<part>: {entry!r}")
+        for part in parts:
+            _segment(part, f"{label} entry")
+    paths = frozenset(entries)
+    if len(paths) > limit:
+        raise _invalid(f"{label} has more than {limit} entries")
+    return paths
+
+
 def _names(value: object, label: str, limit: int) -> frozenset[str]:
     entries = _collection(value, label)
     for entry in entries:
@@ -115,7 +133,8 @@ class AbilityAttempt:
         _text(self.provenance, "provenance")
         if self.effect_id is not None:
             _segment(self.effect_id, "effect_id")
-        object.__setattr__(self, "conditions_met", _names(self.conditions_met, "conditions_met", MAX_PARTS))
+        object.__setattr__(self, "conditions_met", _paths(self.conditions_met, "conditions_met", MAX_PARTS,
+                                                          bare=True))
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,10 +143,13 @@ class AbilityRuling:
 
     ruling_id: str
     attempt: AbilityAttempt
-    decides: Literal["extrapolation", "new_ability"]
+    decides: Literal["extrapolation", "new_ability", "combination"]
     decision: Literal["approved", "refused"]
     provenance: str
     note: str = ""
+    #: ``<ability>/<limit>`` of drawn-on abilities this approval of a combination explicitly sets
+    #: aside. Nothing is lifted unless named; the named ability's own limits are never liftable.
+    lifts: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         _segment(self.ruling_id, "ruling_id")
@@ -139,6 +161,10 @@ class AbilityRuling:
             raise _invalid(f"decision must be one of {sorted(DECISIONS)}: {self.decision!r}")
         _text(self.provenance, "provenance")
         _text(self.note, "note", blank=True)
+        lifts = _paths(self.lifts, "lifts", MAX_PARTS, bare=False)
+        if lifts and (self.decides != "combination" or self.decision != "approved"):
+            raise _invalid("only an approval of a combination can lift limits")
+        object.__setattr__(self, "lifts", lifts)
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -168,6 +194,8 @@ class AbilityAssessment:
     other_unrecognized: tuple[str, ...]
     other_candidates: tuple[str, ...]
     other_drawn: tuple[str, ...]
+    binding_limits: tuple[str, ...]
+    other_costs: tuple[tuple[str, Cost], ...]
     stale_references: tuple[str, ...]
     inapplicable_rulings: tuple[str, ...]
     mismatched_rulings: tuple[str, ...]
@@ -268,20 +296,7 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
     ability = facet.by_id(attempt.ability_id) if facet is not None else None
     reasons: list[Reason] = []
 
-    stale: list[str] = []
-    effect = None
-    if attempt.effect_id is not None:
-        effect = ability.effect(attempt.effect_id) if ability is not None else None
-        if effect is None:
-            stale.append(f"effect:{attempt.effect_id}")
-            reasons.append(Reason("stale_effect", f"{attempt.ability_id!r} has no effect "
-                                                  f"{attempt.effect_id!r}; it is treated as not named"))
-    for condition in sorted(attempt.conditions_met):
-        if ability is None or ability.prerequisite(condition) is None:
-            stale.append(f"prerequisite:{condition}")
-            reasons.append(Reason("stale_prerequisite",
-                                  f"{attempt.ability_id!r} has no prerequisite {condition!r}"))
-
+    effect = ability.effect(attempt.effect_id) if ability is not None and attempt.effect_id else None
     covers = effect is not None and needs <= effect.tags
     # Effects whose scoped prerequisites and costs apply. A covering named effect is exact. A
     # stretch (no covering named effect) counts every effect it touches: each one sharing a needed
@@ -295,6 +310,64 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         touched = {each.id for each in ability.effects if each.tags & needs}
         if not covers:
             scope |= touched
+
+    # Other abilities: an effect sharing a needed tag means the attempt draws on that ability too.
+    unknown: list[str] = []
+    others: list[tuple[str, str, tuple[str, ...]]] = []
+    other_unrecognized: list[tuple[str, tuple[str, ...]]] = []
+    other_candidates: list[str] = []
+    drawn: list[str] = []
+    drawn_scope: dict[str, set[str]] = {}
+    binding: list[str] = []
+    if facet is None:
+        unknown = sorted(needs)  # nothing is authored, so every needed tag is unknown
+    else:
+        used = {tag for each in facet.abilities for part in each.effects for tag in part.tags}
+        used |= {tag for each in facet.abilities for part in each.limits for tag in part.excludes}
+        unknown = sorted(needs - used)
+        for each in facet.abilities:
+            if each.id == attempt.ability_id:
+                continue
+            other_unrecognized += _with_extras(each)
+            for part in each.effects:
+                shared = tuple(sorted(part.tags & needs))
+                if shared:
+                    drawn.append(f"{each.id}/{part.id}")
+                    drawn_scope.setdefault(each.id, set()).add(part.id)
+                    reasons.append(Reason("draws_on_other_ability", f"effect {part.id!r} of {each.id!r} "
+                                                                    f"shares {_tags(shared)}"))
+                if needs <= part.tags:
+                    other_candidates.append(f"{each.id}/{part.id}")
+                    reasons.append(Reason("covered_by_other_ability", f"effect {part.id!r} of {each.id!r} "
+                                                                      f"provides {_tags(needs)}"))
+            for limit in each.limits:
+                hit = tuple(sorted(limit.excludes & needs))
+                if hit:
+                    others.append((each.id, limit.id, hit))
+                    reasons.append(Reason("other_limit_excludes", f"limit {limit.id!r} of another ability "
+                                                                  f"{each.id!r} excludes {_tags(hit)}"))
+                    if each.id in drawn_scope:
+                        binding.append(f"{each.id}/{limit.id}")
+    reasons += [Reason("unknown_tag", f"no ability of {attempt.actor} uses the tag {tag!r}") for tag in unknown]
+    drawn_abilities = {each.id: each for each in facet.abilities if each.id in drawn_scope} if facet else {}
+
+    # References. A plain condition names a prerequisite of the named ability; ``<ability>/<id>``
+    # names one of an ability the attempt draws on (meaningful only for a combination).
+    stale: list[str] = []
+    if attempt.effect_id is not None and effect is None:
+        stale.append(f"effect:{attempt.effect_id}")
+        reasons.append(Reason("stale_effect", f"{attempt.ability_id!r} has no effect "
+                                              f"{attempt.effect_id!r}; it is treated as not named"))
+    for condition in sorted(attempt.conditions_met):
+        owner, _, name = condition.rpartition("/")
+        if owner:
+            valid = owner in drawn_abilities and drawn_abilities[owner].prerequisite(name) is not None
+        else:
+            valid = ability is not None and ability.prerequisite(condition) is not None
+        if not valid:
+            stale.append(f"prerequisite:{condition}")
+            reasons.append(Reason("stale_prerequisite", f"{condition!r} is not a prerequisite of "
+                                                        f"{owner or attempt.ability_id!r} that this attempt uses"))
 
     conflicts: list[tuple[str, tuple[str, ...]]] = []
     unmet: list[str] = []
@@ -317,57 +390,34 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
     else:
         reasons.append(Reason("no_ability", f"{attempt.actor} has no ability {attempt.ability_id!r}"))
 
-    unknown: list[str] = []
-    others: list[tuple[str, str, tuple[str, ...]]] = []
-    other_unrecognized: list[tuple[str, tuple[str, ...]]] = []
-    other_candidates: list[str] = []
-    # An effect of another ability sharing a needed tag means the attempt draws on that ability
-    # too. Unless the named effect fully covers the attempt (a declared use, which a sibling never
-    # blocks), that is a cross-ability combination, which this slice does not adjudicate: it must
-    # not escape that ability's limits, prerequisites or costs, so it fails closed.
-    drawn: list[str] = []
-    drawn_from: set[str] = set()
-    binding: list[tuple[str, str, tuple[str, ...]]] = []
-    if facet is None:
-        unknown = sorted(needs)  # nothing is authored, so every needed tag is unknown
-        reasons += [Reason("unknown_tag", f"no ability of {attempt.actor} uses the tag {tag!r}")
-                    for tag in unknown]
-    else:
-        used = {tag for each in facet.abilities for part in each.effects for tag in part.tags}
-        used |= {tag for each in facet.abilities for part in each.limits for tag in part.excludes}
-        unknown = sorted(needs - used)
-        reasons += [Reason("unknown_tag", f"no ability of {attempt.actor} uses the tag {tag!r}")
-                    for tag in unknown]
-        for each in facet.abilities:
-            if each.id == attempt.ability_id:
-                continue
-            other_unrecognized += _with_extras(each)
-            for part in each.effects:
-                shared = tuple(sorted(part.tags & needs))
-                if shared:
-                    drawn.append(f"{each.id}/{part.id}")
-                    drawn_from.add(each.id)
-                    reasons.append(Reason("draws_on_other_ability", f"effect {part.id!r} of {each.id!r} "
-                                                                    f"shares {_tags(shared)}"))
-                if needs <= part.tags:
-                    other_candidates.append(f"{each.id}/{part.id}")
-                    reasons.append(Reason("covered_by_other_ability", f"effect {part.id!r} of {each.id!r} "
-                                                                      f"provides {_tags(needs)}"))
-            for limit in each.limits:
-                hit = tuple(sorted(limit.excludes & needs))
-                if hit:
-                    others.append((each.id, limit.id, hit))
-                    reasons.append(Reason("other_limit_excludes", f"limit {limit.id!r} of another ability "
-                                                                  f"{each.id!r} excludes {_tags(hit)}"))
-                    if each.id in drawn_from:
-                        binding.append((each.id, limit.id, hit))
     found = _unrecognized(facet, ability)
+    # The shape of a combination: a stretch drawing on other abilities that nothing simpler explains.
+    if ability is None:
+        combination = not stale and not other_candidates and len(drawn_abilities) > 1
+    else:
+        combination = bool(drawn) and bool(touched) and not covers and not candidates and not other_candidates
+    other_costs: list[tuple[str, Cost]] = []
+    if combination:
+        # Fail closed: every drawn-on ability's prerequisites, unknown fields and costs apply too.
+        for owner in sorted(drawn_abilities):
+            each, part_scope = drawn_abilities[owner], drawn_scope[owner]
+            for prerequisite in each.prerequisites:
+                applies = not prerequisite.applies_to or bool(prerequisite.applies_to & part_scope)
+                qualified = f"{owner}/{prerequisite.id}"
+                if applies and qualified not in attempt.conditions_met:
+                    unmet.append(qualified)
+                    reasons.append(Reason("prerequisite_unmet", f"prerequisite {prerequisite.id!r} of "
+                                                                f"{owner!r} is not met"))
+            other_costs += [(owner, cost) for cost in each.costs
+                            if not cost.applies_to or cost.applies_to & part_scope]
+            found += _with_extras(each)
+        found = sorted(found)
     unrecognized = [path for path, _ in found]
     reasons += [Reason("unrecognized_constraint", f"{path} has fields this version does not understand: "
                                                   f"{', '.join(keys)}") for path, keys in found]
     reasons += [Reason("other_unrecognized_constraint", f"another ability's {path} has fields this version "
                                                         f"does not understand: {', '.join(keys)}")
-                for path, keys in sorted(other_unrecognized)]
+                for path, keys in sorted(other_unrecognized) if path not in unrecognized]
     if ability is not None:
         if covers:
             reasons.append(Reason("effect_covers", f"effect {effect.id!r} provides {_tags(needs)}"))
@@ -385,17 +435,14 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
                                                      f"provides {_tags(needs)}"))
 
     if ability is None:
-        # A declared effect of another ability already covers it: filing it under a new id must
-        # not turn a known (perhaps unavailable or costly) power into an approvable new one.
-        # Naming an effect or a prerequisite, or drawing on another ability's effects, says the
-        # attempt is a use of an existing power, not a new one.
-        # Drawing on exactly one existing ability: file it there. On several: a combination.
+        # Naming an effect or a prerequisite, or drawing on one existing ability, says the attempt
+        # is a use of an existing power: file it there. Drawing on several is a combination.
         if FACET_PATH in unrecognized:
             classification = "needs_upgrade"
         elif stale or other_candidates:
             classification = "relabel"
-        elif len(drawn_from) > 1:
-            classification = "combination"
+        elif combination:
+            classification = "unavailable" if unmet else "needs_upgrade" if unrecognized else "combination"
         elif drawn:
             classification = "relabel"
         else:
@@ -406,8 +453,8 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         classification = "relabel"
         reasons.append(Reason("outside_ability", f"no effect of {ability.id!r} shares a needed tag; "
                                                  "file the attempt under its own ability id"))
-    elif conflicts or (binding and not covers):
-        # The named ability's limits, or those of an ability a stretch draws on, exclude it.
+    elif conflicts:
+        # The named ability's own limits: only an authored change can alter them.
         classification = "beyond_limits"
     elif stale:
         classification = "relabel"
@@ -415,12 +462,8 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         # Another ability's declared effect covers it and the named one cannot: file it there.
         # When both cover, the named effect is the character's choice (no deadlock).
         classification = "relabel"
-    elif drawn and not covers and not candidates:
-        # A covering effect of the named ability would make this a declared use (row 5 below).
-        classification = "combination"
     elif not touched:
-        # No effect of the named ability shares a needed tag: this is not a use of it. File it
-        # under its own ability id (a new ability, or the ability that covers it).
+        # No effect of any ability shares a needed tag: this is not a use of the named ability.
         classification = "relabel"
         reasons.append(Reason("outside_ability", f"no effect of {ability.id!r} shares a needed tag; "
                                                  "file the attempt under its own ability id"))
@@ -432,10 +475,23 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         classification = "known_capability" if effect.certainty == "reliable" else "attempted_feat"
     elif candidates:
         classification = "relabel"
+    elif combination:
+        classification = "combination"
     else:
         classification = "extrapolation"
 
     live, inapplicable = _live(matching, classification)
+    if classification == "combination":
+        # A drawn-on ability's limit still binds unless the approval explicitly lifts it.
+        unlifted = [ruling for ruling in live
+                    if ruling.decision == "approved" and not set(binding) <= ruling.lifts]
+        live = [ruling for ruling in live if ruling not in unlifted]
+        inapplicable = tuple(sorted({*inapplicable, *(ruling.ruling_id for ruling in unlifted)}))
+        reasons += [Reason("limit_not_lifted", f"ruling {ruling.ruling_id!r} does not lift "
+                                               f"{', '.join(sorted(set(binding) - ruling.lifts))}")
+                    for ruling in unlifted]
+        reasons += [Reason("limit_binds", f"limit {path} binds this combination unless a ruling lifts it")
+                    for path in sorted(binding)]
     ruling_id = None
     if classification in DECLARED:
         approval = "not_needed"
@@ -448,17 +504,16 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
     else:
         approval = "pending"
         reasons.append(Reason("pending_approval", f"this {classification} needs an approval ruling"))
-    reasons += [Reason("inapplicable_ruling", f"ruling {each!r} does not decide a {classification}")
+    reasons += [Reason("inapplicable_ruling", f"ruling {each!r} does not decide this {classification}")
                 for each in inapplicable]
     reasons += [Reason("mismatched_ruling", f"ruling {each!r} decided a differently labelled attempt")
                 for each in mismatched]
 
-    charged = classification in ("known_capability", "attempted_feat") or (
-        classification == "extrapolation" and approval == "approved")
+    approved = approval == "approved"
+    charged = classification in DECLARED or (classification in ("extrapolation", "combination") and approved)
     costs = tuple(cost for cost in ability.costs if not cost.applies_to or cost.applies_to & scope) \
-        if charged else ()
-    uncertain = classification == "attempted_feat" or (
-        classification in APPROVABLE and approval == "approved")
+        if charged and ability is not None else ()
+    uncertain = classification == "attempted_feat" or (classification in APPROVABLE and approved)
     return AbilityAssessment(
         attempt=attempt,
         classification=classification,
@@ -475,6 +530,9 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         other_unrecognized=tuple(path for path, _ in sorted(other_unrecognized)),
         other_candidates=tuple(sorted(other_candidates)),
         other_drawn=tuple(sorted(drawn)),
+        binding_limits=tuple(sorted(binding)),
+        other_costs=tuple(sorted(other_costs, key=lambda pair: (pair[0], pair[1].id)))
+        if classification == "combination" and approved else (),
         stale_references=tuple(sorted(stale)),
         inapplicable_rulings=inapplicable,
         mismatched_rulings=mismatched,
@@ -488,7 +546,8 @@ def check_ruling(ruling: AbilityRuling, entity: EffectiveEntity,
     if type(ruling) is not AbilityRuling:
         raise TypeError(f"expected an AbilityRuling, not {type(ruling).__name__}")
     existing = _collection(existing, "existing rulings")
-    classification = assess_attempt(ruling.attempt, entity, existing).classification
+    assessment = assess_attempt(ruling.attempt, entity, existing)
+    classification = assessment.classification
     if classification == "beyond_limits":
         raise AbilityError("an authored limit excludes this attempt; only an authored change to the "
                            "ability can alter it", "limit_not_approvable")
@@ -499,6 +558,13 @@ def check_ruling(ruling: AbilityRuling, entity: EffectiveEntity,
     if ruling.decides != classification:
         raise AbilityError(f"the attempt is a {classification}, not a {ruling.decides}",
                            "wrong_classification")
+    binding = set(assessment.binding_limits) if classification == "combination" else set()
+    if ruling.lifts - binding:
+        raise AbilityError(f"{', '.join(sorted(ruling.lifts - binding))} does not bind this attempt",
+                           "lift_not_binding")
+    if ruling.decision == "approved" and binding - ruling.lifts:
+        raise AbilityError(f"approving this combination needs {', '.join(sorted(binding - ruling.lifts))} "
+                           "lifted explicitly", "limit_not_lifted")
     mine, same, matching, _ = _matching_rulings(ruling.attempt, existing)
     if len(same) >= MAX_RULINGS:
         raise AbilityError(f"attempt {ruling.attempt.attempt_id!r} already has {MAX_RULINGS} rulings",

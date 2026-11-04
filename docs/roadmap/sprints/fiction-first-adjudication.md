@@ -26,7 +26,8 @@ Requires the [Player Sovereignty](player-sovereignty.md) intent/authority contra
 
 The first slice of 025 ([fictional abilities](../../ABILITIES.md)) produces a deterministic `AbilityAssessment` that this sprint consumes. 029 must:
 - produce the attempt's labels with a labeller that is **not the narrator**, and put every intended outcome *and* the mechanism it uses into `needs` (the classification follows the labels; under-labelling is undetectable);
-- gate "the power works" on `assessment.permitted` only, never on `approval == "not_needed"`, and treat `combination` as not adjudicated (milestone 3);
+- gate "the power works" on `assessment.permitted` only, never on `approval == "not_needed"`;
+- treat a `combination` as approvable only case by case by an explicit director ruling that names each drawn ability's limit it lifts; proper combination rules remain milestone 3;
 - authenticate who issues an `AbilityRuling` (adjudication channel only, never narration), and for a player-controlled actor take the attempt from that player's own contribution (`attempt_id` is its `contribution_id`);
 - decide supersede/revoke for rulings and whether a ruling pins the entity's `resolved_source`; `AbilityRuling` is provisional and may be replaced here.
 

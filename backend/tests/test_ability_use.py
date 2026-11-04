@@ -374,8 +374,10 @@ def test_assessment_is_a_pure_function_of_its_inputs():
                         description=light_bending().description)
     baseline = assess_attempt(flight(), effective(person("iris", "Iris", light_bending(force_limit=False),
                                                          speak_with_dead(), thruster_pack())), rulings)
-    # With the thruster pack present, flight draws on its `lift`: a cross-ability combination.
-    assert (baseline.classification, baseline.other_drawn) == ("combination", ("thruster_pack/lift",))
+    # With the thruster pack present, flight draws on its `lift`: a combination, which also needs
+    # the pack's own prerequisite.
+    assert (baseline.classification, baseline.other_drawn) == ("unavailable", ("thruster_pack/lift",))
+    assert baseline.unmet_prerequisites == ("thruster_pack/fuel",)
     for reorder_abilities in itertools.permutations([reordered, speak_with_dead(), thruster_pack()]):
         entity = effective(person("iris", "Iris", *reorder_abilities))
         assert assess_attempt(flight(), entity, rulings) == baseline
@@ -591,23 +593,20 @@ def test_a_ruling_note_must_be_text():
 
 # --- round 4 of independent review --------------------------------------------------------
 
-def test_an_attempt_drawing_on_another_ability_is_never_approvable():
-    # The proving scenario filed under the thruster pack: light bending's `no_force` must not be
-    # escaped by filing the flight under a sibling that shares a tag.
+def test_an_attempt_drawing_on_another_ability_carries_that_abilitys_constraints():
+    # The proving scenario filed under the thruster pack draws on light bending (`light`): its
+    # prerequisite must be met, and its `no_force` binds unless a ruling explicitly lifts it.
     both = effective(person("iris", "Iris", light_bending(), thruster_pack()))
     radiant = attempt(ability_id="thruster_pack", needs=("light", "force", "flight"), conditions=("fuel",))
-    result = assess_attempt(radiant, both, [ruling(radiant)])
-    # The stretch draws on light bending (`light`), whose `no_force` limit binds it.
-    assert (result.classification, result.permitted) == ("beyond_limits", False)
-    assert "draws_on_other_ability" in codes(result)
-    assert refusal(lambda: check_ruling(ruling(radiant, ruling_id="r2"), both)) == "limit_not_approvable"
-    # A partial stretch of light bending filed under the thruster pack, in the dark.
-    dark = attempt(ability_id="thruster_pack", needs=("light", "flight"), conditions=("fuel",))
-    assert assess_attempt(dark, both).classification == "combination"
-    honest = attempt(ability_id="light_bending", needs=("light", "flight"), conditions=())
-    assert assess_attempt(honest, both).classification == "combination"  # draws on `lift` for flight
-    assert refusal(lambda: check_ruling(ruling(honest), both)) == "not_approvable"
-    # A partial stretch filed under an invented id.
+    dark = assess_attempt(radiant, both)
+    assert (dark.classification, dark.unmet_prerequisites) == ("unavailable", ("light_bending/ambient_light",))
+    lit = attempt(ability_id="thruster_pack", needs=("light", "force", "flight"),
+                  conditions=("fuel", "light_bending/ambient_light"))
+    result = assess_attempt(lit, both)
+    assert (result.classification, result.approval, result.binding_limits) == (
+        "combination", "pending", ("light_bending/no_force",))
+    assert {"draws_on_other_ability", "limit_binds"} <= codes(result)
+    # A partial stretch filed under an invented id is still filed under the one ability it uses.
     hidden = attempt(ability_id="light_bending_2", needs=("light", "concealment", "motion"), conditions=())
     assert assess_attempt(hidden, IRIS).classification == "relabel"
 
@@ -681,17 +680,18 @@ SUNLANCE = Ability("sunlance", "Sunlance", [Effect("lance", "t", {"light", "heat
 
 
 def test_a_stretch_cannot_escape_a_sibling_sharing_its_mechanism_tag():
-    # The proving scenario filed under another light-based power: light bending's `no_force`,
-    # `ambient_light` and `eye_strain` still bind, because the flight draws on its `light`.
+    # The proving scenario filed under another light-based power is a combination with light
+    # bending: its `ambient_light` must hold, and `no_force` binds unless explicitly lifted.
     entity = effective(person("iris", "Iris", light_bending(), SUNLANCE))
     dark = attempt(ability_id="sunlance", needs=("light", "force", "flight"), conditions=())
-    result = assess_attempt(dark, entity, [ruling(dark)])
-    assert (result.classification, result.permitted) == ("beyond_limits", False)
-    assert refusal(lambda: check_ruling(ruling(dark, ruling_id="r2"), entity)) == "limit_not_approvable"
-    # Without the limit it is a combination of the two abilities: never approvable in this slice.
-    open_entity = effective(person("iris", "Iris", light_bending(force_limit=False), SUNLANCE))
-    combo = assess_attempt(dark, open_entity, [ruling(dark)])
-    assert (combo.classification, combo.approval) == ("combination", "not_approvable")
+    assert assess_attempt(dark, entity, [ruling(dark, decides="combination")]).classification == "unavailable"
+    lit = attempt(ability_id="sunlance", needs=("light", "force", "flight"),
+                  conditions=("light_bending/ambient_light",))
+    unlifted = ruling(lit, decides="combination")
+    assert refusal(lambda: check_ruling(unlifted, entity)) == "limit_not_lifted"
+    result = assess_attempt(lit, entity, [unlifted])
+    assert (result.approval, result.permitted, result.inapplicable_rulings) == ("pending", False, ("r1",))
+    assert "limit_not_lifted" in codes(result)
     # A declared use of either power is untouched by the other.
     lance = attempt(ability_id="sunlance", needs=("light", "heat"), effect_id="lance", conditions=())
     assert assess_attempt(lance, entity).classification == "known_capability"
@@ -729,5 +729,86 @@ def test_a_missing_ability_drawing_on_one_or_several_abilities():
     entity = effective(person("iris", "Iris", light_bending(force_limit=False), thruster_pack()))
     one = attempt(ability_id="solar_sail", needs=("light", "drift"), conditions=())
     assert assess_attempt(one, entity).classification == "relabel"      # file it under light bending
-    two = attempt(ability_id="solar_sail", needs=("light", "flight"), conditions=())
+    two = attempt(ability_id="solar_sail", needs=("light", "flight"),
+                  conditions=("light_bending/ambient_light", "thruster_pack/fuel"))
     assert assess_attempt(two, entity).classification == "combination"  # light bending and the pack
+    # Several abilities each cover it: file it under one of them, not a combination.
+    cloak = Ability("cloak", "Cloak", [Effect("shroud", "t", {"light", "concealment"})])
+    three = effective(person("iris", "Iris", light_bending(), cloak, SUNLANCE))
+    covered = attempt(ability_id="new_id", needs=("light", "concealment"), conditions=())
+    result = assess_attempt(covered, three)
+    assert result.classification == "relabel"
+    assert result.other_candidates == ("cloak/shroud", "light_bending/veil")
+
+
+# --- approvable combinations (requester decision) -----------------------------------------
+
+def test_a_combination_is_approvable_case_by_case_with_explicit_lifts():
+    # Radiation-pressure flight under a sibling light power, with light bending's prerequisite met.
+    entity = effective(person("iris", "Iris", light_bending(), SUNLANCE))
+    lit = attempt(ability_id="sunlance", needs=("light", "force", "flight"),
+                  conditions=("light_bending/ambient_light",))
+    assert assess_attempt(lit, entity).approval == "pending"
+    lifting = AbilityRuling("r1", lit, "combination", "approved", "director",
+                            lifts=frozenset({"light_bending/no_force"}))
+    check_ruling(lifting, entity)
+    result = assess_attempt(lit, entity, [lifting])
+    assert (result.classification, result.approval, result.permitted, result.uncertain) == (
+        "combination", "approved", True, True)
+    # It pays the drawn ability's costs for the effects it touches.
+    assert [(owner, cost.id) for owner, cost in result.other_costs] == [
+        ("light_bending", "eye_strain"), ("light_bending", "migraine")]
+    # A refusal decides it too.
+    refused = assess_attempt(lit, entity, [ruling(lit, decides="combination", decision="refused")])
+    assert (refused.approval, refused.permitted, refused.other_costs) == ("refused", False, ())
+
+
+def test_the_named_abilitys_own_limits_are_never_liftable():
+    entity = effective(person("iris", "Iris", light_bending(), thruster_pack()))
+    own = attempt(needs=("light", "force", "flight"), conditions=("ambient_light", "thruster_pack/fuel"))
+    assert assess_attempt(own, entity).classification == "beyond_limits"
+    lifting = AbilityRuling("r1", own, "combination", "approved", "director",
+                            lifts=frozenset({"light_bending/no_force"}))
+    assert refusal(lambda: check_ruling(lifting, entity)) == "limit_not_approvable"
+
+
+def test_lifts_must_name_exactly_what_binds():
+    entity = effective(person("iris", "Iris", light_bending(), SUNLANCE))
+    lit = attempt(ability_id="sunlance", needs=("light", "force", "flight"),
+                  conditions=("light_bending/ambient_light",))
+    extra = AbilityRuling("r1", lit, "combination", "approved", "d",
+                          lifts=frozenset({"light_bending/no_force", "sunlance/none"}))
+    assert refusal(lambda: check_ruling(extra, entity)) == "lift_not_binding"
+    # A combination with nothing binding needs no lift.
+    open_entity = effective(person("iris", "Iris", light_bending(force_limit=False), SUNLANCE))
+    plain = ruling(lit, decides="combination")
+    check_ruling(plain, open_entity)
+    assert assess_attempt(lit, open_entity, [plain]).permitted
+
+
+@pytest.mark.parametrize("build", [
+    lambda: AbilityRuling("r1", flight(), "extrapolation", "approved", "d", lifts=frozenset({"a/b"})),
+    lambda: AbilityRuling("r1", flight(), "combination", "refused", "d", lifts=frozenset({"a/b"})),
+    lambda: AbilityRuling("r1", flight(), "combination", "approved", "d", lifts=frozenset({"no_slash"})),
+    lambda: AbilityRuling("r1", flight(), "combination", "approved", "d", lifts=frozenset({"a/b/c"})),
+    lambda: attempt(conditions=("a/b/c",)),
+    lambda: attempt(conditions=("A/b",)),
+])
+def test_lifts_and_qualified_conditions_are_validated(build):
+    assert refusal(build) == "invalid_field"
+
+
+def test_a_qualified_condition_only_counts_for_an_ability_drawn_on():
+    # Naming another ability's prerequisite that the attempt does not draw on is a stale label.
+    entity = effective(person("iris", "Iris", light_bending(), thruster_pack()))
+    stray = attempt(effect_id="veil", conditions=("ambient_light", "thruster_pack/fuel"))
+    result = assess_attempt(stray, entity)
+    assert (result.classification, result.stale_references) == ("relabel", ("prerequisite:thruster_pack/fuel",))
+
+
+def test_extras_on_a_drawn_ability_fail_closed_for_a_combination():
+    odd = Ability("sunlance", "Sunlance", [Effect("lance", "t", {"light", "heat"})], extras={"x": 1})
+    entity = effective(person("iris", "Iris", light_bending(force_limit=False), odd))
+    lit = attempt(needs=("light", "heat", "flight"), conditions=("ambient_light",))
+    result = assess_attempt(lit, entity, [ruling(lit, decides="combination")])
+    assert (result.classification, result.permitted) == ("needs_upgrade", False)

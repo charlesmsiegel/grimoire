@@ -70,9 +70,10 @@ def test_explicit_defaults_decode_equal_and_reencode_without_them():
                                              "effects": [{"id": "e", "text": "t", "tags": ["x"]}]}]}
 
 
-def test_a_blank_range_means_absent():
+@pytest.mark.parametrize("blank", ["", "  ", "\n"])
+def test_a_blank_range_means_absent(blank):
     entry = {"facet": "abilities", "abilities": [{"id": "a", "name": "A", "effects": [
-        {"id": "e", "text": "t", "tags": ["x"], "range": ""}]}]}
+        {"id": "e", "text": "t", "tags": ["x"], "range": blank}]}]}
     assert decode_traits(entry).traits.get(Abilities).abilities[0].effects[0].range is None
 
 

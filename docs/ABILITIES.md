@@ -17,7 +17,7 @@ An author writes, as ordinary entity data, what a powers-capable entity **may an
 - a prerequisite, `ambient_light`;
 - an ability-wide cost, `eye_strain`.
 
-She tries to fly using radiation pressure. The labelled attempt needs `light`, `force` and `flight`. The assessment is `beyond_limits`: it cites `no_force` and `force`, charges no cost, and refuses any approval. If the author had written no such limit, the same attempt would be an `extrapolation` waiting for a ruling. In neither case is it effortless flight. Two more constrained abilities are proven the same way: speaking with the recently dead, and a fuelled thruster pack (`backend/tests/test_ability_scenarios.py`).
+She tries to fly using radiation pressure. The labelled attempt needs `light`, `force` and `flight`. The assessment is `beyond_limits`: it cites `no_force` and `force`, charges no cost, and refuses any approval. If the author had written no such limit, the same attempt would be an `extrapolation` waiting for a ruling. Filed under another of her abilities that shares `light`, it is a `combination`: light bending's prerequisite must hold and `no_force` still binds, unless a director's ruling explicitly lifts it. In no case is it effortless flight. Two more constrained abilities are proven the same way: speaking with the recently dead, and a fuelled thruster pack (`backend/tests/test_ability_scenarios.py`).
 
 ## Ability values
 
@@ -74,13 +74,14 @@ Abilities therefore persist in any record that carries an entity payload, such a
 | `actor` | an exact `InstanceRef` (subclasses are refused). Ids and text in ability values, attempts and rulings must be plain `str`. |
 | `effect_id` | the declared effect the labeller says it uses, or none. |
 | `provenance` | attribution text up to 512 characters, never authority. |
-| `conditions_met` | up to 64 ids, only of the **named ability's** prerequisites, that the labeller says hold. A prerequisite id of another ability is stale here (`relabel`, also when the named ability is missing). These are asserted, not checked against scene facts; checking them is 029's job. |
+| `conditions_met` | up to 64 prerequisite ids that the labeller says hold: a plain id names a prerequisite of the **named ability**; `<ability>/<id>` names one of an ability the attempt draws on (needed for a `combination`). Anything else is stale (`relabel`, also when the named ability is missing). These are asserted, not checked against scene facts; checking them is 029's job. |
 
 **Labelling is the trust boundary.** These fields come from a labeller that is **not the narrator**, the same rule as for `NarrationClaim`. The assessment is only as good as the labels and the shared vocabulary.
 - A labeller that writes `push` for `force` escapes `no_force`. The unused tag then shows up in `unknown_tags`.
 - Filing an attempt under an invented id, or a sibling ability, does **not** escape another ability. Unless the named effect fully covers the attempt, an attempt that shares a needed tag with another of the actor's abilities (`other_drawn`) *draws on* it:
-  - that ability's limits bind (`beyond_limits`);
-  - otherwise it is a `combination`, which this slice does not adjudicate and never approves;
+  - it is a `combination`: approvable only case by case by an explicit director ruling, and fail-closed until then;
+  - that ability's prerequisites (`<ability>/<id>` in `conditions_met`), unknown fields and costs apply too;
+  - that ability's limits on a needed tag bind (`binding_limits`) unless the approving ruling lifts each one by name;
   - an attempt another ability covers, or one that is not a use of the named ability at all, reads `relabel` (file it there).
 
   Only a genuinely new vocabulary is a `new_ability`; a limit of an ability it does not draw on stays advisory (`other_conflicts`), since a new power may legitimately produce that tag.
@@ -115,7 +116,8 @@ Let `A` be the named ability and `E` the named effect, if they exist. Then:
   - `other_conflicts`: limits of the actor's *other* abilities that exclude a needed tag;
   - `other_unrecognized`: paths on the actor's *other* abilities that carry extras, so a director deciding a `new_ability` sees a constraint this build cannot read.
   - `other_candidates`: `<ability>/<effect>` of declared effects in the actor's *other* abilities that cover `needs`;
-  - `other_drawn`: `<ability>/<effect>` of other abilities' effects that share a needed tag.
+  - `other_drawn`: `<ability>/<effect>` of other abilities' effects that share a needed tag;
+  - `binding_limits`: `<ability>/<limit>` of those abilities' limits that exclude a needed tag.
 
   These change the classification only when the named effect does **not** cover the attempt. A declared use is never blocked by a sibling, so overlapping powers never deadlock.
 - `unrecognized`: paths of values carrying extras. These are `#facet`, `<ability>` and `<ability>/<part>`, for every part of the named ability.
@@ -124,17 +126,17 @@ Let `A` be the named ability and `E` the named effect, if they exist. Then:
 
 | # | Condition | Classification | Approval |
 |---|---|---|---|
-| 1 | no `A` | `needs_upgrade` if the facet has extras; `relabel` if there are stale references or `other_candidates`, or it draws on exactly one ability (file it there); `combination` if it draws on several; else `new_ability` | `not_approvable`, or `pending` |
+| 1 | no `A` | `needs_upgrade` if the facet has extras; `relabel` if there are stale references or `other_candidates`, or it draws on exactly one ability (file it there); if it draws on several, `unavailable` / `needs_upgrade` / `combination` as for 3, 3a and 2c; else `new_ability` | `not_approvable`, or `pending` |
 | 1a | no effect of `A` shares a needed tag, but another ability's does | `relabel`: not a use of `A`; file it there (before `A`'s limits) | `not_approvable` |
-| 2 | `conflicts`, or (not covered by `E`) a limit of an ability it draws on excludes a needed tag | `beyond_limits` | `not_approvable` |
+| 2 | `conflicts`: a limit of the named ability excludes a needed tag | `beyond_limits` | `not_approvable` |
 | 2a | `stale_references` | `relabel` | `not_approvable` |
 | 2b | `other_candidates` while `A` has no covering effect | `relabel`: file it under the ability that covers it | `not_approvable` |
-| 2c | `other_drawn`, not covered by `E` and no covering candidate in `A` | `combination`: draws on several abilities; not adjudicated in this slice, and no relabelling fixes it | `not_approvable` |
 | 2d | no effect of any ability shares a needed tag | `relabel`: file it under its own ability id | `not_approvable` |
-| 3 | unmet prerequisites | `unavailable` | `not_approvable` |
-| 3a | `unrecognized` | `needs_upgrade` | `not_approvable` |
+| 3 | unmet prerequisites (for a combination, also the drawn abilities') | `unavailable` | `not_approvable` |
+| 3a | `unrecognized` (for a combination, also the drawn abilities') | `needs_upgrade` | `not_approvable` |
 | 4 | `E` covers `needs` | `known_capability` if reliable, else `attempted_feat` | `not_needed` |
 | 5 | `candidates` | `relabel`: name a covering effect | `not_approvable` |
+| 5a | `other_drawn` (a stretch of `A` drawing on other abilities) | `combination`: approvable by a ruling that lifts every `binding_limits` entry | `pending` |
 | 6 | otherwise | `extrapolation` | `pending` |
 
 `approval` is `not_needed` only when the power works as declared. A refusal is `not_approvable`, never `not_needed`. Once a ruling exists the value becomes `approved` or `refused`. **`permitted`** is the one flag a consumer should gate on: it is true exactly for a known capability, an attempted feat, or an approved extrapolation or new ability.
@@ -143,7 +145,7 @@ Let `A` be the named ability and `E` the named effect, if they exist. Then:
 
 Other outputs:
 
-- **`costs`** are what *would* apply: the ability-wide costs plus those scoped to an effect in scope. They are reported only for a known capability, an attempted feat or an **approved** extrapolation. Nothing is committed. Applying costs through accepted state is milestone 2, with [Turn Effects](roadmap/sprints/turn-effects-and-wrap-up.md) (021) and 029.
+- **`costs`** are what *would* apply: the ability-wide costs plus those scoped to an effect in scope. They are reported only for a known capability, an attempted feat, or an **approved** extrapolation or combination. An approved combination also reports `other_costs`: `(ability, cost)` for each drawn ability's ability-wide costs and those scoped to the effects it touches. Nothing is committed. Applying costs through accepted state is milestone 2, with [Turn Effects](roadmap/sprints/turn-effects-and-wrap-up.md) (021) and 029.
 - **`uncertain`** is true for an attempted feat and for an approved extrapolation or new ability. It concerns whether the power works this time. The larger action's outcome is still 029's.
 - **`reasons`** are `Reason(code, text)` values. The `code` is stable; the `text` is deterministic prose naming the ids. Codes:
   - `no_ability`
@@ -154,13 +156,13 @@ Other outputs:
   - `effect_covers`, `effect_uncertain`
   - `not_covered`, `covered_by_other_effect`, `covered_by_other_ability`, `draws_on_other_ability`, `outside_ability`
   - `unknown_tag`, `other_limit_excludes`, `other_unrecognized_constraint`
-  - `approved`, `refused`, `pending_approval`
+  - `approved`, `refused`, `pending_approval`, `limit_binds`, `limit_not_lifted`
   - `inapplicable_ruling`, `mismatched_ruling`
 - **Order independence:** the same inputs in any order give an equal assessment.
 
 ## Provisional rulings
 
-`AbilityRuling(ruling_id, attempt, decides, decision, provenance, note="")` decides one **exact attempt value** for one classification. `decides` is `extrapolation` or `new_ability`; `decision` is `approved` or `refused`. `provenance` and `note` are text up to 512 characters. It is **025-provisional**: 029 may replace this surface. It is unrelated to [`knowledge.Ruling`](KNOWLEDGE.md).
+`AbilityRuling(ruling_id, attempt, decides, decision, provenance, note="", lifts=frozenset())` decides one **exact attempt value** for one classification. `decides` is `extrapolation`, `new_ability` or `combination`; `decision` is `approved` or `refused`. `lifts` (`<ability>/<limit>` paths) is only for an approved combination: it names each limit of a drawn ability the director sets aside. An approval that does not lift every `binding_limits` entry does not apply (`limit_not_lifted`); the named ability's own limits are never liftable. `provenance` and `note` are text up to 512 characters. It is **025-provisional**: 029 may replace this surface. It is unrelated to [`knowledge.Ruling`](KNOWLEDGE.md).
 
 How rulings are matched:
 - A ruling's campaign is that of its attempt's actor. Other-campaign rulings are **ignored**. Ruling ids are unique within the campaign; `check_ruling` enforces that when a ruling is issued. Assessment checks only the rulings on its own attempt id **and actor**, so a stray duplicate elsewhere, or another actor's attempt under the same id, never touches it. The same ruling record passed twice (two merged logs) counts once; two different rulings under one id raise `duplicate_ruling`.
@@ -175,8 +177,10 @@ At most 256 rulings may name one attempt id **for one actor**; rulings on other 
 `check_ruling(ruling, entity, existing=())` is the issue-time check. It assesses the attempt with `existing` (so an already inconsistent `existing` raises `duplicate_ruling` or `conflicting_rulings` first), then refuses, in this order:
 1. `limit_not_approvable`: the attempt is beyond limits. Only an authored change to the ability can alter that.
 2. `ruling_not_needed`: a known capability or attempted feat, whether the ruling approves or refuses.
-3. `not_approvable`: `relabel`, `combination`, `unavailable` or `needs_upgrade`. These cannot be ruled on as labelled: relabel, meet the prerequisite, read with a newer build, or (for a combination) wait for milestone 3.
+3. `not_approvable`: `relabel`, `unavailable` or `needs_upgrade`. These cannot be ruled on as labelled: relabel, meet the prerequisite, or read with a newer build.
 4. `wrong_classification`.
+4a. `lift_not_binding`: `lifts` names a limit that does not bind this attempt.
+4b. `limit_not_lifted`: an approval of a combination does not lift every `binding_limits` entry.
 5. `too_many_rulings`: the attempt id already has 256 rulings, so a further one would make it impossible to assess.
 6. `duplicate_ruling`.
 7. `conflicting_rulings`: a live existing ruling decided the other way.
@@ -199,7 +203,7 @@ At most 256 rulings may name one attempt id **for one actor**; rulings on other 
 
 - observed consequences as evidence (020);
 - committed costs and cooldowns (milestone 2);
-- combinations of, and conflicts between, abilities in one attempt (they read `relabel` and fail closed);
+- rules for combining abilities in one attempt (milestone 3): this slice reads them as `combination`, fail-closed until a director approves one case by case;
 - limits that evolve by rule, and novel high-concept power systems (milestone 3);
 - adapters to real rulesets;
 - wielded or item-granted abilities (034);

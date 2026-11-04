@@ -207,7 +207,8 @@ def _ability_value(cls: type, entry: object, label: str) -> object:
         if item.name == "extras" or item.name not in rest:
             continue
         value = rest.pop(item.name)
-        if item.name in _ABILITY_NULLABLE and (value is None or (item.name == "range" and value == "")):
+        blank_range = item.name == "range" and type(value) is str and not value.strip()
+        if item.name in _ABILITY_NULLABLE and (value is None or blank_range):
             continue  # null (or a blank range) of optional prose means "absent", as encoding omits it
         if item.name in _ABILITY_NAMES:
             value = _names(value, f"{label} {item.name}")
