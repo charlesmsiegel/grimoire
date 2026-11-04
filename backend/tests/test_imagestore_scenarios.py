@@ -870,9 +870,9 @@ def test_a_hide_in_a_look_alike_place_never_reveals_the_source_picture(hidden, s
     images.place(WREN_B, "gallery_1", Placement("hide"), None).commit()  # keeps the canonical folder alive
     if damage == "lookalike-folder-beside-canonical":
         sibling = folder.with_name("Wren-b")
-        sibling.mkdir()
-        if not (folder / "gallery_1.json").exists() or sibling.samefile(folder):
+        if sibling.exists():  # checked before creating it: there the look-alike is the same folder
             pytest.skip("case-insensitive filesystem: the look-alike is the same folder")
+        sibling.mkdir()
         target.rename(sibling / "avatar.json")
     else:
         target.rename(folder / "avatar copy.json")
