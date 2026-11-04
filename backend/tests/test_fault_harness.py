@@ -5,6 +5,7 @@ they are not a storage contract or journal format.
 """
 
 import hashlib
+import itertools
 import json
 import os
 import random
@@ -16,7 +17,8 @@ from grimoire.testing import (
     Crash, CrashScenario, Fail, Interleave, Invariant, OperationBudgetExceeded, RootedFileOps,
     SandboxViolation,
     SimulatedCrash, Target, atomic_outcome, completes_after, explore_crashes,
-    idempotent_recovery, no_residue, preserves_meddle, run_with_fault, untouched,
+    idempotent_recovery, no_residue, preserves_interleave, preserves_meddle, run_plans, run_with_fault,
+    untouched,
 )
 from grimoire.testing.explore import HARNESS_INVARIANTS
 
@@ -694,3 +696,146 @@ def test_harness_invariant_names_are_stable():
         "simulated crash propagated", "failure surfaced", "bounded file operations",
         "all mutations mediated", "recovery completes", "recovery preserves completion", "sandbox",
     )
+
+
+
+# -- interleaves under explore_crashes (019) ---------------------------------------
+
+HUMAN = b"external edit"
+
+
+def _external_edit(ops, root):
+    ops.write_bytes(root / "a.json", HUMAN)
+
+
+def guarded_read_modify_write(ops, root):
+    """Compare-and-swap: an edit that lands before the re-check is kept and ours is set aside."""
+    data = ops.read_bytes(root / "a.json")
+    temp = ops.make_temp(root, prefix="a.json.", suffix=".new")
+    ops.write_bytes(temp, data + b" +writer")
+    if ops.read_bytes(root / "a.json") != data:
+        ops.replace(temp, root / "a.json.theirs")
+        return
+    ops.replace(temp, root / "a.json")
+
+
+def _interleave_scenario(action, **kwargs):
+    return scenario(action, discard_staging,
+                    invariants=(preserves_interleave(), idempotent_recovery(), RESIDUE), **kwargs)
+
+
+def test_explore_with_interleaves_proves_a_guarded_writer(tmp_path):
+    edit = Interleave(Target("write_bytes", "a.json.~tmp1.new"), _external_edit)
+    report = explore_crashes(_interleave_scenario(guarded_read_modify_write), tmp_path, errors=True,
+                             interleaves=[edit])
+    report.assert_ok()
+    assert report.runs[0].recovered["a.json"] == HUMAN  # the baseline itself raced
+    assert report.points_explored >= 6
+    # crashes before the interleaved operation never reach it: excused, not "never triggered"
+    assert any(run.point.startswith("action:#1 make_temp") for run in report.runs)
+
+
+def test_explore_with_interleaves_names_a_lost_edit(tmp_path):
+    edit = Interleave(Target("make_temp"), _external_edit)
+    report = explore_crashes(_interleave_scenario(naive_read_modify_write), tmp_path, interleaves=[edit])
+    assert names(report.violations) == ["preserves_interleave"]
+    assert report.violations[0].point == "baseline"
+
+
+def test_a_shared_interleave_must_fire_in_the_baseline(tmp_path):
+    never = Interleave(Target("remove", "no-such-file"), _external_edit)
+    report = explore_crashes(_interleave_scenario(guarded_read_modify_write), tmp_path, interleaves=[never])
+    assert names(report.violations) == ["planned fault fired"]
+    assert len(report.runs) == 1
+    with pytest.raises(ValueError):
+        explore_crashes(_interleave_scenario(guarded_read_modify_write), tmp_path, interleaves=[Crash(0)])
+
+
+def test_nondeterminism_is_still_named_with_interleaves(tmp_path):
+    counter = itertools.count()
+
+    def drifting(ops, root):
+        guarded_read_modify_write(ops, root)
+        ops.write_bytes(root / f"log{next(counter)}", b"x")
+
+    edit = Interleave(Target("write_bytes", "a.json.~tmp1.new"), _external_edit)
+    report = explore_crashes(_interleave_scenario(drifting), tmp_path, interleaves=[edit])
+    assert "deterministic action" in names(report.violations)
+
+
+def test_select_shards_the_points_and_run_plans_shares_one_baseline(tmp_path):
+    sc = scenario(journaled_publish(NEW), invariants=(atomic_outcome(), idempotent_recovery(), RESIDUE))
+    whole = explore_crashes(sc, tmp_path)
+    replaces = explore_crashes(sc, tmp_path, select=lambda op: op.kind == "replace")
+    rest = explore_crashes(sc, tmp_path, select=lambda op: op.kind != "replace")
+    whole.assert_ok(), replaces.assert_ok(), rest.assert_ok()
+    assert replaces.points_explored + rest.points_explored == whole.points_explored
+    assert {run.point for run in whole.runs[1:]} == {run.point for run in replaces.runs[1:] + rest.runs[1:]}
+    plans = [[Interleave(index, lambda ops, root: None)] for index in range(3)]
+    report = run_plans(sc, plans, tmp_path)
+    report.assert_ok()
+    assert len(report.runs) == 4 and report.runs[0].point == "baseline"
+
+
+def test_select_asking_for_a_disabled_fault_timing_is_an_error(tmp_path):
+    """Asking for ``fail`` without ``errors=True`` (or ``torn`` without ``torn=True``) would explore nothing."""
+    import pytest as _pytest
+    from grimoire.testing.explore import _timings
+    from grimoire.testing import FileOp
+    op = FileOp(0, "write_bytes", "a.json", None, None, 3)
+    with _pytest.raises(ValueError, match="not enabled"):
+        _timings(op, lambda _: {"fail"}, torn=True, errors=False)
+    with _pytest.raises(ValueError, match="not enabled"):
+        _timings(op, lambda _: {"torn"}, torn=False, errors=True)
+    assert _timings(op, lambda _: {"fail"}, torn=False, errors=True) == {"fail"}
+
+
+
+def test_an_interleaved_write_then_remove_is_not_a_lost_edit(tmp_path):
+    """faults: a path an interleave removed stays absent (TESTING.md), so the earlier write is not "lost"."""
+    from grimoire.testing import CrashScenario, Interleave, preserves_interleave, run_plans
+
+    def setup(ops, root):
+        ops.write_bytes(root / "a.json", b"1")
+
+    def action(ops, root):
+        ops.write_bytes(root / "a.json", b"2")
+        ops.write_bytes(root / "a.json", b"3")
+
+    scenario = CrashScenario("write-then-remove", setup, action, lambda ops, root: None, (preserves_interleave(),))
+    plan = [Interleave(0, lambda ops, root: ops.write_bytes(root / "ext.json", b"x")),
+            Interleave(1, lambda ops, root: ops.remove(root / "ext.json"))]
+    run_plans(scenario, [plan], tmp_path).assert_ok()
+
+
+def test_a_sibling_whose_name_starts_with_the_root_is_outside_the_sandbox(tmp_path):
+    """The string-prefix confinement must not treat ``root-evil`` as inside ``root``."""
+    from grimoire.testing import SandboxViolation
+    root = tmp_path / "root"
+    root.mkdir()
+    (tmp_path / "root-evil").mkdir()
+    with pytest.raises(SandboxViolation):
+        RootedFileOps(root).write_bytes(tmp_path / "root-evil" / "f.json", b"x")
+    assert not (tmp_path / "root-evil" / "f.json").exists()
+
+
+@pytest.mark.parametrize("chosen", ["before", {"later"}])
+def test_select_returning_an_unknown_timing_is_an_error(tmp_path, chosen):
+    """A bare string (read as its letters) or a misspelt timing would explore nothing and still pass."""
+    from grimoire.testing import CrashScenario, atomic_outcome, explore_crashes
+
+    def setup(ops, root):
+        ops.write_bytes(root / "a.json", b"1")
+
+    def action(ops, root):
+        ops.write_bytes(root / "a.json", b"2")
+    scenario = CrashScenario("s", setup, action, lambda ops, root: None, (atomic_outcome(),))
+    with pytest.raises(ValueError, match="unknown fault timings"):
+        explore_crashes(scenario, tmp_path, select=lambda op: chosen)
+
+
+def test_interleaves_also_join_the_recovery_crash_runs(tmp_path):
+    from grimoire.testing import Interleave, Target, explore_crashes
+    edit = Interleave(Target("write_bytes", "a.json.~tmp1.new"), _external_edit)
+    explore_crashes(_interleave_scenario(guarded_read_modify_write), tmp_path, interleaves=[edit],
+                    recovery_crashes=True).assert_ok()

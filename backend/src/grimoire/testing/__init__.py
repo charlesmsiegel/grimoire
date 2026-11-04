@@ -7,7 +7,7 @@ Test infrastructure only: production packages must not import it. See
 from .explore import (
     CrashOutcome, CrashReport, CrashScenario, FaultRun, Invariant, Violation,
     atomic_outcome, completes_after, explore_crashes, idempotent_recovery, no_residue,
-    preserves_meddle, run_with_fault, untouched,
+    preserves_interleave, preserves_meddle, run_plans, run_with_fault, untouched,
 )
 from .faults import (
     Crash, Fail, FileOp, Interleave, OperationBudgetExceeded, RootedFileOps, SimulatedCrash,
@@ -18,7 +18,7 @@ from .fileops import FileOps, OsFileOps, SandboxViolation, Tree, snapshot, wipe
 __all__ = [
     "CrashOutcome", "CrashReport", "CrashScenario", "FaultRun", "Invariant", "Violation",
     "atomic_outcome", "completes_after", "explore_crashes", "idempotent_recovery", "no_residue",
-    "preserves_meddle", "run_with_fault", "untouched",
+    "preserves_interleave", "preserves_meddle", "run_plans", "run_with_fault", "untouched",
     "Crash", "Fail", "FileOp", "Interleave", "OperationBudgetExceeded", "RootedFileOps",
     "SimulatedCrash", "Target", "validate_plan",
     "FileOps", "OsFileOps", "SandboxViolation", "Tree", "snapshot", "wipe",

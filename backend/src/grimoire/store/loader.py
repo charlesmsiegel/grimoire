@@ -43,6 +43,7 @@ from .jsonfmt import JsonError, etag, parse_strict
 from .layout import (
     ACCEPTED, CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, HOLDINGS, IMAGES, INSTANCES, PLACEMENTS,
     SCOPE, MANIFEST, MARKER, RECORDS, RELATIONS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS, SOURCE_DIR, SOURCES, SUFFIX,
+    SYNC,
     TXN, WRAPUPS, Parts, classify, is_noise, manifest_parts, name_key,
 )
 
@@ -1091,7 +1092,7 @@ def _load(access: Access) -> LibraryView:
     problems: list[LoadProblem] = []
     roots = set()
     for name in _listing(access, (), problems, None):  # links are reported here and never entered
-        if name in (MARKER, TXN, CONFLICTS) or name in RESERVED_ROOTS:
+        if name in (MARKER, TXN, CONFLICTS, SYNC) or name in RESERVED_ROOTS:
             continue
         if name in (SOURCES, CAMPAIGNS) and _is_dir(access, (name,)):
             roots.add(name)
