@@ -166,6 +166,7 @@ class AbilityAssessment:
     other_conflicts: tuple[tuple[str, str, tuple[str, ...]], ...]
     unrecognized: tuple[str, ...]
     other_unrecognized: tuple[str, ...]
+    other_candidates: tuple[str, ...]
     stale_references: tuple[str, ...]
     inapplicable_rulings: tuple[str, ...]
     mismatched_rulings: tuple[str, ...]
@@ -319,6 +320,7 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
     unknown: list[str] = []
     others: list[tuple[str, str, tuple[str, ...]]] = []
     other_unrecognized: list[tuple[str, tuple[str, ...]]] = []
+    other_candidates: list[str] = []
     if facet is None:
         unknown = sorted(needs)  # nothing is authored, so every needed tag is unknown
     else:
@@ -331,6 +333,11 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
             if each.id == attempt.ability_id:
                 continue
             other_unrecognized += _with_extras(each)
+            for part in each.effects:
+                if needs <= part.tags:
+                    other_candidates.append(f"{each.id}/{part.id}")
+                    reasons.append(Reason("covered_by_other_ability", f"effect {part.id!r} of {each.id!r} "
+                                                                      f"provides {_tags(needs)}"))
             for limit in each.limits:
                 hit = tuple(sorted(limit.excludes & needs))
                 if hit:
@@ -361,15 +368,24 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
                                                      f"provides {_tags(needs)}"))
 
     if ability is None:
-        classification = "needs_upgrade" if FACET_PATH in unrecognized else "new_ability"
+        # A declared effect of another ability already covers it: filing it under a new id must
+        # not turn a known (perhaps unavailable or costly) power into an approvable new one.
+        if FACET_PATH in unrecognized:
+            classification = "needs_upgrade"
+        elif other_candidates:
+            classification = "relabel"
+        else:
+            classification = "new_ability"
     elif conflicts:
         classification = "beyond_limits"
     elif stale:
         classification = "relabel"
     elif not touched:
-        # No effect of the named ability shares a needed tag: this describes a different power,
-        # so the ability's own prerequisites and costs do not apply. Its limits (above) still bind.
-        classification = "needs_upgrade" if unrecognized else "new_ability"
+        # No effect of the named ability shares a needed tag: this is not a use of it. File it
+        # under its own ability id (a new ability, or the ability that covers it).
+        classification = "relabel"
+        reasons.append(Reason("outside_ability", f"no effect of {ability.id!r} shares a needed tag; "
+                                                 "file the attempt under its own ability id"))
     elif unmet:
         classification = "unavailable"
     elif unrecognized:
@@ -419,6 +435,7 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         other_conflicts=tuple(sorted(others)),
         unrecognized=tuple(unrecognized),
         other_unrecognized=tuple(path for path, _ in sorted(other_unrecognized)),
+        other_candidates=tuple(sorted(other_candidates)),
         stale_references=tuple(sorted(stale)),
         inapplicable_rulings=inapplicable,
         mismatched_rulings=mismatched,

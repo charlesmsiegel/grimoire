@@ -103,7 +103,7 @@ def test_stale_references_never_raise():
                    {"conditions": ("ambient_light", "veil")}, {"conditions": ("ambient_light", "no_force")}):
         result = assess_attempt(attempt(**kwargs), IRIS)
         assert result.classification == "relabel" and result.stale_references
-    result = assess_attempt(attempt(ability_id="gone", effect_id="veil"), IRIS)
+    result = assess_attempt(attempt(ability_id="gone", needs=("fire",), effect_id="veil"), IRIS)
     assert result.classification == "new_ability"
     assert result.stale_references == ("effect:veil", "prerequisite:ambient_light")
     assert {"stale_effect", "stale_prerequisite"} <= codes(result)
@@ -491,12 +491,21 @@ def test_adding_a_needed_tag_never_removes_a_scoped_constraint():
                         assert set(before.costs) <= set(after.costs)
 
 
-def test_an_attempt_sharing_no_tag_with_the_ability_is_a_new_ability():
-    telekinesis = attempt(needs=("telekinesis",), conditions=())
-    result = assess_attempt(telekinesis, IRIS)
-    assert (result.classification, result.approval, result.costs) == ("new_ability", "pending", ())
-    check_ruling(ruling(telekinesis, decides="new_ability"), IRIS)
-    # The ability's own prerequisites do not gate a different power, but its limits still bind.
+def test_an_attempt_sharing_no_tag_with_the_ability_must_be_filed_under_its_own_id():
+    # Not a use of light bending, so neither an extrapolation of it nor an approvable new power
+    # that would skip its "every use" prerequisites and costs.
+    for label in (attempt(needs=("telekinesis",), conditions=()),
+                  attempt(needs=("telekinesis",), effect_id="veil", conditions=())):
+        result = assess_attempt(label, IRIS, [ruling(label, decides="new_ability")])
+        assert (result.classification, result.approval, result.permitted) == ("relabel", "not_approvable", False)
+        assert "outside_ability" in codes(result)
+        assert refusal(lambda: check_ruling(ruling(label, decides="new_ability", ruling_id="r2"), IRIS)) == \
+            "not_approvable"
+    # Filed under its own id it is a genuine new ability.
+    own = attempt(ability_id="telekinesis", needs=("telekinesis",), conditions=())
+    assert assess_attempt(own, IRIS).classification == "new_ability"
+    check_ruling(ruling(own, decides="new_ability"), IRIS)
+    # The named ability's limits still bind.
     assert assess_attempt(attempt(needs=("force",), conditions=()), IRIS).classification == "beyond_limits"
 
 
@@ -537,3 +546,33 @@ def test_without_the_facet_every_needed_tag_is_unknown():
     result = assess_attempt(attempt(entity_id="plain", needs=("fire", "light"), conditions=()),
                             effective(person("plain", "Plain")))
     assert result.unknown_tags == ("fire", "light")
+
+
+# --- round 3 of independent review --------------------------------------------------------
+
+VANTA = effective(person("vanta", "Vanta", light_bending(), thruster_pack()))
+
+
+def test_a_power_filed_under_the_wrong_ability_id_needs_a_relabel():
+    # An invented id, or a sibling ability that shares no tag: another ability's declared effect
+    # covers it, so it must not become an approvable new ability that skips that effect's
+    # prerequisites and costs.
+    for ability_id in ("shadow_veil", "thruster_pack"):
+        hidden = attempt(entity_id="vanta", ability_id=ability_id, needs=("light", "concealment"), conditions=())
+        result = assess_attempt(hidden, VANTA, [ruling(hidden, decides="new_ability")])
+        assert (result.classification, result.permitted, result.other_candidates) == \
+            ("relabel", False, ("light_bending/veil",))
+        assert "covered_by_other_ability" in codes(result)
+    honest = assess_attempt(attempt(entity_id="vanta", effect_id="veil", conditions=()), VANTA)
+    assert honest.classification == "unavailable"
+
+
+def test_check_ruling_ignores_ruling_ids_used_in_another_campaign():
+    check_ruling(ruling(flight()), OPEN_IRIS, [ruling(flight(campaign="c2"))])
+
+
+def test_a_ruling_note_must_be_text():
+    assert refusal(lambda: AbilityRuling("r1", flight(), "extrapolation", "approved", "d", note=3)) == \
+        "invalid_field"
+    assert refusal(lambda: AbilityRuling("r1", flight(), "extrapolation", "approved", "d", note="x" * 513)) == \
+        "invalid_field"

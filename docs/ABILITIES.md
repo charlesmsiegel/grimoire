@@ -78,7 +78,7 @@ Abilities therefore persist in any record that carries an entity payload, such a
 
 **Labelling is the trust boundary.** These fields come from a labeller that is **not the narrator**, the same rule as for `NarrationClaim`. The assessment is only as good as the labels and the shared vocabulary.
 - A labeller that writes `push` for `force` escapes `no_force`. The unused tag then shows up in `unknown_tags`.
-- A labeller that files the flight under an invented ability id gets `new_ability`. The real limit then shows up in `other_conflicts`.
+- A labeller that files the flight under an invented ability id gets `new_ability`. The real limit then shows up in `other_conflicts`. (Filing an already *covered* power under another id is caught: it reads `relabel`.)
 - A labeller that leaves the outcome out of `needs` (`{light}` with `veil`, for the radiation-pressure flight) gets a plain `known_capability`, and nothing shows. **Every intended outcome must be a needed tag:** this is a labeller obligation for 029/035.
 
 All three escapes are pinned by tests that state what is and is not guaranteed: the classification follows the labels.
@@ -105,20 +105,21 @@ Let `A` be the named ability and `E` the named effect, if they exist. Then:
   Adding a needed tag can only add effects, so no label and no extra tag ever drops the constraints of an effect the attempt draws on (a property test checks this). It is deliberately conservative: an effect touched only through a generic tag (`light`) counts too, so flight by radiation pressure carries the mirage's migraine. Authors who want effects kept apart give them distinct tags.
 - **Applicable prerequisites:** the ability-wide ones plus those scoped to an effect in scope. A wrong label can therefore read `unavailable` before `relabel`. This is conservative: nothing is used.
 - `candidates`: declared effects whose own tags cover `needs`, including `E`. **A union of tags across effects never covers.**
-- Computed whenever the entity has the facet, advisory only:
+- Computed for every attempt, advisory only (without a facet, every needed tag is unknown):
   - `unknown_tags`: needed tags that none of the actor's abilities use;
   - `other_conflicts`: limits of the actor's *other* abilities that exclude a needed tag;
   - `other_unrecognized`: paths on the actor's *other* abilities that carry extras, so a director deciding a `new_ability` sees a constraint this build cannot read.
+  - `other_candidates`: `<ability>/<effect>` of declared effects in the actor's *other* abilities that cover `needs`. When the named ability is missing, any such candidate makes the attempt `relabel`.
 - `unrecognized`: paths of values carrying extras. These are `#facet`, `<ability>` and `<ability>/<part>`, for every part of the named ability.
 
 **Classification**, first match:
 
 | # | Condition | Classification | Approval |
 |---|---|---|---|
-| 1 | no `A` | `new_ability`, or `needs_upgrade` if the facet has extras | `pending`, or `not_approvable` |
+| 1 | no `A` | `needs_upgrade` if the facet has extras; `relabel` if a declared effect of another of the actor's abilities covers `needs` (`other_candidates`); else `new_ability` | `not_approvable`, or `pending` |
 | 2 | `conflicts` | `beyond_limits` | `not_approvable` |
 | 2a | `stale_references` | `relabel` | `not_approvable` |
-| 2b | no effect of `A` shares a needed tag | `new_ability` (a different power: `A`'s prerequisites and costs do not apply), or `needs_upgrade` if `unrecognized` | `pending`, or `not_approvable` |
+| 2b | no effect of `A` shares a needed tag | `relabel`: this is not a use of `A`; file it under its own ability id | `not_approvable` |
 | 3 | unmet prerequisites | `unavailable` | `not_approvable` |
 | 3a | `unrecognized` | `needs_upgrade` | `not_approvable` |
 | 4 | `E` covers `needs` | `known_capability` if reliable, else `attempted_feat` | `not_needed` |
@@ -140,7 +141,7 @@ Other outputs:
   - `prerequisite_unmet`
   - `unrecognized_constraint`
   - `effect_covers`, `effect_uncertain`
-  - `not_covered`, `covered_by_other_effect`
+  - `not_covered`, `covered_by_other_effect`, `covered_by_other_ability`, `outside_ability`
   - `unknown_tag`, `other_limit_excludes`, `other_unrecognized_constraint`
   - `approved`, `refused`, `pending_approval`
   - `inapplicable_ruling`, `mismatched_ruling`
@@ -158,7 +159,7 @@ How rulings are matched:
 - Only the group that equals the current classification is **live**. Approve and refuse within the live group raise `conflicting_rulings`; agreeing rulings are fine, and the lowest id is reported.
 - Every other matching ruling is `inapplicable` and never raises. An approval of an extrapolation therefore stops applying when the author deletes the ability (the attempt becomes `new_ability`, `pending`), and nothing crashes.
 
-At most 256 same-campaign rulings may name one `attempt_id`; rulings on other attempts or in other campaigns are not counted.
+At most 256 rulings may name one attempt id **for one actor**; rulings on other attempts, by other actors or in other campaigns are not counted.
 
 `check_ruling(ruling, entity, existing=())` is the issue-time check. It assesses the attempt with `existing` (so an already inconsistent `existing` raises `duplicate_ruling` or `conflicting_rulings` first), then refuses, in this order:
 1. `limit_not_approvable`: the attempt is beyond limits. Only an authored change to the ability can alter that.
