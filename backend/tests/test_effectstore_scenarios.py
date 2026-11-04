@@ -72,6 +72,8 @@ def test_a1_the_next_reply_knows_the_key_is_gone(world):
     assert not index.recorded("carries", WREN, KEY1, as_of=8, requested_by=DIRECTOR)
     assert index.recorded("carries", WREN, KEY2, as_of=8, requested_by=DIRECTOR)
     assert index.recorded("carries", WREN, KEY1, as_of=6, requested_by=DIRECTOR)  # history is kept
+    wren = index.relation("r-seed-1", requested_by=DIRECTOR).relation
+    assert wren.ending.until == moment() and wren.ending.provenance == "effect:accepted/e-1"
     tam = index.relation("r-1", requested_by=DIRECTOR).relation
     assert tam.provenance == "effect:accepted/e-1" and tam.since == moment()
     event, _ = library.read(done.ref, requested_by=DIRECTOR)

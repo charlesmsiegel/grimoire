@@ -130,6 +130,7 @@ class EffectChange:
     state: tuple = ()
     chat: ChatRef | None = None
     duplicate_of: AcceptedRef | None = None
+    checks_relations: bool = False  # an acceptance: its preconditions need every relation file readable
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -156,6 +157,8 @@ class EffectChange:
             found.append((f"campaigns/{self.campaign_id}/accepted", "accepted events changed"))
         if self.chat is not None and not self.library._chat_exists(self.chat):
             found.append(("/".join(address_parts(self.chat)), "chat missing"))
+        if self.checks_relations and _relations_unreadable(self.library._graph(self.campaign_id)):
+            found.append((f"campaigns/{self.campaign_id}/relations", "a relation file cannot be read"))
         return found
 
     def commit(self, approvals: Mapping[str, str] | None = None) -> EffectCommit:
@@ -267,7 +270,7 @@ class TurnEffectsLibrary:
             records = self._check_endorsements(authorization.endorsers, endorsements, proposal.fingerprint)
             snap = self._snapshot(campaign)
             self._require_trustworthy(snap)
-            if any(problem.code == "undecodable" for problem in snap.graph.index.problems):
+            if _relations_unreadable(snap.graph):
                 raise InvalidEffect("a relation file cannot be read, so preconditions cannot be checked",
                                     "undecodable_relation")
             wanted = proposal.fingerprint
@@ -278,10 +281,6 @@ class TurnEffectsLibrary:
                                             "receipt_mismatch", (event.event_id,))
                     return EffectChange(self, event.ref, campaign_id=campaign, state=snap.state,
                                         duplicate_of=event.ref)
-            for event in snap.active():
-                if verify_receipts(event, snap.graph.index):
-                    raise InvalidEffect(f"{event.ref} does not match the relations; repair it first",
-                                        "receipt_mismatch", (event.event_id,))
             floor = max((e.moment.sequence for e in snap.active()), default=0)
             if proposal.moment.sequence < floor:
                 raise InvalidEffect(f"sequence {proposal.moment.sequence} is behind an accepted event at {floor}",
@@ -319,7 +318,8 @@ class TurnEffectsLibrary:
             except EffectError as error:
                 raise _refused(error) from None
             record = ScopeRecord(ref, ACCEPTED_SCHEMA, accepted_to_payload(event), owner=self._owner)
-            return EffectChange(self, ref, ((record, None),), tuple(changes), campaign, snap.state, proposal.chat)
+            return EffectChange(self, ref, ((record, None),), tuple(changes), campaign, snap.state, proposal.chat,
+                                checks_relations=True)
 
     # -- revoking -----------------------------------------------------------------------------
 
@@ -497,6 +497,9 @@ class TurnEffectsLibrary:
             return [(path, "no longer accepted as it was")]
         return []
 
+    def _graph(self, campaign_id: str) -> CampaignGraph:
+        return self._relations().graph(campaign_id, requested_by=DIRECTOR)
+
     def _state(self, campaign_id: str) -> tuple:
         found = self.store.campaign_accepted(campaign_id)
         return (tuple(sorted((str(ref), stored.etag) for ref, stored in found.records.items())),
@@ -537,3 +540,8 @@ class TurnEffectsLibrary:
             raise InvalidEffect("the accepted-event stack is inconsistent (duplicate ordinals or order)",
                                 "inconsistent_ledger")
 
+
+def _relations_unreadable(graph: CampaignGraph) -> bool:
+    """A relation file that cannot be decoded, or any store problem under the campaign's relations
+    (a link, a look-alike folder), could hide the fact a precondition must see."""
+    return bool(graph.problems) or any(problem.code == "undecodable" for problem in graph.index.problems)

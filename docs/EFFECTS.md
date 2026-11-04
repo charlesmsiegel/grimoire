@@ -46,7 +46,7 @@ director/adjudication ──the library's trusted handle─────┤   out
 
 ## Operations
 
-In this slice, state changes are changes to [017 relations](GRAPH.md), the only merged play-state family. Holdings ([023](HOLDINGS.md)) are not handled yet; see the obligations below.
+In this slice, state changes are changes to [017 relations](GRAPH.md), the only merged play-state family. Holdings ([Counted Inventory, 023](roadmap/sprints/counted-inventory.md)) are not handled yet; see the obligations below.
 
 | `Op.kind` | Meaning | Written as |
 |---|---|---|
@@ -112,14 +112,16 @@ Narration holds neither key. A player alone can never make their character's act
    - an accepted-event file that cannot be decoded (`undecodable_event`), including a newer schema;
    - any store problem under `campaigns/<c>/accepted`, at the campaign folder, or a look-alike `Accepted/`;
    - a duplicate ordinal, or active events whose ordinal order contradicts their sequence order (`inconsistent_ledger`);
-   - a relation file of the campaign that cannot be decoded (`undecodable_relation`), because it could hide the fact a precondition must see.
+   - a relation file of the campaign that cannot be decoded, or any store problem under its `relations/` (a link, a look-alike `Relations/`), with code `undecodable_relation`, because it could hide the fact a precondition must see. Unlike 017's own writes, which an undecodable file never blocks, an acceptance fails closed. The commit re-checks it too.
+
+   **Limit:** `revoke` and 017's `reopen` overlap check do not block on undecodable relation files.
 
    The repair is to fix the file or move it out of the library by hand.
 5. **Duplicate.** Look for an active event with the same fingerprint:
    - **its receipts verify:** a no-op. `duplicate_of` is set, `preview()` is `{}`, and `commit()` writes nothing and returns that event. This is the path for a reroll, an alternate response or a retry after a crash;
    - **they do not:** refused `receipt_mismatch`. The way out is `revoke(..., partial=True)`.
 
-   After that, **any** active event whose receipts do not verify also blocks a new acceptance (`receipt_mismatch`): the ledger and the state must agree before anything is built on them.
+   A receipt mismatch on any *other* event does not block an unrelated acceptance. It stays reported by `continuity` until it is repaired: revoke back to that event with `partial=True`, or hand-repair the relation file. One editorial edit therefore never freezes a campaign's play.
 6. **Sequence floor.** The sequence must be at least the highest sequence of any active event (`stale_sequence`); equal sequences are allowed. Sequences are campaign-wide. **Obligation on 035:** allocate one non-decreasing sequence across all chats of a scope.
 7. **Ordinal.** The new event gets `ordinal = 1 + max` over every event file, active or revoked. This is the order of the undo stack.
 8. **Plan** against the graph at `as_of = sequence`:
@@ -267,7 +269,7 @@ How it is read and written:
 | A 003 player `Correction` | Strikes a narration claim and never revokes an accepted event automatically. A player who objects to an effect on their character asks for revocation, which needs the director key. A mislabel goes to the referee. |
 | Deleting a scene's transcript | Never deletes accepted events. To undo state, revoke its events; 035 owns the UX. |
 | Forks and branches | Not here. Accepted events belong to one campaign scope and are never copied implicitly. Owner: [Scenes, Forks And Retcons](roadmap/sprints/scenes-forks-and-retcons.md) (054). |
-| A direct 017 `end`, `retract` or `reopen` of an effect-managed relation | Allowed, because 017 edits are editorial. 021 reports `receipt_mismatch` or `orphan_effect`, and revoke refuses `has_dependents` unless `partial=True`. |
+| A direct 017 `end`, `retract` or `reopen` of an effect-managed relation | Allowed, because 017 edits are editorial. 021 reports `receipt_mismatch` or `orphan_effect`. Re-accepting that same effect is refused (`receipt_mismatch`), unrelated acceptances proceed, and revoke refuses (`receipt_mismatch` or `has_dependents`) unless `partial=True`. |
 
 ## Migration, privacy and rollback
 
@@ -281,7 +283,7 @@ How it is read and written:
 
 | Not here | Owner |
 |---|---|
-| Holdings operations from accepted effects (the [023 handoff](roadmap/sprints/turn-effects-and-wrap-up.md#handoff-from-counted-inventory-023-item-mentions-become-reviewed-proposals)) | 021, after 023 merges |
+| Holdings operations from accepted effects (the [023 obligation](roadmap/sprints/turn-effects-and-wrap-up.md#obligation-holdings-operations-023)) | 021, after 023 merges |
 | Persisting the 012 `Event`, witnesses, evidence and beliefs of an accepted event | 020 / 032 |
 | Extracting and labelling narration into proposals; mislabel review | 035 / Narration Continuity Referee |
 | When director acceptance needs human review | 035 |

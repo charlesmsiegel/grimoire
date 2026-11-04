@@ -242,12 +242,13 @@ def test_f6_receipt_mismatch_is_reported_refused_and_repairable(world):
     assert view.problems == () and view.graph.index.relation("r-1", requested_by=DIRECTOR).retracted
 
 
-def test_f6_a_mismatched_earlier_event_blocks_new_acceptances(world):
+def test_f6_a_mismatched_earlier_event_is_reported_but_does_not_block_other_effects(world):
     store, handles, library = world
     accept(library, handles).commit()
     _break_receipt(store, handles)
     snatch = give(KEY2, to=TAM, agent=TAM, backed=None, sequence=8)
-    assert reason(lambda: library.accept(snatch, controls=CONTROLS)) == "receipt_mismatch"
+    library.accept(snatch, controls=CONTROLS).commit()
+    assert "receipt_mismatch" in {p.code for p in library.continuity(C, as_of=8, requested_by=DIRECTOR).problems}
 
 
 def test_f6_an_undecodable_relation_file_blocks_acceptance(world):
@@ -260,6 +261,20 @@ def test_f6_an_undecodable_relation_file_blocks_acceptance(world):
     path.write_bytes(json.dumps(document).encode())
     again = EffectProposal(C, CHAT, moment(8), "Tam joins.", (Op("begin", "member_of", TAM, GUILD),), "director")
     assert reason(lambda: library.accept(again, controls=CONTROLS)) == "undecodable_relation"
+
+
+def test_f6_a_relation_file_damaged_after_preview_makes_the_acceptance_stale(world):
+    store, handles, library = world
+    change = library.accept(give(KEY2, to=TAM, agent=TAM, backed=None, sequence=8), controls=CONTROLS)
+    write(store.root, "campaigns/c/relations/r-zz.json", b"{broken")
+    _stale(store, change)
+
+
+def test_f6_a_look_alike_relations_folder_blocks_acceptance(world):
+    store, handles, library = world
+    write(store.root, "campaigns/c/Relations/r-1.json", b"{}")
+    assert reason(lambda: library.accept(give(KEY2, to=TAM, agent=TAM, backed=None, sequence=8),
+                                         controls=CONTROLS)) == "undecodable_relation"
 
 
 def test_f6_orphan_effects_are_reported(world):
@@ -412,6 +427,9 @@ def _schema_newer(store):
     lambda store: write(store.root, "campaigns/c/accepted/E-8.json", b"{}"),  # name_mismatch
     lambda store: write(store.root, "campaigns/c/accepted/notes.txt", b"x"),  # unrecognized
     lambda store: write(store.root, "campaigns/c/Accepted/e-9.json", b"{}"),  # a look-alike folder
+    lambda store: write(store.root, "campaigns/c/accepted/e-6.json",
+                        {"format": "grimoire.scope-record/9", "address": "campaign:c#accepted/e-6", "schema": "s",
+                         "payload": {}}),  # unsupported_format
 ])
 def test_f13_damage_under_accepted_blocks_accept_revoke_and_wrap_up(world, damage):
     store, handles, library = world
@@ -429,6 +447,16 @@ def test_f13_damage_under_accepted_blocks_accept_revoke_and_wrap_up(world, damag
     assert reason(lambda: library.revoke(done.ref, reason="r", expected=current,
                                          endorsements=[handles.endorse(give())])) == "undecodable_event"
     assert "undecodable_event" in {p.code for p in library.continuity(C, as_of=8, requested_by=DIRECTOR).problems}
+
+
+def test_f13_accepted_as_a_file_not_a_folder_blocks(tmp_path):
+    handles = Handles()
+    with LibraryStore.create(tmp_path / "lib") as store:
+        seed(store, handles)
+        write(store.root, "campaigns/c/accepted", b"a file, not a folder")
+        library = effects_library(store, handles)
+        snatch = give(KEY2, to=TAM, agent=TAM, backed=None, sequence=8)
+        assert reason(lambda: library.accept(snatch, controls=CONTROLS)) == "undecodable_event"
 
 
 def test_f13_a_linked_accepted_folder_blocks(world, tmp_path):
@@ -455,3 +483,17 @@ def test_f13_duplicate_ordinals_are_an_inconsistent_ledger(world):
     assert reason(lambda: library.revoke(done.ref, reason="r", expected=etag,
                                          endorsements=[handles.endorse(give())])) == "inconsistent_ledger"
     assert "duplicate_ordinal" in {p.code for p in library.continuity(C, as_of=9, requested_by=DIRECTOR).problems}
+
+
+def test_f13_an_ordinal_contradicting_the_sequence_is_an_inconsistent_ledger(world):
+    store, handles, library = world
+    accept(library, handles).commit()  # e-1, ordinal 1, sequence 7
+    second = library.accept(give(KEY2, to=TAM, agent=TAM, backed=None, sequence=8), controls=CONTROLS).commit()
+    path = store.root / "campaigns/c/accepted" / f"{second.ref.event_id}.json"
+    document = json.loads(path.read_bytes())
+    document["payload"]["moment"] = {"sequence": 5, "scene_id": "s1", "turn_id": "t8"}  # behind e-1, ahead in order
+    path.write_bytes(json.dumps(document).encode())
+    assert reason(lambda: library.accept(give(KEY1, giver=TAM, to=INES, agent=TAM, backed=None, sequence=9),
+                                         controls=CONTROLS)) == "inconsistent_ledger"
+    assert "inconsistent_ledger" in {p.code for p in
+                                     library.continuity(C, as_of=9, requested_by=DIRECTOR).problems}
