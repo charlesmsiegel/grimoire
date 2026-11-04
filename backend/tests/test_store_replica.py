@@ -753,7 +753,7 @@ def test_exact_kinds_cover_every_synced_kind_and_nothing_of_018():
     from grimoire.store.replica import EXACT_KINDS
     from grimoire.sync.model import SYNCED_KINDS
     assert SYNCED_KINDS <= EXACT_KINDS
-    assert not EXACT_KINDS & {"blob", "image", "placement", "ledger", "accepted", "wrapup"}
+    assert not EXACT_KINDS & {"blob", "image", "placement", "ledger"}
 
 
 @pytest.mark.parametrize("path", ["campaigns/c1/images/portrait.json",
@@ -835,3 +835,39 @@ def test_a_linked_018_folder_under_a_source_never_blocks_a_revision_replace(pair
     outside.mkdir()
     make_dir_link(phone.root / "sources/world/harbor/_source" / folder, outside)
     _replace_r1(phone)  # images and placements attach to entities, never to revisions
+
+
+def test_a_kept_version_is_only_for_records_recovery_accepts(pair):
+    """Recovery accepts only ``.json`` kept paths, so keep_version refuses blobs (and other kinds) up front."""
+    for path in ("assets/blobs/ab/" + "ab" * 32 + ".png", "campaigns/c1/images/portrait.json"):
+        with pytest.raises(InvalidEnvelope, match="can have kept versions"):
+            pair[0].transaction().keep_version(path, b"{}")
+
+
+
+def test_recovery_recreates_the_folder_of_a_committed_create(tmp_path, monkeypatch):
+    """R7 narrowing: recovery's publish makes a missing parent first (a tidied-away empty folder)."""
+    import shutil
+    from grimoire.store import engine
+    root = tmp_path / "lib"
+    store = LibraryStore.create(root)
+    seed(store)
+    txn = store.transaction()
+    txn.put(instance(InstanceRef("c8", "character", "new"), WREN_R1), None)
+
+    def die(*args, **kwargs):
+        raise RuntimeError("the process died right after the commit point")
+
+    monkeypatch.setattr(engine, "settle", die)
+    with pytest.raises(RuntimeError):
+        txn.commit(owner_handle())
+    monkeypatch.undo()
+    assert (root / ".txn" / "journal.json").exists()
+    store.close()
+    shutil.rmtree(root / "campaigns" / "c8")  # an empty folder tidied away while the app was down
+    reopened = LibraryStore.open(root)  # 010 recovery finishes the committed create
+    try:
+        assert (root / "campaigns/c8/instances/character/new.json").exists()
+        assert InstanceRef("c8", "character", "new") in reopened.load().instances
+    finally:
+        reopened.close()

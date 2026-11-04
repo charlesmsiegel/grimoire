@@ -12,7 +12,7 @@ import pytest
 
 from grimoire.core.identity import InstanceRef, SourceRef
 from grimoire.security import Authorizer, Grant, Permission, ResourcePath
-from grimoire.store import LibraryStore, LinkSpec, RecordEnvelope, SourceManifest, etag
+from grimoire.store import LibraryStore, LinkSpec, RecordEnvelope, RevisionReferenced, SourceManifest, etag
 from grimoire.sync import (
     ArchiveTooLarge, IdentityExists, NoDeviceIdentity, ResolveRefused, SameDevice, SyncInterrupted, identify,
     plan_sync, resolve, sync, sync_until_quiet,
@@ -333,12 +333,11 @@ def test_s8_revision_resolve_replaces_only_an_unreferenced_revision(pair):
 
 _IMAGE_PATHS = ("campaigns/c1/images/portrait.json", "sources/world/harbor/_source/images/portrait.json",
                 "sources/world/harbor/_source/placements/character/wren/portrait.json",
-                "campaigns/c1/placements/character/wren-a/portrait.json", "assets/blobs/ab/" + "ab" * 32 + ".png",
-                "campaigns/c1/accepted/e1.json", "campaigns/c1/wrapups/w1.json")  # and 021's accepted events, wrap-ups
+                "campaigns/c1/placements/character/wren-a/portrait.json", "assets/blobs/ab/" + "ab" * 32 + ".png")
 
 
-def test_018_and_021_families_are_skipped_and_never_block_a_revision_resolve(pair):
-    """018's images, placements and blobs and 021's records are not synced yet, and never pin a revision."""
+def test_018_families_are_skipped_and_never_block_a_revision_resolve(pair):
+    """018's images, placements and blobs are not synced yet, and never pin a revision."""
     desktop, phone = pair
     for store in (desktop, phone):
         for path in _IMAGE_PATHS:  # even a damaged one: these records never name a revision
@@ -356,8 +355,7 @@ def test_018_and_021_families_are_skipped_and_never_block_a_revision_resolve(pai
     assert report.conflict(r9).code == "missing_ancestor"
     assert {conflict.path for conflict in report.conflicts} == {r9}
     for device in (DESKTOP, PHONE):
-        assert {"campaigns/c1/images/portrait.json", "campaigns/c1/accepted/e1.json", "assets"} <= set(
-            report.skipped[device])
+        assert {"campaigns/c1/images/portrait.json", "assets"} <= set(report.skipped[device])
     mine, theirs = (desktop.root / r9).read_bytes(), (phone.root / r9).read_bytes()
     resolve(desktop, phone, r9, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
     assert (phone.root / r9).read_bytes() == mine
@@ -818,7 +816,7 @@ def test_a_chat_binding_pins_a_revision_against_replacement(tmp_path):
     txn = phone.transaction()
     txn.put_exact(path, current.replace(b"smuggler", b"pirate"), etag(current), replace_unreferenced=True)
     txn.keep_version(path, current)
-    with pytest.raises(Exception, match="binds|based"):
+    with pytest.raises(RevisionReferenced, match="chats/.* binds"):
         txn.check()
 
 
@@ -1249,3 +1247,217 @@ def test_re_identifying_both_devices_is_a_true_first_sync(pair):
     identify(phone, "tablet", replace=True)
     report = sync(desktop, phone, {"laptop": handle(), "tablet": handle()})
     assert report.copied == ((PATHS["wren_b"], "laptop"),)
+
+
+def test_021_an_accepted_effect_syncs_together_with_the_relations_it_changed(tmp_path):
+    """021 commits an event and its relation changes as one; sync must never deliver one without the other."""
+    from grimoire.core import DIRECTOR
+    from effects_fixtures import C, CONTROLS, Handles, contribution, effects_library, give
+    from effects_fixtures import seed as seed_effects
+    keys = Handles()
+    desktop = LibraryStore.create(tmp_path / DESKTOP)
+    seed_effects(desktop, keys)
+    phone = LibraryStore.create(tmp_path / PHONE)
+    try:
+        identify(desktop, DESKTOP)
+        identify(phone, PHONE)
+        sync(desktop, phone, handles())
+        proposal = give()
+        effects_library(desktop, keys).accept(proposal, controls=CONTROLS, contributions=[contribution()],
+                                              endorsements=[keys.endorse(proposal)]).commit()
+        report = sync(desktop, phone, handles())
+        copied = {path for path, _ in report.copied}
+        assert any("/accepted/" in path for path in copied) and any("/relations/" in path for path in copied)
+        assert effects_library(phone, keys).continuity(C, as_of=8, requested_by=DIRECTOR).problems == ()
+        assert not sync(desktop, phone, handles()).wrote
+    finally:
+        desktop.close()
+        phone.close()
+
+
+# -- brutal-review round 4: resolve markers, retired identities, forgotten tombstones ---------------
+
+def _crash_resolve_state(monkeypatch):
+    def crash(*args, **kwargs):
+        raise _Crash("power loss before resolve's archive step")
+    monkeypatch.setattr(sync_session, "_commit_state", crash)
+
+
+@pytest.mark.parametrize("interrupt", ["none", "crash", "held archive"])
+def test_a_resolve_interrupted_before_its_archives_never_overwrites_a_revert(tmp_path, monkeypatch, interrupt):
+    """resolve marks its copy in its own commit, as sync does: the winner's later revert stays a revert."""
+    desktop, phone = make_pair(tmp_path)
+    path = PATHS["wren_a"]
+    e0 = (phone.root / path).read_bytes()
+    (desktop.root / path).unlink()
+    edit_instance(phone, WREN_A, 9)
+    assert sync(desktop, phone, handles()).conflict(path).code == "edit_delete"
+    chosen = (phone.root / path).read_bytes()
+    args = (desktop, phone, path, etag(chosen), {DESKTOP: None, PHONE: etag(chosen)}, handles())
+    if interrupt == "crash":
+        _crash_resolve_state(monkeypatch)
+        with pytest.raises(_Crash):
+            resolve(*args)
+    elif interrupt == "held archive":  # Windows: another program holds the archive after the data landed
+        real, seen = LibraryStore.read_sync_state, []
+
+        def held(self, name):
+            if name.endswith("archive.json"):
+                seen.append(name)
+                if len(seen) > 2:
+                    raise PermissionError(13, "held by another program")
+            return real(self, name)
+        monkeypatch.setattr(LibraryStore, "read_sync_state", held)
+        with pytest.raises(SyncInterrupted):
+            resolve(*args)
+    else:
+        resolve(*args)
+    monkeypatch.undo()
+    desktop.close()
+    phone.close()
+    desktop, phone = _reopen(tmp_path, DESKTOP), _reopen(tmp_path, PHONE)
+    try:
+        (phone.root / path).write_bytes(e0)  # the phone user undoes the edit they kept
+        sync(desktop, phone, handles())
+        surviving = {(desktop.root / path).read_bytes(), (phone.root / path).read_bytes()}
+        assert e0 in surviving | set(kept(desktop)) | set(kept(phone)), "the revert was overwritten"
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_resolve_refuses_while_a_pending_marker_is_ignored(pair):
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    edit_instance(phone, WREN_A, 4)
+    assert sync(desktop, phone, handles()).conflict(PATHS["wren_a"]).code == "concurrent"
+    (phone.root / ".sync/peers" / DESKTOP / "pending.json").write_bytes(b"{")
+    mine, theirs = (desktop.root / PATHS["wren_a"]).read_bytes(), (phone.root / PATHS["wren_a"]).read_bytes()
+    with pytest.raises(ResolveRefused, match="pending marker"):
+        resolve(desktop, phone, PATHS["wren_a"], etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+
+
+def _renamed_away_and_back(desktop, phone):
+    identify(desktop, "laptop", replace=True)
+    identify(phone, "tablet", replace=True)
+    return {"laptop": handle(), "tablet": handle()}
+
+
+def test_renaming_both_devices_back_never_revives_the_old_pairs_archives(pair):
+    desktop, phone = pair
+    new = InstanceRef("c1", "character", "quill")
+    new_path = "campaigns/c1/instances/character/quill.json"
+    away = _renamed_away_and_back(desktop, phone)
+    sync(desktop, phone, away)
+    put(desktop, instance(new, WREN_R1), None)  # created and agreed under the new names
+    assert (new_path, "tablet") in sync(desktop, phone, away).copied
+    identify(desktop, DESKTOP, replace=True)
+    identify(phone, PHONE, replace=True)
+    (desktop.root / new_path).unlink()  # deleted after renaming back
+    report = sync(desktop, phone, handles())
+    assert not (desktop.root / new_path).exists()
+    assert report.conflict(new_path).code == "missing_ancestor"  # the old archives are retired: uncertain
+    assert any("retired" in notice for notice in report.notices)
+
+
+def test_renaming_both_devices_back_never_overwrites_a_concurrent_revert(pair):
+    desktop, phone = pair
+    e0 = (desktop.root / PATHS["wren_a"]).read_bytes()
+    away = _renamed_away_and_back(desktop, phone)
+    edit_instance(desktop, WREN_A, 9)
+    sync(desktop, phone, away)
+    identify(desktop, DESKTOP, replace=True)
+    identify(phone, PHONE, replace=True)
+    (desktop.root / PATHS["wren_a"]).write_bytes(e0)  # the desktop reverts...
+    edit_instance(phone, WREN_A, 5)  # ...while the phone edits
+    assert sync(desktop, phone, handles()).conflict(PATHS["wren_a"]) is not None
+
+
+def test_a_re_identified_device_never_forgets_a_tombstone(pair):
+    """The tombstone lived in the archive that was retired; the path stays uncertain, so a restore conflicts."""
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    old = (phone.root / path).read_bytes()
+    (desktop.root / path).unlink()
+    (phone.root / path).unlink()
+    sync(desktop, phone, handles())  # tombstone
+    identify(desktop, "tablet", replace=True)
+    renamed = {"tablet": handle(), PHONE: handle()}
+    sync(desktop, phone, renamed)  # the conservative sync after re-identification
+    (phone.root / path).write_bytes(old)  # an old backup restored on the phone
+    report = sync(desktop, phone, renamed)
+    assert report.copied == () and report.conflict(path).code == "missing_ancestor"
+    assert not (desktop.root / path).exists() and old in kept(desktop)
+
+
+@pytest.mark.parametrize("folder", ["fanpack", "fan.pack"])
+def test_a_linked_source_folder_blocks_a_revision_resolve_whatever_its_name(tmp_path, folder):
+    """Source ids may hold dots: a blocked folder is judged by what it is, never by its name."""
+    from grimoire.store.envelope import source_document
+    from grimoire.store.jsonfmt import render
+    (tmp_path / "pair").mkdir()
+    desktop, phone = make_pair(tmp_path / "pair")
+    try:
+        new_revision(desktop, "r2", "a captain")
+        new_revision(phone, "r2", "a pirate")
+        assert sync(desktop, phone, handles()).conflict(PATHS["r2"]).code == "missing_ancestor"
+        outside = tmp_path / "elsewhere" / "_source"
+        outside.mkdir(parents=True)
+        manifest = SourceManifest(f"addon:{folder}", OWNER, "Fan", {}, (LinkSpec(
+            "world:harbor/character/wren@r2", "rival_of", "world:harbor/character/wren@r2"),))
+        (outside / "manifest.json").write_bytes(render(source_document(manifest, None)))
+        (phone.root / "sources" / "addon").mkdir(parents=True, exist_ok=True)
+        make_dir_link(phone.root / "sources" / "addon" / folder, tmp_path / "elsewhere")
+        mine, theirs = (desktop.root / PATHS["r2"]).read_bytes(), (phone.root / PATHS["r2"]).read_bytes()
+        with pytest.raises(ResolveRefused, match="cannot prove"):
+            resolve(desktop, phone, PATHS["r2"], etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_resolve_is_never_refused_for_a_conflict_name_it_never_writes(tmp_path):
+    """A hold is preserved into its own folder's next slot, so only paths resolve can write are checked."""
+    from grimoire.store.layout import conflict_parts
+    desktop, phone = make_pair(tmp_path)
+    edit_instance(desktop, WREN_A, 9)
+    edit_instance(phone, WREN_A, 4)
+    sync(desktop, phone, handles())
+    mine, theirs = (phone.root / PATHS["wren_a"]).read_bytes(), (desktop.root / PATHS["wren_a"]).read_bytes()
+    hold = conflict_parts(tuple(PATHS["wren_a"].split("/")), etag(mine))
+    limit = len(str(phone.root.joinpath(*hold)).encode())  # every path resolve writes fits, a nested name not
+    root = phone.root
+    phone.close()
+    phone = LibraryStore.open(root, limits=lambda directory: (limit, 255))
+    try:
+        resolve(desktop, phone, PATHS["wren_a"], etag(theirs), {DESKTOP: etag(theirs), PHONE: etag(mine)}, handles())
+        assert (phone.root / PATHS["wren_a"]).read_bytes() == theirs and mine in kept(phone)
+    finally:
+        desktop.close()
+        phone.close()
+
+
+
+def test_a_kept_version_the_store_refuses_at_preflight_never_blocks_the_rest(pair):
+    """The keep alone is ``kept: false``; every other write of the sync still lands."""
+    import hashlib
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    edit_instance(phone, WREN_A, 4)  # a conflict: each device keeps the other's
+    edit_instance(phone, WREN_B, 7)  # an ordinary copy to the desktop
+    folder = hashlib.sha256(PATHS["wren_a"].encode("utf-8")).hexdigest()[:16]
+    (desktop.root / ".conflicts").mkdir(exist_ok=True)
+    (desktop.root / ".conflicts" / folder).write_bytes(b"not a folder")  # the desktop's keep is refused
+    report = sync(desktop, phone, handles())
+    assert (PATHS["wren_b"], DESKTOP) in report.copied
+    assert dict(report.conflict(PATHS["wren_a"]).kept) == {DESKTOP: False, PHONE: True}
+
+
+def test_a_manifest_whose_head_is_missing_on_its_origin_is_a_head_dependency(pair):
+    desktop, phone = pair
+    before = (desktop.root / PATHS["manifest"]).read_bytes()
+    new_revision(phone, "r2", "a captain")
+    (phone.root / PATHS["r2"]).unlink()  # the head revision is lost on the phone
+    report = sync(desktop, phone, handles())
+    assert report.conflict(PATHS["manifest"]).code == "head_dependency"
+    assert (desktop.root / PATHS["manifest"]).read_bytes() == before

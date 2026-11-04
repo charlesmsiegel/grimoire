@@ -26,7 +26,8 @@ from grimoire.store.replica import CanonicalScan, parse_exact, previous_of
 from .decide import decide, derive_base
 from .documents import (
     DEVICE_FILE, ArchiveView, PendingView, syncable, archive_name, check_device_id, parse_archive, parse_device,
-    parse_pending, pending_name, render_archive, render_device, render_pending,
+    parse_pending, pending_name, render_archive, render_device, render_pending, render_retired,
+    named_paths, is_retired,
 )
 from .errors import (
     ArchiveTooLarge, IdentityExists, NoDeviceIdentity, ResolveRefused, SameDevice, SyncInterrupted,
@@ -74,8 +75,10 @@ def identify(store: LibraryStore, device_id: str, *, replace: bool = False) -> s
     """Give a library its device ID (an explicit human or app action; IDs are never generated here).
 
     A damaged identity is replaced. Changing a valid ID needs ``replace=True`` (the fix for a
-    library copied with its ``.sync``); the old peer files are kept, so the next sync of the new ID
-    is conservative. If both devices take new IDs, that next sync is a true first sync.
+    library copied with its ``.sync``). In the same commit every peer archive and marker of the old
+    ID is *retired*: kept present, so the next sync of the new ID is conservative, but never valid
+    again, so renaming the devices back cannot revive a stale base. If both devices take new IDs,
+    their next sync is a true first sync.
     """
     check_device_id(device_id)
     current = store.read_sync_state(DEVICE_FILE)  # a read error propagates as itself
@@ -86,6 +89,15 @@ def identify(store: LibraryStore, device_id: str, *, replace: bool = False) -> s
         raise IdentityExists(f"{store.root} is already device {existing!r}")
     txn = store.transaction()
     txn.put_sync_state(DEVICE_FILE, render_device(device_id), None if current is None else etag(current))
+    if existing is not None:
+        for peer in store.sync_peers():
+            for name in (archive_name(peer), pending_name(peer)):
+                try:
+                    data = store.read_sync_state(name)
+                except ValueError:  # not a device name: never read as state, nothing to retire
+                    break
+                if data is not None and not is_retired(data):
+                    txn.put_sync_state(name, render_retired(existing, named_paths(data)), etag(data))
     txn.commit(None)
     return device_id
 
@@ -211,6 +223,7 @@ def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
         scan = scans[device]
         paths |= {path for path in (*scan.files, *scan.blocked) if syncable(path)}
         paths |= set(archives[device].entries) | set(pendings[device].entries)
+        paths |= archives[device].named | pendings[device].named  # ignored: uncertain, never forgotten
     ordered = tuple(sorted(paths))
     _check_archive_size(pair, ordered)
     sides = {path: {device: _side(scans[device], path) for device in pair} for path in ordered}
@@ -472,12 +485,20 @@ def _pending_entries(plan: SyncPlan, device: str) -> dict[str, Mapping[str, obje
     """
     view = plan.pendings[device]
     if view.state == "ignored":  # unknown entries: every path not already agreed stays uncertain
-        return {path: {"uncertain": True} for path in plan.paths if path not in plan.agreed}
+        return {path: {"uncertain": True} for path in plan.paths
+                if path not in plan.agreed or _both_absent_uncertain(plan, path)}
     entries = dict(view.entries)
     for path in plan.paths:
-        if path not in plan.agreed and path not in entries and plan.bases[path].kind == "uncertain":
+        if path not in entries and plan.bases[path].kind == "uncertain" and (
+                path not in plan.agreed or _both_absent_uncertain(plan, path)):
             entries[path] = {"uncertain": True}
     return entries
+
+
+def _both_absent_uncertain(plan: SyncPlan, path: str) -> bool:
+    """Absent on both devices, with an uncertain base: agreed now, but not resolvable (see _resolved)."""
+    return plan.bases[path].kind == "uncertain" and all(
+        side.state == "absent" for side in plan.sides[path].values())
 
 
 def _report(plan: SyncPlan, applied: _Applied) -> SyncReport:
@@ -631,13 +652,17 @@ def _resolved(plan: SyncPlan, applied: _Applied) -> dict[str, tuple[str, str] | 
             continue
         base = plan.bases[path]  # both absent: keep (or derive) a tombstone
         candidates = sorted({entry[1] for view in plan.archives.values() if view.state == "valid"
-                             for entry in [view.entries.get(path)] if entry is not None})
+                             for entry in [view.entries.get(path)] if entry is not None}
+                            | {entry["to"] for view in plan.pendings.values() if view.state == "valid"  # type: ignore[misc]
+                               for entry in [view.entries.get(path)] if entry is not None and "to" in entry})
         if base.kind in ("agreed", "deleted"):
             found[path] = ("deleted", base.etag)  # type: ignore[assignment]
         elif candidates:
             found[path] = ("deleted", candidates[0])
-        else:
+        elif base.kind != "uncertain":
             found[path] = None
+        # absent on both with an uncertain base and no tombstone to derive: a deletion whose
+        # agreed bytes are unknown. It stays uncertain (pending), so a later restore is a conflict.
     return found
 
 
@@ -764,11 +789,14 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         if set(expected) != set(pair) or _current(side) != expected[device]:
             raise ResolveRefused(f"{path} changed on {device} since the conflict was reported")
     other = {pair[0]: pair[1], pair[1]: pair[0]}
-    for device in pair:  # a rebuilt archive would forget why every other path is uncertain
+    pendings = {}
+    for device in pair:  # a rebuilt archive or marker would forget why every other path is uncertain
         archive = parse_archive(_state(stores[device], archive_name(other[device])), pair)
-        if archive.state != "valid":
-            raise ResolveRefused(f"the archive on {device} for this pair is {archive.state}; sync the devices "
-                                 "once first, so their uncertainty is recorded")
+        pendings[device] = parse_pending(_state(stores[device], pending_name(other[device])), pair)
+        for what, state in (("archive", archive.state), ("pending marker", pendings[device].state)):
+            if state == "ignored" or (what == "archive" and state != "valid"):
+                raise ResolveRefused(f"the {what} on {device} for this pair is {state}; sync the devices "
+                                     "once first, so their uncertainty is recorded")
     winners = [device for device in pair if _current(sides[device]) == keep]
     if not winners:
         raise ResolveRefused("keep must be the current etag of one device's version (deletions cannot be chosen)")
@@ -802,6 +830,16 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
                 raise ResolveRefused(f"{head} differs between the devices; resolve it first")
     if mine is not None:
         txn.keep_version(path, mine)
+    # Like a sync's copy, the resolve's copy is marked in the same commit: if the archives are not
+    # written after it (a crash, a held file), the next sync still knows the peer held these bytes,
+    # and a revert on either device is a conflict rather than an "unchanged" side.
+    marked = dict(pendings[receiver].entries)
+    for done in resolved:
+        theirs, ours = scans[winner].files[done], scans[receiver].files.get(done)
+        marked[done] = {"from": None if ours is None else etag(ours), "to": etag(theirs)}
+    old_marker = pendings[receiver].data
+    txn.put_sync_state(pending_name(other[receiver]), render_pending(pair, marked),
+                       None if old_marker is None else etag(old_marker))
     try:
         txn.check()
     except (StaleWrite, *PER_PATH_ERRORS) as error:

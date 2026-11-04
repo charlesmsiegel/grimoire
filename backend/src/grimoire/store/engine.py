@@ -214,7 +214,7 @@ def check_entry_paths(access: Access, journal: Journal) -> None:
         if entry.temp in staged:
             access.check_staged_file(entry.temp)
         access.guard.check_write(entry.target, staging_device=device)
-        if entry.kind not in REGENERABLE_KINDS:  # replica/keep/state entries are dropped, never preserved
+        if entry.kind not in REGENERABLE_KINDS and entry.kind != "hold":  # dropped, or (a hold) own slots
             access.guard.check_write(conflict_parts(entry.target, entry.new), staging_device=device)
             access.check_conflict_folder(conflict_parts(entry.target, entry.new))
 

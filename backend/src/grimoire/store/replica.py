@@ -32,9 +32,9 @@ SCOPE_FILE = SCOPE
 #: Root entries a scan walks for canonical records.
 _RECORD_ROOTS = (SOURCES, CAMPAIGNS)
 #: The record kinds this module reads, copies and checks: every kind sync may own. 018's blobs,
-#: images and placements and 021's accepted events and wrap-ups are not among them yet (a later
-#: slice); ledgers never are.
-EXACT_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge"})
+#: images and placements are not among them yet (a later slice); ledgers never are.
+EXACT_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge",
+                         "accepted", "wrapup"})
 #: Root entries that are device-local or the library's own marker: never transferred, never reported.
 _LOCAL = frozenset({TXN, CONFLICTS, SYNC, MARKER})
 
@@ -84,7 +84,7 @@ def parse_exact(parts: Parts, data: bytes) -> RecordEnvelope | SourceManifest | 
             envelope = parse_knowledge_record(document)[0]
             if envelope.address != found[1]:
                 raise _invalid("address_mismatch", f"{'/'.join(parts)} holds {envelope.address}")
-        elif found[0] in ("scope", "chat", "relation"):  # 107's scope and chat, 017's relation records
+        elif found[0] in ("scope", "chat", "relation", "accepted", "wrapup"):  # 107, 017 and 021 records
             envelope = parse_scope_record(document)[0]
             if envelope.address != found[1]:
                 raise _invalid("address_mismatch", f"{'/'.join(parts)} holds {envelope.address}")
@@ -202,10 +202,10 @@ def _walk(access: Access, parts: Parts, files: dict[str, bytes], blocked: dict[s
             files[text] = data
 
 
-_RECORD_FOLDERS = frozenset({"instances", "chats", "relations", "events", "evidence"})
+_RECORD_FOLDERS = frozenset({"instances", "chats", "relations", "events", "evidence", "accepted", "wrapups"})
 
 
-def _may_hold_records(parts: Parts) -> bool:
+def _may_hold_records(access: Access, parts: Parts) -> bool:
     """Whether a blocked path could be, or contain, a canonical record (else it cannot pin anything)."""
     found = classify(parts)
     if found is not None:
@@ -213,7 +213,10 @@ def _may_hold_records(parts: Parts) -> bool:
     if parts[0] == SOURCES:
         if SOURCE_DIR in parts and parts[parts.index(SOURCE_DIR) + 1:][:1] in ((IMAGES,), (PLACEMENTS,)):
             return False  # 018's images and placements attach to entities, never to revisions
-        return "." not in parts[-1] or parts[-1].endswith(SUFFIX)  # a folder, or a JSON file
+        info = lstat_or_none(access.path(parts))  # by kind, not name: source folder names may hold dots
+        if info is not None and stat.S_ISREG(info.st_mode):
+            return parts[-1].endswith(SUFFIX)  # a regular file pins only if it is JSON
+        return True  # a folder, a link or something unreadable may hold records
     if parts[0] != CAMPAIGNS:
         return False  # the library root's other entries never hold records
     if len(parts) <= 2:
@@ -236,7 +239,7 @@ def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str
     """
     found = scan(access)
     for path, reason in found.blocked.items():
-        if _may_hold_records(tuple(path.split("/"))):
+        if _may_hold_records(access, tuple(path.split("/"))):
             raise RevisionReferenced(f"cannot prove {ref} is unreferenced: {path} is {reason}")
     for path, data in found.files.items():
         envelope = parse_exact(tuple(path.split("/")), data)

@@ -49,7 +49,7 @@ from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, render
 from .layout import (
     ACCEPTED, CAMPAIGNS, CONFLICTS, DISCARD_MARKER, IMAGES, INSTANCES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
-    PLACEMENTS, REPAIR_MARKER, SYNC, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify, conflict_parts,
+    PLACEMENTS, REPAIR_MARKER, SYNC, SYNC_PEERS, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify, conflict_parts,
     definition_parts, image_parts, instance_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
     ledger_parts, ledger_seq, logical, manifest_parts, name_key, sync_state_parts,
 )
@@ -870,6 +870,17 @@ class LibraryStore:
             self._require_consistent()
             return self._access.read(parts)
 
+    def sync_peers(self) -> tuple[str, ...]:
+        """The names under ``.sync/peers/`` (sync, 019), sorted; empty when there is none.
+
+        Only names are returned; ``read_sync_state`` decides whether each holds valid state.
+        """
+        with self.lock:
+            self._require_consistent()
+            if self._access.presence((SYNC, SYNC_PEERS)) != "present":
+                return ()
+            return tuple(sorted(self._access.list_dir((SYNC, SYNC_PEERS))))
+
     def read_exact(self, path: str) -> bytes | None:
         """The exact bytes of a canonical record or kept-version file, or ``None``; never through a link."""
         parts = tuple(path.split("/"))
@@ -1122,8 +1133,8 @@ class Transaction:
             raise InvalidEnvelope("path must be text")
         parts = tuple(path.split("/"))
         found = classify(parts)
-        if found is None or found[0] == "ledger":
-            raise InvalidEnvelope(f"{path} is not a canonical record path")
+        if found is None or found[0] not in replica.EXACT_KINDS:  # recovery accepts only these kept paths
+            raise InvalidEnvelope(f"{path} is not a record that can have kept versions")
         if type(data) is not bytes or len(data) > MAX_FILE_BYTES:
             raise InvalidEnvelope("a kept version is bytes within the file size limit")
         try:
@@ -1209,8 +1220,9 @@ class Transaction:
         if not replaces:
             return
         first = replaces[0]
-        if len(replaces) > 1 or any(put is not first and put.record != first.parts for put in puts):
-            raise InvalidEnvelope("a revision replace is committed alone, with only its kept version")
+        if len(replaces) > 1 or any(put is not first and put.record != first.parts and put.kind != "state"
+                                    for put in puts):  # sync bookkeeping can pin nothing
+            raise InvalidEnvelope("a revision replace is committed alone, with only its kept version and sync state")
         if self._kept.get(first.parts) != first.expected:
             raise InvalidEnvelope(f"replacing {'/'.join(first.parts)} needs its current bytes kept in the same "
                                   "transaction (keep_version)")
@@ -1380,7 +1392,7 @@ class _Commit:
         guard.check_write((TXN, "x.new"), staging_device=None)
         for put in self.puts:
             guard.check_write(put.parts, staging_device=staging.st_dev)
-            if put.preservable:  # replicas, regenerable kept versions and sync state are dropped instead
+            if put.journal_kind == "publish":  # replicas, keeps and state are dropped; a hold takes its own slots
                 guard.check_write(conflict_parts(put.parts, etag(put.data)), staging_device=staging.st_dev)
         return staging.st_dev
 
@@ -1401,7 +1413,7 @@ class _Commit:
         for put in self.puts:
             if self.access.presence(put.parts) == "mismatch":
                 raise NameCollision(f"{'/'.join(put.parts)} collides with a differently spelled existing entry")
-            if put.preservable:
+            if put.journal_kind == "publish":  # a hold is preserved into its own folder's next slot
                 self.access.check_conflict_folder(conflict_parts(put.parts, etag(put.data)))
 
     def _check_sources(self) -> None:
