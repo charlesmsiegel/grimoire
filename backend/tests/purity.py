@@ -70,8 +70,8 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
                                          "datetime", "uuid", "secrets")
 
 #: grimoire packages that are adapters or test infrastructure, not pure.
-ADAPTERS = frozenset({"grimoire.capture", "grimoire.chatstore", "grimoire.effectstore", "grimoire.evidencestore", "grimoire.graphstore",
-                      "grimoire.imagestore",
+ADAPTERS = frozenset({"grimoire.capture", "grimoire.chatstore", "grimoire.effective", "grimoire.effectstore",
+                      "grimoire.evidencestore", "grimoire.graphstore", "grimoire.imagestore",
                       "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1", "grimoire.providers",
                       "grimoire.store", "grimoire.testing"})
 

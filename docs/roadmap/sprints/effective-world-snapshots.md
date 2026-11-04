@@ -1,5 +1,7 @@
 # Consistent Effective-World Reads
 
+**Status:** **first slice implemented**, headless: `grimoire.core.portrayal` and `grimoire.core.snapshot` (pure) and the `grimoire.effective` adapter. The contract is in [EFFECTIVE_VIEWS.md](../../EFFECTIVE_VIEWS.md). Milestone 1 is executable: a world-less character + lorebook chat, the Mara base with Modern and Vampire Elderfen portrayals (inherit, replace, clear, with per-field revision and etag provenance), and campaign instances over them. So is milestone 2's guarantee **on the snapshot side**: a turn holding one snapshot sees no half-update of a source, actor or binding. Action resolution (roster control, `actor_view`, `propose_damage`) still reads the index, so joining it to the same snapshot, which the proving scenario's *action resolution* half needs, is 035's. The boundary is one loaded library; `load()` itself is not a point-in-time read, so a write *during* a load is reported as broken or drift rather than covered. Milestone 3, the virtual-vs-compiled comparison, is open. Snapshot-aware roster control and perspective are a named limitation owned by 035.
+
 > **V2 scope correction:** V2 does not have the V1 world/overlay reader yet. Resolve native world/catalog sources and campaign overrides from revisioned canonical files, using a frozen effective view per operation. See the [V2 ordered roadmap](../README.md) for prerequisites, waves and current first-slice proof. Older references to shipped V1 APIs describe behavior to *port*, not V2 capabilities.
 
 
@@ -42,5 +44,5 @@ Consume the Wave 1 `DefinitionIndex`'s explicit `derived_variant` / `overrides` 
 
 ## Open questions
 - Virtual, compiled or hybrid?
-- What is the exact revision boundary?
+- What is the exact revision boundary? *First slice: one `LibraryView` per operation (see EFFECTIVE_VIEWS); a point-in-time load is open.*
 - How do UI edits display an out-of-date snapshot?
