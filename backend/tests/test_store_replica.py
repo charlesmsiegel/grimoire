@@ -10,7 +10,7 @@ import pytest
 from grimoire.core.identity import InstanceRef, SourceRef
 from grimoire.security import Approval, Authorizer, Grant, Permission, ResourcePath, payload_digest
 from grimoire.store import (
-    ImmutableRevision, InvalidEnvelope, LinkRefused, InvalidSourceState, LibraryStore, NameCollision, ProcessLocker,
+    ImmutableRevision, InvalidEnvelope, LinkRefused, LinkSpec, SourceManifest, InvalidSourceState, LibraryStore, NameCollision, ProcessLocker,
     RecordEnvelope, RevisionReferenced, StaleWrite, StoreError, WriteConflict, WriteDenied, etag,
 )
 from grimoire.store.journal import Entry, Journal, parse
@@ -457,12 +457,14 @@ def test_an_aborted_commit_drops_kept_versions_and_state_instead_of_nesting_them
             txn = store.transaction()
             current = store.read(WREN_A)
             txn.put(instance(WREN_A, WREN_R1, hp=7), current.etag)
-            txn.keep_version(WREN_A_PATH, theirs)
+            txn.keep_version(WREN_A_PATH, theirs, regenerable=REGENERABLE_KEEP[0])
             txn.put_sync_state("peers/desktop/pending.json", b"{}\n", None)
             txn.commit(owner_handle(*ALL))
 
     def human(ops, root):
         ops.write_bytes(root / "lib" / WREN_A_PATH, b'{"a human": 1}\n')
+
+    REGENERABLE_KEEP = [True]
 
     template = snapshot(tmp_path / "lib")
     scenario = CrashScenario(
@@ -478,6 +480,10 @@ def test_an_aborted_commit_drops_kept_versions_and_state_instead_of_nesting_them
     conflicts = [key for key, value in run.recovered.items() if key.startswith("lib/.conflicts/") and value]
     assert len(conflicts) == 1 and run.recovered[conflicts[0]] != theirs  # only the record's own bytes
     assert "lib/.sync/peers/desktop/pending.json" not in run.recovered
+    # a kept version that may be the only copy (resolve's replaced version: ``hold``) is preserved
+    REGENERABLE_KEEP[0] = False
+    run = run_plans(scenario, [[Interleave(guard, human)]], tmp_path / "hold").runs[1]
+    assert theirs in [value for key, value in run.recovered.items() if key.startswith("lib/.conflicts/")]
 
 
 def _replay(ops, root, template):
@@ -488,7 +494,9 @@ def _replay(ops, root, template):
             ops.write_bytes(root / "lib" / key, data)
 
 
-def test_a_mixed_commit_survives_every_crash_and_error(tmp_path):
+@pytest.mark.parametrize("regenerable", [False, True], ids=["publish-and-hold", "replica-and-keep"])
+def test_a_mixed_commit_survives_every_crash_and_error(tmp_path, regenerable):
+    """Both journal flavours: plain exact puts and kept versions, and the ones sync uses."""
     locker = ProcessLocker()
     with LibraryStore.create(tmp_path / "lib", locker=locker) as store:
         seed(store)
@@ -499,8 +507,9 @@ def test_a_mixed_commit_survives_every_crash_and_error(tmp_path):
         with LibraryStore.open(root / "lib", ops=ops, locker=locker) as store:
             txn = store.transaction()
             txn.put_exact("campaigns/c4/instances/character/new.json",
-                          theirs.replace(b"c1/character/wren-a", b"c4/character/new"), None)
-            txn.keep_version(WREN_A_PATH, theirs)
+                          theirs.replace(b"c1/character/wren-a", b"c4/character/new"), None,
+                          regenerable=regenerable)
+            txn.keep_version(WREN_A_PATH, theirs, regenerable=regenerable)
             txn.put_sync_state("peers/desktop/pending.json", b"{}\n", None)
             txn.commit(owner_handle(*ALL))
 
@@ -579,3 +588,112 @@ def test_an_aborted_commit_drops_exact_copies_instead_of_keeping_orphans(tmp_pat
     REGENERABLE[0] = False  # without the flag, put_exact's bytes are preserved like any put
     run = run_plans(scenario, [[Interleave(guard, human)]], tmp_path / "plain").runs[1]
     assert theirs in [value for key, value in run.recovered.items() if key.startswith("lib/.conflicts/")]
+
+
+
+# -- brutal-review round 1 regressions ---------------------------------------------------------
+
+def test_recovery_never_shadows_a_parent_renamed_to_a_lookalike(tmp_path):
+    """A crash after the commit point, then the new folder renamed by case while down: recovery
+    preserves the version instead of creating a second, differently cased folder."""
+    from grimoire.testing import Crash, SimulatedCrash
+    LibraryStore.create(tmp_path / "lib").close()
+    with LibraryStore.open(tmp_path / "lib") as store:
+        seed(store)
+    locker = ProcessLocker()
+    ops = RootedFileOps(tmp_path, plan=[Crash(Target("replace", target="lib/.txn/journal.json"), "after")])
+    store = LibraryStore.open(tmp_path / "lib", ops=ops, locker=locker)
+    txn = store.transaction()
+    txn.put(instance(InstanceRef("c3", "creature", "pup"), WREN_R1), None)
+    with pytest.raises(SimulatedCrash):
+        txn.commit(owner_handle())
+    store.close()
+    campaigns = tmp_path / "lib" / "campaigns"
+    os.rename(campaigns / "c3", campaigns / "C3")
+    if (campaigns / "c3").exists():
+        pytest.skip("a case-insensitive filesystem: no look-alike folder can exist")
+    with LibraryStore.open(tmp_path / "lib", locker=locker) as store:
+        report = store.last_recovery
+    assert sorted(os.listdir(campaigns)) == ["C3", "c1", "c2"]
+    assert report.preserved and not report.published
+
+
+def test_a_commit_inside_a_read_only_phase_is_refused(pair):
+    desktop, phone = pair
+    with phone.cached_reads():
+        txn = phone.transaction()
+        txn.put(instance(InstanceRef("c3", "character", "x"), WREN_R1), None)
+        with pytest.raises(StoreError, match="read-only phase"):
+            txn.commit(owner_handle())
+
+
+def test_a_stray_sync_folder_never_blocks_an_ordinary_write(pair, tmp_path):
+    desktop, phone = pair
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    make_dir_link(phone.root / ".sync", outside)
+    txn = phone.transaction()
+    txn.put(instance(InstanceRef("c3", "character", "x"), WREN_R1), None)
+    txn.commit(owner_handle())  # no sync state in this commit: the linked .sync is not its business
+    state = phone.transaction()
+    state.put_sync_state("device.json", b"{}\n", None)
+    with pytest.raises(LinkRefused):
+        state.check()
+
+
+def _cards(store):
+    """catalog:cards with an entity whose r1 is no longer the head (r2 is)."""
+    from store_helpers import OWNER as owner
+    txn = store.transaction()
+    txn.put(SourceManifest("catalog:cards", owner, "Cards", {"lore/notes": "r2"}), None)
+    for revision in ("r1", "r2"):
+        txn.put(RecordEnvelope(SourceRef("catalog:cards", "lore", "notes", revision), {"r": revision}), None)
+    txn.commit(owner_handle())
+
+
+R1 = SourceRef("catalog:cards", "lore", "notes", "r1")
+R1_FILE = "sources/catalog/cards/_source/records/lore/notes/r1.json"
+
+
+def _replace_r1(store):
+    current = (store.root / R1_FILE).read_bytes()
+    txn = store.transaction()
+    txn.put_exact(R1_FILE, current.replace(b'"r1"', b'"other"'), etag(current), replace_unreferenced=True)
+    txn.check()
+
+
+def test_an_unreferenced_old_revision_can_be_replaced(pair):
+    _cards(pair[1])
+    _replace_r1(pair[1])  # nothing pins r1 any more
+
+
+@pytest.mark.parametrize("pin", ["head", "link", "instance", "chat-pinned", "chat-resolved"])
+def test_each_reference_rule_alone_pins_a_revision(pair, pin):
+    """One pin per case, so every rule in check_unreferenced is proven on its own."""
+    from store_helpers import OWNER as owner
+    from grimoire.store import ScopeRecord
+    from grimoire.core.identity import ChatRef
+    desktop, phone = pair
+    _cards(phone)
+    txn = phone.transaction()
+    if pin == "head":
+        txn.put(SourceManifest("catalog:cards", owner, "Cards", {"lore/notes": "r1"}),
+                phone.read_source("catalog:cards").etag)
+        message = "as its head"
+    elif pin == "link":
+        other = SourceRef("catalog:cards", "lore", "other", "r1")
+        txn.put(RecordEnvelope(other, {}), None)
+        txn.put(SourceManifest("catalog:cards", owner, "Cards", {"lore/notes": "r2"}, (
+            LinkSpec(str(other), "derived_variant", str(R1)),)), phone.read_source("catalog:cards").etag)
+        message = "links"
+    elif pin == "instance":
+        txn.put(RecordEnvelope(InstanceRef("c9", "lore", "copy"), {}, base=str(R1)), None)
+        message = "is based on"
+    else:
+        binding = ({"ref": str(R1)} if pin == "chat-pinned"
+                   else {"ref": str(R1.unpinned()), "resolved_revision": "r1"})
+        txn.put(ScopeRecord(ChatRef("c9", "t-1"), "grimoire.chat/0", {"bindings": [binding]}), None)
+        message = "binds"
+    txn.commit(owner_handle())
+    with pytest.raises(RevisionReferenced, match=message):
+        _replace_r1(phone)

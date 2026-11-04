@@ -28,9 +28,10 @@ Reported as `skipped` and never touched:
 - the reserved campaign families (`scenes/`, `events/`, `evidence/`, `relations/`);
 - non-record files.
 
-Sync compares whole files. It never interprets payloads, never merges inside a file, and never treats source inheritance (`derived_from`, `base`, portrayals) as device ancestry. Two structural readings are the only exceptions:
+Sync compares whole files. It never interprets payloads, never merges inside a file, and never treats source inheritance (`derived_from`, `base`, portrayals) as device ancestry. Three structural readings are the only exceptions:
 - a manifest's `heads`, for the head-dependency rule;
-- on a true first sync only, a record's `previous` field, for one-hop lineage.
+- on a true first sync only, a record's `previous` field, for one-hop lineage;
+- when `resolve` replaces a definition revision, the store's reference check reads every manifest's heads and links, every instance's `derived_from` and `base`, and every string in 107 scope and chat payloads (a pinned reference, or an unpinned one beside a `resolved_revision`).
 
 ## Device identity
 
@@ -60,7 +61,7 @@ A path's base is trusted only where **both devices' own records agree**:
    - the shared entry, when both archives are valid and hold the identical entry;
    - `none`: both archives are valid and neither has an entry (a path new since the last sync);
    - otherwise `uncertain`: one archive is missing or ignored, or the entries disagree.
-2. **Pending override.** If either device has a pending entry for the path, the base is `agreed to` only when every entry names the same `to` and each device holding one still has those bytes: the copy verifiably landed, and the peer held `to`. Anything else is `uncertain`: a revert to the old bytes, an edit racing the copy, disagreeing entries, or a marker that parses but is invalid (ignored).
+2. **Pending override.** If either device has a pending entry for the path, the base is `agreed to` only when every entry names the same `to` and each device holding one still has those bytes: the copy verifiably landed, and the peer held `to`. If both archives already agree on that `to`, the marker is stale (a crash after the archives were written but before the marker was cleared) and the archive base stands: archives are only written after verification. Anything else is `uncertain`: a revert to the old bytes, an edit racing the copy, disagreeing entries, or a marker that parses but is invalid (ignored).
 
 `uncertain` never copies anything. This is what defeats:
 - a **clone** of a library that synced with the phone: its archive cannot make one device's version look like an ancestor;
@@ -108,7 +109,9 @@ For every conflict except `denied`, each device whose peer has a present, usable
 
 A slot already holding those bytes is reused, so kept versions are never duplicated, and a conflict stays reported on every sync until a human ends it. A kept version that cannot be written (for example, because of path limits) is reported as `kept: false`. A device whose own file could not even be read receives nothing: there is nothing to keep it beside, and the next readable sync decides the path. A `denied` conflict keeps nothing either: the denial is only known while committing, after kept versions were planned. Both versions stay canonical on their own device, and the conflict is reported on every sync until the grant changes. Kept versions are not indexed: `load()` still shows one record per path.
 
-Dismissing a kept version by deleting it is not supported yet: the next sync delivers it again.
+Dismissing a kept version by deleting it is not supported yet: the next sync delivers it again. While a conflict stays open and one device keeps editing the record, every new version it sends lands in a new slot, so kept versions accumulate (one per sync, up to the record's size each) until compaction exists.
+
+Kept copies of the **other device's** version are regenerable (journal kind `keep`): an aborted commit drops them, because the other device still holds the bytes. The version `resolve` replaces is the receiver's own and may exist nowhere else (`hold`): an aborted commit preserves it like any other version.
 
 ## Ending a conflict
 
@@ -139,7 +142,9 @@ Errors:
   - a failed verification.
 - `CommitIncomplete`, `OSError`, `PendingRecovery`, `RecoveryBlocked` and root or V1 errors propagate; 010 recovery owns them.
 
-`sync_until_quiet` retries `SyncInterrupted` until a sync completes and writes nothing. After `attempts` it raises the last error, or `SyncNotQuiet`.
+`sync_until_quiet` retries `SyncInterrupted` until a sync completes and writes nothing. Its report merges every attempt: all copies, notices and consumed approvals, and the conflicts of the final sync. After `attempts` it raises the last error, or `SyncNotQuiet`, carrying the merged report.
+
+Planning takes the two libraries' locks in a fixed order (by root path), so two syncs of the same pair in opposite argument order cannot deadlock.
 
 ## Limits
 
@@ -153,12 +158,13 @@ Errors:
   - dependency checks beyond manifest heads;
   - dismissing kept versions.
 - A true first sync, or one after `.sync/` was deleted on **both** devices, re-creates records deleted on one device beforehand. After a tombstone, resurrection is detected only for the exact tombstoned bytes.
+- **Independently created actors can merge.** 107 names a new actor `<entity>-<n>` by the first free number in its campaign, and the actor record holds only identity and source. Two devices that, offline, each add the same character to chats of one campaign create byte-identical `…-1` records, which sync treats as agreed: both chats then share one actor. Making actor IDs unique per device belongs to 107; until then this is a known limit for the chat flows that create actors offline on two devices.
 - **A restore after verification is an edit.** Pending markers protect a restore of the old bytes made *before* a sync verified its copy. Once verified, both devices held the copy, so a restore made after verification (even before the archive is written) is treated as an ordinary later edit, exactly like a restore after the sync finished, and synchronized as one.
 - **Denials are coarse.** A denied write drops every copy of its source to that device (instances are independent), not only the writes that strictly depend on it.
 - **Single-device trust in markers.** A pending marker is trusted on one device's word, and the `check` digest detects damage, not forgery. `.sync` writes need no handle; keeping them out of workers' reach is the application's job until 007/028 integrate.
 - **Link-drop policy.** A copied manifest is admitted exactly as a local commit of it would be. Under 010's accepted link-order policy, it can cause *another* source's cross-source link to be dropped on the destination, and the next `load` reports it.
 - 010's R7 window remains: an external edit landing exactly between a target's guard read and its `replace` is lost. 019 narrowed it to the `replace` alone: a new file's directories are now created before its guard read.
-- **Rollback.** A pre-019 build cannot recover an unfinished journal that contains `replica`, `keep` or `state` entries (`RecoveryFailed`, unknown kind). Finish recovery with a 019 build, or use `discard_journal`.
+- **Rollback.** A pre-019 build cannot recover an unfinished journal that contains `replica`, `keep`, `hold` or `state` entries (`RecoveryFailed`, unknown kind). Finish recovery with a 019 build, or use `discard_journal`.
 
 ## Proofs
 

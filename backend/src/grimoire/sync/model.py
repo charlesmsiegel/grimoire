@@ -9,6 +9,13 @@ SideState = Literal["absent", "present", "blocked"]
 BaseKind = Literal["first", "none", "uncertain", "agreed", "deleted"]
 Action = Literal["agreed", "copy", "conflict"]
 
+#: The record kinds sync owns (the store's ``classify`` kinds); later families extend this set,
+#: and archive and pending documents accept exactly these paths. ``scope`` and ``chat`` are
+#: 107's campaign-local play-scope and chat records.
+SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat"})
+#: Campaign-local kinds: independent of sources and of each other at commit time.
+CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat"})
+
 #: Conflict codes, each named in docs/SYNC.md.
 CONFLICT_CODES = frozenset({
     "blocked", "missing_ancestor", "deleted", "edit_delete", "concurrent", "resurrected",

@@ -176,13 +176,13 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
   - They are published **verbatim**: `previous` is not rewritten, so two libraries converge on one etag.
   - With `regenerable=True` (sync passes it: the bytes still exist on the other device), the entry's journal kind is `replica`, which an abort or an external edit of the target drops instead of preserving. Without it, the bytes are preserved like any `put`.
   - Definition revisions stay create-only (`ImmutableRevision`). The one exception is `replace_unreferenced`: then step 6b refuses with `RevisionReferenced` unless nothing on the library can pin the revision. That covers a manifest head, a link endpoint, an instance's `derived_from` or `base`, and any text naming it in a 107 scope or chat record, across every parsable record including excluded sources. A blocked manifest or instance means "cannot prove".
-- **`Transaction.keep_version(path, data, slot=None)`** stages a kept version of a canonical record under `.conflicts/<hash16>/<name>~<digest12>[.N]`.
+- **`Transaction.keep_version(path, data, slot=None, *, regenerable=False)`** stages a kept version of a canonical record under `.conflicts/<hash16>/<name>~<digest12>[.N]`. With `regenerable=True` (another library still holds the bytes, as for sync) its journal kind is `keep`, dropped on abort; otherwise it is `hold`, preserved like a `put` because it may be the only copy.
   - A slot already holding those bytes is reused, and nothing is staged.
   - A planned `slot` that now holds other bytes is `StaleWrite`.
   - It is authorized as `APPLY` on its own address, `kept/<hash16>/<digest12>[-N]/<name>`, never on the record's.
   - At most one kept version per record per transaction.
 - **`Transaction.put_sync_state(name, data, expected)`** stages `.sync/device.json` or `.sync/peers/<device>/{archive,pending}.json`. This is trusted bookkeeping like the journal: it is not authorized, and a commit of state alone needs no issued handle. It may share a transaction with records, never with ledger batches.
-- **`Transaction.check()`** runs steps 1–6 (and 6b) read-only and raises exactly what `commit` would before authorizing. It consumes nothing. With no puts, it checks the library itself: root, V1 isolation, `.txn`, and that `.conflicts` and `.sync` are exactly spelled and not links.
+- **`Transaction.check()`** runs steps 1–6 (and 6b) read-only and raises exactly what `commit` would before authorizing. It consumes nothing. With no puts, it checks the library itself: root, V1 isolation, `.txn`, and that `.conflicts` and `.sync` are exactly spelled and not links. A commit checks `.sync` only when it holds sync state and `.conflicts` only when it holds a kept version, so a stray sync folder never blocks an ordinary write. A commit inside `cached_reads()` is refused: its checks would see stale listings.
 - **`Transaction.commit(handle, approvals=None, *, on_denied=None)`**: the *partial mode*.
   - Every put is authorized exactly once.
   - A put denied for its path (`not_granted`, `approval_required`, `reserved_resource`) is dropped before staging.
@@ -190,16 +190,16 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
   - Denials that are not about a path still raise `WriteDenied`: an unissued handle, or `internal_error`.
   - `CommitResult` lists `denied`, `dropped` and every consumed approval, including those of dropped dependents.
 - **`preview()` keys** are what is approved: a record's logical address, a kept version's `kept/…` address, or a `.sync/…` path.
-- **Journal entry kinds:** `publish` (canonical targets, via `classify`), `replica` (a canonical target holding another library's exact bytes, from `put_exact`), `keep` (a kept-version slot) and `state` (a sync-state file). Recovery validates each target against its kind. A `replica`, `keep` or `state` entry that would be preserved (an abort, or an external edit of its target) is **dropped** instead: its bytes are regenerable, and preserving them would leave copies nobody asked to keep, or nest conflict copies. A live commit whose settlement aborted or dropped anything raises `WriteConflict` (with `dropped`).
+- **Journal entry kinds:** `publish` (canonical targets, via `classify`), `replica` (a canonical target holding another library's exact bytes, from `put_exact`), `keep` and `hold` (kept-version slots: regenerable, or possibly the only copy) and `state` (a sync-state file). Recovery validates each target against its kind. A `replica`, `keep` or `state` entry that would be preserved (an abort, or an external edit of its target) is **dropped** instead: its bytes are regenerable, and preserving them would leave copies nobody asked to keep, or nest conflict copies. A live commit whose settlement aborted or dropped anything raises `WriteConflict` (with `dropped`).
 - **Reads:**
   - `LibraryStore.scan()` returns every canonical file's exact bytes. It also names blocked paths (`link`, `lookalike`, `unreadable`, `malformed`, `unsupported_format`, `address_mismatch`; a directory blocks its subtree) and skipped non-record entries. It never follows a link.
   - `read_exact(path)` reads a canonical or kept-version file, and `read_sync_state(name)` a `.sync` file. Both return `None` only when the file is absent; a read error propagates.
   - `collides(path)` checks for a differently spelled existing entry.
   - `cached_reads()` reuses directory listings for a read-only phase such as a sync plan.
 
-**R7 narrowed.** For an entry that creates a file, `settle` now re-checks the path and creates the missing directories *before* the per-entry guard read. Only the `replace` itself remains between that read and the publish (`backend/tests/test_store_replica.py::test_r7_window_is_only_the_replace_when_a_file_is_created`). An update never creates directories, so a parent deleted while the app was down is not re-created.
+**R7 narrowed.** For an entry that creates a file, `settle` now re-checks the path and creates the missing directories *before* the per-entry guard read. Only the `replace` itself remains between that read and the publish (`backend/tests/test_store_replica.py::test_r7_window_is_only_the_replace_when_a_file_is_created`). An update never creates directories, so a parent deleted while the app was down is not re-created, and a parent that exists only under a look-alike spelling is never shadowed by a second folder: the guard reads the look-alike and the version is preserved.
 
-**Rollback.** A pre-019 build cannot recover an unfinished journal that contains `replica`, `keep` or `state` entries (`RecoveryFailed`, unknown kind). Finish recovery with a 019 build, or use `discard_journal`.
+**Rollback.** A pre-019 build cannot recover an unfinished journal that contains `replica`, `keep`, `hold` or `state` entries (`RecoveryFailed`, unknown kind). Finish recovery with a 019 build, or use `discard_journal`.
 
 ## Recovery
 

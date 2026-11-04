@@ -113,9 +113,10 @@ def test_s3_a_chat_conflict_keeps_every_participant_and_one_chat_record(pair):
     put(phone, chat_record(["character:wren"], world="world:harbor"))
     report = sync(desktop, phone, handles())
     assert report.conflict(PATHS["chat"]).code == "concurrent"
-    versions = [json.loads(data)["payload"] for data in kept(desktop) + kept(phone)]
-    assert {"world": "world:harbor"}.items() <= versions[0].items() or {"world": "world:harbor"}.items() <= versions[1].items()
-    assert any("character:mara" in version["participants"] for version in versions)
+    on_desktop = [json.loads(data)["payload"] for data in kept(desktop)]
+    on_phone = [json.loads(data)["payload"] for data in kept(phone)]
+    assert [version.get("world") for version in on_desktop] == ["world:harbor"]  # the phone's version
+    assert ["character:mara" in version["participants"] for version in on_phone] == [True]  # the desktop's
     for store in (desktop, phone):
         chats = [ref for ref in store.load().instances if ref.kind == "chat"]
         assert chats == [InstanceRef("c1", "chat", "harbor-talk")]  # kept versions are never indexed
@@ -239,9 +240,8 @@ def test_s7_cross_source_link_cycles_are_caught_cumulatively(pair):
     for store in (desktop, phone):
         for source in ("set:a", "set:b", "set:c"):
             _source(store, source)
-        store_refs = {source: str(SourceRef(source, "character", "x", "r1")) for source in ("set:a", "set:b", "set:c")}
+    refs = {source: str(SourceRef(source, "character", "x", "r1")) for source in ("set:a", "set:b", "set:c")}
     sync(desktop, phone, handles())
-    refs = store_refs
 
     def link(source, target):
         return LinkSpec(refs[source], "derived_variant", refs[target])
@@ -417,8 +417,11 @@ def test_f4_blocked_paths_are_never_copied_or_overwritten(pair, tmp_path):
     (outside / "instances" / "character").mkdir(parents=True)
     make_dir_link(phone.root / "campaigns" / "c9", outside)
     put(desktop, instance(InstanceRef("c9", "character", "x"), WREN_R1), None)
+    unrelated = "campaigns/c5/instances/character/zed.json"
+    put(desktop, instance(InstanceRef("c5", "character", "zed"), WREN_R1), None)  # must still sync
     report = sync(desktop, phone, handles())
-    assert report.copied == ()
+    assert report.copied == ((unrelated, PHONE),)
+    assert (phone.root / unrelated).read_bytes() == (desktop.root / unrelated).read_bytes()
     assert {found.code for found in report.conflicts} == {"blocked"}
     assert (phone.root / PATHS["wren_a"]).read_bytes() == b"{not json"
     assert list((outside / "instances" / "character").iterdir()) == []
@@ -482,7 +485,8 @@ def test_f9_an_archive_too_large_is_refused_before_any_write(pair, monkeypatch):
     assert (_tree(desktop.root), _tree(phone.root)) == before
 
 
-def test_f10_aba_after_an_interrupted_sync_stays_a_conflict_through_many_syncs(pair, monkeypatch):
+@pytest.mark.parametrize("damage", [None, "pending"])
+def test_f10_aba_after_an_interrupted_sync_stays_a_conflict_through_many_syncs(pair, monkeypatch, damage):
     desktop, phone = pair
     old = (desktop.root / PATHS["wren_a"]).read_bytes()
     edit_instance(phone, WREN_A, 4)
@@ -496,10 +500,14 @@ def test_f10_aba_after_an_interrupted_sync_stays_a_conflict_through_many_syncs(p
     monkeypatch.undo()
     assert (desktop.root / PATHS["wren_a"]).read_bytes() == (phone.root / PATHS["wren_a"]).read_bytes()
     (desktop.root / PATHS["wren_a"]).write_bytes(old)  # the human restores the exact old bytes
-    for _ in range(3):
+    if damage == "pending":  # the marker that protects the restore is damaged as well
+        (desktop.root / ".sync" / "peers" / PHONE / "pending.json").write_bytes(b"{")
+    for attempt in range(3):
         report = sync(desktop, phone, handles())
         assert report.conflict(PATHS["wren_a"]).code == "missing_ancestor"
         assert (desktop.root / PATHS["wren_a"]).read_bytes() == old
+        if damage == "pending" and attempt == 0:
+            assert any("pending marker ignored" in notice for notice in report.notices)
 
 
 def test_p15_a_first_sync_with_nothing_agreed_still_writes_an_archive(tmp_path):
@@ -529,7 +537,8 @@ def test_sync_until_quiet_retries_an_interruption(pair, monkeypatch):
 
     monkeypatch.setattr(sync_session, "sync", flaky)
     report = sync_until_quiet(desktop, phone, handles())
-    assert not report.wrote and len(calls) == 3
+    assert len(calls) == 3  # interrupted, the copy, then a quiet sync
+    assert (PATHS["wren_a"], PHONE) in report.copied and report.wrote  # merged across attempts
 
 
 def test_f6_a_denied_source_another_source_needed_never_blocks_the_rest(pair):
@@ -737,7 +746,8 @@ def test_s3_real_chats_conflict_keeps_every_participant_and_one_chat(tmp_path):
     found = report.conflict(path)
     assert found.code == "concurrent" and dict(found.kept) == {DESKTOP: True, PHONE: True}
     # the phone's new participant is never dropped: its actor travels and its chat version is kept
-    assert [(p, d) for p, d in report.copied if "/instances/" in p] and kept(desktop)
+    actor = f"campaigns/{chat.campaign_id}/instances/character/{added.actors[0].instance_id}.json"
+    assert (actor, DESKTOP) in report.copied  # the phone's new participant's actor travels
     assert any(b"anya" in data for data in kept(desktop))
     for library in (on_desktop, on_phone):
         assert library.navigation().all_chats() == (chat,)
@@ -747,7 +757,7 @@ def test_s3_real_chats_conflict_keeps_every_participant_and_one_chat(tmp_path):
     resolve(desktop, phone, path, etag(theirs), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
     assert (desktop.root / path).read_bytes() == theirs and mine in kept(desktop)
     assert sync(desktop, phone, handles()).conflicts == () and canonical(desktop) == canonical(phone)
-    assert added.actors and on_desktop.navigation().all_chats() == (chat,)
+    assert on_desktop.navigation().all_chats() == (chat,)
 
 
 def test_a_chat_binding_pins_a_revision_against_replacement(tmp_path):
@@ -760,3 +770,152 @@ def test_a_chat_binding_pins_a_revision_against_replacement(tmp_path):
     txn.put_exact(path, current.replace(b"smuggler", b"pirate"), etag(current), replace_unreferenced=True)
     with pytest.raises(Exception, match="binds|based"):
         txn.check()
+
+
+# -- brutal-review round 1 regressions -----------------------------------------------------------------
+
+def _crash_before(monkeypatch, step):
+    def crash(*args, **kwargs):
+        raise RuntimeError(f"the process died before {step}")
+    monkeypatch.setattr(sync_session, step, crash)
+
+
+def test_a_marker_left_after_both_archives_agreed_is_stale(pair, monkeypatch):
+    """A crash after the archives but before the marker is cleared: an ordinary edit still copies."""
+    desktop, phone = pair
+    edit_instance(phone, WREN_A, 4)
+    _crash_before(monkeypatch, "_commit_pending")
+    with pytest.raises(RuntimeError):
+        sync(desktop, phone, handles())
+    monkeypatch.undo()
+    assert desktop.read_sync_state(f"peers/{PHONE}/pending.json") is not None  # the marker was left
+    edit_instance(desktop, WREN_A, 7)  # a one-sided edit after the verified copy
+    report = sync(desktop, phone, handles())
+    assert report.conflicts == () and (PATHS["wren_a"], PHONE) in report.copied
+
+
+def test_a_kept_version_that_cannot_be_written_is_reported(pair, monkeypatch):
+    from grimoire.store.library import Transaction
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    edit_instance(phone, WREN_A, 4)
+
+    def refuse(self, *args, **kwargs):
+        raise sync_session.StoreError("no free kept-version slot")
+
+    monkeypatch.setattr(Transaction, "keep_version", refuse)
+    report = sync(desktop, phone, handles())
+    found = report.conflict(PATHS["wren_a"])
+    assert found.code == "concurrent" and dict(found.kept) == {DESKTOP: False, PHONE: False}
+    assert "slot" in found.detail and kept(desktop) == kept(phone) == []
+
+
+def test_approvals_spent_by_a_successful_sync_are_reported(pair):
+    from grimoire.security import Approval, payload_digest
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    authority = Authorizer([OWNER])
+    authority.add_grant(Grant("g", "app:sync", frozenset({Permission.APPLY}), ResourcePath.parse("campaigns"), OWNER))
+    plan = plan_sync(desktop, phone)
+    data = plan.preview()[PHONE][PATHS["wren_a"]]
+    authority.register_approval(Approval("a1", "app:sync", Permission.APPLY, ResourcePath.parse(PATHS["wren_a"]),
+                                         payload_digest(data), OWNER))
+    report = sync_session.apply_sync(plan, {DESKTOP: handle(), PHONE: authority.handle_for("app:sync")},
+                                     {PHONE: {PATHS["wren_a"]: "a1"}})
+    assert report.consumed_approvals == ("a1",) and report.conflicts == ()
+
+
+def test_a_kept_version_is_verified_before_the_archive(pair, monkeypatch):
+    desktop, phone = pair
+    edit_instance(desktop, WREN_A, 9)
+    edit_instance(phone, WREN_A, 4)
+    archive = phone.read_sync_state(f"peers/{DESKTOP}/archive.json")
+    real = phone.read_exact
+    monkeypatch.setattr(phone, "read_exact", lambda path: b"{}" if path.startswith(".conflicts/") else real(path))
+    with pytest.raises(SyncInterrupted, match="verification failed"):
+        sync(desktop, phone, handles())
+    assert phone.read_sync_state(f"peers/{DESKTOP}/archive.json") == archive
+
+
+def test_a_tombstone_survives_through_the_archive_that_still_has_it(pair):
+    desktop, phone = pair
+    original = (desktop.root / PATHS["wren_b"]).read_bytes()
+    (desktop.root / ".sync" / "peers" / PHONE / "archive.json").unlink()  # one archive lost
+    for store in (desktop, phone):
+        (store.root / PATHS["wren_b"]).unlink()  # deleted on both
+    sync(desktop, phone, handles())
+    for store, other in ((desktop, PHONE), (phone, DESKTOP)):
+        entries = json.loads(store.read_sync_state(f"peers/{other}/archive.json"))["entries"]
+        assert entries[PATHS["wren_b"]] == {"deleted": etag(original)}
+
+
+def test_a_path_known_only_from_a_marker_is_settled(pair, monkeypatch):
+    desktop, phone = pair
+    path = "campaigns/c5/instances/character/zed.json"
+    put(phone, instance(InstanceRef("c5", "character", "zed"), WREN_R1), None)
+    _crash_before(monkeypatch, "_verify")
+    with pytest.raises(RuntimeError):
+        sync(desktop, phone, handles())  # zed reached the desktop; only its marker knows the path
+    monkeypatch.undo()
+    for store in (desktop, phone):
+        (store.root / path).unlink()  # then deleted by hand on both devices
+    report = sync(desktop, phone, handles())
+    assert report.conflicts == ()
+    assert path not in json.loads(desktop.read_sync_state(f"peers/{PHONE}/pending.json"))["entries"]
+
+
+def test_resolve_refuses_bad_requests_and_clears_the_marker(pair, monkeypatch, tmp_path):
+    desktop, phone = pair
+    edit_instance(phone, WREN_A, 4)
+    _crash_before(monkeypatch, "_verify")
+    with pytest.raises(RuntimeError):
+        sync(desktop, phone, handles())
+    monkeypatch.undo()
+    edit_instance(desktop, WREN_A, 7)  # an edit over the copy: an uncertain base, a conflict
+    assert sync(desktop, phone, handles()).conflict(PATHS["wren_a"]).code == "missing_ancestor"
+    mine, theirs = (desktop.root / PATHS["wren_a"]).read_bytes(), (phone.root / PATHS["wren_a"]).read_bytes()
+    with pytest.raises(ResolveRefused, match="changed"):
+        resolve(desktop, phone, PATHS["wren_a"], etag(mine), {DESKTOP: etag(mine)}, handles())  # a key missing
+    clone = LibraryStore.create(tmp_path / "clone")
+    identify(clone, DESKTOP)
+    with pytest.raises(SameDevice):
+        resolve(desktop, clone, PATHS["wren_a"], etag(mine), {DESKTOP: etag(mine)}, handles())
+    clone.close()
+    resolve(desktop, phone, PATHS["wren_a"], etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+    pending = json.loads(desktop.read_sync_state(f"peers/{PHONE}/pending.json"))["entries"]
+    assert PATHS["wren_a"] not in pending
+    assert sync(desktop, phone, handles()).conflicts == ()
+
+
+def test_sync_until_quiet_reraises_and_keeps_every_notice(pair, monkeypatch):
+    desktop, phone = pair
+    (phone.root / ".sync" / "peers" / DESKTOP / "archive.json").write_bytes(b"{")
+    report = sync_until_quiet(desktop, phone, handles())
+    assert any("archive ignored" in notice for notice in report.notices)  # seen once, then repaired
+    monkeypatch.setattr(sync_session, "sync", lambda *args, **kwargs: (_ for _ in ()).throw(
+        SyncInterrupted("raced every time")))
+    with pytest.raises(SyncInterrupted, match="raced every time"):
+        sync_until_quiet(desktop, phone, handles(), attempts=2)
+
+
+def test_one_poisoned_source_keeps_admission_linear(tmp_path, monkeypatch):
+    """The fallback checks each source alone, never everything accepted so far."""
+    from grimoire.store.library import Transaction
+    counts = {}
+    for size in (10, 20):
+        root = tmp_path / str(size)
+        root.mkdir()
+        desktop, phone = make_pair(root)
+        for number in range(size):
+            _source(desktop, f"bulk:s{number}")
+        _source(desktop, "catalog:shared", "character")  # poisoned: the phone uses the id for an item
+        _source(phone, "catalog:shared", "item")
+        calls = []
+        real = Transaction.check
+        monkeypatch.setattr(Transaction, "check", lambda self: (calls.append(len(self.preview())), real(self))[1])
+        report = sync(desktop, phone, handles())
+        monkeypatch.undo()
+        assert report.conflict("sources/catalog/shared/_source/records/item/x/r1.json").code == "unapplicable"
+        counts[size] = sum(calls)  # puts staged across every check
+        desktop.close(), phone.close()
+    assert counts[20] < 2.5 * counts[10]  # linear, not quadratic, in the number of sources

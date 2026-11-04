@@ -615,7 +615,13 @@ class _Put:
     def journal_kind(self) -> str:
         if self.kind == "record" and self.regenerable:
             return "replica"
-        return {"keep": "keep", "state": "state"}.get(self.kind, "publish")
+        if self.kind == "keep":
+            return "keep" if self.regenerable else "hold"
+        return {"state": "state"}.get(self.kind, "publish")
+
+    @property
+    def preservable(self) -> bool:
+        return self.journal_kind in ("publish", "hold")
 
 
 class LedgerWriter:
@@ -673,6 +679,7 @@ class Transaction:
         self._store = store
         self._puts: dict[Parts, _Put] = {}
         self._kept: set[Parts] = set()  # records with a kept version in this transaction
+        self._keys: set[str] = set()  # preview keys staged so far
         self._committed = False
 
     def put(self, envelope: RecordEnvelope | SourceManifest | ScopeRecord, expected: str | None) -> str:
@@ -708,9 +715,10 @@ class Transaction:
             raise StoreError("this transaction was already committed")
         if put.parts in self._puts:
             raise InvalidEnvelope(f"{'/'.join(put.parts)} is written twice in one transaction")
-        if any(other.key == put.key for other in self._puts.values()):
+        if put.key in self._keys:
             raise InvalidEnvelope(f"{put.key} is written twice in one transaction")
         self._puts[put.parts] = put
+        self._keys.add(put.key)
 
     def put_exact(self, path: str, data: bytes, expected: str | None, *,
                   replace_unreferenced: bool = False, regenerable: bool = False) -> str:
@@ -743,12 +751,15 @@ class Transaction:
                        replace_unreferenced, regenerable=regenerable))
         return str(address)
 
-    def keep_version(self, path: str, data: bytes, slot: int | None = None) -> str:
+    def keep_version(self, path: str, data: bytes, slot: int | None = None, *, regenerable: bool = False) -> str:
         """Stage ``data`` as a kept version of canonical ``path`` under ``.conflicts``; returns its path.
 
         With ``slot=None`` the first slot that is absent or already holds these bytes is used (a
         reused slot stages nothing). A planned ``slot`` holding other bytes is ``StaleWrite``.
-        Authorized as ``APPLY`` on its own ``kept/...`` address, never the record's.
+        Authorized as ``APPLY`` on its own ``kept/...`` address, never the record's. With
+        ``regenerable`` (another library still holds these bytes, as for sync) an aborted commit
+        drops the kept version (journal kind ``keep``); without it, it is preserved like a
+        ``put`` (``hold``), because it may be the only copy (``resolve``'s replaced version).
         """
         if type(path) is not str:
             raise InvalidEnvelope("path must be text")
@@ -774,7 +785,8 @@ class Transaction:
                 return "/".join(target)  # already kept: nothing to stage
             if current is None:
                 address = kept_address(parts, tag, attempt)
-                self._add(_Put(target, address, bytes(data), None, None, "keep", str(address)))
+                self._add(_Put(target, address, bytes(data), None, None, "keep", str(address),
+                               regenerable=regenerable))
                 return "/".join(target)
             if slot is not None:
                 raise StaleWrite([("/".join(target), "changed")])
@@ -841,6 +853,9 @@ class Transaction:
             raise InvalidEnvelope("nothing to commit")
         store = self._store
         with store.lock:  # the binding cannot change between these checks and the commit
+            if store._access._listings is not None:
+                raise StoreError("a commit cannot run inside a read-only phase (cached_reads): its checks would "
+                                 "see stale listings")
             puts = tuple(self._puts.values())
             if any(put.kind != "state" for put in puts):  # sync state alone is trusted bookkeeping
                 self._require_writable_records(handle)
@@ -875,8 +890,18 @@ class _Commit:
         return staging
 
     def _check_local_roots(self) -> None:
-        """``.conflicts`` and ``.sync`` are spelled exactly and are not links (library-wide)."""
-        for name in (CONFLICTS, SYNC):
+        """``.conflicts`` / ``.sync`` are spelled exactly and are not links, where this commit needs them.
+
+        A transaction with no puts checks both (the library check); otherwise ``.sync`` only for
+        sync-state puts and ``.conflicts`` only for kept versions, so a stray sync folder never
+        blocks an ordinary write.
+        """
+        names = []
+        if not self.puts or any(put.kind == "state" for put in self.puts):
+            names.append(SYNC)
+        if not self.puts or any(put.kind == "keep" for put in self.puts):
+            names.append(CONFLICTS)
+        for name in names:
             if self.access.presence((name,)) == "mismatch":
                 raise NameCollision(f"{name} collides with a differently spelled folder")
             self.access.guard.check_read((name,))
@@ -965,7 +990,7 @@ class _Commit:
         guard.check_write((TXN, "x.new"), staging_device=None)
         for put in self.puts:
             guard.check_write(put.parts, staging_device=staging.st_dev)
-            if put.journal_kind == "publish":  # kept versions and sync state are never preserved
+            if put.preservable:  # replicas, regenerable kept versions and sync state are dropped instead
                 guard.check_write(conflict_parts(put.parts, etag(put.data)), staging_device=staging.st_dev)
         return staging.st_dev
 
@@ -986,7 +1011,7 @@ class _Commit:
         for put in self.puts:
             if self.access.presence(put.parts) == "mismatch":
                 raise NameCollision(f"{'/'.join(put.parts)} collides with a differently spelled existing entry")
-            if put.journal_kind == "publish":
+            if put.preservable:
                 self.access.check_conflict_folder(conflict_parts(put.parts, etag(put.data)))
 
     def _check_sources(self) -> None:

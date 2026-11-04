@@ -250,13 +250,26 @@ def preserves_interleave() -> Invariant:
     """An external edit made while the action ran (an ``Interleave``) survives recovery in place.
 
     Each path an interleave changed holds the interleave's content afterwards, and a path it
-    removed is still absent. This is an *in-place* rule: a writer that legitimately merges or
-    moves an interleaved edit needs its own scenario invariant. 010's pinned R7 window (an edit
+    removed is still absent. A path a later meddle also edited is left to ``preserves_meddle``,
+    and a directory is compared as "present" whether a normalizer dropped it or files below it
+    imply it. This is an *in-place* rule: a writer that legitimately merges or moves an
+    interleaved edit needs its own scenario invariant. 010's pinned R7 window (an edit
     landing on a target's own ``replace``) violates it.
     """
     def check(outcome: CrashOutcome) -> str | None:
-        lost = [key for key in sorted(outcome.interleaved_paths)
-                if outcome.recovered.get(key, _MISSING) != outcome.interleaved.get(key, _MISSING)]
+        def implied(tree: Tree, key: str) -> bool:  # a directory that files below it imply
+            return any(name.startswith(key + "/") for name in tree)
+
+        lost = []
+        for key in sorted(outcome.interleaved_paths - outcome.meddled_paths):  # a later meddle wins
+            expected = outcome.interleaved.get(key, _MISSING)
+            actual = outcome.recovered.get(key, _MISSING)
+            if actual == expected:
+                continue
+            if expected in (None, _MISSING) and actual in (None, _MISSING) and (
+                    implied(outcome.recovered, key) or (expected is None and implied(outcome.interleaved, key))):
+                continue  # a normalized directory: present either way
+            lost.append(key)
         if not lost:
             return None
         return "recovery lost an interleaved edit: " + _difference(

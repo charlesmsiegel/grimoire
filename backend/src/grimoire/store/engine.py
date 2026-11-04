@@ -13,10 +13,12 @@ present    = new        = new       drop the temp
 present    = new        other       preserve (external edit is kept)
 =========  ===========  ==========  =====================================
 
-"Preserve" applies to ``publish`` entries. A ``replica`` (another library's exact
-bytes), ``keep`` (kept version) or ``state`` (``.sync``) entry that would be
-preserved is *dropped* instead: its bytes are regenerable, and preserving them
-would leave copies nobody asked to keep, or nest conflict copies of conflict copies.
+"Preserve" applies to ``publish`` and ``hold`` entries. A ``replica`` (another
+library's exact bytes), ``keep`` (a kept copy of another library's version) or
+``state`` (``.sync``) entry that would be preserved is *dropped* instead: its bytes
+are regenerable, and preserving them would leave copies nobody asked to keep, or
+nest conflict copies of conflict copies. A ``hold`` (a kept version whose bytes
+exist nowhere else, such as the version ``resolve`` replaces) is preserved.
 
 An ``abort`` journal never publishes. A commit journal whose temps are all
 still present and which would preserve any entry is first rewritten as
@@ -39,7 +41,7 @@ from grimoire.library import LibraryPathError
 from .diskops import FileOps, is_link, lstat_or_none
 from .errors import LinkRefused, NameCollision, RecoveryFailed, StoreError, UnstorableIdentifier
 from .guard import Guard
-from .journal import Entry, Journal, is_staging_name, parse
+from .journal import REGENERABLE_KINDS, Entry, Journal, is_staging_name, parse
 from .jsonfmt import MAX_FILE_BYTES, etag
 from .layout import DISCARD_MARKER, JOURNAL, REPAIR_MARKER, TXN, Parts, conflict_parts, name_key
 
@@ -212,7 +214,7 @@ def check_entry_paths(access: Access, journal: Journal) -> None:
         if entry.temp in staged:
             access.check_staged_file(entry.temp)
         access.guard.check_write(entry.target, staging_device=device)
-        if entry.kind == "publish":  # keep/state entries are dropped, never preserved
+        if entry.kind not in REGENERABLE_KINDS:  # replica/keep/state entries are dropped, never preserved
             access.guard.check_write(conflict_parts(entry.target, entry.new), staging_device=device)
             access.check_conflict_folder(conflict_parts(entry.target, entry.new))
 
@@ -229,7 +231,7 @@ def _preserve(access: Access, entry: Entry, settlement: Settlement, digest: str)
 
     A replica, keep or state entry is dropped instead (its temp removed): see the module docstring.
     """
-    if entry.kind != "publish":
+    if entry.kind in REGENERABLE_KINDS:
         access.ops.remove(access.path((TXN, entry.temp)))
         settlement.dropped.append(_text(entry.target))
         return
@@ -261,8 +263,8 @@ def _prepare(access: Access, entry: Entry) -> None:
     """
     staging = lstat_or_none(access.path((TXN,)))
     access.guard.check_write(entry.target, staging_device=staging.st_dev if staging else None)
-    if entry.old is None:
-        access.make_parent(entry.target)
+    if entry.old is None and access.presence(entry.target[:-1]) == "absent":
+        access.make_parent(entry.target)  # a look-alike parent is never shadowed: the guard reads LOOKALIKE
 
 
 def _publish(access: Access, entry: Entry, settlement: Settlement) -> None:

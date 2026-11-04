@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from grimoire.core.identity import InstanceRef
-from grimoire.store import LibraryStore, RecordEnvelope
+from grimoire.store import LibraryStore, RecordEnvelope, RecordNotFound
 from grimoire.sync import identify, sync
 
 from store_helpers import HARBOR, OWNER, WREN_R1, harbor_manifest, instance, owner_handle, seed, wren
@@ -47,7 +47,7 @@ def put(store: LibraryStore, envelope, expected="auto") -> None:
     if expected == "auto":
         try:
             expected = store.read(envelope.address).etag
-        except Exception:  # noqa: BLE001 - absent
+        except RecordNotFound:
             expected = None
     txn.put(envelope, expected)
     txn.commit(handle())

@@ -85,3 +85,21 @@ def test_preserves_interleave():
     assert "lost" in check(raced(DONE, {}, {"a.json"}))
     assert check(raced({**DONE, "d": None}, {"d": None}, {"d"})) is None
     assert "lost" in check(raced({**DONE, "d": b"file"}, {"d": None}, {"d"}))
+
+
+def test_preserves_interleave_defers_to_a_later_meddle_and_normalized_directories():
+    check = preserves_interleave().check
+    # a meddle edited the same path later: the meddled edit is the one to keep (preserves_meddle)
+    later = CrashOutcome(point="test", before=BEFORE, completed=DONE, recovered={**DONE, "a.json": b"meddle"},
+                         recovered_twice=DONE, interleaved={"a.json": b"interleave"},
+                         interleaved_paths=frozenset({"a.json"}), meddled_paths=frozenset({"a.json"}))
+    assert check(later) is None
+    # an interleaved directory a normalizer dropped while the writer filled it later
+    filled = CrashOutcome(point="test", before=BEFORE, completed=DONE,
+                          recovered={**DONE, "box": None, "box/f.json": b"x"}, recovered_twice=DONE,
+                          interleaved={}, interleaved_paths=frozenset({"box"}))
+    assert check(filled) is None
+    # but a removed file still has to stay removed
+    removed = CrashOutcome(point="test", before=BEFORE, completed=DONE, recovered={**DONE, "gone.json": b"x"},
+                           recovered_twice=DONE, interleaved={}, interleaved_paths=frozenset({"gone.json"}))
+    assert "lost" in check(removed)

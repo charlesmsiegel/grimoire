@@ -83,9 +83,12 @@ def derive_base(path: str, archives: tuple[ArchiveLike, ArchiveLike], pendings: 
 
     A pending entry says "a sync published ``to`` here; the peer held ``to``". If every pending
     entry for the path names the same ``to`` and each device that has one still holds it, the
-    copy verifiably landed: ``agreed to``. Anything else (a revert, an edit racing the copy,
-    disagreeing entries, an unreadable marker) is ``uncertain``.
+    copy verifiably landed: ``agreed to``. If both archives already agree on that ``to`` (archives
+    are written only after verification), the marker is stale and the archive base stands.
+    Anything else (a revert, an edit racing the copy, disagreeing entries, an unreadable marker)
+    is ``uncertain``.
     """
+    candidate = archive_candidate(path, *archives)
     entries = []
     for pending, etag in zip(pendings, current):
         if pending.state == "ignored":
@@ -95,10 +98,12 @@ def derive_base(path: str, archives: tuple[ArchiveLike, ArchiveLike], pendings: 
             entries.append((entry, etag))
     if entries:
         targets = {entry.get("to") for entry, _ in entries}
+        if len(targets) == 1 and None not in targets and candidate == Base("agreed", next(iter(targets))):
+            return candidate  # a marker left by a crash after both archives agreed on its copy: stale
         if len(targets) == 1 and None not in targets and all(entry.get("to") == etag for entry, etag in entries):
             return Base("agreed", targets.pop())
         return UNCERTAIN
-    return archive_candidate(path, *archives)
+    return candidate
 
 
 class ArchiveLike:  # structural: documents.ArchiveView

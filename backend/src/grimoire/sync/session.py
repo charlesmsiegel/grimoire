@@ -8,6 +8,7 @@ depend only on bytes, the two devices' own archives and their unfinished-sync ma
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -19,7 +20,7 @@ from grimoire.store import (
     NameCollision, RevisionReferenced, StaleWrite, StoreError, UnstorableIdentifier, WriteConflict, etag,
 )
 from grimoire.store.jsonfmt import MAX_FILE_BYTES
-from grimoire.store.layout import classify, definition_parts
+from grimoire.store.layout import classify, conflict_parts, definition_parts, kept_address
 from grimoire.store.replica import parse_exact, previous_of
 
 from .decide import decide, derive_base
@@ -31,7 +32,7 @@ from .errors import (
     ArchiveTooLarge, IdentityExists, NoDeviceIdentity, ResolveRefused, SameDevice, SyncInterrupted,
     SyncNotQuiet,
 )
-from .model import Base, Side
+from .model import CAMPAIGN_LOCAL, SYNCED_KINDS, Base, Side
 
 _SLOT = re.compile(r"~[0-9a-f]{12}(?:\.([1-9][0-9]*))?$")
 
@@ -40,11 +41,7 @@ PER_PATH_ERRORS = (InvalidSourceState, NameCollision, UnstorableIdentifier, Link
                    InvalidEnvelope, ImmutableRevision, RevisionReferenced)
 #: The largest archive this slice writes (one file under the store's limit; no compaction yet).
 ARCHIVE_LIMIT = MAX_FILE_BYTES
-#: The record kinds this slice synchronizes; later families extend ``syncable``. ``scope`` and
-#: ``chat`` are 107's campaign-local play-scope and chat records.
-SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat"})
-#: Campaign-local kinds: independent of sources and of each other at commit time.
-CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat"})
+
 
 
 def syncable(path: str) -> str | None:
@@ -189,7 +186,8 @@ def _current(side: Side) -> str | None:
 
 def plan_sync(left: LibraryStore, right: LibraryStore) -> SyncPlan:
     """Decide every path; read only. Raises ``SameDevice``/``NoDeviceIdentity`` or ``SyncInterrupted``."""
-    with left.cached_reads(), right.cached_reads():
+    first, second = sorted((left, right), key=lambda store: os.fspath(store.root))  # one lock order: no deadlock
+    with first.cached_reads(), second.cached_reads():
         return _plan(left, right)
 
 
@@ -271,7 +269,7 @@ def _stage(txn, copies: list[Copy], keeps: list[Keep]) -> None:  # type: ignore[
     for copy in copies:  # the origin still holds these bytes: an aborted commit drops, never parks, them
         txn.put_exact(copy.path, copy.data, copy.expected, regenerable=True)
     for keep in keeps:
-        txn.keep_version(keep.path, keep.data, slot=keep.slot)
+        txn.keep_version(keep.path, keep.data, slot=keep.slot, regenerable=True)  # the peer still holds them
 
 
 def _manifest_heads(copy: Copy) -> list[str]:
@@ -315,10 +313,13 @@ def _admit(plan: SyncPlan, dest: str) -> None:
 
 
 def _admit_units(store: LibraryStore, copies: list[Copy]) -> tuple[list[Copy], list[tuple[Copy, BaseException]]]:
-    """Admit copies unit by unit: instances alone, source units cumulatively in sorted order.
+    """Admit copies unit by unit; returns the admitted copies and each refused copy's reason.
 
-    A unit is one instance, one manifest with the head revisions it names among ``copies``, or
-    the other revisions of one entity. Returns the admitted copies and each refused copy's reason.
+    A unit is one campaign-local record, one manifest with the head revisions it names among
+    ``copies``, or the other revisions of one entity. Campaign-local units and sources are checked
+    on their own (a source's units only when the source as a whole fails); manifests that link to
+    other sources are then admitted cumulatively in sorted order, so a cross-source link cycle is
+    caught. The caller runs one combined check of everything admitted.
     """
     by_path = {copy.path: copy for copy in copies}
     heads = {copy.path: [path for path in _manifest_heads(copy) if path in by_path]
@@ -350,23 +351,52 @@ def _admit_units(store: LibraryStore, copies: list[Copy]) -> tuple[list[Copy], l
             units.append([copy])
         else:
             unit.append(copy)
-    accepted: list[Copy] = []
+    # Each source alone: a source's consistency (heads, kinds, revisions) depends only on itself.
+    alone: list[list[Copy]] = []
     for source in sorted(sources):
-        group = [copy for unit in sources[source] for copy in unit]
         txn = store.transaction()
-        _stage(txn, accepted + group, [])
+        _stage(txn, [copy for unit in sources[source] for copy in unit], [])
         if _preflight(txn, f"source {source}") is None:
-            accepted += group
+            alone.extend(sources[source])
             continue
         for unit in sources[source]:
             txn = store.transaction()
-            _stage(txn, accepted + unit, [])
+            _stage(txn, unit, [])
             error = _preflight(txn, f"source {source}")
             if error is None:
-                accepted += unit
+                alone.append(unit)
             else:
                 rejected.extend((copy, error) for copy in unit)
+    # Only manifests with cross-source links can make each other invalid (a link cycle across
+    # sources): those are admitted cumulatively, in order; every other unit stands on its own.
+    accepted = [copy for unit in alone if not _links_out(unit) for copy in unit]
+    linked: list[Copy] = []
+    for unit in (unit for unit in alone if _links_out(unit)):
+        txn = store.transaction()
+        _stage(txn, linked + unit, [])
+        error = _preflight(txn, f"source {_source_of(unit[0].path)}")
+        if error is None:
+            linked += unit
+        else:
+            rejected.extend((copy, error) for copy in unit)
+    accepted += linked
     return sorted(admitted + accepted, key=lambda copy: copy.path), rejected
+
+
+def _links_out(unit: list[Copy]) -> bool:
+    """Whether a unit's manifest declares a link to another source (only those interact)."""
+    copy = unit[0]
+    if syncable(copy.path) != "manifest":
+        return False
+    manifest = parse_exact(tuple(copy.path.split("/")), copy.data)
+    source = manifest.source  # type: ignore[union-attr]
+    for link in manifest.links:  # type: ignore[union-attr]
+        try:
+            if SourceRef.parse(link.object).source != source:
+                return True
+        except ValueError:
+            return True
+    return False
 
 
 def _entity(path: str) -> tuple[str, str]:
@@ -537,7 +567,6 @@ def _marker(plan: SyncPlan, device: str, copies: list[Copy]) -> bytes:
 
 
 def _kept_key(keep: Keep) -> object:
-    from grimoire.store.layout import kept_address
     return kept_address(tuple(keep.path.split("/")), etag(keep.data), keep.slot)
 
 
@@ -549,7 +578,6 @@ def _source_of(path: str) -> str:
 
 def _verify(plan: SyncPlan, applied: _Applied) -> None:
     """Re-read every file this sync published or kept; its bytes must be the planned ones."""
-    from grimoire.store.layout import conflict_parts
     for device in plan.devices:
         store = plan.stores[device]
         checks = [(copy.path, copy.data) for copy in applied.published.get(device, [])]
@@ -654,21 +682,41 @@ def sync(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object],
 
 def sync_until_quiet(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object],
                      approvals: Mapping[str, Mapping[str, str]] | None = None, *, attempts: int = 4) -> SyncReport:
-    """Sync until one sync completes and writes nothing; retries ``SyncInterrupted``."""
+    """Sync until one sync completes and writes nothing; retries ``SyncInterrupted``.
+
+    The returned report merges every attempt: all copies, notices and consumed approvals, and
+    the conflicts of the final (quiet) sync.
+    """
     last: Exception | None = None
-    report: SyncReport | None = None
+    reports: list[SyncReport] = []
     for _ in range(attempts):
         try:
             report = sync(left, right, handles, approvals)
         except SyncInterrupted as error:
             last = error
+            if isinstance(error.report, SyncReport):
+                reports.append(error.report)
             continue
+        reports.append(report)
         if not report.wrote:
-            return report
+            return _merged(reports)
         last = None
     if last is not None:
+        if isinstance(getattr(last, "report", None), SyncReport):
+            last.report = _merged(reports)  # type: ignore[attr-defined]
         raise last
-    raise SyncNotQuiet(f"every one of {attempts} syncs still wrote something", report)
+    raise SyncNotQuiet(f"every one of {attempts} syncs still wrote something", _merged(reports))
+
+
+def _merged(reports: list[SyncReport]) -> SyncReport:
+    final = reports[-1]
+
+    def union(values) -> tuple:  # type: ignore[no-untyped-def]
+        return tuple(dict.fromkeys(value for report in reports for value in values(report)))
+
+    return SyncReport(final.devices, union(lambda report: report.copied), final.conflicts, final.skipped,
+                      union(lambda report: report.notices), any(report.wrote for report in reports),
+                      union(lambda report: report.consumed_approvals))
 
 
 def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expected: Mapping[str, str | None],
@@ -741,7 +789,7 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             state = store.transaction()
             state.put_sync_state(archive_name(other[device]), rendered,
                                  None if archive.data is None else etag(archive.data))
-            state.commit(None)
+            _commit_state(state, device)
     for device in reversed(pair):
         store = stores[device]
         pending = parse_pending(_state(store, pending_name(other[device])), pair)
@@ -751,8 +799,17 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         state.put_sync_state(pending_name(other[device]), render_pending(
             pair, {key: value for key, value in pending.entries.items() if key not in resolved}),
             etag(pending.data))  # type: ignore[arg-type]
-        state.commit(None)
+        _commit_state(state, device)
     return receiver
+
+
+def _commit_state(txn, device: str) -> None:  # type: ignore[no-untyped-def]
+    """A trusted ``.sync`` commit after resolve's data landed; a race is ``SyncInterrupted`` (the next
+    sync sees equal bytes and records the agreement)."""
+    try:
+        txn.commit(None)
+    except (StaleWrite, WriteConflict) as error:
+        raise SyncInterrupted(f"the sync state on {device} changed during resolve: {error}") from error
 
 
 __all__ = [

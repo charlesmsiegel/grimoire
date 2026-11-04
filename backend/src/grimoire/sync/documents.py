@@ -17,6 +17,8 @@ from grimoire.security import InvalidResourcePath, ResourcePath
 from grimoire.store.jsonfmt import JsonError, is_etag, parse_strict, render
 from grimoire.store.layout import classify
 
+from .model import SYNCED_KINDS
+
 DEVICE_FORMAT = "grimoire.sync.device/1"
 ARCHIVE_FORMAT = "grimoire.sync.archive/1"
 PENDING_FORMAT = "grimoire.sync.pending/1"
@@ -69,7 +71,7 @@ def _syncable(path: object) -> bool:
     if type(path) is not str:
         return False
     found = classify(tuple(path.split("/")))
-    return found is not None and found[0] in ("definition", "manifest", "instance", "scope", "chat")
+    return found is not None and found[0] in SYNCED_KINDS
 
 
 @dataclass(frozen=True)

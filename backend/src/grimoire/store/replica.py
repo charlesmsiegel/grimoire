@@ -213,23 +213,42 @@ def check_unreferenced(access: Access, ref: SourceRef) -> None:
                 if ref in (_pinned(link.subject), _pinned(link.object)):
                     raise RevisionReferenced(f"{path} links {ref}")
         elif isinstance(envelope, ScopeRecord):
-            if any(_pinned(text) == ref for text in _texts(envelope.payload)):
+            if ref in _payload_refs(envelope.payload):
                 raise RevisionReferenced(f"{path} binds {ref}")
         elif isinstance(envelope.address, InstanceRef):
             if ref in (_pinned(envelope.derived_from), _pinned(envelope.base)):
                 raise RevisionReferenced(f"{path} is based on {ref}")
 
 
-def _texts(value: object):  # every string inside an opaque JSON value
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, Mapping):
-        for key, child in value.items():
-            yield key
-            yield from _texts(child)
-    elif isinstance(value, (list, tuple)):
-        for child in value:
-            yield from _texts(child)
+def _payload_refs(value: object) -> set[SourceRef]:
+    """Every pinned revision an opaque payload can mean, conservatively.
+
+    Any text that is a pinned reference counts, and so does an unpinned reference beside a
+    ``resolved_revision`` (107 stores a head-following binding that way: the revision it meant
+    when it was introduced).
+    """
+    found: set[SourceRef] = set()
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            pinned = _pinned(item)
+            if pinned is not None:
+                found.add(pinned)
+        elif isinstance(item, Mapping):
+            revision = item.get("resolved_revision")
+            for key, child in item.items():
+                stack.append(key)
+                stack.append(child)
+                if isinstance(child, str) and isinstance(revision, str):
+                    try:
+                        ref = SourceRef.parse(child)
+                        found.add(ref if ref.pinned else ref.at(revision))
+                    except ValueError:
+                        pass
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+    return found
 
 
 def _pinned(text: object) -> SourceRef | None:
