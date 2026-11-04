@@ -19,12 +19,12 @@ A facet is a typed, immutable capability contract with invariants. Integers are 
 | Facet | Fields | Requires | Meaning |
 |---|---|---|---|
 | `physical` | `material` (text or none), `size` (`tiny`, `small`, `medium`, `large`, `huge`, or none) | | occupies space, can be touched |
-| `portable` | `bulk` (`light`, `normal`, `heavy`) | `physical` | can be carried; *who* carries it is a relation (017) |
+| `portable` | `bulk` (`light`, `normal`, `heavy`) | `physical` | can be carried; *who* carries it is a `carries` relation ([GRAPH](GRAPH.md)) |
 | `durable` | `max_integrity` ≥ 1 | `physical` | can be damaged; current integrity is campaign state |
-| `biological` | | `physical` | a living body; species membership is a relation (017, 024) |
+| `biological` | | `physical` | a living body; species membership is a relation (024) |
 | `agent` | | | can hold intentions and act; **the only facet that makes control possible** |
 | `communicative` | `speaks`, `understands`: sets of `speech`, `telepathy`, `sign`, `writing` (not both empty) | `agent` | can be heard (expresses itself on any channel) and/or addressed |
-| `spatial` | | | a place other entities can be in; what is in it is a relation (017) |
+| `spatial` | | | a place other entities can be in; what is in it is a `located_in` relation ([GRAPH](GRAPH.md)) |
 
 - `FacetBundle`: canonical (sorted by name), hashable, one facet per name, no requirement check. Used for an instance's additions and replacements.
 - `FacetSet`: a bundle in which every known facet's requirements are present as **known** facets. Used for definition traits and effective facets.
@@ -106,4 +106,4 @@ Interoperability is proven against a test-only neutral envelope that imports no 
 
 ## Not in this slice
 
-Persistence and files; relations (carrying, location, kinship, species membership); species-trait inheritance; facet suppression; collective, container and mechanics facets; time-bound state; UI; changes to authority or intent signatures.
+Persistence and files; relations (carrying, location and kinship now exist in [the graph](GRAPH.md), without facet constraints; species membership belongs to 024); species-trait inheritance; facet suppression; collective, container and mechanics facets; time-bound state; UI; changes to authority or intent signatures.
