@@ -775,3 +775,16 @@ def test_select_shards_the_points_and_run_plans_shares_one_baseline(tmp_path):
     report = run_plans(sc, plans, tmp_path)
     report.assert_ok()
     assert len(report.runs) == 4 and report.runs[0].point == "baseline"
+
+
+def test_select_asking_for_a_disabled_fault_timing_is_an_error(tmp_path):
+    """Asking for ``fail`` without ``errors=True`` (or ``torn`` without ``torn=True``) would explore nothing."""
+    import pytest as _pytest
+    from grimoire.testing.explore import _timings
+    from grimoire.testing import FileOp
+    op = FileOp(0, "write_bytes", "a.json", None, None, 3)
+    with _pytest.raises(ValueError, match="not enabled"):
+        _timings(op, lambda _: {"fail"}, torn=True, errors=False)
+    with _pytest.raises(ValueError, match="not enabled"):
+        _timings(op, lambda _: {"torn"}, torn=False, errors=True)
+    assert _timings(op, lambda _: {"fail"}, torn=False, errors=True) == {"fail"}

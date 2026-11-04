@@ -11,15 +11,18 @@ Action = Literal["agreed", "copy", "conflict"]
 
 #: The record kinds sync owns (the store's ``classify`` kinds); later families extend this set,
 #: and archive and pending documents accept exactly these paths. ``scope`` and ``chat`` are
-#: 107's campaign-local play-scope and chat records; ``relation`` is 017's typed relation record;
-#: ``accepted`` and ``wrapup`` are 021's accepted events and scene wrap-ups (an effect's relation
-#: changes are synced together with the event that made them); ``holdings`` is 023's one-file-per-holder
-#: counted holdings.
-SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge",
-                          "accepted", "wrapup", "holdings"})
+#: 107's campaign-local play-scope and chat records; ``relation`` is 017's typed relation record.
+SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge"})
 #: Campaign-local kinds: independent of sources and of each other at commit time.
-CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge", "accepted", "wrapup",
-                            "holdings"})
+CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge"})
+#: Families whose own stores commit several files as one unit and whose cross-device merge rule is
+#: a later milestone (docs/EFFECTS.md, docs/HOLDINGS.md): never copied file by file, always reported
+#: as skipped. 021's accepted events and wrap-ups, 023's holdings.
+HELD_BACK_KINDS = frozenset({"accepted", "wrapup", "holdings"})
+#: A campaign holding any record of this kind on either device has its 017 relations held back too,
+#: because 021 changes relations in the same commit as an event: a relation must never arrive
+#: without the event that changed it.
+HOLDS_RELATIONS = "accepted"
 #: Create-only kinds: copied only onto an absent file, and a changed one is a conflict, never a copy.
 #: ``knowledge`` is 020's events, evidence and knowledge-log batches.
 IMMUTABLE_KINDS = frozenset({"definition", "knowledge"})

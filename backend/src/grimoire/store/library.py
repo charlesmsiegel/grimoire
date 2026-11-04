@@ -1247,6 +1247,8 @@ class Transaction:
         if self._kept.get(first.parts) != first.expected:
             raise InvalidEnvelope(f"replacing {'/'.join(first.parts)} needs its current bytes kept in the same "
                                   "transaction (keep_version)")
+        if any(put.record == first.parts and put.regenerable for put in puts):  # may be the only copy
+            raise InvalidEnvelope(f"the kept copy of {'/'.join(first.parts)} must be a hold (regenerable=False)")
 
     def commit(self, handle: object, approvals: Mapping[str, str] | None = None, *,
                on_denied: Callable[[frozenset[str]], Mapping[str, bytes | None]] | None = None) -> CommitResult:

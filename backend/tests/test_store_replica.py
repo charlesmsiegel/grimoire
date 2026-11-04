@@ -871,3 +871,24 @@ def test_recovery_recreates_the_folder_of_a_committed_create(tmp_path, monkeypat
         assert InstanceRef("c8", "character", "new") in reopened.load().instances
     finally:
         reopened.close()
+
+
+def test_a_revision_replace_keeps_the_replaced_bytes_as_a_hold_never_a_regenerable_keep(pair):
+    phone = pair[1]
+    current, other = _r1_now_history(phone)
+    txn = phone.transaction()
+    txn.put_exact(R1_FILE, other, etag(current), replace_unreferenced=True)
+    txn.keep_version(R1_FILE, current, regenerable=True)  # an abort would drop it: the only copy lost
+    with pytest.raises(InvalidEnvelope, match="must be a hold"):
+        txn.check()
+
+
+def test_recovery_refuses_a_journal_that_would_overwrite_a_kept_version():
+    from grimoire.store.jsonfmt import render
+    target = ".conflicts/" + "0" * 16 + "/r1.json~" + "a" * 12
+    for kind in ("keep", "hold"):
+        document = {"format": "grimoire.journal/1", "state": "commit", "entries": [
+            {"kind": kind, "target": target, "temp": "x~tmp1.new", "old": "sha256:" + "1" * 64,
+             "new": "sha256:" + "2" * 64}]}
+        with pytest.raises(RecoveryFailed, match="existing kept version"):
+            parse(render(document))

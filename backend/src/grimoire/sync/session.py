@@ -33,7 +33,7 @@ from .errors import (
     ArchiveTooLarge, IdentityExists, NoDeviceIdentity, ResolveRefused, SameDevice, SyncInterrupted,
     SyncNotQuiet,
 )
-from .model import CAMPAIGN_LOCAL, Base, Side
+from .model import CAMPAIGN_LOCAL, HELD_BACK_KINDS, HOLDS_RELATIONS, Base, Side
 
 _SLOT = re.compile(r"~[0-9a-f]{12}(?:\.([1-9][0-9]*))?$")
 
@@ -166,6 +166,7 @@ class SyncPlan:
     agreed: set[str] = field(default_factory=set)
     notices: list[str] = field(default_factory=list)
     fallback: set[str] = field(default_factory=set)  # devices whose copies were admitted unit by unit
+    skipped: dict[str, tuple[str, ...]] = field(default_factory=dict)  # per device: reported, never touched
 
     def other(self, device: str) -> str:
         return self.devices[1] if device == self.devices[0] else self.devices[0]
@@ -224,13 +225,19 @@ def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
         paths |= {path for path in (*scan.files, *scan.blocked) if syncable(path)}
         paths |= set(archives[device].entries) | set(pendings[device].entries)
         paths |= archives[device].named | pendings[device].named  # ignored: uncertain, never forgotten
+    held = {path.split("/")[1] for device in pair for path in (*scans[device].files, *scans[device].blocked)
+            if _kind(path) == HOLDS_RELATIONS}  # campaigns whose relations 021 effects may have changed
+    paths = {path for path in paths if not _held_relation(path, held)}
+    skipped = {device: tuple(sorted({*scans[device].skipped, *(
+        path for path in (*scans[device].files, *scans[device].blocked)
+        if _kind(path) in HELD_BACK_KINDS or _held_relation(path, held))})) for device in pair}
     ordered = tuple(sorted(paths))
     _check_archive_size(pair, ordered)
     sides = {path: {device: _side(scans[device], path) for device in pair} for path in ordered}
     bases = {path: derive_base(path, (archives[a], archives[b]), (pendings[a], pendings[b]),
                                (_current(sides[path][a]), _current(sides[path][b]))) for path in ordered}
     plan = SyncPlan(pair, stores, scans, archives, pendings, ordered, sides, bases,
-                    copies={a: [], b: []}, keeps={a: [], b: []}, notices=notices)
+                    copies={a: [], b: []}, keeps={a: [], b: []}, notices=notices, skipped=skipped)
     for path in ordered:
         decision = decide(syncable(path), bases[path], sides[path][a], sides[path][b])  # type: ignore[arg-type]
         if decision.action == "agreed":
@@ -495,6 +502,16 @@ def _pending_entries(plan: SyncPlan, device: str) -> dict[str, Mapping[str, obje
     return entries
 
 
+def _kind(path: str) -> str | None:
+    found = classify(tuple(path.split("/")))
+    return found[0] if found is not None else None
+
+
+def _held_relation(path: str, held: set[str]) -> bool:
+    """A 017 relation of a campaign whose relations are held back (see ``model.HOLDS_RELATIONS``)."""
+    return syncable(path) == "relation" and path.split("/")[1] in held
+
+
 def _both_absent_uncertain(plan: SyncPlan, path: str) -> bool:
     """Absent on both devices, with an uncertain base: agreed now, but not resolvable (see _resolved)."""
     return plan.bases[path].kind == "uncertain" and all(
@@ -503,7 +520,7 @@ def _both_absent_uncertain(plan: SyncPlan, path: str) -> bool:
 
 def _report(plan: SyncPlan, applied: _Applied) -> SyncReport:
     copied = tuple(sorted((copy.path, device) for device, copies in applied.published.items() for copy in copies))
-    skipped = {device: plan.scans[device].skipped for device in plan.devices}  # type: ignore[attr-defined]
+    skipped = {device: plan.skipped.get(device, plan.scans[device].skipped) for device in plan.devices}
     return SyncReport(plan.devices, copied, tuple(plan.conflicts[path] for path in sorted(plan.conflicts)),
                       MappingProxyType(skipped), tuple(plan.notices), applied.wrote, tuple(applied.consumed))
 
@@ -657,8 +674,10 @@ def _resolved(plan: SyncPlan, applied: _Applied) -> dict[str, tuple[str, str] | 
                                for entry in [view.entries.get(path)] if entry is not None and "to" in entry})
         if base.kind in ("agreed", "deleted"):
             found[path] = ("deleted", base.etag)  # type: ignore[assignment]
-        elif candidates:
+        elif len(candidates) == 1:
             found[path] = ("deleted", candidates[0])
+        elif candidates:  # disagreeing tombstones (a crash between the archive commits): stay uncertain
+            continue
         elif base.kind != "uncertain":
             found[path] = None
         # absent on both with an uncertain base and no tombstone to derive: a deletion whose

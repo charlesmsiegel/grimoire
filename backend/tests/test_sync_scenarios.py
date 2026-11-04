@@ -1249,8 +1249,9 @@ def test_re_identifying_both_devices_is_a_true_first_sync(pair):
     assert report.copied == ((PATHS["wren_b"], "laptop"),)
 
 
-def test_021_an_accepted_effect_syncs_together_with_the_relations_it_changed(tmp_path):
-    """021 commits an event and its relation changes as one; sync must never deliver one without the other."""
+def test_021_an_accepted_effect_and_the_relations_it_changed_are_held_back_together(tmp_path):
+    """021 commits an event with its relation changes, and its merge rule is a later milestone
+    (docs/EFFECTS.md): sync carries neither, so the phone never sees one without the other."""
     from grimoire.core import DIRECTOR
     from effects_fixtures import C, CONTROLS, Handles, contribution, effects_library, give
     from effects_fixtures import seed as seed_effects
@@ -1261,13 +1262,17 @@ def test_021_an_accepted_effect_syncs_together_with_the_relations_it_changed(tmp
     try:
         identify(desktop, DESKTOP)
         identify(phone, PHONE)
-        sync(desktop, phone, handles())
+        first = sync(desktop, phone, handles())
+        relations = {path for path, _ in first.copied if "/relations/" in path}
+        assert relations  # no event yet: the campaign's relations sync as usual
         proposal = give()
         effects_library(desktop, keys).accept(proposal, controls=CONTROLS, contributions=[contribution()],
                                               endorsements=[keys.endorse(proposal)]).commit()
         report = sync(desktop, phone, handles())
-        copied = {path for path, _ in report.copied}
-        assert any("/accepted/" in path for path in copied) and any("/relations/" in path for path in copied)
+        assert not [path for path, _ in report.copied if "/accepted/" in path or "/relations/" in path]
+        assert report.conflicts == ()
+        held = set(report.skipped[DESKTOP])
+        assert any("/accepted/" in path for path in held) and relations <= held
         assert effects_library(phone, keys).continuity(C, as_of=8, requested_by=DIRECTOR).problems == ()
         assert not sync(desktop, phone, handles()).wrote
     finally:
@@ -1463,16 +1468,44 @@ def test_a_manifest_whose_head_is_missing_on_its_origin_is_a_head_dependency(pai
     assert (desktop.root / PATHS["manifest"]).read_bytes() == before
 
 
-def test_023_holdings_are_synced_and_concurrent_counts_conflict(pair):
-    """One file per holder: copied like any campaign record, and two devices' counts are kept both."""
+def test_023_holdings_are_held_back(pair):
+    """One operation spans several holder files and the count merge rule is a later milestone
+    (docs/HOLDINGS.md): holdings are reported as skipped, never copied file by file."""
     from grimoire.core.identity import HoldingsRef
     from grimoire.store import ScopeRecord
     desktop, phone = pair
-    ref = HoldingsRef("c1", "character", "wren-a")
     path = "campaigns/c1/holdings/character/wren-a.json"
-    put(desktop, ScopeRecord(ref, "grimoire.holdings/1", {"coins": 3}), None)
-    assert (path, PHONE) in sync(desktop, phone, handles()).copied
-    put(desktop, ScopeRecord(ref, "grimoire.holdings/1", {"coins": 5}))
-    put(phone, ScopeRecord(ref, "grimoire.holdings/1", {"coins": 1}))
+    put(desktop, ScopeRecord(HoldingsRef("c1", "character", "wren-a"), "grimoire.holdings/1", {"coins": 3}), None)
     report = sync(desktop, phone, handles())
-    assert report.conflict(path).code == "concurrent" and dict(report.conflict(path).kept) == {DESKTOP: True, PHONE: True}
+    assert path in report.skipped[DESKTOP] and not (phone.root / path).exists()
+    assert report.conflicts == () and not sync(desktop, phone, handles()).wrote
+
+
+@pytest.mark.parametrize("restore", ["old", "new"])
+def test_disagreeing_tombstones_after_a_crash_between_archives_stay_uncertain(pair, monkeypatch, restore):
+    """Crash between archive(b) and archive(a): the archives disagree (E0 vs E1). Deleted on both, the
+    path keeps no arbitrary tombstone; restoring either version is a conflict, never a silent copy."""
+    desktop, phone = pair
+    path = PATHS["wren_a"]
+    e0 = (desktop.root / path).read_bytes()
+    edit_instance(desktop, WREN_A, 9)
+    e1 = (desktop.root / path).read_bytes()
+    real, calls = sync_session._commit_archive, []
+
+    def second_dies(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise _Crash("power loss between the archive commits")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(sync_session, "_commit_archive", second_dies)
+    with pytest.raises(_Crash):
+        sync(desktop, phone, handles())
+    monkeypatch.undo()
+    for store in (desktop, phone):
+        (store.root / path).unlink()
+    sync(desktop, phone, handles())
+    (desktop.root / path).write_bytes(e0 if restore == "old" else e1)
+    report = sync(desktop, phone, handles())
+    assert report.copied == () and report.conflict(path) is not None
+    assert not (phone.root / path).exists()

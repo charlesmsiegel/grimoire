@@ -580,6 +580,9 @@ def _timings(op: FileOp, select: Callable[[FileOp], object] | None, *, torn: boo
     unknown = set(chosen) - {"before", "after", "torn", "fail"}  # type: ignore[arg-type]
     if unknown:
         raise ValueError(f"unknown fault timings: {sorted(unknown)}")
+    disabled = set(chosen) & ({"fail"} if not errors else set()) | set(chosen) & ({"torn"} if not torn else set())
+    if disabled:  # asking for a timing whose flag is off would explore nothing and still pass
+        raise ValueError(f"select asks for {sorted(disabled)} but that fault is not enabled (errors=/torn=)")
     return frozenset(eligible & set(chosen))  # type: ignore[arg-type]
 
 
