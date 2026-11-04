@@ -103,8 +103,9 @@ def test_stale_references_never_raise():
                    {"conditions": ("ambient_light", "veil")}, {"conditions": ("ambient_light", "no_force")}):
         result = assess_attempt(attempt(**kwargs), IRIS)
         assert result.classification == "relabel" and result.stale_references
+    # Naming an effect or prerequisite of a missing ability says it is not a new power: relabel.
     result = assess_attempt(attempt(ability_id="gone", needs=("fire",), effect_id="veil"), IRIS)
-    assert result.classification == "new_ability"
+    assert (result.classification, result.approval) == ("relabel", "not_approvable")
     assert result.stale_references == ("effect:veil", "prerequisite:ambient_light")
     assert {"stale_effect", "stale_prerequisite"} <= codes(result)
 
@@ -197,7 +198,10 @@ def test_relabelling_around_a_limit_is_reported():
     # Filing the flight under an invented ability is a new ability, with the real limit reported.
     invented = assess_attempt(attempt(ability_id="solar_sail", needs=("light", "force", "flight"),
                                       conditions=()), IRIS)
-    assert invented.classification == "new_ability"
+    # It draws on light bending's `light`, so it is not a new power and must be filed there,
+    # where `no_force` binds.
+    assert (invented.classification, invented.other_drawn) == (
+        "relabel", ("light_bending/dazzle", "light_bending/mirage", "light_bending/veil"))
     assert invented.other_conflicts == (("light_bending", "no_force", ("force",)),)
     assert "other_limit_excludes" in codes(invented)
 
@@ -231,20 +235,26 @@ def test_a_ruling_on_an_altered_attempt_does_not_approve():
 
 def test_a_ruling_survives_an_authored_change_without_crashing():
     # F14/F14b: approved as an extrapolation; the ability is then deleted.
-    approval = ruling(flight())
-    check_ruling(approval, OPEN_IRIS)
+    glow = Ability("glow", "Glow", [Effect("shine", "t", {"glow"})])
+    warm = attempt(ability_id="glow", needs=("glow", "warmth"), conditions=())
+    before = effective(person("iris", "Iris", glow))
+    approval = ruling(warm)
+    check_ruling(approval, before)
     gone = effective(person("iris", "Iris", speak_with_dead()))
-    result = assess_attempt(flight(), gone, [approval])
+    result = assess_attempt(warm, gone, [approval])
     assert (result.classification, result.approval) == ("new_ability", "pending")
     assert result.inapplicable_rulings == ("r1",) and "inapplicable_ruling" in codes(result)
     # A refusal of the new classification is accepted and decides it.
-    refusal_ = ruling(flight(), decides="new_ability", decision="refused", ruling_id="r2")
+    refusal_ = ruling(warm, decides="new_ability", decision="refused", ruling_id="r2")
     check_ruling(refusal_, gone, [approval])
-    decided = assess_attempt(flight(), gone, [approval, refusal_])
+    decided = assess_attempt(warm, gone, [approval, refusal_])
     assert (decided.approval, decided.ruling_id, decided.inapplicable_rulings) == ("refused", "r2", ("r1",))
     # A later authored limit makes both inapplicable; still no crash.
-    limited = assess_attempt(flight(), IRIS, [approval, refusal_])
+    limited_glow = Ability("glow", "Glow", [Effect("shine", "t", {"glow"})], [Limit("cold", "t", {"warmth"})])
+    limited = assess_attempt(warm, effective(person("iris", "Iris", limited_glow)), [approval, refusal_])
     assert limited.classification == "beyond_limits" and limited.inapplicable_rulings == ("r1", "r2")
+    # Deleting light bending under an approved flight extrapolation: its prerequisite is now stale.
+    assert assess_attempt(flight(), gone, [ruling(flight())]).classification == "relabel"
 
 
 def test_conflicting_rulings_are_refused_only_when_they_decide_this_attempt():
@@ -364,7 +374,8 @@ def test_assessment_is_a_pure_function_of_its_inputs():
                         description=light_bending().description)
     baseline = assess_attempt(flight(), effective(person("iris", "Iris", light_bending(force_limit=False),
                                                          speak_with_dead(), thruster_pack())), rulings)
-    assert baseline.classification == expected.classification and baseline.costs == expected.costs
+    # With the thruster pack present, flight draws on its `lift`: a cross-ability combination.
+    assert (baseline.classification, baseline.other_drawn) == ("relabel", ("thruster_pack/lift",))
     for reorder_abilities in itertools.permutations([reordered, speak_with_dead(), thruster_pack()]):
         entity = effective(person("iris", "Iris", *reorder_abilities))
         assert assess_attempt(flight(), entity, rulings) == baseline
@@ -576,3 +587,53 @@ def test_a_ruling_note_must_be_text():
         "invalid_field"
     assert refusal(lambda: AbilityRuling("r1", flight(), "extrapolation", "approved", "d", note="x" * 513)) == \
         "invalid_field"
+
+
+# --- round 4 of independent review --------------------------------------------------------
+
+def test_an_attempt_drawing_on_another_ability_is_never_approvable():
+    # The proving scenario filed under the thruster pack: light bending's `no_force` must not be
+    # escaped by filing the flight under a sibling that shares a tag.
+    both = effective(person("iris", "Iris", light_bending(), thruster_pack()))
+    radiant = attempt(ability_id="thruster_pack", needs=("light", "force", "flight"), conditions=("fuel",))
+    result = assess_attempt(radiant, both, [ruling(radiant)])
+    assert (result.classification, result.permitted) == ("relabel", False)
+    assert "draws_on_other_ability" in codes(result)
+    assert refusal(lambda: check_ruling(ruling(radiant, ruling_id="r2"), both)) == "not_approvable"
+    # A partial stretch of light bending filed under the thruster pack, in the dark.
+    dark = attempt(ability_id="thruster_pack", needs=("light", "flight"), conditions=("fuel",))
+    assert assess_attempt(dark, both).classification == "relabel"
+    honest = attempt(ability_id="light_bending", needs=("light", "flight"), conditions=())
+    assert assess_attempt(honest, both).classification == "relabel"  # draws on `lift` for flight
+    # A partial stretch filed under an invented id.
+    hidden = attempt(ability_id="light_bending_2", needs=("light", "concealment", "motion"), conditions=())
+    assert assess_attempt(hidden, IRIS).classification == "relabel"
+
+
+def test_a_covered_power_filed_under_a_sibling_sharing_a_tag_needs_a_relabel():
+    sunwings = Ability("sunwings", "Sunwings", [Effect("soar", "t", {"light", "flight"})],
+                       costs=[Cost("exhaustion", "t")], prerequisites=[Prerequisite("daylight", "t")])
+    entity = effective(person("iris", "Iris", light_bending(force_limit=False), sunwings))
+    night = attempt(needs=("light", "flight"), conditions=("ambient_light",))
+    result = assess_attempt(night, entity, [ruling(night)])
+    assert (result.classification, result.other_candidates) == ("relabel", ("sunwings/soar",))
+    honest = attempt(ability_id="sunwings", needs=("light", "flight"), effect_id="soar", conditions=())
+    assert assess_attempt(honest, entity).classification == "unavailable"
+
+
+def test_a_power_using_only_its_own_tags_is_unaffected_by_siblings():
+    # A known use, and a stretch of only the named ability's own vocabulary, stay as they were.
+    both = effective(person("iris", "Iris", light_bending(), thruster_pack()))
+    assert assess_attempt(attempt(effect_id="veil"), both).classification == "known_capability"
+    stretch = attempt(needs=("light", "concealment", "illusion"))
+    assert assess_attempt(stretch, both).classification == "extrapolation"
+    hop = attempt(ability_id="thruster_pack", needs=("thrust", "flight"), effect_id="lift", conditions=("fuel",))
+    assert assess_attempt(hop, both).classification == "known_capability"
+
+
+def test_no_facet_and_an_empty_facet_report_the_same_reasons():
+    plain = assess_attempt(attempt(entity_id="plain", needs=("fire",), conditions=()), effective(person("plain", "P")))
+    blank = assess_attempt(attempt(entity_id="blank", needs=("fire",), conditions=()),
+                           effective(person("blank", "B", facet_extras={})))
+    assert [r.code for r in plain.reasons] == [r.code for r in blank.reasons]
+    assert plain.unknown_tags == blank.unknown_tags == ("fire",)

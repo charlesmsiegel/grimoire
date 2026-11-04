@@ -37,8 +37,8 @@ def test_a2_without_the_limit_flight_is_an_extrapolation_that_waits_for_a_ruling
     check_ruling(approval, entity)
     approved = assess_attempt(flight(), entity, [approval])
     assert (approved.approval, approved.uncertain) == ("approved", True)
-    # Flight shares only `light` with every effect, so all tie as the closest and their scoped
-    # costs apply too: a stretch never pays less than the effects it stretches.
+    # Flight touches every effect through `light`, so all their scoped costs apply too: a
+    # stretch never pays less than the effects it draws on.
     assert [cost.id for cost in approved.costs] == ["eye_strain", "migraine"]
     refused = assess_attempt(flight(), entity, [ruling(flight(), decision="refused")])
     assert (refused.approval, refused.costs) == ("refused", ())
@@ -122,7 +122,9 @@ def test_a6_pinning_and_the_whole_facet_copy_limitation():
     # the head's new ability is not on this instance.
     copied = EntityInstance(actor("iris"), SourceRef(EMBER, "character", "iris"),
                             replaced=FacetBundle([Abilities([light_bending(force_limit=False)])]))
-    assert assess_attempt(talk, effective_entity(copied, index)).classification == "new_ability"
+    result = assess_attempt(talk, effective_entity(copied, index))
+    assert result.classification == "relabel" and result.stale_references == (
+        "effect:sense_death", "prerequisite:corpse_present")
 
 
 def test_a7_a_definition_with_abilities_survives_the_native_store(tmp_path):

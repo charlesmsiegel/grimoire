@@ -74,11 +74,11 @@ Abilities therefore persist in any record that carries an entity payload, such a
 | `actor` | an exact `InstanceRef` (subclasses are refused). Ids and text in ability values, attempts and rulings must be plain `str`. |
 | `effect_id` | the declared effect the labeller says it uses, or none. |
 | `provenance` | attribution text up to 512 characters, never authority. |
-| `conditions_met` | up to 64 ids, only of the **named ability's** prerequisites, that the labeller says hold. A prerequisite id of another ability is stale here (`relabel`). These are asserted, not checked against scene facts; checking them is 029's job. |
+| `conditions_met` | up to 64 ids, only of the **named ability's** prerequisites, that the labeller says hold. A prerequisite id of another ability is stale here (`relabel`, also when the named ability is missing). These are asserted, not checked against scene facts; checking them is 029's job. |
 
 **Labelling is the trust boundary.** These fields come from a labeller that is **not the narrator**, the same rule as for `NarrationClaim`. The assessment is only as good as the labels and the shared vocabulary.
 - A labeller that writes `push` for `force` escapes `no_force`. The unused tag then shows up in `unknown_tags`.
-- A labeller that files the flight under an invented ability id gets `new_ability`. The real limit then shows up in `other_conflicts`. (Filing an already *covered* power under another id is caught: it reads `relabel`.)
+- Filing an attempt under an invented id, or a sibling ability, does **not** escape another ability: an attempt that needs a tag only another of the actor's abilities provides (`other_drawn`), or that another ability's declared effect covers (`other_candidates`), reads `relabel`. Combinations across abilities are out of scope for this slice, so they fail closed. Only a genuinely new vocabulary is a `new_ability`. A limit of another ability on a tag no effect provides (`force`) is still advisory (`other_conflicts`): a new power may legitimately produce it.
 - A labeller that leaves the outcome out of `needs` (`{light}` with `veil`, for the radiation-pressure flight) gets a plain `known_capability`, and nothing shows. **Every intended outcome must be a needed tag:** this is a labeller obligation for 029/035.
 
 All three escapes are pinned by tests that state what is and is not guaranteed: the classification follows the labels.
@@ -109,17 +109,21 @@ Let `A` be the named ability and `E` the named effect, if they exist. Then:
   - `unknown_tags`: needed tags that none of the actor's abilities use;
   - `other_conflicts`: limits of the actor's *other* abilities that exclude a needed tag;
   - `other_unrecognized`: paths on the actor's *other* abilities that carry extras, so a director deciding a `new_ability` sees a constraint this build cannot read.
-  - `other_candidates`: `<ability>/<effect>` of declared effects in the actor's *other* abilities that cover `needs`. When the named ability is missing, any such candidate makes the attempt `relabel`.
+  - `other_candidates`: `<ability>/<effect>` of declared effects in the actor's *other* abilities that cover `needs`;
+  - `other_drawn`: `<ability>/<effect>` of other abilities' effects that provide a needed tag the named ability's effects do not.
+
+  A non-empty `other_candidates` or `other_drawn` makes the attempt `relabel` (rows 1 and 2c).
 - `unrecognized`: paths of values carrying extras. These are `#facet`, `<ability>` and `<ability>/<part>`, for every part of the named ability.
 
 **Classification**, first match:
 
 | # | Condition | Classification | Approval |
 |---|---|---|---|
-| 1 | no `A` | `needs_upgrade` if the facet has extras; `relabel` if a declared effect of another of the actor's abilities covers `needs` (`other_candidates`); else `new_ability` | `not_approvable`, or `pending` |
+| 1 | no `A` | `needs_upgrade` if the facet has extras; `relabel` if there are stale references, `other_candidates` or `other_drawn`; else `new_ability` | `not_approvable`, or `pending` |
 | 2 | `conflicts` | `beyond_limits` | `not_approvable` |
 | 2a | `stale_references` | `relabel` | `not_approvable` |
-| 2b | no effect of `A` shares a needed tag | `relabel`: this is not a use of `A`; file it under its own ability id | `not_approvable` |
+| 2c | `other_drawn` or `other_candidates` | `relabel`: the attempt draws on another ability (a combination, not adjudicated in this slice) | `not_approvable` |
+| 2d | no effect of `A` shares a needed tag | `relabel`: this is not a use of `A`; file it under its own ability id | `not_approvable` |
 | 3 | unmet prerequisites | `unavailable` | `not_approvable` |
 | 3a | `unrecognized` | `needs_upgrade` | `not_approvable` |
 | 4 | `E` covers `needs` | `known_capability` if reliable, else `attempted_feat` | `not_needed` |
@@ -141,7 +145,7 @@ Other outputs:
   - `prerequisite_unmet`
   - `unrecognized_constraint`
   - `effect_covers`, `effect_uncertain`
-  - `not_covered`, `covered_by_other_effect`, `covered_by_other_ability`, `outside_ability`
+  - `not_covered`, `covered_by_other_effect`, `covered_by_other_ability`, `draws_on_other_ability`, `outside_ability`
   - `unknown_tag`, `other_limit_excludes`, `other_unrecognized_constraint`
   - `approved`, `refused`, `pending_approval`
   - `inapplicable_ruling`, `mismatched_ruling`
@@ -187,7 +191,7 @@ At most 256 rulings may name one attempt id **for one actor**; rulings on other 
 
 - observed consequences as evidence (020);
 - committed costs and cooldowns (milestone 2);
-- combinations of, and conflicts between, abilities in one attempt;
+- combinations of, and conflicts between, abilities in one attempt (they read `relabel` and fail closed);
 - limits that evolve by rule, and novel high-concept power systems (milestone 3);
 - adapters to real rulesets;
 - wielded or item-granted abilities (034);
@@ -198,6 +202,6 @@ At most 256 rulings may name one attempt id **for one actor**; rulings on other 
 The change is additive, and the schema id stays `grimoire.entity/0`.
 - Payloads without an `abilities` facet decode identically.
 - A pre-025 build keeps an `abilities` facet verbatim as an `UnknownFacet`.
-- A 025 build keeps unknown inner **keys** as extras and fails closed on them. Only additive keys are tolerated: a later build that writes a new *value* for a known field (a new `certainty`, or a limit with no `excludes`) makes the definition fail to decode, with a reason. Later milestones must add keys, not widen value vocabularies. A 025 build fails closed only on keys of the facet or of the *named* ability; cross-ability or composition constraints (milestone 3) must therefore be written as facet-level keys or on the constrained ability itself, never only on a sibling ability or in a new facet.
+- A 025 build keeps unknown inner **keys** as extras and fails closed on them. Only additive keys are tolerated: a later build that writes a new *value* for a known field (a new `certainty`, or a limit with no `excludes`) makes the definition fail to decode, with a reason. Later milestones must add keys, not widen value vocabularies. A 025 build fails closed only on keys of the facet or of the *named* ability; cross-ability or composition constraints (milestone 3) must therefore be written as **facet-level keys**, never only on one ability or in a new facet.
 - One break is possible: a hand-written `abilities` facet of another shape is now refused with a reason, though the envelope still holds it. No such writer exists on `v2`.
 - `FacetError` moved to the leaf module `facet_errors` and is re-exported unchanged from `facets`.

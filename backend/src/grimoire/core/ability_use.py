@@ -167,6 +167,7 @@ class AbilityAssessment:
     unrecognized: tuple[str, ...]
     other_unrecognized: tuple[str, ...]
     other_candidates: tuple[str, ...]
+    other_drawn: tuple[str, ...]
     stale_references: tuple[str, ...]
     inapplicable_rulings: tuple[str, ...]
     mismatched_rulings: tuple[str, ...]
@@ -321,8 +322,16 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
     others: list[tuple[str, str, tuple[str, ...]]] = []
     other_unrecognized: list[tuple[str, tuple[str, ...]]] = []
     other_candidates: list[str] = []
+    # Tags the named ability cannot provide. An effect of another ability that provides one of
+    # them means the attempt draws on that ability: a cross-ability combination, which this slice
+    # does not adjudicate. It must not escape that ability's limits, prerequisites and costs.
+    own = {tag for part in ability.effects for tag in part.tags} if ability is not None else set()
+    beyond_own = needs - own
+    drawn: list[str] = []
     if facet is None:
         unknown = sorted(needs)  # nothing is authored, so every needed tag is unknown
+        reasons += [Reason("unknown_tag", f"no ability of {attempt.actor} uses the tag {tag!r}")
+                    for tag in unknown]
     else:
         used = {tag for each in facet.abilities for part in each.effects for tag in part.tags}
         used |= {tag for each in facet.abilities for part in each.limits for tag in part.excludes}
@@ -334,6 +343,11 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
                 continue
             other_unrecognized += _with_extras(each)
             for part in each.effects:
+                provided = tuple(sorted(part.tags & beyond_own))
+                if provided:
+                    drawn.append(f"{each.id}/{part.id}")
+                    reasons.append(Reason("draws_on_other_ability", f"effect {part.id!r} of {each.id!r} "
+                                                                    f"provides {_tags(provided)}"))
                 if needs <= part.tags:
                     other_candidates.append(f"{each.id}/{part.id}")
                     reasons.append(Reason("covered_by_other_ability", f"effect {part.id!r} of {each.id!r} "
@@ -370,15 +384,19 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
     if ability is None:
         # A declared effect of another ability already covers it: filing it under a new id must
         # not turn a known (perhaps unavailable or costly) power into an approvable new one.
+        # Naming an effect or a prerequisite, or drawing on another ability's effects, says the
+        # attempt is a use of an existing power, not a new one.
         if FACET_PATH in unrecognized:
             classification = "needs_upgrade"
-        elif other_candidates:
+        elif stale or other_candidates or drawn:
             classification = "relabel"
         else:
             classification = "new_ability"
     elif conflicts:
         classification = "beyond_limits"
     elif stale:
+        classification = "relabel"
+    elif drawn or other_candidates:
         classification = "relabel"
     elif not touched:
         # No effect of the named ability shares a needed tag: this is not a use of it. File it
@@ -412,8 +430,8 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         reasons.append(Reason("pending_approval", f"this {classification} needs an approval ruling"))
     reasons += [Reason("inapplicable_ruling", f"ruling {each!r} does not decide a {classification}")
                 for each in inapplicable]
-    reasons += [Reason("mismatched_ruling", f"ruling {each!r} decided a differently labelled attempt "
-                                            f"{attempt.attempt_id!r}") for each in mismatched]
+    reasons += [Reason("mismatched_ruling", f"ruling {each!r} decided a differently labelled attempt")
+                for each in mismatched]
 
     charged = classification in ("known_capability", "attempted_feat") or (
         classification == "extrapolation" and approval == "approved")
@@ -436,6 +454,7 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         unrecognized=tuple(unrecognized),
         other_unrecognized=tuple(path for path, _ in sorted(other_unrecognized)),
         other_candidates=tuple(sorted(other_candidates)),
+        other_drawn=tuple(sorted(drawn)),
         stale_references=tuple(sorted(stale)),
         inapplicable_rulings=inapplicable,
         mismatched_rulings=mismatched,
