@@ -10,6 +10,8 @@ The provisional codec carries the record, and a test-local join proves it round-
 - **Portrait clause.** The proving scenario is met except for its portrait clause ("changing the first's portrait does not change the species card"). Art inheritance and milestone 2's separate art wait for 018 placements, and relations for 017. Both attach to the individual's distinct reference.
 - **Direct creation.** Creating a named instance directly from a template was dropped from this slice: create a generic instance, then promote it.
 - **Merging encountered identities.** "Any existing encountered identity" is read as the encountered instance itself, which promotion keeps. Declaring that two encounter instances, or a V1 legacy id, were the same creature is not covered.
+- **Initial scene.** The scope's "initial scene" is recorded as the scene where the individualization was decided (`scene_id`). The scene where the creature was first encountered is only recoverable from the optional event ids; recording it explicitly is deferred.
+- **Creatures as chat actors.** An individualized creature keeps a non-`character` kind (for example `campaign:c1/creature/goblin-1`), and the chat store's actor reuse currently accepts only `character` actors. Talking to an individual from a chat needs a later change there, not a re-key.
 - **Species membership.** [The graph](../../GRAPH.md) assigns the species-membership relation to 024. This slice records only the template source and template provenance; the explicit relation is a later milestone. This slice allocates no instance ids, so 017's allocator obligation (`relation_endpoint_ids`) does not apply yet; a later creation path must honour it.
 - **Milestone 3, changed species.** Re-sourcing is open.
 
@@ -32,7 +34,7 @@ One goblin is named and remembers a conversation, another remains generic; chang
 Works in mechanics-free play without character sheets; ruleset conversion is a separate optional adapter. Capturing is a distinct workflow.
 
 ## Open questions (answered by the first slice)
-- *Which scene evidence authorizes individualization?* An explicit human decision. It comes from the director (the table owner, never narrator or model output) or from the actor's controlling player. Event ids are optional recorded grounds.
+- *Which scene evidence authorizes individualization?* An explicit human decision, never narrator or model output. If the actor has a controlling player, only that player decides; otherwise only the director (the table owner) does. Event ids are optional recorded grounds.
 - *What is the minimum encounter-instance identity?* An `EntityInstance` of the template, which is an `InstanceRef`. Promotion keeps it.
 - *Which properties inherit live versus become personal?*
   - Live from the source, with pin semantics: traits and description.

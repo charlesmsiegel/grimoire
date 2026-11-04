@@ -118,7 +118,7 @@ def _segment(value: object, label: str) -> None:
         raise _invalid(str(error)) from None
 
 
-def segments(values: object, label: str) -> tuple[str, ...]:
+def _segments(values: object, label: str) -> tuple[str, ...]:
     """Distinct identity segments as a sorted tuple; any problem is ``invalid_field``."""
     if isinstance(values, (str, bytes, Mapping)) or not isinstance(values, Iterable):
         raise _invalid(f"{label} must be a collection of ids")
@@ -153,7 +153,7 @@ class Individuality:
             _text(getattr(self, label), label)
         if type(self.template) is not SourceRef or not self.template.pinned:
             raise _invalid("an individuality template must be a pinned SourceRef")
-        object.__setattr__(self, "event_ids", segments(self.event_ids, "event_ids"))
+        object.__setattr__(self, "event_ids", _segments(self.event_ids, "event_ids"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,7 +248,8 @@ def _definition(instance: EntityInstance, index: DefinitionIndex) -> EntityDefin
                           f"{definition.ref.kind!r}, not {instance.ref.kind!r}", "kind_mismatch")
     if definition.nature == "individual" and instance.individuality is not None:
         raise EntityError(f"{instance.ref} was individualized from a template, but {definition.ref} "
-                          "is an individual; pin the instance to the template revision", "not_template")
+                          "is an individual; pin the instance to its source's last template revision",
+                          "not_template")
     return definition
 
 

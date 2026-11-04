@@ -21,28 +21,13 @@ from dataclasses import dataclass, replace
 
 from .authority import DIRECTOR, AuthorityError, controller_of
 from .entity import (
-    EntityDefinition, EntityError, EntityInstance, Individuality, effective_entity, segments,
+    EntityDefinition, EntityError, EntityInstance, Individuality, _invalid, _segment, _segments, _text,
+    effective_entity,
 )
-from .identity import InstanceRef, validate_segment
+from .identity import InstanceRef
 from .index import DefinitionIndex
 from .model import ControlAssignment
 from .roster import CampaignRoster
-
-
-def _invalid(message: str) -> EntityError:
-    return EntityError(message, "invalid_field")
-
-
-def _segment(value: object, label: str) -> None:
-    try:
-        validate_segment(value, label)
-    except ValueError as error:
-        raise _invalid(str(error)) from None
-
-
-def _text(value: object, label: str) -> None:
-    if not isinstance(value, str) or not value.strip():
-        raise _invalid(f"{label} must be nonempty text")
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +51,7 @@ class IndividualizationDecision:
             raise _invalid(f"{self.instance} is not in campaign {self.campaign_id}")
         for label in ("name", "decided_by", "scene_id"):
             _text(getattr(self, label), label)
-        object.__setattr__(self, "event_ids", segments(self.event_ids, "event_ids"))
+        object.__setattr__(self, "event_ids", _segments(self.event_ids, "event_ids"))
 
 
 @dataclass(frozen=True, slots=True)
