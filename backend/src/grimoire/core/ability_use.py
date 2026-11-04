@@ -147,9 +147,11 @@ class AbilityRuling:
     decision: Literal["approved", "refused"]
     provenance: str
     note: str = ""
-    #: ``<ability>/<limit>`` of drawn-on abilities this approval of a combination explicitly sets
-    #: aside. Nothing is lifted unless named; the named ability's own limits are never liftable.
-    lifts: frozenset[str] = frozenset()
+    #: For a combination only: the exact terms the director decided on, as the assessment reports
+    #: them (``terms``): the other abilities' effects it draws on, and every binding limit and
+    #: unmet prerequisite of the abilities taking part. An approval sets aside exactly those
+    #: limits and prerequisites; a ruling applies only while the terms are unchanged.
+    terms: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         _segment(self.ruling_id, "ruling_id")
@@ -161,10 +163,10 @@ class AbilityRuling:
             raise _invalid(f"decision must be one of {sorted(DECISIONS)}: {self.decision!r}")
         _text(self.provenance, "provenance")
         _text(self.note, "note", blank=True)
-        lifts = _paths(self.lifts, "lifts", MAX_PARTS, bare=False)
-        if lifts and (self.decides != "combination" or self.decision != "approved"):
-            raise _invalid("only an approval of a combination can lift limits")
-        object.__setattr__(self, "lifts", lifts)
+        terms = _paths(self.terms, "terms", 4 * MAX_PARTS, bare=False)
+        if bool(terms) != (self.decides == "combination"):
+            raise _invalid("a ruling on a combination names its terms, and only such a ruling does")
+        object.__setattr__(self, "terms", terms)
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -195,6 +197,7 @@ class AbilityAssessment:
     other_candidates: tuple[str, ...]
     other_drawn: tuple[str, ...]
     binding_limits: tuple[str, ...]
+    terms: tuple[str, ...]
     other_costs: tuple[tuple[str, Cost], ...]
     stale_references: tuple[str, ...]
     inapplicable_rulings: tuple[str, ...]
@@ -204,6 +207,13 @@ class AbilityAssessment:
     @property
     def needs_approval(self) -> bool:
         return self.approval == "pending"
+
+    @property
+    def charges(self) -> tuple[tuple[str, Cost], ...]:
+        """Every cost to charge, as ``(ability id, cost)``: the named ability's and, for an
+        approved combination, the other abilities'. Empty unless the use is permitted."""
+        own = tuple((self.attempt.ability_id, cost) for cost in self.costs)
+        return tuple(sorted(own + self.other_costs, key=lambda pair: (pair[0], pair[1].id)))
 
     @property
     def permitted(self) -> bool:
@@ -248,9 +258,10 @@ def _matching_rulings(attempt: AbilityAttempt, rulings: object):
     return mine, same, matching, mismatched
 
 
-def _live(matching: list, classification: str) -> tuple[list, tuple[str, ...]]:
-    """The rulings that decide this classification, and the ids of the rest."""
-    live = [ruling for ruling in matching if ruling.decides == classification]
+def _live(matching: list, classification: str, terms: frozenset[str]) -> tuple[list, tuple[str, ...]]:
+    """The rulings that decide this classification (a combination: on these exact terms), and the
+    ids of the rest. Only the live ones can conflict; the rest never raise."""
+    live = [ruling for ruling in matching if ruling.decides == classification and ruling.terms == terms]
     if len({ruling.decision for ruling in live}) > 1:
         raise AbilityError(f"rulings both approve and refuse this {classification}", "conflicting_rulings")
     rest = tuple(sorted(ruling.ruling_id for ruling in matching if ruling not in live))
@@ -397,6 +408,7 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
     else:
         combination = bool(drawn) and bool(touched) and not covers and not candidates and not other_candidates
     other_costs: list[tuple[str, Cost]] = []
+    waivable: list[str] = []
     if combination:
         # Fail closed: every drawn-on ability's prerequisites, unknown fields and costs apply too.
         for owner in sorted(drawn_abilities):
@@ -442,7 +454,7 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         elif stale or other_candidates:
             classification = "relabel"
         elif combination:
-            classification = "unavailable" if unmet else "needs_upgrade" if unrecognized else "combination"
+            classification = "needs_upgrade" if unrecognized else "combination"
         elif drawn:
             classification = "relabel"
         else:
@@ -453,8 +465,8 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         classification = "relabel"
         reasons.append(Reason("outside_ability", f"no effect of {ability.id!r} shares a needed tag; "
                                                  "file the attempt under its own ability id"))
-    elif conflicts:
-        # The named ability's own limits: only an authored change can alter them.
+    elif conflicts and not combination:
+        # The named ability's own limits outside a combination: only an authored change alters them.
         classification = "beyond_limits"
     elif stale:
         classification = "relabel"
@@ -467,7 +479,7 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         classification = "relabel"
         reasons.append(Reason("outside_ability", f"no effect of {ability.id!r} shares a needed tag; "
                                                  "file the attempt under its own ability id"))
-    elif unmet:
+    elif unmet and not combination:
         classification = "unavailable"
     elif unrecognized:
         classification = "needs_upgrade"
@@ -480,18 +492,20 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
     else:
         classification = "extrapolation"
 
-    live, inapplicable = _live(matching, classification)
+    terms: frozenset[str] = frozenset()
     if classification == "combination":
-        # A drawn-on ability's limit still binds unless the approval explicitly lifts it.
-        unlifted = [ruling for ruling in live
-                    if ruling.decision == "approved" and not set(binding) <= ruling.lifts]
-        live = [ruling for ruling in live if ruling not in unlifted]
-        inapplicable = tuple(sorted({*inapplicable, *(ruling.ruling_id for ruling in unlifted)}))
-        reasons += [Reason("limit_not_lifted", f"ruling {ruling.ruling_id!r} does not lift "
-                                               f"{', '.join(sorted(set(binding) - ruling.lifts))}")
-                    for ruling in unlifted]
-        reasons += [Reason("limit_binds", f"limit {path} binds this combination unless a ruling lifts it")
-                    for path in sorted(binding)]
+        # Every participating ability is treated alike, so the result does not depend on which
+        # one the attempt is filed under: their limits on a needed tag and unmet prerequisites
+        # bind, and only a ruling naming these exact terms sets them aside.
+        if ability is not None:
+            binding += [f"{ability.id}/{limit_id}" for limit_id, _ in conflicts]
+            waivable = [f"{ability.id}/{each}" for each in unmet if "/" not in each]
+        waivable += [each for each in unmet if "/" in each]
+        terms = frozenset(drawn) | frozenset(binding) | frozenset(waivable)
+    live, inapplicable = _live(matching, classification, terms)
+    if classification == "combination":
+        reasons += [Reason("combination_term", f"{path} binds this combination unless a ruling sets it aside")
+                    for path in sorted(binding) + sorted(waivable)]
     ruling_id = None
     if classification in DECLARED:
         approval = "not_needed"
@@ -530,7 +544,8 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         other_unrecognized=tuple(path for path, _ in sorted(other_unrecognized)),
         other_candidates=tuple(sorted(other_candidates)),
         other_drawn=tuple(sorted(drawn)),
-        binding_limits=tuple(sorted(binding)),
+        binding_limits=tuple(sorted(binding)) if classification == "combination" else (),
+        terms=tuple(sorted(terms)),
         other_costs=tuple(sorted(other_costs, key=lambda pair: (pair[0], pair[1].id)))
         if classification == "combination" and approved else (),
         stale_references=tuple(sorted(stale)),
@@ -558,20 +573,17 @@ def check_ruling(ruling: AbilityRuling, entity: EffectiveEntity,
     if ruling.decides != classification:
         raise AbilityError(f"the attempt is a {classification}, not a {ruling.decides}",
                            "wrong_classification")
-    binding = set(assessment.binding_limits) if classification == "combination" else set()
-    if ruling.lifts - binding:
-        raise AbilityError(f"{', '.join(sorted(ruling.lifts - binding))} does not bind this attempt",
-                           "lift_not_binding")
-    if ruling.decision == "approved" and binding - ruling.lifts:
-        raise AbilityError(f"approving this combination needs {', '.join(sorted(binding - ruling.lifts))} "
-                           "lifted explicitly", "limit_not_lifted")
+    if ruling.terms != frozenset(assessment.terms):
+        raise AbilityError("a ruling on a combination must name exactly its current terms: "
+                           f"{', '.join(assessment.terms)}", "terms_mismatch")
     mine, same, matching, _ = _matching_rulings(ruling.attempt, existing)
     if len(same) >= MAX_RULINGS:
         raise AbilityError(f"attempt {ruling.attempt.attempt_id!r} already has {MAX_RULINGS} rulings",
                            "too_many_rulings")
     if ruling.ruling_id in {each.ruling_id for each in mine}:
         raise AbilityError(f"ruling id {ruling.ruling_id!r} is already used", "duplicate_ruling")
-    if any(each.decides == classification and each.decision != ruling.decision for each in matching):
+    if any(each.decides == classification and each.terms == ruling.terms and each.decision != ruling.decision
+           for each in matching):
         raise AbilityError(f"an existing ruling already decided this {classification} the other way",
                            "conflicting_rulings")
 

@@ -30,7 +30,7 @@ Consume generic 010 record revisions and the Wave 1 PC-authority decision policy
 
 ## Obligations from 025
 
-Ability costs from [fictional abilities](../../ABILITIES.md) are reported, never committed. 021 owns committing them through accepted state: charge each `attempt_id` **once**, from the assessment's `costs`, and only when the attempt was `permitted`. Instance ability changes (`added`/`replaced` abilities facets) are accepted state, never narration.
+Ability costs from [fictional abilities](../../ABILITIES.md) are reported, never committed. 021 owns committing them through accepted state: charge each `attempt_id` **once**, from the assessment's `charges` (every `(ability, cost)`, including the other abilities of an approved combination), and only when the attempt was `permitted`. Instance ability changes (`added`/`replaced` abilities facets) are accepted state, never narration.
 
 ## Open questions
 - Which narrations imply immediate accepted truth, and which require player review?

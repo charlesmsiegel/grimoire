@@ -141,7 +141,10 @@ def test_a7_a_definition_with_abilities_survives_the_native_store(tmp_path):
     entity = effective(decoded)
     hop = attempt("vanta", "thruster_pack", ("thrust", "flight"), effect_id="lift", conditions=("fuel",))
     assert assess_attempt(hop, entity).classification == "known_capability"
-    assert assess_attempt(flight(entity_id="vanta"), entity).classification == "beyond_limits"
+    # With the thruster pack present, flight also draws on it: a combination in which light
+    # bending's `no_force` binds unless a director's ruling sets it aside by name.
+    combined = assess_attempt(flight(entity_id="vanta"), entity)
+    assert (combined.classification, combined.binding_limits) == ("combination", ("light_bending/no_force",))
 
 
 def test_a8_the_ability_modules_load_no_provider_or_store():

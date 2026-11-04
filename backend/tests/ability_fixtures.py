@@ -106,5 +106,5 @@ def flight(**kwargs):
     return attempt(needs=("light", "force", "flight"), **kwargs)
 
 
-def ruling(the_attempt, decides="extrapolation", decision="approved", ruling_id="r1"):
-    return AbilityRuling(ruling_id, the_attempt, decides, decision, "director")
+def ruling(the_attempt, decides="extrapolation", decision="approved", ruling_id="r1", terms=()):
+    return AbilityRuling(ruling_id, the_attempt, decides, decision, "director", terms=frozenset(terms))
