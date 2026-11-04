@@ -347,3 +347,49 @@ def test_021_a_relation_held_on_a_first_sync_is_recorded_as_agreed(tmp_path):
     finally:
         desktop.close()
         phone.close()
+
+
+def test_107_a_chat_never_lands_where_its_roster_actor_cannot(tmp_path):
+    from grimoire.chats.model import Launch
+    from chat_fixtures import MARA, chat_library, seed_sources
+    desktop, phone = LibraryStore.create(tmp_path / DESKTOP), LibraryStore.create(tmp_path / PHONE)
+    try:
+        seed_sources(desktop)
+        identify(desktop, DESKTOP)
+        identify(phone, PHONE)
+        sync(desktop, phone, handles())
+        chat_library(desktop).start_chat(Launch("character", MARA.at("r1"))).commit()
+        actors = [path for path in desktop.scan().files if "/instances/" in path]
+        assert actors
+        for actor in actors:  # the phone cannot take the actor: a folder sits where its file belongs
+            (phone.root / actor).mkdir(parents=True)
+        report = sync(desktop, phone, handles())
+        assert not [path for path, _ in report.copied if "/chats/" in path]
+        assert {conflict.code for conflict in report.conflicts if "/chats/" in conflict.path} == {"head_dependency"}
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_an_instance_whose_payload_pins_a_differing_revision_waits(tmp_path):
+    from grimoire.core.identity import InstanceRef, SourceRef
+    from grimoire.store import RecordEnvelope, SourceManifest
+    from sync_helpers import handle, make_pair, put
+    desktop, phone = make_pair(tmp_path)
+    try:
+        r9 = SourceRef("world:harbor", "character", "wren", "r9")
+        for store, bio in ((desktop, "captain"), (phone, "pirate")):
+            txn = store.transaction()
+            txn.put(RecordEnvelope(r9, {"bio": bio}), None)
+            current = store.read_source("world:harbor")
+            txn.put(SourceManifest(current.manifest.source, current.manifest.owner, current.manifest.title,
+                                   {"character/wren": "r1"}, current.manifest.links, extra=current.manifest.extra),
+                    current.etag)
+            txn.commit(handle())
+        put(desktop, RecordEnvelope(InstanceRef("c1", "character", "nell"), {"portrait_of": str(r9)}), None)
+        report = sync(desktop, phone, handles())
+        nell = "campaigns/c1/instances/character/nell.json"
+        assert report.conflict(nell).code == "head_dependency" and not (phone.root / nell).exists()
+    finally:
+        desktop.close()
+        phone.close()

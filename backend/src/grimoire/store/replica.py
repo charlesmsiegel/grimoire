@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from grimoire.core.identity import InstanceRef, SourceRef
+from grimoire.core.identity import InstanceRef, SourceRef, validate_segment
 
 from .diskops import is_link, lstat_or_none
 from .engine import Access
@@ -142,15 +142,16 @@ def _children(access: Access, parts: Parts, blocked: dict[str, str]) -> list[tup
     except OSError:
         blocked["/".join(parts)] = "unreadable"
         return []
+    noise = {name for name in names if is_noise(name) and not _real_identifier(access, parts + (name,))}
     keys: dict[str, int] = {}
     for name in names:
-        if not is_noise(name):
+        if name not in noise:
             keys[name_key(name)] = keys.get(name_key(name), 0) + 1
     found = []
     for name in names:
         child = parts + (name,)
         text = "/".join(child)
-        if is_noise(name):
+        if name in noise:
             found.append((name, "skip"))
             continue
         if is_link(access.path(child)):
@@ -166,6 +167,17 @@ def _children(access: Access, parts: Parts, blocked: dict[str, str]) -> list[tup
             continue
         found.append((name, "dir" if stat.S_ISDIR(info.st_mode) else "file"))
     return found
+
+
+def _real_identifier(access: Access, parts: Parts) -> bool:
+    """The loader's rule: every file the store writes ends in ``.json``, so a noise-looking name
+    (``desktop.ini``, ``test.swp``) is real only as a directory with a valid identifier name."""
+    try:
+        validate_segment(parts[-1], "name")
+    except ValueError:
+        return False
+    info = lstat_or_none(access.path(parts))
+    return info is not None and stat.S_ISDIR(info.st_mode) and not is_link(access.path(parts))
 
 
 def _walk(access: Access, parts: Parts, files: dict[str, bytes], blocked: dict[str, str],
@@ -247,9 +259,12 @@ def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str
         if isinstance(envelope, SourceManifest):
             if _etag(data) in allowed:
                 continue
+            heads = envelope.head_refs()
             if any(head == SourceRef(ref.source, ref.kind, ref.entity_id) and revision == ref.revision
-                   for head, revision in envelope.head_refs().items()):
+                   for head, revision in heads.items()):
                 raise RevisionReferenced(f"{path} names {ref} as its head")
+            if envelope.source == ref.source and ref.unpinned() not in heads and _sole_revision(found, ref):
+                raise RevisionReferenced(f"{path} has {ref} as its implicit head (its entity's only revision)")
             for link in envelope.links:
                 if ref in {_pinned(link.subject), _pinned(link.object)} | _payload_refs(link.extra):
                     raise RevisionReferenced(f"{path} links {ref}")
@@ -265,6 +280,17 @@ def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str
                 raise RevisionReferenced(f"{path} pins {ref} in its payload")
         elif envelope.address != ref and ref in _payload_refs(envelope.payload) | _payload_refs(envelope.extra):
             raise RevisionReferenced(f"{path} pins {ref} in its payload")
+
+
+def _sole_revision(found: CanonicalScan, ref: SourceRef) -> bool:
+    """Whether ``ref`` is the only revision of its entity on this library: then it is the head even
+    with no head declared (the loader resolves it so), and an unpinned reference follows it."""
+    revisions = set()
+    for path in (*found.files, *found.blocked):
+        kind = classify(tuple(path.split("/")))
+        if kind is not None and kind[0] == "definition" and kind[1].unpinned() == ref.unpinned():  # type: ignore[union-attr]
+            revisions.add(kind[1].revision)  # type: ignore[union-attr]
+    return revisions == {ref.revision}
 
 
 def pinned_by(parts: Parts, data: bytes) -> frozenset[SourceRef]:

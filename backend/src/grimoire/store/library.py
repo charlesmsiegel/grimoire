@@ -993,10 +993,6 @@ class _Put:
             return "keep" if self.regenerable else "hold"
         return {"state": "state"}.get(self.kind, "publish")
 
-    @property
-    def preservable(self) -> bool:
-        return self.journal_kind in ("publish", "hold")
-
 
 class LedgerWriter:
     """Appends chained batches to one ledger; obtained only from ``LibraryStore.ledger_writer``."""
@@ -1258,7 +1254,7 @@ class Transaction:
         if self._kept.get(first.parts) != first.expected:
             raise InvalidEnvelope(f"replacing {'/'.join(first.parts)} needs its current bytes kept in the same "
                                   "transaction (keep_version)")
-        if any(put.record == first.parts and put.regenerable for put in puts):  # may be the only copy
+        if not any(put.record == first.parts and not put.regenerable for put in puts):  # may be the only copy
             raise InvalidEnvelope(f"the kept copy of {'/'.join(first.parts)} must be a hold (regenerable=False)")
 
     def commit(self, handle: object, approvals: Mapping[str, str] | None = None, *,

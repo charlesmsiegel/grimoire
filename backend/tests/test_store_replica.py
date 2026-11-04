@@ -977,3 +977,51 @@ def test_put_exact_never_overwrites_a_knowledge_record(pair):
     current = (phone.root / path).read_bytes()
     with pytest.raises(ImmutableRevision, match="create-only"):
         phone.transaction().put_exact(path, current.replace(b'"n": 1', b'"n": 2'), etag(current))
+
+
+@pytest.mark.parametrize("campaign", ["desktop.ini", "rp.swp", "rp.swo"])
+def test_a_noise_looking_but_valid_folder_is_scanned_like_the_loader_reads_it(pair, campaign):
+    """load() keeps a noise-looking name that is a valid identifier folder; scan() must too, or the reference
+    check misses its pins and sync silently drops its records."""
+    phone = pair[1]
+    _cards(phone)
+    put_txn = phone.transaction()
+    put_txn.put(RecordEnvelope(InstanceRef(campaign, "lore", "copy"), {}, base=str(R1)), None)
+    put_txn.commit(owner_handle())
+    assert InstanceRef(campaign, "lore", "copy") in phone.load().instances
+    assert any(path.startswith(f"campaigns/{campaign}/") for path in phone.scan().files)
+    with pytest.raises(RevisionReferenced, match="is based on"):
+        _replace_r1(phone)
+
+
+def test_a_sole_revision_is_its_entitys_implicit_head(tmp_path):
+    from store_helpers import OWNER as owner
+    store = LibraryStore.create(tmp_path / "lib")
+    try:
+        notes = SourceRef("catalog:solo", "lore", "notes")
+        txn = store.transaction()
+        txn.put(SourceManifest("catalog:solo", owner, "Solo", {}), None)  # no head declared
+        txn.put(RecordEnvelope(notes.at("r1"), {"text": "mine"}), None)
+        txn.commit(owner_handle())
+        path = "sources/catalog/solo/_source/records/lore/notes/r1.json"
+        current = (store.root / path).read_bytes()
+        replace = store.transaction()
+        replace.put_exact(path, current.replace(b'"mine"', b'"theirs"'), etag(current), replace_unreferenced=True)
+        replace.keep_version(path, current)
+        with pytest.raises(RevisionReferenced, match="implicit head"):
+            replace.check()
+    finally:
+        store.close()
+
+
+def test_a_reused_regenerable_kept_slot_never_satisfies_a_replace(pair):
+    phone = pair[1]
+    current, other = _r1_now_history(phone)
+    first = phone.transaction()
+    first.keep_version(R1_FILE, current, regenerable=True)
+    first.commit(owner_handle(*ALL))
+    txn = phone.transaction()
+    txn.put_exact(R1_FILE, other, etag(current), replace_unreferenced=True)
+    txn.keep_version(R1_FILE, current, regenerable=True)  # reused: nothing staged, nothing re-checked
+    with pytest.raises(InvalidEnvelope, match="must be a hold"):
+        txn.check()
