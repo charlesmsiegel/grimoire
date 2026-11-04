@@ -70,12 +70,23 @@ def test_explicit_defaults_decode_equal_and_reencode_without_them():
                                              "effects": [{"id": "e", "text": "t", "tags": ["x"]}]}]}
 
 
-def test_explicit_nulls_of_defaulted_fields_mean_absent():
-    entry = {"facet": "abilities", "abilities": [{"id": "a", "name": "A", "description": None,
-                                                  "costs": None, "effects": [
-        {"id": "e", "text": "t", "tags": ["x"], "certainty": None, "range": None}]}]}
+def test_explicit_nulls_of_optional_prose_mean_absent():
+    entry = {"facet": "abilities", "abilities": [{"id": "a", "name": "A", "description": None, "effects": [
+        {"id": "e", "text": "t", "tags": ["x"], "range": None}]}]}
     ability = decode_traits(entry).traits.get(Abilities).abilities[0]
-    assert ability.description == "" and ability.costs == () and ability.effects[0].certainty == "reliable"
+    assert ability.description == "" and ability.effects[0].range is None
+
+
+@pytest.mark.parametrize("field, where", [("limits", "ability"), ("costs", "ability"),
+                                          ("prerequisites", "ability"), ("certainty", "effect")])
+def test_a_null_that_would_loosen_a_power_is_refused(field, where):
+    # Reading a null `limits` as none, or a null `certainty` as reliable, would fail open.
+    effect = {"id": "e", "text": "t", "tags": ["x"]}
+    ability = {"id": "a", "name": "A", "effects": [effect]}
+    (ability if where == "ability" else effect)[field] = None
+    with pytest.raises((CodecError, FacetError)) as caught:
+        decode_traits({"facet": "abilities", "abilities": [ability]})
+    assert caught.value.reason == "invalid_field"
 
 
 def test_an_empty_facet_round_trips():

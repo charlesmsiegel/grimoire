@@ -201,7 +201,10 @@ def _matching_rulings(attempt: AbilityAttempt, rulings: object):
             raise _invalid(f"not an AbilityRuling: {ruling!r}")
     campaign = attempt.actor.campaign_id
     mine = [ruling for ruling in given if ruling.attempt.actor.campaign_id == campaign]
-    same = [ruling for ruling in mine if ruling.attempt.attempt_id == attempt.attempt_id]
+    # Another actor's ruling under the same attempt id is not about this attempt. The same record
+    # seen twice (two merged logs) is one ruling.
+    same = list(dict.fromkeys(ruling for ruling in mine if ruling.attempt.attempt_id == attempt.attempt_id
+                              and ruling.attempt.actor == attempt.actor))
     # Only this attempt's rulings are checked here: one bad record elsewhere in the campaign
     # must not block every other use. Campaign-wide id uniqueness is ``check_ruling``'s job.
     ids = [ruling.ruling_id for ruling in same]
@@ -280,16 +283,17 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
 
     covers = effect is not None and needs <= effect.tags
     # Effects whose scoped prerequisites and costs apply. A covering named effect is exact. A
-    # stretch (no covering named effect) also counts the effects it is closest to: those sharing
-    # the most needed tags, all of them on a tie. So leaving out or misnaming the effect never
-    # drops the constraints of the effect being stretched.
+    # stretch (no covering named effect) counts every effect it touches: each one sharing a needed
+    # tag. Adding a needed tag can only add effects, so no label or extra tag ever drops the
+    # constraints of an effect the attempt draws on. This is deliberately conservative.
     scope: set[str] = set()
     if effect is not None:
         scope.add(effect.id)
-    if ability is not None and not covers:
-        best = max(len(each.tags & needs) for each in ability.effects)
-        if best:
-            scope |= {each.id for each in ability.effects if len(each.tags & needs) == best}
+    touched: set[str] = set()
+    if ability is not None:
+        touched = {each.id for each in ability.effects if each.tags & needs}
+        if not covers:
+            scope |= touched
 
     conflicts: list[tuple[str, tuple[str, ...]]] = []
     unmet: list[str] = []
@@ -299,8 +303,9 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
             hit = tuple(sorted(limit.excludes & needs))
             if hit:
                 conflicts.append((limit.id, hit))
+                unread = " (it also has fields this version does not understand)" if limit.extras else ""
                 reasons.append(Reason("limit_excludes", f"limit {limit.id!r} of {ability.id!r} "
-                                                        f"excludes {_tags(hit)}"))
+                                                        f"excludes {_tags(hit)}{unread}"))
         for prerequisite in ability.prerequisites:
             applies = not prerequisite.applies_to or bool(prerequisite.applies_to & scope)
             if applies and prerequisite.id not in attempt.conditions_met:
@@ -314,7 +319,9 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
     unknown: list[str] = []
     others: list[tuple[str, str, tuple[str, ...]]] = []
     other_unrecognized: list[tuple[str, tuple[str, ...]]] = []
-    if facet is not None:
+    if facet is None:
+        unknown = sorted(needs)  # nothing is authored, so every needed tag is unknown
+    else:
         used = {tag for each in facet.abilities for part in each.effects for tag in part.tags}
         used |= {tag for each in facet.abilities for part in each.limits for tag in part.excludes}
         unknown = sorted(needs - used)
@@ -359,6 +366,10 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
         classification = "beyond_limits"
     elif stale:
         classification = "relabel"
+    elif not touched:
+        # No effect of the named ability shares a needed tag: this describes a different power,
+        # so the ability's own prerequisites and costs do not apply. Its limits (above) still bind.
+        classification = "needs_upgrade" if unrecognized else "new_ability"
     elif unmet:
         classification = "unavailable"
     elif unrecognized:

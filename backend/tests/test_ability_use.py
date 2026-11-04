@@ -406,10 +406,10 @@ def test_leaving_out_the_effect_never_drops_a_stretched_effects_constraints():
     approved_label = attempt(needs=("light", "illusion", "motion"), conditions=("ambient_light", "still_air"))
     approved = assess_attempt(approved_label, SCOPED, [ruling(approved_label)])
     assert approved.approval == "approved" and [c.id for c in approved.costs] == ["eye_strain", "migraine"]
-    # The closest effect counts, not every effect sharing a generic tag: a concealing stretch
-    # is closest to `veil`, so the mirage's still air is not required.
+    # Every effect a stretch touches counts, even through a shared generic tag: deliberately
+    # conservative, so a concealing stretch still needs the mirage's still air.
     hidden = attempt(needs=("light", "concealment", "motion"))
-    assert assess_attempt(hidden, SCOPED).classification == "extrapolation"
+    assert assess_attempt(hidden, SCOPED).unmet_prerequisites == ("still_air",)
 
 
 def test_issuing_the_ruling_past_the_bound_is_refused():
@@ -446,3 +446,94 @@ def test_unknown_fields_on_other_abilities_are_reported():
     with pytest.raises(TypeError):
         sub = type("Sub", (type(entity),), {})
         assess_attempt(flight(), sub(**{f.name: getattr(entity, f.name) for f in dataclasses.fields(entity)}))
+
+
+# --- round 2 of independent review --------------------------------------------------------
+
+def _wide_veil():
+    return Ability("light_bending", "Light bending", [
+        Effect("veil", "t", {"light", "concealment", "body"}),
+        Effect("mirage", "t", {"light", "illusion"}, certainty="uncertain"),
+    ], costs=[Cost("eye_strain", "t"), Cost("migraine", "t", {"mirage"})],
+        prerequisites=[Prerequisite("ambient_light", "t"), Prerequisite("still_air", "t", {"mirage"})])
+
+
+def test_a_stretch_drawing_on_a_smaller_effect_keeps_its_constraints():
+    # Hiding inside a mirage of herself: `veil` shares more tags, but only `mirage` gives illusion.
+    entity = effective(person("iris", "Iris", _wide_veil()))
+    for label in (None, "veil", "mirage"):
+        decoy = attempt(needs=("light", "concealment", "body", "illusion"), effect_id=label)
+        result = assess_attempt(decoy, entity)
+        assert (result.classification, result.unmet_prerequisites) == ("unavailable", ("still_air",))
+    calm = attempt(needs=("light", "concealment", "body", "illusion"), conditions=("ambient_light", "still_air"))
+    approved = assess_attempt(calm, entity, [ruling(calm)])
+    assert approved.permitted and [c.id for c in approved.costs] == ["eye_strain", "migraine"]
+
+
+def test_adding_a_needed_tag_never_removes_a_scoped_constraint():
+    # Property: for every stretch over the authored vocabulary, a superset of needs keeps every
+    # unmet prerequisite (unless a limit or a new-ability classification takes over) and cost.
+    entity = effective(person("iris", "Iris", _wide_veil()))
+    vocabulary = ["light", "concealment", "body", "illusion", "motion", "glow"]
+    for size in range(1, 4):
+        for needs in itertools.combinations(vocabulary, size):
+            base = attempt(needs=needs)
+            before = assess_attempt(base, entity, [ruling(base)])
+            for extra in vocabulary:
+                if extra in needs:
+                    continue
+                more = attempt(needs=(*needs, extra))
+                after = assess_attempt(more, entity, [ruling(more)])
+                if after.classification in ("unavailable", "extrapolation") and \
+                        before.classification in ("unavailable", "extrapolation"):
+                    assert set(before.unmet_prerequisites) <= set(after.unmet_prerequisites)
+                    if before.costs and after.costs:
+                        assert set(before.costs) <= set(after.costs)
+
+
+def test_an_attempt_sharing_no_tag_with_the_ability_is_a_new_ability():
+    telekinesis = attempt(needs=("telekinesis",), conditions=())
+    result = assess_attempt(telekinesis, IRIS)
+    assert (result.classification, result.approval, result.costs) == ("new_ability", "pending", ())
+    check_ruling(ruling(telekinesis, decides="new_ability"), IRIS)
+    # The ability's own prerequisites do not gate a different power, but its limits still bind.
+    assert assess_attempt(attempt(needs=("force",), conditions=()), IRIS).classification == "beyond_limits"
+
+
+@pytest.mark.parametrize("change", [
+    {"effect_id": "veil"}, {"effect_id": "mirage"}, {"conditions": ()}, {"ability_id": "light_bending_2"},
+])
+def test_every_label_field_is_part_of_what_a_ruling_decides(change):
+    approval = ruling(flight())
+    relabelled = flight(**change)
+    result = assess_attempt(relabelled, OPEN_IRIS, [approval])
+    assert (result.approval, result.mismatched_rulings) in (("pending", ("r1",)), ("not_approvable", ("r1",)))
+
+
+def test_another_actors_ruling_under_the_same_attempt_id_is_ignored():
+    other = AbilityAttempt("t1-a", InstanceRef("c1", "character", "bob-1"), "light_bending",
+                           frozenset({"light", "force", "flight"}), "scene:s1/t1")
+    result = assess_attempt(flight(), OPEN_IRIS, [AbilityRuling("r1", other, "extrapolation", "approved", "d")])
+    assert (result.approval, result.mismatched_rulings) == ("pending", ())
+
+
+def test_the_same_ruling_record_seen_twice_is_one_ruling():
+    approval = ruling(flight())
+    assert assess_attempt(flight(), OPEN_IRIS, [approval, approval]).approval == "approved"
+    twin = ruling(flight(), decision="refused")  # same id, different content
+    assert refusal(lambda: assess_attempt(flight(), OPEN_IRIS, [approval, twin])) == "duplicate_ruling"
+
+
+def test_assessment_follows_the_labels_it_is_given():
+    # Under-labelling escape (documented trust boundary): leaving the outcome tags out of `needs`
+    # makes radiation-pressure flight read as a plain veil. The labeller must state every outcome.
+    result = assess_attempt(attempt(needs=("light",), effect_id="veil"), IRIS)
+    assert result.classification == "known_capability" and result.conflicts == ()
+    honest = assess_attempt(flight(effect_id="veil"), IRIS)
+    assert honest.classification == "beyond_limits"
+
+
+def test_without_the_facet_every_needed_tag_is_unknown():
+    result = assess_attempt(attempt(entity_id="plain", needs=("fire", "light"), conditions=()),
+                            effective(person("plain", "Plain")))
+    assert result.unknown_tags == ("fire", "light")

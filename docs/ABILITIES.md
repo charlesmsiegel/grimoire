@@ -59,7 +59,7 @@ The codec writes `{"facet": "abilities", "abilities": [ … ], …extras}`. Each
 - Defaults and empty values are omitted: `certainty: reliable`, a null `range`, `[]` and `""`. An empty facet is still written, as `{"facet": "abilities"}`, because "no powers" differs from "no facet".
 - Extras are written as that object's own keys.
 
-Unlike every other known facet, **unknown keys here are kept as extras** rather than refused. Malformed known fields are still refused: a wrong container or a name listed twice is a `CodecError` (`invalid_field`), and a value the ability types reject keeps its `FacetError` reason (`invalid_field`, `duplicate_ability`, `duplicate_ability_part`, …). An explicit `null` on a field that has a default (`description`, `range`, `certainty`, the part lists) decodes as absent, matching how encoding omits it. Decoding accepts the read-only mappings and tuples of a stored payload, and re-encoding is canonical.
+Unlike every other known facet, **unknown keys here are kept as extras** rather than refused. Malformed known fields are still refused: a wrong container or a name listed twice is a `CodecError` (`invalid_field`), and a value the ability types reject keeps its `FacetError` reason (`invalid_field`, `duplicate_ability`, `duplicate_ability_part`, …). An explicit `null` on optional prose (`description`, `range`) decodes as absent, matching how encoding omits it. A `null` list or `certainty` is refused, because reading it as empty or `reliable` would loosen the power. Decoding accepts the read-only mappings and tuples of a stored payload, and re-encoding is canonical.
 
 Abilities therefore persist in any record that carries an entity payload, such as a 010 definition or instance record. **The store needs no change only because it treats payloads opaquely.** The 107 chat actors are plain source bindings: they reach abilities through their definition.
 
@@ -74,13 +74,14 @@ Abilities therefore persist in any record that carries an entity payload, such a
 | `actor` | an exact `InstanceRef` (subclasses are refused). Ids and text in ability values, attempts and rulings must be plain `str`. |
 | `effect_id` | the declared effect the labeller says it uses, or none. |
 | `provenance` | attribution text up to 512 characters, never authority. |
-| `conditions_met` | up to 64 prerequisite ids the labeller says hold. These are asserted, not checked against scene facts; checking them is 029's job. |
+| `conditions_met` | up to 64 ids, only of the **named ability's** prerequisites, that the labeller says hold. A prerequisite id of another ability is stale here (`relabel`). These are asserted, not checked against scene facts; checking them is 029's job. |
 
 **Labelling is the trust boundary.** These fields come from a labeller that is **not the narrator**, the same rule as for `NarrationClaim`. The assessment is only as good as the labels and the shared vocabulary.
 - A labeller that writes `push` for `force` escapes `no_force`. The unused tag then shows up in `unknown_tags`.
 - A labeller that files the flight under an invented ability id gets `new_ability`. The real limit then shows up in `other_conflicts`.
+- A labeller that leaves the outcome out of `needs` (`{light}` with `veil`, for the radiation-pressure flight) gets a plain `known_capability`, and nothing shows. **Every intended outcome must be a needed tag:** this is a labeller obligation for 029/035.
 
-Both escapes are pinned by tests that state what is and is not guaranteed.
+All three escapes are pinned by tests that state what is and is not guaranteed: the classification follows the labels.
 
 ## Assessment
 
@@ -99,9 +100,9 @@ Let `A` be the named ability and `E` the named effect, if they exist. Then:
 - `conflicts`: limits of `A` that exclude a needed tag.
 - **Scope** is the set of effects whose effect-scoped (`applies_to`) prerequisites and costs apply:
   - when the named `E` covers `needs`: just `E`;
-  - otherwise (a stretch, or no effect named): `E` if named, **plus the effects the attempt is closest to**, meaning those sharing the most needed tags, all of them on a tie.
+  - otherwise (a stretch, or no effect named): `E` if named, **plus every effect the attempt touches**, meaning each effect sharing at least one needed tag.
 
-  So leaving out or misnaming the effect never drops the constraints of the effect being stretched. Flight by radiation pressure shares only `light` with every light-bending effect, so all tie and all their scoped constraints apply.
+  Adding a needed tag can only add effects, so no label and no extra tag ever drops the constraints of an effect the attempt draws on (a property test checks this). It is deliberately conservative: an effect touched only through a generic tag (`light`) counts too, so flight by radiation pressure carries the mirage's migraine. Authors who want effects kept apart give them distinct tags.
 - **Applicable prerequisites:** the ability-wide ones plus those scoped to an effect in scope. A wrong label can therefore read `unavailable` before `relabel`. This is conservative: nothing is used.
 - `candidates`: declared effects whose own tags cover `needs`, including `E`. **A union of tags across effects never covers.**
 - Computed whenever the entity has the facet, advisory only:
@@ -117,6 +118,7 @@ Let `A` be the named ability and `E` the named effect, if they exist. Then:
 | 1 | no `A` | `new_ability`, or `needs_upgrade` if the facet has extras | `pending`, or `not_approvable` |
 | 2 | `conflicts` | `beyond_limits` | `not_approvable` |
 | 2a | `stale_references` | `relabel` | `not_approvable` |
+| 2b | no effect of `A` shares a needed tag | `new_ability` (a different power: `A`'s prerequisites and costs do not apply), or `needs_upgrade` if `unrecognized` | `pending`, or `not_approvable` |
 | 3 | unmet prerequisites | `unavailable` | `not_approvable` |
 | 3a | `unrecognized` | `needs_upgrade` | `not_approvable` |
 | 4 | `E` covers `needs` | `known_capability` if reliable, else `attempted_feat` | `not_needed` |
@@ -149,7 +151,7 @@ Other outputs:
 `AbilityRuling(ruling_id, attempt, decides, decision, provenance, note="")` decides one **exact attempt value** for one classification. `decides` is `extrapolation` or `new_ability`; `decision` is `approved` or `refused`. `provenance` and `note` are text up to 512 characters. It is **025-provisional**: 029 may replace this surface. It is unrelated to [`knowledge.Ruling`](KNOWLEDGE.md).
 
 How rulings are matched:
-- A ruling's campaign is that of its attempt's actor. Other-campaign rulings are **ignored**. Ruling ids are unique within the campaign; `check_ruling` enforces that when a ruling is issued. Assessment checks only the rulings on its own attempt id, so a stray duplicate elsewhere never blocks it.
+- A ruling's campaign is that of its attempt's actor. Other-campaign rulings are **ignored**. Ruling ids are unique within the campaign; `check_ruling` enforces that when a ruling is issued. Assessment checks only the rulings on its own attempt id **and actor**, so a stray duplicate elsewhere, or another actor's attempt under the same id, never touches it. The same ruling record passed twice (two merged logs) counts once; two different rulings under one id raise `duplicate_ruling`.
 - A ruling decides the attempt's **labels**: `attempt_id`, actor, `ability_id`, `needs`, `effect_id` and `conditions_met`. `provenance` is attribution and is not compared, so re-running a labeller with a new attribution keeps its approvals.
 - Same `attempt_id`, different labels: the ruling is reported in `mismatched_rulings` and approves nothing. A relabelled attempt needs a fresh ruling.
 - Same labels: the ruling **matches**. Matching rulings are grouped by `decides`.
@@ -177,6 +179,7 @@ At most 256 same-campaign rulings may name one `attempt_id`; rulings on other at
 - **Instance ability changes** (`added`/`replaced`) come only from authored edits or, later, accepted state changes (021), never from narration or model output.
   - For a player-controlled actor, consent to a changed power is a **035 obligation**.
 - **Assess and charge each `attempt_id` once:** an obligation on 020, 021 and 029.
+- **Superseding a ruling** is not possible in this slice: an approve/refuse pair on the same labels is a named `conflicting_rulings`, never a silent overwrite. A supersede/revoke record, and whether a ruling should also pin the entity's `resolved_source`, belong to 029.
 - **Whole-facet limitation.** `abilities` is one facet. Evolving a single ability on a sourced instance means `replaced` with a copy of all of them, and that copy no longer follows head changes to the others (tested). Per-ability inherit, replace and clear is a follow-up for [022](roadmap/sprints/effective-world-snapshots.md) and [024](roadmap/sprints/creature-individualization.md).
 
 ## Not in this slice
@@ -194,6 +197,6 @@ At most 256 same-campaign rulings may name one `attempt_id`; rulings on other at
 The change is additive, and the schema id stays `grimoire.entity/0`.
 - Payloads without an `abilities` facet decode identically.
 - A pre-025 build keeps an `abilities` facet verbatim as an `UnknownFacet`.
-- A 025 build keeps unknown inner **keys** as extras and fails closed on them. Only additive keys are tolerated: a later build that writes a new *value* for a known field (a new `certainty`, or a limit with no `excludes`) makes the definition fail to decode, with a reason. Later milestones must add keys, not widen value vocabularies.
+- A 025 build keeps unknown inner **keys** as extras and fails closed on them. Only additive keys are tolerated: a later build that writes a new *value* for a known field (a new `certainty`, or a limit with no `excludes`) makes the definition fail to decode, with a reason. Later milestones must add keys, not widen value vocabularies. A 025 build fails closed only on keys of the facet or of the *named* ability; cross-ability or composition constraints (milestone 3) must therefore be written as facet-level keys or on the constrained ability itself, never only on a sibling ability or in a new facet.
 - One break is possible: a hand-written `abilities` facet of another shape is now refused with a reason, though the envelope still holds it. No such writer exists on `v2`.
 - `FacetError` moved to the leaf module `facet_errors` and is re-exported unchanged from `facets`.

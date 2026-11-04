@@ -36,6 +36,9 @@ _ABILITY_PARTS: dict[str, type] = {"abilities": Ability, "effects": Effect, "lim
                                    "costs": Cost, "prerequisites": Prerequisite}
 #: Fields holding sets of id segments.
 _ABILITY_NAMES = frozenset({"tags", "excludes", "applies_to"})
+#: Optional prose whose explicit null decodes as absent. A null list or ``certainty`` is refused:
+#: reading it as empty or ``reliable`` would loosen the power.
+_ABILITY_NULLABLE = frozenset({"description", "range"})
 #: Field values that are the default and so are omitted when encoding.
 _ABILITY_DEFAULTS = {"certainty": "reliable", "description": ""}
 
@@ -189,8 +192,8 @@ def _ability_value(cls: type, entry: object, label: str) -> object:
         if item.name == "extras" or item.name not in rest:
             continue
         value = rest.pop(item.name)
-        if value is None and (item.default is not MISSING or item.default_factory is not MISSING):
-            continue  # an explicit null of a defaulted field means "absent", as encoding omits it
+        if value is None and item.name in _ABILITY_NULLABLE:
+            continue  # an explicit null of optional prose means "absent", as encoding omits it
         if item.name in _ABILITY_NAMES:
             value = _names(value, f"{label} {item.name}")
         elif item.name in _ABILITY_PARTS:
