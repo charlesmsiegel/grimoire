@@ -17,7 +17,8 @@ import unicodedata
 from typing import Literal
 
 from grimoire.core.identity import (
-    ChatRef, InstanceRef, RelationRef, ScopeRef, SourceRef, validate_segment, validate_source_id,
+    AcceptedRef, ChatRef, InstanceRef, RelationRef, ScopeRef, SourceRef, WrapUpRef, validate_segment,
+    validate_source_id,
 )
 from grimoire.security import InvalidResourcePath, ResourcePath
 
@@ -44,6 +45,8 @@ INSTANCES = "instances"
 SUFFIX = ".json"
 CHATS = "chats"  # campaigns/<id>/chats/<chat_id>.json: one chat record (107)
 RELATIONS = "relations"  # campaigns/<id>/relations/<relation_id>.json: one relation record (017)
+ACCEPTED = "accepted"  # campaigns/<id>/accepted/<event_id>.json: one accepted fictional event (021)
+WRAPUPS = "wrapups"  # campaigns/<id>/wrapups/<wrapup_id>.json: one scene wrap-up (021)
 SCOPE = "scope.json"  # campaigns/<id>/scope.json: the play-scope record (107)
 
 ROOT_ENTRIES = frozenset({MARKER, SOURCES, CAMPAIGNS, TXN, CONFLICTS})
@@ -52,7 +55,7 @@ RESERVED_ROOTS = frozenset({"authority", "config", "assets", "secrets"})
 RESERVED_CAMPAIGN_ENTRIES = frozenset({"scenes", "events", "evidence"})
 _NOISE = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
 
-Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat", "relation"]
+Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat", "relation", "accepted", "wrapup"]
 
 
 def is_noise(name: str) -> bool:
@@ -109,7 +112,16 @@ def relation_parts(ref: RelationRef) -> Parts:
     return _checked((CAMPAIGNS, ref.campaign_id, RELATIONS, ref.relation_id + SUFFIX))
 
 
-def address_parts(address: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef) -> Parts:
+def accepted_parts(ref: AcceptedRef) -> Parts:
+    return _checked((CAMPAIGNS, ref.campaign_id, ACCEPTED, ref.event_id + SUFFIX))
+
+
+def wrapup_parts(ref: WrapUpRef) -> Parts:
+    return _checked((CAMPAIGNS, ref.campaign_id, WRAPUPS, ref.wrapup_id + SUFFIX))
+
+
+def address_parts(address: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | AcceptedRef | WrapUpRef
+                  ) -> Parts:
     if isinstance(address, InstanceRef):
         return instance_parts(address)
     if isinstance(address, ScopeRef):
@@ -118,6 +130,10 @@ def address_parts(address: SourceRef | InstanceRef | ScopeRef | ChatRef | Relati
         return chat_parts(address)
     if isinstance(address, RelationRef):
         return relation_parts(address)
+    if isinstance(address, AcceptedRef):
+        return accepted_parts(address)
+    if isinstance(address, WrapUpRef):
+        return wrapup_parts(address)
     return definition_parts(address)
 
 
@@ -164,7 +180,7 @@ def _stem(name: str) -> str | None:
     return stem
 
 
-Address = SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef
+Address = SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | AcceptedRef | WrapUpRef
 
 
 def classify(parts: Parts) -> tuple[Kind, Address | str] | None:
@@ -186,6 +202,14 @@ def classify(parts: Parts) -> tuple[Kind, Address | str] | None:
             stem = _stem(parts[3])
             if stem is not None:
                 found = ("relation", RelationRef(parts[1], stem))
+        elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == ACCEPTED:
+            stem = _stem(parts[3])
+            if stem is not None:
+                found = ("accepted", AcceptedRef(parts[1], stem))
+        elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == WRAPUPS:
+            stem = _stem(parts[3])
+            if stem is not None:
+                found = ("wrapup", WrapUpRef(parts[1], stem))
         elif len(parts) >= 3 and parts[0] == LEDGERS:
             seq = ledger_seq(parts[-1])
             if seq is not None:

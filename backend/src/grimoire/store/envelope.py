@@ -14,7 +14,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from grimoire.core.identity import (
-    ChatRef, InstanceRef, RelationRef, ScopeRef, SourceRef, parse_ref, validate_segment, validate_source_id,
+    AcceptedRef, ChatRef, InstanceRef, RelationRef, ScopeRef, SourceRef, WrapUpRef, parse_ref, validate_segment,
+    validate_source_id,
 )
 from grimoire.core.index import DIRECTED_RELATIONS, SYMMETRIC_RELATIONS
 
@@ -129,13 +130,15 @@ def _parse_source_ref(text: str, label: str) -> SourceRef:
         raise InvalidEnvelope(f"{label}: {error}") from None
 
 
-ScopeAddress = ScopeRef | ChatRef | RelationRef
+ScopeAddress = ScopeRef | ChatRef | RelationRef | AcceptedRef | WrapUpRef
+_SCOPE_ADDRESSES = (ScopeRef, ChatRef, RelationRef, AcceptedRef, WrapUpRef)
 
 
 @dataclass(frozen=True)
 class ScopeRecord:
     """A campaign-scoped record with an opaque payload: the play scope (``ScopeRef``), a chat
-    (``ChatRef``, 107) or a relation (``RelationRef``, 017).
+    (``ChatRef``, 107), a relation (``RelationRef``, 017), an accepted event (``AcceptedRef``, 021) or a
+    scene wrap-up (``WrapUpRef``, 021).
 
     The envelope owns the address and the payload's schema id; the store never
     interprets either payload. Unknown top-level fields are preserved in ``extra``.
@@ -148,8 +151,9 @@ class ScopeRecord:
     extra: Mapping[str, object] = field(default_factory=_empty)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.address, (ScopeRef, ChatRef, RelationRef)):
-            raise InvalidEnvelope("a scope record's address must be a ScopeRef, ChatRef or RelationRef")
+        if not isinstance(self.address, _SCOPE_ADDRESSES):
+            raise InvalidEnvelope("a scope record's address must be a ScopeRef, ChatRef, RelationRef, AcceptedRef "
+                                  "or WrapUpRef")
         if type(self.schema) is not str or not self.schema.strip() or len(self.schema) > SCHEMA_MAX:
             raise InvalidEnvelope(f"schema must be nonempty text of at most {SCHEMA_MAX} characters")
         _optional_text(self.owner, "owner", nonempty=True)
@@ -350,6 +354,10 @@ def _scope_address(text: object) -> ScopeAddress:
     if isinstance(text, str) and "#" in text:
         if "#relation/" in text:
             return RelationRef.parse(text)
+        if "#accepted/" in text:
+            return AcceptedRef.parse(text)
+        if "#wrapup/" in text:
+            return WrapUpRef.parse(text)
         return ChatRef.parse(text)
     return ScopeRef.parse(text)
 
