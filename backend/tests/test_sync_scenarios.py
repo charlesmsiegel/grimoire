@@ -816,6 +816,7 @@ def test_a_chat_binding_pins_a_revision_against_replacement(tmp_path):
     current = (phone.root / path).read_bytes()
     txn = phone.transaction()
     txn.put_exact(path, current.replace(b"smuggler", b"pirate"), etag(current), replace_unreferenced=True)
+    txn.keep_version(path, current)
     with pytest.raises(Exception, match="binds|based"):
         txn.check()
 
@@ -1136,3 +1137,78 @@ def test_concurrent_syncs_in_opposite_order_never_deadlock(pair):
         thread.join(timeout=60)
     assert not any(thread.is_alive() for thread in threads)
     assert all(isinstance(error, SyncInterrupted) for error in errors)
+
+
+# -- uncertainty that lives only in an archive (brutal-review round 3) ----------------------------
+
+class _Crash(Exception):
+    pass
+
+
+def _renamed_with_a_deletion(tmp_path):
+    """The desktop (which never wrote a pending marker) is re-identified, then deletes wren-b."""
+    desktop, phone = make_pair(tmp_path)
+    identify(desktop, "tablet", replace=True)
+    edit_instance(desktop, WREN_A, 9)
+    (desktop.root / PATHS["wren_b"]).unlink()
+    return desktop, phone, {PHONE: handle(), "tablet": handle()}
+
+
+@pytest.mark.parametrize("crash_at", [0, 1])
+def test_a_crash_after_the_archives_never_forgets_archive_borne_uncertainty(tmp_path, monkeypatch, crash_at):
+    """The fresh archives no longer say why wren-b was uncertain; the marker written with the data must."""
+    desktop, phone, hs = _renamed_with_a_deletion(tmp_path)
+    real, calls = sync_session._commit_pending, []
+
+    def crashing(*args, **kwargs):
+        calls.append(1)
+        if len(calls) > crash_at:
+            raise _Crash("power loss before this pending step")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(sync_session, "_commit_pending", crashing)
+    with pytest.raises(_Crash):
+        sync(desktop, phone, hs)
+    monkeypatch.setattr(sync_session, "_commit_pending", real)
+    desktop.close()
+    phone.close()
+    desktop, phone = _reopen(tmp_path, DESKTOP), _reopen(tmp_path, PHONE)
+    try:
+        for _ in range(3):
+            report = sync(desktop, phone, hs)
+            assert report.copied == ()
+            assert report.conflict(PATHS["wren_b"]).code == "missing_ancestor"
+        assert not (desktop.root / PATHS["wren_b"]).exists()
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_resolve_waits_for_a_sync_when_an_archive_is_missing_or_ignored(tmp_path):
+    desktop, phone, hs = _renamed_with_a_deletion(tmp_path)
+    try:
+        assert set(plan_sync(desktop, phone).conflicts) >= {PATHS["wren_a"], PATHS["wren_b"]}  # read only
+        mine, theirs = (desktop.root / PATHS["wren_a"]).read_bytes(), (phone.root / PATHS["wren_a"]).read_bytes()
+        expected = {"tablet": etag(mine), PHONE: etag(theirs)}
+        before = _tree(desktop.root), _tree(phone.root)
+        with pytest.raises(ResolveRefused, match="sync the devices once first"):
+            resolve(desktop, phone, PATHS["wren_a"], etag(mine), expected, hs)
+        assert (_tree(desktop.root), _tree(phone.root)) == before
+        sync(desktop, phone, hs)  # records the uncertainty; now resolve may rewrite the archives
+        resolve(desktop, phone, PATHS["wren_a"], etag(mine), expected, hs)
+        report = sync(desktop, phone, hs)
+        assert report.copied == () and report.conflict(PATHS["wren_b"]).code == "missing_ancestor"
+        assert not (desktop.root / PATHS["wren_b"]).exists()
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_re_identifying_both_devices_is_a_true_first_sync(pair):
+    """A documented limit (SYNC.md, Limits): with no file for the new pair on either side, it is ``first``."""
+    desktop, phone = pair
+    (desktop.root / PATHS["wren_b"]).unlink()
+    identify(desktop, "laptop", replace=True)
+    identify(phone, "tablet", replace=True)
+    report = sync(desktop, phone, {"laptop": handle(), "tablet": handle()})
+    assert report.copied == ((PATHS["wren_b"], "laptop"),)

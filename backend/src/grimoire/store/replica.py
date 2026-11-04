@@ -23,7 +23,8 @@ from .errors import InvalidEnvelope, LinkRefused, RevisionReferenced, Unstorable
 from .jsonfmt import MAX_FILE_BYTES, JsonError, parse_strict
 from .jsonfmt import etag as _etag
 from .layout import (
-    CAMPAIGNS, CONFLICTS, MARKER, SCOPE, SOURCES, SUFFIX, SYNC, TXN, Parts, classify, is_noise, name_key,
+    CAMPAIGNS, CONFLICTS, IMAGES, MARKER, PLACEMENTS, SCOPE, SOURCE_DIR, SOURCES, SUFFIX, SYNC, TXN, Parts, classify,
+    is_noise, name_key,
 )
 
 SCOPE_FILE = SCOPE
@@ -210,6 +211,8 @@ def _may_hold_records(parts: Parts) -> bool:
     if found is not None:
         return found[0] in EXACT_KINDS  # 018 images and placements attach to entities, never revisions
     if parts[0] == SOURCES:
+        if SOURCE_DIR in parts and parts[parts.index(SOURCE_DIR) + 1:][:1] in ((IMAGES,), (PLACEMENTS,)):
+            return False  # 018's images and placements attach to entities, never to revisions
         return "." not in parts[-1] or parts[-1].endswith(SUFFIX)  # a folder, or a JSON file
     if parts[0] != CAMPAIGNS:
         return False  # the library root's other entries never hold records
@@ -247,7 +250,7 @@ def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str
                 if ref in (_pinned(link.subject), _pinned(link.object)):
                     raise RevisionReferenced(f"{path} links {ref}")
         elif isinstance(envelope, (ScopeRecord, KnowledgeRecord)):
-            if ref in _payload_refs(envelope.payload):
+            if ref in _payload_refs(envelope.payload) | _payload_refs(envelope.extra):
                 raise RevisionReferenced(f"{path} binds {ref}")
         elif isinstance(envelope.address, InstanceRef):
             if ref in (_pinned(envelope.derived_from), _pinned(envelope.base)):

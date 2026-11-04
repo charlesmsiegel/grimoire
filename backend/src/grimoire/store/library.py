@@ -935,6 +935,7 @@ class _Put:
     replace_unreferenced: bool = False
     regenerable: bool = False  # exact bytes another library still holds: dropped, never preserved
     allowed: frozenset[str] = frozenset()  # manifest etags whose references a replace may ignore
+    record: Parts = ()  # a kept version: the record it keeps a version of
 
     @property
     def ledger(self) -> bool:
@@ -1007,7 +1008,7 @@ class Transaction:
     def __init__(self, store: LibraryStore) -> None:
         self._store = store
         self._puts: dict[Parts, _Put] = {}
-        self._kept: set[Parts] = set()  # records with a kept version in this transaction
+        self._kept: dict[Parts, str] = {}  # record -> the bytes kept beside it (staged or already there)
         self._keys: set[str] = set()  # preview keys staged so far
         self._committed = False
 
@@ -1129,22 +1130,23 @@ class Transaction:
             parse_strict(data)
         except JsonError as error:
             raise InvalidEnvelope(f"a kept version must be readable JSON: {error}") from None
-        if parts in self._kept:
-            raise InvalidEnvelope(f"{path} already has a kept version in this transaction")
-        self._kept.add(parts)
         if slot is not None and (type(slot) is not int or not 0 <= slot < engine.MAX_CONFLICT_ATTEMPTS):
             raise InvalidEnvelope(f"a kept-version slot is an int from 0 to {engine.MAX_CONFLICT_ATTEMPTS - 1}")
+        if parts in self._kept:
+            raise InvalidEnvelope(f"{path} already has a kept version in this transaction")
         tag, access = etag(data), self._store._access
         attempts = range(engine.MAX_CONFLICT_ATTEMPTS) if slot is None else (slot,)
         for attempt in attempts:
             target = conflict_parts(parts, tag, attempt)
             current = access.etag_of(target)
             if current == tag:
+                self._kept[parts] = tag
                 return "/".join(target)  # already kept: nothing to stage
             if current is None:
                 address = kept_address(parts, tag, attempt)
                 self._add(_Put(target, address, bytes(data), None, None, "keep", str(address),
-                               regenerable=regenerable))
+                               regenerable=regenerable, record=parts))
+                self._kept[parts] = tag
                 return "/".join(target)
             if slot is not None:
                 raise StaleWrite([("/".join(target), "changed")])
@@ -1182,6 +1184,7 @@ class Transaction:
             raise StoreError("the library was opened read-only")
         with store.lock:
             puts = tuple(self._puts.values())
+            self._check_replaces(puts)
             if any(put.kind != "state" for put in puts) or not puts:
                 self._require_writable_records(None, check_handle=False)
             _Commit(store, puts, None, {}).preflight()
@@ -1194,6 +1197,23 @@ class Transaction:
                               (), ())
         if authority is None and store._access.presence(ledger_parts("security", 1)) != "absent":
             raise StoreError("this library has a security ledger: open its durable authority before writing")
+
+    def _check_replaces(self, puts: tuple[_Put, ...]) -> None:
+        """A revision replace commits alone with the kept copy of the bytes it replaces.
+
+        Its kept version may be the only copy left anywhere, so the store enforces the pairing
+        rather than trusting the caller; and since step 6b checks references on disk only, no
+        other write may add a pin in the same transaction.
+        """
+        replaces = [put for put in puts if put.replace_unreferenced]
+        if not replaces:
+            return
+        first = replaces[0]
+        if len(replaces) > 1 or any(put is not first and put.record != first.parts for put in puts):
+            raise InvalidEnvelope("a revision replace is committed alone, with only its kept version")
+        if self._kept.get(first.parts) != first.expected:
+            raise InvalidEnvelope(f"replacing {'/'.join(first.parts)} needs its current bytes kept in the same "
+                                  "transaction (keep_version)")
 
     def commit(self, handle: object, approvals: Mapping[str, str] | None = None, *,
                on_denied: Callable[[frozenset[str]], Mapping[str, bytes | None]] | None = None) -> CommitResult:
@@ -1215,6 +1235,7 @@ class Transaction:
                 raise StoreError("a commit cannot run inside a read-only phase (cached_reads): its checks would "
                                  "see stale listings")
             puts = tuple(self._puts.values())
+            self._check_replaces(puts)
             if any(put.kind != "state" for put in puts):  # sync state alone is trusted bookkeeping
                 self._require_writable_records(handle)
             self._committed = True
@@ -1341,6 +1362,12 @@ class _Commit:
                     raise InvalidEnvelope("on_denied may replace the bytes of sync state only")
                 put = replace(put, data=bytes(data))
             remaining.append(put)
+        held = {put.record for put in remaining if put.kind == "keep"}
+        staged = {put.record for put in self.puts if put.kind == "keep"}
+        for put in list(remaining):  # a replace never outlives the kept copy of what it replaces
+            if put.replace_unreferenced and put.parts in staged and put.parts not in held:
+                remaining.remove(put)
+                dropped.add(put.key)
         self.puts, self.denied, self.dropped = tuple(remaining), keys, frozenset(dropped - keys)
 
     def _check_paths(self) -> int:

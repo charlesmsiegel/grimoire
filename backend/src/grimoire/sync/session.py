@@ -32,7 +32,7 @@ from .errors import (
     ArchiveTooLarge, IdentityExists, NoDeviceIdentity, ResolveRefused, SameDevice, SyncInterrupted,
     SyncNotQuiet,
 )
-from .model import CAMPAIGN_LOCAL, SYNCED_KINDS, Base, Side
+from .model import CAMPAIGN_LOCAL, Base, Side
 
 _SLOT = re.compile(r"~[0-9a-f]{12}(?:\.([1-9][0-9]*))?$")
 
@@ -75,7 +75,7 @@ def identify(store: LibraryStore, device_id: str, *, replace: bool = False) -> s
 
     A damaged identity is replaced. Changing a valid ID needs ``replace=True`` (the fix for a
     library copied with its ``.sync``); the old peer files are kept, so the next sync of the new ID
-    is conservative, never a first sync.
+    is conservative. If both devices take new IDs, that next sync is a true first sync.
     """
     check_device_id(device_id)
     current = store.read_sync_state(DEVICE_FILE)  # a read error propagates as itself
@@ -507,7 +507,12 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
                  applied: _Applied) -> None:
     store = plan.stores[device]
     copies, keeps = list(plan.copies[device]), list(plan.keeps[device])
-    if not copies and not keeps:
+    old = plan.pendings[device].data
+    # The marker is written with the data, before any archive is rewritten: a fresh archive no
+    # longer says why a path was uncertain, so the marker must already say it (R: crash between
+    # archive and pending steps).
+    marker = [_marker(plan, device, copies)]  # the bytes the marker will hold (on_denied may change them)
+    if not copies and not keeps and not _marker_needed(plan, marker[0], old):
         applied.published[device], applied.kept[device] = [], []
         return
     txn = store.transaction()
@@ -516,10 +521,7 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
     except StaleWrite as error:  # a planned kept-version slot was taken meanwhile
         raise SyncInterrupted(f"the data commit on {device} stopped: {error}", _report(plan, applied)) from error
     marker_key = None
-    marker: list[bytes] = []  # the bytes the marker will hold (on_denied may change them)
-    if copies:
-        marker.append(_marker(plan, device, copies))
-        old = plan.pendings[device].data
+    if _marker_needed(plan, marker[0], old):
         marker_key = txn.put_sync_state(pending_name(plan.other(device)), marker[0],
                                         None if old is None else etag(old))
     dropped: set[str] = set()
@@ -555,7 +557,7 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
         if marker_key is not None:
             remaining = [copy for copy in copies if copy.path not in dropped]
             marker[0] = _marker(plan, device, remaining)
-            changes[marker_key] = marker[0] if remaining else None
+            changes[marker_key] = marker[0] if _marker_needed(plan, marker[0], old) else None
         return changes
 
     try:
@@ -571,6 +573,11 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
         applied.pending_written[device] = marker[0]
     applied.wrote = applied.wrote or bool(result.etags)
     plan.copies[device] = published
+
+
+def _marker_needed(plan: SyncPlan, data: bytes, old: bytes | None) -> bool:
+    """Whether the marker must be written: it changes, and is not merely an empty marker where none was."""
+    return data != old and (old is not None or data != render_pending(plan.devices, {}))
 
 
 def _marker(plan: SyncPlan, device: str, copies: list[Copy]) -> bytes:
@@ -756,6 +763,12 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             raise ResolveRefused(f"{path} is {side.reason} on {device}")
         if set(expected) != set(pair) or _current(side) != expected[device]:
             raise ResolveRefused(f"{path} changed on {device} since the conflict was reported")
+    other = {pair[0]: pair[1], pair[1]: pair[0]}
+    for device in pair:  # a rebuilt archive would forget why every other path is uncertain
+        archive = parse_archive(_state(stores[device], archive_name(other[device])), pair)
+        if archive.state != "valid":
+            raise ResolveRefused(f"the archive on {device} for this pair is {archive.state}; sync the devices "
+                                 "once first, so their uncertainty is recorded")
     winners = [device for device in pair if _current(sides[device]) == keep]
     if not winners:
         raise ResolveRefused("keep must be the current etag of one device's version (deletions cannot be chosen)")
@@ -797,11 +810,12 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     found = stores[receiver].read_exact(path)
     if found is None or etag(found) != keep:
         raise SyncInterrupted(f"verification failed on {receiver}: {path} does not hold the chosen bytes")
-    other = {pair[0]: pair[1], pair[1]: pair[0]}
     for device in reversed(pair):
         store = stores[device]
         archive = parse_archive(_state(store, archive_name(other[device])), pair)
-        entries = dict(archive.entries) if archive.state == "valid" else {}
+        if archive.state != "valid":  # damaged since the check: never rebuild it from nothing
+            raise SyncInterrupted(f"the archive on {device} changed during resolve")
+        entries = dict(archive.entries)
         for done in resolved:
             entries[done] = ("agreed", etag(scans[winner].files[done]))
         rendered = render_archive(pair, entries)

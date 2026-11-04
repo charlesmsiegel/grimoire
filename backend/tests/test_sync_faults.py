@@ -33,7 +33,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from grimoire.store import LibraryStore, ProcessLocker, etag
-from grimoire.sync import sync, sync_until_quiet
+from grimoire.sync import identify, sync, sync_until_quiet
 from grimoire.testing import (
     CrashScenario, FileOp, Interleave, Invariant, explore_crashes, idempotent_recovery, no_residue,
     preserves_interleave, preserves_meddle, run_plans,
@@ -46,7 +46,8 @@ from grimoire.core.identity import InstanceRef
 
 from store_helpers import WREN_R1, drop_empty_dirs, instance
 from sync_helpers import (
-    DESKTOP, PATHS, PHONE, WREN_A, WREN_B, chat_record, edit_instance, handles, make_pair, new_revision, put,
+    DESKTOP, PATHS, PHONE, WREN_A, WREN_B, chat_record, edit_instance, handle, handles, make_pair, new_revision,
+    put,
 )
 
 DEVICES = (DESKTOP, PHONE)
@@ -256,6 +257,76 @@ def test_s9_a_crash_while_recovering_still_converges(tmp_path):
     report.assert_ok()
     assert any(run.recover_trace for run in report.runs[1:])
     assert report.points_explored >= 8
+
+
+# -- S9u: crash safety when the uncertainty lives only in an archive (brutal-review round 3) --------
+
+TABLET = "tablet"  # the desktop, re-identified: its old-pair archive is ignored, the phone has none
+
+
+@functools.cache
+def _uncertain_fixture() -> tuple[tuple[str, bytes | None], ...]:
+    """Every base is ``uncertain``, and only the archives say so; the desktop deleted wren-b."""
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        desktop, phone = make_pair(root)
+        identify(desktop, TABLET, replace=True)
+        edit_instance(desktop, WREN_A, 9)
+        (desktop.root / PATHS["wren_b"]).unlink()
+        desktop.close(), phone.close()
+        return tuple(snapshot(root).items())
+
+
+def _uncertain_setup(ops, root):
+    for key, data in _uncertain_fixture():
+        if data is None:
+            ops.make_dirs(root / key)
+        else:
+            ops.write_bytes(root / key, data)
+
+
+def _never_recreated(outcome):
+    """The deletion is never undone, and the edit never copied, whatever crashed where."""
+    if outcome.recovered.get(f"{DESKTOP}/{PATHS['wren_b']}") is not None:
+        return "wren-b, deleted on the desktop, was re-created"
+    desktop, phone = (outcome.recovered.get(f"{device}/{PATHS['wren_a']}") for device in DEVICES)
+    if desktop == phone:
+        return "wren-a was copied although no ancestor was proven"
+    return None
+
+
+_TABLET_HANDLES = {PHONE: handle(), TABLET: handle()}
+_uncertain_once = _with_both(lambda desktop, phone: sync(desktop, phone, _TABLET_HANDLES))
+_uncertain_recover = _with_both(lambda desktop, phone: [sync(desktop, phone, _TABLET_HANDLES) for _ in range(2)])
+S9U = (CONVERGES, Invariant("never_recreated", _never_recreated), idempotent_recovery(), RESIDUE)
+
+
+def _uncertain_scenario():
+    locker = ProcessLocker()
+    return CrashScenario("sync-uncertain", _uncertain_setup, lambda ops, root: _uncertain_once(ops, root, locker),
+                         lambda ops, root: _uncertain_recover(ops, root, locker), S9U, normalize=drop_empty_dirs)
+
+
+@functools.cache
+def _uncertain_trace() -> tuple[FileOp, ...]:
+    with tempfile.TemporaryDirectory() as folder:
+        report = run_plans(_uncertain_scenario(), [], Path(folder))
+        report.assert_ok()
+        return report.runs[0].action_trace
+
+
+def test_s9u_a_crash_or_error_at_any_commit_boundary_never_forgets_archive_borne_uncertainty(tmp_path):
+    points = commit_boundaries(_uncertain_trace())
+    commits = [op for op in _uncertain_trace() if _is_journal_replace(op)]
+    # no copies, but each device's data commit records the uncertainty before any archive is rewritten
+    assert len(commits) == 4  # marker(a), marker(b), archive(b), archive(a); the markers already say it all
+    crashes = explore_crashes(_uncertain_scenario(), tmp_path / "crash", torn=False,
+                              select=_select(points, {"before", "after"}))
+    crashes.assert_ok()
+    errors = explore_crashes(_uncertain_scenario(), tmp_path / "error", errors=True, torn=False,
+                             select=_select(points, {"fail"}))
+    errors.assert_ok()
+    assert crashes.points_explored >= 8 and errors.points_explored >= 4
 
 
 # -- S10 edits during sync -------------------------------------------------------------------------------

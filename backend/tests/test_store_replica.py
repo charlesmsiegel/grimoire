@@ -124,6 +124,7 @@ def test_an_unreferenced_revision_can_be_replaced_and_a_referenced_one_cannot(pa
     edited = r1.replace(b"a sailor", b"a ghost")
     txn = phone.transaction()
     txn.put_exact(R1_PATH, edited, etag(r1), replace_unreferenced=True)
+    txn.keep_version(R1_PATH, r1)
     with pytest.raises(RevisionReferenced):
         txn.check()
     with pytest.raises(RevisionReferenced):
@@ -145,6 +146,7 @@ def test_an_unreadable_instance_means_a_revision_cannot_be_proven_unreferenced(p
     current = (phone.root / r2).read_bytes()
     txn = phone.transaction()
     txn.put_exact(r2, current.replace(b"pirate", b"corsair"), etag(current), replace_unreferenced=True)
+    txn.keep_version(r2, current)
     with pytest.raises(RevisionReferenced, match="cannot prove"):
         txn.check()
 
@@ -662,6 +664,7 @@ def _replace_r1(store):
     current = (store.root / R1_FILE).read_bytes()
     txn = store.transaction()
     txn.put_exact(R1_FILE, current.replace(b'"r1"', b'"other"'), etag(current), replace_unreferenced=True)
+    txn.keep_version(R1_FILE, current)
     txn.check()
 
 
@@ -759,3 +762,76 @@ def test_put_exact_refuses_018_paths(pair, path):
     with pytest.raises(InvalidEnvelope) as caught:
         pair[0].transaction().put_exact(path, b"{}", None)
     assert caught.value.code == "not_canonical"
+
+
+# -- brutal-review round 3: a revision replace never loses the replaced bytes -------------------------
+
+def _r1_now_history(store):
+    """catalog:cards' r1 is unreferenced history; return (current bytes, a different version)."""
+    _cards(store)
+    current = (store.root / R1_FILE).read_bytes()
+    return current, current.replace(b'"r1"', b'"other"')
+
+
+def test_a_revision_replace_needs_the_replaced_bytes_kept_beside_it(pair):
+    phone = pair[1]
+    current, other = _r1_now_history(phone)
+    txn = phone.transaction()
+    txn.put_exact(R1_FILE, other, etag(current), replace_unreferenced=True)
+    with pytest.raises(InvalidEnvelope, match="kept in the same transaction"):
+        txn.check()
+    with pytest.raises(InvalidEnvelope, match="kept in the same transaction"):
+        txn.commit(owner_handle(*ALL))
+    assert (phone.root / R1_FILE).read_bytes() == current
+    wrong = phone.transaction()  # a kept version of other bytes does not count
+    wrong.put_exact(R1_FILE, other, etag(current), replace_unreferenced=True)
+    wrong.keep_version(R1_FILE, other)
+    with pytest.raises(InvalidEnvelope, match="kept in the same transaction"):
+        wrong.check()
+
+
+def test_a_revision_replace_commits_alone_so_no_write_can_pin_it_unseen(pair):
+    phone = pair[1]
+    current, other = _r1_now_history(phone)
+    txn = phone.transaction()
+    txn.put_exact(R1_FILE, other, etag(current), replace_unreferenced=True)
+    txn.keep_version(R1_FILE, current)
+    txn.put(RecordEnvelope(InstanceRef("c9", "lore", "copy"), {}, base=str(R1)), None)  # a new pin, same commit
+    with pytest.raises(InvalidEnvelope, match="committed alone"):
+        txn.check()
+    with pytest.raises(InvalidEnvelope, match="committed alone"):
+        txn.commit(owner_handle(*ALL))
+    assert (phone.root / R1_FILE).read_bytes() == current
+
+
+def test_a_denied_kept_copy_drops_its_revision_replace_in_partial_mode(pair):
+    phone = pair[1]
+    current, other = _r1_now_history(phone)
+    txn = phone.transaction()
+    key = txn.put_exact(R1_FILE, other, etag(current), replace_unreferenced=True)
+    txn.keep_version(R1_FILE, current)
+    result = txn.commit(owner_handle("sources"), on_denied=lambda keys: {})  # kept/ is not granted
+    assert key in result.dropped and key not in result.etags
+    assert (phone.root / R1_FILE).read_bytes() == current
+
+
+def test_a_pin_in_a_scope_records_extra_fields_counts(pair):
+    from grimoire.core.identity import ChatRef
+    from grimoire.store import ScopeRecord
+    phone = pair[1]
+    _cards(phone)
+    txn = phone.transaction()
+    txn.put(ScopeRecord(ChatRef("c9", "t-1"), "grimoire.chat/0", {"seq": 0}, extra={"x-pin": str(R1)}), None)
+    txn.commit(owner_handle())
+    with pytest.raises(RevisionReferenced, match="binds"):
+        _replace_r1(phone)
+
+
+@pytest.mark.parametrize("folder", ["images", "placements"])
+def test_a_linked_018_folder_under_a_source_never_blocks_a_revision_replace(pair, tmp_path, folder):
+    phone = pair[1]
+    _cards(phone)
+    outside = tmp_path / "art"
+    outside.mkdir()
+    make_dir_link(phone.root / "sources/world/harbor/_source" / folder, outside)
+    _replace_r1(phone)  # images and placements attach to entities, never to revisions
