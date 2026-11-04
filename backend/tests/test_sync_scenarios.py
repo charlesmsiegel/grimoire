@@ -1690,3 +1690,24 @@ def test_sync_until_quiet_merges_what_an_interrupted_attempt_copied(pair, monkey
     monkeypatch.setattr(sync_session, "_verify", verify)
     report = sync_until_quiet(desktop, phone, handles())
     assert {(PATHS["wren_a"], PHONE), (PATHS["wren_b"], DESKTOP)} <= set(report.copied)
+
+
+@pytest.mark.parametrize("name", ["pending.json", "archive.json"])
+def test_a_sync_file_under_a_lookalike_spelling_stops_the_sync(pair, name):
+    """``Pending.json`` beside nothing else is the marker itself on a case-insensitive filesystem: it must
+    never read as missing (an edit copied over the peer, a deletion resurrected)."""
+    desktop, phone = pair
+    folder = desktop.root / ".sync" / "peers" / PHONE
+    current = folder / name
+    if not current.exists():
+        current.write_bytes(desktop.read_sync_state(f"peers/{PHONE}/archive.json"))  # any valid document
+    data = current.read_bytes()
+    current.unlink()
+    (folder / name.capitalize()).write_bytes(data)
+    if (folder / name).exists():  # a case-insensitive filesystem: the spelling is the file
+        pytest.skip("this filesystem folds case")
+    edit_instance(desktop, WREN_A, 9)
+    before = (phone.root / PATHS["wren_a"]).read_bytes()
+    with pytest.raises(SyncInterrupted, match="another spelling"):
+        sync(desktop, phone, handles())
+    assert (phone.root / PATHS["wren_a"]).read_bytes() == before

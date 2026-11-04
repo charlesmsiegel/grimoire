@@ -54,7 +54,7 @@ def _state(store: LibraryStore, name: str) -> bytes | None:
     """
     try:
         return store.read_sync_state(name)
-    except (OSError, UnstorableIdentifier, LinkRefused) as error:
+    except (OSError, UnstorableIdentifier, LinkRefused, NameCollision) as error:
         raise SyncInterrupted(f"cannot read .sync/{name} on {store.root}: {error}") from error
 
 
@@ -63,7 +63,7 @@ def device_of(store: LibraryStore) -> str:
         data = store.read_sync_state(DEVICE_FILE)
     except (UnstorableIdentifier, LinkRefused) as error:  # not a file: no usable identity
         raise NoDeviceIdentity(f"{store.root}/.sync/{DEVICE_FILE} is not a readable file: {error}") from error
-    except OSError as error:
+    except (OSError, NameCollision) as error:  # a look-alike spelling must never read as "no identity"
         raise SyncInterrupted(f"cannot read .sync/{DEVICE_FILE} on {store.root}: {error}") from error
     device = parse_device(data)
     if device is None:
@@ -595,16 +595,39 @@ def _group_knowledge(plan: SyncPlan) -> None:
     record), no knowledge copy of that campaign lands: half an append would leave records no batch
     lists, and the log would refuse every later append. The held copies are reported as skipped.
     """
-    stuck = {_knowledge_campaign(path) for path in plan.conflicts} - {None}
+    stuck = ({_knowledge_campaign(path) for path in plan.conflicts} - {None}) | _unknown_logs(plan.scans.values())
     if not stuck:
         return
     for device in plan.devices:
         kept, held = [], []
         for copy in plan.copies[device]:
-            (held if _knowledge_campaign(copy.path) in stuck else kept).append(copy)
+            campaign = _knowledge_campaign(copy.path)
+            (held if campaign is not None and (campaign in stuck or "*" in stuck) else kept).append(copy)
         plan.copies[device] = kept
         for copy in held:
             plan.skipped[copy.origin] = tuple(sorted({*plan.skipped.get(copy.origin, ()), copy.path}))
+
+
+def _unknown_logs(scans) -> set[str]:  # type: ignore[no-untyped-def]
+    """Campaigns whose knowledge log cannot be seen whole on some device, so it moves nowhere: a blocked
+    ``events``/``evidence`` folder (or below), one in another spelling, or a blocked campaign folder,
+    ``campaigns/`` or root (``"*"``: every campaign). Fails closed, like ``_held_campaigns``."""
+    unknown = set()
+    for scan in scans:
+        for path in scan.blocked:
+            parts = path.split("/")
+            if path in ("", "campaigns"):
+                unknown.add("*")
+            elif parts[0] == "campaigns" and len(parts) == 2:
+                unknown.add(parts[1])
+            elif parts[0] == "campaigns" and len(parts) >= 3 and parts[2].casefold() in ("events", "evidence"):
+                unknown.add(parts[1])
+        for path in scan.skipped:
+            parts = path.split("/")
+            if (parts[0] == "campaigns" and len(parts) >= 3 and parts[2].casefold() in ("events", "evidence")
+                    and parts[2] not in ("events", "evidence")):
+                unknown.add(parts[1])  # a look-alike spelling of a knowledge folder
+    return unknown
 
 
 def _knowledge_campaign(path: str) -> str | None:
@@ -1054,9 +1077,14 @@ def _knowledge_log_copies(scans: Mapping[str, CanonicalScan], winner: str, recei
     winner holds and the receiver lacks (020 writes records and their batch as one unit), never a
     replacement. Two logs that diverged (a path both hold with different bytes) cannot be merged yet."""
     if scans[receiver].files.get(path) is not None:
-        raise ResolveRefused(f"{path} is a create-only knowledge record both devices hold differently; two "
-                             "devices' knowledge logs cannot be merged yet (correct it by appending)")
+        raise ResolveRefused(f"{path} is a create-only knowledge record both devices hold differently: two "
+                             "devices' knowledge logs cannot be merged yet. If one copy was edited by hand, "
+                             "delete that copy, sync, and resolve the resulting deleted conflict")
     campaign = _knowledge_campaign(path)
+    unknown = _unknown_logs(scans.values())
+    if campaign in unknown or "*" in unknown:
+        raise ResolveRefused(f"the knowledge log of campaign {campaign} cannot be seen whole on both devices "
+                             "(a folder is unreadable or spelled differently); fix it first")
     log = sorted({candidate for scan in scans.values() for candidate in (*scan.files, *scan.blocked)
                   if _knowledge_campaign(candidate) == campaign})
     copies = []

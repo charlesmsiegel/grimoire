@@ -896,11 +896,15 @@ class LibraryStore:
         """The exact bytes of ``.sync/<name>`` (``device.json``, ``peers/<id>/{archive,pending}.json``).
 
         ``None`` only when the file does not exist; a read error propagates (an unreadable marker
-        must never look like a missing one).
+        must never look like a missing one). A look-alike spelling of the file or of a folder above
+        it (``Pending.json``; on a case-insensitive filesystem it *is* the file) is ``NameCollision``.
         """
         parts = sync_state_parts(name)
         with self.lock:
             self._require_consistent()
+            for depth in range(1, len(parts) + 1):
+                if self._access.presence(parts[:depth]) == "mismatch":
+                    raise NameCollision(f"{'/'.join(parts[:depth])} exists only under another spelling")
             return self._access.read(parts)
 
     def sync_peers(self) -> tuple[str, ...]:

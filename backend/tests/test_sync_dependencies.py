@@ -194,7 +194,7 @@ def test_resolve_never_writes_a_held_relation_after_a_listing_error(tmp_path, mo
                 raise PermissionError(13, "held by another program")
             return real(self, parts)
         monkeypatch.setattr(engine.Access, "list_dir", busy_once)
-        with pytest.raises(ResolveRefused):
+        with pytest.raises(ResolveRefused, match="held back"):
             resolve(desktop, phone, path, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
         monkeypatch.undo()
         assert (phone.root / path).read_bytes() == theirs

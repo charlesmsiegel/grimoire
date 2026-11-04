@@ -448,3 +448,67 @@ def test_020_resolve_never_merges_two_diverged_knowledge_logs(tmp_path):
     finally:
         desktop.close()
         phone.close()
+
+
+# -- round 11: a knowledge log that cannot be seen whole moves nowhere --------------------------------
+
+def _busy_folder(monkeypatch, store, parts):
+    from grimoire.store import engine
+    real = engine.Access.list_dir
+
+    def busy(self, listed):
+        if self.root == store.root and tuple(listed) == tuple(parts):
+            raise PermissionError(13, "held by another program")
+        return real(self, listed)
+    monkeypatch.setattr(engine.Access, "list_dir", busy)
+
+
+@pytest.mark.parametrize("how", ["unlistable", "respelled"])
+def test_020_a_knowledge_log_not_seen_whole_never_crosses_by_halves(tmp_path, monkeypatch, how):
+    desktop, phone = _evidence_pair(tmp_path)
+    try:
+        _evidence(desktop).append(EVIDENCE_C, [Event(EVIDENCE_C, "e-desk", "desk event", m(1), "director")]).commit()
+        if how == "unlistable":
+            _busy_folder(monkeypatch, desktop, ("campaigns", EVIDENCE_C, "evidence", "batch"))
+        else:
+            base = desktop.root / "campaigns" / EVIDENCE_C
+            (base / "evidence").rename(base / "Evidence")  # a case-only rename by another program
+        report = sync(desktop, phone, handles())
+        monkeypatch.undo()
+        assert not [path for path, _ in report.copied if "/events/" in path or "/evidence/" in path]
+        assert _evidence(phone).read(EVIDENCE_C, requested_by="director").quarantined == ()
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_020_resolve_refuses_a_knowledge_log_it_cannot_see_whole(tmp_path, monkeypatch):
+    desktop, phone = _evidence_pair(tmp_path)
+    try:
+        identify(phone, "tablet", replace=True)
+        renamed = {DESKTOP: handles()[DESKTOP], "tablet": handles()[PHONE]}
+        _evidence(desktop).append(EVIDENCE_C, [Event(EVIDENCE_C, "e-desk", "desk event", m(1), "director")]).commit()
+        sync(desktop, phone, renamed)
+        event = f"campaigns/{EVIDENCE_C}/events/e-desk.json"
+        _busy_folder(monkeypatch, desktop, ("campaigns", EVIDENCE_C, "evidence", "batch"))
+        data = (desktop.root / event).read_bytes()
+        with pytest.raises(ResolveRefused, match="cannot be seen whole"):
+            resolve(desktop, phone, event, etag(data), {DESKTOP: etag(data), "tablet": None}, renamed)
+        monkeypatch.undo()
+        assert not (phone.root / event).exists()
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_021_an_unlistable_campaign_folder_reports_its_relations_as_held(tmp_path, monkeypatch):
+    desktop, phone, keys, relations = _effects_pair(tmp_path)
+    try:
+        _accept(desktop, keys)
+        _busy_folder(monkeypatch, desktop, ("campaigns", EFFECTS_C))
+        report = sync(desktop, phone, handles())
+        monkeypatch.undo()
+        assert not [path for path, _ in report.copied if "/relations/" in path]
+    finally:
+        desktop.close()
+        phone.close()

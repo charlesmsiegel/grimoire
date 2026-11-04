@@ -184,7 +184,12 @@ def _the_canonical_one(name: str, names: list[str], noise: set[str]) -> bool:
     lowercase segments, so at most one can be) is the record and stays readable; only the others
     are blocked. A stray empty ``Campaigns`` beside ``campaigns`` never stops the real folder."""
     group = [other for other in names if other not in noise and name_key(other) == name_key(name)]
-    return _valid_name(name) and sum(_valid_name(other) for other in group) == 1
+    return _canonical(name) and sum(_canonical(other) for other in group) == 1
+
+
+def _canonical(name: str) -> bool:
+    """A spelling the store itself writes: a valid identifier segment, or the layout's ``_source``."""
+    return name == SOURCE_DIR or _valid_name(name)
 
 
 def _real_identifier(access: Access, parts: Parts) -> bool:

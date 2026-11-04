@@ -1037,3 +1037,16 @@ def test_a_stray_empty_lookalike_folder_never_blocks_the_canonical_one(pair):
     found = phone.scan()
     assert WREN_A_PATH in found.files and found.blocked_reason(WREN_A_PATH) is None
     assert found.blocked.get("Campaigns") == "lookalike"
+
+
+def test_a_stray_lookalike_of_the_source_folder_never_blocks_the_source(pair):
+    """``_source`` is the layout's own spelling (not an identifier segment): a stray ``_Source`` beside it
+    is the only one blocked."""
+    phone = pair[1]
+    try:
+        (phone.root / "sources/world/harbor/_Source").mkdir()
+    except FileExistsError:
+        pytest.skip("this filesystem folds case")
+    found = phone.scan()
+    assert R1_PATH in found.files and found.blocked_reason(R1_PATH) is None
+    assert found.blocked.get("sources/world/harbor/_Source") == "lookalike"
