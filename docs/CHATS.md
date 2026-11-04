@@ -155,7 +155,7 @@ No mutating method calls `load()` (tested). A changed source is scanned again; a
 
 ### Actor ids
 
-Actor ids are `<entity_id>-<n>`, the smallest number used neither by an instance file of any kind in the campaign nor by this chat's roster, even when an actor's file has vanished. **Limit:** an instance file deleted by hand can free its id for a *different* chat in the same campaign. A look-alike instance file (`Mara-1.json`) is invisible to that listing, so the commit fails with `NameCollision` rather than reallocating.
+Actor ids are `<entity_id>-<n>`, the smallest number used neither by an instance file of any kind in the campaign nor by this chat's roster, even when an actor's file has vanished. Ids named by a relation (017) or an accepted event (021), or owning a holdings file (023), are taken too, so a hand-deleted endpoint's, individual's or holder's id never goes to a different individual. **Limit:** an instance file deleted by hand can free its id for a *different* chat in the same campaign. A look-alike instance file (`Mara-1.json`) is invisible to that listing, so the commit fails with `NameCollision` rather than reallocating.
 
 ### Actor instances
 
@@ -169,7 +169,7 @@ Actor instances are written as `grimoire.record/1` with:
 
 | Not here | Owner |
 |---|---|
-| Messages and scene segments, and what an added actor is told | 021/027/032. Events and evidence are stored by 020 ([EVIDENCE](EVIDENCE.md)); records accept a chat as provenance, and a late actor starts with none |
+| Messages and scene segments, and what an added actor is told | 027/032; accepted turn effects are 021's ([EFFECTS](EFFECTS.md)), and a chat is their provenance and must exist. Events and evidence are stored by 020 ([EVIDENCE](EVIDENCE.md)); records accept a chat as provenance, and a late actor starts with none |
 | Control assignment for the persona's actor | 003/035 |
 | Effective portrayal composition (first slice implemented: [EFFECTIVE_VIEWS](EFFECTIVE_VIEWS.md), including `chat_snapshot`) and derivation-aware navigation filters | 022/065 |
 | Card import | 037 |
@@ -179,4 +179,4 @@ Actor instances are written as `grimoire.record/1` with:
 
 Binding a source creates no event, belief or evidence record and never makes anyone aware of its content.
 
-New actor ids skip every id named by the campaign's relation files (`relation_endpoint_ids`, 017), at allocation and again under the store lock at commit, so a hand-deleted endpoint's id never goes to a different individual. See [GRAPH](GRAPH.md#endpoint-ids-stay-taken).
+New actor ids skip every id named by the campaign's relation files (`relation_endpoint_ids`, 017) and accepted events (`accepted_instance_ids`, [021](EFFECTS.md)), and every id with a holdings file (`holdings_holder_ids`, 023, from file names only), at allocation and again under the store lock at commit, so a hand-deleted endpoint's, individual's or holder's id never goes to a different individual. A look-alike holder file or folder (`Mara-2.json`, `Holdings`) keeps the id it folds to taken. If a folder that could hold holder files cannot be listed (a link, an unreadable or uninspectable folder, or a look-alike campaign folder), allocating a new actor id fails closed with `HoldingsUnlisted`. Taken ids are computed only when a new actor id is needed, so binding a scenario or lorebook, or reusing an actor, never lists them. See [GRAPH](GRAPH.md#endpoint-ids-stay-taken).

@@ -23,7 +23,9 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from grimoire.core.identity import (
-    ChatRef, IdentityConflict, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef, validate_segment,
+    AcceptedRef, ChatRef, HoldingsRef, IdentityConflict, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef,
+    WrapUpRef,
+    validate_segment,
 )
 from grimoire.core.index import DIRECTED_RELATIONS, DefinitionIndex, DefinitionLink, SourceDescriptor
 
@@ -39,9 +41,9 @@ from .errors import (
 )
 from .jsonfmt import JsonError, etag, parse_strict
 from .layout import (
-    CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, IMAGES, INSTANCES, PLACEMENTS, SCOPE, MANIFEST,
-    MARKER, RECORDS, RELATIONS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS, SOURCE_DIR, SOURCES, SUFFIX, TXN, Parts,
-    classify, is_noise, manifest_parts, name_key,
+    ACCEPTED, CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, HOLDINGS, IMAGES, INSTANCES, PLACEMENTS,
+    SCOPE, MANIFEST, MARKER, RECORDS, RELATIONS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS, SOURCE_DIR, SOURCES, SUFFIX,
+    TXN, WRAPUPS, Parts, classify, is_noise, manifest_parts, name_key,
 )
 
 EntityKey = tuple[str, str]  # (kind, entity_id) within one source
@@ -144,10 +146,23 @@ class LibraryView:
 
 
 @dataclass(frozen=True)
-class CampaignRelations:
-    """One campaign's relation records and the problems ``load()`` would report under its folder."""
+class CampaignRecords:
+    """One campaign's records of one family (relations, accepted events or wrap-ups) and the problems
+    ``load()`` would report under that family's folder."""
 
-    records: Mapping[RelationRef, StoredScopeRecord]
+    records: Mapping[RelationRef | AcceptedRef | WrapUpRef, StoredScopeRecord]
+    problems: tuple[LoadProblem, ...]
+
+
+#: the name 017 introduced; one campaign's relation records
+CampaignRelations = CampaignRecords
+
+
+@dataclass(frozen=True)
+class CampaignHoldingRecords:
+    """One campaign's holdings records (023) and the problems ``load()`` would report under its folder."""
+
+    records: Mapping[HoldingsRef, StoredScopeRecord]
     problems: tuple[LoadProblem, ...]
 
 
@@ -191,7 +206,7 @@ def read_record(access: Access, parts: Parts) -> StoredRecord:
 
 
 def read_scope_record(access: Access, parts: Parts) -> StoredScopeRecord:
-    """The scope or chat record at ``parts``; its address must be the one its path implies."""
+    """The scope, chat, relation or holdings record at ``parts``; its address must be the one its path implies."""
     document, tag = _document(access, parts)
     try:
         record, previous = parse_scope_record(document)
@@ -572,6 +587,9 @@ class _Campaigns:
     scopes: dict[ScopeRef, StoredScopeRecord] = field(default_factory=dict)
     chats: dict[ChatRef, StoredScopeRecord] = field(default_factory=dict)
     relations: dict[RelationRef, StoredScopeRecord] = field(default_factory=dict)
+    accepted: dict[AcceptedRef, StoredScopeRecord] = field(default_factory=dict)
+    wrapups: dict[WrapUpRef, StoredScopeRecord] = field(default_factory=dict)
+    holdings: dict[HoldingsRef, StoredScopeRecord] = field(default_factory=dict)
 
 
 def _discover_instances(access: Access, problems: list[LoadProblem]) -> _Campaigns:
@@ -679,26 +697,35 @@ def _discover_chats(access: Access, base: Parts, found: _Campaigns, problems: li
         _read_scoped(access, parts, found.chats, problems)
 
 
-def _discover_relations(access: Access, base: Parts, found: _Campaigns, problems: list[LoadProblem]) -> None:
-    folder = base + (RELATIONS,)
+#: campaign-scoped record families stored one file per record: folder -> (classified kind, ``_Campaigns`` field)
+_FAMILIES = {RELATIONS: ("relation", "relations"), ACCEPTED: ("accepted", "accepted"), WRAPUPS: ("wrapup", "wrapups")}
+#: families that grow with every played turn (021): like 020's events/evidence, ``load()`` skips them
+_HISTORY = frozenset({ACCEPTED, WRAPUPS})
+
+
+def _discover_family(access: Access, base: Parts, family: str, found: _Campaigns,
+                     problems: list[LoadProblem]) -> None:
+    kind, attribute = _FAMILIES[family]
+    folder = base + (family,)
     for name in _listing(access, folder, problems, None):
         parts = folder + (name,)
         hit = classify(parts)
-        if hit is None or hit[0] != "relation":
+        if hit is None or hit[0] != kind:
             _unrecognized(access, parts, problems, None)
             continue
-        _read_scoped(access, parts, found.relations, problems)
+        _read_scoped(access, parts, getattr(found, attribute), problems)
 
 
-def campaign_relations(access: Access, campaign: str) -> CampaignRelations:
-    """One campaign's relation records, contained per file exactly as ``load()`` contains them.
+def campaign_family(access: Access, campaign: str, family: str) -> CampaignRecords:
+    """One campaign's records of one family, contained per file exactly as ``load()`` contains them.
 
-    Reads only ``campaigns/<campaign>/relations``; links are reported, never followed.
+    Reads only ``campaigns/<campaign>/<family>``; links are reported, never followed.
     """
+    _, attribute = _FAMILIES[family]
     base = (CAMPAIGNS, campaign)
     problems: list[LoadProblem] = []
     found = _Campaigns()
-    folder = base + (RELATIONS,)
+    folder = base + (family,)
     if is_link(access.path(base)):
         problems.append(LoadProblem(_text(base), "link", "links are never followed"))
     elif access.presence(base) == "present" and not _is_dir(access, base):
@@ -708,13 +735,136 @@ def campaign_relations(access: Access, campaign: str) -> CampaignRelations:
             problems.append(LoadProblem(_text(folder), "link", "links are never followed"))
         elif access.presence(folder) == "present":
             if _is_dir(access, folder):
-                _discover_relations(access, base, found, problems)
+                _discover_family(access, base, family, found, problems)
             else:
                 _unrecognized(access, folder, problems, None)
         for name in access.list_dir(base):  # a look-alike ("Relations") is reported, as load() reports it
-            if name != RELATIONS and name_key(name) == RELATIONS and not is_link(access.path(base + (name,))):
-                _unrecognized(access, base + (name,), problems, None)
-    return CampaignRelations(MappingProxyType(found.relations), tuple(problems))
+            if name != family and name_key(name) == family:
+                if is_link(access.path(base + (name,))):
+                    problems.append(LoadProblem(_text(base + (name,)), "link", "links are never followed"))
+                else:
+                    _unrecognized(access, base + (name,), problems, None)
+    return CampaignRecords(MappingProxyType(getattr(found, attribute)), tuple(problems))
+
+
+def campaign_relations(access: Access, campaign: str) -> CampaignRecords:
+    """One campaign's relation records (017), contained per file exactly as ``load()`` contains them."""
+    return campaign_family(access, campaign, RELATIONS)
+
+
+def campaign_holdings(access: Access, campaign: str) -> CampaignHoldingRecords:
+    """One campaign's holdings records, contained per file exactly as ``load()`` contains them.
+
+    Reads only ``campaigns/<campaign>/holdings``; links are reported, never followed.
+    """
+    base = (CAMPAIGNS, campaign)
+    problems: list[LoadProblem] = []
+    found = _Campaigns()
+    folder = base + (HOLDINGS,)
+    if is_link(access.path(base)):
+        problems.append(LoadProblem(_text(base), "link", "links are never followed"))
+    elif access.presence(base) == "present" and not _is_dir(access, base):
+        _unrecognized(access, base, problems, None)
+    elif access.presence(base) == "present":
+        try:
+            names = access.list_dir(base)
+        except OSError as error:  # contained as load() contains an unreadable campaign folder
+            problems.append(LoadProblem(_text(base), "unreadable", str(error)))
+            names = None
+        if names is not None:
+            if is_link(access.path(folder)):
+                problems.append(LoadProblem(_text(folder), "link", "links are never followed"))
+            elif access.presence(folder) == "present":
+                if _is_dir(access, folder):
+                    _discover_holdings(access, base, found, problems)
+                else:
+                    _unrecognized(access, folder, problems, None)
+            for name in names:  # a look-alike ("Holdings") is reported, as load() reports it
+                if name == HOLDINGS or name_key(name) != HOLDINGS:
+                    continue
+                if is_link(access.path(base + (name,))):
+                    problems.append(LoadProblem(_text(base + (name,)), "link", "links are never followed"))
+                else:
+                    _unrecognized(access, base + (name,), problems, None)
+    return CampaignHoldingRecords(MappingProxyType(found.holdings), tuple(problems))
+
+
+def campaign_holding_names(access: Access, campaign: str) -> tuple[tuple[HoldingsRef, ...], bool]:
+    """The holder files of one campaign, from listings only (no file is read), and whether the
+    listing was complete.
+
+    A look-alike name that a case-insensitive or normalizing filesystem, or a case-only rename, could
+    turn into a holder file (``Holdings/``, ``Character/``, ``Mara-2.json``) counts under the name it
+    folds to, so its id stays taken; a folder whose name can never fold to a kind (``New folder``,
+    ``@eaDir``) cannot hold one and is ignored. ``False`` only when something that could hold holder
+    files cannot be listed: the campaign folder exists only as a look-alike, or a holdings or kind folder
+    is a link, cannot be inspected or cannot be listed.
+    """
+    base = (CAMPAIGNS, campaign)
+    try:
+        presence = access.presence(base)
+        if presence == "mismatch":
+            return (), False  # only a look-alike campaign folder: its holder files are not listed here
+        if presence != "present":
+            return (), True
+        if is_link(access.path(base)):
+            return (), False
+        if not _is_dir(access, base):
+            return (), True  # a stray file named like a campaign holds no holder files
+        tops = [name for name in access.list_dir(base) if name_key(name) == HOLDINGS]
+    except (OSError, LinkRefused):
+        return (), False
+    found: set[HoldingsRef] = set()
+    complete = True
+    for top in tops:  # the canonical ``holdings`` and any look-alike of it
+        listed = _folder_names(access, base + (top,))
+        if listed is None:
+            complete = False
+            continue
+        for kind in listed:
+            folded_kind = name_key(kind)
+            if not _valid_segment(folded_kind):
+                continue  # a name no kind folds from: it cannot hold holder files
+            names = _folder_names(access, base + (top, kind))
+            if names is None:
+                complete = False
+                continue
+            for name in names:
+                hit = classify(base + (HOLDINGS, folded_kind, name_key(name)))
+                if hit is not None and hit[0] == "holdings":
+                    found.add(hit[1])  # type: ignore[arg-type]
+    return tuple(sorted(found, key=str)), complete
+
+
+def _folder_names(access: Access, parts: Parts) -> list[str] | None:
+    """A folder's entries by one lstat and one listing: ``[]`` for a file or a vanished entry, ``None``
+    when it is a link (never followed) or cannot be inspected or listed, so ids could hide in it."""
+    try:
+        info = lstat_or_none(access.path(parts))
+        if info is None:
+            return []  # vanished since the listing
+        if stat.S_ISLNK(info.st_mode) or is_link(access.path(parts)):  # a link or a junction
+            return None
+        if not stat.S_ISDIR(info.st_mode):
+            return []  # a stray file holds no holder files
+        return access.list_dir(parts)
+    except (OSError, LinkRefused):
+        return None
+
+
+def _discover_holdings(access: Access, base: Parts, found: _Campaigns, problems: list[LoadProblem]) -> None:
+    folder = base + (HOLDINGS,)
+    for kind in _listing(access, folder, problems, None):
+        if not _is_dir(access, folder + (kind,)) or not _valid_segment(kind):
+            _unrecognized(access, folder + (kind,), problems, None)
+            continue
+        for name in _listing(access, folder + (kind,), problems, None):
+            parts = folder + (kind, name)
+            hit = classify(parts)
+            if hit is None or hit[0] != "holdings":
+                _unrecognized(access, parts, problems, None)
+                continue
+            _read_scoped(access, parts, found.holdings, problems)
 
 
 def _discover_campaign(access: Access, campaign: str, into: _Campaigns, problems: list[LoadProblem]) -> None:
@@ -732,8 +882,10 @@ def _discover_campaign(access: Access, campaign: str, into: _Campaigns, problems
         if entry == CHATS and _is_dir(access, base + (entry,)):
             _discover_chats(access, base, into, problems)
             continue
-        if entry == RELATIONS and _is_dir(access, base + (entry,)):
-            _discover_relations(access, base, into, problems)
+        if entry in _HISTORY and _is_dir(access, base + (entry,)):  # 021's per-turn history: never walked here
+            continue
+        if entry in _FAMILIES and _is_dir(access, base + (entry,)):
+            _discover_family(access, base, entry, into, problems)
             continue
         if entry == IMAGES:
             walk_assets(access, base + (entry,), 0, "image", problems, None)

@@ -34,6 +34,11 @@ _INSTANCE_REF_RE = re.compile(
 _SCOPE_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})")
 _CHAT_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#chat/(?P<chat_id>{_SEGMENT})")
 _RELATION_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#relation/(?P<relation_id>{_SEGMENT})")
+_ACCEPTED_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#accepted/(?P<event_id>{_SEGMENT})")
+_WRAPUP_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#wrapup/(?P<wrapup_id>{_SEGMENT})")
+_HOLDINGS_REF_RE = re.compile(
+    rf"campaign:(?P<campaign_id>{_SEGMENT})/(?P<kind>{_SEGMENT})/(?P<instance_id>{_SEGMENT})#holdings"
+)
 _IMAGE_REF_RE = re.compile(
     rf"(?P<scope>campaign:{_SEGMENT}|{_SOURCE_RE.pattern})#image/(?P<image_id>{_SEGMENT})"
 )
@@ -305,6 +310,69 @@ class RelationRef:
 
 
 @dataclass(frozen=True, slots=True)
+class AcceptedRef:
+    """One accepted fictional event of a campaign (021): an authority record with operations and receipts.
+
+    ``campaign:<campaign_id>#accepted/<event_id>``. Distinct from 020's ``#event/`` knowledge family.
+    Not returned by ``parse_ref``.
+    """
+
+    campaign_id: str
+    event_id: str
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.event_id, "event_id")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"campaign:{self.campaign_id}#accepted/{self.event_id}"
+
+    @property
+    def scope(self) -> ScopeRef:
+        return ScopeRef(self.campaign_id)
+
+    @classmethod
+    def parse(cls, text: object) -> AcceptedRef:
+        match = _ACCEPTED_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not an accepted-event reference: {text!r}")
+        return cls(**match.groupdict())
+
+
+@dataclass(frozen=True, slots=True)
+class WrapUpRef:
+    """One scene wrap-up (021): a retrospective director summary of one chat scene; never actor memory.
+
+    ``campaign:<campaign_id>#wrapup/<wrapup_id>``. Not returned by ``parse_ref``.
+    """
+
+    campaign_id: str
+    wrapup_id: str
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.wrapup_id, "wrapup_id")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"campaign:{self.campaign_id}#wrapup/{self.wrapup_id}"
+
+    @property
+    def scope(self) -> ScopeRef:
+        return ScopeRef(self.campaign_id)
+
+    @classmethod
+    def parse(cls, text: object) -> WrapUpRef:
+        match = _WRAPUP_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not a wrap-up reference: {text!r}")
+        return cls(**match.groupdict())
+
+
+@dataclass(frozen=True, slots=True)
 class ImageRef:
     """One picture object, owned by one source or one play scope; never a blob or a file path.
 
@@ -431,3 +499,42 @@ def parse_ref(text: object) -> SourceRef | InstanceRef | LegacyId:
     if text.startswith("campaign:"):
         return InstanceRef.parse(text)
     return SourceRef.parse(text)
+
+
+@dataclass(frozen=True, slots=True)
+class HoldingsRef:
+    """The counted holdings (Sprint 023) of one campaign instance; never the instance itself.
+
+    ``campaign:<campaign_id>/<kind>/<instance_id>#holdings``. Not returned by ``parse_ref``.
+    """
+
+    campaign_id: str
+    kind: str
+    instance_id: str
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.kind, "kind")
+        validate_segment(self.instance_id, "instance_id")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"campaign:{self.campaign_id}/{self.kind}/{self.instance_id}#holdings"
+
+    @classmethod
+    def parse(cls, text: object) -> HoldingsRef:
+        match = _HOLDINGS_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not a holdings reference: {text!r}")
+        return cls(**match.groupdict())
+
+    @classmethod
+    def of(cls, holder: InstanceRef) -> HoldingsRef:
+        if not isinstance(holder, InstanceRef):
+            raise TypeError(f"holdings belong to an InstanceRef, not {type(holder).__name__}")
+        return cls(holder.campaign_id, holder.kind, holder.instance_id)
+
+    @property
+    def holder(self) -> InstanceRef:
+        return InstanceRef(self.campaign_id, self.kind, self.instance_id)

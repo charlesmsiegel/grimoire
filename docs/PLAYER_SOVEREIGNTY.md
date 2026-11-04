@@ -98,6 +98,8 @@ Both are labelling errors, so the remedy is a labeller and a mislabel-review pat
 - Policy inheritance across worlds and retconned scenes.
 - AI-controlled companions as a third authority class.
 
+**Accepted effects (021).** A player character's voluntary state change (giving away a key, joining a guild) becomes canonical only when it is backed by the controller's own `action` contribution for that turn **and** the player endorses the exact operations, **and** the director accepts the outcome. See [EFFECTS](EFFECTS.md#two-keys). Delegations are not honoured there yet.
+
 ## Persistence (010b)
 
 `grimoire.ledgers.SovereigntyLedger` keeps one ledger per campaign (`authority/campaigns/<campaign_id>`; see [STORAGE](STORAGE.md#authority-ledgers-010b)). It records four kinds of value:
