@@ -744,3 +744,18 @@ def test_a_kept_slot_must_be_a_small_non_negative_int(pair):
     for slot in (-1, 10 ** 10, True, "0"):
         with pytest.raises(InvalidEnvelope, match="slot"):
             phone.transaction().keep_version(WREN_A_PATH, data, slot=slot)
+
+
+def test_exact_kinds_cover_every_synced_kind_and_nothing_of_018():
+    from grimoire.store.replica import EXACT_KINDS
+    from grimoire.sync.model import SYNCED_KINDS
+    assert SYNCED_KINDS <= EXACT_KINDS
+    assert not EXACT_KINDS & {"blob", "image", "placement", "ledger"}
+
+
+@pytest.mark.parametrize("path", ["campaigns/c1/images/portrait.json",
+                                  "sources/world/harbor/_source/placements/character/wren/portrait.json"])
+def test_put_exact_refuses_018_paths(pair, path):
+    with pytest.raises(InvalidEnvelope) as caught:
+        pair[0].transaction().put_exact(path, b"{}", None)
+    assert caught.value.code == "not_canonical"

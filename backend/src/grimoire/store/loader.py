@@ -15,6 +15,8 @@ References are never rebound: every unresolvable one is reported verbatim.
 
 from __future__ import annotations
 
+import dataclasses
+import os
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -28,8 +30,8 @@ from grimoire.core.index import DIRECTED_RELATIONS, DefinitionIndex, DefinitionL
 from .diskops import is_link, lstat_or_none
 from .engine import Access
 from .envelope import (
-    EnvelopeError, KnowledgeRecord, LinkSpec, RecordEnvelope, ScopeRecord, SourceManifest, link_problem,
-    parse_knowledge_record, parse_record, parse_scope_record, parse_source,
+    AssetRecord, EnvelopeError, KnowledgeRecord, LinkSpec, RecordEnvelope, ScopeRecord, SourceManifest, link_problem,
+    parse_asset_record, parse_knowledge_record, parse_record, parse_scope_record, parse_source,
 )
 from .errors import (
     AddressMismatch, LinkRefused, MalformedRecord, RecordNotFound, StoreError, UnstorableIdentifier,
@@ -37,9 +39,9 @@ from .errors import (
 )
 from .jsonfmt import JsonError, etag, parse_strict
 from .layout import (
-    CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, INSTANCES, SCOPE, MANIFEST, MARKER, RECORDS,
-    RELATIONS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS,
-    SOURCE_DIR, SOURCES, SUFFIX, SYNC, TXN, Parts, classify, is_noise, manifest_parts, name_key,
+    CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, IMAGES, INSTANCES, PLACEMENTS, SCOPE, MANIFEST,
+    MARKER, RECORDS, RELATIONS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS, SOURCE_DIR, SOURCES, SUFFIX, SYNC, TXN, Parts,
+    classify, is_noise, manifest_parts, name_key,
 )
 
 EntityKey = tuple[str, str]  # (kind, entity_id) within one source
@@ -81,6 +83,13 @@ class KnowledgeScan:
     damaged: Mapping[KnowledgeRef, str]
     problems: tuple[LoadProblem, ...]
     entries: tuple[tuple[str, str, str | None], ...]
+
+
+@dataclass(frozen=True)
+class StoredAssetRecord:
+    record: AssetRecord
+    etag: str
+    previous: str | None
 
 
 @dataclass(frozen=True)
@@ -224,6 +233,21 @@ def read_knowledge_record(access: Access, parts: Parts) -> StoredKnowledgeRecord
     return StoredKnowledgeRecord(record, tag)
 
 
+def read_asset_record(access: Access, parts: Parts) -> StoredAssetRecord:
+    """The image or placement record at ``parts``; its address must be the one its path implies."""
+    document, tag = _document(access, parts)
+    try:
+        record, previous = parse_asset_record(document)
+    except EnvelopeError as error:
+        kind = UnsupportedFormat if error.code == "unsupported_format" else MalformedRecord
+        raise kind(f"{_text(parts)}: {error.detail}", tag) from None
+    found = classify(parts)
+    if found is None or found[1] != record.address:
+        raise AddressMismatch(f"{_text(parts)} holds {record.address}, not the record its path names", tag,
+                              record.address)
+    return StoredAssetRecord(record, tag, previous)
+
+
 def read_source(access: Access, source_id: str) -> StoredSource:
     parts = manifest_parts(source_id)
     document, tag = _document(access, parts)
@@ -247,6 +271,8 @@ class SourceScan:
     revisions: dict[EntityKey, dict[str, StoredDefinition | None]] = field(default_factory=dict)
     problems: list[LoadProblem] = field(default_factory=list)
     excluded_by: list[LoadProblem] = field(default_factory=list)
+    #: an I/O error shaped this scan; it may not repeat, so a store never caches the scan
+    io_error: bool = False
 
 
 def _is_dir(access: Access, parts: Parts) -> bool:
@@ -305,8 +331,13 @@ def _unrecognized(access: Access, parts: Parts, problems: list[LoadProblem], sou
     problems.append(LoadProblem(_text(parts), code, "not a file this store reads", source))
 
 
-def scan_source(access: Access, source_id: str) -> SourceScan:
-    """Read one source's manifest and every revision file without judging heads."""
+def scan_source(access: Access, source_id: str, *, assets: bool = False) -> SourceScan:
+    """Read one source's manifest and every revision file without judging heads.
+
+    ``assets=True`` also walks ``images/`` and ``placements/`` for stray names (``load()`` reports
+    them). Admission never depends on art, so one-source checks and commits skip that walk: its
+    cost would grow with the source's pictures.
+    """
     scan = SourceScan(source_id)
     base = manifest_parts(source_id)[:-1]
     problems = scan.problems
@@ -317,6 +348,7 @@ def scan_source(access: Access, source_id: str) -> SourceScan:
     except (MalformedRecord, StoreError, ValueError) as error:  # LinkRefused is a ValueError
         code = "unsupported_format" if isinstance(error, UnsupportedFormat) else "malformed"
         scan.excluded_by.append(LoadProblem(_text(base + (MANIFEST,)), code, str(error), source_id))
+        scan.io_error |= _from_io(error)
     if scan.stored is not None:
         try:
             scan.stored.manifest.head_refs()
@@ -331,7 +363,11 @@ def scan_source(access: Access, source_id: str) -> SourceScan:
     access.guard.check_read(base)  # never list through a linked ancestor (LinkRefused)
     names = _listing(access, base, problems, source_id)  # links are reported here, not entered
     for name in names:
-        if name not in (MANIFEST, RECORDS):
+        if name in (IMAGES, PLACEMENTS):
+            if assets:
+                walk_assets(access, base + (name,), 0 if name == IMAGES else 2,
+                            "image" if name == IMAGES else "placement", problems, source_id)
+        elif name not in (MANIFEST, RECORDS):
             _unrecognized(access, base + (name,), problems, source_id)
     records = base + (RECORDS,)
     if RECORDS not in names or not _is_dir(access, records):
@@ -365,6 +401,7 @@ def scan_source(access: Access, source_id: str) -> SourceScan:
                     continue
                 except (StoreError, ValueError, OSError) as error:
                     problems.append(LoadProblem(_text(parts), _code(error), str(error), source_id))
+                    scan.io_error |= _from_io(error)
                     continue
                 envelope = stored.envelope
                 revisions[ref.revision] = StoredDefinition(  # type: ignore[index]
@@ -374,14 +411,21 @@ def scan_source(access: Access, source_id: str) -> SourceScan:
     return scan
 
 
-def contained_scan(access: Access, source_id: str) -> SourceScan:
+def _from_io(error: BaseException) -> bool:
+    return isinstance(error, OSError) or isinstance(error.__cause__, OSError)
+
+
+def contained_scan(access: Access, source_id: str, *, assets: bool = False) -> SourceScan:
     """``scan_source``, with any I/O or link failure excluding only this source."""
     try:
-        return scan_source(access, source_id)
+        scan = scan_source(access, source_id, assets=assets)
+        scan.io_error |= any(problem.code == "unreadable" for problem in scan.problems)  # an unlistable folder
+        return scan
     except (OSError, StoreError, ValueError) as error:
         scan = SourceScan(source_id)
         code = "link" if isinstance(error, LinkRefused) else "unreadable"
         scan.excluded_by.append(LoadProblem(_text(manifest_parts(source_id)[:-1]), code, str(error), source_id))
+        scan.io_error = code == "unreadable"
         return scan
 
 
@@ -556,6 +600,65 @@ def campaign_instances(access: Access, campaign: str) -> tuple[InstanceRef, ...]
     return tuple(sorted(found, key=str))  # type: ignore[arg-type]
 
 
+def _is_file(access: Access, parts: Parts) -> bool:
+    try:
+        info = lstat_or_none(access.path(parts))
+    except OSError:
+        return False
+    return info is not None and stat.S_ISREG(info.st_mode)
+
+
+def campaign_exists(access: Access, campaign: str) -> bool:
+    """A canonical, regular ``scope.json`` or at least one canonical, regular instance file (018 §11.4).
+
+    Asset records alone never make a campaign exist, and neither does a stray file.
+    """
+    base = (CAMPAIGNS, campaign)
+    try:
+        if access.presence(base + (SCOPE,)) == "present" and _is_file(access, base + (SCOPE,)):
+            return True
+        refs = campaign_instances(access, campaign)
+    except (OSError, StoreError, ValueError):  # a link, an instances/ that is a file, unreadable: none
+        return False
+    return any(_is_file(access, address_parts_of(ref)) for ref in refs)
+
+
+def address_parts_of(ref: InstanceRef) -> Parts:
+    return (CAMPAIGNS, ref.campaign_id, INSTANCES, ref.kind, ref.instance_id + SUFFIX)
+
+
+def walk_assets(access: Access, folder: Parts, levels: int, kind: str, problems: list[LoadProblem],
+                source: str | None) -> list[object]:
+    """Canonical asset files under ``folder`` by listing only (contents are never read).
+
+    ``levels`` directory levels of id segments sit above the files: 0 for ``images/`` and for one
+    ``placements/<kind>/<id>/`` folder, 2 for a whole ``placements/``. Anything else is reported
+    ``unrecognized`` (or ``name_mismatch``), and a link is reported and never entered.
+    """
+    if not _is_dir(access, folder):
+        _unrecognized(access, folder, problems, source)
+        return []
+    found: list[object] = []
+    for name in _listing(access, folder, problems, source):
+        parts = folder + (name,)
+        if levels:
+            if _valid_segment(name) and _is_dir(access, parts):
+                found.extend(walk_assets(access, parts, levels - 1, kind, problems, source))
+            else:
+                _unrecognized(access, parts, problems, source)
+            continue
+        hit = classify(parts)
+        if hit is not None and hit[0] == kind and not _is_file(access, parts):
+            # a record's own name that is not a regular file (even an empty folder) is always reported
+            problems.append(LoadProblem(_text(parts), "unrecognized", "not a regular file", source))
+            continue
+        if hit is None or hit[0] != kind:
+            _unrecognized(access, parts, problems, source)
+            continue
+        found.append(hit[1])
+    return found
+
+
 def _read_scoped(access: Access, parts: Parts, into: dict, problems: list[LoadProblem]) -> None:
     try:
         stored = read_scope_record(access, parts)
@@ -632,6 +735,12 @@ def _discover_campaign(access: Access, campaign: str, into: _Campaigns, problems
         if entry == RELATIONS and _is_dir(access, base + (entry,)):
             _discover_relations(access, base, into, problems)
             continue
+        if entry == IMAGES:
+            walk_assets(access, base + (entry,), 0, "image", problems, None)
+            continue
+        if entry == PLACEMENTS:
+            walk_assets(access, base + (entry,), 2, "placement", problems, None)
+            continue
         if entry != INSTANCES or not _is_dir(access, base + (entry,)):
             _unrecognized(access, base + (entry,), problems, None)
             continue
@@ -652,38 +761,40 @@ def _discover_campaign(access: Access, campaign: str, into: _Campaigns, problems
                     problems.append(LoadProblem(_text(parts), _code(error), str(error)))
 
 
-def load(access: Access) -> LibraryView:
-    with access.cached_listings():
-        return _load(access)
+@dataclass
+class Admission:
+    """Which sources ``load()`` admits, and the index it builds from them."""
+
+    index: DefinitionIndex
+    dropped: set[tuple[str, EntityKey]]
+    links: list[DefinitionLink]
+    excluded: set[str]  # every source left out, including empty folders
+    empty: set[str]  # folders with no manifest and no records: not sources at all
+    reported: set[str]  # what load() reports as excluded
 
 
-def _load(access: Access) -> LibraryView:
-    problems: list[LoadProblem] = []
-    roots = set()
-    for name in _listing(access, (), problems, None):  # links are reported here and never entered
-        if name in (MARKER, TXN, CONFLICTS, SYNC) or name in RESERVED_ROOTS:
-            continue
-        if name in (SOURCES, CAMPAIGNS) and _is_dir(access, (name,)):
-            roots.add(name)
-            continue
-        _unrecognized(access, (name,), problems, None)
+def admit(scans: Mapping[str, SourceScan], problems: list[LoadProblem]) -> Admission:
+    """The one exclusion algorithm: per-source damage, then whole-library ``identity_conflict``s.
 
-    scans = {source_id: contained_scan(access, source_id) for source_id in
-             (discover_sources(access, problems) if SOURCES in roots else [])}
+    Shared by ``load()`` and ``excluded_sources``, so a one-source check that consults the latter
+    can never disagree with ``load()`` about which sources are admitted.
+    """
     excluded: set[str] = set()
-    for source_id, scan in scans.items():
+    for source_id, scan in scans.items():  # scans are never mutated: a store may cache and reuse them
         problems.extend(scan.problems)
-        if scan.stored is None and not scan.excluded_by:
+        excluded_by = list(scan.excluded_by)
+        if scan.stored is None and not excluded_by:
             if scan.revisions:
-                scan.excluded_by.append(LoadProblem(_text(manifest_parts(source_id)), "malformed",
-                                                    "a source with records needs a manifest", source_id))
+                excluded_by.append(LoadProblem(_text(manifest_parts(source_id)), "malformed",
+                                               "a source with records needs a manifest", source_id))
             else:
                 excluded.add(source_id)  # an empty source folder is not a source
                 continue
-        if scan.excluded_by:
-            problems.extend(scan.excluded_by)
+        if excluded_by:
+            problems.extend(excluded_by)
             excluded.add(source_id)
-    empty = {source_id for source_id, scan in scans.items() if scan.stored is None and not scan.excluded_by}
+    empty = {source_id for source_id, scan in scans.items()
+             if scan.stored is None and not scan.excluded_by and not scan.revisions}
     reported_excluded = excluded - empty
 
     def build() -> tuple[DefinitionIndex, set[tuple[str, EntityKey]], list[DefinitionLink]]:
@@ -726,6 +837,120 @@ def _load(access: Access) -> LibraryView:
             checkpoint = len(problems)
             excluded |= blamed
             reported_excluded |= blamed
+    return Admission(index, dropped, links, excluded, empty, reported_excluded)
+
+
+def transient(scan: SourceScan) -> bool:
+    """Whether an I/O error shaped a scan. It may not repeat, so a store never caches the scan
+    (a persistently unreadable source is simply scanned again on every check)."""
+    return scan.io_error
+
+
+def slim(scan: SourceScan) -> SourceScan:
+    """The same scan without record payloads: all ``admit`` needs (refs, names, heads, links).
+
+    What a store caches between calls, so a long-lived store does not hold every payload.
+    """
+    revisions = {key: {revision: None if found is None else dataclasses.replace(found, envelope=None)
+                       for revision, found in files.items()}
+                 for key, files in scan.revisions.items()}
+    return SourceScan(scan.source_id, scan.stored, revisions, list(scan.problems), list(scan.excluded_by),
+                      scan.io_error)
+
+
+_REPARSE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+
+
+def _entry(path: str, info: os.stat_result | None) -> tuple:
+    if info is None:
+        return (path, None)
+    return (path, info.st_mode, info.st_size, info.st_ino, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _walkable(info: os.stat_result) -> bool:
+    """A real directory: never a link, junction or other reparse point."""
+    return stat.S_ISDIR(info.st_mode) and not ((getattr(info, "st_file_attributes", 0) or 0) & _REPARSE)
+
+
+def source_fingerprint(access: Access, source_id: str) -> tuple:
+    """A stat-only fingerprint of what can change whether ``load()`` admits one source.
+
+    Covers the source's ``manifest.json`` and everything under its ``records/`` (names, types,
+    sizes, inodes, nanosecond modification and change times); no file is read. Its ``images/``,
+    ``placements/`` and the ``_source`` folder's own times are left out: they never change
+    admission, so writing art never invalidates a cached exclusion. Links and reparse points are
+    recorded, never entered; an unlistable folder is recorded as such, so the fingerprint stays
+    stable (and cacheable) while the damage persists. Plain ``os.scandir`` keeps this to one
+    system call per entry.
+    """
+    # discovery already validated the id: build the path directly (no per-segment re-validation)
+    base = os.path.join(os.fspath(access.root), SOURCES, *source_id.split(":"), SOURCE_DIR)
+    try:
+        base_info = os.lstat(base)
+    except OSError:
+        return ((base, None),)
+    entries: list[tuple] = [(base, base_info.st_mode)]
+    if not _walkable(base_info):
+        return tuple(entries)
+    try:  # the real spellings: a case-only rename of manifest.json keeps its stat on Windows/macOS
+        with os.scandir(base) as listing:
+            spellings = sorted(item.name for item in listing
+                               if item.name.casefold() in (MANIFEST.casefold(), RECORDS.casefold()))
+    except OSError as error:
+        spellings = ["unlistable", type(error).__name__]
+    entries.append(("names", tuple(spellings)))
+    stack: list[str] = []
+    for name in (MANIFEST, RECORDS):
+        path = os.path.join(base, name)
+        try:
+            info = os.lstat(path)
+        except OSError:
+            entries.append((name, None))
+            continue
+        entries.append(_entry(name, info))
+        if name == RECORDS and _walkable(info):
+            stack.append(path)
+    while stack:
+        folder = stack.pop()
+        try:
+            with os.scandir(folder) as listing:
+                found = sorted(listing, key=lambda item: item.name)
+        except OSError as error:
+            entries.append((folder, "unlistable", type(error).__name__))
+            continue
+        for item in found:
+            try:
+                info = item.stat(follow_symlinks=False)
+            except OSError:
+                entries.append((item.path, None))
+                continue
+            entries.append(_entry(item.path[len(base):], info))
+            if _walkable(info):
+                stack.append(item.path)
+    return tuple(entries)
+
+
+def load(access: Access) -> LibraryView:
+    with access.cached_listings():
+        return _load(access)
+
+
+def _load(access: Access) -> LibraryView:
+    problems: list[LoadProblem] = []
+    roots = set()
+    for name in _listing(access, (), problems, None):  # links are reported here and never entered
+        if name in (MARKER, TXN, CONFLICTS, SYNC) or name in RESERVED_ROOTS:
+            continue
+        if name in (SOURCES, CAMPAIGNS) and _is_dir(access, (name,)):
+            roots.add(name)
+            continue
+        _unrecognized(access, (name,), problems, None)
+
+    scans = {source_id: contained_scan(access, source_id, assets=True) for source_id in
+             (discover_sources(access, problems) if SOURCES in roots else [])}
+    admitted = admit(scans, problems)
+    index, dropped, links = admitted.index, admitted.dropped, admitted.links
+    excluded, empty, reported_excluded = admitted.excluded, admitted.empty, admitted.reported
 
     campaigns = _discover_instances(access, problems) if CAMPAIGNS in roots else _Campaigns()
     instances = campaigns.instances

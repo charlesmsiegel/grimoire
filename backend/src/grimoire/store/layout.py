@@ -17,12 +17,14 @@ import unicodedata
 from typing import Literal
 
 from grimoire.core.identity import (
-    KNOWLEDGE_FAMILIES, ChatRef, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef, validate_segment,
+    KNOWLEDGE_FAMILIES, ChatRef, ImageRef, InstanceRef, KnowledgeRef, PlacementRef, RelationRef, ScopeRef, SourceRef,
+    validate_segment,
     validate_source_id,
 )
 from grimoire.security import InvalidResourcePath, ResourcePath
 
 from .errors import UnstorableIdentifier
+from .media import MEDIA
 
 Parts = tuple[str, ...]
 
@@ -55,6 +57,12 @@ EVENTS = "events"  # campaigns/<id>/events/<event_id>.json: accepted events (020
 EVIDENCE = "evidence"  # campaigns/<id>/evidence/<family>/<id>.json: everything else, and the batch log (020)
 #: families stored under ``evidence/`` (an event lives under ``events/``)
 EVIDENCE_FAMILIES = frozenset(KNOWLEDGE_FAMILIES) - {"event"}
+IMAGES = "images"  # <owner>/images/<image_id>.json: one image object (018)
+PLACEMENTS = "placements"  # <owner>/placements/<kind>/<id>/<slot>.json: one placement (018)
+ASSETS = "assets"  # assets/blobs/<sha[:2]>/<sha256>.<ext>: content-addressed bytes (018)
+BLOBS = "blobs"
+BLOB_EXTS = tuple(MEDIA)  # the sniffer's formats are the only blob extensions
+_BLOB_NAME = re.compile(rf"(?P<sha>[0-9a-f]{{64}})\.(?P<ext>{'|'.join(map(re.escape, BLOB_EXTS))})")
 
 ROOT_ENTRIES = frozenset({MARKER, SOURCES, CAMPAIGNS, TXN, CONFLICTS, SYNC})
 #: Reserved for later record families; the loader skips them. ``kept`` is never a folder: it
@@ -65,7 +73,8 @@ RESERVED_ROOTS = frozenset({"authority", "config", "assets", "secrets", KEPT})
 RESERVED_CAMPAIGN_ENTRIES = frozenset({"scenes", "events", "evidence"})
 _NOISE = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
 
-Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat", "relation", "knowledge"]
+Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat", "relation", "knowledge", "blob",
+               "image", "placement"]
 
 
 def is_noise(name: str) -> bool:
@@ -128,9 +137,37 @@ def knowledge_parts(ref: KnowledgeRef) -> Parts:
     return _checked((CAMPAIGNS, ref.campaign_id, EVIDENCE, ref.family, ref.record_id + SUFFIX))
 
 
-def address_parts(address: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef) -> Parts:
+def image_parts(ref: ImageRef) -> Parts:
+    if ref.campaign_id is not None:
+        return _checked((CAMPAIGNS, ref.campaign_id, IMAGES, ref.image_id + SUFFIX))
+    return _checked(source_parts(ref.scope) + (IMAGES, ref.image_id + SUFFIX))
+
+
+def placement_parts(ref: PlacementRef) -> Parts:
+    subject = ref.subject
+    if isinstance(subject, InstanceRef):
+        return _checked((CAMPAIGNS, subject.campaign_id, PLACEMENTS, subject.kind, subject.instance_id,
+                         ref.slot + SUFFIX))
+    return _checked(source_parts(subject.source) + (PLACEMENTS, subject.kind, subject.entity_id, ref.slot + SUFFIX))
+
+
+def blob_parts(sha256: str, ext: str) -> Parts:
+    """Where the blob with these exact bytes lives; refuses anything but 64 lowercase hex and a known ext."""
+    if not isinstance(sha256, str) or not isinstance(ext, str) or not _BLOB_NAME.fullmatch(f"{sha256}.{ext}"):
+        raise ValueError(f"not a blob name: {sha256!r}.{ext!r}")
+    return _checked((ASSETS, BLOBS, sha256[:2], f"{sha256}.{ext}"))
+
+
+Address = SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef | ImageRef | PlacementRef
+
+
+def address_parts(address: Address) -> Parts:
     if isinstance(address, KnowledgeRef):
         return knowledge_parts(address)
+    if isinstance(address, ImageRef):
+        return image_parts(address)
+    if isinstance(address, PlacementRef):
+        return placement_parts(address)
     if isinstance(address, InstanceRef):
         return instance_parts(address)
     if isinstance(address, ScopeRef):
@@ -185,15 +222,28 @@ def _stem(name: str) -> str | None:
     return stem
 
 
-Address = SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef
+def classify(parts: Parts) -> tuple[Kind, object] | None:
+    """The record a canonical path holds, or ``None``; exact inverse of the mappings.
 
-
-def classify(parts: Parts) -> tuple[Kind, Address | str] | None:
-    """The record a canonical path holds, or ``None``; exact inverse of the mappings."""
+    Values: a ref for records, the source id for a manifest, ``(name, seq)`` for a ledger batch
+    and ``(sha256, ext)`` for a blob.
+    """
     parts = tuple(parts)
-    found: tuple[Kind, Address | str] | None = None
+    found: tuple[Kind, object] | None = None
     try:
-        if len(parts) == 5 and parts[0] == CAMPAIGNS and parts[2] == INSTANCES:
+        if len(parts) == 4 and parts[0] == ASSETS and parts[1] == BLOBS:
+            match = _BLOB_NAME.fullmatch(parts[3])
+            if match is not None:
+                found = ("blob", (match["sha"], match["ext"]))
+        elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == IMAGES:
+            stem = _stem(parts[3])
+            if stem is not None:
+                found = ("image", ImageRef(f"campaign:{parts[1]}", stem))
+        elif len(parts) == 6 and parts[0] == CAMPAIGNS and parts[2] == PLACEMENTS:
+            stem = _stem(parts[5])
+            if stem is not None:
+                found = ("placement", PlacementRef(InstanceRef(parts[1], parts[3], parts[4]), stem))
+        elif len(parts) == 5 and parts[0] == CAMPAIGNS and parts[2] == INSTANCES:
             stem = _stem(parts[4])
             if stem is not None:
                 found = ("instance", InstanceRef(parts[1], parts[3], stem))
@@ -230,6 +280,14 @@ def classify(parts: Parts) -> tuple[Kind, Address | str] | None:
                 stem = _stem(tail[3])
                 if stem is not None:
                     found = ("definition", SourceRef(source_id, tail[1], tail[2], stem))
+            elif len(tail) == 2 and tail[0] == IMAGES:
+                stem = _stem(tail[1])
+                if stem is not None:
+                    found = ("image", ImageRef(source_id, stem))
+            elif len(tail) == 4 and tail[0] == PLACEMENTS:
+                stem = _stem(tail[3])
+                if stem is not None:
+                    found = ("placement", PlacementRef(SourceRef(source_id, tail[1], tail[2]), stem))
     except ValueError:
         return None
     if found is None:
@@ -240,6 +298,8 @@ def classify(parts: Parts) -> tuple[Kind, Address | str] | None:
             canonical = ledger_parts(*value)  # type: ignore[misc]
         elif kind == "manifest":
             canonical = manifest_parts(value)  # type: ignore[arg-type]
+        elif kind == "blob":
+            canonical = blob_parts(*value)  # type: ignore[misc]
         else:
             canonical = address_parts(value)  # type: ignore[arg-type]
     except (ValueError, UnstorableIdentifier):

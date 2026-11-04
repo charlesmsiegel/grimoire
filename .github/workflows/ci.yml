@@ -29,7 +29,9 @@ jobs:
   compat:
     name: compat (${{ matrix.os }}, py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30  # the Windows cell has taken 8-15 minutes for the whole suite
+    # Windows file I/O makes the crash-exploration tests several times slower: the suite takes
+    # 10-15 minutes there (~4 on Ubuntu), so leave it room (docs/TESTING.md#ci-gate).
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

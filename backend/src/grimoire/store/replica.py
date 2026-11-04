@@ -30,6 +30,9 @@ SCOPE_FILE = SCOPE
 
 #: Root entries a scan walks for canonical records.
 _RECORD_ROOTS = (SOURCES, CAMPAIGNS)
+#: The record kinds this module reads, copies and checks: every kind sync may own. 018's blobs,
+#: images and placements are not among them yet (a later slice); ledgers never are.
+EXACT_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge"})
 #: Root entries that are device-local or the library's own marker: never transferred, never reported.
 _LOCAL = frozenset({TXN, CONFLICTS, SYNC, MARKER})
 
@@ -62,7 +65,7 @@ class CanonicalScan:
 def parse_exact(parts: Parts, data: bytes) -> RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord:
     """The envelope ``data`` holds at canonical ``parts``; ``InvalidEnvelope`` (with ``code``) otherwise."""
     found = classify(parts)
-    if found is None or found[0] == "ledger":
+    if found is None or found[0] not in EXACT_KINDS:
         raise _invalid("not_canonical", f"{'/'.join(parts)} is not a canonical record path")
     if type(data) is not bytes or len(data) > MAX_FILE_BYTES:
         raise _invalid("malformed", f"{'/'.join(parts)}: not bytes, or larger than {MAX_FILE_BYTES}")
@@ -170,13 +173,13 @@ def _walk(access: Access, parts: Parts, files: dict[str, bytes], blocked: dict[s
         text = "/".join(child)
         if kind == "dir":
             found = classify(child)
-            if found is not None and found[0] != "ledger":  # a directory where a record file belongs
+            if found is not None and found[0] in EXACT_KINDS:  # a directory where a record file belongs
                 blocked[text] = "unreadable"
                 continue
             _walk(access, child, files, blocked, skipped)
         elif kind == "file":
             found = classify(child)
-            if found is None or found[0] == "ledger":
+            if found is None or found[0] not in EXACT_KINDS:  # ledgers, and 018's images (not synced yet)
                 skipped.append(text)
                 continue
             try:
@@ -202,8 +205,9 @@ _RECORD_FOLDERS = frozenset({"instances", "chats", "relations", "events", "evide
 
 def _may_hold_records(parts: Parts) -> bool:
     """Whether a blocked path could be, or contain, a canonical record (else it cannot pin anything)."""
-    if classify(parts) is not None:
-        return True
+    found = classify(parts)
+    if found is not None:
+        return found[0] in EXACT_KINDS  # 018 images and placements attach to entities, never revisions
     if parts[0] == SOURCES:
         return "." not in parts[-1] or parts[-1].endswith(SUFFIX)  # a folder, or a JSON file
     if parts[0] != CAMPAIGNS:

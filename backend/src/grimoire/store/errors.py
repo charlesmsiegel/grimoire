@@ -33,6 +33,37 @@ class ImmutableRevision(StoreError):
     """A definition revision exists; edit by adding a revision and moving the head."""
 
 
+class ImmutableImage(StoreError):
+    """An image object exists; a different picture or new metadata is a new image object."""
+
+
+class ImmutableBlob(StoreError):
+    """A blob already holds exactly these bytes; blobs are only created or repaired."""
+
+
+class InvalidBlob(InvalidEnvelope):
+    """Bytes that cannot be a blob; ``reason`` is ``empty``, ``too_large`` or ``unsupported_media``."""
+
+    def __init__(self, message: str, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self), (str(self), self.reason))
+
+
+class BlobCorrupt(StoreError):
+    """A blob file's bytes do not hash to its name; ``actual`` is their etag (``None`` if not read)."""
+
+    def __init__(self, sha256: str, actual: str | None) -> None:
+        super().__init__(f"blob {sha256} is corrupt (actual {actual or 'unread: too large'})")
+        self.sha256 = sha256
+        self.actual = actual
+
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self), (self.sha256, self.actual))
+
+
 class StaleWrite(StoreError):
     """A target no longer has the expected content revision; nothing was written."""
 

@@ -25,7 +25,8 @@ Reported as `skipped` and never touched:
 - ledgers under `authority/`;
 - the library marker;
 - unknown root entries such as `worlds/`;
-- the reserved campaign family `scenes/`, and 020's batch log under `evidence/` (only `events/` and `evidence/<family>/` knowledge records are synced);
+- [018](IMAGES.md)'s image objects and placements (`images/` and `placements/` under a source's `_source/` or a campaign) and its blobs under `assets/`: they are not synced yet, and they never pin a definition revision (placements attach to the entity), so they never block `resolve`;
+- the reserved campaign family `scenes/`, and any file under `events/` or `evidence/` that is not a knowledge record of a known family;
 - non-record files.
 
 Sync compares whole files. It never interprets payloads, never merges inside a file, and never treats source inheritance (`derived_from`, `base`, portrayals) as device ancestry. Three structural readings are the only exceptions:

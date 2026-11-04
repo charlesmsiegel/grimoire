@@ -331,6 +331,36 @@ def test_s8_revision_resolve_replaces_only_an_unreferenced_revision(pair):
     assert (phone.root / PATHS["r1"]).read_bytes() == other
 
 
+_IMAGE_PATHS = ("campaigns/c1/images/portrait.json", "sources/world/harbor/_source/images/portrait.json",
+                "sources/world/harbor/_source/placements/character/wren/portrait.json",
+                "campaigns/c1/placements/character/wren-a/portrait.json", "assets/blobs/ab/" + "ab" * 32 + ".png")
+
+
+def test_018_images_are_skipped_and_never_block_a_revision_resolve(pair):
+    """018's images, placements and blobs are not synced yet, and can never pin a revision."""
+    desktop, phone = pair
+    for store in (desktop, phone):
+        for path in _IMAGE_PATHS:  # even a damaged one: 018 records never name a revision
+            (store.root / path).parent.mkdir(parents=True, exist_ok=True)
+            (store.root / path).write_bytes(b"{}" if path.endswith(".json") else b"\x89PNG")
+    for store, bio in ((desktop, "captain"), (phone, "pirate")):  # a non-head revision, as in S8
+        txn = store.transaction()
+        txn.put(RecordEnvelope(SourceRef("world:harbor", "character", "wren", "r9"), {"bio": bio}), None)
+        manifest = store.read_source("world:harbor").manifest
+        txn.put(SourceManifest(manifest.source, manifest.owner, manifest.title, {"character/wren": "r1"},
+                               manifest.links, extra=manifest.extra), store.read_source("world:harbor").etag)
+        txn.commit(handle())
+    r9 = PATHS["r1"].replace("r1.json", "r9.json")
+    report = sync(desktop, phone, handles())
+    assert report.conflict(r9).code == "missing_ancestor"
+    assert {conflict.path for conflict in report.conflicts} == {r9}
+    for device in (DESKTOP, PHONE):
+        assert {"campaigns/c1/images/portrait.json", "assets"} <= set(report.skipped[device])
+    mine, theirs = (desktop.root / r9).read_bytes(), (phone.root / r9).read_bytes()
+    resolve(desktop, phone, r9, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+    assert (phone.root / r9).read_bytes() == mine
+
+
 def test_s8_resolving_a_deletion_or_blocked_side_is_refused(pair):
     desktop, phone = pair
     original = (phone.root / PATHS["wren_b"]).read_bytes()

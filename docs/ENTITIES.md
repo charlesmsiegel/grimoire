@@ -50,9 +50,11 @@ A facet is a typed, immutable capability contract with invariants. Integers are 
 3. It composes traits, then replacements, then additions, and checks requirements.
 4. It checks state against the effective facets.
 
-It returns a disposable `EffectiveEntity`, which records each facet's origin (`trait`, `replaced` or `added`). A missing source raises Wave 1 `MissingDefinition`; a namesake is never substituted. [Effective World Snapshots](roadmap/sprints/effective-world-snapshots.md) may supersede this view.
+It returns a disposable `EffectiveEntity`, which records each facet's origin (`trait`, `replaced` or `added`). A missing source raises Wave 1 `MissingDefinition`; a namesake is never substituted.
 
-`EntityError(ValueError).reason`: `invalid_field`, `campaign_original_needs_name`, `not_entity_definition`, `kind_mismatch`, `replaced_without_trait`, `added_shadows_trait`, `missing_requirement`, `state_without_facet`, `invalid_state`, `duplicate_state`, `not_agent`.
+`compose_instance(instance, base)` is the same composition over an explicit base: an `EntityDefinition`, or an `EffectiveDefinition` from [Effective World Snapshots](EFFECTIVE_VIEWS.md) (022), which composes a derived portrayal over its pinned base first. A definition whose payload carries `derivation` is a derived **delta**, not a complete card. Both `effective_entity` and `compose_instance` refuse it with `derived_definition`, so roster control, `actor_view` and `propose_damage` of a derived-portrayal actor fail visibly until 035 adds a snapshot-aware path. A base that is not an authored entity is `not_entity_definition`; a base that is not the instance's own source entity (or a base for a campaign original, or none for a sourced instance) is `source_mismatch`.
+
+`EntityError(ValueError).reason`: `invalid_field`, `campaign_original_needs_name`, `not_entity_definition`, `kind_mismatch`, `replaced_without_trait`, `added_shadows_trait`, `missing_requirement`, `state_without_facet`, `invalid_state`, `duplicate_state`, `not_agent`, `derived_definition`, `source_mismatch`.
 
 Capability queries return `False` or `None` when the facet is absent: `is_agent`, `can_be_carried`, `can_be_damaged`, `can_be_heard`, `can_be_addressed` and `integrity`. `propose_damage(instance, amount, index)` returns a new instance with reduced integrity, floored at 0. It is a **proposal**, not a committed event; committing state belongs to the event and recovery sprints (020, 030).
 
@@ -154,6 +156,10 @@ At resolution, a template revision that changes nature to `individual` makes an 
 
 Interoperability is proven against a test-only neutral envelope that imports no grimoire module.
 
+### Registered payload keys
+
+`sections` and `derivation` are top-level `grimoire.entity/0` payload keys owned by [Effective World Snapshots](EFFECTIVE_VIEWS.md) (022). The 009 codec keeps them in `extras` like any unknown field; only 022 composition interprets them.
+
 ## Not in this slice
 
-Persistence and files (a codec↔store round trip of an individual is proven by a test-local join only); relations (carrying, location and kinship now exist in [the graph](GRAPH.md), without facet constraints; a species-membership relation is a later 024 milestone, see [Individualizing a template instance](#individualizing-a-template-instance)); creating a named instance directly from a template; re-sourcing an individual to a changed species; a durable accepted-event record of an individualization decision (020/021); model proposals of individualization; cross-checking a decision's event grounds against knowledge; facet suppression; collective, container and mechanics facets; time-bound state; UI; changes to authority or intent signatures.
+Persistence and files (a codec↔store round trip of an individual is proven by a test-local join only); relations (carrying, location and kinship now exist in [the graph](GRAPH.md), without facet constraints; a species-membership relation is a later 024 milestone, see [Individualizing a template instance](#individualizing-a-template-instance)); definition-to-definition derivation is 022's, in [EFFECTIVE_VIEWS](EFFECTIVE_VIEWS.md); creating a named instance directly from a template; re-sourcing an individual to a changed species; a durable accepted-event record of an individualization decision (020/021); model proposals of individualization; cross-checking a decision's event grounds against knowledge; facet suppression; collective, container and mechanics facets; time-bound state; UI; changes to authority or intent signatures.

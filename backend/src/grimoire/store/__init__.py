@@ -6,26 +6,28 @@ never interprets their payloads. See docs/STORAGE.md for the contract.
 """
 
 from .diskops import DiskOps, FileOps
-from .envelope import KnowledgeRecord, LinkSpec, RecordEnvelope, ScopeRecord, SourceManifest
+from .envelope import AssetRecord, KnowledgeRecord, LinkSpec, RecordEnvelope, ScopeRecord, SourceManifest
 from .errors import (
-    CommitIncomplete, CrossDevice, ImmutableRevision, InvalidEnvelope, InvalidSourceState, LibraryLocked,
+    BlobCorrupt, CommitIncomplete, CrossDevice, ImmutableBlob, ImmutableImage, ImmutableRevision, InvalidBlob, InvalidEnvelope, InvalidSourceState, LibraryLocked,
     LinkRefused, LockUnavailable, MalformedRecord, NameCollision, NotALibrary, PendingRecovery,
     RecordNotFound, RecoveryBlocked, RecoveryFailed, RevisionReferenced, StaleWrite, StoreError,
     UnstorableIdentifier,
     UnsupportedFormat, WriteConflict, WriteDenied,
 )
 from .jsonfmt import etag
-from .library import CommitResult, LibraryStore, RecoveryReport, Transaction
+from .library import CommitResult, LibraryStore, RecoveryReport, SourceFacts, Transaction
 from .loader import (
-    BrokenRef, CampaignRelations, KnowledgeScan, LibraryView, LoadProblem, StoredDefinition, StoredKnowledgeRecord,
-    StoredRecord, StoredScopeRecord, StoredSource,
+    BrokenRef, CampaignRelations, KnowledgeScan, LibraryView, LoadProblem, StoredAssetRecord, StoredDefinition,
+    StoredKnowledgeRecord, StoredRecord, StoredScopeRecord, StoredSource,
 )
+from .media import MAX_BLOB_BYTES, MEDIA, ImageBlob, sniff
 from .lock import Locker, OsLocker, ProcessLocker
 from .replica import CanonicalScan
 
 __all__ = [
-    "BrokenRef", "CampaignRelations", "CanonicalScan", "CommitIncomplete", "CommitResult", "CrossDevice",
-    "DiskOps", "FileOps",
+    "AssetRecord", "BlobCorrupt", "ImageBlob", "ImmutableBlob", "ImmutableImage", "InvalidBlob", "MAX_BLOB_BYTES",
+    "MEDIA", "SourceFacts", "StoredAssetRecord", "sniff",
+    "BrokenRef", "CampaignRelations", "CanonicalScan", "CommitIncomplete", "CommitResult", "CrossDevice", "DiskOps", "FileOps",
     "ImmutableRevision", "InvalidEnvelope", "InvalidSourceState", "LibraryLocked", "LibraryStore",
     "KnowledgeRecord", "KnowledgeScan",
     "LibraryView", "LinkRefused", "LinkSpec", "LoadProblem", "LockUnavailable", "Locker",

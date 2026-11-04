@@ -23,6 +23,10 @@
 
 Planned, authorized, fully booked OpenAI-compatible model calls. Endpoints are trusted configuration, and every attempt is booked on the turn's ledger. See [PROVIDERS.md](PROVIDERS.md).
 
+### Effective definitions and snapshots (implemented: `grimoire.core.portrayal`, `grimoire.core.snapshot`, `grimoire.effective`)
+
+A derived portrayal names its pinned base in its own payload and composes over it with explicit inherit/replace/clear and field provenance. A chat or selection is frozen for one operation from one loaded library, with or without a world. See [EFFECTIVE_VIEWS.md](EFFECTIVE_VIEWS.md).
+
 ### Library location and V1 isolation (implemented: `grimoire.library`)
 
 `resolve_library()` returns the V2 library and what selected it (`default` or `env`); `python -m grimoire.library` prints the same. Resolution is **read-only**: it creates nothing and never opens or lists a V1 directory.
@@ -58,11 +62,11 @@ Planned, authorized, fully booked OpenAI-compatible model calls. Endpoints are t
     events/                           # committed happenings and consequences
     evidence/                         # observations, reports, beliefs and provenance
     relations/                        # scoped typed relationship records
-  assets/                             # content-addressed image objects and placements
+  assets/                             # content-addressed image blobs (018; objects and placements live with their owner)
   .cache/                             # disposable derived graph, search, embeddings
 ```
 
-The native store's accepted first-slice layout (`sources/<segments>/_source/…`, `campaigns/<id>/instances/…`) and its revision, recovery and isolation contract are in [STORAGE.md](STORAGE.md); the first-slice relation schema (`campaigns/<id>/relations/`) and graph semantics are in [GRAPH.md](GRAPH.md). Data files must remain usable by humans and external agents. Derived indexes, embeddings and cached actor views are disposable and may not become a second canonical store.
+Image objects and placements (018) deliberately live under their owning source's `_source/` or their campaign, not in `assets/`; only content-addressed blobs are library-global. See [IMAGES](IMAGES.md). The native store's accepted first-slice layout (`sources/<segments>/_source/…`, `campaigns/<id>/instances/…`) and its revision, recovery and isolation contract are in [STORAGE.md](STORAGE.md); the first-slice relation schema (`campaigns/<id>/relations/`) and graph semantics are in [GRAPH.md](GRAPH.md). Data files must remain usable by humans and external agents. Derived indexes, embeddings and cached actor views are disposable and may not become a second canonical store.
 
 ## Wave 2 independent domain and storage contracts (planned)
 
@@ -78,7 +82,7 @@ Wave 2's independent exit proofs are both **native revisioned storage with typed
 
 ## World-optional chats and reusable characters (planned after 010)
 
-A reusable authored character may exist in a standalone catalog **outside any world**. Elderfen's Regency, Modern, Mecha and Vampire character portrayals can declare **explicit pinned derivation links** to an optional shared Mara concept, retaining distinct authored occupations, species, biographies, relationships and sources. **Same name does not mean same individual or derivation.** The 009 entity implementation composes definition-to-instance facets, but it does *not* compose one definition from another; that first proof belongs to **022**, with explicit inherit/replace/clear and source-revision provenance. Art, voice, source merge and relation remapping remain separately owned.
+A reusable authored character may exist in a standalone catalog **outside any world**. Elderfen's Regency, Modern, Mecha and Vampire character portrayals can declare **explicit pinned derivation links** to an optional shared Mara concept, retaining distinct authored occupations, species, biographies, relationships and sources. **Same name does not mean same individual or derivation.** The 009 entity implementation composes definition-to-instance facets, but it does *not* compose one definition from another; that first proof belongs to **022** (first slice implemented: [EFFECTIVE_VIEWS](EFFECTIVE_VIEWS.md)), with explicit inherit/replace/clear and source-revision provenance. Art, voice, source merge and relation remapping remain separately owned.
 
 **A world is optional for play.** Creating a conversation allocates one minimal **campaign identity namespace** automatically, so `InstanceRef`s, actor knowledge and accepted history remain independent; no worldbuilding wizard or heavy authoring records are needed. A **chat** is a separate persistent thread inside that scope, with one canonical history, optional launch provenance and multiple character/scenario/lorebook associations. Naming the scope as a campaign or later attaching/creating a world must not move or rewrite that chat or the actor IDs. **107** extends 010's durable file store with these chat/scope records and rebuildable navigation links; 037 imports standalone cards in Wave 4, 035 runs text chats in Wave 5, 036 migrates ST chat histories, and 052/065 build quick-start and fuller navigation.
 

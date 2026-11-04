@@ -113,7 +113,10 @@ class DefinitionLink:
         return (self.relation, self.subject, self.object)
 
 
-def _name_key(name: str) -> str:
+def name_key(name: str) -> str:
+    """The comparison form of a display name (NFKC, casefolded, whitespace-collapsed); never identity."""
+    if not isinstance(name, str):
+        raise ValueError("a name must be text")
     return " ".join(unicodedata.normalize("NFKC", name).casefold().split())
 
 
@@ -172,7 +175,7 @@ class DefinitionIndex:
             if ref.revision in revisions:
                 raise IdentityConflict(f"definition registered twice: {ref}", (ref.source,))
             revisions[ref.revision] = definition
-            self._names.setdefault(_name_key(definition.name), set()).add(ref.entity_key)
+            self._names.setdefault(name_key(definition.name), set()).add(ref.entity_key)
 
     def _choose_heads(self, declared: dict[SourceRef, str]) -> dict[EntityKey, str]:
         heads: dict[EntityKey, str] = {}
@@ -278,7 +281,7 @@ class DefinitionIndex:
         """Candidates whose name (in any revision) matches; never a selection."""
         if not isinstance(name, str):
             raise ValueError("a name must be text")
-        keys = self._names.get(_name_key(name), set())
+        keys = self._names.get(name_key(name), set())
         return tuple(sorted(
             (SourceRef(*key) for key in keys if kind is None or key[1] == kind), key=str
         ))

@@ -21,7 +21,8 @@ from pathlib import Path
 from types import MappingProxyType
 
 from grimoire.core.identity import (
-    ChatRef, IdentityConflict, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef, validate_segment,
+    ChatRef, IdentityConflict, ImageRef, InstanceRef, KnowledgeRef, PlacementRef, RelationRef, ScopeRef, SourceRef,
+    validate_segment,
 )
 from grimoire.core.index import DefinitionIndex, SourceDescriptor
 from grimoire.library import LibraryPathError, check_write_destination
@@ -31,29 +32,32 @@ from . import engine, loader, replica
 from .diskops import DiskOps, FileOps, is_link, lstat_or_none
 from .engine import Access, Settlement
 from .envelope import (
-    EnvelopeError, KnowledgeRecord, RecordEnvelope, ScopeRecord, SourceManifest, knowledge_record_document,
-    parse_knowledge_record, parse_record, parse_scope_record, parse_source, record_document, scope_record_document,
+    AssetRecord, EnvelopeError, KnowledgeRecord, RecordEnvelope, ScopeRecord, SourceManifest, asset_record_document,
+    knowledge_record_document, parse_asset_record, parse_knowledge_record, parse_record, parse_scope_record,
+    parse_source, record_document, scope_record_document,
     source_document,
 )
 from .errors import (
-    CommitIncomplete, ImmutableRevision, InvalidEnvelope, InvalidSourceState, LinkRefused, NameCollision,
-    NotALibrary, LedgerBusy, PendingRecovery, RecoveryBlocked, RecoveryFailed, StaleWrite, StoreError, WriteConflict,
-    WriteDenied,
+    BlobCorrupt, CommitIncomplete, ImmutableBlob, ImmutableImage, ImmutableRevision, InvalidEnvelope,
+    InvalidSourceState, LinkRefused, NameCollision, NotALibrary, LedgerBusy, PendingRecovery, RecordNotFound,
+    RecoveryBlocked, RecoveryFailed, StaleWrite, StoreError, UnstorableIdentifier, WriteConflict, WriteDenied,
 )
 from .replica import CanonicalScan
 from .guard import Guard, Limits, RootIdentity
 from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, render
 from .layout import (
-    CAMPAIGNS, CONFLICTS, DISCARD_MARKER, INSTANCES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER, REPAIR_MARKER, SYNC,
-    TXN, Parts, address_parts, classify, conflict_parts, definition_parts, instance_parts, is_kept_target,
-    kept_address, ledger_folder, ledger_name, ledger_parts, ledger_seq, logical, manifest_parts, sync_state_parts,
+    CAMPAIGNS, CONFLICTS, DISCARD_MARKER, IMAGES, INSTANCES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER, PLACEMENTS,
+    REPAIR_MARKER, SYNC, TXN, Parts, address_parts, blob_parts, classify, conflict_parts, definition_parts,
+    image_parts, instance_parts, is_kept_target, kept_address, ledger_folder, ledger_name, ledger_parts, ledger_seq,
+    logical, manifest_parts, name_key, sync_state_parts,
 )
 from .ledger import Head, Ledger, read_ledger, render_batches
 from .loader import (
-    CampaignRelations, KnowledgeScan, LibraryView, StoredDefinition, StoredKnowledgeRecord, StoredRecord,
-    StoredScopeRecord, StoredSource,
+    CampaignRelations, KnowledgeScan, LibraryView, LoadProblem, StoredAssetRecord, StoredDefinition,
+    StoredKnowledgeRecord, StoredRecord, StoredScopeRecord, StoredSource,
 )
+from .media import MAX_BLOB_BYTES, ImageBlob
 from .lock import Locker, OsLocker
 
 #: Authorization outcomes that concern one path; a partial commit drops those puts (019).
@@ -110,6 +114,16 @@ class LibraryStore:
         #: a ledger flush from inside a commit re-enters; another thread waits its turn.
         self.lock = threading.RLock()
         self._authority: object | None = None
+        #: per-source (fingerprint, slim scan), per-source (fingerprint, view) and the whole-library
+        #: exclusions computed from them; see source_facts()
+        self._scans: dict[str, tuple[tuple, loader.SourceScan]] = {}
+        self._views: dict[str, tuple[tuple, _View]] = {}
+        self._exclusions: tuple[dict[str, tuple], frozenset[str]] | None = None
+        #: bumped by every commit and recovery of this store, so a caller's SourceFacts expire
+        self.generation = 0
+        #: inside read_pass(): the facts are verified once and reused until a commit
+        self._pass_depth = 0
+        self._pass_facts: SourceFacts | None = None
         self._capability: object | None = None
         self._writers: dict[str, LedgerWriter] = {}
         self._staging = False  # a record commit has staged temps or a journal
@@ -442,12 +456,15 @@ class LibraryStore:
                 report = RecoveryReport.of(engine.recover(self._access))
             except OSError as error:
                 raise RecoveryBlocked(f"recovery could not finish: {error}") from error
+            finally:
+                self.generation += 1
+                self._pass_facts = None
             self.last_recovery = report
             return report
 
     # -- reading -----------------------------------------------------------------
-    def read(self, ref: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef
-             ) -> StoredRecord | StoredScopeRecord | StoredKnowledgeRecord:
+    def read(self, ref: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef | ImageRef
+             | PlacementRef) -> StoredRecord | StoredScopeRecord | StoredKnowledgeRecord | StoredAssetRecord:
         """One record by exact address (a definition must be pinned)."""
         if isinstance(ref, SourceRef) and not ref.pinned:
             raise ValueError("read a pinned revision; resolve unpinned references with load().index")
@@ -457,7 +474,134 @@ class LibraryStore:
                 return loader.read_scope_record(self._access, address_parts(ref))
             if isinstance(ref, KnowledgeRef):
                 return loader.read_knowledge_record(self._access, address_parts(ref))
+            if isinstance(ref, (ImageRef, PlacementRef)):
+                return loader.read_asset_record(self._access, address_parts(ref))
             return loader.read_record(self._access, address_parts(ref))
+
+    # -- images and blobs (018) ---------------------------------------------------
+    def campaign_exists(self, campaign_id: str) -> bool:
+        """A canonical ``scope.json`` or at least one canonical instance file exists (018 §11.4)."""
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return loader.campaign_exists(self._access, campaign_id)
+
+    def _blob_info(self, sha256: str, ext: str) -> tuple[Parts, str, os.stat_result | None]:
+        parts = blob_parts(sha256, ext)
+        presence = self._access.presence(parts)
+        if presence != "present":
+            return parts, "lookalike" if presence == "mismatch" else "absent", None
+        self._access.guard.check_read(parts)  # LinkRefused for a linked ancestor or the file itself
+        info = lstat_or_none(self._access.path(parts))
+        if info is None:
+            return parts, "absent", None
+        if not stat.S_ISREG(info.st_mode):
+            raise UnstorableIdentifier(f"{'/'.join(parts)} is not a regular file")
+        return parts, "present", info
+
+    def blob_stat(self, sha256: str, ext: str) -> tuple[str, int | None]:
+        """``(presence, size)``: presence is ``absent``, ``present`` or ``lookalike`` (another spelling).
+
+        Never reads the bytes; a link raises ``LinkRefused`` and a non-regular file ``UnstorableIdentifier``.
+        """
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                _, presence, info = self._blob_info(sha256, ext)
+        return presence, None if info is None else info.st_size
+
+    def blob_etag(self, sha256: str, ext: str) -> str | None:
+        """The etag of the blob file's current bytes, or ``None`` if it is absent.
+
+        A file over ``MAX_BLOB_BYTES`` is corrupt by definition and raises ``BlobCorrupt`` without
+        being read; a look-alike spelling raises ``NameCollision``.
+        """
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                parts, presence, info = self._blob_info(sha256, ext)
+            if presence == "lookalike":
+                raise NameCollision(f"{'/'.join(parts)} collides with a differently spelled existing entry")
+            if info is None:
+                return None
+            if info.st_size > MAX_BLOB_BYTES:
+                raise BlobCorrupt(sha256, None)
+            data = self._access.read(parts)
+        return None if data is None else etag(data)
+
+    def read_blob(self, sha256: str, ext: str) -> bytes:
+        """The blob's exact bytes, verified against its name; ``BlobCorrupt`` otherwise."""
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                parts, presence, info = self._blob_info(sha256, ext)
+            if info is None:
+                raise RecordNotFound("/".join(parts))
+            if info.st_size > MAX_BLOB_BYTES:
+                raise BlobCorrupt(sha256, None)
+            data = self._access.read(parts)
+        if data is None:
+            raise RecordNotFound("/".join(parts))
+        if len(data) > MAX_BLOB_BYTES:
+            raise BlobCorrupt(sha256, None)
+        if etag(data) != "sha256:" + sha256:
+            raise BlobCorrupt(sha256, etag(data))
+        return data
+
+    def list_images(self, scope: str) -> tuple[tuple[ImageRef, ...], tuple[LoadProblem, ...]]:
+        """Canonical image files of one source or ``campaign:<id>``, plus problems; contents are not read."""
+        folder = image_parts(ImageRef(scope, "x"))[:-1]
+        return self._list_assets(folder, "image", ImageRef(scope, "x").source)  # type: ignore[return-value]
+
+    def list_placements(self, subject: SourceRef | InstanceRef,
+                        ) -> tuple[tuple[PlacementRef, ...], tuple[LoadProblem, ...]]:
+        """Canonical placement files of one subject, plus problems; contents are not read."""
+        folder = address_parts(PlacementRef(subject, "x"))[:-1]
+        source = subject.source if isinstance(subject, SourceRef) else None
+        return self._list_assets(folder, "placement", source)  # type: ignore[return-value]
+
+    def _list_assets(self, folder: Parts, kind: str, source: str | None) -> tuple[tuple, tuple[LoadProblem, ...]]:
+        problems: list[LoadProblem] = []
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                try:
+                    for depth in range(1, len(folder) + 1):  # a file where a folder belongs is damage
+                        info = lstat_or_none(self._access.path(folder[:depth]))
+                        if info is None:
+                            break
+                        if not stat.S_ISDIR(info.st_mode) and not is_link(self._access.path(folder[:depth])):
+                            return (), (LoadProblem("/".join(folder[:depth]), "unrecognized",
+                                                    "a file where a folder belongs", source),)
+                    presence = self._access.presence(folder)
+                    if presence == "mismatch":  # only a differently spelled folder: never silent
+                        return (), (LoadProblem("/".join(folder), "name_mismatch",
+                                                "only a differently spelled folder exists", source),)
+                    if presence != "present":
+                        return (), ()
+                    self._access.guard.check_read(folder)
+                    problems.extend(self._lookalike_siblings(folder, source))
+                    found = loader.walk_assets(self._access, folder, 0, kind, problems, source)
+                except LinkRefused as error:
+                    return (), (LoadProblem("/".join(folder), "link", str(error), source),)
+                except OSError as error:
+                    return (), (LoadProblem("/".join(folder), "unreadable", f"cannot list: {error}", source),)
+        return tuple(sorted(found, key=str)), tuple(problems)
+
+    def _lookalike_siblings(self, folder: Parts, source: str | None) -> list[LoadProblem]:
+        """Differently spelled siblings of the asset folders on the way down (``Wren-b`` beside
+        ``wren-b``): they may hold records under another spelling, so they are reported."""
+        found = []
+        top = next((at for at, part in enumerate(folder) if part in (IMAGES, PLACEMENTS)), len(folder))
+        for depth in range(top + 1, len(folder) + 1):
+            parent, name = folder[:depth - 1], folder[depth - 1]
+            key = name_key(name)
+            for other in self._access.list_dir(parent):
+                if other != name and name_key(other) == key:
+                    found.append(LoadProblem("/".join(parent + (other,)), "name_mismatch",
+                                             "a differently spelled folder beside the canonical one", source))
+        return found
 
     def campaign_presence(self, campaign_id: str) -> str:
         """``absent``, ``present`` or ``mismatch`` (only a look-alike folder) for ``campaigns/<id>``."""
@@ -495,45 +639,163 @@ class LibraryStore:
             with self._access.cached_listings():
                 return loader.campaign_knowledge(self._access, campaign_id)
 
-    def check_source(self, source_id: str) -> StoredSource | str:
-        """One source as ``load()`` would admit it, or why not (``missing_source``/``excluded_source``).
+    def source_facts(self) -> SourceFacts:
+        """One verified answer to "which sources would ``load()`` exclude?", reusable by a caller.
 
-        Scans only that source, so its cost does not grow with the library. Exclusions that
-        only a whole-library build can see (two sources' ``identity_conflict``) are not detected.
+        Incremental and cached: each source is scanned again only when a stat-only fingerprint of
+        its manifest and revision files changed (art and campaign writes never count), and
+        ``load()``'s own exclusion algorithm (``loader.admit``) then runs in memory over the
+        cached scans. An unchanged library costs one stat per manifest and revision entry, and
+        inside ``read_pass()`` only once per pass. A scan that failed with an I/O error is never
+        cached, so a transient error affects one call only.
+
+        Pass the result to ``check_source``/``check_definition`` to validate many references
+        against one verification. It expires with ``generation`` (any commit or recovery of this
+        store); an edit made by another program after it was taken is not seen until then.
         """
         with self.lock:
             self._require_consistent()
+            if self._pass_depth and self._pass_facts is not None and self._pass_facts.generation == self.generation:
+                return self._pass_facts
             with self._access.cached_listings():
-                scan = loader.contained_scan(self._access, source_id)
-        verdict = _scan_verdict(scan)
-        return verdict if verdict is not None else scan.stored  # type: ignore[return-value]
+                ids = loader.discover_sources(self._access)
+                prints = {source_id: loader.source_fingerprint(self._access, source_id) for source_id in ids}
+                if self._exclusions is not None and self._exclusions[0] == prints:
+                    excluded = self._exclusions[1]
+                else:
+                    scans = {}
+                    for source_id in ids:
+                        cached = self._scans.get(source_id)
+                        scans[source_id] = (cached[1] if cached is not None and cached[0] == prints[source_id]
+                                            else loader.slim(loader.contained_scan(self._access, source_id)))
+                    self._scans = {source_id: (prints[source_id], scan) for source_id, scan in scans.items()
+                                   if not loader.transient(scan)}
+                    excluded = frozenset(loader.admit(scans, []).reported)
+                    transient = any(loader.transient(scan) for scan in scans.values())
+                    self._exclusions = None if transient else (prints, excluded)
+                    self._views = {source_id: entry for source_id, entry in self._views.items()
+                                   if source_id in self._scans and entry[0] == self._scans[source_id][0]}
+            facts = SourceFacts(self.generation, MappingProxyType(dict(prints)), excluded)
+            if self._pass_depth:
+                self._pass_facts = facts
+            return facts
 
-    def check_definition(self, ref: SourceRef) -> StoredDefinition | str:
-        """The definition ``ref`` resolves to under ``load()``'s rules for its own source, or a reason.
+    def excluded_sources(self) -> frozenset[str]:
+        """Every source ``load()`` would report as excluded, including by a cross-source
+        ``identity_conflict`` that no one-source scan can see (see ``source_facts``)."""
+        return self.source_facts().excluded
+
+    @contextlib.contextmanager
+    def read_pass(self) -> Iterator[None]:
+        """Hold the store lock and verify ``source_facts`` once for the whole block.
+
+        For a service validating many references at once; a commit inside the block makes the
+        next check verify again.
+        """
+        with self.lock:
+            self._pass_depth += 1
+            try:
+                yield
+            finally:
+                self._pass_depth -= 1
+                if not self._pass_depth:
+                    self._pass_facts = None
+
+    def _current(self, facts: SourceFacts | None) -> SourceFacts:
+        return facts if facts is not None and facts.generation == self.generation else self.source_facts()
+
+    def _view(self, source_id: str, facts: SourceFacts) -> _View:
+        """One source's admission facts, derived once per fingerprint from its cached scan."""
+        fingerprint = facts.prints.get(source_id)
+        cached = self._views.get(source_id)
+        if fingerprint is not None and cached is not None and cached[0] == fingerprint:
+            if self._manifest_unchanged(source_id, cached[1].stored):
+                return cached[1]
+            self._forget(source_id)  # edited without changing its stat (a restore, coarse times)
+        entry = self._scans.get(source_id)
+        if fingerprint is not None and entry is not None and entry[0] == fingerprint \
+                and self._manifest_unchanged(source_id, entry[1].stored):
+            scan = entry[1]
+        else:  # not a discovered source (missing), or its scan was transient: scan it now
+            with self._access.cached_listings():
+                scan = loader.slim(loader.contained_scan(self._access, source_id))
+        verdict, index, dropped = _scan_verdict(scan), None, frozenset()
+        if verdict is None:
+            definitions, heads, gone, _ = loader.evaluate(scan)
+            dropped = frozenset(gone)
+            manifest = scan.stored.manifest  # type: ignore[union-attr]
+            try:
+                index = DefinitionIndex([SourceDescriptor(source_id, manifest.owner, manifest.title)],
+                                        definitions, heads)
+            except IdentityConflict:
+                index = None
+        view = _View(verdict, scan.stored, index, dropped)
+        if fingerprint is not None and not loader.transient(scan):
+            self._views[source_id] = (fingerprint, view)
+        return view
+
+    def _manifest_unchanged(self, source_id: str, stored: StoredSource | None) -> bool:
+        """One small read: the manifest (heads, links, owner) still has the bytes the view used."""
+        if stored is None:
+            return True  # absence is in the fingerprint
+        try:
+            return self._access.etag_of(manifest_parts(source_id)) == stored.etag
+        except (StoreError, ValueError, OSError):
+            return False
+
+    def _forget(self, source_id: str) -> None:
+        self._views.pop(source_id, None)
+        self._scans.pop(source_id, None)
+        self._exclusions = None
+
+    def check_source(self, source_id: str, facts: SourceFacts | None = None) -> StoredSource | str:
+        """One source as ``load()`` would admit it, or why not (``missing_source``/``excluded_source``).
+
+        Agrees with ``load()``, including whole-library exclusions. While the source and ``facts``
+        (default: verified now, see ``source_facts``) are unchanged it parses nothing: it reads only
+        the manifest, to compare its etag.
+        """
+        with self.lock:
+            self._require_consistent()
+            facts = self._current(facts)
+            view = self._view(source_id, facts)
+            verdict = view.verdict or ("excluded_source" if source_id in facts.excluded else None)
+        return verdict if verdict is not None else view.stored  # type: ignore[return-value]
+
+    def check_definition(self, ref: SourceRef, facts: SourceFacts | None = None, *,
+                         _retried: bool = False) -> StoredDefinition | str:
+        """The definition ``ref`` resolves to under ``load()``'s rules, or a reason.
 
         Reasons: ``missing_source``, ``excluded_source``, ``entity_dropped``, ``missing_entity``,
         ``missing_revision``. An unpinned ref follows the declared head, or the only revision.
-        Same scope limit as ``check_source``.
+        While the source and ``facts`` are unchanged it parses nothing but reads the manifest (an
+        etag check) and the one resolved revision file.
         """
         with self.lock:
             self._require_consistent()
-            with self._access.cached_listings():
-                scan = loader.contained_scan(self._access, ref.source)
-        verdict = _scan_verdict(scan)
-        if verdict is not None:
-            return verdict
-        definitions, heads, dropped, _ = loader.evaluate(scan)
-        if (ref.kind, ref.entity_id) in dropped:
-            return "entity_dropped"
-        manifest = scan.stored.manifest  # type: ignore[union-attr]
-        try:
-            index = DefinitionIndex([SourceDescriptor(ref.source, manifest.owner, manifest.title)], definitions, heads)
-        except IdentityConflict:
-            return "excluded_source"
-        broken = index.check(ref)
-        if broken is not None:
-            return broken.reason
-        return index.resolve(ref)  # type: ignore[return-value]
+            facts = self._current(facts)
+            view = self._view(ref.source, facts)
+            if view.verdict is not None:
+                return view.verdict
+            if ref.source in facts.excluded or view.index is None:
+                return "excluded_source"
+            if (ref.kind, ref.entity_id) in view.dropped:
+                return "entity_dropped"
+            broken = view.index.check(ref)
+            if broken is not None:
+                return broken.reason
+            found = view.index.resolve(ref)
+            try:
+                stored = loader.read_record(self._access, definition_parts(found.ref))  # type: ignore[attr-defined]
+            except (StoreError, ValueError, OSError):
+                stored = None
+            if stored is None or stored.etag != found.etag:  # type: ignore[attr-defined]
+                # changed (or unreadable) since it was scanned: forget this source, decide afresh once
+                self._forget(ref.source)
+                if _retried:
+                    return "missing_revision" if stored is None else "excluded_source"
+                return self.check_definition(ref, self.source_facts(), _retried=True)
+            return StoredDefinition(found.ref, found.name, stored.envelope, stored.etag)  # type: ignore[attr-defined]
 
     def read_source(self, source_id: str) -> StoredSource:
         with self.lock:
@@ -615,6 +877,25 @@ class LibraryStore:
         return Transaction(self)
 
 
+@dataclass(frozen=True)
+class SourceFacts:
+    """One verified answer to which sources ``load()`` excludes (``LibraryStore.source_facts``)."""
+
+    generation: int
+    prints: Mapping[str, tuple]
+    excluded: frozenset[str]
+
+
+@dataclass(frozen=True)
+class _View:
+    """One source's admission facts, from its slim scan: never holds record payloads."""
+
+    verdict: str | None  # missing_source / excluded_source from its own scan
+    stored: StoredSource | None
+    index: DefinitionIndex | None  # None: an identity conflict inside the source
+    dropped: frozenset
+
+
 def _scan_verdict(scan: loader.SourceScan) -> str | None:
     """Why ``load()`` would not admit this source, or ``None``."""
     if scan.excluded_by:
@@ -630,7 +911,8 @@ class _Put:
     address: ResourcePath | None  # what is authorized; None for trusted ledger batches and sync state
     data: bytes
     expected: str | None
-    envelope: RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord | None  # records only
+    #: records only; None for ledger batches, kept versions and sync state
+    envelope: RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord | AssetRecord | ImageBlob | None
     kind: str = "record"  # record | ledger | keep (a kept version) | state (``.sync``)
     key: str = ""  # the preview / approval / result key
     replace_unreferenced: bool = False
@@ -712,7 +994,7 @@ class Transaction:
         self._keys: set[str] = set()  # preview keys staged so far
         self._committed = False
 
-    def put(self, envelope: RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord,
+    def put(self, envelope: RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord | AssetRecord | ImageBlob,
             expected: str | None) -> str:
         """Stage a write; ``expected`` is the etag read, or ``None`` for "must not exist yet"."""
         if self._committed:
@@ -739,12 +1021,26 @@ class Transaction:
             envelope.check_writable()
             parts = address_parts(envelope.address)
             document = knowledge_record_document(envelope)
+        elif isinstance(envelope, AssetRecord):
+            envelope.check_writable()
+            if envelope.is_image and expected is not None:
+                raise ImmutableImage(f"{envelope.address} exists; a different picture is a new image object")
+            parts = address_parts(envelope.address)
+            document = asset_record_document(envelope, expected)
+        elif isinstance(envelope, ImageBlob):
+            if expected == envelope.etag:
+                raise ImmutableBlob(f"blob {envelope.sha256} already holds exactly these bytes")
+            # None creates; any other etag repairs a file whose bytes no longer hash to its name (CAS)
+            parts = blob_parts(envelope.sha256, envelope.ext)
+            document = None
         else:
-            raise InvalidEnvelope("put takes a RecordEnvelope, a SourceManifest, a ScopeRecord or a KnowledgeRecord")
+            raise InvalidEnvelope("put takes a RecordEnvelope, SourceManifest, ScopeRecord, KnowledgeRecord, AssetRecord "
+                                  "or ImageBlob")
         if parts in self._puts:
             raise InvalidEnvelope(f"{'/'.join(parts)} is written twice in one transaction")
         address = logical(parts)
-        self._add(_Put(parts, address, render(document), expected, envelope, "record", str(address)))
+        data = envelope.data if isinstance(envelope, ImageBlob) else render(document)  # type: ignore[arg-type]
+        self._add(_Put(parts, address, data, expected, envelope, "record", str(address)))
         return str(address)
 
     def _add(self, put: _Put) -> None:
@@ -905,7 +1201,11 @@ class Transaction:
             if any(put.kind != "state" for put in puts):  # sync state alone is trusted bookkeeping
                 self._require_writable_records(handle)
             self._committed = True
-            return _Commit(store, puts, handle, dict(approvals or {}), on_denied).run()
+            try:
+                return _Commit(store, puts, handle, dict(approvals or {}), on_denied).run()
+            finally:
+                store.generation += 1  # a commit may change admission: callers' facts expire
+                store._pass_facts = None
 
 
 class _Commit:
@@ -1062,6 +1362,7 @@ class _Commit:
 
     def _check_sources(self) -> None:
         touched: dict[str, tuple[SourceManifest | None, list[SourceRef]]] = {}
+        art: set[str] = set()  # sources receiving images or placements
         for put in self.puts:
             if put.kind != "record":
                 continue
@@ -1076,9 +1377,44 @@ class _Commit:
                 ref = put.envelope.address
                 assert isinstance(ref, SourceRef)
                 touched.setdefault(ref.source, (None, []))[1].append(ref)
+            elif isinstance(put.envelope, AssetRecord):
+                owner = _asset_owner(put.envelope)
+                if owner[0] == "source":
+                    touched.setdefault(owner[1], (None, []))  # an admitted manifest is required (018)
+                    art.add(owner[1])
+                else:
+                    self._check_campaign(owner[1])
         proposed = {source_id: manifest for source_id, (manifest, _) in touched.items() if manifest is not None}
+        facts = None  # verified once for the whole commit, and only if an art-only source needs it
         for source_id, (manifest, new_refs) in touched.items():
+            if manifest is None and not new_refs:  # art only: the source's own admission, from its cached view
+                facts = facts or self.store.source_facts()
+                verdict = self.store._view(source_id, facts).verdict
+                if verdict == "missing_source":
+                    raise InvalidSourceState(f"{source_id} has no manifest; write one in this transaction")
+                if verdict is not None:
+                    raise InvalidSourceState(f"{source_id} is unreadable or excluded on disk; repair it first")
+                continue
             _validate_source(self.access, source_id, manifest, new_refs, proposed)
+            if source_id in art:  # a manifest rewrite cannot clear exclusions its records cause (ownership)
+                manifest_path = "/".join(manifest_parts(source_id))
+                blocking = [problem for problem in loader.contained_scan(self.access, source_id).excluded_by
+                            if problem.path != manifest_path]
+                if blocking:
+                    raise InvalidSourceState(f"{source_id} is excluded by its own files ({blocking[0].code}); "
+                                             "repair them before adding art")
+
+    def _check_campaign(self, campaign: str) -> None:
+        """A campaign asset needs a campaign: on disk, or this transaction's scope record or instance."""
+        for put in self.puts:
+            envelope = put.envelope
+            if isinstance(envelope, ScopeRecord) and envelope.address == ScopeRef(campaign):
+                return
+            if isinstance(envelope, RecordEnvelope) and isinstance(envelope.address, InstanceRef) \
+                    and envelope.address.campaign_id == campaign:
+                return
+        if not loader.campaign_exists(self.access, campaign):
+            raise InvalidSourceState(f"campaign {campaign} does not exist: create its scope or an instance first")
 
     def _authorize(self) -> list[int]:
         """Authorize every put once; the positions denied in partial mode (else raise)."""
@@ -1164,11 +1500,14 @@ class _Commit:
 
 def _unsupported(data: bytes, envelope: object) -> bool:
     """Whether the current file is a format this store must not overwrite (a newer version)."""
+    if isinstance(envelope, ImageBlob):
+        return False  # bytes, never parsed
     parse = (parse_source if isinstance(envelope, SourceManifest) else
              parse_scope_record if isinstance(envelope, ScopeRecord) else
              # Unreachable for a create-only knowledge put (an existing file is already `exists`);
              # kept so a future revisioned family cannot silently fall through to parse_record.
-             parse_knowledge_record if isinstance(envelope, KnowledgeRecord) else parse_record)
+             parse_knowledge_record if isinstance(envelope, KnowledgeRecord) else
+             parse_asset_record if isinstance(envelope, AssetRecord) else parse_record)
     try:
         parse(parse_strict(data))
     except EnvelopeError as error:
@@ -1176,6 +1515,17 @@ def _unsupported(data: bytes, envelope: object) -> bool:
     except JsonError:
         return False
     return False
+
+
+def _asset_owner(record: AssetRecord) -> tuple[str, str]:
+    """``("source", id)`` or ``("campaign", id)``: who an asset record belongs to, by its address."""
+    address = record.address
+    if isinstance(address, ImageRef):
+        return ("campaign", address.campaign_id) if address.campaign_id is not None else ("source", address.scope)
+    subject = address.subject
+    if isinstance(subject, InstanceRef):
+        return ("campaign", subject.campaign_id)
+    return ("source", subject.source)
 
 
 def _validate_source(access: Access, source_id: str, manifest: SourceManifest | None,

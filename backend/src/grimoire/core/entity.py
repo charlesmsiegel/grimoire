@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, Protocol
 
 from .facets import Agent, Communicative, Durable, Facet, FacetBundle, FacetError, FacetSet, Portable
 from .identity import InstanceRef, SourceRef, validate_segment
@@ -236,6 +236,35 @@ class EffectiveEntity:
     description: str = ""
 
 
+class AuthoredBase(Protocol):
+    """What an instance composes over: a complete authored definition or an effective one."""
+
+    @property
+    def ref(self) -> SourceRef: ...
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def nature(self) -> str: ...
+
+    @property
+    def description(self) -> str: ...
+
+    @property
+    def traits(self) -> FacetSet: ...
+
+
+#: An ``extras`` key that makes a revision a derived delta (Effective World Snapshots, 022).
+DERIVATION_KEY = "derivation"
+
+
+def _refuse_derived(definition: EntityDefinition) -> None:
+    if DERIVATION_KEY in definition.extras:
+        raise EntityError(f"{definition.ref} is a derived portrayal; compose it through an effective "
+                          "snapshot, never as a complete definition", "derived_definition")
+
+
 def _definition(instance: EntityInstance, index: DefinitionIndex) -> EntityDefinition | None:
     if instance.source is None:
         return None
@@ -243,13 +272,6 @@ def _definition(instance: EntityInstance, index: DefinitionIndex) -> EntityDefin
     if not isinstance(definition, EntityDefinition):
         raise EntityError(f"{instance.source} is a {type(definition).__name__}; convert it explicitly",
                           "not_entity_definition")
-    if definition.nature == "individual" and instance.ref.kind != definition.ref.kind:
-        raise EntityError(f"an instance of individual {definition.ref} must have kind "
-                          f"{definition.ref.kind!r}, not {instance.ref.kind!r}", "kind_mismatch")
-    if definition.nature == "individual" and instance.individuality is not None:
-        raise EntityError(f"{instance.ref} was individualized from a template, but {definition.ref} "
-                          "is an individual; pin the instance to its source's last template revision",
-                          "not_template")
     return definition
 
 
@@ -271,12 +293,37 @@ def _compose(traits: Iterable[Facet], instance: EntityInstance) -> tuple[FacetSe
     return facets, tuple((name, chosen[name][1]) for name in sorted(chosen))
 
 
-def effective_entity(instance: EntityInstance, index: DefinitionIndex) -> EffectiveEntity:
-    """Validate an instance against its exact source revision and compose its facets."""
+def compose_instance(instance: EntityInstance, base: AuthoredBase | None) -> EffectiveEntity:
+    """Compose an instance over the exact authored base it resolved to (``None``: a campaign original).
+
+    ``base`` is a complete ``EntityDefinition`` or an effective definition (022). A raw derived
+    revision is a delta, not a complete card, and is refused (``derived_definition``). The base must
+    be the instance's own source entity (any revision: a selection may follow a newer head); a base
+    for a campaign original, a missing base for a sourced instance, or another entity's base, such
+    as a namesake, is ``source_mismatch``.
+    """
     if not isinstance(instance, EntityInstance):
         raise TypeError(f"expected an EntityInstance, not {type(instance).__name__}")
-    definition = _definition(instance, index)
-    facets, origins = _compose(definition.traits if definition else (), instance)
+    if isinstance(base, EntityDefinition):
+        _refuse_derived(base)
+    elif base is not None and not (isinstance(getattr(base, "traits", None), FacetSet)
+                                   and isinstance(getattr(base, "ref", None), SourceRef)
+                                   and all(isinstance(getattr(base, label, None), str)
+                                           for label in ("name", "nature", "description"))):
+        raise EntityError(f"{type(base).__name__} is not an authored entity base; convert it explicitly",
+                          "not_entity_definition")
+    if (instance.source is None) != (base is None) or (
+            base is not None and base.ref.entity_key != instance.source.entity_key):  # type: ignore[union-attr]
+        raise EntityError(f"{instance.ref} has source {instance.source}; it cannot compose over "
+                          f"{base.ref if base is not None else 'no base'}", "source_mismatch")
+    if base is not None and base.nature == "individual" and instance.ref.kind != base.ref.kind:
+        raise EntityError(f"an instance of individual {base.ref} must have kind "
+                          f"{base.ref.kind!r}, not {instance.ref.kind!r}", "kind_mismatch")
+    if base is not None and base.nature == "individual" and instance.individuality is not None:
+        raise EntityError(f"{instance.ref} was individualized from a template, but {base.ref} "
+                          "is an individual; pin the instance to its source's last template revision",
+                          "not_template")
+    facets, origins = _compose(base.traits if base is not None else (), instance)
     for value in instance.state:
         if value.facet not in facets:
             raise EntityError(f"{type(value).__name__} needs an effective {value.facet} facet",
@@ -286,13 +333,24 @@ def effective_entity(instance: EntityInstance, index: DefinitionIndex) -> Effect
             raise EntityError(f"integrity {value.current} exceeds {durable.max_integrity}", "invalid_state")
     return EffectiveEntity(
         ref=instance.ref,
-        resolved_source=definition.ref if definition else None,
-        name=instance.local_name or definition.name,
+        resolved_source=base.ref if base is not None else None,
+        name=instance.local_name or base.name,  # type: ignore[union-attr]
         facets=facets,
         origins=origins,
         state=instance.state,
-        description=definition.description if definition else "",
+        description=base.description if base is not None else "",
     )
+
+
+def effective_entity(instance: EntityInstance, index: DefinitionIndex) -> EffectiveEntity:
+    """Validate an instance against its exact source revision and compose its facets.
+
+    A derived portrayal (one whose payload carries ``derivation``) is refused with
+    ``derived_definition``: use an effective snapshot (022) for it.
+    """
+    if not isinstance(instance, EntityInstance):
+        raise TypeError(f"expected an EntityInstance, not {type(instance).__name__}")
+    return compose_instance(instance, _definition(instance, index))
 
 
 # --- capabilities -------------------------------------------------------------
