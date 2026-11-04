@@ -21,15 +21,15 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from grimoire.core.identity import (
-    ChatRef, IdentityConflict, InstanceRef, RelationRef, ScopeRef, SourceRef, validate_segment,
+    ChatRef, IdentityConflict, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef, validate_segment,
 )
 from grimoire.core.index import DIRECTED_RELATIONS, DefinitionIndex, DefinitionLink, SourceDescriptor
 
 from .diskops import is_link, lstat_or_none
 from .engine import Access
 from .envelope import (
-    EnvelopeError, LinkSpec, RecordEnvelope, ScopeRecord, SourceManifest, link_problem, parse_record,
-    parse_scope_record, parse_source,
+    EnvelopeError, KnowledgeRecord, LinkSpec, RecordEnvelope, ScopeRecord, SourceManifest, link_problem,
+    parse_knowledge_record, parse_record, parse_scope_record, parse_source,
 )
 from .errors import (
     AddressMismatch, LinkRefused, MalformedRecord, RecordNotFound, StoreError, UnstorableIdentifier,
@@ -37,8 +37,8 @@ from .errors import (
 )
 from .jsonfmt import JsonError, etag, parse_strict
 from .layout import (
-    CAMPAIGNS, CHATS, CONFLICTS, INSTANCES, SCOPE, MANIFEST, MARKER, RECORDS, RELATIONS, RESERVED_CAMPAIGN_ENTRIES,
-    RESERVED_ROOTS,
+    CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, INSTANCES, SCOPE, MANIFEST, MARKER, RECORDS,
+    RELATIONS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS,
     SOURCE_DIR, SOURCES, SUFFIX, TXN, Parts, classify, is_noise, manifest_parts, name_key,
 )
 
@@ -57,6 +57,30 @@ class StoredScopeRecord:
     record: ScopeRecord
     etag: str
     previous: str | None
+
+
+@dataclass(frozen=True)
+class StoredKnowledgeRecord:
+    record: KnowledgeRecord
+    etag: str
+    previous: None = None
+
+
+@dataclass(frozen=True)
+class KnowledgeScan:
+    """One campaign's ``events/`` and ``evidence/`` trees as found on disk (020); never interpreted.
+
+    ``damaged`` holds a code (``malformed``, ``unsupported_format``, ``address_mismatch``, ``link``)
+    for each canonically named file that cannot be read. ``entries`` is the snapshot a writer
+    compares before committing: every file and link at a canonical or stray position under both
+    trees, as ``(path, type, etag)``. A non-canonical folder appears only in ``problems`` (and any
+    problem already refuses an append); OS/editor noise and empty directories are not state.
+    """
+
+    records: Mapping[KnowledgeRef, StoredKnowledgeRecord]
+    damaged: Mapping[KnowledgeRef, str]
+    problems: tuple[LoadProblem, ...]
+    entries: tuple[tuple[str, str, str | None], ...]
 
 
 @dataclass(frozen=True)
@@ -170,6 +194,34 @@ def read_scope_record(access: Access, parts: Parts) -> StoredScopeRecord:
         raise AddressMismatch(f"{_text(parts)} holds {record.address}, not the record its path names", tag,
                               record.address)
     return StoredScopeRecord(record, tag, previous)
+
+
+def read_knowledge_record(access: Access, parts: Parts) -> StoredKnowledgeRecord:
+    """The knowledge record at ``parts``; its address must be the one its path implies.
+
+    Every refusal carries a fixed detail: the file's own values (a duplicate key, a number) are never echoed.
+    """
+    try:
+        document, tag = _document(access, parts)
+    except MalformedRecord as error:
+        unreadable = error
+    else:
+        unreadable = None
+    if unreadable is not None:
+        raise MalformedRecord(f"{_text(parts)}: not a readable knowledge record (malformed)", unreadable.etag)
+    code = None
+    try:
+        record, _ = parse_knowledge_record(document)
+    except EnvelopeError as error:  # keep only the code: the detail (and __context__) can echo file text
+        code = error.code
+    if code is not None:
+        kind = UnsupportedFormat if code == "unsupported_format" else MalformedRecord
+        raise kind(f"{_text(parts)}: not a readable knowledge record ({code})", tag)
+    found = classify(parts)
+    if found is None or found[1] != record.address:
+        raise AddressMismatch(f"{_text(parts)} holds another knowledge record than its path names", tag,
+                              record.address)
+    return StoredKnowledgeRecord(record, tag)
 
 
 def read_source(access: Access, source_id: str) -> StoredSource:
@@ -730,3 +782,126 @@ def _broken(index: DefinitionIndex, links: list[DefinitionLink], excluded: set[s
                 if getattr(definition, "etag", None) != envelope.base_etag:
                     broken.append(BrokenRef(where, "base_etag", envelope.base_etag, "base_drift"))
     return broken
+
+
+# -- one campaign's events and evidence (020) ---------------------------------------------------
+
+_KNOWLEDGE_TREES = (EVENTS, EVIDENCE)
+
+
+class _KnowledgeWalk:
+    """Collects one campaign's knowledge files; problem details are fixed text, never file content."""
+
+    def __init__(self, access: Access) -> None:
+        self.access = access
+        self.records: dict[KnowledgeRef, StoredKnowledgeRecord] = {}
+        self.damaged: dict[KnowledgeRef, str] = {}
+        self.problems: list[LoadProblem] = []
+        self.entries: list[tuple[str, str, str | None]] = []
+
+    def problem(self, parts: Parts, code: str, detail: str) -> None:
+        self.problems.append(LoadProblem(_text(parts), code, detail))
+
+    def listing(self, parts: Parts) -> list[str]:
+        try:
+            return sorted(self.access.list_dir(parts))
+        except OSError:
+            self.problem(parts, "unreadable", "cannot list this folder")
+            return []
+
+    def link(self, parts: Parts) -> None:
+        self.problem(parts, "link", "links are never followed")
+        self.entries.append((_text(parts), "link", None))
+        found = classify(parts)
+        if found is not None and found[0] == "knowledge":
+            self.damaged[found[1]] = "link"  # type: ignore[index]
+
+    def stray_etag(self, parts: Parts) -> str | None:
+        try:
+            if self.access.too_large(parts):
+                return None
+            data = self.access.read(parts)
+        except (OSError, StoreError, ValueError):
+            return None
+        return None if data is None else etag(data)
+
+    def file(self, parts: Parts) -> None:
+        access = self.access
+        if is_link(access.path(parts)):
+            self.link(parts)
+            return
+        found = classify(parts)
+        if found is not None and found[0] == "knowledge":
+            ref = found[1]
+            try:
+                self.records[ref] = read_knowledge_record(access, parts)  # type: ignore[index]
+            except (StoreError, ValueError, OSError) as error:
+                self.damaged[ref] = _code(error)  # type: ignore[index]
+                self.entries.append((_text(parts), "file", getattr(error, "etag", None)))
+            else:
+                self.entries.append((_text(parts), "file", self.records[ref].etag))  # type: ignore[index]
+            return
+        if is_noise(parts[-1]) and not _is_dir(access, parts):
+            return
+        _unrecognized(access, parts, self.problems, None)  # name_mismatch or unrecognized; none if empty
+        if not _is_dir(access, parts):
+            self.entries.append((_text(parts), "file", self.stray_etag(parts)))
+
+    def tree(self, parts: Parts) -> None:
+        access = self.access
+        if is_link(access.path(parts)):
+            self.link(parts)
+            return
+        if not _is_dir(access, parts):
+            self.problem(parts, "unrecognized", "not a folder this store reads")
+            self.entries.append((_text(parts), "file", self.stray_etag(parts)))
+            return
+        for name in self.listing(parts):
+            child = parts + (name,)
+            if parts[-1] == EVENTS:
+                self.file(child)
+            elif is_link(access.path(child)):
+                self.link(child)
+            elif name in EVIDENCE_FAMILIES and _is_dir(access, child):
+                for leaf in self.listing(child):
+                    self.file(child + (leaf,))
+            else:
+                self.file(child)  # a stray file, or an unknown/look-alike family folder
+
+    def campaign(self, campaign: str) -> None:
+        access = self.access
+        base = (CAMPAIGNS, campaign)
+        presence = access.presence(base)  # LinkRefused if campaigns/ itself is a link
+        if presence == "absent":
+            return
+        if presence == "mismatch":
+            self.problem(base, "name_mismatch", "only a look-alike campaign folder exists")
+            return
+        if is_link(access.path(base)):
+            self.link(base)
+            return
+        if not _is_dir(access, base):
+            self.problem(base, "unrecognized", "not a folder this store reads")
+            return
+        for name in self.listing(base):
+            if name in _KNOWLEDGE_TREES:
+                self.tree(base + (name,))
+            elif name_key(name) in _KNOWLEDGE_TREES:  # a look-alike, reported as load() would
+                child = base + (name,)
+                if is_link(access.path(child)):
+                    self.link(child)
+                elif not _is_dir(access, child):
+                    self.problem(child, "name_mismatch", "a look-alike of a knowledge folder")
+                    self.entries.append((_text(child), "file", self.stray_etag(child)))
+                elif _has_files(access, child):  # an empty folder is not state
+                    self.problem(child, "name_mismatch", "a look-alike of a knowledge folder")
+
+
+def campaign_knowledge(access: Access, campaign: str) -> KnowledgeScan:
+    """Read only ``campaigns/<campaign>/events`` and ``.../evidence``; never follows a link, never writes."""
+    walk = _KnowledgeWalk(access)
+    walk.campaign(campaign)
+    return KnowledgeScan(MappingProxyType(dict(sorted(walk.records.items(), key=lambda item: str(item[0])))),
+                         MappingProxyType(dict(sorted(walk.damaged.items(), key=lambda item: str(item[0])))),
+                         tuple(sorted(walk.problems, key=lambda p: (p.path, p.code))),
+                         tuple(sorted(walk.entries)))
