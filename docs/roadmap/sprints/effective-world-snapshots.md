@@ -42,6 +42,10 @@ Consume the Wave 1 `DefinitionIndex`'s explicit `derived_variant` / `overrides` 
 
 [Chat/portrayal examples](../CHAT_MODEL.md#elderfen-one-reusable-concept-setting-specific-portrayals) and [Sprint 107](world-optional-chat-scopes.md).
 
+## Obligations from 025
+
+`abilities` ([fictional abilities](../../ABILITIES.md)) is a single facet, so evolving one ability on a sourced instance replaces a full copy that stops following head changes, and a head that gains the facet breaks an instance that *added* one. Per-ability inherit/replace/clear is a follow-up for this sprint (with 024).
+
 ## Open questions
 - Virtual, compiled or hybrid?
 - What is the exact revision boundary? *First slice: one `LibraryView` per operation (see EFFECTIVE_VIEWS); a point-in-time load is open.*

@@ -3,7 +3,8 @@
 A facet is an immutable capability contract with its own invariants, not a
 freeform flag. Entities combine facets instead of inheriting from exclusive
 Character/Item/Creature classes, so a sentient sword is simply physical,
-portable, durable, an agent and communicative.
+portable, durable, an agent and communicative. Fictional abilities (025) are
+the ``abilities`` facet, defined in ``abilities.py``.
 
 Facets never confer control: PC/NPC is a ``ControlAssignment``, and no
 authority code reads facets. Reserved names are extra defence, not the
@@ -17,6 +18,8 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import ClassVar, Literal, Union
 
+from .abilities import Abilities
+from .facet_errors import FacetError
 from .identity import validate_segment
 from .json_value import JsonObject, JsonValueError, freeze_object
 
@@ -28,17 +31,6 @@ SIZES = frozenset({"tiny", "small", "medium", "large", "huge"})
 BULKS = frozenset({"light", "normal", "heavy"})
 CHANNELS = frozenset({"speech", "telepathy", "sign", "writing"})
 RESERVED_FACET_NAMES = frozenset({"control", "controller", "pc", "npc", "player", "director"})
-
-
-class FacetError(ValueError):
-    """An invalid facet or facet combination; ``reason`` is machine-readable."""
-
-    def __init__(self, message: str, reason: str) -> None:
-        super().__init__(message)
-        self.reason = reason
-
-    def __reduce__(self) -> tuple[object, ...]:
-        return (type(self), (str(self), self.reason))
 
 
 def _whole(value: object) -> bool:
@@ -142,9 +134,10 @@ class Spatial:
     requires: ClassVar[frozenset[str]] = frozenset()
 
 
-KnownFacet = Union[Physical, Portable, Durable, Biological, Agent, Communicative, Spatial]
+KnownFacet = Union[Physical, Portable, Durable, Biological, Agent, Communicative, Spatial, Abilities]
 KNOWN_FACETS: dict[str, type] = {
-    cls.name: cls for cls in (Physical, Portable, Durable, Biological, Agent, Communicative, Spatial)
+    cls.name: cls for cls in (Physical, Portable, Durable, Biological, Agent, Communicative, Spatial,
+                              Abilities)
 }
 
 

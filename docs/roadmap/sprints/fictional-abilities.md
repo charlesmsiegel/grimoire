@@ -1,5 +1,7 @@
 # Fictional Abilities, Limits and Costs Without Mandatory Mechanics
 
+**Status:** **first slice implemented**, headless and pure: the `abilities` facet and a deterministic, model-free assessment of labelled attempts in `grimoire.core` (`abilities.py`, `ability_use.py`, codec support). The contract is in [ABILITIES.md](../../ABILITIES.md). Milestone 1's three constrained abilities and the radiation-pressure proving scenario are executable on synthetic fixtures. Nothing is adjudicated or committed: outcomes are 029's, committed costs are milestone 2 (with 021) and composition is milestone 3. Obligations on 020/021/029/034/035 and 022/024 are listed in ABILITIES.md.
+
 **Outcome:** Keep supernatural abilities, technology, spells and extraordinary traits coherent in freeform play even without a rules engine.
 
 ## Scope and ownership

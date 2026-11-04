@@ -13,7 +13,8 @@ import sys
 import pytest
 from purity import GRIMOIRE, PURE_STDLIB, SRC
 
-ENTITY_MODULES = ("json_value", "facets", "entity", "roster", "entity_codec", "individual")
+ENTITY_MODULES = ("json_value", "facet_errors", "abilities", "facets", "entity", "roster",
+                  "entity_codec", "ability_use", "individual")
 CORE = GRIMOIRE / "core"
 _STUB = (
     "import sys, types\n"
@@ -53,10 +54,13 @@ def test_intent_routing_loads_no_entity_module():
 
 ALLOWED = {
     "json_value": set(),
-    "facets": {"identity", "json_value"},
+    "facet_errors": set(),
+    "abilities": {"facet_errors", "identity", "json_value"},
+    "facets": {"abilities", "facet_errors", "identity", "json_value"},
     "entity": {"facets", "identity", "index", "json_value", "model"},
     "roster": {"authority", "entity", "identity", "index", "model"},
-    "entity_codec": {"entity", "facets", "identity", "json_value"},
+    "entity_codec": {"abilities", "entity", "facets", "identity", "json_value"},
+    "ability_use": {"abilities", "entity", "facets", "identity"},
     "individual": {"authority", "entity", "identity", "index", "model", "roster"},
 }
 

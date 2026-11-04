@@ -51,6 +51,10 @@ Consume generic 010 record revisions and the Wave 1 PC-authority decision policy
 - **Retries.** A retried turn reuses the same whole `Operation` (`op_id`, lines, `note` and `cause`), so 021 should persist the operation it proposed rather than regenerate it: a retry with a regenerated note is refused as `op_id_reused`. An identical retry is a no-op while the entry is in the holders' logs. To stay exactly-once after eviction, 021 must record each holder's `seq` when it creates the operation and pass it as `basis` on every retry (a stale retry is then refused as `beyond_history`), together with the first change's `holders=change.holder_etags` (a holder replaced in between is refused as `holder_replaced`, and `HolderReplaced` is never retried). This holds unless a holder's file was restored or recreated in between, which forgets the operation (see [HOLDINGS known limits](../../HOLDINGS.md#known-limits)).
 - **Rerolls and edits.** A rerolled turn whose effect has *different* lines cannot reuse the `op_id` (it is refused as `op_id_reused`), and a new `op_id` does not undo the first one. Either commit holdings only when a turn is finally accepted, or commit an explicit compensating operation under a fresh `op_id` (`cause` naming the reroll).
 
+## Obligations from 025
+
+Ability costs from [fictional abilities](../../ABILITIES.md) are reported, never committed. 021 owns committing them through accepted state: charge each `attempt_id` **once**, from the assessment's `charges` (every `(ability, cost)`, including the other abilities of an approved combination), and only when the attempt was `permitted`. Instance ability changes (`added`/`replaced` abilities facets) are accepted state, never narration.
+
 ## Open questions
 - Which narrations imply immediate accepted truth, and which require player review? **Partly answered:**
   - none does by itself; narration only proposes;

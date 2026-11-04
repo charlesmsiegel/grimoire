@@ -137,6 +137,15 @@ from .facets import (
     Spatial,
     UnknownFacet,
 )
+from .abilities import Abilities, Ability
+from .ability_use import (
+    AbilityAssessment,
+    AbilityAttempt,
+    AbilityError,
+    AbilityRuling,
+    assess_attempt,
+    check_ruling,
+)
 from .json_value import JsonObject
 from .roster import CampaignRoster, ControlProblem, UnknownInstance
 from .individual import Individualization, IndividualizationDecision, individualize, is_generic
@@ -173,5 +182,7 @@ __all__ = [
     "can_be_addressed", "can_be_carried", "can_be_damaged", "can_be_heard", "compose_instance", "effective_entity",
     "entity_from_character", "instance_from_actor", "integrity", "is_agent", "propose_damage",
     "CampaignRoster", "ControlProblem", "UnknownInstance",
+    "Abilities", "Ability", "AbilityAssessment", "AbilityAttempt", "AbilityError", "AbilityRuling",
+    "assess_attempt", "check_ruling",
     "Individualization", "IndividualizationDecision", "individualize", "is_generic",
 ]
