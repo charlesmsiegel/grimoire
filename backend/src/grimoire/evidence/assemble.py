@@ -153,8 +153,8 @@ def assemble(campaign_id: str, files: Mapping[KnowledgeRef, ScannedFile]) -> Ass
                 quarantine(name, "missing", key)
             elif scanned.damage is not None:
                 quarantine(name, scanned.damage, key, own_key(name))
-            elif scanned.etag != entry.etag:
-                quarantine(name, "edited", key, own_key(name))
+            elif scanned.etag != entry.etag:  # the edit's own (untrusted) key would strip another actor's chain
+                quarantine(name, "edited", key)
             elif name in failures:
                 quarantine(name, failures[name], key)
             elif own_key(name) != key:
@@ -164,6 +164,7 @@ def assemble(campaign_id: str, files: Mapping[KnowledgeRef, ScannedFile]) -> Ass
     for batch in hints:
         for name, entry in batch.entries.items():
             ref = KnowledgeRef.from_name(campaign_id, name)
+            # The chain families are already quarantined wholesale on a broken log; the keys stay as defence.
             quarantine(name, "missing" if ref not in records else "log_broken", entry.key(ref.family), own_key(name))
     # 3. A file no verified batch accounts for is not trusted.
     for ref in records:
@@ -185,6 +186,28 @@ def assemble(campaign_id: str, files: Mapping[KnowledgeRef, ScannedFile]) -> Ass
 
     candidates: dict[str, Record] = {name: value[0] for name, value in decoded.items() if name not in quarantined}
     sweep(candidates)
+    # A missing reference (one deleted event, a lost evidence folder) is common and cascades; remove
+    # every record whose reference is gone in linear passes, with 012's own reason, so the 012 loop
+    # below only meets genuine rule failures and a read stays near-linear.
+    while True:
+        dangling = _dangling(candidates)
+        if not dangling:
+            break
+        by_chain: dict[ChainKey, list[str]] = {}
+        for name, record in candidates.items():
+            key = chain_key(record)
+            if key is not None:
+                by_chain.setdefault(key, []).append(name)
+        for name in sorted(dangling):
+            if name in quarantined:
+                continue
+            key = chain_key(candidates[name])
+            quarantine(name, dangling[name], key)
+            for member in by_chain.get(key, ()) if key is not None else ():
+                quarantine(member, "chain_quarantined")
+        for name in [name for name in candidates if name in quarantined]:
+            del candidates[name]
+        sweep(candidates)
     knowledge = None
     for _ in range(len(candidates) + 2):
         try:
@@ -210,6 +233,37 @@ def assemble(campaign_id: str, files: Mapping[KnowledgeRef, ScannedFile]) -> Ass
     return Assembly(knowledge, tuple(sorted(Quarantine(name, reason) for name, reason in quarantined.items())),
                     tuple(sorted(set(problems))), MappingProxyType(origins), high_water, head,
                     log_intact=not broken, records=MappingProxyType(kept))
+
+
+def _dangling(candidates: Mapping[str, Record]) -> dict[str, str]:
+    """Records whose reference is not among ``candidates``, with the reason 012's check order gives."""
+    def missing_event(subjects) -> bool:  # type: ignore[no-untyped-def]
+        return any(s.kind == "event" and f"event:{s.ref}" not in candidates for s in subjects)
+
+    found: dict[str, str] = {}
+    for name, record in candidates.items():
+        reason = None
+        if isinstance(record, Proposition):
+            reason = "unknown_event" if missing_event(record.about) else None
+        elif isinstance(record, Ruling):
+            if f"proposition:{record.proposition_id}" not in candidates:
+                reason = "unknown_proposition"
+            elif missing_event(record.grounds):
+                reason = "unknown_event"
+        elif isinstance(record, (Perception, Disclosure)):
+            reason = "unknown_event" if f"event:{record.event_id}" not in candidates else None
+        elif isinstance(record, Report):
+            reason = "unknown_proposition" if f"proposition:{record.proposition_id}" not in candidates else None
+        elif isinstance(record, Belief):
+            if f"proposition:{record.proposition_id}" not in candidates:
+                reason = "unknown_proposition"
+            elif any(f"evidence:{e}" not in candidates for e in record.evidence_ids):
+                reason = "unknown_evidence"
+            elif record.supersedes is not None and f"belief:{record.supersedes}" not in candidates:
+                reason = "unknown_belief"
+        if reason is not None:
+            found[name] = reason
+    return found
 
 
 def build_ledger(campaign_id: str, records) -> Knowledge:  # type: ignore[no-untyped-def]

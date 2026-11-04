@@ -114,6 +114,7 @@ Every append writes its records and exactly **one batch**, in one store transact
    A canonically named file that no trusted batch lists is `unlisted`. That covers a hand-added file, a store-level put that bypassed the service, and the remains of a partial publish.
 3. **Chains.** Quarantining a ruling quarantines every ruling of its proposition. Quarantining a belief quarantines every belief of its (holder, proposition). Quarantining a disclosure quarantines every disclosure of its event. The reason is `chain_quarantined`. An unlisted file that cannot be decoded has no trusted key, so its whole family goes.
 4. **Validate the rest.**
+   - First, in linear passes, remove every record whose reference is gone (an event, a proposition, a cited evidence item, a superseded belief), with the reason 012's check order would give (`unknown_event`, `unknown_proposition`, `unknown_evidence`, `unknown_belief`) and the chain rule. One deleted file therefore costs a near-linear read, however many records cite it.
    - Build `Knowledge` from the remaining records.
    - On a `KnowledgeError`, quarantine only the **first-named record still present**. In 012 that is always the record whose rule failed; for `reused_contribution` it is the belief with the later ID. Use 012's reason, and the chain rule applies. Repeat until the ledger is valid.
    - Evidence that a broken belief cites is kept.
@@ -136,9 +137,10 @@ These are tested against the undamaged ledger U, for every actor, the player and
 **Limits.** As for [010b ledgers](STORAGE.md#reading), the log is an integrity check, not authentication. It cannot detect:
 - truncating, or consistently editing, the **tail**: removing the newest record together with its entry in the newest batch (a test pins this);
 - a correctly chained forged batch;
-- restoring an older copy of the whole campaign.
+- restoring an older copy of the whole campaign;
+- altering two or more consecutive batches consistently. A broken `previous` at batch `k` is blamed on `k` or `k−1`, so the guarantees assume the visible damage altered **one** batch. Whoever re-chains two batches can as easily re-chain to the tail, which is undetectable anyway; the log protects against accidental damage, not a determined editor.
 
-**Deviation from 012's per-actor independence.** A broken log, or an unlisted and undecodable ruling, belief or disclosure, quarantines that whole family. One actor's damaged file can then strip other actors' beliefs. That is fail-closed. Otherwise, damage to one actor's files affects only that actor's chains and the director view. An edit that changes a record's holder also quarantines the new holder's chain.
+**Deviation from 012's per-actor independence.** A broken log, or an unlisted and undecodable ruling, belief or disclosure, quarantines that whole family. One actor's damaged file can then strip other actors' beliefs. That is fail-closed. Otherwise, damage to one actor's files affects only that actor's chains and the director view. An edited record is placed in its chain by its batch entry, never by its edited content, so an edit that names another holder leaves that holder's chain alone (tested).
 
 ## The service (`grimoire.evidencestore.EvidenceLibrary`)
 
@@ -154,7 +156,7 @@ These are tested against the undamaged ledger U, for every actor, the player and
 | `player_knowledge(…)` | 012's projection over the assembled ledger |
 | `standing(…)` | 012's projection over the assembled ledger |
 
-There is no widening flag. Every read scans the campaign's knowledge files and assembles them. That is linear in the number of files; log verification walks only the batch files present, so a stray huge sequence number costs one file. Assembly is quadratic in the worst case, when many records depend on one quarantined record. Nothing is cached or persisted.
+There is no widening flag. Every read scans the campaign's knowledge files and assembles them. That is linear in the number of files; log verification walks only the batch files present, so a stray huge sequence number costs one file. A cascade from missing references is removed in linear passes. Only records that fail other 012 rules are removed one validation at a time, which is quadratic in their number. Nothing is cached or persisted.
 
 ### `append`
 

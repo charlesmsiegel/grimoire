@@ -14,12 +14,13 @@ from collections import Counter
 import pytest
 
 from grimoire.core import (
-    DIRECTOR, Belief, Knowledge, KnowledgeRef, Ruling, actor_knowledge, player_knowledge, standing,
+    DIRECTOR, Belief, Event, Knowledge, KnowledgeRef, Perception, Proposition, Ruling, Subject, actor_knowledge,
+    player_knowledge, standing,
 )
 from grimoire.evidence import ScannedFile, assemble, decode_batch, encode, encode_batch
 
 from evidence_fixtures import (
-    ACTORS, C, E1, INES, MARA, PC_CONTROLS, PLAYER, SAM, TAVI, all_records, fake_etag, in_memory_files, m,
+    ACTORS, C, E1, INES, MARA, ORRIN, PC_CONTROLS, PLAYER, SAM, TAVI, all_records, fake_etag, in_memory_files, m,
 )
 
 AS_OF = range(0, 10)
@@ -224,6 +225,62 @@ def test_a_stray_huge_batch_number_costs_one_file():
     assert "log_broken" in assembly.problems and assembly.knowledge.beliefs == ()
 
 
+def forge(files, seq, name):
+    """A hand edit of one record that also rewrites its entry's etag in batch ``seq`` (one altered batch)."""
+    target = ref(name)
+    payload = dict(files[target].payload)
+    if "confirmed" in payload:
+        payload["confirmed"] = True  # an unconfirmed off-stage line becomes "delivered"
+    else:
+        payload["provenance"] = "forged"
+    tag = fake_etag(target, files[target].schema, payload)
+    files[target] = ScannedFile(tag, files[target].schema, payload)
+    batch_ref = KnowledgeRef.batch(C, seq)
+    old = decode_batch(batch_ref, files[batch_ref].schema, files[batch_ref].payload)
+    entries = {**old.entries, name: type(old.entries[name])(tag, **{
+        k: getattr(old.entries[name], k) for k in ("proposition", "holder", "event")})}
+    _, schema, new_payload = encode_batch(C, seq, old.previous, entries)
+    files[batch_ref] = ScannedFile(fake_etag(batch_ref, schema, [new_payload, "hand edit"]), schema, new_payload)
+
+
+def test_only_batches_before_k_minus_1_are_trusted():
+    """Batch 3 and Orrin's off-stage line edited together: the break shows at 4, and batch 3 is not trusted."""
+    files = in_memory_files()
+    forge(files, 3, "evidence:v-orrin")
+    assembly = assemble(C, files)
+    assert "log_broken" in assembly.problems
+    assert reasons(assembly)["evidence:v-orrin"] == "log_broken"
+    assert actor_knowledge(assembly.knowledge, ORRIN, as_of=9).evidence == ()
+    check_guarantees(assembly, files)
+
+
+def test_an_edit_that_names_another_holder_leaves_that_holders_chain_alone():
+    files = in_memory_files()
+    target = ref("belief:b-mara-2")
+    edited = Belief(C, "b-mara-2", INES, "p-lie", "rejected", m(7), DIRECTOR, ("v-ines",), supersedes="b-ines-1")
+    _, schema, payload = encode(edited)
+    files[target] = ScannedFile(fake_etag(target, schema, payload), schema, payload)  # a new etag: an edit
+    assembly = assemble(C, files)
+    assert reasons(assembly) == {"belief:b-mara-2": "edited", "belief:b-mara-1": "chain_quarantined"}
+    assert actor_knowledge(assembly.knowledge, INES, as_of=9) == actor_knowledge(U, INES, as_of=9)
+
+
+def test_a_cascade_from_one_deleted_file_stays_linear():
+    import time
+    seen = [Perception(C, f"v-big-{n}", MARA, "e-big", "seen", "faces", m(1), "director", confirmed=True)
+            for n in range(1500)]
+    first = [Event(C, "e-big", "a crowd gathers", m(1), "director"),
+             Proposition(C, "p-big", "a crowd gathered", m(1), "director", about=(Subject("event", "e-big"),))]
+    beliefs = [Belief(C, f"b-big-{n}", MARA, "p-big", "believed", m(1), DIRECTOR, (f"v-big-{n}",))
+               for n in range(400)]
+    files = in_memory_files([first, *(seen[i:i + 500] for i in range(0, 1500, 500)), beliefs])
+    del files[ref("event:e-big")]
+    started = time.perf_counter()
+    assembly = assemble(C, files)
+    assert time.perf_counter() - started < 5
+    assert len(assembly.quarantined) == 1 + 1 + 1500 + 400 and assembly.knowledge.evidence == ()
+
+
 def test_a_consistent_tail_edit_is_the_documented_limit():
     """Like 010b ledgers: dropping the newest record and its entry from the newest batch is invisible."""
     files = in_memory_files()
@@ -325,13 +382,22 @@ EXTRA = [
 def damage(files: dict, rng: random.Random) -> str:
     records = sorted((r for r in files if r.family != "batch"), key=str)
     kind = rng.choice(["delete", "edit", "add", "undecodable", "newer_schema", "batch_edit", "batch_delete",
-                       "lookalike"])
+                       "consistent_edit"])  # a look-alike rename is a real rename only on disk (damage test)
     if not records:
         return "none"
     target = rng.choice(records)
     scanned = files[target]
-    if kind in ("delete", "lookalike"):
+    if kind == "delete":
         del files[target]
+    elif kind == "consistent_edit":  # edit a non-chain record AND its entry's etag, in one batch other than the newest
+        listed = [(seq, entry_name) for seq in range(1, 6) if KnowledgeRef.batch(C, seq) in files
+                  for entry_name in decode_batch(KnowledgeRef.batch(C, seq), files[KnowledgeRef.batch(C, seq)].schema,
+                                                 files[KnowledgeRef.batch(C, seq)].payload).entries
+                  if ref(entry_name).family in ("event", "proposition", "evidence") and ref(entry_name) in files
+                  and files[ref(entry_name)].damage is None]
+        if listed:
+            seq, entry_name = rng.choice(listed)
+            forge(files, seq, entry_name)
     elif kind == "edit":
         other = rng.choice([r for r in records if r.family == target.family])
         payload = files[other].payload

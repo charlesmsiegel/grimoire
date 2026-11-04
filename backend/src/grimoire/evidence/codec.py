@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from grimoire.core.identity import ChatRef, InstanceRef, KnowledgeRef
+from grimoire.core.identity import ChatRef, InstanceRef, KnowledgeRef, validate_segment
 from grimoire.core.knowledge import (
     Belief, Disclosure, Event, KnowledgeError, Moment, Perception, Proposition, Report, Ruling, Subject,
 )
@@ -368,6 +368,9 @@ def _decode_entry(campaign_id: str, name: object, raw: object) -> BatchEntry:
     if type(raw["etag"]) is not str or not _ETAG.fullmatch(raw["etag"]):
         raise _Refused("invalid_field")
     values = {label: _text(raw[label], LABEL_LIMIT * 4) for label in ("proposition", "holder", "event") if label in raw}
+    for label in ("proposition", "event"):  # a chain key is an id, as in 012
+        if label in values:
+            validate_segment(values[label], label)
     if "holder" in values and InstanceRef.parse(values["holder"]).campaign_id != campaign_id:
         raise _Refused("campaign_mismatch")
     return BatchEntry(raw["etag"], **values)
@@ -395,11 +398,16 @@ def _decode_batch(ref: KnowledgeRef, schema: object, payload: object) -> Batch:
 
 def encode_batch(campaign_id: str, seq: int, previous: str | None,
                  entries: Mapping[str, BatchEntry]) -> tuple[KnowledgeRef, str, dict[str, object]]:
-    ref = KnowledgeRef.batch(campaign_id, seq)
-    payload = _batch_payload(seq, previous, entries)
-    ok, outcome = _attempt(lambda: _decode_batch(ref, BATCH_SCHEMA, payload))  # write only what reads back
-    if not ok:
-        raise EvidenceCodecError(outcome, ref.name)  # type: ignore[arg-type]
+    def build() -> tuple[KnowledgeRef, dict[str, object]]:
+        ref = KnowledgeRef.batch(campaign_id, seq)
+        payload = _batch_payload(seq, previous, entries)
+        _decode_batch(ref, BATCH_SCHEMA, payload)  # write only what reads back
+        return ref, payload
+
+    ok, outcome = _attempt(build)
+    if not ok:  # named "batch": the ref itself may be what is invalid
+        raise EvidenceCodecError(outcome, "batch")  # type: ignore[arg-type]
+    ref, payload = outcome  # type: ignore[misc]
     return ref, BATCH_SCHEMA, payload
 
 

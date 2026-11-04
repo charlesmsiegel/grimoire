@@ -181,30 +181,42 @@ def test_batches_round_trip():
     assert ENTRIES["belief:b1"].key("belief") == ("belief", str(MARA), "p1")
 
 
-@pytest.mark.parametrize("seq, previous, entries", [
-    (1, ETAG, ENTRIES),                                        # batch 1 has no previous
-    (2, None, ENTRIES),                                        # later batches do
-    (1, None, {}),                                             # at least one record
-    (1, None, {"event:e1": BatchEntry("sha256:short")}),
-    (1, None, {"ruling:r1": BatchEntry(ETAG)}),                # a ruling needs its proposition
-    (1, None, {"belief:b1": BatchEntry(ETAG, proposition="p1")}),
-    (1, None, {"disclosure:d1": BatchEntry(ETAG)}),
-    (1, None, {"event:e1": BatchEntry(ETAG, proposition="p1")}),
-    (1, None, {"batch:0000000001": BatchEntry(ETAG)}),
-    (1, None, {"belief:b1": BatchEntry(ETAG, proposition="p1", holder="campaign:c2/character/x")}),
-    (1, None, {"chat:t": BatchEntry(ETAG)}),
+@pytest.mark.parametrize("seq, previous, entries, reason", [
+    (1, ETAG, ENTRIES, "invalid_field"),                                    # batch 1 has no previous
+    (2, None, ENTRIES, "invalid_field"),                                    # later batches do
+    (1, None, {}, "invalid_field"),                                         # at least one record
+    (1, None, {"event:e1": BatchEntry("sha256:short")}, "invalid_field"),
+    (1, None, {"ruling:r1": BatchEntry(ETAG)}, "invalid_field"),            # a ruling needs its proposition
+    (1, None, {"belief:b1": BatchEntry(ETAG, proposition="p1")}, "invalid_field"),
+    (1, None, {"disclosure:d1": BatchEntry(ETAG)}, "invalid_field"),
+    (1, None, {"event:e1": BatchEntry(ETAG, proposition="p1")}, "invalid_field"),
+    (1, None, {"batch:0000000001": BatchEntry(ETAG)}, "invalid_field"),
+    (1, None, {"belief:b1": BatchEntry(ETAG, proposition="p1", holder="campaign:c2/character/x")},
+     "campaign_mismatch"),
+    (1, None, {"chat:t": BatchEntry(ETAG)}, "invalid_field"),
+    (1, None, {"ruling:r1": BatchEntry(ETAG, proposition="NOT AN ID !")}, "invalid_field"),  # chain keys are ids
+    (0, None, ENTRIES, "invalid_field"),                                    # the ref itself, still a reason
+    (1, None, {"event:e1": "not an entry"}, "invalid_field"),
 ])
-def test_bad_batches_are_never_written(seq, previous, entries):
-    with pytest.raises(EvidenceCodecError):
+def test_bad_batches_are_never_written(seq, previous, entries, reason):
+    with pytest.raises(EvidenceCodecError) as caught:
         encode_batch(C, seq, previous, entries)
+    assert caught.value.reason == reason
 
 
 def test_bad_batches_are_never_read():
     ref, schema, payload = encode_batch(C, 1, None, ENTRIES)
-    for bad_schema, bad in (("grimoire.knowledge-batch/2", payload), (schema, {**payload, "seq": 2}),
-                            (schema, {**payload, "extra": 1}), (schema, {**payload, "previous": None}),
-                            (schema, {**payload, "seq": True})):
-        with pytest.raises(EvidenceCodecError):
+    for bad_schema, bad, reason in (("grimoire.knowledge-batch/2", payload, "unsupported_schema"),
+                                    (schema, {**payload, "seq": 2}, "invalid_field"),
+                                    (schema, {**payload, "extra": 1}, "unknown_field"),
+                                    (schema, {**payload, "previous": None}, "invalid_field"),
+                                    (schema, {**payload, "seq": True}, "invalid_field")):
+        with pytest.raises(EvidenceCodecError) as caught:
             decode_batch(ref, bad_schema, bad)
+        assert caught.value.reason == reason
+    later, _, later_payload = encode_batch(C, 2, ETAG, ENTRIES)
+    with pytest.raises(EvidenceCodecError) as caught:  # a seq that disagrees with its file name
+        decode_batch(later, schema, {**later_payload, "seq": 3})
+    assert caught.value.reason == "invalid_field"
     with pytest.raises(EvidenceCodecError):
         decode(ref, schema, payload)  # a batch is not a record
