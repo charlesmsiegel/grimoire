@@ -275,12 +275,12 @@ def test_blob_writes_are_authorized_and_denial_writes_nothing(library):
 
 def test_a_look_alike_blob_name_is_a_collision(library):
     _write(library.root, f"assets/blobs/{BLOB.sha256[:2]}/{BLOB.sha256.upper()}.png", PNG)
-    if not (library.root / "assets/blobs" / BLOB.sha256[:2] / f"{BLOB.sha256}.png").exists():
-        with pytest.raises(NameCollision):  # case-sensitive filesystem: an exact name never matches
-            _commit(library, (BLOB, None))
-        assert library.blob_stat(BLOB.sha256, "png") == ("lookalike", None)
-        with pytest.raises(NameCollision):
-            library.blob_etag(BLOB.sha256, "png")
+    # decided from listings by exact spelling, so this holds on case-insensitive filesystems too
+    with pytest.raises(NameCollision):
+        _commit(library, (BLOB, None))
+    assert library.blob_stat(BLOB.sha256, "png") == ("lookalike", None)
+    with pytest.raises(NameCollision):
+        library.blob_etag(BLOB.sha256, "png")
 
 
 def _v1_like(path: Path) -> Path:
@@ -386,3 +386,17 @@ def test_a_journal_naming_asset_targets_recovers(tmp_path):
         assert len(store.last_recovery.published) == 3
         assert store.read(AVATAR).record == placement_record()
         assert store.read_blob(BLOB.sha256, "png") == PNG
+
+
+
+def test_a_manifest_rewrite_cannot_smuggle_art_into_a_source_its_records_exclude(library):
+    stray = library.root / "sources/world/harbor/_source/records/character/y/r1.json"
+    stray.parent.mkdir(parents=True)
+    stray.write_text(json.dumps({"format": "grimoire.record/1", "address": "card:mira/character/y@r1",
+                                 "payload": {}}))  # an ownership violation: harbor holds card:mira's record
+    assert "world:harbor" in library.load().excluded
+    manifest = library.read_source(HARBOR)
+    before = snapshot(library.root)
+    with pytest.raises(InvalidSourceState):
+        _commit(library, (BLOB, None), (image_record(), None), (manifest.manifest, manifest.etag))
+    assert snapshot(library.root) == before  # refused even though the transaction rewrites the manifest

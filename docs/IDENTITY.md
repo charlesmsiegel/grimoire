@@ -22,7 +22,6 @@ A name, a legacy V1 slug or an inherited portrayal is never identity. Two defini
 | Chat (107) | `ChatRef(campaign_id, chat_id)` | `campaign:<campaign_id>#chat/<chat_id>` |
 | Relation (017) | `RelationRef(campaign_id, relation_id)` | `campaign:<campaign_id>#relation/<relation_id>` |
 | Stored knowledge record (020) | `KnowledgeRef(campaign_id, family, record_id)` | `campaign:<campaign_id>#<family>/<record_id>`. `family` is one of `event`, `proposition`, `ruling`, `evidence`, `belief`, `disclosure` or `batch`. A batch ID is its ten-digit sequence number from 1. `name` gives 012's `<family>:<id>` |
-
 | Image object (018) | `ImageRef(scope, image_id)` | `<source>#image/<image_id>` or `campaign:<campaign_id>#image/<image_id>` |
 | Placement (018) | `PlacementRef(subject, slot)` | `<unpinned definition or instance>#placement/<slot>` (slot ≤ 123 characters) |
 

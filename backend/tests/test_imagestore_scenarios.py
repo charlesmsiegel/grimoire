@@ -16,7 +16,7 @@ import pytest
 
 from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef
 from grimoire.images import Crop, Expression, Focus, Hidden, Placement, Shown, Unavailable
-from grimoire.imagestore import ImageLibrary, InvalidImage, InvalidPlacement
+from grimoire.imagestore import ImageLibrary, InvalidBatch, InvalidImage, InvalidPlacement
 from grimoire.library import LibraryPathError
 from grimoire.store import (
     BlobCorrupt, LibraryStore, LinkSpec, NameCollision, RecordEnvelope, SourceManifest, StaleWrite, WriteDenied,
@@ -316,8 +316,7 @@ def test_f11_a_linked_assets_folder_is_never_written_or_read(pictured, store, tm
     before = snapshot(target)
     with pytest.raises(LibraryPathError):
         images.add_image(HARBOR, "x", PNG_2).commit()
-    with pytest.raises(LibraryPathError):
-        images.read_image_bytes(WREN_IMG)
+    _refused(InvalidImage, "missing_blob", images.read_image_bytes, WREN_IMG)  # never read through the link
     found = images.effective_placements(SAILOR).slot("avatar")
     assert isinstance(found, Unavailable) and found.reason == "missing_blob"
     assert snapshot(target) == before
@@ -834,9 +833,9 @@ def test_a_repeated_put_is_refused_and_leaves_the_batch_usable(images, store):
     z = InstanceRef("c1", "character", "z")
     batch = images.change()
     batch.put(RecordEnvelope(z, {}), None)
-    with pytest.raises(InvalidPlacement) as refused:
+    with pytest.raises(InvalidBatch) as refused:
         batch.put(RecordEnvelope(z, {"again": True}), None)
-    assert refused.value.reason == "invalid_field"
+    assert refused.value.reason == "duplicate_put"
     batch.commit()
     assert store.read(z).envelope.payload == {}
 
@@ -858,3 +857,54 @@ def test_an_empty_folder_at_a_campaign_placement_path_shows_nothing_else(hidden,
     target.mkdir()  # empty: no hide can be stored here, and nothing may fall back
     found = hidden.effective_placements(WREN_B).slot("avatar")
     assert isinstance(found, Unavailable) and found.reason == "invalid_placement"
+
+
+
+# -- round-4 brutal-review regressions -----------------------------------------------------------
+
+@pytest.mark.parametrize("damage", ["lookalike-folder-beside-canonical", "lowercase-duplicate"])
+def test_a_hide_in_a_look_alike_place_never_reveals_the_source_picture(hidden, store, damage):
+    images = hidden
+    target = store.root.joinpath(*address_parts(PlacementRef(WREN_B, "avatar")))
+    folder = target.parent
+    images.place(WREN_B, "gallery_1", Placement("hide"), None).commit()  # keeps the canonical folder alive
+    if damage == "lookalike-folder-beside-canonical":
+        sibling = folder.with_name("Wren-b")
+        sibling.mkdir()
+        if not (folder / "gallery_1.json").exists() or sibling.samefile(folder):
+            pytest.skip("case-insensitive filesystem: the look-alike is the same folder")
+        target.rename(sibling / "avatar.json")
+    else:
+        target.rename(folder / "avatar copy.json")
+    result = images.effective_placements(WREN_B)
+    found = result.slot("avatar")
+    assert isinstance(found, Unavailable) and found.reason == "invalid_placement" and result.problems
+
+
+def test_an_adjust_over_a_broken_inherited_picture_is_unavailable_not_hidden(pictured, store):
+    images = pictured
+    images.place(WREN_C, "avatar", Placement("adjust", image=WREN_IMG, crop=Crop(1, 1, 10, 10)), None).commit()
+    blob = images.read_image(WREN_IMG)[0].blob
+    store.root.joinpath(*blob_parts(blob.sha256, blob.ext)).unlink()
+    found = images.effective_placements(WREN_C).slot("avatar")
+    assert found == Unavailable("avatar", "missing_blob", str(WREN_IMG))
+
+
+def test_read_errors_are_invalid_image_reasons(pictured, store, tmp_path):
+    images = pictured
+    _refused(InvalidImage, "missing_image", images.read_image, ImageRef(HARBOR, "absent"))
+    path = store.root.joinpath(*address_parts(WREN_IMG))
+    outside = tmp_path / "wren.json"
+    outside.write_bytes(path.read_bytes())
+    path.unlink()
+    _link_or_skip(path, outside)
+    _refused(InvalidImage, "invalid_image", images.read_image, WREN_IMG)
+
+
+def test_a_newer_placement_is_reported_as_such_and_never_replaceable(pictured, store):
+    ref = PlacementRef(SAILOR, "avatar")
+    path = store.root.joinpath(*address_parts(ref))
+    path.write_text(json.dumps(dict(json.loads(path.read_bytes()), format="grimoire.asset-record/9")))
+    with pytest.raises(InvalidPlacement) as refused:
+        pictured.read_placement(ref)
+    assert refused.value.reason == "unsupported_format" and refused.value.etag is None

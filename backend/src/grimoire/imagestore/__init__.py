@@ -3,6 +3,6 @@
 An adapter over ``grimoire.store`` and the pure ``grimoire.images``. See docs/IMAGES.md.
 """
 
-from .library import ImageBatch, ImageCommit, ImageLibrary, InvalidImage, InvalidPlacement, derivation
+from .library import ImageBatch, ImageCommit, ImageLibrary, InvalidBatch, InvalidImage, InvalidPlacement, derivation
 
-__all__ = ["ImageBatch", "ImageCommit", "ImageLibrary", "InvalidImage", "InvalidPlacement", "derivation"]
+__all__ = ["ImageBatch", "ImageCommit", "ImageLibrary", "InvalidBatch", "InvalidImage", "InvalidPlacement", "derivation"]

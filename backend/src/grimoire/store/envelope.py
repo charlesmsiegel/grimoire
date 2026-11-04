@@ -348,6 +348,11 @@ def knowledge_record_document(record: KnowledgeRecord) -> dict[str, object]:
     document: dict[str, object] = dict(thaw(record.extra))  # type: ignore[arg-type]
     document.update(format=KNOWLEDGE_RECORD_FORMAT, address=str(record.address), schema=record.schema,
                     payload=thaw(record.payload), previous=None)
+    if record.owner is not None:
+        document["owner"] = record.owner
+    return document
+
+
 def asset_record_document(record: AssetRecord, previous: str | None) -> dict[str, object]:
     document: dict[str, object] = dict(thaw(record.extra))  # type: ignore[arg-type]
     document.update(format=ASSET_RECORD_FORMAT, address=str(record.address), schema=record.schema,
@@ -474,6 +479,8 @@ def parse_knowledge_record(document: Mapping[str, object]) -> tuple[KnowledgeRec
     except InvalidEnvelope as error:
         raise EnvelopeError("malformed", str(error)) from None
     return record, None
+
+
 def parse_asset_record(document: Mapping[str, object]) -> tuple[AssetRecord, str | None]:
     _format(document, ASSET_RECORD_FORMAT)
     text = document.get("address")

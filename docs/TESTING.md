@@ -202,7 +202,7 @@ Not simulated:
 
 ## CI gate
 
-**Time budget:** the `domain` job and the Ubuntu and macOS `compat` cells finish in about 4 minutes; the Windows cell takes about 10–15, mostly in the file-store crash explorations. The `compat` matrix therefore has a 30-minute job timeout (the `domain` job keeps 15). A new crash-exploration scenario should be measured on Windows CI, and split or shrunk (as 107's and 018's recovery tests do) rather than raising the limit again.
+**Time budget:** the `domain` job and the Ubuntu and macOS `compat` cells finish in about 4 minutes; the Windows cell takes about 15 (14½ minutes measured on Sprint 018's head before 020's tests were added), mostly in the file-store crash explorations. The `compat` matrix therefore has a 30-minute job timeout (the `domain` job keeps 15). A new crash-exploration scenario should be measured on Windows CI, and split or shrunk (as 107's and 018's recovery tests do) rather than raising the limit again.
 
 **Wave 2 entry rule:** require a completed green integration-head check for **all** configured jobs before another PR is merged into `v2`. Without a GitHub-side required-checks rule and up-to-date branch enforcement (or a merge queue), individually passing PRs are not enough: rebase or test their exact merged combination against the current `v2` first. **Repository owner action is still needed** to configure protection; adding these words does not enable a branch rule. See [Wave 2 handoffs](roadmap/WAVE2_HANDOFFS.md#wave-2-entry-gate).
 

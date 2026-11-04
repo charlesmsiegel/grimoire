@@ -151,7 +151,7 @@ Fields:
   - Image records are **create-only** (`ImmutableImage`). Placements are compare-and-swap.
 - **One transaction.** Blobs, asset records, definitions, manifests, instances and scope records can share one transaction. Every commit step applies to all of them: guards, CAS, collisions, `Permission.APPLY` over exact bytes, journal, recovery and conflict preservation. `classify` recognises the new paths, so recovery accepts journals that name them.
 - **Ownership is checked at commit:**
-  - a source asset needs its source admitted by its **own** files: a readable manifest on disk or in the transaction that the source's own scan does not exclude (`InvalidSourceState`). An art-only commit takes that verdict from the cached per-source view instead of re-reading every revision. A cross-source exclusion is enforced by the image service (it validates against `source_facts`), not by a raw store transaction;
+  - a source asset needs its source admitted by its **own** files: a readable manifest on disk or in the transaction that the source's own scan does not exclude (`InvalidSourceState`). A manifest rewrite in the same transaction cannot clear an exclusion its records cause (an ownership violation): such a commit is refused too. An art-only commit takes that verdict from the cached per-source view instead of re-reading every revision. A cross-source exclusion is enforced by the image service (it validates against `source_facts`), not by a raw store transaction;
   - a campaign asset needs the campaign to exist: a canonical regular `scope.json` or instance file, or that campaign's scope or instance put in the transaction. Asset records alone never make a campaign exist.
 - **Reads** take the store lock and never follow links:
   - `read(ImageRef | PlacementRef)`;
@@ -159,7 +159,7 @@ Fields:
   - `blob_stat(sha, ext)` returns `(absent | present | lookalike, size)` without reading the file;
   - `blob_etag(sha, ext)`: a file over 32 MiB raises `BlobCorrupt` unread;
   - `read_blob(sha, ext)` verifies the digest or raises `BlobCorrupt`;
-  - `list_images(scope)` and `list_placements(subject)` return canonical refs plus `LoadProblem`s for stray names, without reading contents.
+  - `list_images(scope)` and `list_placements(subject)` return canonical refs plus `LoadProblem`s for stray names and for differently spelled sibling folders on the way down (`Wren-b` beside `wren-b`), without reading contents.
 - **`load()`** recognises `images/` and `placements/` inside `_source/` and inside a campaign, and does not interpret them. Anything else there is `unrecognized` or `name_mismatch`. `assets/` remains a reserved root and is skipped.
 - **Authorization:**
   - `assets/blobs/…` is library-global, so a grant on `sources/<s>` or `campaigns/<c>` never covers it: grant `assets` or approve each blob;

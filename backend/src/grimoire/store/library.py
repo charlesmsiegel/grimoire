@@ -47,7 +47,8 @@ from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import JsonError, etag, is_etag, parse_strict, render
 from .layout import (
     CAMPAIGNS, CONFLICTS, DISCARD_MARKER, INSTANCES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER, REPAIR_MARKER, TXN, Parts,
-    address_parts, blob_parts, classify, conflict_parts, definition_parts, image_parts,
+    IMAGES, PLACEMENTS, address_parts, blob_parts, classify, conflict_parts, definition_parts, image_parts,
+    name_key,
     instance_parts, ledger_folder, ledger_name, ledger_parts, ledger_seq, logical, manifest_parts,
 )
 from .ledger import Head, Ledger, read_ledger, render_batches
@@ -569,12 +570,27 @@ class LibraryStore:
                     if presence != "present":
                         return (), ()
                     self._access.guard.check_read(folder)
+                    problems.extend(self._lookalike_siblings(folder, source))
                     found = loader.walk_assets(self._access, folder, 0, kind, problems, source)
                 except LinkRefused as error:
                     return (), (LoadProblem("/".join(folder), "link", str(error), source),)
                 except OSError as error:
                     return (), (LoadProblem("/".join(folder), "unreadable", f"cannot list: {error}", source),)
         return tuple(sorted(found, key=str)), tuple(problems)
+
+    def _lookalike_siblings(self, folder: Parts, source: str | None) -> list[LoadProblem]:
+        """Differently spelled siblings of the asset folders on the way down (``Wren-b`` beside
+        ``wren-b``): they may hold records under another spelling, so they are reported."""
+        found = []
+        top = next((at for at, part in enumerate(folder) if part in (IMAGES, PLACEMENTS)), len(folder))
+        for depth in range(top + 1, len(folder) + 1):
+            parent, name = folder[:depth - 1], folder[depth - 1]
+            key = name_key(name)
+            for other in self._access.list_dir(parent):
+                if other != name and name_key(other) == key:
+                    found.append(LoadProblem("/".join(parent + (other,)), "name_mismatch",
+                                             "a differently spelled folder beside the canonical one", source))
+        return found
 
     def campaign_presence(self, campaign_id: str) -> str:
         """``absent``, ``present`` or ``mismatch`` (only a look-alike folder) for ``campaigns/<id>``."""
@@ -1061,6 +1077,7 @@ class _Commit:
 
     def _check_sources(self) -> None:
         touched: dict[str, tuple[SourceManifest | None, list[SourceRef]]] = {}
+        art: set[str] = set()  # sources receiving images or placements
         for put in self.puts:
             if isinstance(put.envelope, SourceManifest):
                 entry = touched.setdefault(put.envelope.source, (None, []))
@@ -1073,6 +1090,7 @@ class _Commit:
                 owner = _asset_owner(put.envelope)
                 if owner[0] == "source":
                     touched.setdefault(owner[1], (None, []))  # an admitted manifest is required (018)
+                    art.add(owner[1])
                 else:
                     self._check_campaign(owner[1])
         proposed = {source_id: manifest for source_id, (manifest, _) in touched.items() if manifest is not None}
@@ -1087,6 +1105,13 @@ class _Commit:
                     raise InvalidSourceState(f"{source_id} is unreadable or excluded on disk; repair it first")
                 continue
             _validate_source(self.access, source_id, manifest, new_refs, proposed)
+            if source_id in art:  # a manifest rewrite cannot clear exclusions its records cause (ownership)
+                manifest_path = "/".join(manifest_parts(source_id))
+                blocking = [problem for problem in loader.contained_scan(self.access, source_id).excluded_by
+                            if problem.path != manifest_path]
+                if blocking:
+                    raise InvalidSourceState(f"{source_id} is excluded by its own files ({blocking[0].code}); "
+                                             "repair them before adding art")
 
     def _check_campaign(self, campaign: str) -> None:
         """A campaign asset needs a campaign: on disk, or this transaction's scope record or instance."""

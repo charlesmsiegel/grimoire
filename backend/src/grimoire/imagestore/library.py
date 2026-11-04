@@ -43,6 +43,17 @@ class InvalidImage(ValueError):
         return (type(self), (str(self), self.reason))
 
 
+class InvalidBatch(ValueError):
+    """A batch op refused that is neither an image nor a placement (a repeated ``put``)."""
+
+    def __init__(self, message: str, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self), (str(self), self.reason))
+
+
 class InvalidPlacement(ValueError):
     """A placement refused; nothing was staged. ``reason`` is machine-readable.
 
@@ -201,16 +212,20 @@ class _Disk:
             problems, trusted = [], True
             folder = "/".join(address_parts(PlacementRef(subject, "x"))[:-1])
             for problem in listed:
+                inside = problem.path.startswith(folder + "/")
                 if problem.path == folder or folder.startswith(problem.path + "/"):
                     trusted = False  # the subject's own folder (or an ancestor) is damaged
+                elif not inside and problem.code == "name_mismatch":
+                    trusted = False  # a look-alike folder beside the canonical one may hold its records
+                elif inside and problem.path.casefold().endswith(".json") and problem.code != "link":
+                    trusted = False  # any non-canonical .json (``avatar copy.json``) may be a placement
                 problems.append(Problem(problem.path, problem.code, problem.detail))
                 hit = classify(tuple(problem.path.split("/")))
                 if hit is not None and hit[0] == "placement" and hit[1].subject == subject:  # type: ignore[union-attr]
                     ref = hit[1]
                     entries[ref.slot] = PlacementEntry(ref, None, "invalid_placement", problem.path)  # type: ignore[union-attr]
-                elif problem.code in ("link", "unreadable") or (
-                        problem.code == "name_mismatch" and problem.path.casefold().endswith(".json")):
-                    trusted = False  # could be a placement under another spelling, or unreadable
+                elif problem.code in ("link", "unreadable"):
+                    trusted = False
             return entries, tuple(problems), trusted
         return self._memo(("placements", subject), compute)
 
@@ -412,7 +427,7 @@ def _apply(library: ImageLibrary, state: _State, disk: _Disk, op: tuple) -> obje
         envelope = op[1]
         key = ("manifest", envelope.source) if isinstance(envelope, SourceManifest) else ("record", envelope.address)
         if key in state.puts:
-            raise InvalidPlacement(f"{key[1]} is put twice in one batch", "invalid_field")
+            raise InvalidBatch(f"{key[1]} is put twice in one batch", "duplicate_put")
         state.puts.add(key)
         if isinstance(envelope, SourceManifest):
             state.manifests.add(envelope.source)
@@ -636,9 +651,11 @@ class ImageLibrary:
                 raise InvalidImage(f"{ref}: its source is {status}", str(status))
         try:
             stored = self.store.read(ref)
+        except RecordNotFound:
+            raise InvalidImage(f"{ref} does not exist", "missing_image") from None
         except UnsupportedFormat as error:
             raise InvalidImage(str(error), "unsupported_format") from None
-        except MalformedRecord as error:
+        except (StoreError, ValueError, OSError) as error:  # malformed, misaddressed, a link, unreadable
             raise InvalidImage(str(error), "invalid_image") from None
         record = stored.record  # type: ignore[union-attr]
         if record.schema != IMAGE_SCHEMA:
@@ -651,11 +668,15 @@ class ImageLibrary:
     def read_placement(self, ref: PlacementRef) -> tuple[Placement, str]:
         """The placement and its etag, for a CAS rewrite that keeps its unknown fields.
 
-        A file this version cannot interpret raises ``InvalidPlacement`` carrying its ``etag``, so
-        it can still be replaced: ``place(subject, slot, new, expected=error.etag)``.
+        A malformed file, or one with an unknown schema or payload, raises ``InvalidPlacement``
+        (``invalid_placement``) carrying its ``etag``, so it can still be replaced:
+        ``place(subject, slot, new, expected=error.etag)``. A file written by a newer version raises
+        ``unsupported_format`` with no etag: the store never overwrites it.
         """
         try:
             stored = self.store.read(ref)
+        except UnsupportedFormat as error:  # written by a newer version: keep it, never replace it
+            raise InvalidPlacement(str(error), "unsupported_format") from None
         except MalformedRecord as error:
             raise InvalidPlacement(str(error), "invalid_placement", error.etag) from None
         record = stored.record  # type: ignore[union-attr]
@@ -667,9 +688,20 @@ class ImageLibrary:
             raise InvalidPlacement(str(error), "invalid_placement", stored.etag) from None
 
     def read_image_bytes(self, ref: ImageRef) -> bytes:
-        """The picture's exact bytes, verified against the blob's name (``BlobCorrupt`` otherwise)."""
+        """The picture's exact bytes, verified against the blob's name.
+
+        ``BlobCorrupt`` if the bytes no longer match; ``InvalidImage`` for every other refusal
+        (``missing_blob``, or the reasons ``read_image`` gives).
+        """
         image, _ = self.read_image(ref)
-        return self.store.read_blob(image.blob.sha256, image.blob.ext)
+        try:
+            return self.store.read_blob(image.blob.sha256, image.blob.ext)
+        except BlobCorrupt:
+            raise
+        except RecordNotFound:
+            raise InvalidImage(f"the blob of {ref} is missing", "missing_blob") from None
+        except (StoreError, ValueError, OSError) as error:
+            raise InvalidImage(str(error), "missing_blob") from None
 
     def effective_placements(self, subject: SourceRef | InstanceRef) -> Resolution:
         """What ``subject`` shows in each slot, failing closed; reads only, no model, no network."""

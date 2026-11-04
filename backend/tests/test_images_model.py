@@ -263,3 +263,9 @@ def test_the_package_loads_no_store_and_no_provider():
     loaded = subprocess.run([sys.executable, "-c", code], check=True, capture_output=True, text=True,
                             env={**os.environ, "PYTHONPATH": str(SRC)}).stdout.split()
     assert not [m for m in loaded if m.startswith(("grimoire.store", "grimoire.providers", "grimoire.imagestore"))]
+
+
+def test_an_adjust_over_an_unavailable_base_keeps_the_base_reason():
+    facts = Facts(FACTS.images, {(SHA, "png"): BlobFact("absent")})
+    found = _instance({"avatar": Placement("adjust", image=IMG)}, facts).slot("avatar")
+    assert found == Unavailable("avatar", "missing_blob", str(IMG))
