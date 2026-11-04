@@ -504,7 +504,8 @@ def test_f6_kept_versions_need_their_own_grant(pair):
 
 def test_f7_sync_never_consults_clocks_or_randomness():
     banned_modules = {"time", "datetime", "random", "uuid", "secrets"}
-    banned_names = {"st_mtime", "st_mtime_ns", "st_ctime", "st_atime", "getmtime", "getctime", "utime"}
+    banned_names = {"st_mtime", "st_mtime_ns", "st_ctime", "st_atime", "getmtime", "getctime", "utime",
+                    "urandom", "getrandom", "times", "perf_counter", "monotonic", "SystemRandom"}
     for path in SYNC_SRC.glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -1118,10 +1119,28 @@ def test_resolve_keeps_the_replaced_version_as_a_preserved_hold(pair, monkeypatc
     assert flags == [False]  # its only copy: preserved, never dropped (hold, not keep)
 
 
-def test_concurrent_syncs_in_opposite_order_never_deadlock(pair):
+def test_concurrent_syncs_in_opposite_order_never_deadlock(pair, monkeypatch):
+    """Each thread, holding the first library it locked, waits for the other to hold one too.
+
+    With one lock order the second thread blocks on the same first library, so the barrier times
+    out and both syncs finish; with opposite orders both hold one and wait for the other: a hang.
+    """
+    import contextlib
     import threading
     desktop, phone = pair
     edit_instance(desktop, WREN_A, 9)
+    original, barrier, local = LibraryStore.cached_reads, threading.Barrier(2, timeout=2), threading.local()
+
+    @contextlib.contextmanager
+    def rendezvous(self):
+        with original(self):
+            if not getattr(local, "met", False):  # once per thread, with its first library held
+                local.met = True
+                with contextlib.suppress(threading.BrokenBarrierError):
+                    barrier.wait()
+            yield
+
+    monkeypatch.setattr(LibraryStore, "cached_reads", rendezvous)
     errors = []
 
     def run(left, right):
@@ -1130,13 +1149,31 @@ def test_concurrent_syncs_in_opposite_order_never_deadlock(pair):
         except Exception as error:  # noqa: BLE001 - a race may interrupt one; only a hang fails
             errors.append(error)
 
-    threads = [threading.Thread(target=run, args=args) for args in ((desktop, phone), (phone, desktop))]
+    threads = [threading.Thread(target=run, args=args, daemon=True)  # a deadlock must fail, never hang CI
+               for args in ((desktop, phone), (phone, desktop))]
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(timeout=60)
-    assert not any(thread.is_alive() for thread in threads)
+        thread.join(timeout=30)
+    assert not any(thread.is_alive() for thread in threads), "opposite-order syncs deadlocked"
     assert all(isinstance(error, SyncInterrupted) for error in errors)
+
+
+def test_f10_both_markers_damaged_after_an_aba_restore_stay_uncertain(pair, monkeypatch):
+    """An ignored marker keeps every unagreed path uncertain on its own, even when the peer's is ignored too."""
+    desktop, phone = pair
+    old = (desktop.root / PATHS["wren_a"]).read_bytes()
+    edit_instance(phone, WREN_A, 4)
+    _crash_before(monkeypatch, "_verify")
+    with pytest.raises(RuntimeError):
+        sync(desktop, phone, handles())
+    monkeypatch.undo()
+    (desktop.root / PATHS["wren_a"]).write_bytes(old)  # ABA: the human restores the exact old bytes
+    for store, peer in ((desktop, PHONE), (phone, DESKTOP)):
+        (store.root / ".sync/peers" / peer / "pending.json").write_bytes(b"{")
+    for _ in range(3):
+        sync(desktop, phone, handles())
+        assert (desktop.root / PATHS["wren_a"]).read_bytes() == old
 
 
 # -- uncertainty that lives only in an archive (brutal-review round 3) ----------------------------
