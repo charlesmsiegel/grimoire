@@ -3,7 +3,7 @@
 **Status:** first slice of [Native File Store And Revisions](roadmap/sprints/native-file-store-and-revisions.md) (Wave 2, #010), implemented as the filesystem adapter `grimoire.store`. It persists **facet-neutral record envelopes** for source-qualified definitions and campaign instances. It never interprets a payload, and it does not decide whether a record is a character, a PC, a creature or an item; that meaning belongs to [Entity Facets (009)](roadmap/sprints/entity-facets-and-instance-model.md), which joins through codecs in Wave 3. There is no application or UI yet. A green test suite proves this contract, not a playable app.
 
 Not in this slice:
-- the image blob store (018), sync (019) and effective views (022). Events and evidence (020) are an additive family, documented [below](#events-and-evidence-020);
+- sync (019) and effective views (022). Events and evidence (020) and image blobs and placements (018) are additive families, documented below ([020](#events-and-evidence-020), [018](#images-and-blobs-018));
 - **Markdown.** The sprint's outcome names "Markdown/JSON" records. By the requester's decision this slice is JSON-only (stdlib, no YAML dependency); a Markdown payload codec is a remaining 010 obligation, re-homed by the requester to its own later pull request.
 
 The security audit, grants and approvals, and player sovereignty are persisted as [authority ledgers](#authority-ledgers-010b) (010b).
@@ -22,6 +22,11 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   campaigns/<campaign_id>/events/<event_id>.json                  # one accepted event (020)
   campaigns/<campaign_id>/evidence/<family>/<id>.json             # proposition|ruling|evidence|belief|disclosure (020)
   campaigns/<campaign_id>/evidence/batch/<seq:010d>.json          # the campaign's knowledge log (020)
+  sources/<segs>/_source/images/<image_id>.json                   # one image object (018)
+  sources/<segs>/_source/placements/<kind>/<entity_id>/<slot>.json   # one placement (018)
+  campaigns/<campaign_id>/images/<image_id>.json                  # a campaign's image object (018)
+  campaigns/<campaign_id>/placements/<kind>/<instance_id>/<slot>.json  # a campaign placement (018)
+  assets/blobs/<sha256[:2]>/<sha256>.<png|jpg|gif|webp>           # content-addressed bytes (018)
   .txn/lock, .txn/journal.json, .txn/*.new                        # writer lock, journal, staging
   .txn/discard.json                                               # an unfinished discard_journal
   .conflicts/<hash16>/<name>~<digest12>[.N]                       # preserved versions awaiting a human
@@ -131,6 +136,41 @@ Fields:
 
 **Rollback:** a pre-017 build skips `relations/` (it is reserved there), and never writes or deletes it. Its allocators do not protect relation endpoint ids. It **cannot recover a journal that names a relation path**: it raises `RecoveryFailed`, and reads then raise `PendingRecovery`. Recover with a 017+ build, or run `LibraryStore.discard_journal` (tested).
 
+### Images and blobs (018)
+
+<a id="images-and-blobs-018"></a>Added by [Image Identity And Placements](roadmap/sprints/image-identity-and-placements.md) as an additive family. Interpreted by [`grimoire.images`](IMAGES.md), never by the store; `record/1`, `source/1` and `scope-record/1` are unchanged.
+
+- **Blobs** (`ImageBlob(data)`):
+  - The extension is decided by the store's one sniffer (`grimoire.store.media`) from magic bytes: PNG, JPEG, GIF or WebP.
+  - At most 32 MiB (`MAX_BLOB_BYTES`). The 8 MiB JSON limit does not apply.
+  - A blob file's etag is `sha256:<its name without extension>`.
+  - `put(blob, None)` creates. `put(blob, <actual etag>)` **repairs** a file whose bytes do not hash to its name: CAS proves which bytes are replaced, and the repaired bytes are not preserved. `put(blob, blob.etag)` raises `ImmutableBlob`.
+  - Blobs are never JSON-parsed.
+- **Asset records** (`grimoire.asset-record/1`, `AssetRecord`):
+  - Fields mirror `scope-record/1`: `format`, `address` (an `ImageRef` or `PlacementRef`, which must equal what its path implies), `schema`, opaque `payload`, optional `owner`, `previous`, and unknown keys preserved.
+  - Image records are **create-only** (`ImmutableImage`). Placements are compare-and-swap.
+- **One transaction.** Blobs, asset records, definitions, manifests, instances and scope records can share one transaction. Every commit step applies to all of them: guards, CAS, collisions, `Permission.APPLY` over exact bytes, journal, recovery and conflict preservation. `classify` recognises the new paths, so recovery accepts journals that name them.
+- **Ownership is checked at commit:**
+  - a source asset needs its source admitted by its **own** files: a readable manifest on disk or in the transaction that the source's own scan does not exclude (`InvalidSourceState`). A manifest rewrite in the same transaction cannot clear an exclusion its records cause (an ownership violation): such a commit is refused too. An art-only commit takes that verdict from the cached per-source view instead of re-reading every revision. A cross-source exclusion is enforced by the image service (it validates against `source_facts`), not by a raw store transaction;
+  - a campaign asset needs the campaign to exist: a canonical regular `scope.json` or instance file, or that campaign's scope or instance put in the transaction. Asset records alone never make a campaign exist.
+- **Reads** take the store lock and never follow links:
+  - `read(ImageRef | PlacementRef)`;
+  - `campaign_exists(id)`;
+  - `blob_stat(sha, ext)` returns `(absent | present | lookalike, size)` without reading the file;
+  - `blob_etag(sha, ext)`: a file over 32 MiB raises `BlobCorrupt` unread;
+  - `read_blob(sha, ext)` verifies the digest or raises `BlobCorrupt`;
+  - `list_images(scope)` and `list_placements(subject)` return canonical refs plus `LoadProblem`s for stray names and for differently spelled sibling folders on the way down (`Wren-b` beside `wren-b`), without reading contents.
+- **`load()`** recognises `images/` and `placements/` inside `_source/` and inside a campaign, and does not interpret them. Anything else there is `unrecognized` or `name_mismatch`. `assets/` remains a reserved root and is skipped.
+- **Authorization:**
+  - `assets/blobs/…` is library-global, so a grant on `sources/<s>` or `campaigns/<c>` never covers it: grant `assets` or approve each blob;
+  - the service does not re-stage deduplicated bytes, so they need no new approval;
+  - a preview therefore reveals whether identical bytes already exist.
+
+**Rollback:** a pre-018 build:
+- skips `assets/` silently (it was already reserved);
+- reports the new `images/` and `placements/` folders as `unrecognized`, and never writes them;
+- **cannot recover a journal that names them** (`RecoveryFailed`). Recover with an 018+ build, or use `discard_journal`.
+
 ### Read-only helpers (107)
 
 All of these take the store lock, require a consistent library, and read listings and files only:
@@ -138,10 +178,25 @@ All of these take the store lock, require a consistent library, and read listing
 - `read(ScopeRef | ChatRef)` returns a `StoredScopeRecord`.
 - `campaign_presence(id)` returns `absent`, `present`, or `mismatch` when only a look-alike folder exists.
 - `campaign_instances(id)` returns canonically named instance files across kinds. It reads names only and refuses links.
-- `check_source(source_id)` and `check_definition(ref)` run the loader's own scan-and-evaluate on **one** source:
+- `excluded_sources()` returns every source `load()` would report as excluded, including by a cross-source `identity_conflict`. It runs `load()`'s own exclusion algorithm (`loader.admit`, shared with `load()` and given read-only scans) without reading campaigns. It is **incremental and cached**:
+  - each source has a stat-only fingerprint of its `manifest.json` and everything under its `records/`: names, types, sizes, inodes, and nanosecond modification and change times. No file is read;
+  - a source is scanned again only when its fingerprint changed, and the exclusion algorithm then reruns in memory over the cached scans;
+  - images, placements, campaign and chat writes never change a fingerprint, so they never invalidate it;
+  - a check on an unchanged library reads no file: it re-discovers the sources and `stat`s each manifest and revision entry. That is about 170 ms for 200 sources × 20 revisions on Linux, about half of it Python overhead rather than system calls, so it grows linearly with the library. Inside `read_pass()` it is verified only **once per pass**, and a commit inside the pass makes the next check verify again. A list view that resolves many subjects should wrap them in one `read_pass()`;
+  - the cached scans keep identities, names, heads and links, but no record payloads;
+  - the real spellings of `manifest.json` and `records` in `_source/` are part of the fingerprint, so a case-only rename (which keeps its stat on Windows and macOS) is seen;
+  - links and reparse points are recorded and never entered;
+  - **limit:** a hand edit that changes none of those stat fields is not seen until something else in that source changes. On POSIX that needs the same size, inode and timestamps (a coarse-timestamp filesystem). On Windows the check is weaker: `os.scandir` reports no inode there and its "change" time is the creation time, so a same-size replace that preserves the modification time (a `robocopy` or `cp -p` restore) is missed. Two reads narrow this for the checked source: its `manifest.json` is re-read and compared by etag on every check (heads, links and owner are therefore always current), and `check_definition` re-reads the one revision it resolves. What can still go stale is an edit missed by the stat keys to a *different* revision file of that source, or to another source that changes the cross-source verdict;
+  - when to revisit: at roughly 20,000–40,000 revision files a pass approaches a second. The next step is a commit-maintained index or a filesystem watcher, not a staler stat key.
+- `source_facts()` returns that verification as a `SourceFacts` value (`generation`, per-source fingerprints, `excluded`). `check_source(id, facts)` and `check_definition(ref, facts)` accept it, so a caller validating many references verifies once. Facts expire with `store.generation`, which every commit and recovery of this store bumps; an edit made by another program after they were taken is not seen until then. Without `facts`, each check verifies afresh (or once per `read_pass()`).
+- `read_pass()` is a context manager that holds the store lock and verifies the facts once for its whole block. The image service runs `preview`, `commit` and `effective_placements` in one, and shares one `SourceFacts` across a batch's ops until a commit; the chat service runs `start_chat` in one. `ChatLibrary.attach_source`, `set_persona` and `attach_world` make one check each and verify once each. A caller reading many images (`read_image`, `read_image_bytes`) should wrap them in one `read_pass()`.
+- **Per-source views:** each source's admission facts (its own verdict, its manifest, the entities it drops and a slim definition index) are derived once per fingerprint from the cached scan, so an unchanged source is never parsed again. `check_definition` then reads only the one resolved revision file for its envelope, and if that file changed since the scan, it forgets the source and decides afresh.
+- **One-source scans skip art:** `scan_source(..., assets=False)`, used by these checks and by commit-time source validation, does not walk `images/` or `placements/` (admission never depends on art); only `load()` walks them to report stray names.
+- **I/O errors are never cached:** a scan shaped by an `OSError` (an unreadable manifest, revision or folder) is not cached, so a transient error affects one call only. While such damage persists, every verification rescans that source **and** reruns the whole-library admission (about 70 ms more at 200 sources × 20 revisions on Linux).
+- `check_source(source_id)` and `check_definition(ref)` agree with `load()`:
   - `check_definition` returns the definition `load()` would resolve, or a reason: `missing_source`, `excluded_source`, `entity_dropped`, `missing_entity` or `missing_revision`.
   - Parity with `load()` is tested across bad and implicit heads, kind reuse, ownership, unreadable revisions and missing manifests.
-  - A cross-source `identity_conflict` is visible only to `load()`.
+  - A cross-source `identity_conflict` is caught through `excluded_sources()` (tested with a simulated conflict, since today's loader drops bad links before the index sees them).
 
 ### Knowledge record (`grimoire.knowledge-record/1`) — events and evidence (020)
 

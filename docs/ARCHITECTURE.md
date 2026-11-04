@@ -58,11 +58,11 @@ Planned, authorized, fully booked OpenAI-compatible model calls. Endpoints are t
     events/                           # committed happenings and consequences
     evidence/                         # observations, reports, beliefs and provenance
     relations/                        # scoped typed relationship records
-  assets/                             # content-addressed image objects and placements
+  assets/                             # content-addressed image blobs (018; objects and placements live with their owner)
   .cache/                             # disposable derived graph, search, embeddings
 ```
 
-The native store's accepted first-slice layout (`sources/<segments>/_source/…`, `campaigns/<id>/instances/…`) and its revision, recovery and isolation contract are in [STORAGE.md](STORAGE.md); the first-slice relation schema (`campaigns/<id>/relations/`) and graph semantics are in [GRAPH.md](GRAPH.md). Data files must remain usable by humans and external agents. Derived indexes, embeddings and cached actor views are disposable and may not become a second canonical store.
+Image objects and placements (018) deliberately live under their owning source's `_source/` or their campaign, not in `assets/`; only content-addressed blobs are library-global. See [IMAGES](IMAGES.md). The native store's accepted first-slice layout (`sources/<segments>/_source/…`, `campaigns/<id>/instances/…`) and its revision, recovery and isolation contract are in [STORAGE.md](STORAGE.md); the first-slice relation schema (`campaigns/<id>/relations/`) and graph semantics are in [GRAPH.md](GRAPH.md). Data files must remain usable by humans and external agents. Derived indexes, embeddings and cached actor views are disposable and may not become a second canonical store.
 
 ## Wave 2 independent domain and storage contracts (planned)
 
