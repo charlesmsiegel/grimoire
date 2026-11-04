@@ -102,8 +102,20 @@ def _template(instance: EntityInstance, index: DefinitionIndex) -> EntityDefinit
 
 def individualize(roster: CampaignRoster, decision: IndividualizationDecision,
                   index: DefinitionIndex,
-                  controls: Iterable[ControlAssignment] = ()) -> Individualization:
-    """Promote one generic template instance in place; replaying a decision is a no-op."""
+                  controls: Iterable[ControlAssignment]) -> Individualization:
+    """Promote one generic template instance in place; replaying a decision is a no-op.
+
+    ``controls`` is required, as in every authority API: an omitted argument
+    must never read as "nobody controls this actor". Pass ``()`` only when the
+    campaign truly has no assignments. An existing assignment keeps its
+    authority even if ``CampaignRoster.check_controls`` reports it (for
+    example ``not_agent`` after a source change), because control is never
+    silently revoked.
+
+    A replay (the same decision already recorded) returns ``applied=False``
+    without re-validating the instance against the current index; call
+    ``effective_entity`` to check that it still resolves.
+    """
     if not isinstance(roster, CampaignRoster):
         raise TypeError(f"expected a CampaignRoster, not {type(roster).__name__}")
     if not isinstance(decision, IndividualizationDecision):

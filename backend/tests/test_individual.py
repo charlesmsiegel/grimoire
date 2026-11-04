@@ -140,7 +140,7 @@ def conversation_knowledge():
 def test_proving_scenario_one_goblin_named_and_remembering_others_generic():
     roster, knowledge = three_goblins(), conversation_knowledge()
     species_before = goblin()
-    result = individualize(roster, decide(event_ids=("evt-talk",)), INDEX)
+    result = individualize(roster, decide(event_ids=("evt-talk",)), INDEX, ())
     assert isinstance(result, Individualization) and result.applied
     snik = result.roster.instance(G1)
     assert snik is result.instance and snik.ref == G1
@@ -160,8 +160,8 @@ def test_proving_scenario_one_goblin_named_and_remembering_others_generic():
 
 
 def test_two_individuals_keep_separate_names_and_wounds():
-    roster = individualize(three_goblins(), decide(), INDEX).roster
-    roster = individualize(roster, decide(G2, "Mog", "d-mog", scene_id="s4"), INDEX).roster
+    roster = individualize(three_goblins(), decide(), INDEX, ()).roster
+    roster = individualize(roster, decide(G2, "Mog", "d-mog", scene_id="s4"), INDEX, ()).roster
     snik, mog = roster.instance(G1), roster.instance(G2)
     assert (snik.local_name, mog.local_name) == ("Snik", "Mog")
     assert snik.individuality.decision_id != mog.individuality.decision_id
@@ -176,8 +176,8 @@ def test_two_individuals_keep_separate_names_and_wounds():
 def test_a_head_update_flows_into_an_unpinned_individual_without_losing_identity():
     pinned_ref = InstanceRef(C, "creature", "goblin-pinned")
     roster = CampaignRoster(C, (generic(G1), generic(pinned_ref, ref("species", "goblin"))))
-    roster = individualize(roster, decide(), INDEX).roster
-    roster = individualize(roster, decide(pinned_ref, "Grub", "d-grub"), INDEX).roster
+    roster = individualize(roster, decide(), INDEX, ()).roster
+    roster = individualize(roster, decide(pinned_ref, "Grub", "d-grub"), INDEX, ()).roster
     roster = replace(roster)  # values only
     moved = index_of(goblin(), goblin_r2(), heads={GOBLIN: "r2"})
     snik = propose_damage(roster.instance(G1), 1, INDEX)
@@ -194,18 +194,18 @@ def test_a_head_update_flows_into_an_unpinned_individual_without_losing_identity
 # --- idempotency and conflicts -----------------------------------------------------------
 
 def test_replaying_a_decision_is_a_no_op_even_reordered_or_after_a_rename():
-    first = individualize(three_goblins(), decide(event_ids=("evt-b", "evt-a")), INDEX)
-    again = individualize(first.roster, decide(event_ids=("evt-a", "evt-b")), INDEX)
+    first = individualize(three_goblins(), decide(event_ids=("evt-b", "evt-a")), INDEX, ())
+    again = individualize(first.roster, decide(event_ids=("evt-a", "evt-b")), INDEX, ())
     assert not again.applied and again.roster == first.roster and again.instance == first.instance
     renamed = replace(first.instance, local_name="Snik the Bold")
     roster = CampaignRoster(C, (renamed, generic(G2), generic(G3)))
-    replay = individualize(roster, decide(event_ids=("evt-a", "evt-b")), INDEX)
+    replay = individualize(roster, decide(event_ids=("evt-a", "evt-b")), INDEX, ())
     assert not replay.applied and replay.instance.local_name == "Snik the Bold"
     assert replay.instance.individuality.given_name == "Snik"
 
 
 def test_replay_needs_no_authority_but_a_new_decision_does():
-    roster = individualize(three_goblins(), decide(), INDEX).roster
+    roster = individualize(three_goblins(), decide(), INDEX, ()).roster
     p1 = (ControlAssignment(C, "goblin-1", "p1"), ControlAssignment(C, "goblin-2", "p1"))
     assert not individualize(roster, decide(), INDEX, p1).applied  # control changed after promotion
     with pytest.raises(AuthorityError):
@@ -213,26 +213,39 @@ def test_replay_needs_no_authority_but_a_new_decision_does():
 
 
 def test_conflicting_decisions_are_refused():
-    roster = individualize(three_goblins(), decide(), INDEX).roster
-    assert reason(lambda: individualize(roster, decide(name="Snak"), INDEX)) == "decision_conflict"
-    assert reason(lambda: individualize(roster, decide(scene_id="s9"), INDEX)) == "decision_conflict"
-    assert reason(lambda: individualize(roster, decide(name="Snak", decision_id="d-2"), INDEX)) \
+    roster = individualize(three_goblins(), decide(), INDEX, ()).roster
+    assert reason(lambda: individualize(roster, decide(name="Snak"), INDEX, ())) == "decision_conflict"
+    assert reason(lambda: individualize(roster, decide(scene_id="s9"), INDEX, ())) == "decision_conflict"
+    assert reason(lambda: individualize(roster, decide(name="Snak", decision_id="d-2"), INDEX, ())) \
         == "already_individualized"
-    assert reason(lambda: individualize(roster, decide(G2, name="Snik"), INDEX)) == "decision_conflict"
+    assert reason(lambda: individualize(roster, decide(G2, name="Snik"), INDEX, ())) == "decision_conflict"
+    # Every recorded field takes part in the replay comparison.
+    p1 = (ControlAssignment(C, "goblin-1", "p1"),)
+    assert reason(lambda: individualize(roster, decide(decided_by="p1"), INDEX, p1)) == "decision_conflict"
+    assert reason(lambda: individualize(roster, decide(event_ids=("evt-x",)), INDEX, ())) \
+        == "decision_conflict"
+    assert reason(lambda: individualize(roster, decide(decision_id="d-2"), INDEX, ())) \
+        == "already_individualized"
+
+
+def test_controls_must_be_passed_explicitly():
+    # An omitted argument must never read as "nobody controls this actor".
+    with pytest.raises(TypeError):
+        individualize(three_goblins(), decide(), INDEX)
 
 
 def test_a_duplicated_decision_id_fails_closed_even_for_an_exact_replay():
     snik = EntityInstance(G1, GOBLIN, "Snik", individuality=snik_individuality())
     twin = EntityInstance(G2, GOBLIN, "Snik", individuality=snik_individuality())
     merged = CampaignRoster(C, (snik, twin, generic(G3)))  # e.g. after a sync merge: still loads
-    assert reason(lambda: individualize(merged, decide(), INDEX)) == "decision_conflict"
+    assert reason(lambda: individualize(merged, decide(), INDEX, ())) == "decision_conflict"
 
 
 # --- authority ----------------------------------------------------------------------------
 
 def test_only_the_director_individualizes_an_uncontrolled_creature():
     with pytest.raises(AuthorityError):
-        individualize(three_goblins(), decide(decided_by="p1"), INDEX)
+        individualize(three_goblins(), decide(decided_by="p1"), INDEX, ())
     other = (ControlAssignment(C, "goblin-2", "p1"),)  # control of another actor is irrelevant
     assert individualize(three_goblins(), decide(), INDEX, other).applied
 
@@ -255,15 +268,33 @@ def test_ambiguous_control_fails_closed():
         individualize(three_goblins(), decide(decided_by="p1"), INDEX, controls)
 
 
-def test_a_non_agent_template_instance_is_director_only():
+def test_an_uncontrolled_non_agent_template_instance_is_director_only():
     from grimoire.core.entity import EntityDefinition
     blade = EntityDefinition(ref("item", "goblin-blade"), "Goblin blade", "template", plain_sword().traits)
     knife = InstanceRef(C, "item", "knife-1")
     roster = CampaignRoster(C, (EntityInstance(knife, blade.ref.unpinned()),))
     index = index_of(blade)
     with pytest.raises(AuthorityError):
-        individualize(roster, decide(knife, "Biter", decided_by="p1"), index)
-    assert individualize(roster, decide(knife, "Biter"), index).instance.local_name == "Biter"
+        individualize(roster, decide(knife, "Biter", decided_by="p1"), index, ())
+    assert individualize(roster, decide(knife, "Biter"), index, ()).instance.local_name == "Biter"
+
+
+def test_a_stale_assignment_keeps_its_authority_after_agency_is_lost():
+    """Control is reported, never silently revoked (009): the player still decides."""
+    from grimoire.core.entity import EntityDefinition
+    from grimoire.core.facets import Agent, FacetSet
+    awake = EntityDefinition(ref("item", "goblin-blade"), "Goblin blade", "template",
+                             FacetSet([*plain_sword().traits, Agent()]))
+    dull = EntityDefinition(ref("item", "goblin-blade", "r2"), "Goblin blade", "template",
+                            plain_sword().traits)
+    knife = InstanceRef(C, "item", "knife-1")
+    roster = CampaignRoster(C, (EntityInstance(knife, awake.ref.unpinned()),))
+    control = roster.assign_control(knife, "p1", index_of(awake))
+    index = index_of(awake, dull, heads={awake.ref.unpinned(): "r2"})
+    assert [problem.reason for problem in roster.check_controls([control], index)] == ["not_agent"]
+    with pytest.raises(AuthorityError):
+        individualize(roster, decide(knife, "Biter"), index, [control])
+    assert individualize(roster, decide(knife, "Biter", decided_by="p1"), index, [control]).applied
 
 
 # --- refusals --------------------------------------------------------------------------------
@@ -276,31 +307,31 @@ def test_individuals_and_originals_are_not_templates():
                                 EntityInstance(odd, grakka().ref)))
     index = index_of(goblin(), grakka())
     for target in (chief, hero, odd):
-        assert reason(lambda: individualize(roster, decide(target), index)) == "not_template"
+        assert reason(lambda: individualize(roster, decide(target), index, ())) == "not_template"
 
 
 def test_unknown_targets_campaigns_and_sources():
     roster = three_goblins()
     with pytest.raises(UnknownInstance):
-        individualize(roster, decide(InstanceRef(C, "creature", "goblin-9")), INDEX)
+        individualize(roster, decide(InstanceRef(C, "creature", "goblin-9")), INDEX, ())
     with pytest.raises(UnknownInstance):
-        individualize(roster, decide(InstanceRef(C, "species", "goblin-1")), INDEX)
+        individualize(roster, decide(InstanceRef(C, "species", "goblin-1")), INDEX, ())
     with pytest.raises(ValueError) as caught:
-        individualize(roster, decide(InstanceRef("c2", "creature", "goblin-1"), campaign_id="c2"), INDEX)
+        individualize(roster, decide(InstanceRef("c2", "creature", "goblin-1"), campaign_id="c2"), INDEX, ())
     assert not isinstance(caught.value, EntityError)
     gone = CampaignRoster(C, (generic(G1, ref("species", "goblin", "r9")),))
     with pytest.raises(MissingDefinition):
-        individualize(gone, decide(), INDEX)
+        individualize(gone, decide(), INDEX, ())
 
 
 def test_argument_types_are_checked():
     roster = three_goblins()
     with pytest.raises(TypeError):
-        individualize(list(roster.instances), decide(), INDEX)
+        individualize(list(roster.instances), decide(), INDEX, ())
     with pytest.raises(TypeError):
-        individualize(roster, "d-snik", INDEX)
+        individualize(roster, "d-snik", INDEX, ())
     with pytest.raises(TypeError):
-        individualize(roster, decide(), {})
+        individualize(roster, decide(), {}, ())
     with pytest.raises(TypeError):
         individualize(roster, decide(), INDEX, [("c1", "goblin-1", "p1")])
     with pytest.raises(TypeError):
@@ -333,7 +364,7 @@ def test_is_generic_cases():
     index = index_of(goblin(), grakka())
     assert not is_generic(EntityInstance(G2, grakka().ref), index)
     assert not is_generic(EntityInstance(G3, None, "Original"), index)
-    labelled_snik = individualize(CampaignRoster(C, (labelled,)), decide(), INDEX).instance
+    labelled_snik = individualize(CampaignRoster(C, (labelled,)), decide(), INDEX, ()).instance
     assert labelled_snik.local_name == "Snik" and not is_generic(labelled_snik, INDEX)
 
 
@@ -342,7 +373,7 @@ def test_promotion_preserves_pin_facets_state_and_extras():
     rich = EntityInstance(G1, ref("species", "goblin"), added=FacetBundle([UnknownFacet("x-mark")]),
                           extras={"x-note": "has a limp"})
     rich = propose_damage(rich, 2, INDEX)
-    snik = individualize(CampaignRoster(C, (rich,)), decide(), INDEX).instance
+    snik = individualize(CampaignRoster(C, (rich,)), decide(), INDEX, ()).instance
     assert replace(snik, local_name=None, individuality=None) == rich
 
 
@@ -350,7 +381,7 @@ def test_existing_drift_still_blocks_promotion():
     from grimoire.core.facets import FacetBundle
     voiced = EntityInstance(G1, GOBLIN, added=FacetBundle([Communicative(speaks={"speech"})]))
     moved = index_of(goblin(), goblin_r2(), heads={GOBLIN: "r2"})
-    assert reason(lambda: individualize(CampaignRoster(C, (voiced,)), decide(), moved)) \
+    assert reason(lambda: individualize(CampaignRoster(C, (voiced,)), decide(), moved, ())) \
         == "added_shadows_trait"
 
 
@@ -360,5 +391,5 @@ def test_a_legacy_definition_source_is_not_an_entity_definition():
     target = InstanceRef(C, "character", "old-1")
     roster = CampaignRoster(C, (EntityInstance(target, legacy.ref),))
     index = index_of(legacy)
-    assert reason(lambda: individualize(roster, decide(target), index)) == "not_entity_definition"
+    assert reason(lambda: individualize(roster, decide(target), index, ())) == "not_entity_definition"
     assert not is_generic(roster.instance(target), index)

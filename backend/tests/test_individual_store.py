@@ -75,7 +75,7 @@ def test_an_individualized_goblin_round_trips_and_nothing_else_is_rewritten(libr
     index, roster = decode_index(before), decode_roster(before)
     assert all(is_generic(instance, index) for instance in roster.instances)
 
-    result = individualize(roster, snik_decision(), index)
+    result = individualize(roster, snik_decision(), index, ())
     txn = library.transaction()
     txn.put(envelope(result.instance), etags[G1])
     txn.commit(owner_handle())
@@ -96,13 +96,13 @@ def test_an_individualized_goblin_round_trips_and_nothing_else_is_rewritten(libr
 def test_a_stale_write_of_the_individual_is_refused(library):
     view = library.load()
     stale_etag = view.instances[G1].etag
-    first = individualize(decode_roster(view), snik_decision(), decode_index(view))
+    first = individualize(decode_roster(view), snik_decision(), decode_index(view), ())
     txn = library.transaction()
     txn.put(envelope(first.instance), stale_etag)
     txn.commit(owner_handle())
 
     other = IndividualizationDecision(C, "d-grub", G1, "Grub", DIRECTOR, "s5")
-    rival = individualize(decode_roster(view), other, decode_index(view))  # from the old read
+    rival = individualize(decode_roster(view), other, decode_index(view), ())  # from the old read
     txn = library.transaction()
     txn.put(envelope(rival.instance), stale_etag)
     with pytest.raises(StaleWrite):
