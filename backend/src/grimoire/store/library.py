@@ -914,19 +914,26 @@ class LibraryStore:
         """
         with self.lock:
             self._require_consistent()
-            if self._access.presence((SYNC, SYNC_PEERS)) != "present":
+            presence = self._access.presence((SYNC, SYNC_PEERS))
+            if presence == "mismatch":  # on a case-insensitive filesystem it *is* the folder
+                raise NameCollision(f"{SYNC}/{SYNC_PEERS} exists only under another spelling")
+            if presence != "present":
                 return ()
             return tuple(sorted(self._access.list_dir((SYNC, SYNC_PEERS))))
 
     def read_exact(self, path: str) -> bytes | None:
-        """The exact bytes of a canonical record or kept-version file, or ``None``; never through a link."""
+        """The exact bytes of a canonical record or kept-version file, or ``None`` when it is absent;
+        never through a link. A look-alike spelling of it or of a folder above it is ``NameCollision``."""
         parts = tuple(path.split("/"))
         found = classify(parts)
         if (found is None or found[0] == "ledger") and not is_kept_target(parts):
             raise ValueError(f"{path} is not a canonical record or kept-version path")
         with self.lock:
             self._require_consistent()
-            return self._access.read(parts)
+            data = self._access.read(parts)
+            if data is None and self._access.presence(parts) == "mismatch":
+                raise NameCollision(f"{path} exists only under another spelling")
+            return data
 
     def collides(self, path: str) -> bool:
         """Whether ``path`` (or a missing ancestor) would collide with a differently spelled entry."""

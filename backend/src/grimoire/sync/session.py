@@ -824,7 +824,10 @@ def _verify(plan: SyncPlan, applied: _Applied) -> None:
         checks += [("/".join(conflict_parts(tuple(keep.path.split("/")), etag(keep.data), keep.slot)), keep.data)
                    for keep in applied.kept.get(device, [])]
         for path, data in checks:
-            found = store.read_exact(path)
+            try:
+                found = store.read_exact(path)
+            except NameCollision:  # renamed to a look-alike since it was published
+                found = None
             if found is None or etag(found) != etag(data):
                 raise SyncInterrupted(f"verification failed on {device}: {path} does not hold the planned bytes",
                                       _report(plan, applied))
@@ -1071,7 +1074,10 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     except (StaleWrite, *PER_PATH_ERRORS) as error:
         raise ResolveRefused(f"{path} cannot be resolved on {receiver}: {error}") from error
     txn.commit(handles[receiver], dict((approvals or {}).get(receiver, {})))
-    found = stores[receiver].read_exact(path)
+    try:
+        found = stores[receiver].read_exact(path)
+    except NameCollision:  # renamed to a look-alike since it was written
+        found = None
     if found is None or etag(found) != keep:
         raise SyncInterrupted(f"verification failed on {receiver}: {path} does not hold the chosen bytes")
     for device in reversed(pair):

@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, validate_segment
+from grimoire.core.identity import TEXT_MAX, ChatRef, InstanceRef, SourceRef, validate_segment
 
 from .diskops import is_link, lstat_or_none
 from .engine import Access
@@ -164,7 +164,14 @@ def _children(access: Access, parts: Parts, blocked: dict[str, str]) -> list[tup
                 blocked["/".join(parts + (_folded(name),))] = SHADOWED
             found.append((name, "skip"))
             continue
-        if is_link(access.path(child)):
+        try:
+            linked = is_link(access.path(child))
+            info = None if linked else lstat_or_none(access.path(child))
+        except OSError:  # listed but not inspectable (a folder with read but no search permission)
+            blocked[text] = "unreadable"
+            found.append((name, "skip"))
+            continue
+        if linked:
             blocked[text] = "link"
             found.append((name, "skip"))
             continue
@@ -172,7 +179,6 @@ def _children(access: Access, parts: Parts, blocked: dict[str, str]) -> list[tup
             blocked[text] = "lookalike"
             found.append((name, "skip"))
             continue
-        info = lstat_or_none(access.path(child))
         if info is None:
             continue
         found.append((name, "dir" if stat.S_ISDIR(info.st_mode) else "file"))
@@ -219,12 +225,24 @@ def _real_identifier(access: Access, parts: Parts) -> bool:
         validate_segment(parts[-1], "name")
     except ValueError:
         return False
-    info = lstat_or_none(access.path(parts))
-    return info is not None and stat.S_ISDIR(info.st_mode) and not is_link(access.path(parts))
+    try:
+        info = lstat_or_none(access.path(parts))
+        # a link with an identifier name is never noise: the walk then blocks it as a link
+        return info is not None and (stat.S_ISDIR(info.st_mode) or is_link(access.path(parts)))
+    except OSError:
+        return True  # cannot be inspected: never skipped as noise; the walk blocks it as unreadable
+
+
+#: Deeper than any canonical path can be (a source id is at most ``TEXT_MAX`` characters, so at most
+#: half that many segments, plus the fixed folders around them): nothing below can be a record.
+_MAX_DEPTH = TEXT_MAX // 2 + 16
 
 
 def _walk(access: Access, parts: Parts, files: dict[str, bytes], blocked: dict[str, str],
           skipped: list[str]) -> None:
+    if len(parts) > _MAX_DEPTH:
+        skipped.append("/".join(parts))  # never recursed into: a stray tree cannot stop the scan
+        return
     for name, kind in _children(access, parts, blocked):
         child = parts + (name,)
         text = "/".join(child)
@@ -282,8 +300,14 @@ def _may_hold_records(access: Access, original: Parts) -> bool:
         return True  # a folder, a link or something unreadable may hold records
     if parts[0] != CAMPAIGNS:
         return False  # the library root's other entries never hold records
-    if len(parts) <= 2:
-        return True  # campaigns/ itself, or one campaign folder
+    if len(parts) == 2:
+        try:
+            info = lstat_or_none(access.path(original))
+        except OSError:
+            return True
+        return info is None or not stat.S_ISREG(info.st_mode)  # a regular file is never a campaign folder
+    if len(parts) < 2:
+        return True  # campaigns/ itself
     return parts[2] in _RECORD_FOLDERS or parts[2] == SCOPE_FILE
 
 
@@ -302,6 +326,8 @@ def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str
     """
     found = scan(access)
     for path, reason in found.blocked.items():
+        if reason == SHADOWED:
+            continue  # the look-alike that shadows it is blocked too, and judged by what it is
         if _may_hold_records(access, tuple(path.split("/"))):
             raise RevisionReferenced(f"cannot prove {ref} is unreferenced: {path} is {reason}")
     for path, data in found.files.items():

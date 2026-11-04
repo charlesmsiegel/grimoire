@@ -323,6 +323,12 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
                 journal = journal.aborted()
                 _replace_journal(access, journal)
                 break
+    if live and journal.state == "commit" and any(entry.kind == "hold" for entry in journal.entries) and any(
+            entry.temp not in staged and access.etag_of(entry.target) != entry.new for entry in journal.entries):
+        # A revision replace publishes only with the hold of the bytes it replaces (019): live, a
+        # vanished staged file means nothing is published yet, so the pair is abandoned whole.
+        journal = journal.aborted()
+        _replace_journal(access, journal)
     for entry in journal.entries:
         if entry.temp not in staged:
             current = access.etag_of(entry.target)
