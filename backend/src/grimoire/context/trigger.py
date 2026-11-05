@@ -17,20 +17,20 @@ from __future__ import annotations
 
 import functools
 import re
-import sys
 import unicodedata
 from collections.abc import Callable, Iterable
 
 _DOT_ABOVE = "\u0307"  # what casefold leaves after the i of a dotted capital I
 _PATTERN: re.Pattern[str] | None = None
+_MAX_CODE_POINT = 0x10FFFF
 
 
 def _ranges(wanted: Callable[[str], bool]) -> str:
     """A regex class body for every code point ``wanted`` accepts, as escaped ranges."""
     found: list[str] = []
     start = None
-    for point in range(sys.maxunicode + 2):
-        inside = point <= sys.maxunicode and wanted(chr(point))
+    for point in range(_MAX_CODE_POINT + 2):
+        inside = point <= _MAX_CODE_POINT and wanted(chr(point))
         if inside and start is None:
             start = point
         elif not inside and start is not None:
