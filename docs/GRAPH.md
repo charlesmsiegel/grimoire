@@ -149,7 +149,7 @@ Validation:
 
 012's `Proposition` is text plus `about`. A `ClaimShape(campaign_id, proposition_id, predicate, subject, object)` gives one proposition a typed, **positive, present-tense** reading.
 
-`ClaimSet(knowledge, shapes)` validates the shapes against the ledger and keeps only the campaign id and the shapes. Its refusals are `GraphError` reasons:
+`ClaimSet(knowledge, shapes)` validates the shapes against the ledger and keeps only the campaign id and the shapes. Two `ClaimSet`s are equal (and hash alike) when their campaign and shapes are, so two reads of one stored ledger compare equal (020). Its refusals are `GraphError` reasons:
 - `unknown_proposition`, `campaign_mismatch`, `unknown_predicate`, `self_relation`;
 - `duplicate_claim`: at most one shape per proposition;
 - `not_overt`: **each endpoint must be in the proposition's `about`**. This is 012's overt-reference rule. A shape can never identify "the masked man" as the duke; that identification is a separate proposition.

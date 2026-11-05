@@ -13,7 +13,7 @@ import traceback
 import pytest
 
 from grimoire.core import (
-    DIRECTOR, Belief, ControlAssignment, Event, InstanceRef, KnowledgeRef, Moment, Proposition, Report, Ruling,
+    DIRECTOR, Belief, ControlAssignment, Event, InstanceRef, KnowledgeError, KnowledgeRef, Proposition, Report, Ruling,
     Subject, actor_knowledge, player_knowledge,
 )
 from grimoire.evidence import (
@@ -248,6 +248,13 @@ def test_a_shaped_proposition_is_one_file_under_its_own_schema(store, evidence):
     assert {"duke", "guild"} <= evidence_instance_ids(store, C)
 
 
+def test_two_reads_of_one_ledger_compare_equal(store, evidence):
+    append_u(evidence)
+    first, second = (evidence.read(C, requested_by=DIRECTOR) for _ in range(2))
+    assert first == second and first.claims == second.claims and hash(first.claims) == hash(second.claims)
+    assert first.claims != ClaimSet(first.knowledge, ())
+
+
 def test_a_one_shot_iterable_of_claims_is_accepted(store, evidence):
     append_u(evidence, upto=1)
     proposition, shape = shaped()
@@ -309,14 +316,22 @@ def test_012s_rules_and_earlier_steps_win_over_a_bad_shape(store, evidence):
     refused(store, evidence, [duplicate], "duplicate_id", claims=[loose])  # step 5 before the claim rules
     late, shape = shaped(seq=0)
     refused(store, evidence, [late], "backdated", claims=[shape])
+    fresh, _ = shaped()
+    orphan = Report(C, "v-o", MARA, "p-gone", "told", m(9), "director", confirmed=True)
+    before = knowledge_files(store)
+    with pytest.raises(KnowledgeError) as caught:  # 012's rule (step 7) before the claim rules (not_overt)
+        evidence.append(C, [fresh, orphan], claims=[ClaimShape(C, "p-x", "member_of", DUKE, TAVI)])
+    assert (caught.value.reason, caught.value.records) == ("unknown_proposition", ("evidence:v-o",))
+    assert knowledge_files(store) == before
 
 
-def test_a_claim_endpoint_removed_before_commit_is_stale(store, evidence):
+def test_every_claim_endpoint_is_pinned_and_one_removed_before_commit_is_stale(store, evidence):
     append_u(evidence, upto=1)
     seed_actors(store, actors=(InstanceRef(C, "character", "kell"),))
     kell = InstanceRef(C, "character", "kell")
     proposition, shape = shaped(subject=kell)
     pending = evidence.append(C, [proposition], claims=[shape])
+    assert {shape.subject, shape.object} <= pending.actors  # re-checked under the lock at commit
     (store.root / "campaigns" / C / "instances" / "character" / "kell.json").unlink()
     with pytest.raises(StaleWrite):
         pending.commit()

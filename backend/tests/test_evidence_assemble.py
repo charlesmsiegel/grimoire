@@ -390,6 +390,7 @@ def check_claims(knowledge: Knowledge, shapes) -> None:
         for node in ACTORS:
             for a in ACTORS:
                 _claims_within(claims_about(actors_a[a], claims, node), claims_about(actors_u[a], U_CLAIMS, node))
+            assert [v.actor for v in player_a.actors] == [v.actor for v in player_u.actors]
             for got, want in zip(player_a.actors, player_u.actors):
                 _claims_within(claims_about(got, claims, node), claims_about(want, U_CLAIMS, node))
 
