@@ -262,6 +262,25 @@ def test_a_snapshot_that_does_not_match_the_peers_own_scan_is_never_used(tmp_pat
     assert _files(phone.store.root) == before
 
 
+def test_a_snapshot_this_device_cannot_rebuild_is_read_to_its_end_and_the_next_pass_succeeds(tmp_path, monkeypatch):
+    desktop, phone, _ = paired(tmp_path)
+    start_scene(phone)
+    real = snapshot_module._materialize
+    calls = []
+
+    def once_unholdable(root, kind, parts, body):  # type: ignore[no-untyped-def]
+        calls.append(1)
+        if len(calls) == 3:  # say, a name this filesystem cannot hold, early in the first snapshot
+            raise snapshot_module.MirrorMismatch("cannot reproduce it here")
+        return real(root, kind, parts, body)
+
+    monkeypatch.setattr(snapshot_module, "_materialize", once_unholdable)
+    with serving(phone) as server:
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert report.status == "synced", report  # the same connection stayed in step for the next pass
+    assert _files(desktop.store.root) == _files(phone.store.root)
+
+
 # -- pairing ----------------------------------------------------------------------------------
 
 def test_a_device_with_another_key_is_refused_before_anything_is_exchanged(tmp_path):

@@ -22,6 +22,7 @@ from pathlib import Path
 
 from grimoire.security import Authorizer, Grant, Permission, ResourcePath
 from grimoire.store import LibraryStore, etag
+from grimoire.store.diskops import is_link
 from grimoire.store.jsonfmt import MAX_FILE_BYTES
 from grimoire.store.media import MAX_BLOB_BYTES
 from grimoire.sync.documents import DEVICE_FILE, archive_name, parse_device, pending_name
@@ -42,6 +43,10 @@ _REPARSE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 #: The scan summary travels in pieces of at most this size (one frame holds 36 MiB of body).
 _SUMMARY_CHUNK = 16 * 1024 * 1024
+#: The most scan summary a client keeps in memory (about 1.5 million records' worth).
+MAX_SUMMARY_BYTES = 256 * 1024 * 1024
+#: Characters no synchronized path holds, and which a client must never take as a path part.
+_UNSAFE = (":", "\\", "\0")
 
 
 @dataclass(frozen=True)
@@ -130,6 +135,11 @@ def _walk(root: Path, parts: tuple[str, ...], depth: int) -> Iterator[tuple[str,
         return
     yield "dir", relative, b""
     for name in names:
+        if any(char in name for char in _UNSAFE):
+            # A Finder name like "notes 10:30.txt". No record, blob or kept version is ever
+            # spelled so (IDs cannot hold these characters), so 019 plans nothing from it, and
+            # the client could not tell it from a path that escapes its mirror: it stays here.
+            continue
         yield from _walk(root, (*parts, name), depth + 1)
 
 
@@ -170,17 +180,25 @@ def _parts(path: object) -> tuple[str, ...]:
         raise TransportError("a snapshot path is not text")
     parts = tuple(path.split("/"))
     if parts[0] not in ROOTS or len(parts) > _MAX_DEPTH + 1 or any(
-            not part or part in (".", "..") or "\\" in part or "\0" in part or ":" in part for part in parts):
+            not part or part in (".", "..") or any(char in part for char in _UNSAFE) for part in parts):
         raise TransportError(f"a snapshot path is outside the synchronized roots: {path!r}")
+    if os.name == "nt" and any(part.strip(".") == "" or part[-1] in ". " for part in parts):
+        # Windows drops trailing dots and spaces from a name, so "..." or "x." would name another
+        # entry (or a folder above) here: a name this filesystem cannot hold as itself.
+        raise MirrorMismatch(f"{path} cannot be held as itself on this filesystem")
     return parts
 
 
 def _target(root: Path, parts: tuple[str, ...]) -> Path:
     for depth in range(1, len(parts)):  # every folder above is one this snapshot made, never a link
         above = root.joinpath(*parts[:depth])
-        if os.path.islink(above) or not os.path.isdir(above):
+        if is_link(above) or not os.path.isdir(above):
             raise MirrorMismatch(f"{'/'.join(parts)} arrived outside a folder the snapshot listed")
-    return root.joinpath(*parts)
+    target = root.joinpath(*parts)
+    parent = os.path.realpath(target.parent)
+    if os.path.commonpath([parent, os.path.realpath(root)]) != os.path.realpath(root):
+        raise MirrorMismatch(f"{'/'.join(parts)} would land outside the mirror on this filesystem")
+    return target
 
 
 def _block(path: Path) -> None:
@@ -205,51 +223,73 @@ def _grant_handle(grants: object, principal: str):  # type: ignore[no-untyped-de
     return kernel.handle_for(principal, trusted=True)
 
 
+def _materialize(root: Path, kind: str, parts: tuple[str, ...], body: bytes) -> None:
+    """Create one snapshot entry in the mirror; ``MirrorMismatch`` if this filesystem cannot."""
+    target = _target(root, parts)
+    if os.path.lexists(target):  # listed twice, or two names one case-insensitive filesystem merges
+        raise MirrorMismatch(f"{'/'.join(parts)} cannot be held apart from another entry here")
+    try:
+        if kind == "dir":
+            os.mkdir(target)
+        elif kind == "file":
+            with open(target, "xb") as handle:
+                handle.write(body)
+        else:
+            _block(target)
+    except OSError as error:  # a reserved name, a full disk, a path too long for this system
+        raise MirrorMismatch(f"cannot reproduce {'/'.join(parts)} here: {error}") from error
+
+
 def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Limits()) -> Mirror:
-    """Read one snapshot from ``channel`` into a new library at ``root`` and check its scan."""
+    """Read one snapshot from ``channel`` into a new library at ``root`` and check its scan.
+
+    A snapshot is always read to its ``end``, even once the mirror is known to be unusable (an
+    entry this filesystem cannot hold, a path that resolves elsewhere): the next pass asks for a
+    new snapshot on the same connection, and leftover frames of this one would be read as the
+    start of that. Only ``MirrorMismatch`` is raised after draining; a frame that breaks the
+    protocol, or a snapshot over ``limits`` (which cannot be drained safely), ends the session
+    with ``TransportError``.
+    """
     peer = channel.peer
     LibraryStore.create(root).close()
     states: dict[str, bytes] = {}
     grants: object = None
     summary_parts: list[bytes] = []
-    entries = total = 0
+    entries = total = summary_bytes = 0
+    failure: MirrorMismatch | None = None
     while True:
         header, body = channel.recv()
         kind = header["t"]
         entries += 1
         total += len(body)
         if entries > limits.entries or total > limits.total_bytes:
-            raise MirrorMismatch("the peer's snapshot is larger than this device accepts")
+            raise TransportError("the peer's snapshot is larger than this device accepts")
         if kind == "end":
             break
-        if kind == "grants":
-            grants = header.get("grants")
-        elif kind == "state":
-            name = header.get("name")
-            if name not in (DEVICE_FILE, archive_name(local), pending_name(local)) or name in states:
-                raise TransportError(f"the snapshot carries an unexpected sync file {name!r}")
-            states[name] = body  # type: ignore[index]
-        elif kind == "scan":
+        if kind == "scan":
+            summary_bytes += len(body)
+            if summary_bytes > MAX_SUMMARY_BYTES:
+                raise TransportError("the peer's scan summary is larger than this device accepts")
             summary_parts.append(body)
-        elif kind in ("dir", "file", "blocked"):
-            parts = _parts(header.get("path"))
-            target = _target(root, parts)
-            if os.path.lexists(target):
-                raise TransportError(f"the snapshot lists {'/'.join(parts)} twice")
-            try:
-                if kind == "dir":
-                    os.mkdir(target)
-                elif kind == "file":
-                    with open(target, "xb") as handle:
-                        handle.write(body)
-                else:
-                    _block(target)
-            except MirrorMismatch:
-                raise
-            except OSError as error:  # a name this filesystem cannot hold (a look-alike, a reserved name)
-                raise MirrorMismatch(f"cannot reproduce {'/'.join(parts)} here: {error}") from error
-        else:
+            continue
+        if kind not in ("grants", "state", "dir", "file", "blocked"):
             raise TransportError(f"unexpected snapshot message {kind!r}")
+        if failure is not None:
+            continue  # draining to the end: nothing more is written
+        try:
+            if kind == "grants":
+                grants = header.get("grants")
+            elif kind == "state":
+                name = header.get("name")
+                if name not in (DEVICE_FILE, archive_name(local), pending_name(local)) or name in states:
+                    raise TransportError(f"the snapshot carries an unexpected sync file {name!r}")
+                states[name] = body  # type: ignore[index]
+            else:
+                _materialize(root, kind, _parts(header.get("path")), body)
+        except MirrorMismatch as error:
+            failure = error
+    if failure is not None:
+        raise failure
     try:
         summary = json.loads(b"".join(summary_parts)) if summary_parts else None
     except (ValueError, RecursionError) as error:
@@ -257,10 +297,13 @@ def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Li
     if parse_device(states.get(DEVICE_FILE)) != peer:
         raise MirrorMismatch("the peer's snapshot does not carry its own device identity")
     sync_root = root / ".sync"
-    for name, data in states.items():
-        target = sync_root.joinpath(*name.split("/"))
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
+    try:
+        for name, data in states.items():
+            target = sync_root.joinpath(*name.split("/"))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+    except OSError as error:  # a full disk, say: this pass cannot use the mirror
+        raise MirrorMismatch(f"cannot write the peer's sync state here: {error}") from error
     store = LibraryStore.open(root)
     try:
         if not isinstance(summary, Mapping) or scan_summary(store) != dict(summary):

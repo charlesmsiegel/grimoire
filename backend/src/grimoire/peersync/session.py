@@ -16,14 +16,18 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from grimoire.store import LibraryStore
-from grimoire.sync import Conflict, SyncInterrupted, SyncReport, apply_sync, device_of, plan_sync
+from grimoire.store import LibraryStore, StoreError
+from grimoire.sync import Conflict, SyncError, SyncInterrupted, SyncReport, apply_sync, device_of, plan_sync
 
 from .errors import MirrorMismatch, NotPaired, PeerRefused, TransportError
 from .pairing import peer_principal, read_pairing
 from .replay import send_step
 from .snapshot import Limits, receive_mirror
 from .wire import Channel, client_handshake, no_delay
+
+
+#: Refusals after which the server hangs up: there is no next pass on this connection.
+_SESSION_ENDING = frozenset({"not_paired", "protocol"})
 
 
 @dataclass(frozen=True)
@@ -91,9 +95,18 @@ def _passes(store: LibraryStore, channel: Channel, local: str, local_handle: obj
     for _ in range(attempts):
         try:
             report = _one_pass(store, channel, local, local_handle, workdir, limits)
-        except (SyncInterrupted, MirrorMismatch, PeerRefused) as error:
+        except PeerRefused as error:
             reason = f"{type(error).__name__}: {error}"
+            if error.code in _SESSION_ENDING:
+                return TransferReport(peer, "incomplete", error.code, tuple(reports))
             continue  # the next pass plans again from both devices as they now are
+        except (SyncInterrupted, MirrorMismatch) as error:
+            reason = f"{type(error).__name__}: {error}"
+            continue
+        except (SyncError, StoreError, OSError) as error:  # ArchiveTooLarge, an unreadable library ...
+            # The same next time: say why, rather than raise out of a transfer whose earlier
+            # steps may already have landed (each one whole, as 019 leaves them after a crash).
+            return TransferReport(peer, "incomplete", f"{type(error).__name__}: {error}", tuple(reports))
         reports.append(report)
         if not report.wrote:
             return TransferReport(peer, "conflicts" if report.conflicts else "synced", None, tuple(reports))

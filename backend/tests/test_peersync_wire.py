@@ -12,7 +12,9 @@ import socket
 import pytest
 
 from grimoire.peersync import PeerRefused, PeerServer, TransportError, read_pairing, transfer, unpair
+from grimoire.peersync import new_pairing_key, pair
 from grimoire.peersync import replay as replay_module
+from grimoire.peersync import server as server_module
 from grimoire.peersync.wire import Channel, client_handshake
 from grimoire.store import RecordEnvelope, SourceManifest, etag
 
@@ -256,3 +258,39 @@ def test_a_link_inside_the_library_never_sends_what_it_points_at(tmp_path):
         if path.is_file():
             assert b"Winifred" not in path.read_bytes(), path
 
+
+
+def test_a_session_stays_bound_to_the_key_it_proved_when_the_owner_pairs_again(tmp_path, monkeypatch):
+    desktop, phone, _ = paired(tmp_path)
+    real = server_module.PeerServer._key
+    swapped = []
+
+    def key_then_repair(self, peer):  # type: ignore[no-untyped-def]
+        found = real(self, peer)
+        if not swapped:  # the owner rotates the key while this hello is being answered
+            swapped.append(1)
+            pair(phone.store, phone.authority, DESKTOP, new_pairing_key(), granted_by=OWNER)
+        return found
+
+    monkeypatch.setattr(server_module.PeerServer, "_key", key_then_repair)
+    with serving(phone) as server:
+        channel = _connect(desktop, server)  # proves the old key, which was current at its hello
+        channel.send({"t": "snapshot"})
+        with pytest.raises(PeerRefused) as refused:
+            channel.recv()
+        assert refused.value.code == "not_paired"
+        channel.close()
+
+
+def test_a_file_named_with_a_colon_stays_on_its_device_and_blocks_nothing(tmp_path):
+    desktop, phone, _ = paired(tmp_path)
+    start_scene(phone)
+    notes = phone.store.root / "sources" / "notes 10:30.txt"
+    try:
+        notes.write_bytes(b"a note")
+    except OSError:
+        pytest.skip("this filesystem cannot hold a colon in a name")
+    with serving(phone) as server:
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert report.status == "synced", report
+    assert not (desktop.store.root / "sources" / "notes 10:30.txt").exists()

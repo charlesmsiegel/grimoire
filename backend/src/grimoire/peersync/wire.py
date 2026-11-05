@@ -149,6 +149,9 @@ class Channel:
         self.peer = peer  # the authenticated device id at the other end
         self._send_key, self._recv_key = send_key, recv_key
         self._sent = self._received = 0
+        #: On the serving end, the pairing key this session proved: the one later requests are
+        #: checked against (a key read again later could already be a newer pairing's).
+        self.pairing_key: bytes | None = None
 
     def send(self, header: dict, body: bytes = b"") -> None:  # type: ignore[type-arg]
         if len(body) > MAX_FRAME - MAX_HEADER:
@@ -247,5 +250,6 @@ def server_handshake(sock: socket.socket, device: str, keys, *, within: float = 
                                                              _mac(key, b"client-proof", transcript)):
         channel.refuse("unauthenticated", "the proof does not match this pairing's key")
         raise AuthenticationFailed(f"{client} could not prove it holds this pairing's key")
+    channel.pairing_key = key
     channel.send({"t": "welcome"})
     return channel

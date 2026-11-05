@@ -25,6 +25,9 @@ from .wire import Channel
 #: The most writes one step may carry: 019 commits a step as one transaction, never in pieces.
 MAX_STEP_OPS = 200_000
 MAX_STEP_BYTES = 8 * 1024 * 1024 * 1024
+#: Of which record, kept-version and state bodies (held in memory, as a local 019 step holds
+#: them) may be at most this much; blobs are spooled to disk and count only toward the total.
+MAX_STEP_MEMORY = 1024 * 1024 * 1024
 
 
 def send_step(channel: Channel, step: Step, blob_reader: Callable[[str, int], bytes | None]) -> None:
@@ -63,19 +66,19 @@ class StepBuffer:
 
     Blob bodies are spooled to a private temporary folder as they arrive and read back one at a
     time when the commit stages them, so a first sync of many pictures never holds them all in
-    memory; record bodies (each at most 010's 8 MiB file cap) stay in memory until the commit.
+    memory; record bodies (each at most 010's 8 MiB file cap, 1 GiB in all) stay in memory until the commit.
     """
 
     def __init__(self, peer: str) -> None:
         self.peer = peer
         self.ops: list[tuple[dict, bytes | Path]] = []  # type: ignore[type-arg]
-        self.size = 0
+        self.size = self.memory = 0
         self.poisoned: PeerRefused | None = None
         self._spool: tempfile.TemporaryDirectory[str] | None = None
 
     def reset(self) -> None:
         """Drop the step under way, its spooled blobs included."""
-        self.ops, self.size, self.poisoned = [], 0, None
+        self.ops, self.size, self.memory, self.poisoned = [], 0, 0, None
         if self._spool is not None:
             self._spool.cleanup()
             self._spool = None
@@ -84,7 +87,9 @@ class StepBuffer:
         if self.poisoned is not None:
             return
         self.size += len(body)
-        if len(self.ops) >= MAX_STEP_OPS or self.size > MAX_STEP_BYTES:
+        if header.get("op") != "blob":
+            self.memory += len(body)
+        if len(self.ops) >= MAX_STEP_OPS or self.size > MAX_STEP_BYTES or self.memory > MAX_STEP_MEMORY:
             self._poison(PeerRefused("too_large", "one step carries more than this device accepts"))
             return
         if header.get("op") == "blob":

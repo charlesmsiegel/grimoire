@@ -94,7 +94,7 @@ class PeerServer:
             return  # refused (or gone) before it was authenticated: nothing was read or written
         connection.settimeout(self.timeout)
         try:
-            self._serve(channel, channel_key=self._key(channel.peer))
+            self._serve(channel, channel_key=channel.pairing_key)
         except TransportError:
             return  # the client went away; every commit already made is whole
 
