@@ -14,7 +14,7 @@ from grimoire.core import DefinitionLink, MissingDefinition, SourceRef
 from grimoire.core.entity import EntityDefinition
 from grimoire.core.facets import Agent, Biological, Durable, FacetSet, Physical, UnknownFacet
 from grimoire.core.portrayal import (
-    MAX_CHAIN, ChainNode, FieldOrigin, PortrayalError, compose, read_entities,
+    MAX_CHAIN, MAX_SECTIONS, ChainNode, FieldOrigin, PortrayalError, compose, derivation_chain, read_entities,
 )
 
 
@@ -393,3 +393,59 @@ def test_a_whitespace_description_is_kept_verbatim_and_agrees_with_the_index_pat
     assert view.description == "   \n" and view.origin("description") is None  # blank: present, not authored
     actor = EntityInstance(InstanceRef("c1", "character", "m"), NAMESAKE)
     assert compose_instance(actor, view).description == effective_entity(actor, index).description == "   \n"
+
+
+# -- the composed section cap --------------------------------------------------------------------
+
+def stacked(*layers):
+    """A chain of synthetic Winifred portrayals, root first; each layer is ``(sections, clears)``."""
+    refs = [SourceRef(f"world:saltmarch{n}", "character", "winifred", "r1") for n in range(len(layers))]
+    definitions = [EntityDefinition(refs[0], "Winifred", "individual", FacetSet([Agent()]), "",
+                                    {"sections": layers[0][0]})]
+    for n, (sections, clears) in enumerate(layers[1:], start=1):
+        definitions.append(derived(refs[n], refs[n - 1], name="Winifred", sections=sections,
+                                   clear_sections=list(clears)))
+    return refs, elderfen_index(*definitions)
+
+
+def texts(prefix, count):
+    return {f"{prefix}{n}": f"Fact {n}." for n in range(count)}
+
+
+def test_a_composed_portrayal_over_the_section_cap_is_refused():
+    """Each layer is within 64 sections, but two layers of 40 compose 80: prompt builders need bounded input."""
+    refs, index = stacked((texts("a", 40), ()), (texts("b", 40), ()))
+    error = refusal(refs[-1], index)
+    assert (error.reason, error.ref) == ("too_many_sections", refs[-1])
+    assert len(effective(refs[0], index).sections) == 40  # the base alone is fine
+    # the ancestry still walks, so a merge owner can reach the base to repair the portrayal
+    assert [node.ref for node in derivation_chain(refs[-1], index, read_entities(index))] == refs[::-1]
+
+
+def test_clears_that_bring_a_portrayal_back_under_the_cap_compose():
+    refs, index = stacked((texts("a", 40), ()), (texts("b", 40), [f"a{n}" for n in range(20)]))
+    assert len(effective(refs[-1], index).sections) == 60
+
+
+def test_exactly_the_section_cap_composes():
+    refs, index = stacked((texts("a", 40), ()), (texts("b", 24), ()))
+    assert len(effective(refs[-1], index).sections) == MAX_SECTIONS
+
+
+def test_the_cap_applies_to_each_requested_revision_not_to_each_step():
+    """A middle portrayal over the cap is refused; a leaf that clears back under it composes."""
+    refs, index = stacked((texts("a", 40), ()), (texts("b", 40), ()), ({}, [f"b{n}" for n in range(20)]))
+    assert refusal(refs[1], index).reason == "too_many_sections"
+    assert len(effective(refs[2], index).sections) == 60
+
+
+# -- edge-case reason codes ----------------------------------------------------------------------
+
+@pytest.mark.parametrize("own_base", [MODERN_MARA, MODERN_MARA.at("r0")])
+def test_a_revision_deriving_from_its_own_entity_is_invalid_not_unlinked(own_base):
+    """The index never links an entity to itself, so no link could satisfy it: the payload is what is wrong."""
+    earlier = EntityDefinition(MODERN_MARA.at("r0"), "Mara", "individual", FacetSet([Agent()]))
+    index = elderfen_index(base(), earlier, derived(MODERN_MARA, own_base),
+                           heads={MODERN_MARA.unpinned(): "r1"}, links=[])
+    error = refusal(MODERN_MARA, index)
+    assert (error.reason, error.ref) == ("invalid_derivation", MODERN_MARA)

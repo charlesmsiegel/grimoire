@@ -204,6 +204,12 @@ def derivation_of(definition: EntityDefinition) -> Derivation | None:
         raise _fail(f"{ref}: derivation.base: {error}", "invalid_derivation", ref) from None
     if not base.pinned:
         raise _fail(f"{ref}: derivation.base must be a pinned revision: {base}", "invalid_derivation", ref)
+    # The index refuses to link an entity to itself, at any revision, so no derived_variant link could
+    # ever agree with this base. Left to the walk it would surface as ``unlinked_derivation``, which
+    # invites the author to add a link the loader must then reject; the payload itself is what is wrong.
+    if base.entity_key == ref.entity_key:
+        raise _fail(f"{ref}: derivation.base {base} is a revision of the same entity; derive from another "
+                    "entity", "invalid_derivation", ref)
     clear_description = raw.get("clear_description", False)
     if type(clear_description) is not bool:
         raise _fail(f"{ref}: derivation.clear_description must be true or false", "invalid_derivation", ref)
@@ -374,6 +380,15 @@ def compose(ref: SourceRef, index: DefinitionIndex, read: Reader,
     state = _State(layers[-1], standalone=len(layers) == 1)
     for layer in reversed(layers[:-1]):
         _apply(state, layer)
+    # ``authored_sections`` bounds each revision, but up to MAX_CHAIN layers that each add their own
+    # names could compose eight times as many, and prompt builders (027 voice, 031 assembly) need a
+    # bounded input. The cap is on the *requested* revision's composed result, not on each step, so a
+    # leaf that clears an over-full parent back under it still composes. It is refused, never
+    # truncated: which sections to drop is an authoring decision. ``derivation_chain`` reads no field
+    # and is unaffected, so merge owners can still reach the pinned base to repair the portrayal.
+    if len(state.sections) > MAX_SECTIONS:
+        raise _fail(f"{leaf} composes {len(state.sections)} sections, more than {MAX_SECTIONS}; clear some",
+                    "too_many_sections", leaf)
     skipped = {SECTIONS_KEY} if state.unusable_sections is not None else set()
     uncomposed = tuple(sorted(((layer.node.ref, key) for layer in layers
                                for key in layer.definition.extras if key not in REGISTERED_KEYS or key in skipped),

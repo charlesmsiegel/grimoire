@@ -70,7 +70,10 @@ class SourceSelection:
                 validate_source_id(self.world, "world")
             except ValueError as error:
                 raise _fail(str(error), "invalid_selection") from None
-        sources = tuple(self.sources)
+        try:
+            sources = tuple(self.sources)
+        except TypeError:  # None, or one SelectedSource passed bare: malformed, like any other element
+            raise _fail("sources must be a collection of SelectedSource values", "invalid_selection") from None
         object.__setattr__(self, "sources", sources)
         keys: set[tuple[str, tuple[str, str, str]]] = set()
         actors: set[InstanceRef] = set()
@@ -221,8 +224,13 @@ class EffectiveSnapshot:
             if any(resolution.resolved == ref for resolution in candidates):
                 return ref
             for resolution in candidates:
-                if resolution.broken is not None and resolution.source.ref == ref:
-                    raise MissingDefinition(ref, resolution.broken.reason)
+                # A broken head-following selection selected no revision at all. A head always names a
+                # registered revision, so it is broken only because its source or entity is absent,
+                # and then every revision of it is missing too: ``revision_not_selected`` would wrongly
+                # claim the snapshot chose some other revision.
+                if resolution.broken is not None and (resolution.source.ref == ref
+                                                      or not resolution.source.ref.pinned):
+                    raise MissingDefinition(resolution.broken.ref, resolution.broken.reason)
             if ancestors and self._in_selected_chain(ref, role):
                 return ref
             if candidates:

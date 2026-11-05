@@ -362,3 +362,13 @@ def test_an_unreadable_base_revision_is_not_reported_missing(store):
     assert [p.code for p in view.problems] == ["malformed"]
     error = reason(lambda: selection_snapshot(view, selected((MODERN_MARA, "character"))).effective(MODERN_MARA))
     assert (error.reason, error.detail) == ("missing_base", "unreadable_revision")
+
+
+def test_a_bases_only_revision_unreadable_is_unreadable_not_dropped(store):
+    """The loader drops an entity with no readable revision; the fix is still that one file, not a restore."""
+    path = store.root / "sources" / "catalog" / "elderfen-cast" / "_source" / "records" / "character" / "mara" / "r1.json"
+    path.write_text("{not json")
+    view = store.load()
+    assert BASE.unpinned() in [ref.unpinned() for ref in view.dropped]  # the loader did drop the entity
+    error = reason(lambda: selection_snapshot(view, selected((MODERN_MARA, "character"))).effective(MODERN_MARA))
+    assert (error.reason, error.detail) == ("missing_base", "unreadable_revision")

@@ -50,6 +50,11 @@ def explainer(view: LibraryView) -> Explain:
 
     ``excluded_source`` or ``entity_dropped`` when the load left it out, ``unreadable_revision``
     when its file exists but could not be read (fix the file, do not restore it).
+
+    The most specific reason wins. An excluded source is fixed at its manifest, so it comes first.
+    An unreadable base file comes before ``entity_dropped``: the loader drops an entity with no
+    readable revision, or whose head is unreadable, so when the base itself is that file, the
+    drop is only a consequence and repairing the file is the fix.
     """
     excluded, dropped = set(view.excluded), {ref.entity_key for ref in view.dropped}
     unreadable = _unreadable(view)
@@ -57,9 +62,9 @@ def explainer(view: LibraryView) -> Explain:
     def explain(ref: SourceRef) -> str | None:
         if ref.source in excluded:
             return "excluded_source"
-        if ref.entity_key in dropped:
-            return "entity_dropped"
-        return "unreadable_revision" if ref in unreadable else None
+        if ref in unreadable:
+            return "unreadable_revision"
+        return "entity_dropped" if ref.entity_key in dropped else None
     return explain
 
 
