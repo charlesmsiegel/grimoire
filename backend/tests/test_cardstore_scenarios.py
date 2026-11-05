@@ -646,3 +646,21 @@ def test_a_damaged_stored_portrait_blob_is_repaired_by_the_import(store):
     blob.write_bytes(b"garbage")
     land(store, encode(card(name="Other")), portrait=PORTRAIT)
     assert blob.read_bytes() == PORTRAIT
+
+
+def test_rerunning_the_same_import_repairs_a_damaged_portrait_blob(store):
+    land(store, encode(V3), portrait=PORTRAIT)
+    sha = hashlib.sha256(PORTRAIT).hexdigest()
+    (blob,) = (store.root / "assets" / "blobs" / sha[:2]).glob(f"{sha}.*")
+    blob.write_bytes(b"garbage")
+    planned = land(store, encode(V3), portrait=PORTRAIT)
+    assert planned.report.status == "update" and blob.read_bytes() == PORTRAIT
+    assert importer(store).plan(encode(V3), portrait=PORTRAIT).report.status == "unchanged"
+
+
+def test_a_json_type_change_is_a_new_revision(store):
+    land(store, encode(card(extensions={"flag": True})))
+    for value in (1, 1.0):
+        planned = land(store, encode(card(extensions={"flag": value})), target="card:mara-vell")
+        payload = store.check_definition(planned.report.main).envelope.payload
+        assert type(payload["card"]["extensions"]["flag"]) is type(value) and planned.report.main.revision != "r1"

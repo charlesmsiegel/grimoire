@@ -31,11 +31,12 @@ from grimoire.cards import (
 from grimoire.cards.records import ENTITY_SCHEMA
 from grimoire.core.identity import ImageRef, PlacementRef, SourceRef, validate_source_id
 from grimoire.images.model import Placement
-from grimoire.imagestore import ImageCommit, ImageLibrary, InvalidImage, InvalidPlacement
+from grimoire.imagestore import ImageCommit, ImageLibrary, InvalidPlacement
 from grimoire.security import Permission
 from grimoire.store import (
     InvalidEnvelope, LibraryStore, RecordEnvelope, RecordNotFound, SourceManifest, StoredDefinition, StoredSource,
-    ImpreciseNumber, InvalidSourceState, NameCollision, StoreError, UnstorableIdentifier,
+    BlobCorrupt, ImageBlob, ImpreciseNumber, InvalidBlob, InvalidSourceState, NameCollision, StoreError,
+    UnstorableIdentifier,
 )
 from grimoire.store.envelope import source_document
 from grimoire.store.jsonfmt import JsonError, is_imprecise, parse_strict, render, thaw
@@ -315,9 +316,9 @@ def _asset_losses(card: ParsedCard) -> tuple[Loss, ...]:
     return tuple(found)
 
 
-def _plain(value: object) -> object:
-    """Payload values as rendered JSON reads them back (tuples are lists)."""
-    return json.loads(json.dumps(thaw(value), sort_keys=True))
+def _canonical(value: object) -> str:
+    """A payload as canonical JSON text, so ``true``, ``1`` and ``1.0`` stay different values."""
+    return json.dumps(thaw(value), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
 def _revision_number(revision: str | None) -> int:
@@ -602,8 +603,8 @@ class CardImporter:
                 found = self.store.check_definition(SourceRef(source_id, entity.kind, entity.entity_id, head))
                 if isinstance(found, StoredDefinition):
                     current = found
-            payload = _plain(entity.payload)
-            if (current is not None and _plain(current.envelope.payload) == payload
+            payload = _canonical(entity.payload)
+            if (current is not None and _canonical(current.envelope.payload) == payload
                     and current.envelope.name == entity.name and current.envelope.extra.get("schema") == entity.schema):
                 records[entity.key] = current.ref
                 return
@@ -672,7 +673,9 @@ class CardImporter:
         kept_imported = sorted(str(SourceRef(source_id, *key.split("/", 1), imported[key]))
                                for key in kept_roles.values() if key in imported)
         record_refs = sorted(records.values(), key=str)
-        unchanged = (record is not None and not writes and not place and _get(record, "digest") == digest
+        damaged = _blob_damaged(self.store, plan.portrait)  # repaired by this import, whatever else it does
+        unchanged = (record is not None and not writes and not place and not damaged
+                     and _get(record, "digest") == digest
                      and _get(record, "records") == [str(ref) for ref in record_refs]
                      and _roles(record, "kept_entities") == kept_roles
                      and avatars == ({**avatars, str(main_ref): str(shown)} if shown is not None else avatars))
@@ -701,17 +704,12 @@ class CardImporter:
                           stored_source.etag if stored_source is not None else None)
                 for envelope in writes:
                     batch.put(envelope, None)
+                if damaged:  # the stored copy of the portrait's exact bytes no longer matches its name
+                    batch.repair_blob(plan.portrait)
                 if place:
                     if portrait_ref is not None and not _image_present(self.images, portrait_ref):
                         try:
-                            try:
-                                batch.add_image(source_id, portrait_ref.image_id, plan.portrait, _provenance(plan))
-                            except InvalidImage as error:
-                                if error.reason != "blob_corrupt":
-                                    raise
-                                # the stored copy of these exact bytes is damaged: this import repairs it
-                                batch.repair_blob(plan.portrait)
-                                batch.add_image(source_id, portrait_ref.image_id, plan.portrait, _provenance(plan))
+                            batch.add_image(source_id, portrait_ref.image_id, plan.portrait, _provenance(plan))
                         except NameCollision:  # the shared blob store, not the destination: no target helps
                             raise CardError("the library's picture store holds a differently spelled copy of "
                                             "this portrait's file", "portrait_unstorable", "portrait") from None
@@ -909,6 +907,23 @@ def _scope(path: str) -> str:
         return "assets/blobs"
     index = parts.index("_source") if "_source" in parts else len(parts) - 1
     return "/".join(parts[:index + 1])
+
+
+def _blob_damaged(store: LibraryStore, portrait: bytes | None) -> bool:
+    """Whether the library's copy of these exact portrait bytes is there but no longer matches its name."""
+    if portrait is None:
+        return False
+    try:
+        blob = ImageBlob(portrait)
+    except InvalidBlob:
+        return False  # not a picture: 018 refuses it when the batch adds it
+    try:
+        store.read_blob(blob.sha256, blob.ext)
+    except BlobCorrupt:
+        return True
+    except (StoreError, ValueError):
+        return False  # absent, or a look-alike name the batch reports
+    return False
 
 
 def _image_present(images: ImageLibrary, ref: ImageRef) -> bool:
