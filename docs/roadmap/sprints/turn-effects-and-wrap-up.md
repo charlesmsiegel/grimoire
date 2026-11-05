@@ -1,11 +1,11 @@
 # Turn-Level Effect Authority and Scene Wrap-Up
 
-**Status:** **first slice implemented**, headless. It is `grimoire.effects` (pure) and `grimoire.effectstore` (service), on additive `accepted/` and `wrapups/` record families in `grimoire.store`, plus an additive 017 `reopen`. The contract is in [EFFECTS.md](../../EFFECTS.md). The proving scenario, the failure cases and the crash exploration are executable. The requester decided:
+**Status:** **first slice and next slice implemented**, headless. It is `grimoire.effects` (pure) and `grimoire.effectstore` (service), on additive `accepted/` and `wrapups/` record families in `grimoire.store`, plus an additive 017 `reopen`. The contract is in [EFFECTS.md](../../EFFECTS.md). The proving scenario, the failure cases and the crash exploration are executable. The requester decided:
 - the work is done on a topic branch, with a PR into `v2`;
 - independent reviewer subagents stand in for the Codex gates;
 - revocation (undo of a revised turn) is in scope.
 
-State changes are 017 relation changes. The 023 holdings obligation below is still open; it waits for 023 to merge.
+State changes are 017 relation changes and, since the [next slice](#next-slice-holdings-and-ability-charges-delivered), 023 holdings changes and 025 ability charges. The 023 and 025 obligations below are met by it.
 
 > **V2 scope correction:** V2 has no V1 wrap-up API. Own the acceptance boundary for canonical events in native storage; once resolved, narration retry cannot reroll or reapply the outcome. Long-form memory consolidation is a separate consumer. See the [V2 ordered roadmap](../README.md) for prerequisites, waves and current first-slice proof. Older references to shipped V1 APIs describe behavior to *port*, not V2 capabilities.
 
@@ -35,14 +35,31 @@ Owns timing and acceptance policy, not file journaling internals or mechanics le
 
 Consume generic 010 record revisions and the Wave 1 PC-authority decision policy. Do not reinterpret 012's witnessed claims as committed physical events. An effect must have a stable accepted operation/event identity, preconditions and one-time publication; speculative narrator prose and a proposed player action cannot write canonical state. Durable event receipts become compatible with 020's independent evidence persistence after Wave 3 interfaces land; 030 owns cross-file exactly-once crash recovery. The first step must not require a V1 wrap-up API (none exists on V2).
 
+## Next slice: holdings and ability charges (delivered)
+
+The contract is in [EFFECTS](../../EFFECTS.md#holdings-and-ability-uses). An accepted turn can now, in **one** store transaction with its event record:
+- change counted holdings (023): Wren pays Tam 2 coins while Tam hands Wren a knife, or Orin burns 1 fuel. The effect carries one `EffectHoldings` part, whose lines each name their acting agent and backing;
+- charge the 025 `charges` of **each** ability use in the turn (Iris's veil, Orin's hop), recorded as cost ids;
+- do either with no 017 relation operation at all.
+
+Every holdings part and ability use belongs to an **attempt**, charged and applied exactly once while an event holds it: rerolls, retries, crashes and recovery never charge or spend twice (proven by crash exploration with a `charged_once` invariant), and a late retry after a revocation is refused (`attempt_revoked`). Revoking undoes the holdings with an inverse 023 operation and voids the charges. A holdings part's 023 op id is derived from the effect, its cause names the event, and the event records each holder's seq as its receipt. An event with parts is stored as `grimoire.accepted-event/1`; every other event stays `/0`, byte-identical.
+
+**Limits:**
+- the ability assessment is the caller's; computing and authenticating it is 029's;
+- orphan detection and duplicate recognition are bounded by the holders' logs, and completing a partial publication automatically is 030's;
+- a skipped holdings undo stays reported (`partial_revocation`) until 030 can record a human repair;
+- a paired holder blocks a holdings undo; a holder file that cannot be read at all blocks an acceptance with holdings, not one without (except one reusing a revoked event's attempt that must read it);
+- charges record cost ids, not cost text; rules tying a cost to a counted resource are 029's and 034's;
+- still one accepted effect per turn; several actors' acts fit in that one effect.
+
 ## Obligation: holdings operations (023)
 
-021's first slice merged before [Counted Inventory](counted-inventory.md) (023), so its accepted effects change only 017 relations. 023 has since merged; the obligation is open for 021's next slice:
+**Met by the [next slice](#next-slice-holdings-and-ability-charges-delivered).** 021's first slice merged before [Counted Inventory](counted-inventory.md) (023), so its accepted effects changed only 017 relations. The obligation was:
 - an accepted effect that moves, uses or finds counted items carries a [holdings operation](../../HOLDINGS.md);
 - that operation's `op_id` is derived from the accepted event, and its `cause` is the event;
 - it is committed in the same transaction as the event record and its receipts, and checked by the same receipt and duplicate rules.
 
-023's handoff below then applies. A rerolled or retried turn can never spend or grant twice.
+023's handoff below then applies. A rerolled or retried turn can never spend or grant twice. How the next slice met it, including the `basis` and pin rules below, is in [HOLDINGS](../../HOLDINGS.md#driven-by-accepted-effects-021): an acceptance is a fresh plan, a retry of an accepted effect is recognised by 021's duplicate check, and the event's per-holder seqs are the persisted `basis` its undo passes.
 
 ### Handoff from Counted Inventory (023): item mentions become reviewed proposals
 
@@ -53,7 +70,7 @@ Consume generic 010 record revisions and the Wave 1 PC-authority decision policy
 
 ## Obligations from 025
 
-Ability costs from [fictional abilities](../../ABILITIES.md) are reported, never committed. 021 owns committing them through accepted state: charge each `attempt_id` **once**, from the assessment's `charges` (every `(ability, cost)`, including the other abilities of an approved combination), and only when the attempt was `permitted`. Instance ability changes (`added`/`replaced` abilities facets) are accepted state, never narration.
+**Charging is met by the [next slice](#next-slice-holdings-and-ability-charges-delivered)**; instance ability changes are still open. Ability costs from [fictional abilities](../../ABILITIES.md) are reported, never committed, by 025. 021 owns committing them through accepted state: charge each `attempt_id` **once**, from the assessment's `charges` (every `(ability, cost)`, including the other abilities of an approved combination), and only when the attempt was `permitted`. Instance ability changes (`added`/`replaced` abilities facets) are accepted state, never narration.
 
 ## Open questions
 - Which narrations imply immediate accepted truth, and which require player review? **Partly answered:**

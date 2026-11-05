@@ -36,7 +36,7 @@ Persist 017's claim shapes (see [GRAPH](../../GRAPH.md#claims-what-an-actor-thin
 
 ## Obligations from 025
 
-[fictional abilities](../../ABILITIES.md) leaves persistence to later sprints. Observed consequences of a power belong in the event/evidence records. Persisting an `AbilityRuling`, and assessing and charging one `attempt_id` once across reloads, is owned by [029](fiction-first-adjudication.md), which may replace the ruling surface; 020 stores only what 029 decides to record.
+[fictional abilities](../../ABILITIES.md) leaves persistence to later sprints. Observed consequences of a power belong in the event/evidence records. Persisting an `AbilityRuling` and assessing an attempt is owned by [029](fiction-first-adjudication.md), which may replace the ruling surface; charging one `attempt_id` once across reloads is 021's (its holdings and abilities slice); 020 stores only what 029 decides to record.
 
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove? *Answered for the first slice:* every append can be previewed, its approvals are enforced by the handle's authority, it commits at most once, or it is refused with a reason before anything is written. Read-time damage only removes knowledge. Manual rollback of the knowledge log is documented. See [EVIDENCE](../../EVIDENCE.md#correction-and-repair).

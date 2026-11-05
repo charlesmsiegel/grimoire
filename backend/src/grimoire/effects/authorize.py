@@ -7,6 +7,10 @@ action contribution for this turn **and** the player's endorsement of the exact 
 trusted human handle, also checked by the service). Narration never holds either key, and a
 player alone can never make their character's action succeed.
 
+Each holdings line is an act like an operation (its ``agent`` and ``backed_by``). Each ability use is
+an act of its attempt's actor: when a player controls it, its backing is the contribution whose id is
+the attempt id (025: a player's ``attempt_id`` is their action's ``contribution_id``).
+
 ``authorize`` decides the domains and which contributions need endorsing. It reads no files.
 """
 
@@ -16,10 +20,11 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from grimoire.core.authority import DIRECTOR, PlayerContribution, controller_of
+from grimoire.core.identity import InstanceRef
 from grimoire.core.model import ControlAssignment
 
 from .model import (
-    CONTRIBUTION_TEXT_MAX, TEXT_MAX, ContributionSnapshot, ControlSnapshot, EffectError, EffectProposal, Op,
+    CONTRIBUTION_TEXT_MAX, TEXT_MAX, ContributionSnapshot, ControlSnapshot, EffectError, EffectProposal,
 )
 
 
@@ -31,6 +36,8 @@ class Authorization:
     contributions: tuple[ContributionSnapshot, ...]
     endorsers: Mapping[str, str]  # contribution_id -> the principal who must endorse
     controls: tuple[ControlSnapshot, ...]
+    holdings_domains: tuple[str, ...] = ()  # one per holdings line
+    ability_domains: tuple[str, ...] = ()  # one per ability use, in the proposal's order
 
 
 def _snapshot(contribution: PlayerContribution) -> ContributionSnapshot:
@@ -62,33 +69,36 @@ def authorize(proposal: EffectProposal, controls: Iterable[ControlAssignment],
             raise EffectError("invalid_expression", (contribution.contribution_id,))
         by_id[contribution.contribution_id] = contribution
     campaign, moment = proposal.campaign_id, proposal.moment
-    domains: list[str] = []
     used: dict[str, PlayerContribution] = {}
     endorsers: dict[str, str] = {}
     snapshots: dict[str, str] = {}
-    for op in proposal.operations:
-        controller = None if op.agent is None else controller_of(campaign, op.agent.instance_id, controls)
-        if op.agent is not None and controller is not None:
-            snapshots[op.agent.instance_id] = controller
+
+    def domain_of(agent: InstanceRef | None, backed_by: str | None, *, implied: bool = False) -> str:
+        """``implied``: an ability use, whose backing is the attempt's own contribution when a player acts."""
+        controller = None if agent is None else controller_of(campaign, agent.instance_id, controls)
+        if agent is not None and controller is not None:
+            snapshots[agent.instance_id] = controller
         if controller is None or controller == DIRECTOR:
-            if op.backed_by is not None:
-                raise EffectError("unexpected_backing", (op.backed_by,))
-            domains.append("director")
-            continue
-        contribution = _backing(op, by_id)
+            if backed_by is not None and not implied:
+                raise EffectError("unexpected_backing", (backed_by,))
+            return "director"
+        if backed_by is None or backed_by not in by_id:
+            raise EffectError("pc_authorship", (agent.instance_id,))  # type: ignore[union-attr]
+        contribution = by_id[backed_by]
         if (contribution.campaign_id, contribution.scene_id, contribution.turn_id, contribution.actor_id,
                 contribution.kind, contribution.submitted_by) != (
-                campaign, moment.scene_id, moment.turn_id, op.agent.instance_id, "action", controller):  # type: ignore[union-attr]
+                campaign, moment.scene_id, moment.turn_id, agent.instance_id, "action", controller):  # type: ignore[union-attr]
             raise EffectError("invalid_expression", (contribution.contribution_id,))
         used[contribution.contribution_id] = contribution
         endorsers[contribution.contribution_id] = controller
-        domains.append("voluntary_action")
+        return "voluntary_action"
+
+    domains = tuple(domain_of(op.agent, op.backed_by) for op in proposal.operations)
+    lines = () if proposal.holdings is None else proposal.holdings.lines
+    holdings_domains = tuple(domain_of(item.agent, item.backed_by) for item in lines)
+    ability_domains = tuple(domain_of(attempt.actor, attempt.attempt_id, implied=True)
+                            for attempt in proposal.ability_attempts)
     return Authorization(
-        tuple(domains), tuple(_snapshot(used[cid]) for cid in sorted(used)), dict(sorted(endorsers.items())),
-        tuple(ControlSnapshot(actor, controller) for actor, controller in sorted(snapshots.items())))
-
-
-def _backing(op: Op, by_id: Mapping[str, PlayerContribution]) -> PlayerContribution:
-    if op.backed_by is None or op.backed_by not in by_id:
-        raise EffectError("pc_authorship", (op.agent.instance_id,))  # type: ignore[union-attr]
-    return by_id[op.backed_by]
+        domains, tuple(_snapshot(used[cid]) for cid in sorted(used)), dict(sorted(endorsers.items())),
+        tuple(ControlSnapshot(actor, controller) for actor, controller in sorted(snapshots.items())),
+        holdings_domains, ability_domains)

@@ -2,7 +2,10 @@
 
 **Outcome:** One accepted action updates multiple human-editable records once, even after crashes, retries and external edits.
 
-**Unscheduled prerequisite, awaiting a decision:** [021's next slice](turn-effects-and-wrap-up.md) (holdings operations from accepted effects, committing ability costs, charging each `attempt_id` once) is not on any wave yet; this sprint depends on it.
+**Prerequisite met:** [021's next slice](turn-effects-and-wrap-up.md#next-slice-holdings-and-ability-charges-delivered) (holdings operations from accepted effects, committing ability costs, charging each `attempt_id` once) is done ([EFFECTS](../../EFFECTS.md#holdings-and-ability-uses)). An accepted effect and its holder files are one store transaction, and each attempt is charged once while an event holds it. Left for this sprint:
+- completing a partial publication (an event file without its holder files, or holder files without their event, reported today as `receipt_mismatch` and `orphan_effect`);
+- recording a human repair of a skipped holdings undo, which 021 reports as `partial_revocation` until then;
+- orphan detection and duplicate recognition beyond the holders' bounded logs.
 
 ## Scope
 - Carry forward Mechanics II's existing Action/Effect/journal proposal rather than inventing a rival engine.

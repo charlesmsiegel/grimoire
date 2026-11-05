@@ -11,22 +11,30 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from grimoire.core.ability_use import AbilityAttempt
 from grimoire.core.identity import AcceptedRef, ChatRef, InstanceRef, RelationRef, WrapUpRef
 from grimoire.core.json_value import JsonObject, JsonValueError, thaw
 from grimoire.core.knowledge import KnowledgeError, Moment
+from grimoire.holdings import HoldingsError, Line
 
 from .model import (
     AcceptedEvent, AcceptedOperation, ContributionSnapshot, ControlSnapshot, EffectError, EndorsementRecord, Op,
     Receipt, Revocation, SceneWrapUp, Skipped,
 )
+from .parts import AbilityCharge, AcceptedHoldings, ActedLine, EffectHoldings
 
+#: an event with no attempt, holdings or ability use is written exactly as before the next slice
 ACCEPTED_SCHEMA = "grimoire.accepted-event/0"
+#: an event that changes holdings or charges ability uses
+ACCEPTED_SCHEMA_V1 = "grimoire.accepted-event/1"
 WRAPUP_SCHEMA = "grimoire.scene-wrapup/0"
 _ACCEPTED_IDENTITY = frozenset({"ref", "address", "campaign_id", "event_id", "schema"})
 _WRAPUP_IDENTITY = frozenset({"ref", "address", "campaign_id", "wrapup_id", "schema"})
 ACCEPTED_FIELDS = frozenset({"chat", "moment", "summary", "proposed_by", "operations", "contributions",
                              "endorsements", "controls", "committed_by", "accepted_at", "ordinal", "receipts",
                              "revocation"})
+#: the next slice's fields: only a /1 payload may hold them (a /0 one holding them is refused)
+PART_FIELDS = frozenset({"attempt_id", "holdings", "abilities"})
 WRAPUP_FIELDS = frozenset({"chat", "scene_id", "through", "summary", "cites", "written_by", "written_at"})
 _MOMENT = frozenset({"sequence", "scene_id", "turn_id"})
 _OP = frozenset({"kind", "predicate", "subject", "object", "agent", "domain", "backed_by"})
@@ -35,6 +43,14 @@ _ENDORSEMENT = frozenset({"contribution_id", "principal", "fingerprint"})
 _CONTROL = frozenset({"actor_id", "controller_id"})
 _RECEIPT = frozenset({"op", "relation"})
 _REVOCATION = frozenset({"reason", "at", "committed_by", "endorsements", "skipped"})
+_REVOCATION_V1 = _REVOCATION | {"holdings_skipped", "holdings_seqs"}
+_HOLDINGS = frozenset({"lines", "note", "op_id", "seqs"})
+_HOLDINGS_REQUIRED = frozenset({"lines", "op_id", "seqs"})
+_LINE_FIELDS = {"add": ("amount",), "consume": ("amount",), "adjust": ("seen", "to"), "move": ("amount", "target")}
+_LINE_OPTIONAL = frozenset({"agent", "backed_by"})
+_ABILITY = frozenset({"attempt_id", "actor", "ability_id", "needs", "provenance", "effect_id", "conditions_met",
+                      "classification", "ruling_id", "charges", "domain"})
+_ABILITY_REQUIRED = _ABILITY - {"effect_id", "ruling_id"}
 _SKIPPED = frozenset({"op", "why"})
 
 
@@ -79,6 +95,53 @@ def _op(item: AcceptedOperation) -> dict:
     return data
 
 
+def _line(item: ActedLine, domain: str) -> dict:
+    line = item.line
+    data: dict = {"line": line.kind, "holder": str(line.holder), "item": line.item, "domain": domain}
+    if line.kind == "adjust":
+        data.update(seen=line.seen, to=line.to)
+    else:
+        data["amount"] = line.amount
+    if line.target is not None:
+        data["target"] = str(line.target)
+    if item.agent is not None:
+        data["agent"] = str(item.agent)
+    if item.backed_by is not None:
+        data["backed_by"] = item.backed_by
+    return data
+
+
+def _seqs(seqs: Mapping[InstanceRef, int]) -> dict:
+    return {str(holder): seq for holder, seq in sorted(seqs.items(), key=lambda pair: str(pair[0]))}
+
+
+def _holdings(accepted: AcceptedHoldings) -> dict:
+    part = accepted.holdings
+    data: dict = {"lines": [_line(item, domain) for item, domain in zip(part.lines, accepted.domains)],
+                  "op_id": accepted.op_id, "seqs": _seqs(accepted.seqs)}
+    if part.note is not None:
+        data["note"] = part.note
+    return data
+
+
+def _ability(charge: AbilityCharge) -> dict:
+    attempt = charge.attempt
+    data: dict = {"attempt_id": attempt.attempt_id, "actor": str(attempt.actor), "ability_id": attempt.ability_id,
+                  "needs": sorted(attempt.needs), "provenance": attempt.provenance,
+                  "conditions_met": sorted(attempt.conditions_met), "classification": charge.classification,
+                  "charges": [list(pair) for pair in charge.charges], "domain": charge.domain}
+    if attempt.effect_id is not None:
+        data["effect_id"] = attempt.effect_id
+    if charge.ruling_id is not None:
+        data["ruling_id"] = charge.ruling_id
+    return data
+
+
+def accepted_schema(event: AcceptedEvent) -> str:
+    """The schema an event is stored under: /0 unless it changes holdings or charges an ability use."""
+    return ACCEPTED_SCHEMA_V1 if event.has_parts else ACCEPTED_SCHEMA
+
+
 def _extras_clash(extras: JsonObject, identity: frozenset[str], fields: frozenset[str]) -> None:
     clash = sorted(set(extras) & (identity | fields))
     if clash:
@@ -87,7 +150,8 @@ def _extras_clash(extras: JsonObject, identity: frozenset[str], fields: frozense
 
 
 def accepted_to_payload(event: AcceptedEvent) -> dict:
-    _extras_clash(event.extras, _ACCEPTED_IDENTITY, ACCEPTED_FIELDS)
+    """The payload of ``event``, to be stored under ``accepted_schema(event)``."""
+    _extras_clash(event.extras, _ACCEPTED_IDENTITY, ACCEPTED_FIELDS | PART_FIELDS)
     payload: dict = {
         "chat": str(event.chat), "moment": _moment(event.moment), "summary": event.summary,
         "proposed_by": event.proposed_by, "operations": [_op(item) for item in event.operations],
@@ -105,6 +169,16 @@ def accepted_to_payload(event: AcceptedEvent) -> dict:
             "reason": revocation.reason, "at": revocation.at, "committed_by": revocation.committed_by,
             "endorsements": [_endorsement(e) for e in revocation.endorsements],
             "skipped": [{"op": s.op, "why": s.why} for s in revocation.skipped]}
+        if revocation.holdings_skipped is not None:
+            payload["revocation"]["holdings_skipped"] = revocation.holdings_skipped
+        if revocation.holdings_seqs:
+            payload["revocation"]["holdings_seqs"] = _seqs(revocation.holdings_seqs)
+    if event.attempt_id is not None:
+        payload["attempt_id"] = event.attempt_id
+    if event.holdings is not None:
+        payload["holdings"] = _holdings(event.holdings)
+    if event.abilities:
+        payload["abilities"] = [_ability(charge) for charge in event.abilities]
     return {**thaw(event.extras), **payload}  # type: ignore[dict-item]
 
 
@@ -170,12 +244,12 @@ def _extras(payload: Mapping, fields: frozenset[str]) -> JsonObject:
         raise _invalid("unknown fields are not JSON") from None
 
 
-def _start(payload: object, schema: str, expected: str, identity: frozenset[str]) -> Mapping:
+def _start(payload: object, schema: str, expected: str | frozenset[str], identity: frozenset[str]) -> Mapping:
     if not isinstance(payload, Mapping) or not all(type(key) is str for key in payload):
         raise _invalid("a payload must be a JSON object")
     if set(payload) & identity:
         raise EffectCodecError(f"the envelope owns {sorted(set(payload) & identity)}", "identity_in_payload")
-    if schema != expected:
+    if schema not in (expected if isinstance(expected, frozenset) else {expected}):
         raise EffectCodecError(f"schema {schema!r} is not {expected}", "unsupported_schema")
     return payload
 
@@ -199,12 +273,104 @@ def _decode_endorsements(value: object, label: str) -> tuple[EndorsementRecord, 
     return tuple(found)
 
 
+def _ref_text(value: object, label: str) -> InstanceRef:
+    if type(value) is not str:
+        raise _invalid(f"{label} is not a valid reference")
+    return _ref(InstanceRef.parse, value, label)
+
+
+def _decode_line(value: object, label: str) -> tuple[ActedLine, object]:
+    kind = value.get("line") if isinstance(value, Mapping) else None
+    if type(kind) is not str or kind not in _LINE_FIELDS:
+        raise _invalid(f"{label}.line is not a line kind")
+    required = frozenset({"line", "holder", "item", "domain", *_LINE_FIELDS[kind]})
+    data = _object(value, label, required | _LINE_OPTIONAL, required)
+    _no_nulls(data, label)
+    target = _ref_text(data["target"], f"{label}.target") if "target" in data else None
+    holder = _ref_text(data["holder"], f"{label}.holder")
+    for key in ("amount", "seen", "to"):
+        if key in data and type(data[key]) is not int:
+            raise _invalid(f"{label}.{key} must be an integer")
+    try:
+        line = Line(kind, holder, data["item"], amount=data.get("amount"), seen=data.get("seen"), to=data.get("to"),
+                    target=target)
+    except HoldingsError:
+        raise _invalid(f"{label} is not a valid line") from None
+    agent = None if "agent" not in data else _ref_text(data["agent"], f"{label}.agent")
+    return _build(lambda: ActedLine(line, agent, data.get("backed_by"))), data["domain"]
+
+
+def _decode_seqs(value: object, label: str) -> dict[InstanceRef, int]:
+    if not isinstance(value, Mapping) or not all(type(key) is str for key in value):
+        raise _invalid(f"{label} must be a JSON object")
+    found = {}
+    for key, seq in value.items():
+        if type(seq) is not int:
+            raise _invalid(f"{label} holds a non-integer seq", "invalid_receipts")
+        found[_ref_text(key, label)] = seq
+    if list(value) != sorted(value):
+        raise _invalid(f"{label} is not in canonical order")
+    return found
+
+
+def _decode_holdings(value: object) -> AcceptedHoldings:
+    data = _object(value, "holdings", _HOLDINGS, _HOLDINGS_REQUIRED)
+    _no_nulls(data, "holdings")
+    decoded = [_decode_line(item, f"holdings.lines[{i}]") for i, item in enumerate(_list(data["lines"],
+                                                                                           "holdings.lines"))]
+    part = _build(lambda: EffectHoldings(tuple(line for line, _ in decoded), data.get("note")))
+    seqs = _decode_seqs(data["seqs"], "holdings.seqs")
+    return _build(lambda: AcceptedHoldings(part, tuple(domain for _, domain in decoded), data["op_id"], seqs))
+
+
+def _names(value: object, label: str) -> frozenset[str]:
+    items = _list(value, label)
+    if not all(type(item) is str for item in items) or list(items) != sorted(set(items)):
+        raise _invalid(f"{label} must be a sorted list of distinct names")
+    return frozenset(items)
+
+
+def _decode_ability(value: object, label: str) -> AbilityCharge:
+    data = _object(value, label, _ABILITY, _ABILITY_REQUIRED)
+    _no_nulls(data, label)
+    actor = _ref_text(data["actor"], f"{label}.actor")
+    needs = _names(data["needs"], f"{label}.needs")
+    conditions = _names(data["conditions_met"], f"{label}.conditions_met")
+    try:
+        attempt = AbilityAttempt(data["attempt_id"], actor, data["ability_id"], needs, data["provenance"],
+                                 data.get("effect_id"), conditions)
+    except (ValueError, TypeError):
+        raise _invalid(f"{label} is not a valid attempt") from None
+    charges = [_list(pair, f"{label}.charges[{index}]")
+               for index, pair in enumerate(_list(data["charges"], f"{label}.charges"))]
+    return _build(lambda: AbilityCharge(attempt, data["classification"], data.get("ruling_id"), tuple(charges),
+                                        data["domain"]))
+
+
 def accepted_from_payload(ref: AcceptedRef, schema: str, payload: object) -> AcceptedEvent:
-    """Decode an accepted-event payload; refuse with ``EffectCodecError`` rather than guess."""
-    data = _start(payload, schema, ACCEPTED_SCHEMA, _ACCEPTED_IDENTITY)
+    """Decode an accepted-event payload; refuse with ``EffectCodecError`` rather than guess.
+
+    A /0 payload holding any of the next slice's fields is refused (``invalid_field``) rather than read
+    with those fields as extras: no older writer wrote them, and ignoring a holdings part would hide it.
+    A /1 payload with no holdings and no ability use is refused too: /0 is that event's one form.
+    """
+    data = _start(payload, schema, frozenset({ACCEPTED_SCHEMA, ACCEPTED_SCHEMA_V1}), _ACCEPTED_IDENTITY)
+    v1 = schema == ACCEPTED_SCHEMA_V1
+    if not v1 and set(data) & PART_FIELDS:
+        raise _invalid(f"schema {ACCEPTED_SCHEMA} may not hold {sorted(set(data) & PART_FIELDS)}")
     missing = sorted((ACCEPTED_FIELDS - {"revocation"}) - set(data))
     if missing:
         raise _invalid(f"missing {missing}", "missing_field")
+    if "attempt_id" in data and type(data["attempt_id"]) is not str:
+        raise _invalid("attempt_id must be text")
+    holdings = None if "holdings" not in data else _decode_holdings(data["holdings"])
+    abilities = () if "abilities" not in data else tuple(
+        _decode_ability(item, f"abilities[{index}]")
+        for index, item in enumerate(_list(data["abilities"], "abilities")))
+    if "abilities" in data and not abilities:
+        raise _invalid("an empty abilities list is not canonical")
+    if [a.attempt.attempt_id for a in abilities] != sorted(a.attempt.attempt_id for a in abilities):
+        raise _invalid("abilities are not in canonical order")
     if type(data["ordinal"]) is not int:
         raise _invalid("ordinal must be an integer")
     operations = tuple(_decode_op(item, i) for i, item in enumerate(_list(data["operations"], "operations")))
@@ -225,22 +391,29 @@ def accepted_from_payload(ref: AcceptedRef, schema: str, payload: object) -> Acc
         receipts.append(_build(lambda: Receipt(r["op"], relation)))
     revocation = None
     if "revocation" in data:
-        v = _object(data["revocation"], "revocation", _REVOCATION, _REVOCATION)
+        v = _object(data["revocation"], "revocation", _REVOCATION_V1 if v1 else _REVOCATION, _REVOCATION)
+        _no_nulls(v, "revocation")
         skipped = []
         for index, item in enumerate(_list(v["skipped"], "revocation.skipped")):
             s = _object(item, f"revocation.skipped[{index}]", _SKIPPED, _SKIPPED)
             skipped.append(_build(lambda: Skipped(s["op"], s["why"])))
         endorsements = _decode_endorsements(v["endorsements"], "revocation.endorsements")
+        undo_seqs = {} if "holdings_seqs" not in v else _decode_seqs(v["holdings_seqs"], "revocation.holdings_seqs")
+        if "holdings_seqs" in v and not undo_seqs:
+            raise _invalid("an empty holdings_seqs is not canonical")
         revocation = _build(lambda: Revocation(v["reason"], v["at"], v["committed_by"], endorsements,
-                                               tuple(skipped)))
+                                               tuple(skipped), v.get("holdings_skipped"), undo_seqs))
     chat = _ref(ChatRef.parse, data["chat"], "chat")
     moment = _decode_moment(data["moment"], "moment")
     endorsements = _decode_endorsements(data["endorsements"], "endorsements")
-    extras = _extras(data, ACCEPTED_FIELDS)
-    return _build(lambda: AcceptedEvent(
+    extras = _extras(data, ACCEPTED_FIELDS | PART_FIELDS)
+    event = _build(lambda: AcceptedEvent(
         ref, chat, moment, data["summary"], data["proposed_by"], operations, tuple(contributions), endorsements,
         tuple(controls), data["committed_by"], data["accepted_at"], data["ordinal"], tuple(receipts), revocation,
-        extras))
+        extras, data.get("attempt_id"), holdings, abilities))
+    if accepted_schema(event) != schema:
+        raise _invalid(f"an event with no holdings or ability use is stored as {ACCEPTED_SCHEMA}")  # one form
+    return event
 
 
 def wrapup_from_payload(ref: WrapUpRef, schema: str, payload: object) -> SceneWrapUp:

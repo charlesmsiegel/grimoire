@@ -6,7 +6,7 @@
 - **"stable IDs":** holder instance IDs plus stable item keys and operation IDs. A stack has no ID of its own.
 - **milestone 3:** re-homed to [021](turn-effects-and-wrap-up.md) (narrative extraction).
 
-Prompt context is a pure holder-only helper for 031, and the manual editor is the headless `adjust` line; the UI is later.
+Prompt context is a pure holder-only helper for 031, and the manual editor is the headless `adjust` line; the UI is later. [021's next slice](turn-effects-and-wrap-up.md#next-slice-holdings-and-ability-charges-delivered) now applies the holdings operation an accepted turn effect carries, in the event's own transaction ([HOLDINGS](../../HOLDINGS.md#driven-by-accepted-effects-021)); extracting proposals from narration is still to come.
 
 **Outcome:** Track how many ordinary resources each actor owns without requiring any mechanics module.
 
