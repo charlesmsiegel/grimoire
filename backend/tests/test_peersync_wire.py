@@ -84,11 +84,13 @@ def test_an_oversized_frame_is_refused_before_it_is_read():
         receiver.recv()
 
 
-def test_a_server_only_listens_on_loopback(tmp_path):
+def test_frames_only_travel_over_loopback_at_either_end(tmp_path):
     desktop, phone, _ = paired(tmp_path)
     for host in ("0.0.0.0", "::", "192.168.1.20", "localhost"):
         with pytest.raises(ValueError, match="loopback"):
             PeerServer(phone.store, phone.authority, host=host)
+        with pytest.raises(ValueError, match="loopback"):
+            transfer(desktop.store, desktop.authority, PHONE, (host, 9))
 
 
 # -- a hostile but authenticated peer -----------------------------------------------------------
@@ -285,6 +287,8 @@ def test_a_session_stays_bound_to_the_key_it_proved_when_the_owner_pairs_again(t
 def test_a_file_named_with_a_colon_stays_on_its_device_and_blocks_nothing(tmp_path):
     desktop, phone, _ = paired(tmp_path)
     start_scene(phone)
+    if os.name == "nt":  # NTFS takes "notes 10:30.txt" as a stream of "notes 10", not as that name
+        pytest.skip("this filesystem cannot hold a colon in a name")
     notes = phone.store.root / "sources" / "notes 10:30.txt"
     try:
         notes.write_bytes(b"a note")

@@ -249,8 +249,8 @@ def test_a_snapshot_that_does_not_match_the_peers_own_scan_is_never_used(tmp_pat
     start_scene(phone)
     real = snapshot_module.walk
 
-    def altered(root):  # type: ignore[no-untyped-def]
-        for kind, path, data in real(root):
+    def altered(root, blocked):  # type: ignore[no-untyped-def]
+        for kind, path, data in real(root, blocked):
             yield kind, path, (data + b" " if kind == "file" and path.endswith("manifest.json") else data)
 
     monkeypatch.setattr(snapshot_module, "walk", altered)
@@ -279,6 +279,67 @@ def test_a_snapshot_this_device_cannot_rebuild_is_read_to_its_end_and_the_next_p
         report = transfer(desktop.store, desktop.authority, PHONE, server.address)
     assert report.status == "synced", report  # the same connection stayed in step for the next pass
     assert _files(desktop.store.root) == _files(phone.store.root)
+
+
+def _stray_large_file(root: Path) -> None:
+    (root / "sources" / "catalog" / "original.bin").write_bytes(b"\0" * (9 * 1024 * 1024))
+
+
+def _stray_pipe(root: Path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("this system has no named pipes")
+    os.mkfifo(root / "sources" / "catalog" / "pipe")
+
+
+def _stray_deep_folder(root: Path) -> None:
+    folder = root / "sources" / "catalog" / "notes"
+    for depth in range(70):
+        folder = folder / f"d{depth}"
+    try:
+        folder.mkdir(parents=True)
+    except OSError:  # Windows: past the path length this system allows
+        pytest.skip("this filesystem cannot nest folders that deep")
+
+
+@pytest.mark.parametrize("stray", [_stray_large_file, _stray_pipe, _stray_deep_folder])
+def test_a_stray_file_beside_the_records_that_019_ignores_blocks_nothing(tmp_path, stray):
+    desktop, phone, _ = paired(tmp_path)
+    start_scene(phone)
+    stray(phone.store.root)
+    with serving(phone) as server:
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert report.status == "synced", report
+    assert desktop.chats.navigation().all_chats() == phone.chats.navigation().all_chats()
+
+
+def test_unpairing_on_the_starting_device_stops_what_it_sends_mid_transfer(tmp_path, monkeypatch):
+    from grimoire.peersync import replay as replay_module
+    from grimoire.peersync import session as session_module
+    desktop, phone, _ = paired(tmp_path)
+    start_scene(desktop)
+    real = replay_module.send_step
+    sent = []
+
+    def unpair_first(channel, step, reader):  # type: ignore[no-untyped-def]
+        sent.append(step.kind)
+        return real(channel, step, reader)
+
+    monkeypatch.setattr(session_module, "send_step", unpair_first)
+    real_check = session_module._check_paired
+    checks = []
+
+    def unpair_before_the_first_step(store, peer, key):  # type: ignore[no-untyped-def]
+        checks.append(1)
+        if len(checks) == 2:  # after the pass's own check: the owner unpairs a lost phone
+            unpair(desktop.store, desktop.authority, PHONE)
+        return real_check(store, peer, key)
+
+    monkeypatch.setattr(session_module, "_check_paired", unpair_before_the_first_step)
+    with serving(phone) as server:
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert report.status == "incomplete" and report.reason == "not_paired", report
+    assert sent == []  # nothing of the desktop's library was sent
+    assert not (phone.store.root / "campaigns").exists()
 
 
 # -- pairing ----------------------------------------------------------------------------------

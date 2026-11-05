@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import secrets
 import socket
@@ -33,6 +34,14 @@ MAX_FRAME = 40 * 1024 * 1024
 MAX_HEADER = 4 * 1024 * 1024
 _LENGTH = struct.Struct(">I")
 _SEQ = struct.Struct(">Q")
+
+
+def is_loopback(host: object) -> bool:
+    """Whether ``host`` is a loopback IP: the only place unencrypted frames may travel."""
+    try:
+        return ipaddress.ip_address(host).is_loopback  # type: ignore[arg-type]
+    except ValueError:
+        return False
 
 
 def no_delay(sock: socket.socket) -> None:

@@ -9,7 +9,6 @@ on loopback only: frames are authenticated but not encrypted (docs/DEVICE_SYNC.m
 from __future__ import annotations
 
 import hmac
-import ipaddress
 import socket
 import threading
 
@@ -21,14 +20,7 @@ from .errors import AuthenticationFailed, PeerRefused, TransportError
 from .pairing import peer_principal, read_pairing
 from .replay import StepBuffer
 from .snapshot import send_snapshot
-from .wire import Channel, no_delay, server_handshake
-
-
-def _loopback(host: str) -> bool:
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
+from .wire import Channel, is_loopback, no_delay, server_handshake
 
 
 class PeerServer:
@@ -40,7 +32,7 @@ class PeerServer:
         snapshot and its first step the client rebuilds the mirror, plans and commits its own side
         and the mirror's (minutes for a first sync of many pictures). ``handshake_timeout`` bounds
         the whole handshake, so a local process that never authenticates frees the slot quickly."""
-        if not _loopback(host):
+        if not is_loopback(host):
             raise ValueError("this slice serves loopback addresses only: its frames are not encrypted")
         self.store, self.authority = store, authority
         self.timeout, self.handshake_timeout = timeout, handshake_timeout

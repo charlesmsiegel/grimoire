@@ -11,6 +11,7 @@ placements included, was re-read on both devices and held the planned bytes.
 
 from __future__ import annotations
 
+import hmac
 import socket
 import tempfile
 from dataclasses import dataclass
@@ -23,7 +24,7 @@ from .errors import MirrorMismatch, NotPaired, PeerRefused, TransportError
 from .pairing import peer_principal, read_pairing
 from .replay import send_step
 from .snapshot import Limits, receive_mirror
-from .wire import Channel, client_handshake, no_delay
+from .wire import Channel, client_handshake, is_loopback, no_delay
 
 
 #: Refusals after which the server hangs up: there is no next pass on this connection.
@@ -60,6 +61,8 @@ def transfer(store: LibraryStore, authority, peer: str, address: tuple[str, int]
     Raises ``NotPaired`` or ``AuthenticationFailed`` before anything is exchanged; every later
     failure is an ``incomplete`` report, never a half-applied step (docs/DEVICE_SYNC.md).
     """
+    if not is_loopback(address[0]):
+        raise ValueError("this slice connects to loopback addresses only: its frames are not encrypted")
     pairing = read_pairing(store, peer)
     if pairing is None:
         raise NotPaired(f"this library is not paired with {peer}")
@@ -75,7 +78,7 @@ def transfer(store: LibraryStore, authority, peer: str, address: tuple[str, int]
     channel: Channel | None = None
     try:
         channel = client_handshake(connection, local, peer, pairing.key)
-        return _passes(store, channel, local, local_handle, attempts, workdir, limits)
+        return _passes(store, channel, local, local_handle, pairing.key, attempts, workdir, limits)
     except TransportError as error:
         return TransferReport(peer, "incomplete", f"disconnected: {error}")
     finally:
@@ -87,14 +90,14 @@ def transfer(store: LibraryStore, authority, peer: str, address: tuple[str, int]
         connection.close()
 
 
-def _passes(store: LibraryStore, channel: Channel, local: str, local_handle: object, attempts: int,
-            workdir: str | Path | None, limits: Limits) -> TransferReport:
+def _passes(store: LibraryStore, channel: Channel, local: str, local_handle: object, key: bytes,
+            attempts: int, workdir: str | Path | None, limits: Limits) -> TransferReport:
     peer = channel.peer
     reports: list[SyncReport] = []
     reason = "no pass ran"
     for _ in range(attempts):
         try:
-            report = _one_pass(store, channel, local, local_handle, workdir, limits)
+            report = _one_pass(store, channel, local, local_handle, key, workdir, limits)
         except PeerRefused as error:
             reason = f"{type(error).__name__}: {error}"
             if error.code in _SESSION_ENDING:
@@ -114,11 +117,26 @@ def _passes(store: LibraryStore, channel: Channel, local: str, local_handle: obj
     return TransferReport(peer, "incomplete", reason, tuple(reports))
 
 
-def _one_pass(store: LibraryStore, channel: Channel, local: str, local_handle: object,
+def _check_paired(store: LibraryStore, peer: str, key: bytes) -> None:
+    """Stop unless this library is still paired with ``peer`` under the key this transfer proved.
+
+    Checked before each pass and before each step goes out: an owner who unpairs a lost device
+    mid-transfer must not have the rest of the library sent to it (the serving end checks the
+    same of its own pairing before every request).
+    """
+    current = read_pairing(store, peer)
+    if current is None or not hmac.compare_digest(current.key, key):
+        raise PeerRefused("not_paired", f"this library is no longer paired with {peer}")
+
+
+def _one_pass(store: LibraryStore, channel: Channel, local: str, local_handle: object, key: bytes,
               workdir: str | Path | None, limits: Limits) -> SyncReport:
     peer = channel.peer
+    _check_paired(store, peer, key)
     channel.send({"t": "snapshot"})
-    with tempfile.TemporaryDirectory(prefix="grimoire-peer-", dir=workdir) as scratch:
+    # A file an indexer or virus scanner still holds open must not turn a finished pass into a
+    # failure: the scratch mirror is only ever deleted, never read again.
+    with tempfile.TemporaryDirectory(prefix="grimoire-peer-", dir=workdir, ignore_cleanup_errors=True) as scratch:
         mirror = receive_mirror(channel, Path(scratch) / "peer", local, limits)
         try:
             handles = {local: local_handle, peer: mirror.handle}
@@ -126,6 +144,7 @@ def _one_pass(store: LibraryStore, channel: Channel, local: str, local_handle: o
 
             def replay(step) -> None:  # type: ignore[no-untyped-def]
                 if step.device == peer:
+                    _check_paired(store, peer, key)
                     send_step(channel, step, mirror.store.read_blob_exact)
             return apply_sync(plan, handles, observer=replay)
         finally:

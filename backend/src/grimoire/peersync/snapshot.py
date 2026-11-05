@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import os
 import stat
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -82,18 +82,29 @@ def _cap(parts: tuple[str, ...]) -> int:
     return MAX_BLOB_BYTES if parts[0] == _BLOB_ROOT else MAX_FILE_BYTES
 
 
-def walk(root: Path) -> Iterator[tuple[str, str, bytes]]:
+def walk(root: Path, blocked: Collection[str] = frozenset()) -> Iterator[tuple[str, str, bytes]]:
     """Every entry under the synchronized roots: ``(kind, path, bytes)``, never following a link.
 
-    ``kind`` is ``dir``, ``file`` or ``blocked``: a link, anything that is not a regular file or
-    folder, a folder that cannot be listed, or a file that cannot be read or is larger than
-    anything the store accepts there. A blocked entry is sent as one, never as absent.
+    ``kind`` is ``dir``, ``file`` or ``blocked``. An entry the walk cannot send as itself (a link,
+    anything that is not a regular file or folder, a folder that cannot be listed or is nested too
+    deep, a file that cannot be read or is larger than anything the store accepts there) is sent
+    as ``blocked`` when the serving library's own scan reports it blocked (``blocked``), and left
+    out otherwise. The mirror reproduces a blocked entry as a dangling link, which every scan
+    reports as blocked whatever its name; a stray original or a pipe beside a source's records,
+    which the serving scan simply skips because 019 plans nothing from it, would then make the
+    two scans differ on every pass, while a local 019 sync of the same libraries converges.
     """
     for name in ROOTS:
-        yield from _walk(root, (name,), 0)
+        yield from _walk(root, (name,), 0, blocked)
 
 
-def _walk(root: Path, parts: tuple[str, ...], depth: int) -> Iterator[tuple[str, str, bytes]]:
+def _unsendable(relative: str, blocked: Collection[str]) -> Iterator[tuple[str, str, bytes]]:
+    if relative in blocked:
+        yield "blocked", relative, b""
+
+
+def _walk(root: Path, parts: tuple[str, ...], depth: int,
+          blocked: Collection[str]) -> Iterator[tuple[str, str, bytes]]:
     path = root.joinpath(*parts)
     relative = "/".join(parts)
     try:
@@ -101,18 +112,18 @@ def _walk(root: Path, parts: tuple[str, ...], depth: int) -> Iterator[tuple[str,
     except FileNotFoundError:
         return
     except OSError:
-        yield "blocked", relative, b""
+        yield from _unsendable(relative, blocked)
         return
     if (stat.S_ISLNK(info.st_mode) or _REPARSE & (getattr(info, "st_file_attributes", 0) or 0)
             or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode))):
         # A Windows junction lstats as a folder; only its reparse attribute says it leads
         # elsewhere (the store's own ``is_link`` test). Walking it would send files from outside
         # the library to the peer before any check could refuse the snapshot.
-        yield "blocked", relative, b""
+        yield from _unsendable(relative, blocked)
         return
     if stat.S_ISREG(info.st_mode):
         if info.st_size > _cap(parts):
-            yield "blocked", relative, b""
+            yield from _unsendable(relative, blocked)
             return
         try:  # never through a link put in its place since the lstat (O_NOFOLLOW where it exists)
             descriptor = os.open(path, os.O_RDONLY | _NOFOLLOW | getattr(os, "O_BINARY", 0))
@@ -121,17 +132,20 @@ def _walk(root: Path, parts: tuple[str, ...], depth: int) -> Iterator[tuple[str,
                     raise OSError("not a regular file")
                 data = handle.read(_cap(parts) + 1)
         except OSError:
-            yield "blocked", relative, b""
+            yield from _unsendable(relative, blocked)
             return
-        yield ("blocked", relative, b"") if len(data) > _cap(parts) else ("file", relative, data)
+        if len(data) > _cap(parts):  # it grew since the lstat
+            yield from _unsendable(relative, blocked)
+        else:
+            yield "file", relative, data
         return
     if depth >= _MAX_DEPTH:
-        yield "blocked", relative, b""
+        yield from _unsendable(relative, blocked)
         return
     try:
         names = sorted(os.listdir(path))
     except OSError:
-        yield "blocked", relative, b""
+        yield from _unsendable(relative, blocked)
         return
     yield "dir", relative, b""
     for name in names:
@@ -140,7 +154,7 @@ def _walk(root: Path, parts: tuple[str, ...], depth: int) -> Iterator[tuple[str,
             # spelled so (IDs cannot hold these characters), so 019 plans nothing from it, and
             # the client could not tell it from a path that escapes its mirror: it stays here.
             continue
-        yield from _walk(root, (*parts, name), depth + 1)
+        yield from _walk(root, (*parts, name), depth + 1, blocked)
 
 
 def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -> None:  # type: ignore[no-untyped-def]
@@ -155,7 +169,7 @@ def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -
             channel.send({"t": "state", "name": name}, data)
     summary = scan_summary(store)  # before the walk: a file changed after it fails the client's check
     count = 0
-    for kind, path, data in walk(store.root):
+    for kind, path, data in walk(store.root, frozenset(summary["blocked"])):  # type: ignore[arg-type]
         channel.send({"t": kind, "path": path}, data)
         count += 1
     encoded = json.dumps(summary, sort_keys=True).encode()  # a large library's runs past one frame
