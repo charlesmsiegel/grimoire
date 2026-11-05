@@ -139,7 +139,7 @@ A re-created change has new bytes, so it needs fresh approvals.
 | Including holdings in prompts | 031 (`context_lines` is the input). Holdings are not part of 022's `ChatSnapshot` (`load()` never reads them), so 031 must read them once per turn and pin each `HoldingsView.etag` to keep a turn consistent |
 | The UI editor and the tracking toggle | UI sprints (`adjust` is the headless editor) |
 | Item display labels, item definitions, unique objects | 034 |
-| Cross-device merge of counts | 019/028 |
+| Cross-device merge of counts (sync reports a divergence as a `held` conflict until then) | [028](roadmap/sprints/app-managed-device-sync.md) |
 | Exactly-once beyond the bounded log; automatic partial completion | 030 |
 | Who may mutate whose holdings beyond the store's per-path `APPLY` | 003/104 |
 | Migrating V1 inventories | 026 |

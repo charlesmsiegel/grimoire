@@ -5,6 +5,8 @@
 
 **Outcome:** Retrieve exactly the useful setting, actors and history for a turn within predictable model-context budgets.
 
+**Unscheduled prerequisite, awaiting a decision:** [020](durable-event-evidence.md)'s persistence of 017's claim shapes with their propositions is not on any wave yet; this sprint depends on it.
+
 ## Scope
 - Retrieve relevant world records, recent history, memories, optional mechanics and inventory.
 - Respect sources, viewpoint, temporal consistency and hidden information.

@@ -336,8 +336,10 @@ _IMAGE_PATHS = ("campaigns/c1/images/portrait.json", "sources/world/harbor/_sour
                 "campaigns/c1/placements/character/wren-a/portrait.json", "assets/blobs/ab/" + "ab" * 32 + ".png")
 
 
-def test_018_families_are_skipped_and_never_block_a_revision_resolve(pair):
-    """018's images, placements and blobs are not synced yet, and never pin a revision."""
+def test_018_damaged_art_is_blocked_and_never_blocks_a_revision_resolve(pair):
+    """018's images, placements and blobs never pin a revision. C2: 018 art is synced, so the damaged
+    files (malformed records, a blob whose bytes do not hash to its name) are now ``blocked``
+    conflicts instead of skipped paths."""
     desktop, phone = pair
     for store in (desktop, phone):
         for path in _IMAGE_PATHS:  # even a damaged one: these records never name a revision
@@ -353,9 +355,11 @@ def test_018_families_are_skipped_and_never_block_a_revision_resolve(pair):
     r9 = PATHS["r1"].replace("r1.json", "r9.json")
     report = sync(desktop, phone, handles())
     assert report.conflict(r9).code == "missing_ancestor"
-    assert {conflict.path for conflict in report.conflicts} == {r9}
+    assert {conflict.path for conflict in report.conflicts} == {r9, *_IMAGE_PATHS}
+    assert {report.conflict(path).code for path in _IMAGE_PATHS} == {"blocked"}
+    assert "corrupt on" in report.conflict(_IMAGE_PATHS[-1]).detail  # hashed at first sight
     for device in (DESKTOP, PHONE):
-        assert {"campaigns/c1/images/portrait.json", "assets"} <= set(report.skipped[device])
+        assert not {"campaigns/c1/images/portrait.json", "assets"} & set(report.skipped[device])
     mine, theirs = (desktop.root / r9).read_bytes(), (phone.root / r9).read_bytes()
     resolve(desktop, phone, r9, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
     assert (phone.root / r9).read_bytes() == mine
@@ -463,7 +467,9 @@ def test_f4_blocked_paths_are_never_copied_or_overwritten(pair, tmp_path):
     report = sync(desktop, phone, handles())
     assert report.copied == ((unrelated, PHONE),)
     assert (phone.root / unrelated).read_bytes() == (desktop.root / unrelated).read_bytes()
-    assert {found.code for found in report.conflicts} == {"blocked"}
+    # C1: the linked campaign folder cannot be listed, so its held-back families are a held conflict
+    assert {found.code for found in report.conflicts} == {"blocked", "held"}
+    assert [found.path for found in report.conflicts if found.code == "held"] == ["campaigns/c9"]
     assert (phone.root / PATHS["wren_a"]).read_bytes() == b"{not json"
     assert list((outside / "instances" / "character").iterdir()) == []
 
@@ -1270,7 +1276,13 @@ def test_021_an_accepted_effect_and_the_relations_it_changed_are_held_back_toget
                                               endorsements=[keys.endorse(proposal)]).commit()
         report = sync(desktop, phone, handles())
         assert not [path for path, _ in report.copied if "/accepted/" in path or "/relations/" in path]
-        assert report.conflicts == ()
+        # C1: the divergence is reported as held conflicts (the event, the relations it changed), never silent
+        changed = {path for path in desktop.scan().files if "/relations/" in path
+                   and (not (phone.root / path).exists()
+                        or (desktop.root / path).read_bytes() != (phone.root / path).read_bytes())}
+        assert changed and {(found.path, found.code) for found in report.conflicts} == {
+            (path, "held") for path in {*changed, *(p for p in report.skipped[DESKTOP] if "/accepted/" in p)}}
+        assert not phone.conflicts() and not desktop.conflicts()  # nothing kept for a held path
         held = set(report.skipped[DESKTOP])
         assert any("/accepted/" in path for path in held) and relations <= held
         assert effects_library(phone, keys).continuity(C, as_of=8, requested_by=DIRECTOR).problems == ()
@@ -1470,7 +1482,8 @@ def test_a_manifest_whose_head_is_missing_on_its_origin_is_a_head_dependency(pai
 
 def test_023_holdings_are_held_back(pair):
     """One operation spans several holder files and the count merge rule is a later milestone
-    (docs/HOLDINGS.md): holdings are reported as skipped, never copied file by file."""
+    (docs/HOLDINGS.md): holdings are reported as skipped, never copied file by file, and (C1) a
+    divergence is a ``held`` conflict."""
     from grimoire.core.identity import HoldingsRef
     from grimoire.store import ScopeRecord
     desktop, phone = pair
@@ -1478,7 +1491,8 @@ def test_023_holdings_are_held_back(pair):
     put(desktop, ScopeRecord(HoldingsRef("c1", "character", "wren-a"), "grimoire.holdings/1", {"coins": 3}), None)
     report = sync(desktop, phone, handles())
     assert path in report.skipped[DESKTOP] and not (phone.root / path).exists()
-    assert report.conflicts == () and not sync(desktop, phone, handles()).wrote
+    assert [(found.path, found.code) for found in report.conflicts] == [(path, "held")]
+    assert not sync(desktop, phone, handles()).wrote
 
 
 @pytest.mark.parametrize("restore", ["old", "new"])

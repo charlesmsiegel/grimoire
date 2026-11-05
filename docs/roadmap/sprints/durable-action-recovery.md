@@ -2,6 +2,8 @@
 
 **Outcome:** One accepted action updates multiple human-editable records once, even after crashes, retries and external edits.
 
+**Unscheduled prerequisite, awaiting a decision:** [021's next slice](turn-effects-and-wrap-up.md) (holdings operations from accepted effects, committing ability costs, charging each `attempt_id` once) is not on any wave yet; this sprint depends on it.
+
 ## Scope
 - Carry forward Mechanics II's existing Action/Effect/journal proposal rather than inventing a rival engine.
 - Validate prerequisites, expected versions, logged randomness and all intended writes before publication.

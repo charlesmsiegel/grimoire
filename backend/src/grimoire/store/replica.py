@@ -11,21 +11,22 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from grimoire.core.identity import TEXT_MAX, ChatRef, InstanceRef, SourceRef, validate_segment
+from grimoire.core.identity import TEXT_MAX, ChatRef, ImageRef, InstanceRef, SourceRef, validate_segment
 
 from .diskops import is_link, lstat_or_none
 from .engine import Access
 from .envelope import (
-    EnvelopeError, KnowledgeRecord, RecordEnvelope, ScopeRecord, SourceManifest, parse_knowledge_record,
-    parse_record, parse_scope_record, parse_source,
+    AssetRecord, EnvelopeError, KnowledgeRecord, RecordEnvelope, ScopeRecord, SourceManifest, parse_asset_record,
+    parse_knowledge_record, parse_record, parse_scope_record, parse_source,
 )
 from .errors import InvalidEnvelope, LinkRefused, RevisionReferenced, UnstorableIdentifier
 from .jsonfmt import MAX_FILE_BYTES, JsonError, parse_strict
 from .jsonfmt import etag as _etag
 from .layout import (
-    CAMPAIGNS, CONFLICTS, IMAGES, MARKER, PLACEMENTS, SCOPE, SOURCE_DIR, SOURCES, SUFFIX, SYNC, TXN, Parts, classify,
-    chat_parts, definition_parts, instance_parts, is_noise, name_key,
+    ASSETS, BLOBS, CAMPAIGNS, CONFLICTS, IMAGES, MARKER, PLACEMENTS, SCOPE, SOURCE_DIR, SOURCES, SUFFIX, SYNC, TXN,
+    Parts, blob_parts, classify, chat_parts, definition_parts, instance_parts, is_noise, name_key,
 )
+from .media import MAX_BLOB_BYTES, MEDIA
 
 SCOPE_FILE = SCOPE
 #: The blocked reason of a canonical spelling that exists here only as a look-alike (``R9.json`` for ``r9.json``).
@@ -33,10 +34,15 @@ SHADOWED = "shadowed"
 
 #: Root entries a scan walks for canonical records.
 _RECORD_ROOTS = (SOURCES, CAMPAIGNS)
-#: The record kinds this module reads, copies and checks: every kind sync may own. 018's blobs,
-#: images and placements are not among them yet (a later slice); ledgers never are.
+#: The JSON record kinds this module reads, copies and checks: every kind sync may own except
+#: 018's blobs (binary, listed by name and size in ``CanonicalScan.blobs``); ledgers never are.
 EXACT_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge",
-                         "accepted", "wrapup", "holdings"})
+                         "accepted", "wrapup", "holdings", "image", "placement"})
+#: 018's image objects and placements: strict-JSON asset records that never pin a revision.
+ASSET_RECORD_KINDS = frozenset({"image", "placement"})
+#: The load problem (and sync blocked reason) of an instance id held by two kinds in one campaign.
+INSTANCE_ID_CONFLICT = "instance_id_conflict"
+_EXTENSION = {media: ext for ext, media in MEDIA.items()}
 #: Root entries that are device-local or the library's own marker: never transferred, never reported.
 _LOCAL = frozenset({TXN, CONFLICTS, SYNC, MARKER})
 
@@ -48,14 +54,21 @@ class CanonicalScan:
     ``blocked`` maps a path (a file, or a directory whose whole subtree is unusable) to a reason:
     ``link``, ``lookalike``, ``unreadable``, ``malformed``, ``unsupported_format`` or
     ``address_mismatch``. ``skipped`` lists entries that are not canonical records.
+
+    ``blobs`` maps each canonical 018 blob file to its size: listed and ``lstat``-ed, never read
+    (a blob's bytes never enter a scan). ``pairs`` names every instance file whose id another kind
+    also holds in its campaign (``instance_id_conflict``): such a file stays in ``files`` (its pins
+    still count) but is unusable for sync, like a blocked one.
     """
 
     files: Mapping[str, bytes] = field(default_factory=dict)
     blocked: Mapping[str, str] = field(default_factory=dict)
     skipped: tuple[str, ...] = ()
+    blobs: Mapping[str, int] = field(default_factory=dict)
+    pairs: Mapping[str, str] = field(default_factory=dict)
 
     def blocked_reason(self, path: str) -> str | None:
-        """Why ``path`` is unusable here: blocked itself or below a blocked directory."""
+        """Why ``path`` is unusable here: blocked itself, below a blocked directory, or an id pair."""
         if path in self.blocked:
             return self.blocked[path]
         if "" in self.blocked:  # the library root itself could not be listed: nothing in it is known
@@ -65,10 +78,11 @@ class CanonicalScan:
             reason = self.blocked.get("/".join(parts[:index]))
             if reason is not None:
                 return reason
-        return None
+        return self.pairs.get(path)
 
 
-def parse_exact(parts: Parts, data: bytes) -> RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord:
+def parse_exact(parts: Parts, data: bytes
+                ) -> RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord | AssetRecord:
     """The envelope ``data`` holds at canonical ``parts``; ``InvalidEnvelope`` (with ``code``) otherwise."""
     found = classify(parts)
     if found is None or found[0] not in EXACT_KINDS:
@@ -81,7 +95,8 @@ def parse_exact(parts: Parts, data: bytes) -> RecordEnvelope | SourceManifest | 
         raise _invalid("malformed", f"{'/'.join(parts)}: {error}") from None
     try:
         if found[0] == "manifest":
-            envelope: RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord = parse_source(document)[0]
+            envelope: RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord | AssetRecord = \
+                parse_source(document)[0]
             if envelope.source != found[1]:
                 raise _invalid("address_mismatch", f"{'/'.join(parts)} holds the manifest of {envelope.source}")
         elif found[0] == "knowledge":  # 020's create-only events, evidence and log batches
@@ -90,6 +105,10 @@ def parse_exact(parts: Parts, data: bytes) -> RecordEnvelope | SourceManifest | 
                 raise _invalid("address_mismatch", f"{'/'.join(parts)} holds {envelope.address}")
         elif found[0] in ("scope", "chat", "relation", "accepted", "wrapup", "holdings"):  # 107/017/021/023
             envelope = parse_scope_record(document)[0]
+            if envelope.address != found[1]:
+                raise _invalid("address_mismatch", f"{'/'.join(parts)} holds {envelope.address}")
+        elif found[0] in ASSET_RECORD_KINDS:  # 018's image objects and placements
+            envelope = parse_asset_record(document)[0]
             if envelope.address != found[1]:
                 raise _invalid("address_mismatch", f"{'/'.join(parts)} holds {envelope.address}")
         else:
@@ -125,15 +144,73 @@ def scan(access: Access) -> CanonicalScan:
     files: dict[str, bytes] = {}
     blocked: dict[str, str] = {}
     skipped: list[str] = []
+    blobs: dict[str, int] = {}
     with access.cached_listings():
         for name, kind in _children(access, (), blocked):
             if kind == "skip" or name in _LOCAL or is_noise(name):
                 continue
             if name in _RECORD_ROOTS and kind == "dir":
                 _walk(access, (name,), files, blocked, skipped)
+            elif name == ASSETS and kind == "dir":
+                _walk_blobs(access, blobs, blocked, skipped)
             else:
                 skipped.append(name)
-    return CanonicalScan(MappingProxyType(files), MappingProxyType(blocked), tuple(sorted(skipped)))
+    return CanonicalScan(MappingProxyType(files), MappingProxyType(blocked), tuple(sorted(skipped)),
+                         MappingProxyType(blobs), MappingProxyType(_instance_pairs([*files, *blocked])))
+
+
+def _walk_blobs(access: Access, blobs: dict[str, int], blocked: dict[str, str], skipped: list[str]) -> None:
+    """018's ``assets/blobs/<xx>/<sha256>.<ext>``: each canonical blob by size, never read. Links,
+    look-alike spellings and unlistable folders are blocked as anywhere; a size no blob can have
+    (empty, over ``MAX_BLOB_BYTES``) is ``unreadable``; anything else under ``assets/`` is skipped."""
+    for name, kind in _children(access, (ASSETS,), blocked):
+        if kind == "skip":
+            continue
+        if name != BLOBS or kind != "dir":
+            skipped.append(f"{ASSETS}/{name}")
+            continue
+        for prefix, prefix_kind in _children(access, (ASSETS, BLOBS), blocked):
+            if prefix_kind == "skip":
+                continue
+            if prefix_kind != "dir":
+                skipped.append(f"{ASSETS}/{BLOBS}/{prefix}")
+                continue
+            for file_name, file_kind in _children(access, (ASSETS, BLOBS, prefix), blocked):
+                child = (ASSETS, BLOBS, prefix, file_name)
+                text = "/".join(child)
+                if file_kind == "skip":
+                    continue
+                found = classify(child)
+                if found is None or found[0] != "blob":
+                    skipped.append(text)
+                    continue
+                if file_kind != "file":  # a directory where a blob belongs
+                    blocked[text] = "unreadable"
+                    continue
+                try:
+                    info = lstat_or_none(access.path(child))
+                except OSError:
+                    blocked[text] = "unreadable"
+                    continue
+                if info is None:
+                    continue
+                if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= MAX_BLOB_BYTES:
+                    blocked[text] = "unreadable"
+                    continue
+                blobs[text] = info.st_size
+
+
+def _instance_pairs(paths: list[str]) -> dict[str, str]:
+    """Every canonical instance path whose id another kind also holds in its campaign (A2): all
+    members of such a group, never one picked, exactly as ``load()`` excludes them."""
+    groups: dict[tuple[str, str], set[str]] = {}
+    for path in paths:
+        found = classify(tuple(path.split("/")))
+        if found is not None and found[0] == "instance":
+            ref = found[1]
+            assert isinstance(ref, InstanceRef)
+            groups.setdefault((ref.campaign_id, ref.instance_id), set()).add(path)
+    return {path: INSTANCE_ID_CONFLICT for members in groups.values() if len(members) > 1 for path in members}
 
 
 def _children(access: Access, parts: Parts, blocked: dict[str, str]) -> list[tuple[str, str]]:
@@ -255,7 +332,7 @@ def _walk(access: Access, parts: Parts, files: dict[str, bytes], blocked: dict[s
             _walk(access, child, files, blocked, skipped)
         elif kind == "file":
             found = classify(child)
-            if found is None or found[0] not in EXACT_KINDS:  # ledgers, and 018's images (not synced yet)
+            if found is None or found[0] not in EXACT_KINDS:  # ledgers, notes, stray files
                 skipped.append(text)
                 continue
             try:
@@ -291,7 +368,7 @@ def _may_hold_records(access: Access, original: Parts) -> bool:
     parts = tuple(_folded(part) for part in original)
     found = classify(parts)
     if found is not None:
-        return found[0] in EXACT_KINDS  # 018 images and placements attach to entities, never revisions
+        return found[0] in EXACT_KINDS - ASSET_RECORD_KINDS  # 018 art attaches to entities, never revisions
     if parts[0] == SOURCES:
         if SOURCE_DIR in parts and parts[parts.index(SOURCE_DIR) + 1:][:1] in ((IMAGES,), (PLACEMENTS,)):
             return False  # 018's images and placements attach to entities, never to revisions
@@ -336,6 +413,8 @@ def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str
             raise RevisionReferenced(f"cannot prove {ref} is unreferenced: {path} is {reason}")
     for path, data in found.files.items():
         envelope = parse_exact(tuple(path.split("/")), data)
+        if isinstance(envelope, AssetRecord):
+            continue  # 018 art attaches to entities (its provenance text is not a pin)
         if isinstance(envelope, SourceManifest):
             if _etag(data) in allowed:
                 continue
@@ -378,6 +457,8 @@ def pinned_by(parts: Parts, data: bytes) -> frozenset[SourceRef]:
     counts as a reference, read from one record (sync's dependency rule, 019)."""
     envelope = parse_exact(parts, data)
     found: set[SourceRef] = set()
+    if isinstance(envelope, AssetRecord):
+        return frozenset()  # 018 art never pins a revision
     if isinstance(envelope, SourceManifest):
         found |= {head.at(revision) for head, revision in envelope.head_refs().items()}
         for link in envelope.links:
@@ -479,5 +560,75 @@ def _pinned(text: object) -> SourceRef | None:
     return ref if ref.pinned else None
 
 
-__all__ = ["CanonicalScan", "check_unreferenced", "instances_named", "parse_exact", "pinned_by", "previous_of",
-           "scan"]
+# -- structural readings of 018 art (sync's dependency rule; raw text only: the store never imports
+# grimoire.images, and the payload schema id is not interpreted) ----------------------------------
+
+def _payload(data: bytes) -> Mapping[str, object] | None:
+    try:
+        payload = parse_strict(data).get("payload")
+    except JsonError:
+        return None
+    return payload if isinstance(payload, Mapping) else None
+
+
+def image_blob(data: bytes) -> Parts | None:
+    """The blob an image object's bytes name (``payload.blob.sha256`` and ``media_type``), or ``None``
+    when that is absent, not text, or names no storable blob."""
+    blob = (_payload(data) or {}).get("blob")
+    if not isinstance(blob, Mapping):
+        return None
+    sha256, media = blob.get("sha256"), blob.get("media_type")
+    if not isinstance(sha256, str) or not isinstance(media, str) or media not in _EXTENSION:
+        return None
+    try:
+        return blob_parts(sha256, _EXTENSION[media])
+    except (ValueError, UnstorableIdentifier):
+        return None
+
+
+def placement_target(data: bytes) -> tuple[str | None, ImageRef | None, bool]:
+    """``(mode, image, readable)`` of a placement's bytes: ``readable`` is false when ``mode`` is not
+    text or an ``image`` is present that is no image reference."""
+    payload = _payload(data)
+    if payload is None:
+        return None, None, False
+    mode, image = payload.get("mode"), payload.get("image")
+    if not isinstance(mode, str):
+        return None, None, False
+    if image is None:
+        return mode, None, True
+    try:
+        return mode, ImageRef.parse(image), True
+    except ValueError:
+        return mode, None, False
+
+
+def instance_derivation(derived_from: object, base: object) -> tuple[SourceRef | None, str | None]:
+    """The unpinned entity an instance derives from (``derived_from``, else ``base``) or a problem
+    code (``invalid_derivation``, ``ambiguous_derivation``): 018's one derivation rule (W7), shared
+    by ``grimoire.imagestore`` and sync so they can never disagree."""
+    entities = set()
+    for text in (derived_from, base):
+        if text is None:
+            continue
+        try:
+            entities.add(SourceRef.parse(text).unpinned())
+        except ValueError:
+            return None, "invalid_derivation"
+    if len(entities) > 1:
+        return None, "ambiguous_derivation"
+    return (entities.pop(), None) if entities else (None, None)
+
+
+def instance_derivation_of(data: bytes) -> tuple[SourceRef | None, str | None]:
+    """``instance_derivation`` of an instance file's raw bytes (unreadable: ``invalid_derivation``)."""
+    try:
+        document = parse_strict(data)
+    except JsonError:
+        return None, "invalid_derivation"
+    return instance_derivation(document.get("derived_from"), document.get("base"))
+
+
+__all__ = ["ASSET_RECORD_KINDS", "CanonicalScan", "INSTANCE_ID_CONFLICT", "check_unreferenced", "image_blob",
+           "instance_derivation", "instance_derivation_of", "instances_named", "parse_exact", "pinned_by",
+           "placement_target", "previous_of", "scan"]

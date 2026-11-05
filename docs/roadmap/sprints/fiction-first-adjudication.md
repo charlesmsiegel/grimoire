@@ -2,6 +2,8 @@
 
 **Outcome:** Mechanics-free actions produce credible, consistent successes, failures and costs without relying on narratorial whim or assuming every action succeeds.
 
+**Unscheduled prerequisite, awaiting a decision:** [021's next slice](turn-effects-and-wrap-up.md) (holdings operations from accepted effects, committing ability costs, charging each `attempt_id` once) is not on any wave yet; this sprint depends on it.
+
 ## Scope and ownership
 - Represent a proposed action, known constraints, capabilities, stakes, uncertainty and accepted outcome without manufacturing dice rolls.
 - Distinguish straightforward actions, uncertain outcomes, consensual authorial decisions and actions requiring explicit clarification; challenge is independent of whether mechanics are enabled.

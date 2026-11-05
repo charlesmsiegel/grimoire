@@ -8,22 +8,28 @@ depend only on bytes, the two devices' own archives and their unfinished-sync ma
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from grimoire.core.identity import SourceRef
+from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef
 from grimoire.store import (
-    CrossDevice, ImmutableRevision, InvalidEnvelope, InvalidSourceState, LibraryStore, LinkRefused,
-    NameCollision, RevisionReferenced, StaleWrite, StoreError, UnstorableIdentifier, WriteConflict, WriteDenied, etag,
+    BlobCorrupt, CrossDevice, ImmutableImage, ImmutableRevision, InstanceIdConflict, InvalidEnvelope, InvalidSourceState,
+    LibraryStore, LinkRefused, NameCollision, RevisionReferenced, StaleWrite, StoreError, UnstorableIdentifier,
+    WriteConflict, WriteDenied, etag,
 )
 from grimoire.store.jsonfmt import MAX_FILE_BYTES
 from grimoire.store.layout import (
-    chat_parts, classify, conflict_parts, definition_parts, instance_parts, kept_address, manifest_parts,
+    chat_parts, classify, conflict_parts, definition_parts, image_parts, instance_parts, kept_address, manifest_parts,
+    placement_parts,
 )
-from grimoire.store.replica import SHADOWED, CanonicalScan, chats_named, instances_named, parse_exact, pinned_by, previous_of
+from grimoire.store.replica import (
+    SHADOWED, CanonicalScan, chats_named, image_blob, instance_derivation_of, instances_named, parse_exact, pinned_by,
+    placement_target, previous_of,
+)
 
 from .decide import archive_candidate, decide, derive_base
 from .documents import (
@@ -35,13 +41,17 @@ from .errors import (
     ArchiveTooLarge, IdentityExists, NoDeviceIdentity, ResolveRefused, SameDevice, SyncInterrupted,
     SyncNotQuiet,
 )
-from .model import CAMPAIGN_LOCAL, HELD_BACK_KINDS, HOLDS_RELATIONS, Base, Side
+from .model import ASSET_KINDS, CAMPAIGN_LOCAL, HELD_BACK_KINDS, HOLDS_RELATIONS, Base, Side
 
 _SLOT = re.compile(r"~[0-9a-f]{12}(?:\.([1-9][0-9]*))?$")
+#: Folders of the held-back families (021 accepted events and wrap-ups, 023 holdings).
+_HELD_FOLDERS = frozenset({"accepted", "wrapups", "holdings"})
+_HELD = "held back until 028's merge rules exist"
 
 #: Store refusals that concern one path or unit: that unit becomes ``unapplicable``.
+#: ``InstanceIdConflict``: a copy that would form a cross-kind instance id pair on its receiver (A2).
 PER_PATH_ERRORS = (InvalidSourceState, NameCollision, UnstorableIdentifier, LinkRefused, CrossDevice,
-                   InvalidEnvelope, ImmutableRevision, RevisionReferenced)
+                   InvalidEnvelope, ImmutableRevision, RevisionReferenced, InstanceIdConflict, ImmutableImage)
 #: The largest archive this slice writes (one file under the store's limit; no compaction yet).
 ARCHIVE_LIMIT = MAX_FILE_BYTES
 
@@ -108,15 +118,27 @@ def identify(store: LibraryStore, device_id: str, *, replace: bool = False) -> s
 
 @dataclass(frozen=True)
 class Copy:
+    """One file travelling from ``origin`` to ``dest``. A blob carries no bytes (``data`` is ``None``):
+    ``size`` and the ``source`` library it is loaded from, one at a time, when the commit needs it."""
+
     path: str
     origin: str
     dest: str
-    data: bytes
+    data: bytes | None
     expected: str | None
+    size: int | None = None
+    source: LibraryStore | None = field(default=None, repr=False, compare=False)
 
     @property
     def etag(self) -> str:
-        return etag(self.data)
+        return etag(self.data) if self.data is not None else _blob_etag(self.path)
+
+
+def _blob_etag(path: str) -> str:
+    """A blob's etag is its name: the sha256 of the bytes it must hold."""
+    found = classify(tuple(path.split("/")))
+    assert found is not None and found[0] == "blob"
+    return "sha256:" + found[1][0]  # type: ignore[index]
 
 
 @dataclass(frozen=True)
@@ -188,6 +210,8 @@ def _side(scan, path: str) -> Side:  # type: ignore[no-untyped-def]
     reason = scan.blocked_reason(path)
     if reason is not None:
         return Side.blocked(reason)
+    if path in scan.blobs:  # listed by name and size; ``_plan`` hashes it when it must (_verify_blobs)
+        return Side.present(_blob_etag(path))
     data = scan.files.get(path)
     if data is None:
         return Side.absent()
@@ -225,7 +249,7 @@ def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
     paths: set[str] = set()
     for device in pair:
         scan = scans[device]
-        paths |= {path for path in (*scan.files, *scan.blocked) if syncable(path)}
+        paths |= {path for path in (*scan.files, *scan.blocked, *scan.blobs) if syncable(path)}
         paths |= set(archives[device].entries) | set(pendings[device].entries)
         paths |= archives[device].named | pendings[device].named  # ignored: uncertain, never forgotten
     held = _held_campaigns(scans.values())
@@ -240,21 +264,31 @@ def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
     plan = SyncPlan(pair, stores, scans, archives, pendings, ordered, sides, bases,
                     copies={a: [], b: []}, keeps={a: [], b: []}, notices=notices, skipped=skipped,
                     held={path for path in ordered if _held_relation(path, held)})
+    _verify_blobs(plan)
     for path in ordered:
         if path in plan.held:  # never decided, copied or archived; an uncertain base stays pending
+            if not _identical(sides[path].values()):  # but a divergence is never silent (C1)
+                plan.conflicts[path] = Conflict(path, "held", f"{_HELD}: its campaign has accepted events (021)")
             continue
         decision = decide(syncable(path), bases[path], sides[path][a], sides[path][b])  # type: ignore[arg-type]
         if decision.action == "agreed":
             plan.agreed.add(path)
         elif decision.action == "conflict":
             shadowed = decision.code == "blocked" and any(side.reason == SHADOWED for side in sides[path].values())
+            detail = "; ".join(f"{side.reason} on {device}" for device, side in sides[path].items()
+                               if side.state == "blocked")
             plan.conflicts[path] = (Conflict(path, "name_collision", "a differently spelled entry exists") if shadowed
-                                    else Conflict(path, decision.code or "conflict"))
+                                    else Conflict(path, decision.code or "conflict", detail))
         else:
             origin = a if decision.origin == "left" else b
             dest = other[origin]
-            plan.copies[dest].append(Copy(path, origin, dest, scans[origin].files[path],
-                                          _current(sides[path][dest])))
+            if syncable(path) == "blob":  # never in memory: loaded from the origin when the commit needs it
+                plan.copies[dest].append(Copy(path, origin, dest, None, None, size=scans[origin].blobs[path],
+                                              source=stores[origin]))
+            else:
+                plan.copies[dest].append(Copy(path, origin, dest, scans[origin].files[path],
+                                              _current(sides[path][dest])))
+    _held_families(plan)
     for device in pair:
         _admit(plan, device)
     _group_knowledge(plan)
@@ -265,7 +299,7 @@ def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
             continue  # what remains was already checked as one whole
         txn = stores[device].transaction()
         _stage(txn, plan.copies[device], plan.keeps[device])
-        if txn.preview():
+        if txn.staged():
             error = _preflight(txn, "the combined plan")
             if error is not None:
                 raise SyncInterrupted(f"the planned writes for {device} conflict with each other: {error}")
@@ -277,6 +311,65 @@ def _check_archive_size(pair: tuple[str, str], paths: tuple[str, ...]) -> None:
     estimate = len(paths) * 300 + sum(len(path.encode("utf-8")) for path in paths)
     if estimate > ARCHIVE_LIMIT:
         raise ArchiveTooLarge(f"an archive of {len(paths)} paths would exceed {ARCHIVE_LIMIT} bytes")
+
+
+def _identical(sides) -> bool:  # type: ignore[no-untyped-def]
+    """Both devices hold the same bytes, or both lack the file. A blocked side always differs."""
+    found = list(sides)
+    return (all(side.state == "absent" for side in found)
+            or (all(side.state == "present" for side in found) and len({side.etag for side in found}) == 1))
+
+
+def _verify_blobs(plan: SyncPlan) -> None:
+    """Hash a blob at copy or first sight; otherwise trust this pair's agreement (C2).
+
+    A device's blob is read and hashed unless both devices list it at one size and the base already
+    records that very content as agreed. So a blob about to be copied is always hashed on its origin,
+    a blob this pair has not yet verified together is hashed on each side that lists it, and an agreed
+    one is read by no later sync. A hash mismatch (or any read failure) blocks that side (``corrupt``).
+    """
+    a, b = plan.devices
+    for path in plan.paths:
+        if syncable(path) != "blob":
+            continue
+        sides = plan.sides[path]
+        listed = [device for device in plan.devices if sides[device].state == "present"]
+        name = _blob_etag(path)
+        if (len(listed) == 2 and plan.scans[a].blobs[path] == plan.scans[b].blobs[path]  # type: ignore[attr-defined]
+                and plan.bases[path] == Base("agreed", name)):
+            continue  # trusted: verified when it was copied or first seen, and unchanged in size since
+        changed = False
+        for device in listed:
+            try:
+                plan.stores[device].verify_blob(path)
+            except (StoreError, OSError, ValueError) as error:
+                sides[device] = Side.blocked("corrupt" if isinstance(error, BlobCorrupt) else "unreadable")
+                changed = True
+        if changed:
+            plan.bases[path] = derive_base(path, (plan.archives[a], plan.archives[b]), (plan.pendings[a], plan.pendings[b]),
+                                           (_current(sides[a]), _current(sides[b])))
+
+
+def _held_families(plan: SyncPlan) -> None:
+    """021 accepted events and wrap-ups and 023 holdings are never copied (their merge rules are 028's),
+    but a path the two devices hold differently is a ``held`` conflict, never silent (C1). A held-family
+    folder that cannot be listed (in any spelling, or a campaign folder, ``campaigns`` or the root) is a
+    ``held`` conflict on that folder: what diverged there is unknowable. Nothing is decided, copied, kept
+    or archived for them; they stay listed in ``skipped`` too."""
+    scans = [plan.scans[device] for device in plan.devices]
+    family = sorted({path for scan in scans for path in (*scan.files, *scan.blocked)
+                     if _kind(path) in HELD_BACK_KINDS})
+    for path in family:
+        if not _identical(_side(scan, path) for scan in scans):
+            plan.conflicts[path] = Conflict(path, "held", f"{_HELD}: 021/023 commit several files as one unit")
+    for scan in scans:
+        for path in scan.blocked:
+            parts = path.split("/")
+            if path in ("", "campaigns") or (parts[0] == "campaigns" and (
+                    len(parts) == 2 or (len(parts) >= 3 and parts[2].casefold() in _HELD_FOLDERS))):
+                if _kind(path) not in HELD_BACK_KINDS:  # a file is already decided above
+                    plan.conflicts.setdefault(path, Conflict(path, "held", f"{_HELD}: this folder cannot be listed, "
+                                                             "so what diverged in it is unknown"))
 
 
 def _preflight(txn, what: str) -> BaseException | None:  # type: ignore[no-untyped-def]
@@ -292,7 +385,12 @@ def _preflight(txn, what: str) -> BaseException | None:  # type: ignore[no-untyp
 
 def _stage(txn, copies: list[Copy], keeps: list[Keep]) -> None:  # type: ignore[no-untyped-def]
     for copy in copies:  # the origin still holds these bytes: an aborted commit drops, never parks, them
-        txn.put_exact(copy.path, copy.data, copy.expected, regenerable=True)
+        if copy.data is None:  # a blob: loaded from the origin only when the commit needs its bytes
+            assert copy.source is not None and copy.size is not None and copy.expected is None
+            txn.put_blob_exact(copy.path, functools.partial(copy.source.read_blob_exact, copy.path, copy.size),
+                               size=copy.size)
+        else:
+            txn.put_exact(copy.path, copy.data, copy.expected, regenerable=True)
     for keep in keeps:
         txn.keep_version(keep.path, keep.data, slot=keep.slot, regenerable=True)  # the peer still holds them
 
@@ -323,7 +421,9 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
       chat a batch came from) that the origin holds is present on ``dest``, already or copied in
       the same commit;
     - a 020 knowledge record's campaign exists on ``dest`` (a scope or an instance, 020's own test)
-      whenever it exists on the origin.
+      whenever it exists on the origin;
+    - 018 art (``_art_needs``) has every file it needs identical, or present, on ``dest``: sync never
+      creates a state the 018 batch would refuse.
     A path blocked on either side is never read as present or absent: the dependency is unmet.
     Holding one copy can unmeet another's dependency, so this repeats until nothing changes.
     """
@@ -337,16 +437,26 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
 
         def final(path: str) -> bytes | None:
             return by_path[path].data if path in by_path else dest_files.get(path)
+
+        def final_etag(path: str) -> str | None:
+            return by_path[path].etag if path in by_path else _etag_on(plan, dest, path)
         newly = {}
         for copy in kept:
             origin_files = plan.scans[copy.origin].files  # type: ignore[attr-defined]
             parts = tuple(copy.path.split("/"))
-            heads = set(_manifest_heads(copy)) if syncable(copy.path) == "manifest" else set()
-            pins = {"/".join(definition_parts(ref)) for ref in pinned_by(parts, copy.data)}
             origin_scan, dest_scan = plan.scans[copy.origin], plan.scans[dest]
 
             def blocked(path: str) -> bool:  # unknown on either side: never read as "absent on both"
-                return origin_scan.blocked_reason(path) is not None or dest_scan.blocked_reason(path) is not None
+                return (origin_scan.blocked_reason(path) is not None or dest_scan.blocked_reason(path) is not None
+                        or any(side.state == "blocked" for side in plan.sides.get(path, {}).values()))
+            if syncable(copy.path) in ASSET_KINDS:
+                why = _art_unmet(_art_needs(copy.path, copy.data, origin_files), blocked, final_etag,
+                                 lambda path, origin=copy.origin: _etag_on(plan, origin, path), here, dest)
+                if why:
+                    newly[copy.path] = why
+                continue
+            heads = set(_manifest_heads(copy)) if syncable(copy.path) == "manifest" else set()
+            pins = {"/".join(definition_parts(ref)) for ref in pinned_by(parts, copy.data)}  # type: ignore[arg-type]
             missing = sorted(path for path in pins | heads if final(path) != origin_files.get(path) or blocked(path)
                              or (path in heads and origin_files.get(path) is None))
             actors = sorted(path for path in [*_named_paths(parts, copy.data), *_home_scope(copy.path)]
@@ -379,6 +489,143 @@ def _home_scope(path: str) -> list[str]:
 def _campaigns_with_state(paths) -> set[str]:  # type: ignore[no-untyped-def]
     """The campaigns with real state among ``paths``: a scope or an instance (020's existence test)."""
     return {path.split("/")[1] for path in paths if syncable(path) in ("scope", "instance")}
+
+
+def _etag_on(plan: SyncPlan, device: str, path: str) -> str | None:
+    """What ``device`` holds at ``path`` (a blob as verified or trusted by ``_verify_blobs``)."""
+    side = plan.sides.get(path, {}).get(device)
+    if side is not None:
+        return side.etag if side.state == "present" else None
+    data = plan.scans[device].files.get(path)  # type: ignore[attr-defined]
+    return None if data is None else etag(data)
+
+
+@dataclass(frozen=True)
+class _Needs:
+    """What one 018 art file needs on the receiving device (the 018 batch's W5-W9, structurally)."""
+
+    identical: frozenset[str] = frozenset()  # the receiver must hold exactly the origin's bytes
+    present: frozenset[str] = frozenset()  # the receiver must hold some version
+    campaign: str | None = None  # this campaign must have state (a scope or an instance) there
+    hold: str | None = None  # the origin itself is in a state the batch refuses: never copied
+
+
+def _art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes]) -> _Needs:
+    """The files a blob, image object or placement needs (docs/SYNC.md, "Art"), read from the
+    origin's bytes. Everything the resolver reads for it must be identical, so it resolves the same
+    on both devices; a placement the 018 batch would refuse there (W7 scope, unreadable payload, an
+    adjust with nothing inherited) is held."""
+    kind = syncable(path)
+    if kind == "blob" or data is None:
+        return _Needs()  # content-addressed: needs nothing
+    found = classify(tuple(path.split("/")))
+    assert found is not None
+    identical: set[str] = set()
+    present: set[str] = set()
+
+    def art(image: ImageRef) -> str | None:  # W6: the image object and its blob, as the origin holds them
+        try:
+            image_path = "/".join(image_parts(image))
+        except (ValueError, UnstorableIdentifier):
+            return f"{image} cannot be stored"
+        image_data = origin.get(image_path)
+        blob = None if image_data is None else image_blob(image_data)
+        if blob is None:
+            return f"{image} or its blob is not readable on the origin"
+        identical.update((image_path, "/".join(blob)))
+        return None
+
+    def done(hold: str | None = None, campaign: str | None = None) -> _Needs:
+        return _Needs(frozenset(identical), frozenset(present), campaign, hold)
+    if kind == "image":
+        ref = found[1]
+        assert isinstance(ref, ImageRef)
+        blob = image_blob(data)
+        if blob is None:
+            return done("it names no storable blob")
+        identical.add("/".join(blob))
+        if ref.campaign_id is not None:
+            return done(campaign=ref.campaign_id)
+        present.add("/".join(manifest_parts(ref.scope)))
+        return done()
+    ref = found[1]
+    assert isinstance(ref, PlacementRef)
+    mode, image, readable = placement_target(data)
+    if not readable:
+        return done("its mode or image cannot be read")
+    subject = ref.subject
+    if isinstance(subject, SourceRef):  # W5 (source admitted, entity exists), W7, W6
+        present.add("/".join(manifest_parts(subject.source)))
+        head = _entity_head(origin, subject)
+        if head is None:
+            return done(f"{subject} has no head revision on the origin")
+        identical.add(head)
+        if image is not None:
+            if image.scope != subject.source:
+                return done(f"{image} is not in scope for {subject}")
+            return done(art(image))
+        return done()
+    assert isinstance(subject, InstanceRef)
+    instance = "/".join(instance_parts(subject))
+    present.add(instance)  # W5; a pair-blocked instance is unknown, so the placement is held (A2)
+    if mode != "adjust" and (image is None or image.scope == f"campaign:{subject.campaign_id}"):
+        return done(None if image is None else art(image))
+    # inherited source art (W7 through the instance's derivation) or an adjust of it (W9): the
+    # derivation, the entity and (for adjust) the source placement must mean the same on both sides
+    instance_data = origin.get(instance)
+    if instance_data is None:
+        return done(f"{subject} is not readable on the origin")
+    entity, problem = instance_derivation_of(instance_data)
+    if entity is None or image is None or image.scope != entity.source:
+        return done(f"{image} is not in scope for {subject} ({problem or 'not its derivation source'})")
+    head = _entity_head(origin, entity)
+    if head is None:
+        return done(f"{entity} has no head revision on the origin")
+    identical.update((instance, "/".join(manifest_parts(entity.source)), head))
+    hold = art(image)
+    if hold is None and mode == "adjust":
+        inherited = "/".join(placement_parts(PlacementRef(entity, ref.slot)))
+        inherited_data = origin.get(inherited)
+        _, base_image, ok = placement_target(inherited_data) if inherited_data is not None else (None, None, False)
+        if not ok or base_image is None:
+            return done(f"{entity} has no picture in {ref.slot!r} to adjust on the origin")
+        identical.add(inherited)
+        hold = art(base_image)
+    return done(hold)
+
+
+def _entity_head(origin: Mapping[str, bytes], entity: SourceRef) -> str | None:
+    """The revision file the origin's manifest names as ``entity``'s head, or its sole revision."""
+    manifest = origin.get("/".join(manifest_parts(entity.source)))
+    if manifest is not None:
+        try:
+            heads = parse_exact(manifest_parts(entity.source), manifest).head_refs()  # type: ignore[union-attr]
+        except (StoreError, ValueError):
+            return None
+        revision = heads.get(entity.unpinned())
+        if revision is not None:
+            try:
+                return "/".join(definition_parts(entity.at(revision)))
+            except (ValueError, UnstorableIdentifier):
+                return None
+    prefix = "/".join(definition_parts(entity.at("x"))[:-1]) + "/"
+    revisions = [path for path in origin if path.startswith(prefix) and syncable(path) == "definition"]
+    return revisions[0] if len(revisions) == 1 else None
+
+
+def _art_unmet(needs: _Needs, blocked, final, origin, here: set[str], dest: str) -> str:  # type: ignore[no-untyped-def]
+    """Why ``needs`` do not hold on ``dest`` ("" when they do). ``final(path)``: the etag ``dest`` will
+    hold; ``origin(path)``: the etag the origin holds; ``blocked(path)``: unknown on either side."""
+    if needs.hold is not None:
+        return f"018 art the batch would refuse: {needs.hold}"
+    unequal = sorted(path for path in needs.identical
+                     if blocked(path) or origin(path) is None or final(path) != origin(path))
+    absent = sorted(path for path in needs.present if blocked(path) or final(path) is None)
+    if needs.campaign is not None and needs.campaign not in here:
+        absent.append(f"campaigns/{needs.campaign} (no scope or instance)")
+    what = (["art it shows not identical on " + dest + ": " + ", ".join(unequal)] if unequal else [])
+    what += (["owner or subject missing on " + dest + ": " + ", ".join(absent)] if absent else [])
+    return "; ".join(what)
 
 
 def _admit(plan: SyncPlan, dest: str) -> None:
@@ -416,30 +663,46 @@ def _admit_units(store: LibraryStore, copies: list[Copy]) -> tuple[list[Copy], l
     """Admit copies unit by unit; returns the admitted copies and each refused copy's reason.
 
     A unit is one campaign-local record, one manifest with the head revisions it names among
-    ``copies``, or the other revisions of one entity. Campaign-local units and sources are checked
-    on their own; when a source fails as a whole, its units are admitted cumulatively (manifest
-    units first), so two units that are each acceptable but not together are never both admitted.
-    Manifests that link to other sources are then admitted cumulatively in sorted order, so a
-    cross-source link cycle is caught. The caller runs one combined check of everything admitted.
+    ``copies``, the other revisions of one entity, or one 018 art file. Campaign-local records other
+    than instances are checked alone; the instances of one campaign are admitted cumulatively in
+    sorted path order, so two that would form a cross-kind pair never both pass (A2). Sources are
+    checked on their own; when a source fails as a whole, its units are admitted cumulatively
+    (manifest units first), so two units that are each acceptable but not together are never both
+    admitted. Manifests that link to other sources are then admitted cumulatively in sorted order, so
+    a cross-source link cycle is caught. Each art file is checked once, over the accepted copies its
+    owner needs. The caller runs one combined check of everything admitted.
     """
     by_path = {copy.path: copy for copy in copies}
     heads = {copy.path: [path for path in _manifest_heads(copy) if path in by_path]
              for copy in copies if syncable(copy.path) == "manifest"}
     admitted: list[Copy] = []
     rejected: list[tuple[Copy, BaseException]] = []
-    for copy in (copy for copy in copies if syncable(copy.path) in CAMPAIGN_LOCAL):  # independent: alone
+
+    def admit(copy: Copy, over: list[Copy], what: str) -> bool:
         txn = store.transaction()
-        _stage(txn, [copy], [])
-        error = _preflight(txn, copy.path)
-        if error is None:
-            admitted.append(copy)
-        else:
+        _stage(txn, [*over, copy], [])
+        error = _preflight(txn, what)
+        if error is not None:
             rejected.append((copy, error))
+        return error is None
+    for copy in copies:  # independent of each other: alone
+        if syncable(copy.path) in CAMPAIGN_LOCAL - {"instance"} and admit(copy, [], copy.path):
+            admitted.append(copy)
+    instances: dict[str, list[Copy]] = {}
+    for copy in copies:
+        if syncable(copy.path) == "instance":
+            instances.setdefault(copy.path.split("/")[1], []).append(copy)
+    for campaign in sorted(instances):  # cumulative, in path order: two that form an id pair never both pass (A2)
+        mine: list[Copy] = []
+        for copy in sorted(instances[campaign], key=lambda copy: copy.path):
+            if admit(copy, mine, copy.path):
+                mine.append(copy)
+        admitted.extend(mine)
     sources: dict[str, list[list[Copy]]] = {}
     in_manifest_unit = {path for paths in heads.values() for path in paths}
     for copy in copies:
         kind = syncable(copy.path)
-        if kind in CAMPAIGN_LOCAL or copy.path in in_manifest_unit:
+        if kind in CAMPAIGN_LOCAL | ASSET_KINDS or copy.path in in_manifest_unit:
             continue
         if kind == "manifest":
             units = sources.setdefault(_source_of(copy.path), [])
@@ -483,7 +746,30 @@ def _admit_units(store: LibraryStore, copies: list[Copy]) -> tuple[list[Copy], l
         else:
             rejected.extend((copy, error) for copy in unit)
     accepted += linked
-    return sorted(admitted + accepted, key=lambda copy: copy.path), rejected
+    # 018 art: each file its own unit, over what its owner needs from this commit (a source's accepted
+    # copies, a campaign's accepted scope and instances). Art never constrains other art at store level.
+    art: list[Copy] = []
+    for copy in (copy for copy in copies if syncable(copy.path) in ASSET_KINDS):
+        owner = _asset_owner(copy.path)
+        over = ([] if owner is None else
+                [other for other in accepted if _source_of(other.path) == owner[1]] if owner[0] == "source" else
+                [other for other in admitted if syncable(other.path) in ("scope", "instance")
+                 and other.path.split("/")[1] == owner[1]])
+        if admit(copy, over, copy.path):
+            art.append(copy)
+    return sorted(admitted + accepted + art, key=lambda copy: copy.path), rejected
+
+
+def _asset_owner(path: str) -> tuple[str, str] | None:
+    """``("source", id)`` or ``("campaign", id)`` for an image object or placement; ``None`` for a blob."""
+    found = classify(tuple(path.split("/")))
+    if found is None or found[0] not in ("image", "placement"):
+        return None
+    ref = found[1]
+    if isinstance(ref, ImageRef):
+        return ("campaign", ref.campaign_id) if ref.campaign_id is not None else ("source", ref.scope)
+    subject = ref.subject  # type: ignore[union-attr]
+    return ("campaign", subject.campaign_id) if isinstance(subject, InstanceRef) else ("source", subject.source)
 
 
 def _links_out(unit: list[Copy]) -> bool:
@@ -513,6 +799,8 @@ def _plan_keeps(plan: SyncPlan, device: str) -> None:
     other, store = plan.other(device), plan.stores[device]
     keeps: list[Keep] = []
     for path, conflict in sorted(plan.conflicts.items()):
+        if conflict.code == "held" or syncable(path) == "blob":
+            continue  # held: nothing is kept until 028 (C1); a blob's name is its content, never kept
         side = plan.sides[path][other]
         mine = plan.sides[path][device]
         if side.state != "present" or (mine.state == "blocked" and mine.reason == "unreadable"):
@@ -730,11 +1018,12 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
 
     def on_denied(keys: frozenset[str]) -> dict[str, bytes | None]:
         denied = {key for key in keys if not key.startswith("kept/")}
-        sources = {_source_of(path) for path in denied if syncable(path) not in CAMPAIGN_LOCAL}
+        own_units = CAMPAIGN_LOCAL | ASSET_KINDS  # never source-coarse: art is denied only for itself
+        sources = {_source_of(path) for path in denied if syncable(path) not in own_units}
         logs = {_knowledge_campaign(path) for path in denied} - {None}  # a log is one unit, too
         changes: dict[str, bytes | None] = {}
         for copy in copies:
-            if copy.path in denied or (syncable(copy.path) not in CAMPAIGN_LOCAL
+            if copy.path in denied or (syncable(copy.path) not in own_units
                                        and _source_of(copy.path) in sources) or _knowledge_campaign(copy.path) in logs:
                 dropped.add(copy.path)
                 if copy.path not in denied:
@@ -811,9 +1100,12 @@ def _kept_key(keep: Keep) -> object:
     return kept_address(tuple(keep.path.split("/")), etag(keep.data), keep.slot)
 
 
-def _source_of(path: str) -> str:
+def _source_of(path: str) -> str | None:
+    """The source a definition or manifest belongs to; ``None`` for 018 art (own units, see ``_asset_owner``)."""
     found = classify(tuple(path.split("/")))
     assert found is not None
+    if found[0] in ASSET_KINDS:
+        return None
     return found[1] if found[0] == "manifest" else found[1].source  # type: ignore[return-value, union-attr]
 
 
@@ -821,15 +1113,15 @@ def _verify(plan: SyncPlan, applied: _Applied) -> None:
     """Re-read every file this sync published or kept; its bytes must be the planned ones."""
     for device in plan.devices:
         store = plan.stores[device]
-        checks = [(copy.path, copy.data) for copy in applied.published.get(device, [])]
-        checks += [("/".join(conflict_parts(tuple(keep.path.split("/")), etag(keep.data), keep.slot)), keep.data)
+        checks = [(copy.path, copy.etag) for copy in applied.published.get(device, [])]
+        checks += [("/".join(conflict_parts(tuple(keep.path.split("/")), etag(keep.data), keep.slot)), etag(keep.data))
                    for keep in applied.kept.get(device, [])]
-        for path, data in checks:
+        for path, tag in checks:
             try:
                 found = store.read_exact(path)
             except NameCollision:  # renamed to a look-alike since it was published
                 found = None
-            if found is None or etag(found) != etag(data):
+            if found is None or etag(found) != tag:
                 raise SyncInterrupted(f"verification failed on {device}: {path} does not hold the planned bytes",
                                       _report(plan, applied))
 
@@ -978,6 +1270,9 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     The other device receives those bytes and keeps its replaced version under ``.conflicts``,
     in one transaction; both archives then record the agreement. See docs/SYNC.md for refusals.
     """
+    if _kind(path) in HELD_BACK_KINDS:  # before anything else: these paths are never synced at all
+        raise ResolveRefused(f"{path} is {_HELD} (021/023 commit several files as one unit); the conflict "
+                             "ends when both devices hold identical bytes")
     kind = syncable(path)
     if kind is None:
         raise ResolveRefused(f"{path} is not a synchronized record")
@@ -988,8 +1283,9 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     pair: tuple[str, str] = tuple(sorted(ids))  # type: ignore[assignment]
     scans = {device: stores[device].scan() for device in pair}
     if kind == "relation" and _held_relation(path, _held_campaigns(scans.values())):  # the scans decided from
-        raise ResolveRefused(f"{path} is held back: its campaign has accepted events (021), and a relation "
-                             "they changed must never arrive without them")
+        raise ResolveRefused(f"{path} is {_HELD}: its campaign has accepted events (021), and a relation they "
+                             "changed must never arrive without them; the conflict ends when both devices hold "
+                             "identical bytes")
     sides = {device: _side(scans[device], path) for device in pair}
     for device, side in sides.items():
         if side.state == "blocked":
@@ -1013,10 +1309,20 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         raise ResolveRefused(f"{path} is already identical on both devices")
     winner = winners[0]
     receiver = pair[1] if winner == pair[0] else pair[0]
-    data = scans[winner].files[path]
-    mine = scans[receiver].files.get(path)
     txn = stores[receiver].transaction()
     resolved = [path]
+    data: bytes | None = None
+    mine: bytes | None = None
+    if kind == "blob":
+        if sides[receiver].state != "absent":  # unreachable by etag choice; kept as a guard
+            raise ResolveRefused(f"{path} is a content-addressed blob {receiver} already holds; repair_blob "
+                                 "fixes a corrupt one")
+        size = scans[winner].blobs[path]  # type: ignore[attr-defined]
+        _verified(stores[winner], path, winner)
+        txn.put_blob_exact(path, functools.partial(stores[winner].read_blob_exact, path, size), size=size)
+    else:
+        data = scans[winner].files[path]
+        mine = scans[receiver].files.get(path)
     if kind == "knowledge":
         resolved = _knowledge_log_copies(scans, winner, receiver, path)  # the whole log unit, create-only
         for done in resolved:
@@ -1024,13 +1330,20 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     elif kind == "definition":
         # A manifest byte-identical on both devices names the same revision id on both: once the
         # receiver holds the winner's bytes, that reference means the same thing everywhere.
-        manifest = "/".join(manifest_parts(_source_of(path)))
+        manifest = "/".join(manifest_parts(_source_of(path)))  # type: ignore[arg-type]
         same = scans[receiver].files.get(manifest)
         allowed = frozenset({etag(same)}) if same is not None and same == scans[winner].files.get(manifest) else frozenset()
-        txn.put_exact(path, data, None if mine is None else etag(mine), replace_unreferenced=mine is not None,
+        txn.put_exact(path, data, None if mine is None else etag(mine), replace_unreferenced=mine is not None,  # type: ignore[arg-type]
                       regenerable=True, allowed_manifests=allowed)
-    else:
-        txn.put_exact(path, data, None if mine is None else etag(mine), regenerable=True)
+    elif kind == "image":
+        if mine is not None:
+            raise ResolveRefused(f"{path} is a create-only image object both devices hold differently: a "
+                                 "different picture is a new image object")
+        txn.put_exact(path, data, None, regenerable=True)  # type: ignore[arg-type]
+    elif kind != "blob":
+        txn.put_exact(path, data, None if mine is None else etag(mine), regenerable=True)  # type: ignore[arg-type]
+    if kind in ("image", "placement"):  # sync's dependency rule for art, on the receiver
+        _resolve_art(stores, scans, winner, receiver, path, data)  # type: ignore[arg-type]
     if kind == "manifest":
         for head in _manifest_heads(Copy(path, winner, receiver, data, None)):
             theirs, ours = scans[winner].files.get(head), scans[receiver].files.get(head)
@@ -1042,6 +1355,8 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             elif ours != theirs:
                 raise ResolveRefused(f"{head} differs between the devices; resolve it first")
     for done in resolved:  # every record resolve writes, head revisions included: sync's dependency rule
+        if syncable(done) in ASSET_KINDS:
+            continue  # art never pins a revision or names an actor (``_resolve_art`` checked its needs)
         written = scans[winner].files[done]
         for pinned in sorted({"/".join(definition_parts(ref)) for ref in pinned_by(tuple(done.split("/")), written)}
                              - set(resolved)):
@@ -1062,10 +1377,12 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     # Like a sync's copy, the resolve's copy is marked in the same commit: if the archives are not
     # written after it (a crash, a held file), the next sync still knows the peer held these bytes,
     # and a revert on either device is a conflict rather than an "unchanged" side.
+    tags = {done: _blob_etag(done) if syncable(done) == "blob" else etag(scans[winner].files[done])
+            for done in resolved}
     marked = dict(pendings[receiver].entries)
     for done in resolved:
-        theirs, ours = scans[winner].files[done], scans[receiver].files.get(done)
-        marked[done] = {"from": None if ours is None else etag(ours), "to": etag(theirs),
+        ours = scans[receiver].files.get(done)
+        marked[done] = {"from": None if ours is None else etag(ours), "to": tags[done],
                         "base": _archived(archive_candidate(done, *archived))}
     old_marker = pendings[receiver].data
     txn.put_sync_state(pending_name(other[receiver]), render_pending(pair, marked),
@@ -1091,7 +1408,7 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             raise SyncInterrupted(f"the archive on {device} changed during resolve")
         entries = dict(archive.entries)
         for done in resolved:
-            entries[done] = ("agreed", etag(scans[winner].files[done]))
+            entries[done] = ("agreed", tags[done])
         rendered = render_archive(pair, entries)
         if rendered != archive.data:
             state = store.transaction()
@@ -1109,6 +1426,35 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             etag(pending.data))  # type: ignore[arg-type]
         _commit_state(state, device)
     return receiver
+
+
+def _verified(store: LibraryStore, path: str, device: str) -> str:
+    """A blob's etag after hashing it; ``ResolveRefused`` if it is corrupt or unreadable."""
+    try:
+        return store.verify_blob(path)
+    except (StoreError, OSError, ValueError) as error:
+        raise ResolveRefused(f"{path} is not a readable, intact blob on {device}: {error}") from error
+
+
+def _resolve_art(stores: Mapping[str, LibraryStore], scans: Mapping[str, CanonicalScan], winner: str, receiver: str,
+                 path: str, data: bytes) -> None:
+    """``resolve`` delivers an image object or placement only where sync would copy it (``_art_needs``):
+    every file it needs identical on both devices and blocked on neither (blobs hashed on the
+    receiver), every owner or subject it needs present on the receiver."""
+    needs = _art_needs(path, data, scans[winner].files)
+
+    def held(where: str) -> bool:
+        return any(scans[device].blocked_reason(where) is not None for device in scans)
+
+    def tag(device: str, where: str) -> str | None:
+        if where in scans[device].blobs:  # type: ignore[attr-defined]
+            return _verified(stores[device], where, device) if device == receiver else _blob_etag(where)
+        found = scans[device].files.get(where)
+        return None if found is None else etag(found)
+    here = _campaigns_with_state(scans[receiver].files)
+    why = _art_unmet(needs, held, lambda where: tag(receiver, where), lambda where: tag(winner, where), here, receiver)
+    if why:
+        raise ResolveRefused(f"{path} cannot be resolved on {receiver} yet: {why}; sync or resolve those first")
 
 
 def _knowledge_log_copies(scans: Mapping[str, CanonicalScan], winner: str, receiver: str, path: str) -> list[str]:

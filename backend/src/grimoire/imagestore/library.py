@@ -28,6 +28,7 @@ from grimoire.store import (
     SourceFacts, StoredSource, StoreError, TakenIdsUnlisted, UnstorableIdentifier, UnsupportedFormat,
 )
 from grimoire.store.layout import address_parts, blob_parts, classify, manifest_parts
+from grimoire.store.replica import instance_derivation
 
 BlobKey = tuple[str, str]  # (sha256, ext)
 
@@ -276,18 +277,9 @@ class _Disk:
 
 
 def derivation(envelope: RecordEnvelope) -> tuple[SourceRef | None, str | None]:
-    """The unpinned entity an instance derives from (``derived_from``, else ``base``) or a problem code."""
-    entities = set()
-    for text in (envelope.derived_from, envelope.base):
-        if text is None:
-            continue
-        try:
-            entities.add(SourceRef.parse(text).unpinned())
-        except ValueError:
-            return None, "invalid_derivation"
-    if len(entities) > 1:
-        return None, "ambiguous_derivation"
-    return (entities.pop(), None) if entities else (None, None)
+    """The unpinned entity an instance derives from (``derived_from``, else ``base``) or a problem code.
+    One rule with sync's (``replica.instance_derivation``), so the two never disagree about W7."""
+    return instance_derivation(envelope.derived_from, envelope.base)
 
 
 # -- the batch ---------------------------------------------------------------------------------

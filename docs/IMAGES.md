@@ -160,7 +160,7 @@ The resolver is pure (`grimoire.images.resolve`). It checks a blob's presence an
   - Blobs live at the library-global `assets/blobs/…`. A grant on `sources/<s>` or `campaigns/<c>` never covers them: each new blob needs an approval or an `assets` grant.
   - A deduplicated blob is not re-staged, so no new byte approval happens for it.
   - `preview()` therefore reveals whether identical bytes already exist. That is acceptable only because the service is trusted code.
-- **Self-containment.** A source folder no longer carries its own bytes. Moving or removing it leaves its blobs in `assets/`. Transplanting it to another library resolves `missing_blob` until its blobs are copied. Garbage collection and transfer are deferred.
+- **Self-containment.** A source folder no longer carries its own bytes. Moving or removing it leaves its blobs in `assets/`. Transplanting it to another library by hand resolves `missing_blob` until its blobs are copied. [Device sync](SYNC.md#art) carries blobs with the images and placements that need them, and never delivers a picture without its blob. Garbage collection is deferred.
 - **Privacy.** Tests use synthetic byte strings and the existing synthetic V1 fixture only.
 
 ## V0.2.1 mapping (for 026)
@@ -198,4 +198,4 @@ The [inventory](MIGRATION_INVENTORY.md) rows map as follows. Test-only adapter: 
   - There is no unplace or delete, because the store has no deletes. A source avatar can be removed only by hand.
   - Direct store use (not the service) of a blob create or repair over a hand-placed file larger than 32 MiB reads that file whole during the commit.
   - **Placement subject ids stay taken.** `placement_subject_ids(store, campaign_id)` returns every id with a campaign placement folder (`placements/<kind>/<id>/`) from listings only, and a look-alike folder keeps the id it folds to. It is part of the one reservation set, [`campaign_taken_ids`](CHATS.md#taken-instance-ids), so a hand-deleted actor's id never goes to a new individual who would show the old one's `hide` or `set` art. A folder that could hold a subject but is a link or cannot be listed raises `TakenIdsUnlisted`.
-- **Later milestones:** gallery ordering and collections; expression manifests and outfit sets; captions and subjects; scene art; legacy loose images; cross-source portrayal inheritance (022); blob garbage collection; dimension probing; image generation; and blob transfer by sync (019/028).
+- **Later milestones:** gallery ordering and collections; expression manifests and outfit sets; captions and subjects; scene art; legacy loose images; cross-source portrayal inheritance (022); blob garbage collection; dimension probing; and image generation. Image objects, placements and blobs are synced between devices ([SYNC](SYNC.md#art)).

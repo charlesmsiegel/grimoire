@@ -417,7 +417,8 @@ def test_021_an_unlistable_campaigns_folder_holds_every_relation(tmp_path):
         make_dir_link(phone.root / "campaigns", tmp_path / "phone-campaigns")
         report = sync(desktop, phone, handles())
         assert set(relations) <= set(report.skipped[DESKTOP])
-        assert not [conflict for conflict in report.conflicts if conflict.path in relations]
+        # C1: never decided, but reported: the phone's side is unknown, so each relation is a held conflict
+        assert {conflict.code for conflict in report.conflicts if conflict.path in relations} == {"held"}
         assert not any("/relations/" in str(path) for path in phone.conflicts())
     finally:
         desktop.close()

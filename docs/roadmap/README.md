@@ -122,6 +122,8 @@ We still target the first **playable migrated desktop text campaign in Wave 5** 
 
 - **019 first slice:** `grimoire.sync`, a headless, transport-free revision and conflict core for two locally open libraries ([SYNC.md](../SYNC.md)). It proves keep-both conflicts and crash convergence under the 006 harness. It is not phone sync: transport and pairing belong to 028.
 - 019 synchronizes 107's play-scope and chat records too; derived navigation indexes are never synced.
+- 019 also synchronizes 018's image objects, placements and blobs. 021 accepted events and wrap-ups and 023 holdings stay held back (reported as `held` conflicts) until [028](sprints/app-managed-device-sync.md#inherited-from-019), which inherits their merge rules.
+- **Unscheduled prerequisites, awaiting a decision:** 021's next slice (holdings operations, ability costs, `attempt_id` charged once), needed by 029 and 030, and 020's claim-shape persistence, needed by 031, are not on any wave yet.
 
 ### Wave 4 — Card/scenario import, V1 migration, independent NPC generation and peer transfer
 

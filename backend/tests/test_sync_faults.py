@@ -45,7 +45,7 @@ import pytest
 
 from grimoire.core.identity import InstanceRef
 
-from store_helpers import EXHAUSTIVE_RECOVERY, WREN_R1, drop_empty_dirs, instance
+from store_helpers import EXHAUSTIVE_RECOVERY, WREN_R1, drop_empty_dirs, instance, owner_handle
 from sync_helpers import (
     DESKTOP, PATHS, PHONE, WREN_A, WREN_B, chat_record, edit_instance, handle, handles, make_pair, new_revision,
     put,
@@ -596,3 +596,80 @@ def test_resolve_survives_a_crash_or_error_at_every_commit_boundary(tmp_path, ki
                              select=_select(points, {"before", "after", "fail"}))
     report.assert_ok()
     assert report.points_explored >= 8  # data, archive(b), archive(a), pending(b), pending(a)
+
+
+# -- C2: a sync copying 018 art (one blob, one image object, one placement) under the harness ------------
+
+_ART_HANDLES = {device: owner_handle("sources", "campaigns", "assets", "kept") for device in DEVICES}
+
+
+@functools.cache
+def _art_fixture() -> tuple[tuple[str, bytes | None], ...]:
+    """The desktop adds a campaign picture and places it; the phone (synced before) lacks all three."""
+    from grimoire.images import Placement
+    from grimoire.imagestore import ImageLibrary
+    from image_fixtures import PNG, WREN_A as ART_SUBJECT, seed as seed_art
+    from store_helpers import OWNER
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        desktop, phone = LibraryStore.create(root / DESKTOP), LibraryStore.create(root / PHONE)
+        seed_art(desktop)
+        identify(desktop, DESKTOP)
+        identify(phone, PHONE)
+        assert sync_until_quiet(desktop, phone, _ART_HANDLES).conflicts == ()
+        batch = ImageLibrary(desktop, _ART_HANDLES[DESKTOP], owner=OWNER).change()
+        ref = batch.add_image("campaign:c1", "wren", PNG)
+        batch.place(ART_SUBJECT, "avatar", Placement("set", "avatar", ref), None)
+        batch.commit()
+        desktop.close(), phone.close()
+        return tuple(snapshot(root).items())
+
+
+def _art_setup(ops, root):
+    for key, data in _art_fixture():
+        if data is None:
+            ops.make_dirs(root / key)
+        else:
+            ops.write_bytes(root / key, data)
+
+
+def _art_whole(outcome):
+    """Art never lands by halves: a placement's image and blob are there, and a blob holds its name's bytes."""
+    import hashlib
+    from grimoire.store.layout import classify
+    for key, value in outcome.recovered.items():
+        device, _, path = key.partition("/")
+        found = classify(tuple(path.split("/")))
+        if value is None or found is None:
+            continue
+        if found[0] == "blob" and hashlib.sha256(value).hexdigest() != found[1][0]:
+            return f"{key} does not hold the bytes its name says"
+        if found[0] == "placement" and (outcome.recovered.get(f"{device}/campaigns/c1/images/wren.json") is None or not [
+                other for other in outcome.recovered if other.startswith(f"{device}/assets/blobs/")]):
+            return f"{key} landed without its image or blob"
+    return None
+
+
+_art_once = _with_both(lambda desktop, phone: sync(desktop, phone, _ART_HANDLES))
+
+
+def _art_scenario():
+    locker = ProcessLocker()
+    return CrashScenario("sync-art", _art_setup, lambda ops, root: _art_once(ops, root, locker),
+                         lambda ops, root: _art_once(ops, root, locker),
+                         (CONVERGES, Invariant("art_whole", _art_whole), idempotent_recovery(), RESIDUE),
+                         normalize=drop_empty_dirs)
+
+
+def test_c2_a_crash_or_error_at_any_commit_boundary_of_an_art_copy_converges(tmp_path):
+    """The blob is loaded lazily inside the data commit (about 5 s on Linux: not behind an opt-in)."""
+    with tempfile.TemporaryDirectory() as folder:
+        baseline = run_plans(_art_scenario(), [], Path(folder))
+        baseline.assert_ok()
+        trace = baseline.runs[0].action_trace
+    points = commit_boundaries(trace)
+    assert len([op for op in trace if _is_journal_replace(op)]) >= 3  # data(phone), archives, markers
+    report = explore_crashes(_art_scenario(), tmp_path, errors=True, torn=False,
+                             select=_select(points, {"before", "after", "fail"}))
+    report.assert_ok()
+    assert report.points_explored >= 9

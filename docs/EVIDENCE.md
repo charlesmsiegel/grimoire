@@ -221,7 +221,7 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 | Which narration becomes an accepted event | 021 ([EFFECTS](EFFECTS.md); its `as_knowledge_event` bridge yields the 012 `Event` to store here) |
 | Transmission semantics | 032 |
 | Prompts from actor projections | 027 |
-| Cross-device merge of logs | 019/028 |
+| Cross-device merge of logs | [028](roadmap/sprints/app-managed-device-sync.md) |
 | Export redaction | the export owner |
 | Graph traversal | 017 |
 | Persisted control assignments | 009/035 |
