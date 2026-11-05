@@ -28,7 +28,7 @@ from grimoire.adjudication import (
     check_decision, decision_from_payload, decision_to_payload, frame_from_payload, frame_to_payload,
     ruling_from_payload, ruling_to_payload,
 )
-from grimoire.adjudication.model import PROSE_MAX
+from grimoire.adjudication.model import DIRECTOR_ATTEMPT, PROSE_MAX
 from grimoire.chats import ChatCodecError
 from grimoire.core.ability_use import AbilityAssessment, AbilityError, AbilityRuling, assess_attempt, check_ruling
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution, Resolution, controller_of
@@ -126,19 +126,24 @@ class _Builder:
         revisions = self.frames.get(frame.attempt_id, [])
         if revisions and revisions[0].frame.actor != frame.actor:
             raise _refused(f"attempt {frame.attempt_id!r} is another actor's", "attempt_reused")
-        if revisions and (revisions[0].frame.chat, revisions[0].frame.moment, revisions[0].contribution) != (
-                frame.chat, frame.moment, contribution):
-            # The same action: a later moment would admit facts established after it was attempted.
-            raise _refused("a revision keeps the action's chat, moment and contribution", "frame_moved")
+        if (contribution is None) != frame.attempt_id.startswith(DIRECTOR_ATTEMPT):
+            # One namespace per kind of actor: a director's attempt can never share a player's contribution
+            # id, so its outcome can never bind narration about a player character (003 keys by attempt id).
+            raise _refused(f"an attempt with no player contribution, and only one, is named "
+                           f"{DIRECTOR_ATTEMPT!r}...", "reserved_attempt_id")
         if revisions:
-            first = revisions[0].frame
-            against = {f for f in first.factors if f.bearing != "favours"}
-            added = [f.factor_id for f in frame.factors if f.bearing != "favours" and f not in against]
-            stakes = [s.stake_id for s in frame.stakes if s not in first.stakes]
-            if added or stakes:
-                # A difficulty or a consequence invented after the action was framed is fiat by revision.
-                raise _refused(f"a revision adds no new hindrance or stake: {', '.join(added + stakes)}",
-                               "frame_worsened")
+            first = revisions[0]
+            if (first.frame.chat, first.frame.moment, first.contribution, first.frame.ability) != (
+                    frame.chat, frame.moment, contribution, frame.ability):
+                # The same action: a later moment would admit facts established after it was attempted, and
+                # another power is another action.
+                raise _refused("a revision keeps the action's chat, moment, contribution and ability",
+                               "frame_moved")
+            worse = _worsened(first.frame, frame)
+            if worse:
+                # A difficulty or a consequence invented after the action was framed, or a recorded advantage
+                # dropped, is fiat by revision.
+                raise _refused(f"a revision cannot worsen the action: {', '.join(worse)}", "frame_worsened")
         if frame.attempt_id in self.decisions:
             raise _refused(f"attempt {frame.attempt_id!r} is already decided", "already_decided")
         if contribution is not None:
@@ -204,6 +209,16 @@ class _Builder:
     def state(self) -> AdjudicationState:
         return AdjudicationState(self.campaign_id, {key: tuple(value) for key, value in self.frames.items()},
                                  tuple(self.rulings), frozenset(self.superseded), dict(self.decisions))
+
+
+def _worsened(first: ActionFrame, frame: ActionFrame) -> list[str]:
+    """What a revision would do against the action: a new hindrance, prevention or stake, or a lost advantage."""
+    against = {f for f in first.factors if f.bearing != "favours"}
+    favours = {f for f in frame.factors if f.bearing == "favours"}
+    added = [f.factor_id for f in frame.factors if f.bearing != "favours" and f not in against]
+    dropped = [f.factor_id for f in first.factors if f.bearing == "favours" and f not in favours]
+    stakes = [s.stake_id for s in frame.stakes if s not in first.stakes]
+    return added + dropped + stakes
 
 
 def _check_backing(frame: ActionFrame, contribution: PlayerContribution) -> None:
@@ -466,11 +481,13 @@ class AdjudicationLibrary:
         """The actor is still controlled as when it was framed: by its author, or by no player."""
         frame = entry.frame
         controller = self._controller(frame.campaign_id, frame.actor.instance_id)
-        player = controller if controller is not None and is_human(controller) else None
+        if controller is not None and controller != DIRECTOR and not is_human(controller):
+            raise _refused(f"{frame.actor} is controlled by {controller!r}, not a human", "non_human_controller")
+        player = None if controller in (None, DIRECTOR) else controller
         author = None if entry.contribution is None else entry.contribution.submitted_by
         if player != author:
-            raise _refused(f"control of {frame.actor} changed since the action was framed; frame it again",
-                           "control_changed")
+            raise _refused(f"control of {frame.actor} changed since the action was framed; this attempt cannot "
+                           "be decided, and the new controller's action is a new attempt", "control_changed")
 
     def _consent(self, entry: FrameEntry, decision: Decision, consent: object) -> str | None:
         if decision.basis != "consent":

@@ -146,11 +146,11 @@ def test_no_one_consents_for_an_actor_no_player_controls(table):
     # A setback the rules would not force needs someone with standing to choose it; the director deciding
     # alone would be an uncaused outcome, so the actor's failure must come from a recorded cause instead.
     library = table.library()
-    library.frame(bridge(actor=SOLA, attempt_id="s-1"))
+    library.frame(bridge(actor=SOLA, attempt_id="director:s-1"))
     setback = Decision("failure", "consent", consequences={"fall"})
-    assert _reason(library.decide, Q, "s-1", setback) == "consent_mismatch"
-    assert _reason(library.decide, Q, "s-1", setback, consent=table.player(ANA)) == "consent_mismatch"
-    assert "s-1" not in library.state(Q).decisions
+    assert _reason(library.decide, Q, "director:s-1", setback) == "consent_mismatch"
+    assert _reason(library.decide, Q, "director:s-1", setback, consent=table.player(ANA)) == "consent_mismatch"
+    assert "director:s-1" not in library.state(Q).decisions
 
 
 def test_a_contribution_is_given_only_through_its_authors_own_handle(table):
@@ -184,6 +184,34 @@ def test_a_revision_cannot_add_a_hindrance_or_a_stake_the_action_did_not_have(ta
                          author=table.player()).revision == 2
 
 
+def test_a_revision_cannot_drop_an_advantage_or_bring_in_a_power(table):
+    library = table.library()
+    library.frame(bridge(), contribution=vault(), author=table.player())
+    weaker = bridge(factors=(GAP, COLLAPSE))  # her training, dropped, would leave failure alone
+    assert _reason(library.frame, weaker, contribution=vault(), author=table.player()) == "frame_worsened"
+    flight = ability(MARA, ("flight",), attempt_id="c10", effect_id=None)
+    powered = bridge(ability=flight)  # a power she never claimed would make the vault clarify, then impossible
+    assert _reason(library.frame, powered, contribution=vault(), author=table.player()) == "frame_moved"
+    assert len(library.state(Q).frames["c10"]) == 1
+
+
+def test_a_directors_attempt_never_shares_a_players_id(table):
+    library = table.library()
+    # Iris's attempt under Ana's contribution id would bind narration about Mara to Iris's result.
+    assert _reason(library.frame, bridge(actor=IRIS, attempt_id="c10")) == "reserved_attempt_id"
+    claimed = vault(cid="director:c10")
+    assert _reason(library.frame, bridge(attempt_id="director:c10"), contribution=claimed,
+                   author=table.player()) == "reserved_attempt_id"
+    assert library.state(Q).frames == {}
+
+
+def test_a_director_actor_handed_to_a_non_human_is_not_decided(table):
+    library = table.library()
+    library.frame(bridge(actor=SOLA, attempt_id="director:s-1"))
+    table.control("sola-1", "app:bot")
+    assert _reason(library.decide, Q, "director:s-1", PARTIAL) == "non_human_controller"
+
+
 def test_an_unstorable_contribution_is_refused_before_anything_is_written(table):
     library = table.library()
     broken = vault("I vault \ud800 the gap")
@@ -197,20 +225,20 @@ def test_a_stretch_waits_for_a_ruling_then_charges_once_through_an_accepted_effe
     library = table.library()
     sail = ability(SOLA, **STRETCH)
     library.frame(power_frame(sail, intent="Rise on a sail of sunlight."))
-    assert library.assess(Q, "a-1").classification == "clarify"
-    assert _reason(library.decide, Q, "a-1", Decision("failure", "rule")) == "needs_clarification"
+    assert library.assess(Q, "director:a-1").classification == "clarify"
+    assert _reason(library.decide, Q, "director:a-1", Decision("failure", "rule")) == "needs_clarification"
     assert _reason(library.rule, AbilityRuling("r1", sail, "new_ability", "approved", "director")) == \
         "wrong_classification"
     library.rule(AbilityRuling("r1", sail, "extrapolation", "refused", "director"))
-    assert library.assess(Q, "a-1").classification == "impossible"
+    assert library.assess(Q, "director:a-1").classification == "impossible"
     # The director changes their mind before the outcome: the new ruling supersedes the refusal.
     library.rule(AbilityRuling("r2", sail, "extrapolation", "approved", "director"), supersedes=["r1"])
-    assert library.assess(Q, "a-1").classification == "uncertain"
-    library.decide(Q, "a-1", Decision("partial", "adjudicated", {"#ability", "#ability-uncertain"}, {"fall"}))
+    assert library.assess(Q, "director:a-1").classification == "uncertain"
+    library.decide(Q, "director:a-1", Decision("partial", "adjudicated", {"#ability", "#ability-uncertain"}, {"fall"}))
     assert _reason(library.rule, AbilityRuling("r3", sail, "extrapolation", "refused", "director"),
                    supersedes=["r2"]) == "already_decided"
 
-    used = library.ability_use(Q, "a-1")
+    used = library.ability_use(Q, "director:a-1")
     assert (used.ruling_id, [cost.id for _, cost in used.charges]) == ("r2", ["eye_strain", "migraine"])
     proposal = EffectProposal(Q, CHAT, moment(), "Sola rises on a sail of sunlight.", (), "director",
                               abilities=(used,))
@@ -222,7 +250,7 @@ def test_a_stretch_waits_for_a_ruling_then_charges_once_through_an_accepted_effe
     ref = effects.accept(proposal, controls=[]).commit().ref
     accepted, _ = effects.read(ref, requested_by=DIRECTOR)
     assert [(charge.attempt.attempt_id, charge.charges) for charge in accepted.abilities] == \
-        [("a-1", (("light_bending", "eye_strain"), ("light_bending", "migraine")))]
+        [("director:a-1", (("light_bending", "eye_strain"), ("light_bending", "migraine")))]
     assert effects.accept(proposal, controls=[]).commit().ref == ref  # a retry charges nothing more
     again = EffectProposal(Q, CHAT, moment(11, "t11"), "Sola rises again.", (), "director",
                            abilities=(used,))
@@ -235,7 +263,7 @@ def test_a_stretch_waits_for_a_ruling_then_charges_once_through_an_accepted_effe
     forged = EffectProposal(Q, CHAT, moment(), "Sola rises.", (), "director", abilities=(made_up,))
     assert _reason(library.check_effect, forged) == "assessment_mismatch"
     replayed = _reopen(table).library()
-    assert replayed.ability_use(Q, "a-1") == used
+    assert replayed.ability_use(Q, "director:a-1") == used
     assert [entry.ruling.ruling_id for entry in replayed.state(Q).rulings] == ["r1", "r2"]
 
 
@@ -243,20 +271,20 @@ def test_flight_beyond_a_limit_is_impossible_and_no_ruling_changes_that(table):
     library = table.library()
     flight = ability(IRIS, **STRETCH)
     library.frame(power_frame(flight))
-    assert library.assess(Q, "a-1").classification == "impossible"
+    assert library.assess(Q, "director:a-1").classification == "impossible"
     assert _reason(library.rule, AbilityRuling("r1", flight, "extrapolation", "approved", "director")) == \
         "limit_not_approvable"
-    library.decide(Q, "a-1", Decision("failure", "rule", {"#ability"}, {"fall"}))
-    assert _reason(library.ability_use, Q, "a-1") == "ability_not_permitted"
+    library.decide(Q, "director:a-1", Decision("failure", "rule", {"#ability"}, {"fall"}))
+    assert _reason(library.ability_use, Q, "director:a-1") == "ability_not_permitted"
 
 
 def test_a_failed_use_of_a_power_charges_nothing(table):
     library = table.library()
     glare = ability(SOLA, ("light", "glare"), effect_id="dazzle")
     library.frame(power_frame(glare, intent="Dazzle the guard."))
-    assert library.assess(Q, "a-1").classification == "uncertain"  # a feat: its own uncertainty hinders it
-    library.decide(Q, "a-1", Decision("failure", "adjudicated", {"#ability-uncertain"}, {"fall"}))
-    assert _reason(library.ability_use, Q, "a-1") == "action_failed"
+    assert library.assess(Q, "director:a-1").classification == "uncertain"  # a feat: its own uncertainty hinders it
+    library.decide(Q, "director:a-1", Decision("failure", "adjudicated", {"#ability-uncertain"}, {"fall"}))
+    assert _reason(library.ability_use, Q, "director:a-1") == "action_failed"
 
 
 def test_rulings_belong_to_a_recorded_frame_labelled_exactly_as_there(table):
@@ -273,7 +301,7 @@ def test_rulings_belong_to_a_recorded_frame_labelled_exactly_as_there(table):
         "duplicate_ruling"
     assert _reason(library.rule, AbilityRuling("r2", sail, "extrapolation", "approved", "director"),
                    supersedes=["r9"]) == "unknown_ruling"
-    assert _reason(library.ability_use, Q, "a-1") == "undecided"
+    assert _reason(library.ability_use, Q, "director:a-1") == "undecided"
 
 
 # -- the ledger fails closed ------------------------------------------------------------------
@@ -321,7 +349,7 @@ def test_a_second_decision_on_record_is_refused_on_replay(table):
 def test_the_ledger_reserves_the_ids_of_the_actors_it_names(table):
     library = table.library()
     library.frame(bridge(), contribution=vault(), author=table.player())
-    library.frame(bridge(actor=SOLA, attempt_id="s-1", factors=(Factor("x", "hinders", "x", 1, "s"),)))
+    library.frame(bridge(actor=SOLA, attempt_id="director:s-1", factors=(Factor("x", "hinders", "x", 1, "s"),)))
     assert adjudication_actor_ids(table.store, Q) == {"mara-1", "sola-1"}
     assert {"mara-1", "sola-1"} <= campaign_taken_ids(table.store, Q)
     assert table.store.campaign_authority_presence("q-9") == "absent"

@@ -16,7 +16,7 @@ Narrator fiat is an outcome with no cause on record, or a difficulty invented in
 2. For an action that relies on a power, any [025 ability ruling](ABILITIES.md) is recorded against the frame's exact attempt.
 3. The **decision** records the result. It may cite only recorded factors, and bring only declared stakes.
 
-A frame may be revised, and a ruling superseded, only until the attempt is decided. A revision may drop a hindrance or add a favouring fact, but never add a hindrance, a preventing fact or a stake the first revision did not have (`frame_worsened`): a difficulty found after the action was framed cannot be slipped in before the ruling. A decision is final in this slice.
+A frame may be revised, and a ruling superseded, only until the attempt is decided. A revision may drop a hindrance or a stake, or add a favouring fact, but never add a hindrance, a preventing fact or a stake the first revision did not have, nor drop a favouring fact it had (`frame_worsened`): a difficulty found after the action was framed cannot be slipped in before the ruling. It keeps the first revision's ability attempt exactly (`frame_moved`), since a power brings derived factors of its own. A decision is final in this slice.
 
 ## Frames
 
@@ -24,7 +24,7 @@ A frame may be revised, and a ruling superseded, only until the attempt is decid
 
 | Field | Meaning |
 |---|---|
-| `attempt_id` | The action's id in its campaign. For a player character it is the id of the player's own `action` contribution, as 003's `Resolution.attempt_id` and 025's attempt are. |
+| `attempt_id` | The action's id in its campaign. For a player character it is the id of the player's own `action` contribution, as 003's `Resolution.attempt_id` and 025's attempt are. An attempt with no contribution starts with `director:` (`DIRECTOR_ATTEMPT`), and a contribution id never does (`reserved_attempt_id`): 003 matches narration to a result by attempt id alone, so the two namespaces must never meet. |
 | `actor`, `chat` | An `InstanceRef` in the chat's campaign. The actor must be on the chat's roster. |
 | `moment` | A 012 `Moment` with a scene and turn. |
 | `intent` | Prose for people, never read. The player's own words stay in their contribution. |
@@ -66,7 +66,7 @@ An `Outcome` is a recorded decision. `Outcome.resolution()` is the 003 `Resoluti
 
 | Call | Does |
 |---|---|
-| `frame(frame, contribution=None, author=None)` | Records a new attempt, or a revision of an undecided one (`FrameEntry.revision` counts from 1). A revision is the same action: same actor, chat, moment and contribution (`frame_moved`), so it cannot admit facts established after the attempt, and it cannot worsen the action (`frame_worsened`). |
+| `frame(frame, contribution=None, author=None)` | Records a new attempt, or a revision of an undecided one (`FrameEntry.revision` counts from 1). A revision is the same action: same actor, chat, moment, contribution and ability attempt (`frame_moved`), so it cannot admit facts established after the attempt, and it cannot worsen the action (`frame_worsened`). |
 | `rule(ruling, supersedes=())` | Records a 025 `AbilityRuling` on a recorded frame's exact ability attempt, after 025's `check_ruling`. `supersedes` names live rulings on the same attempt that this one replaces. |
 | `decide(campaign, attempt_id, decision, consent=None)` | Assesses the latest frame revision now and records the decision. Deciding the same again returns the recorded outcome; a different one is `already_decided`. |
 | `assess`, `outcome`, `resolutions`, `state` | Read. |
@@ -77,7 +77,7 @@ An `Outcome` is a recorded decision. `Outcome.resolution()` is the 003 `Resoluti
 - The frame of a player-controlled actor is backed by the controller's own `action` contribution for that scene and turn, whose id is the `attempt_id`. Without one it is `pc_authorship`; with another player's, another turn's or another kind's, it is `invalid_expression`.
 - The contribution is given through `author`, the controller's own trusted handle issued by this authority. A bare value, another principal's handle or an untrusted one is `not_controller`: the adjudication key alone cannot put words in a player's mouth.
 - An actor no human controls takes no contribution or author (`unexpected_backing`); one controlled by a non-human principal is `non_human_controller`.
-- Control is read under the authority's lock, and read again at the decision: if the actor's human controller is no longer the contribution's author, the decision is `control_changed`.
+- Control is read under the authority's lock, and read again at the decision: if the actor's human controller is no longer the contribution's author, the decision is `control_changed`, and if a non-human principal now controls it, `non_human_controller`. That attempt can no longer be decided; the new controller's action is a new attempt.
 - A `consent` decision needs the authoring player's own trusted handle (`not_controller` otherwise) and is recorded with them as `consented_by`. A frame with no contribution has no one to consent (`consent_mismatch`); a director-controlled actor's setback must come from a recorded cause.
 
 **Abilities.** The library computes the 025 assessment itself, from the chat's snapshot and the campaign's live (not superseded) rulings. A caller cannot supply it. The decision records what it relied on as an `AbilityFinding`: classification, approval, ruling id, uncertainty and charges.
@@ -85,7 +85,7 @@ An `Outcome` is a recorded decision. `Outcome.resolution()` is the 003 `Resoluti
 - 021 then charges that assessment once.
 - A ruling never pins the entity's `resolved_source`. The decision's finding is the pin: a later change shows up as `assessment_changed` at hand-off.
 
-**Other refusals.** `missing_chat`, `not_in_chat`, `unresolved_actor`, `attempt_reused` (an attempt id is another actor's), `frame_moved`, `frame_worsened`, `invalid_field` (text that could never be stored), `ruling_mismatch` (no frame, or other labels), `duplicate_ruling`, `unknown_ruling`, `unknown_attempt`, `stale_frame`, `consent_mismatch`, and 025's own reasons from `check_ruling` (`limit_not_approvable`, `wrong_classification` and so on). A refusal writes nothing.
+**Other refusals.** `missing_chat`, `not_in_chat`, `unresolved_actor`, `attempt_reused` (an attempt id is another actor's), `frame_moved`, `frame_worsened`, `reserved_attempt_id`, `invalid_field` (text that could never be stored), `contribution_too_long`, `too_large` (an entry over the ledger's batch limit), `ruling_mismatch` (no frame, or other labels), `duplicate_ruling`, `unknown_ruling`, `unknown_attempt`, `stale_frame`, `consent_mismatch`, and 025's own reasons from `check_ruling` (`limit_not_approvable`, `wrong_classification` and so on). A refusal writes nothing.
 
 ## Persistence
 
@@ -102,6 +102,7 @@ Each campaign has one authority ledger, `authority/adjudication/<campaign_id>` (
 - **Factor sources are attributed, not verified.** Nothing checks that a factor's `source` exists or says what the factor claims, or that `established` matches it. Checking against 017 relations, 020 events and 021 accepted events is a later slice. Until then the guarantee rests on the labeller and on the order of records.
 - **The labeller is trusted.** As in 003 and 025, the classification is only as good as the labels. Under-labelling a hindrance makes an action straightforward.
 - **One key labels and decides.** The adjudication key records both frames and decisions. The order of records and `frame_worsened` stop a hindrance invented after the fact, but a caller holding the key could still frame an action thinly and decide it at once. Separating the labeller from the decider is 035's job.
+- **Contribution ids are the caller's.** Adjudication refuses to frame a contribution whose id starts with `director:`, but nothing allocates contribution ids yet. The allocator (035) must never issue one, or narration citing it could be bound to a director's result.
 - **The moment is the caller's.** Nothing checks `moment.sequence` against the campaign's real sequence, so `established < moment.sequence` holds only as far as the labeller is honest.
 - **Decisions are final.** Revising a decided outcome needs coordination with 021 revocation and is deferred.
 - **No graded consequences or contests** (milestone 3). Each consequence is one declared stake, and there is no opposed action between two actors.

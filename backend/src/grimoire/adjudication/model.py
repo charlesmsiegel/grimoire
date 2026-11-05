@@ -43,6 +43,9 @@ ABILITY_FACTOR = "#ability"
 ABILITY_UNCERTAIN = "#ability-uncertain"
 
 PROSE_MAX = 4000
+# A director's attempt (no player contribution) is named with this prefix, so it never shares an id
+# with a player's action contribution: 003 binds narration to a result by attempt id alone.
+DIRECTOR_ATTEMPT = "director:"
 MAX_FACTORS = 32
 MAX_STAKES = 16
 #: 025 classifications that cannot be judged as labelled: the frame needs a ruling or new labels.

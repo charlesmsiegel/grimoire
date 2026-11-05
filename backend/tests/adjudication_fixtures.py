@@ -56,7 +56,7 @@ def vault(text: str = "I run and vault the gap!", *, cid: str = "c10", by: str =
     return PlayerContribution(Q, cid, "s1", turn, actor_id, by, kind, text)
 
 
-def ability(who: InstanceRef = IRIS, needs=("light", "concealment"), *, attempt_id: str = "a-1",
+def ability(who: InstanceRef = IRIS, needs=("light", "concealment"), *, attempt_id: str = "director:a-1",
             effect_id: str | None = "veil", conditions=("ambient_light",)) -> AbilityAttempt:
     return AbilityAttempt(attempt_id, who, "light_bending", frozenset(needs), "labeller:test", effect_id,
                           frozenset(conditions))
