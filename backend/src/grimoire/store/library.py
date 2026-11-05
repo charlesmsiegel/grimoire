@@ -51,7 +51,7 @@ from .guard import Guard, Limits, RootIdentity
 from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, reemitted_imprecise, render
 from .layout import (
-    ACCEPTED, CAMPAIGNS, CHATS, CONFLICTS, DISCARD_MARKER, IMAGES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
+    ACCEPTED, CAMPAIGN_LEDGERS, CAMPAIGNS, CHATS, CONFLICTS, DISCARD_MARKER, IMAGES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
     PLACEMENTS, REPAIR_MARKER, SYNC, SYNC_PEERS, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify, conflict_parts,
     definition_parts, image_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
     SUFFIX, ledger_parts, ledger_seq, logical, manifest_parts, name_key, sync_state_parts,
@@ -677,14 +677,18 @@ class LibraryStore:
                 return self._access.presence((CAMPAIGNS, campaign_id))
 
     def campaign_authority_presence(self, campaign_id: str) -> str:
-        """``absent``, ``present`` or ``mismatch`` for the campaign's authority ledger folder
-        (``authority/campaigns/<id>``, 010b's sovereignty ledger), which outlives ``campaigns/<id>``
-        when that folder is deleted by hand. Decided from listings, as ``campaign_presence``."""
+        """``absent``, ``present`` or ``mismatch`` for the campaign's authority ledger folders
+        (``authority/campaigns/<id>``, 010b's sovereignty ledger, and ``authority/adjudication/<id>``,
+        029's), which outlive ``campaigns/<id>`` when that folder is deleted by hand: ``present`` if
+        either is, else ``mismatch`` if either has a look-alike. Decided from listings, as
+        ``campaign_presence``."""
         validate_segment(campaign_id, "campaign_id")
         with self.lock:
             self._require_consistent()
             with self._access.cached_listings():
-                return self._access.presence(ledger_folder(f"{CAMPAIGNS}/{campaign_id}"))
+                found = {self._access.presence(ledger_folder(f"{prefix}{campaign_id}"))
+                         for prefix in CAMPAIGN_LEDGERS}
+        return next(state for state in ("present", "mismatch", "absent") if state in found)
 
     def campaign_instances(self, campaign_id: str) -> tuple[InstanceRef, ...]:
         """Every canonically named instance file of one campaign, across kinds; reads no content."""

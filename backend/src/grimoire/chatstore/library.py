@@ -23,6 +23,7 @@ import re
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 
+from grimoire.adjudicationstore import adjudication_actor_ids
 from grimoire.chats import (
     ACTOR_ROLES, CAMPAIGN_CONTINUITY, CHAT_SCHEMA, NOT_WITNESSED, ROLE_KINDS, SCOPE_SCHEMA, ChatCodecError,
     ChatRecord, Launch, NavigationIndex, NewBinding, PlayScope, ScopeEntry, WorldBinding, chat_from_payload,
@@ -58,7 +59,7 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     past. Reserved: every instance file of any kind (a pair two kinds share keeps both); every id
     named by a relation (017), a chat roster (107), an accepted event (021), the events, evidence and
     knowledge log (020), a holder file's log (023's move peers), the sovereignty ledger (010b's bare
-    ``actor_id``s) or a security-ledger grant or approval scoped to one individual (its instance,
+    ``actor_id``s), the adjudication ledger (029's frames, rulings and decisions) or a security-ledger grant or approval scoped to one individual (its instance,
     holder or placement address), each scanned raw so an undecodable record still protects its ids;
     every owner, holder and wearer a unique item's possession record names (034, scanned raw);
     every holder with a holdings file (023) and every subject with a campaign placement folder (018),
@@ -71,7 +72,7 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     allocator (107 here; 024, 026, 037 later) must use this at plan time and again under the store
     lock at commit, and any later record family that names instance ids must extend it. Its cost
     grows with play history: it reads every instance, relation, chat, accepted-event, knowledge and holder file
-    and every sovereignty batch of the campaign, and every security batch of the library.
+    and every sovereignty and adjudication batch of the campaign, and every security batch of the library.
     """
     return _taken_ids(store, campaign_id, security=True)
 
@@ -89,6 +90,7 @@ def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool,
     taken |= placement_subject_ids(store, campaign_id)
     taken |= sovereignty_actor_ids(store, campaign_id)
     taken |= possession_party_ids(store, campaign_id)
+    taken |= adjudication_actor_ids(store, campaign_id)
     if security:  # skipped only by _fresh_campaign_taken_ids
         taken |= security_instance_ids(store, campaign_id, spent=spent)
     return frozenset(taken)

@@ -70,7 +70,7 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
                                          "datetime", "uuid", "secrets")
 
 #: grimoire packages that are adapters or test infrastructure, not pure.
-ADAPTERS = frozenset({"grimoire.capture", "grimoire.chatstore", "grimoire.effective", "grimoire.effectstore",
+ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.capture", "grimoire.chatstore", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1", "grimoire.partystore",
                       "grimoire.possessionstore", "grimoire.providers",
@@ -123,6 +123,9 @@ PURE_PACKAGES = (
                 never_import=("grimoire.core.inference",)),
     # Unique possessions (034): values, record codec and the deterministic mutator; the service is an adapter.
     PurePackage("grimoire.possessions", ("grimoire.possessions", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
+    # Fiction-first adjudication (029): frames, assessment, decisions and codecs; the service is an adapter.
+    PurePackage("grimoire.adjudication", ("grimoire.adjudication", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
     PurePackage("grimoire.security", ("grimoire.security",)),
     # Voice evidence: shares the gate's text matcher so screening and scoring agree.

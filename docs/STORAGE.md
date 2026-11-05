@@ -453,11 +453,12 @@ Broken-reference reasons are the index's `missing_source`, `missing_entity` and 
 
 ## Authority ledgers (010b)
 
-A **ledger** is an append-only, hash-chained run of batch files under the reserved root `authority/`. There are two ledger kinds: `security`, and one `campaigns/<campaign_id>` ledger per campaign.
+A **ledger** is an append-only, hash-chained run of batch files under the reserved root `authority/`. There are three ledger kinds: `security`; one `campaigns/<campaign_id>` ledger per campaign (sovereignty, 010b); and one `adjudication/<campaign_id>` ledger per campaign ([ADJUDICATION](ADJUDICATION.md#persistence), 029).
 
 ```text
 authority/security/<seq:010d>.json
 authority/campaigns/<campaign_id>/<seq:010d>.json
+authority/adjudication/<campaign_id>/<seq:010d>.json
   {"format": "grimoire.ledger/1", "ledger": "<name>", "seq": N, "previous": "<etag of N-1>" | null,
    "entries": [ 1–500 JSON objects ]}
 ```
@@ -471,7 +472,7 @@ authority/campaigns/<campaign_id>/<seq:010d>.json
 
 Any break raises `LedgerBroken(name, seq, reason)`; a ledger is never read partially. Other files beside the batches (for example a sync tool's "conflicted copy") are reported in `Ledger.ignored` and never replayed. For 019, that means another device's fork is dropped and only reported.
 
-`store.ledger_documents(name)` is the one raw read, for reserving ids (`grimoire.ledgers.sovereignty_actor_ids` on `campaigns/<id>`, and `security_campaign_ids` and `security_instance_ids` on `security`; see [`campaign_taken_ids`](#instance-ids-are-never-reused)). It returns `(documents, unread)`: the strict JSON of every canonically named batch of `authority/<name>/`, with no chain, format or entry check, and the paths that could hold batches but cannot be read (a look-alike, linked or unlistable folder; a linked, unreadable, oversized or non-JSON batch, or a look-alike batch name). Replay never uses it.
+`store.ledger_documents(name)` is the one raw read, for reserving ids (`grimoire.ledgers.sovereignty_actor_ids` on `campaigns/<id>`, `grimoire.adjudicationstore.adjudication_actor_ids` on `adjudication/<id>`, and `security_campaign_ids` and `security_instance_ids` on `security`; see [`campaign_taken_ids`](#instance-ids-are-never-reused)). It returns `(documents, unread)`: the strict JSON of every canonically named batch of `authority/<name>/`, with no chain, format or entry check, and the paths that could hold batches but cannot be read (a look-alike, linked or unlistable folder; a linked, unreadable, oversized or non-JSON batch, or a look-alike batch name). Replay never uses it.
 
 **Limit (pinned by a test):** with local file access, the chain cannot detect changes at the tail. Appending a valid batch (even one with consistent forged provenance), editing or truncating the tail, or restoring an older copy all keep a valid chain. Interior edits, deletions and reordering are detected.
 
