@@ -49,7 +49,7 @@ The record is the value of the `possession` key in the item's `grimoire.entity/0
 ```
 
 - **Parties** are `<kind>/<instance_id>` within the item's campaign. Nothing is keyed by a name.
-- **Invariants:** an item never holds or owns itself; a worn item is held by its owner, in a slot it fits; the log's revisions increase within `(evicted_through, rev]`; op ids are unique (the origin's too). A value that breaks one is refused, as is anything decoded.
+- **Invariants:** an item never holds or owns itself, now or in any logged state or step; a worn item is held by its owner, in a slot it fits (logged slots too); the log's revisions increase within `(evicted_through, rev]`; op ids are unique (the origin's too). A value that breaks one is refused, as is anything decoded.
 - **Canonical:** `fits` sorted and written only when nonempty, the log by revision, absent fields omitted. A log edited out of order is accepted and re-sorted on the next write.
 - **Strict:** an unknown schema is `unsupported_schema` (upgrade the app); an address key (`instance_id`, `campaign_id`, ...) is `identity_in_payload`; an unknown field inside a known structure is `unknown_field`; a wrong shape is `invalid_field`. Unknown **top-level** fields of the record are kept verbatim, as is everything else in the instance file.
 - **The log is bounded** at 200 entries. The oldest are evicted and `evicted_through` records the last evicted revision; the new entry is never dropped.
@@ -92,13 +92,13 @@ The record is the value of the `possession` key in the item's `grimoire.entity/0
 
 After `StaleWrite`, `WriteConflict` or `CommitIncomplete`, or after reopening a store that raised `PendingRecovery`, call `apply` (or `create`) again with the **same** operation, the same `expected_rev` and the first change's pin, `parties=change.party_etags`. The result is:
 - `already_applied` while the operation's entry is in the item's log (a creation: while its item exists), whatever its parties became since;
-- `party_replaced` when a pinned party's instance file differs;
+- `party_replaced` when a pinned party's instance file differs (for a unique-item party, anything but its possession state);
 - `stale_revision` when the item moved on: never applied twice;
 - or a fresh plan, which has new bytes and needs fresh approvals.
 
 ### Instance ids stay taken
 
-`campaign_taken_ids` also reserves every id a possession record names (owner, holder, wearer, in the current state, the origin and the log), scanned raw so an undecodable record protects its ids too. A hand-deleted owner's id never goes to a different individual, who would read as the item's owner. Any instance file the store cannot read makes allocation fail closed (`TakenIdsUnlisted`), since it could be an item.
+`campaign_taken_ids` also reserves every id a possession record names (owner, holder, wearer, in the current state, the origin and the log), scanned raw so an undecodable record protects its ids too. A hand-deleted owner's id never goes to a different individual, who would read as the item's owner. An instance file the store cannot read as a record (malformed, a newer format) could be an item, so every `<kind>/<id>` in its exact bytes is reserved instead (as a parsed JSON document, or as text when it does not parse). Only a file whose bytes cannot be read at all (a link, an I/O error) makes allocation fail closed (`TakenIdsUnlisted`). So one broken character file does not stop new actors in its campaign. Over-reserving only skips an id.
 
 ## Known limits
 
@@ -109,7 +109,7 @@ After `StaleWrite`, `WriteConflict` or `CommitIncomplete`, or after reopening a 
 - **Exactly-once is bounded by the log.** Once an entry is evicted (after 200 newer operations), its retry is `stale_revision` (the revision moved), never applied again; it is no longer recognised as `already_applied`. A file restored from a backup forgets what it lost, as for holdings; a per-file identity is 030's.
 - `duplicate_individual` only sees unique items: an instance of the same individual definition with no possession record (a 107 actor) does not count.
 - **Cost.** Every read, plan and allocation reads every instance file of the campaign.
-- The party pin is byte identity, with the same limit as [holdings](HOLDINGS.md#service-grimoireholdingstoreholdingslibrary).
+- The party pin is byte identity, with the same limit as [holdings](HOLDINGS.md#service-grimoireholdingstoreholdingslibrary). A party that is itself a unique item (a chest) is pinned by everything except its possession state (its entity, envelope and origin), so a chest that moved or was worn since the plan is replanned rather than taken for a different individual; its custody and slots are checked again by the replan.
 - Not yet synchronized: 019 treats an instance file as any other, so two devices that change one item merge as a conflict on that file.
 
 ## Boundaries and deferrals

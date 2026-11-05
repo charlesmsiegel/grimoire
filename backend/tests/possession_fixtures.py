@@ -7,6 +7,7 @@ from grimoire.core.entity_codec import ENTITY_SCHEMA, definition_to_payload, ins
 from grimoire.core.facets import FacetSet, Physical, Portable
 from grimoire.core.identity import InstanceRef, SourceRef
 from grimoire.possessions import Creation, Operation, Origin, Possession, State, Step
+from grimoire.possessionstore import PossessionLibrary
 from grimoire.store import LibraryStore, RecordEnvelope, SourceManifest
 
 from store_helpers import OWNER, owner_handle
@@ -76,5 +77,4 @@ def seed(store: LibraryStore, parties=(MARA, TOMA, CHEST, HALL)) -> None:
 
 
 def possession_library(store: LibraryStore, handle=None):
-    from grimoire.possessionstore import PossessionLibrary
     return PossessionLibrary(store, handle or owner_handle(), clock=Clock(), owner=OWNER)

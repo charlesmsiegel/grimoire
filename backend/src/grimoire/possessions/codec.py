@@ -9,6 +9,8 @@ kept verbatim; inside known structures, unknowns are refused with a reason.
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Mapping
 
 from grimoire.core.identity import InstanceRef, SourceRef
@@ -202,6 +204,33 @@ def party_ids(record: object) -> frozenset[str]:
             stack.extend(value.values())
         elif isinstance(value, (list, tuple)):
             stack.extend(value)
+    return frozenset(taken)
+
+
+_PARTY_TEXT = re.compile(r"(?<![a-z0-9._-])([a-z0-9][a-z0-9._-]*)/([a-z0-9][a-z0-9._-]*)")
+
+
+def party_ids_in_bytes(data: bytes) -> frozenset[str]:
+    """Every instance id that a file the store cannot read as a record might name as a party.
+
+    Parseable JSON (a newer format, a misplaced file) is scanned as ``party_ids`` scans a record, whole;
+    anything else is read as text and every ``<kind>/<instance_id>`` in it counts. Over-reserving only
+    skips an id, so an unreadable instance file reserves what it could name instead of blocking.
+    """
+    text = data.decode("utf-8", "replace")
+    try:
+        document = json.loads(text)
+    except ValueError:
+        document = None
+    if document is not None:
+        return party_ids(document)
+    taken: set[str] = set()
+    for kind, instance_id in _PARTY_TEXT.findall(text.replace("\\/", "/")):
+        try:
+            InstanceRef("c", kind, instance_id)
+        except ValueError:
+            continue
+        taken.add(instance_id)
     return frozenset(taken)
 
 

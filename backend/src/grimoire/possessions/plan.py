@@ -159,8 +159,8 @@ class Creation:
         return self.holder.campaign_id
 
     def origin(self, at: str) -> Origin:
-        return Origin(self.op_id, at, self.holder, self.owner, self.name, self.source, tuple(self.fits), self.note,
-                      self.cause)
+        return Origin(self.op_id, at, self.holder, self.owner, self.name, self.source, self.fits, self.note,
+                      self.cause)  # fits as given: Origin refuses text, a mapping or None rather than splitting it
 
     def same(self, origin: Origin) -> bool:
         """Whether a recorded origin is this very creation (its time aside)."""

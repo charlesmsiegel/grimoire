@@ -36,11 +36,11 @@ from grimoire.holdingstore import holdings_holder_ids, holdings_peer_ids
 from grimoire.imagestore import placement_subject_ids
 from grimoire.ledgers import security_campaign_ids, security_instance_ids, sovereignty_actor_ids
 from grimoire.library import LibraryPathError
-from grimoire.possessions import POSSESSION_KEY, party_ids
+from grimoire.possessions import POSSESSION_KEY, party_ids, party_ids_in_bytes
 from grimoire.security import payload_digest
 from grimoire.store import (
-    CampaignRecords, LibraryStore, LibraryView, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
-    TakenIdsUnlisted,
+    CampaignRecords, LibraryStore, LibraryView, MalformedRecord, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite,
+    StoreError, TakenIdsUnlisted,
 )
 from grimoire.store.layout import address_parts, classify
 
@@ -103,16 +103,28 @@ def _fresh_campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozense
 def possession_party_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     """Instance ids named by the campaign's unique items (034): owners, holders and wearers, current and
     logged, in each instance file's ``possession`` record, scanned raw. An instance file the store cannot
-    read could be an item, so it raises ``TakenIdsUnlisted``. Reads every instance file of the campaign."""
+    read as a record (malformed, a newer format) could be an item, so every ``<kind>/<id>`` in its exact
+    bytes is reserved; one whose bytes cannot be read at all (a link, an I/O error) raises
+    ``TakenIdsUnlisted``. Reads every instance file of the campaign."""
     taken: set[str] = set()
     unread: list[str] = []
     for ref in store.campaign_instances(campaign_id):
+        path = "/".join(address_parts(ref))
         try:
             stored = store.read(ref)
         except RecordNotFound:
             continue
+        except MalformedRecord:
+            try:
+                data = store.read_exact(path)
+            except (StoreError, LibraryPathError, ValueError):
+                data = None
+                unread.append(path)
+            if data is not None:
+                taken |= party_ids_in_bytes(data)
+            continue
         except (StoreError, LibraryPathError):
-            unread.append("/".join(address_parts(ref)))
+            unread.append(path)
             continue
         payload = stored.envelope.payload  # type: ignore[union-attr]
         if isinstance(payload, Mapping) and POSSESSION_KEY in payload:

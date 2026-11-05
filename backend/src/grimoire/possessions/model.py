@@ -328,6 +328,13 @@ class Possession:
                 raise _invalid(f"operation {entry.op} is logged twice (or is the origin's)")
             if entry.before.holder.campaign_id != campaign:
                 raise PossessionRefused("cross_campaign", f"operation {entry.op} names another campaign")
+            named = {entry.before.holder, entry.after.holder, entry.before.owner, entry.after.owner}
+            if self.item in named.union(*(step.parties for step in entry.steps)):
+                raise _invalid(f"operation {entry.op} names the item itself as a party")
+            worn = [state.equipped for state in (entry.before, entry.after) if state.equipped is not None]
+            worn += [step.slot for step in entry.steps if step.slot is not None]
+            if any(slot not in self.fits for slot in worn):
+                raise _invalid(f"operation {entry.op} wears the item in a slot it does not fit")
             previous = entry.rev
             ids.add(entry.op)
         try:

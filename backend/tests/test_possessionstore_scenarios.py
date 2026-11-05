@@ -229,7 +229,49 @@ def test_an_id_named_only_by_a_possession_record_is_never_reallocated(store, lib
     assert created(library, make("make-2")).instance_id == expected
 
 
-def test_an_unreadable_instance_file_fails_allocation_closed(store, library):
-    instance_file(store, TOMA).write_bytes(b"{broken")
+@pytest.mark.parametrize("data", [
+    b'{"broken": "character/vex-1"',  # not JSON: every <kind>/<id> in its text
+    b'{"format": "grimoire.record/9", "payload": {"possession": {"owner": "character/vex-1"}}}',  # a newer format
+])
+def test_an_instance_file_the_store_cannot_read_reserves_what_it_names(store, data):
+    """It could be an item, so the parties it may name stay taken; it does not block allocation."""
+    instance_file(store, HALL).write_bytes(data)
+    assert {"vex-1", "hall-1", "mara-1"} <= campaign_taken_ids(store, "c1")
+
+
+def test_an_instance_file_with_no_bytes_to_read_fails_allocation_closed(store, monkeypatch):
+    instance_file(store, HALL).write_bytes(b"{broken")
+
+    def unreadable(path):
+        raise TakenIdsUnlisted("unreadable", (path,))
+
+    monkeypatch.setattr(store, "read_exact", unreadable)
     with pytest.raises(TakenIdsUnlisted):
         campaign_taken_ids(store, "c1")
+
+
+def test_a_party_that_is_a_moved_item_is_replanned_not_replaced(store, library):
+    chest = created(library, make("make-1", name="Chest"))
+    sword = created(library, make("make-2"))
+    planned = library.apply(sword, op("m1", Step.move(chest)), expected_rev=1)
+    done(library, chest, op("m2", Step.move(TOMA)))  # the chest moved on: still the same chest
+    planned.commit()
+    assert library.read(sword).possession.holder == chest
+    # two items each planned into the other: the second is a custody cycle, not a replaced party
+    bag, box = created(library, make("make-3")), created(library, make("make-4"))
+    first = library.apply(bag, op("m3", Step.move(box)), expected_rev=1)
+    second = library.apply(box, op("m4", Step.move(bag)), expected_rev=1)
+    first.commit()
+    with pytest.raises(StaleWrite) as caught:
+        second.commit()
+    assert not isinstance(caught.value, PartyReplaced)
+    assert caught.value.stale == (("campaigns/c1/instances/item/item-4.json", "custody_cycle"),)
+
+
+def test_a_party_item_whose_identity_changed_is_replaced(store, library):
+    chest = created(library, make("make-1", name="Chest"))
+    sword = created(library, make("make-2"))
+    planned = library.apply(sword, op("m1", Step.move(chest)), expected_rev=1)
+    edit(store, chest, lambda d: d["payload"].update(local_name="Another chest"))
+    with pytest.raises(PartyReplaced):
+        planned.commit()

@@ -85,6 +85,11 @@ def test_an_item_cannot_be_put_inside_what_it_holds():
     assert refused(op("m2", Step.move(inside.item)), chest, others={inside.item: inside}) == "custody_cycle"
     deeper = run(op("m2", Step.move(HALL)), chest, others={inside.item: inside}).value
     assert deeper.holder == HALL
+    # two levels down: the sword in a bag, the bag in the chest; the chest cannot go into the sword
+    bag = run(op("m3", Step.move(CHEST)), sword("bag-1")).value
+    deep = run(op("m4", Step.move(bag.item)), sword()).value
+    others = {bag.item: bag, deep.item: deep}
+    assert refused(op("m5", Step.move(deep.item)), deeper, others=others) == "custody_cycle"
 
 
 def test_replay_and_revision_rules():
@@ -175,4 +180,55 @@ def test_originate_starts_at_revision_one_with_its_origin():
     assert error.value.reason == "missing_party"
     with pytest.raises(PossessionRefused) as error:
         make(owner=OTHER)
+    assert error.value.reason == "cross_campaign"
+    for fits in ("head", None, b"head"):  # text is never split into one-letter slots
+        with pytest.raises(PossessionRefused) as error:
+            make(fits=fits)
+        assert error.value.reason == "invalid_field"
+    with pytest.raises(PossessionRefused):
+        make(fits=tuple(f"slot-{n}" for n in range(17)))
+
+
+def _logged(**entry):
+    base = {"op": "m1", "rev": 2, "at": AT, "steps": [{"step": "move", "to": "character/toma-1"}],
+            "before": {"holder": "character/mara-1", "owner": "character/mara-1"},
+            "after": {"holder": "character/toma-1", "owner": "character/mara-1"}}
+    base.update(entry)
+    return base
+
+
+@pytest.mark.parametrize("change", [
+    lambda p: p.update(log=[_logged(steps=[{"step": "move", "to": "item/sword-1"}],
+                                    after={"holder": "item/sword-1", "owner": "character/mara-1"})]),
+    lambda p: p.update(log=[_logged(steps=[{"step": "equip", "by": "character/mara-1", "slot": "tail"}],
+                                    after={"holder": "character/mara-1", "owner": "character/mara-1",
+                                           "equipped": "tail"})]),
+    lambda p: p.update(log=[_logged(), _logged(rev=3)]),  # one op id logged twice
+    lambda p: p.update(log=[_logged(op="c-sword")]),  # the creation's id
+    lambda p: p.update(log=[_logged(at="2026-02-30T00:00:00Z")]),
+    lambda p: p.update(fits=[f"slot-{n}" for n in range(17)]),
+])
+def test_a_hand_edited_history_must_keep_the_records_invariants(change):
+    payload = possession_to_payload(sword())
+    payload["rev"] = 3
+    change(payload)
+    with pytest.raises(PossessionCodecError) as error:
+        possession_from_payload(sword().item, payload)
+    assert error.value.reason == "invalid_field"
+
+
+def test_a_log_out_of_order_is_accepted_and_written_back_sorted():
+    current = sword()
+    for n in range(3):
+        current = run(op(f"m{n}", Step.move(TOMA if n % 2 == 0 else MARA)), current).value
+    payload = possession_to_payload(current)
+    shuffled = dict(payload, log=list(reversed(payload["log"])))
+    assert possession_to_payload(possession_from_payload(current.item, shuffled)) == payload
+
+
+def test_a_logged_operation_in_another_campaign_is_refused():
+    entry = run(op("m1", Step.move(TOMA)), sword()).value.log[0]
+    with pytest.raises(PossessionRefused) as error:
+        Possession(InstanceRef("c2", "item", "sword-1"), State(OTHER), Origin("c-sword", AT, OTHER), rev=2,
+                   log=(entry,))
     assert error.value.reason == "cross_campaign"

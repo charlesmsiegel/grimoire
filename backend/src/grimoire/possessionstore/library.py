@@ -24,6 +24,8 @@ automatically: a human decides.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
@@ -62,7 +64,8 @@ class ItemView:
 
     @property
     def name(self) -> str | None:
-        """The instance's own label (009 ``local_name``); a sourced item without one shows its definition's."""
+        """The instance's own label (009 ``local_name``); ``None`` for a sourced item that has none (its
+        definition's name is the composed entity's to show)."""
         payload = self.envelope.payload
         value = payload.get("local_name") if isinstance(payload, Mapping) else None
         return value if isinstance(value, str) else None
@@ -184,6 +187,19 @@ def _envelope_with(envelope: RecordEnvelope, record: Possession) -> RecordEnvelo
                           extra=thaw(envelope.extra))  # type: ignore[arg-type]
 
 
+def _individual_pin(envelope: RecordEnvelope) -> str | None:
+    """A unique item's identity apart from its possession state: its entity, envelope and origin."""
+    payload = envelope.payload
+    if not isinstance(payload, Mapping) or not isinstance(payload.get(POSSESSION_KEY), Mapping):
+        return None
+    document = thaw({"payload": {key: value for key, value in payload.items() if key != POSSESSION_KEY},
+                     "origin": payload[POSSESSION_KEY].get("origin"), "name": envelope.name, "owner": envelope.owner,
+                     "derived_from": envelope.derived_from, "base": envelope.base, "base_etag": envelope.base_etag,
+                     "extra": envelope.extra})
+    text = json.dumps(document, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+    return "item:" + hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+
+
 def _unreadable_reason(error: Exception) -> str:
     if isinstance(error, UnsupportedFormat):
         return "unsupported_format"
@@ -275,13 +291,16 @@ class PossessionLibrary:
                         stored.envelope)  # type: ignore[union-attr]
 
     def _party_etags(self, parties, instances: frozenset[InstanceRef]) -> dict[InstanceRef, str]:  # type: ignore[no-untyped-def]
-        """The exact bytes each existing party was checked against (a malformed file by its raw bytes)."""
+        """What each existing party was checked against: its exact bytes (a malformed file by its raw
+        bytes), or, for a party that is itself a unique item, everything but its changing possession state,
+        so a chest that moved since the plan is replanned, not taken for a different individual."""
         etags = {}
         for party in parties:
             if party not in instances:
                 continue
             try:
-                etags[party] = self.store.read(party).etag
+                stored = self.store.read(party)
+                etags[party] = _individual_pin(stored.envelope) or stored.etag  # type: ignore[arg-type]
             except MalformedRecord as error:
                 if error.etag is not None:
                     etags[party] = error.etag
