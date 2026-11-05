@@ -31,7 +31,8 @@ Membership is a 017 relation from the member to its **party anchor**:
 | `in_reserve` | `reserve` | the member is stored for the anchor's party, available but not travelling |
 
 - **The anchor** is any existing instance of the campaign. For one player character's party it is that character (or trainer). For a party spanning several player characters it is a group instance, and the player characters are members too.
-- **Why relations.** A relation already has what membership needs: exact endpoints, a `since` and an `ending` in campaign sequence, editorial retraction, preview and approval, [taken instance ids](CHATS.md#taken-instance-ids), [sync](SYNC.md) and [accepted effects](EFFECTS.md) (021). A move made in play is an accepted effect that ends one membership relation and begins another with these predicates.
+- **Why relations.** A relation already has what membership needs: exact endpoints, a `since` and an `ending` in campaign sequence, editorial retraction, preview and approval, [taken instance ids](CHATS.md#taken-instance-ids), [sync](SYNC.md) and [accepted effects](EFFECTS.md) (021).
+- **Accepted effects (021)** can begin and end these predicates like any other. 021 does not apply this slice's move rules (one membership at a time, no cycles, appended history). What it records is read by the same rules as a hand edit: two memberships at once are reported and fail closed, never guessed. A play-time move that enforces the move rules is a later slice.
 - **History is the relation files.** Nothing is deleted. Leaving or releasing ends a relation; `PartyLibrary.history(member)` lists every membership relation of a member, oldest first.
 - **Older builds.** A build without these predicates decodes such a file as an `UnsupportedRelation`: listed, never walked and never rewritten (017's rule).
 
@@ -41,33 +42,38 @@ Membership is a 017 relation from the member to its **party anchor**:
 
 - `membership(member)` returns a `Membership(member, party, status, relation, since)` or `None`.
 - `party(anchor)` returns the anchor's active members and its reserve, each sorted by reference text.
+- `chain(x)` walks upward: `x`'s membership, then its anchor's, and so on (a group travelling in a larger party). `anchors_above(x)` lists those anchors.
+- **Reserve is transitive.** `reserved(x)` is true when `x` is stored, or travels in a party whose anchor (or an anchor above it) is stored: a boxed group's members are boxed with it.
+- `uncertain(x)` is true when `x`'s membership, or an anchor's above it, is ambiguous.
 - A retracted membership never counts. An ended one counts before its `until`.
 - **Ambiguity is reported, never guessed.** A member holding two membership relations at once (a hand edit, two devices, or two accepted effects) is in `conflicted`, appears in no party, and is reported as `conflicting_membership`. `membership()` refuses it.
 - **Unreadable files fail closed.** When a relation file or the folder cannot be read, `complete` is false and the state reports `relations_unreadable`: a reserve membership might be hiding in the unreadable file.
 
 ## Scene casts and presence
 
-A **scene cast** (`SceneCast(campaign_id, scene_id, as_of, present)`) is exactly who is present in one scene. `cast.may_speak(x)` is true only for a cast member.
+A **scene cast** (`SceneCast(campaign_id, scene_id, as_of, present)`) is exactly who is present in one scene. `cast.may_speak(x)` is true only for a cast member. **Only `stage` builds a cast**: constructing one directly is refused (`invalid_field`), so a cast never holds a member `stage` would refuse.
 
 `stage(state, scene_id, present, instances=…)` builds one. It refuses, with `PartyRefused.reason` and the offending `members`:
 
 | Reason | When |
 |---|---|
 | `relations_unreadable` | the state is incomplete |
-| `in_reserve` | a reserved member is selected. Withdraw it first, which is a recorded move |
-| `conflicting_membership` | a selected member's membership is ambiguous |
+| `in_reserve` | a selected member is reserved, directly or through a stored anchor. Withdraw it first, which is a recorded move |
+| `conflicting_membership` | a selected member's membership, or an anchor's above it, is ambiguous |
 | `missing_actor` | a selected individual has no instance file |
 | `instance_id_conflict` | its id is also used by another kind, so it is no one individual ([IDENTITY](IDENTITY.md)) |
-| `invalid_field`, `cross_campaign`, `duplicate_actor`, `too_large` | the selection's shape (at most 256) |
+| `invalid_field`, `cross_campaign`, `duplicate_actor`, `too_large` | the selection's shape (at most 256), including an invalid `scene_id` |
 
 **Any instance kind may be cast**, a creature included, under its own reference: an individualized goblin (`campaign:c/creature/goblin-1`, [024](ENTITIES.md#individualizing-a-template-instance)) is staged as itself, with no re-key and no character copy.
 
 `presence(state, cast, x)` answers one of:
 - `present`: in the cast;
-- `accompanying`: in the active party of an anchor who is present. It is nearby and can join the scene, but it is not on stage and never a speaker;
-- `reserved`: stored. It cannot appear;
-- `uncertain`: its membership is ambiguous;
+- `reserved`: stored, directly or through a stored anchor. It cannot appear;
+- `uncertain`: its membership, or an anchor's above it, is ambiguous;
+- `accompanying`: in the active party of an anchor who is present, directly or through a group. It is nearby and can join the scene, but it is not on stage and never a speaker;
 - `absent`: anything else, including every companion of an anchor who is not in the scene.
+
+`presence` refuses with `relations_unreadable` while the state is incomplete (a hidden membership could change the answer), and with `stale_cast` for a cast of another campaign or sequence.
 
 `cast_report(state, cast, instances, controlled=…)` gives one `PresenceRow(instance, presence, membership, controlled)` per individual. `controlled` is the caller's set of player-controlled instances; this slice does not read the sovereignty ledger.
 
@@ -80,7 +86,7 @@ Casts are values. **No cast is persisted in this slice.**
 ### Reading
 
 - `view(campaign_id, as_of=…)` returns `PartyView(state, instances, problems)`. It is rebuilt from canonical files under one store lock, and nothing is cached.
-- `history(member)`.
+- `history(member)`. Refused with `relations_unreadable` when a relation file cannot be read, since the history could be partial.
 - `stage(campaign_id, scene_id, present, as_of=…)` is `stage` over the campaign as it is now. It writes nothing.
 
 ### Moves
@@ -104,10 +110,11 @@ Each takes `at` (a 012 `Moment`) and `provenance` (attribution text, not authori
 - `invalid_field`, `cross_campaign`, `self_membership`, `missing_campaign`, `missing_member`, `missing_party`, `instance_id_conflict`;
 - `relations_unreadable`: any relation file of the campaign cannot be read;
 - `already_member`, `not_a_member`, `not_in_party`, `not_in_reserve`, `already_there`: the named move does not fit where the member stands;
-- `conflicting_membership`: the member, or the target anchor, holds two memberships;
-- `out_of_order`: the member's membership is already recorded after `at`. History is appended, never rewritten;
+- `conflicting_membership`: the member, or the target anchor or one above it, holds two memberships;
+- `out_of_order`: **any** membership of the campaign is already recorded after `at`. Membership history is appended in campaign order, never rewritten. This is campaign-wide on purpose: the cycle and stored-anchor checks are made at `at`, and they stay true afterwards only if nothing later is already recorded;
 - `same_moment`: the current membership began at `at`. Record the move at a later sequence;
-- `party_cycle`: the target anchor is itself, directly or through other parties, in the member's party.
+- `party_cycle`: the target anchor is itself, directly or through other parties, in the member's party;
+- `party_in_reserve`: joining the active party of an anchor that is itself stored. Its reserve can still take members.
 
 **At commit**, under the store lock, the move is refused with `StaleWrite` (nothing written) when:
 - any membership relation file of the campaign was added, changed or removed since the plan;
@@ -130,4 +137,5 @@ A release only ends a relation. The member's instance file, its other relations,
 | Capture, trainer links and storage capacity | [050](roadmap/sprints/capture-and-trainer-links.md) |
 | Which present individuals actually speak, and what a newly present one is told | 027 (each speaker is its own generation call) and 032 |
 | Physical positions within a scene, and who can still reach whom | 041 |
+| An **audience**: individuals who perceive a scene without being on stage | 032 (who receives what) and 041 (who can see and hear); the cast here is only who is present |
 | Cross-device merge of memberships (relation files sync as 017's do) | 019/028 |

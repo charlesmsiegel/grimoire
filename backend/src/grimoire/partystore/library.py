@@ -155,7 +155,10 @@ class PartyLibrary:
 
     def view(self, campaign_id: str, *, as_of: int) -> PartyView:
         """Membership at ``as_of``, rebuilt from canonical files under one lock; nothing is cached."""
-        validate_segment(campaign_id, "campaign_id")
+        try:
+            validate_segment(campaign_id, "campaign_id")
+        except ValueError as error:
+            raise _refuse("invalid_field", str(error)) from None
         with self.store.lock:
             files = _read(self.store, campaign_id)
             instances = self.store.campaign_instances(campaign_id)
@@ -165,11 +168,14 @@ class PartyLibrary:
     def history(self, member: InstanceRef) -> tuple[Relation, ...]:
         """Every membership relation ``member`` is the subject of, ended and retracted ones included, oldest first.
 
-        This is the member's membership history; nothing in it is ever deleted.
+        This is the member's membership history; nothing in it is ever deleted. Refused with
+        ``relations_unreadable`` when a relation file cannot be read, since one of its memberships may be in it.
         """
         _instance(member, "member")
         with self.store.lock:
             files = _read(self.store, member.campaign_id)
+        if files.unreadable:
+            raise _refuse("relations_unreadable", "a relation file cannot be read, so the history may be partial")
         found = [r for r in files.relations if r.predicate in MEMBERSHIP and r.subject == member]
         return tuple(sorted(found, key=lambda r: (r.since.sequence, r.ref.relation_id)))
 
@@ -236,13 +242,17 @@ class PartyLibrary:
             files = _read(store, campaign)
             if files.unreadable:
                 raise _refuse("relations_unreadable", "a relation file cannot be read, so membership is unknown")
-            mine = [r for r in files.relations
-                    if r.predicate in MEMBERSHIP and r.subject == member and r.retraction is None]
-            later = [r for r in mine if r.since.sequence > at.sequence
-                     or (r.ending is not None and r.ending.until.sequence > at.sequence)]
+            live = [r for r in files.relations if r.predicate in MEMBERSHIP and r.retraction is None]
+            # Membership history is appended in campaign order: a move checked at ``at`` (for a cycle, a stored
+            # anchor) stays valid afterwards only if no membership of the campaign is recorded after ``at``.
+            later = sorted((r for r in live if r.since.sequence > at.sequence
+                            or (r.ending is not None and r.ending.until.sequence > at.sequence)),
+                           key=lambda r: r.ref.relation_id)
             if later:
-                raise _refuse("out_of_order", f"{member}'s membership is already recorded after sequence "
-                                              f"{at.sequence}", member)
+                raise _refuse("out_of_order", f"a membership is already recorded after sequence {at.sequence} "
+                                              f"({later[0].ref}); record the move at a later sequence",
+                              *dict.fromkeys(r.subject for r in later))
+            mine = [r for r in live if r.subject == member]
             holding = [r for r in mine if r.holds_at(at.sequence)]
             if len(holding) > 1:
                 raise _refuse("conflicting_membership", f"{member} holds more than one membership", member)
@@ -265,10 +275,13 @@ class PartyLibrary:
                                              "record the move at a later sequence", member)
             if target is not None:
                 state = PartyState.build(campaign, files.relations, as_of=at.sequence)
-                if target[0] in state.conflicted:
-                    raise _refuse("conflicting_membership", f"{target[0]}'s own membership is ambiguous", target[0])
+                if state.uncertain(target[0]):
+                    raise _refuse("conflicting_membership", f"{target[0]}'s membership is ambiguous", target[0])
                 if member in state.anchors_above(target[0]):
                     raise _refuse("party_cycle", f"{target[0]} is itself in {member}'s party", member, target[0])
+                if target[1] == "party" and state.reserved(target[0]):
+                    raise _refuse("party_in_reserve", f"{target[0]} is stored, so its party cannot travel",
+                                  target[0])
             changes: list[RelationChange] = []
             try:
                 if current is not None:

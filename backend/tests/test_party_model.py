@@ -95,17 +95,44 @@ def test_stage_refusals():
     many = [InstanceRef(C, "creature", f"g-{n}") for n in range(257)]
     assert refused(lambda: ok(many, many)).reason == "too_large"
     assert refused(lambda: stage("state", "s", [MARA], instances=EVERYONE)).reason == "invalid_field"
-    with pytest.raises(ValueError):
-        ok([MARA]).__class__(C, "Bad Scene", 1, (MARA,))
 
 
-def test_scene_cast_is_validated_on_its_own():
-    assert SceneCast(C, "s", 0, (SNIK, MARA)).present == (MARA, SNIK)
-    assert SceneCast(C, "s", 0, ()).present == ()
-    assert refused(lambda: SceneCast(C, "s", 0, [MARA])).reason == "invalid_field"
-    assert refused(lambda: SceneCast(C, "s", 0, (MARA, MARA))).reason == "duplicate_actor"
-    assert refused(lambda: SceneCast(C, "s", -1, ())).reason == "invalid_field"
-    assert refused(lambda: SceneCast(C, "s", 0, (InstanceRef("x", "character", "a"),))).reason == "cross_campaign"
+def test_only_stage_builds_a_cast():
+    state = PartyState.build(C, [rel(1, "in_reserve", GRUB, MARA, 1)], as_of=1)
+    found = refused(lambda: SceneCast(C, "s", 1, (GRUB,)))  # a hand-made cast could hold a reserved member
+    assert found.reason == "invalid_field"
+    cast = stage(state, "s", (SNIK, MARA), instances=EVERYONE)
+    assert cast.present == (MARA, SNIK) and stage(state, "s", (), instances=EVERYONE).present == ()
+    assert refused(lambda: SceneCast(C, "s", 1, (MARA,), object())).reason == "invalid_field"
+    assert refused(lambda: stage(state, "Bad Scene", [MARA], instances=EVERYONE)).reason == "invalid_field"
+    assert refused(lambda: PartyState.build("Bad Campaign", [], as_of=0)).reason == "invalid_field"
+
+
+def test_reserve_is_transitive():
+    """A member travelling in a party whose anchor is itself stored cannot appear either."""
+    state = PartyState.build(C, [rel(1, "in_reserve", CREW, MARA, 1), rel(2, "in_party", TOMA, CREW, 1)], as_of=1)
+    assert state.reserved(TOMA) and state.reserved(CREW) and not state.reserved(MARA)
+    found = refused(lambda: stage(state, "s", [MARA, TOMA], instances=EVERYONE))
+    assert found.reason == "in_reserve" and found.members == (TOMA,)
+    cast = stage(state, "s", [MARA], instances=EVERYONE)
+    assert presence(state, cast, TOMA) == "reserved"
+
+
+def test_an_ambiguous_anchor_makes_its_members_uncertain():
+    state = PartyState.build(C, [rel(1, "in_party", CREW, MARA, 1), rel(2, "in_party", CREW, TOMA, 1),
+                                 rel(3, "in_party", SNIK, CREW, 1)], as_of=1)
+    assert state.uncertain(SNIK) and not state.reserved(SNIK)
+    assert refused(lambda: stage(state, "s", [SNIK], instances=EVERYONE)).reason == "conflicting_membership"
+    assert presence(state, stage(state, "s", [MARA], instances=EVERYONE), SNIK) == "uncertain"
+
+
+def test_presence_refuses_an_incomplete_state():
+    complete = PartyState.build(C, [], as_of=0)
+    cast = stage(complete, "s", [MARA], instances=EVERYONE)
+    broken = PartyState.build(C, [], as_of=0, unreadable=True)
+    assert refused(lambda: presence(broken, cast, SNIK)).reason == "relations_unreadable"
+    assert refused(lambda: cast_report(broken, cast, [SNIK])).reason == "relations_unreadable"
+    assert refused(lambda: presence(complete, cast, "x")).reason == "invalid_field"
 
 
 def test_presence_and_the_report_keep_control_membership_and_presence_apart():
@@ -127,8 +154,10 @@ def test_presence_and_the_report_keep_control_membership_and_presence_apart():
 def test_anchors_above_and_a_recorded_cycle():
     state = PartyState.build(C, [rel(1, "in_party", MARA, CREW, 1), rel(2, "in_party", SNIK, MARA, 1)], as_of=1)
     assert state.anchors_above(SNIK) == (MARA, CREW) and state.anchors_above(CREW) == ()
+    cast = stage(state, "s", [CREW], instances=EVERYONE)
+    assert presence(state, cast, SNIK) == "accompanying"  # through Mara, who travels with the crew
     looped = PartyState.build(C, [rel(1, "in_party", MARA, CREW, 1), rel(2, "in_party", CREW, MARA, 1)], as_of=1)
-    assert looped.anchors_above(MARA) == (CREW,)
+    assert looped.anchors_above(MARA) == (CREW,) and looped.chain(MARA)[1] is False
 
 
 def test_refusals_pickle():

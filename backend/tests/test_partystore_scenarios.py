@@ -12,7 +12,8 @@ import json
 
 import pytest
 
-from grimoire.core import DIRECTOR, Moment
+from grimoire.core import DIRECTOR, Event, Moment, Perception
+from grimoire.evidencestore import EvidenceLibrary
 from grimoire.graph import Relation
 from grimoire.party import PartyRefused, cast_report, presence
 from grimoire.store import LibraryStore
@@ -20,6 +21,7 @@ from grimoire.testing.fileops import snapshot
 
 from graph_fixtures import relation_library
 from party_fixtures import C, CREW, GRUB, INNKEEPER, MARA, SNIK, TOMA, party_library, seed
+from store_helpers import OWNER, owner_handle
 
 
 @pytest.fixture
@@ -100,6 +102,13 @@ def test_a_creature_is_cast_under_its_own_reference(path):
 
 def test_releasing_deletes_nothing_it_remembers(path):
     _two_creatures(path)
+    with LibraryStore.open(path) as store:  # Grub saw something while boxed: a 020 event and its perception
+        EvidenceLibrary(store, owner_handle(), owner=OWNER).append(C, [
+            Event(C, "e-feast", "the trainers held a feast", Moment(5), "director", (MARA,)),
+            Perception(C, "v-grub", GRUB, "e-feast", "heard", "laughter through the ball", Moment(5), "director",
+                       confirmed=True)]).commit()
+        remembered = EvidenceLibrary(store).actor_knowledge(C, GRUB, as_of=9)
+        assert [e.evidence_id for e in remembered.evidence] == ["v-grub"]
     before = snapshot(path)
     with LibraryStore.open(path) as store:
         party = party_library(store)
@@ -112,6 +121,8 @@ def test_releasing_deletes_nothing_it_remembers(path):
     after = snapshot(path)
     changed = {key for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
     assert {key for key in changed if not key.startswith(".grimoire")} == {"campaigns/c/relations/r-3.json"}
+    with LibraryStore.open(path) as store:
+        assert EvidenceLibrary(store).actor_knowledge(C, GRUB, as_of=9) == remembered
     assert after["campaigns/c/instances/creature/goblin-2.json"] == before["campaigns/c/instances/creature/goblin-2.json"]
     with LibraryStore.open(path) as store:
         ended = [r for r in party_library(store).history(GRUB) if isinstance(r, Relation)]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from grimoire.core import InstanceRef, Moment
-from grimoire.party import PartyRefused
+from grimoire.party import PartyRefused, presence
 from grimoire.store import LibraryStore, StaleWrite, StoreError
 from grimoire.testing.fileops import snapshot
 
@@ -67,6 +67,7 @@ def test_shape_and_existence(store):
     assert refused(lambda: party.join(MARA, str(SNIK), at=at, provenance="d")).reason == "invalid_field"  # type: ignore[arg-type]
     assert refused(lambda: party.join(MARA, SNIK, at=at, provenance=" ")).reason == "invalid_field"
     assert refused(lambda: party.move(SNIK, MARA, "box", at=at, provenance="d")).reason == "invalid_field"
+    assert refused(lambda: party.view("Bad Campaign", as_of=0)).reason == "invalid_field"
     assert refused(lambda: party.join(InstanceRef("nowhere", "character", "a"), InstanceRef("nowhere", "creature", "b"),
                                       at=at, provenance="d")).reason == "missing_campaign"
 
@@ -76,6 +77,23 @@ def test_a_cross_kind_pair_is_no_one_individual(store):
     party = party_library(store)
     assert refused(lambda: party.join(MARA, SNIK, at=Moment(1), provenance="d")).reason == "instance_id_conflict"
     assert refused(lambda: party.join(SNIK, MARA, at=Moment(1), provenance="d")).reason == "instance_id_conflict"
+
+
+def test_a_cycle_cannot_be_recorded_at_an_earlier_sequence(store):
+    party = party_library(store)
+    party.join(SNIK, MARA, at=Moment(7), provenance="d").commit()  # Mara travels with Snik from 7
+    found = refused(lambda: party.join(MARA, SNIK, at=Moment(5), provenance="d"))
+    assert found.reason == "out_of_order" and found.members == (MARA,)
+    assert refused(lambda: party.join(MARA, SNIK, at=Moment(8), provenance="d")).reason == "party_cycle"
+
+
+def test_a_stored_anchor_cannot_take_travellers(store):
+    party = party_library(store)
+    party.join(MARA, GRUB, at=Moment(1), provenance="d").commit()
+    party.store_in_reserve(GRUB, at=Moment(2), provenance="d").commit()
+    assert refused(lambda: party.join(GRUB, SNIK, at=Moment(3), provenance="d")).reason == "party_in_reserve"
+    party.move(SNIK, GRUB, "reserve", at=Moment(3), provenance="d").commit()  # its reserve is fine
+    assert refused(lambda: party.stage(C, "s", [SNIK], as_of=3)).reason == "in_reserve"
 
 
 def test_a_party_cannot_contain_itself(store):
@@ -104,11 +122,14 @@ def test_an_unreadable_relation_file_fails_closed(store):
     party = party_library(store)
     party.join(MARA, GRUB, at=Moment(1), provenance="d").commit()
     party.store_in_reserve(GRUB, at=Moment(2), provenance="d").commit()
+    party_cast_from_before = party.stage(C, "s", [MARA], as_of=3)
     (store.root / "campaigns" / "c" / "relations" / "r-3.json").write_text("{not json", encoding="utf-8")
     view = party.view(C, as_of=3)
     assert not view.state.complete and view.state.problems[-1].code == "relations_unreadable"
     assert refused(lambda: party.stage(C, "s", [MARA], as_of=3)).reason == "relations_unreadable"
     assert refused(lambda: party.join(MARA, SNIK, at=Moment(3), provenance="d")).reason == "relations_unreadable"
+    assert refused(lambda: party.history(GRUB)).reason == "relations_unreadable"
+    assert refused(lambda: presence(view.state, party_cast_from_before, SNIK)).reason == "relations_unreadable"
 
 
 def test_a_membership_change_since_the_preview_is_stale(store):

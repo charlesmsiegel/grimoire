@@ -53,6 +53,17 @@ def _refuse(reason: str, message: str, *members: InstanceRef) -> PartyRefused:
     return PartyRefused(message, reason, tuple(members))
 
 
+def _segment(value: object, label: str) -> None:
+    try:
+        validate_segment(value, label)
+    except ValueError as error:
+        raise _refuse("invalid_field", str(error)) from None
+
+
+#: Only ``stage`` builds a ``SceneCast``: a cast made any other way could hold a reserved member.
+_STAGED = object()
+
+
 @dataclass(frozen=True, slots=True)
 class Membership:
     """Where one member stands at one sequence: in ``party``'s active party or its reserve."""
@@ -111,7 +122,7 @@ class PartyState:
               unreadable: bool = False) -> PartyState:
         """``relations`` are the campaign's decoded relations (others are ignored); ``unreadable`` says some
         relation file or the folder could not be read."""
-        validate_segment(campaign_id, "campaign_id")
+        _segment(campaign_id, "campaign_id")
         if type(as_of) is not int or as_of < 0:
             raise _refuse("invalid_field", "as_of must be a non-negative int")
         holding: dict[InstanceRef, list[Relation]] = {}
@@ -156,31 +167,62 @@ class PartyState:
         return (tuple(m.member for m in found if m.status == "party"),
                 tuple(m.member for m in found if m.status == "reserve"))
 
-    def anchors_above(self, anchor: InstanceRef) -> tuple[InstanceRef, ...]:
-        """The parties ``anchor`` itself belongs to, transitively (a group in a larger party), nearest first.
+    def chain(self, instance: InstanceRef) -> tuple[tuple[Membership, ...], bool]:
+        """``instance``'s own membership, then its anchor's, and so on upward (a group in a larger party).
 
-        A cycle recorded by hand or by accepted effects stops the walk where it repeats.
+        The flag is true when the walk reaches an individual whose membership is ambiguous, so the rest of the
+        chain is unknown. A cycle (only a hand edit or accepted effects can record one; ``PartyLibrary`` refuses
+        it) stops the walk where it repeats.
         """
-        seen: list[InstanceRef] = []
-        current = self.memberships.get(anchor)
-        while current is not None and current.party not in seen and current.party != anchor:
-            seen.append(current.party)
-            current = self.memberships.get(current.party)
-        return tuple(seen)
+        found: list[Membership] = []
+        seen = {instance}
+        current = instance
+        while True:
+            if current in self.conflicted:
+                return tuple(found), True
+            membership = self.memberships.get(current)
+            if membership is None:
+                return tuple(found), False
+            found.append(membership)
+            if membership.party in seen:
+                return tuple(found), False
+            seen.add(membership.party)
+            current = membership.party
+
+    def anchors_above(self, anchor: InstanceRef) -> tuple[InstanceRef, ...]:
+        """The parties ``anchor`` itself belongs to, transitively, nearest first."""
+        found, _ = self.chain(anchor)
+        return tuple(dict.fromkeys(m.party for m in found if m.party != anchor))
+
+    def reserved(self, instance: InstanceRef) -> bool:
+        """Stored, directly or because a party it travels in is itself stored (a boxed group, a boxed anchor)."""
+        found, _ = self.chain(instance)
+        return any(m.status == "reserve" for m in found)
+
+    def uncertain(self, instance: InstanceRef) -> bool:
+        """Its own membership, or one of its anchors', is ambiguous."""
+        return self.chain(instance)[1]
 
 
 @dataclass(frozen=True, slots=True)
 class SceneCast:
-    """Who is present in one scene at one sequence: exactly the individuals ``stage`` selected, sorted."""
+    """Who is present in one scene at one sequence: exactly the individuals ``stage`` selected, sorted.
+
+    Only ``stage`` builds one, so a cast never holds a reserved or ambiguous member; any other construction is
+    refused (``invalid_field``).
+    """
 
     campaign_id: str
     scene_id: str
     as_of: int
     present: tuple[InstanceRef, ...]
+    _token: object = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        validate_segment(self.campaign_id, "campaign_id")
-        validate_segment(self.scene_id, "scene_id")
+        if self._token is not _STAGED:
+            raise _refuse("invalid_field", "a scene cast is built by stage")
+        _segment(self.campaign_id, "campaign_id")
+        _segment(self.scene_id, "scene_id")
         if type(self.as_of) is not int or self.as_of < 0:
             raise _refuse("invalid_field", "as_of must be a non-negative int")
         if type(self.present) is not tuple or any(type(ref) is not InstanceRef for ref in self.present):
@@ -205,12 +247,14 @@ def stage(state: PartyState, scene_id: str, present: Iterable[InstanceRef], *,
     Refused (``PartyRefused.reason``): ``relations_unreadable`` while membership is incomplete;
     ``invalid_field``, ``cross_campaign``, ``duplicate_actor``, ``too_large`` for the selection's shape;
     ``missing_actor`` for an individual without an instance file; ``instance_id_conflict`` for an id another
-    kind also uses; ``conflicting_membership``; and ``in_reserve`` for a reserved member, which must be
-    withdrawn into the party (a recorded move) before it can appear. Any instance kind may be cast, a
+    kind also uses; ``conflicting_membership`` when its membership or an anchor's is ambiguous; and
+    ``in_reserve`` for a reserved member, or one travelling in a party that is itself stored, which must be
+    withdrawn (a recorded move) before it can appear. Any instance kind may be cast, a
     creature included, under its own reference: nothing is re-keyed.
     """
     if not isinstance(state, PartyState):
         raise _refuse("invalid_field", "stage needs a PartyState")
+    _segment(scene_id, "scene_id")
     chosen = tuple(present)
     if any(type(ref) is not InstanceRef for ref in chosen):
         raise _refuse("invalid_field", "a cast is selected by InstanceRef")
@@ -230,35 +274,39 @@ def stage(state: PartyState, scene_id: str, present: Iterable[InstanceRef], *,
     paired = sorted(set(chosen) & paired_instances(known), key=str)
     if paired:
         raise _refuse("instance_id_conflict", "an id also used by another kind is no one individual", *paired)
-    conflicted = sorted(set(chosen) & state.conflicted, key=str)
-    if conflicted:
-        raise _refuse("conflicting_membership", "membership is ambiguous", *conflicted)
-    reserved = sorted((ref for ref in chosen if (m := state.memberships.get(ref)) and m.status == "reserve"), key=str)
+    reserved = sorted((ref for ref in chosen if state.reserved(ref)), key=str)
     if reserved:
         raise _refuse("in_reserve", "a reserved member is not with the party", *reserved)
-    return SceneCast(state.campaign_id, scene_id, state.as_of, chosen)
+    conflicted = sorted((ref for ref in chosen if state.uncertain(ref)), key=str)
+    if conflicted:
+        raise _refuse("conflicting_membership", "membership is ambiguous", *conflicted)
+    return SceneCast(state.campaign_id, scene_id, state.as_of, chosen, _STAGED)
 
 
 def presence(state: PartyState, cast: SceneCast, instance: InstanceRef) -> str:
     """One individual's presence in ``cast``'s scene; one of ``PRESENCES``.
 
-    ``present``: in the cast. ``accompanying``: in the active party of an anchor who is present (nearby and
-    available to join the scene, but not on stage and never a speaker). ``reserved``: stored; it cannot
-    appear. ``uncertain``: its membership is ambiguous. ``absent``: anything else, including every
-    companion of an anchor who is not in the scene.
+    ``present``: in the cast. ``reserved``: stored, or travelling in a party that is itself stored; it cannot
+    appear. ``uncertain``: its membership or an anchor's is ambiguous. ``accompanying``: in the active party
+    of an anchor who is present, directly or through a group (nearby and available to join the scene, but not
+    on stage and never a speaker). ``absent``: anything else, including every companion of an anchor who is
+    not in the scene. Refused with ``relations_unreadable`` while the state is incomplete, and with
+    ``stale_cast`` for a cast of another campaign or sequence.
     """
+    if not isinstance(state, PartyState) or not isinstance(cast, SceneCast) or type(instance) is not InstanceRef:
+        raise _refuse("invalid_field", "presence needs a PartyState, a SceneCast and an InstanceRef")
+    if not state.complete:
+        raise _refuse("relations_unreadable", "a relation file cannot be read, so reserve membership is unknown")
     if cast.campaign_id != state.campaign_id or cast.as_of != state.as_of:
         raise _refuse("stale_cast", "the cast and the state must be of the same campaign and sequence")
     if instance in cast.present:
         return "present"
-    if instance in state.conflicted:
-        return "uncertain"
-    membership = state.memberships.get(instance)
-    if membership is None:
-        return "absent"
-    if membership.status == "reserve":
+    chain, unknown = state.chain(instance)
+    if any(m.status == "reserve" for m in chain):
         return "reserved"
-    return "accompanying" if membership.party in cast.present else "absent"
+    if unknown:
+        return "uncertain"
+    return "accompanying" if any(m.party in cast.present for m in chain) else "absent"
 
 
 @dataclass(frozen=True, slots=True)
