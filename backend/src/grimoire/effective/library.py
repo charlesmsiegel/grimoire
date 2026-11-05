@@ -90,7 +90,7 @@ def _drop_is_unreadable_base(view: LibraryView, ref: SourceRef) -> bool:
         return False
     try:
         head = stored.manifest.head_refs().get(ref.unpinned())
-    except ValueError:  # a manifest with a bad head key: the loader's own reading decides, not ours
+    except ValueError:  # defensive: the loader excludes a source with a bad head key (excluded_source wins)
         return False
     if head is not None:
         return head == ref.revision

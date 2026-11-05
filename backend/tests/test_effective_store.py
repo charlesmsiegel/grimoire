@@ -420,3 +420,29 @@ def test_an_unreadable_base_beside_another_revision_and_no_head_is_dropped(store
     view = store.load()
     assert "missing_head" in [problem.code for problem in view.problems]
     assert base_explanation(store) == "entity_dropped"
+
+
+def test_an_unreadable_base_whose_id_is_reused_by_another_kind_is_dropped(store):
+    """kind_reuse drops the entity whatever its files hold, so repairing the base alone would not help."""
+    other = store.root.joinpath(*MARA_FILES[:-2], "lorebook", "mara")
+    other.mkdir(parents=True)
+    other.joinpath("r1.json").write_text("{not json")
+    r1 = store.root.joinpath(*MARA_FILES, "r1.json")
+    good = r1.read_text()
+    r1.write_text("{not json")
+    assert "kind_reuse" in [problem.code for problem in store.load().problems]
+    assert base_explanation(store) == "entity_dropped"
+    r1.write_text(good)
+    assert base_explanation(store) == "entity_dropped"
+
+
+def test_a_missing_head_elsewhere_in_the_source_is_read_conservatively(store):
+    """The base's only revision is unreadable, but another entity of its source reports missing_head,
+    which cannot be told from one for the base without parsing prose: the true, less specific reason."""
+    zed = store.root.joinpath(*MARA_FILES[:-1], "zed")
+    zed.mkdir(parents=True)
+    zed.joinpath("r1.json").write_text("{not json")
+    zed.joinpath("r2.json").write_text("{not json")
+    store.root.joinpath(*MARA_FILES, "r1.json").write_text("{not json")
+    assert "missing_head" in [problem.code for problem in store.load().problems]
+    assert base_explanation(store) == "entity_dropped"

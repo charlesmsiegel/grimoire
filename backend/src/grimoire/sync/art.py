@@ -254,9 +254,9 @@ def art_unmet(needs: Needs, blocked, final, origin, here: set[str], dest: str,  
 
     Why the receiver's exclusions count at all, when the store already guards its own writes: its
     art-only check refuses an image or source placement written into a source the receiver's own
-    files exclude (``InvalidSourceState``, which a sync reported as ``unapplicable`` before this
-    check, which now catches that case first and reports it as ``head_dependency``), but it sees neither a cross-source exclusion (it reads one source's scan, not the library's verdict)
-    nor a campaign placement that inherits a picture from an excluded source (a campaign asset is
+    files exclude (``InvalidSourceState``). Sync used to report that case as ``unapplicable``; this
+    check now catches it first, as ``head_dependency``. But the store sees neither a cross-source
+    exclusion (it reads one source's scan, not the library's verdict) nor a campaign placement that inherits a picture from an excluded source (a campaign asset is
     checked against its campaign only). Both would land in a state the receiver's batch refuses.
     Holding them here names the reason as a ``head_dependency``, holds what depends on them in the
     same fixpoint, and leaves the store's check as the backstop it was."""
