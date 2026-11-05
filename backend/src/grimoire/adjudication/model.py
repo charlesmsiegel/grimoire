@@ -210,7 +210,8 @@ class AbilityFinding:
     """What an action's assessment takes from 025's ``AbilityAssessment`` of the power it relies on.
 
     It is also what a decision records, so a replay re-checks the decision exactly as it was made and a
-    later use can tell whether the assessment still holds. ``charges`` are ``(ability id, cost id)``.
+    later use can tell whether the assessment still holds. ``charges`` are ``(ability id, cost id, cost
+    text)``: the text is what the price means, so a cost reworded under the same id no longer matches.
     """
 
     ability_id: str
@@ -218,7 +219,7 @@ class AbilityFinding:
     approval: str
     ruling_id: str | None
     uncertain: bool
-    charges: tuple[tuple[str, str], ...] = ()
+    charges: tuple[tuple[str, str, str], ...] = ()
 
     def __post_init__(self) -> None:
         for label in ("ability_id", "classification", "approval"):
@@ -229,9 +230,9 @@ class AbilityFinding:
         if type(self.uncertain) is not bool:
             raise _invalid("uncertain must be a bool")
         charges = _tuple(self.charges, "charges")
-        if not all(type(pair) is tuple and len(pair) == 2 and all(type(part) is str for part in pair)
-                   for pair in charges):
-            raise _invalid("charges must be (ability id, cost id) pairs")
+        if not all(type(charge) is tuple and len(charge) == 3 and all(type(part) is str for part in charge)
+                   for charge in charges):
+            raise _invalid("charges must be (ability id, cost id, cost text) triples")
         object.__setattr__(self, "charges", tuple(sorted(charges)))
         self._check_consistent()
 
@@ -263,7 +264,7 @@ class AbilityFinding:
             raise TypeError(f"expected an AbilityAssessment, not {type(assessment).__name__}")
         return cls(assessment.attempt.ability_id, assessment.classification, assessment.approval,
                    assessment.ruling_id, assessment.uncertain,
-                   tuple((ability, cost.id) for ability, cost in assessment.charges))
+                   tuple((ability, cost.id, cost.text) for ability, cost in assessment.charges))
 
     @property
     def permitted(self) -> bool:

@@ -160,7 +160,8 @@ def test_a_recorded_finding_classifies_exactly_as_its_assessment():
     attempt = ability()
     live = _power(attempt)
     finding = AbilityFinding.of(live)
-    assert finding.charges == (("light_bending", "eye_strain"),) and finding.permitted
+    assert finding.charges == (("light_bending", "eye_strain", "Every use leaves her eyes aching."),) \
+        and finding.permitted
     assert assess_action(power_frame(attempt), finding) == assess_action(power_frame(attempt), live)
 
 
@@ -209,7 +210,7 @@ def test_rulings_and_decisions_round_trip():
     assert ruling_from_payload(Q, _stored(ruling_to_payload(ruling, frozenset({"r0"})))) == (ruling,
                                                                                             frozenset({"r0"}))
     finding = AbilityFinding("light_bending", "extrapolation", "approved", "r1", True,
-                             (("light_bending", "migraine"), ("light_bending", "eye_strain")))
+                             (("light_bending", "migraine", "A headache."), ("light_bending", "eye_strain", "Aching eyes.")))
     decision = Decision("partial", "consent", consequences={"fall"})
     payload = decision_to_payload(bridge(), 2, "uncertain", decision, ANA, finding)
     assert decision_from_payload(Q, _stored(payload)) == ("c10", MARA, 2, "uncertain", decision, ANA, finding)
@@ -221,7 +222,7 @@ def test_rulings_and_decisions_round_trip():
     ("known_capability", "approved", "r1", False, ()),  # a declared use is never ruled on
     ("beyond_limits", "approved", "r1", True, ()),  # no ruling lifts a limit
     ("extrapolation", "approved", "r1", False, ()),  # an approved stretch is uncertain
-    ("new_ability", "approved", "r1", True, (("light_bending", "x"),)),  # a new ability charges nothing
+    ("new_ability", "approved", "r1", True, (("light_bending", "x", "A price."),)),  # a new ability charges nothing
     ("feat", "not_needed", None, True, ()),
 ], ids=["approved-unruled", "pending-ruled", "declared-ruled", "limit-approved", "certain-stretch",
         "charged-new", "unknown"])

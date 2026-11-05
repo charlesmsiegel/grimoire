@@ -201,7 +201,7 @@ def decision_to_payload(frame: ActionFrame, revision: int, classification: str, 
             "ability": None if ability is None else {
                 "ability_id": ability.ability_id, "classification": ability.classification,
                 "approval": ability.approval, "ruling_id": ability.ruling_id, "uncertain": ability.uncertain,
-                "charges": [list(pair) for pair in ability.charges]}}
+                "charges": [list(charge) for charge in ability.charges]}}
 
 
 def decision_from_payload(campaign_id: str, value: object
@@ -218,16 +218,16 @@ def decision_from_payload(campaign_id: str, value: object
         given = _object(data["ability"], _FINDING_KEYS, "ability")
         charges = given["charges"]
         if not isinstance(charges, (list, tuple)) or not all(
-                isinstance(pair, (list, tuple)) and len(pair) == 2 and all(type(part) is str for part in pair)
-                for pair in charges):
-            raise _bad("charges must be [ability, cost] pairs")
+                isinstance(charge, (list, tuple)) and len(charge) == 3 and all(type(part) is str for part in charge)
+                for charge in charges):
+            raise _bad("charges must be [ability, cost, text] triples")
         if type(given["uncertain"]) is not bool:
             raise _bad("uncertain must be true or false")
         finding = _build(AbilityFinding, _str(given["ability_id"], "ability_id"),
                          _str(given["classification"], "classification"), _str(given["approval"], "approval"),
                          _str(given["ruling_id"], "ruling_id", optional=True), given["uncertain"],
-                         tuple(tuple(pair) for pair in charges))
-        if [list(pair) for pair in finding.charges] != _thaw(charges):
+                         tuple(tuple(charge) for charge in charges))
+        if [list(charge) for charge in finding.charges] != _thaw(charges):
             raise _bad("charges must be sorted")
     return (_str(data["attempt_id"], "attempt_id"), actor, _int(data["revision"], "revision"),
             _str(data["classification"], "classification"), decision,

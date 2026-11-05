@@ -8,17 +8,20 @@ from grimoire.adjudication import AdjudicationError, Decision, Factor
 from grimoire.adjudicationstore import AdjudicationLibrary, adjudication_actor_ids
 from grimoire.chatstore import campaign_taken_ids
 from grimoire.core import DIRECTOR
+from grimoire.core.abilities import Abilities, Ability, Cost
 from grimoire.core.ability_use import AbilityRuling, assess_attempt
 from grimoire.core.authority import AuthorityError
-from grimoire.core.identity import InstanceRef
+from grimoire.core.entity import EntityInstance, FacetBundle
+from grimoire.core.entity_codec import instance_to_payload
+from grimoire.core.identity import InstanceRef, SourceRef
 from grimoire.effects import EffectProposal
 from grimoire.effectstore import InvalidEffect, TurnEffectsLibrary
 from grimoire.ledgers import LedgerInvalid
 from grimoire.security import Authorizer, Grant, Permission, ResourcePath
-from grimoire.store import LibraryStore, ProcessLocker, TakenIdsUnlisted
+from grimoire.store import LibraryStore, ProcessLocker, RecordEnvelope, TakenIdsUnlisted
 from grimoire.store.ledger import render_batches
 
-from ability_fixtures import effective
+from ability_fixtures import effective, light_bending
 from adjudication_fixtures import (
     ACROBAT, ANA, BOB, CHAT, COLLAPSE, FALL, GAP, IRIS, MARA, Q, SATCHEL, SOLA, SOLA_DEF, Table, ability, bridge, build_library,
     moment, power_frame, vault,
@@ -265,6 +268,29 @@ def test_a_stretch_waits_for_a_ruling_then_charges_once_through_an_accepted_effe
     replayed = _reopen(table).library()
     assert replayed.ability_use(Q, "director:a-1") == used
     assert [entry.ruling.ruling_id for entry in replayed.state(Q).rulings] == ["r1", "r2"]
+
+
+def test_a_cost_reworded_after_the_decision_is_not_charged(table):
+    library = table.library()
+    sail = ability(SOLA, **STRETCH)
+    library.frame(power_frame(sail, intent="Rise on a sail of sunlight."))
+    library.rule(AbilityRuling("r1", sail, "extrapolation", "approved", "director"))
+    library.decide(Q, "director:a-1", Decision("success", "adjudicated", {"#ability"}))
+    assert library.ability_use(Q, "director:a-1").approval == "approved"
+    # Same cost id, a harsher price: the decision was made against aching eyes, not blindness.
+    base = light_bending(force_limit=False)
+    harsher = Ability("light_bending", "Light bending", effects=base.effects, limits=base.limits,
+                      costs=[Cost("eye_strain", "Every use costs her sight for good."), *base.costs[1:]],
+                      prerequisites=base.prerequisites)
+    table.authority.add_grant(Grant("g-cmp", OWNER, frozenset(Permission), ResourcePath.parse("campaigns"), OWNER))
+    stored = table.store.load().instances[SOLA]
+    edited = EntityInstance(SOLA, SourceRef.parse(stored.envelope.payload["source"]),
+                            replaced=FacetBundle([Abilities([harsher])]))
+    txn = table.store.transaction()
+    txn.put(RecordEnvelope(SOLA, instance_to_payload(edited), name=stored.envelope.name,
+                           extra=dict(stored.envelope.extra)), stored.etag)
+    txn.commit(table.owner)
+    assert _reason(library.ability_use, Q, "director:a-1") == "assessment_changed"
 
 
 def test_flight_beyond_a_limit_is_impossible_and_no_ruling_changes_that(table):
