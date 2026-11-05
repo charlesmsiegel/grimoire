@@ -7,7 +7,10 @@ Each art file is its own unit: a denied or held one holds only itself and what d
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import os
+import threading
 
 import pytest
 
@@ -17,7 +20,7 @@ from grimoire.imagestore import ImageLibrary
 from grimoire.security import Grant, Permission, ResourcePath
 from grimoire.store import LibraryStore, RecordEnvelope, WriteDenied, etag
 from grimoire.store.layout import address_parts, blob_parts
-from grimoire.sync import ResolveRefused, identify, resolve, sync, sync_until_quiet
+from grimoire.sync import ResolveRefused, SyncInterrupted, apply_sync, identify, plan_sync, resolve, sync, sync_until_quiet
 
 from image_fixtures import HARBOR, PNG, PNG_2, SAILOR, WREN_A, WREN_B, handle, seed
 from ledger_helpers import open_authority
@@ -495,3 +498,94 @@ def test_the_same_picture_dropped_by_hand_on_both_devices_can_be_imported_again(
     assert calls == [(DESKTOP, _blob(PNG))]  # hashed on the origin before the copy, as any new blob
     assert (phone.root / _blob(PNG)).read_bytes() == PNG and _slot(phone, WREN_B) == _slot(desktop, WREN_B)
     assert sync(desktop, phone, H).conflicts == ()
+
+
+@pytest.mark.parametrize("mode", ["hide", "adjust"])
+def test_a_hand_edited_source_hide_or_adjust_is_never_copied(unpaired, mode):
+    """W8 ``mode_not_allowed``: a source placement may only ``set`` a picture. One edited by hand to
+    ``hide`` or ``adjust`` is a state the origin's own batch refuses, so sync holds it, never copies it."""
+    desktop, phone = unpaired
+    batch = _images(desktop).change()
+    ref = batch.add_image(HARBOR, "wren", PNG, {"origin": "test"})
+    batch.place(SAILOR, "avatar", Placement("set", "avatar", ref), None)
+    batch.commit()
+    source = desktop.root / _path(PlacementRef(SAILOR, "avatar"))
+    text = source.read_text()
+    edited = (text.replace('"image": "world:harbor#image/wren",\n    "mode": "set",', '"mode": "hide",')
+              if mode == "hide" else text.replace('"mode": "set"', '"mode": "adjust"'))
+    assert edited != text
+    source.write_text(edited)
+    report = sync_until_quiet(desktop, phone, H)
+    held = _path(PlacementRef(SAILOR, "avatar"))
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == {held: "head_dependency"}
+    assert "mode_not_allowed" in report.conflict(held).detail
+    assert not (phone.root / held).exists()
+    assert {(_path(ref), PHONE), (_blob(PNG), PHONE)} <= set(report.copied)  # the rest still syncs
+    mine = source.read_bytes()  # resolve applies the same rule: refused
+    with pytest.raises(ResolveRefused, match="mode_not_allowed"):
+        resolve(desktop, phone, held, etag(mine), {DESKTOP: etag(mine), PHONE: None}, H)
+    assert not (phone.root / held).exists()
+
+
+@pytest.mark.parametrize("how", ["sync", "resolve"])
+def test_a_blob_copy_never_deadlocks_with_a_planner(pair, monkeypatch, how):
+    """The commit that copies desktop's blob onto the phone loads it lazily from the desktop. A planner
+    of the same pair locks the libraries in root order (desktop, then phone). If the commit held only the
+    phone's lock while it loaded from the desktop, each would hold one lock and wait for the other.
+
+    The commit pauses at its first load until the planner holds the desktop's lock (or 2 seconds pass):
+    with one lock order the planner cannot get it, and both finish; with opposite orders, a hang.
+    """
+    desktop, phone = pair
+    assert os.fspath(desktop.root) < os.fspath(phone.root)  # the planner's order: desktop first
+    _campaign_art(desktop)
+    if how == "sync":
+        plan = plan_sync(desktop, phone, H)
+        assert any(copy.path == _blob(PNG) for copy in plan.copies[PHONE])
+
+        def commit() -> None:
+            apply_sync(plan, H)
+    else:
+        assert sync_until_quiet(desktop, phone, H).conflicts == ()
+        (phone.root / _blob(PNG)).unlink()  # a ``deleted`` conflict that resolve delivers
+        name = "sha256:" + hashlib.sha256(PNG).hexdigest()
+
+        def commit() -> None:
+            resolve(desktop, phone, _blob(PNG), name, {DESKTOP: name, PHONE: None}, H)
+    loading, planning = threading.Event(), threading.Event()
+    read, cached_reads = desktop.read_blob_exact, LibraryStore.cached_reads
+
+    def paused_read(*args):  # type: ignore[no-untyped-def]
+        if not loading.is_set():
+            loading.set()  # the commit on the phone holds the phone's lock here
+            planning.wait(timeout=2)
+        return read(*args)
+
+    @contextlib.contextmanager
+    def announced(self):  # type: ignore[no-untyped-def]
+        with cached_reads(self):
+            if self is desktop and threading.current_thread().name == "planner":
+                planning.set()
+            yield
+    monkeypatch.setattr(desktop, "read_blob_exact", paused_read)
+    monkeypatch.setattr(LibraryStore, "cached_reads", announced)
+    errors: list[BaseException] = []
+
+    def run(work) -> None:  # type: ignore[no-untyped-def]
+        try:
+            work()
+        except Exception as error:  # noqa: BLE001 - only a hang (or an unexpected error) fails
+            errors.append(error)
+
+    def planner() -> None:
+        assert loading.wait(timeout=10)
+        plan_sync(desktop, phone, H)
+    threads = [threading.Thread(target=run, args=(work,), name=name, daemon=True)  # a deadlock fails, never hangs
+               for work, name in ((commit, "committer"), (planner, "planner"))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+    assert not any(thread.is_alive() for thread in threads), "a blob copy and a planner deadlocked"
+    assert all(isinstance(error, SyncInterrupted) for error in errors), errors
+    assert loading.is_set() and (phone.root / _blob(PNG)).read_bytes() == PNG

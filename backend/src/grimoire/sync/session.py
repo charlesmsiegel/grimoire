@@ -8,6 +8,7 @@ depend only on bytes, the two devices' own archives and their unfinished-sync ma
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import os
 import re
@@ -16,13 +17,14 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef
+from grimoire.images import ImageModelError, placement_from_payload, validate_placement
 from grimoire.security import Permission
 from grimoire.store import (
     BlobCorrupt, CrossDevice, ImmutableImage, ImmutableRevision, InstanceIdConflict, InvalidEnvelope, InvalidSourceState,
     LibraryStore, LinkRefused, NameCollision, RevisionReferenced, StaleWrite, StoreError, UnstorableIdentifier,
     WriteConflict, WriteDenied, etag,
 )
-from grimoire.store.jsonfmt import MAX_FILE_BYTES
+from grimoire.store.jsonfmt import MAX_FILE_BYTES, JsonError, parse_strict
 from grimoire.store.layout import (
     chat_parts, classify, conflict_parts, definition_parts, image_parts, instance_parts, kept_address, logical,
     manifest_parts, placement_parts,
@@ -229,9 +231,28 @@ def plan_sync(left: LibraryStore, right: LibraryStore, handles: Mapping[str, obj
 
     With the ``handles`` the sync will commit with, a blob copy its receiver's durable authority
     grants no write for is ``denied`` here, without reading the blob (``_ungranted``)."""
-    first, second = sorted((left, right), key=lambda store: os.fspath(store.root))  # one lock order: no deadlock
+    first, second = _lock_order((left, right))
     with first.cached_reads(), second.cached_reads():
         return _plan(left, right, handles or {})
+
+
+def _lock_order(stores) -> list[LibraryStore]:  # type: ignore[no-untyped-def]
+    """The one order in which a thread takes more than one library's lock: by root path.
+
+    A commit that copies a blob loads it lazily from the origin (``put_blob_exact``), taking the
+    origin's lock inside the destination's commit; a plan holds both libraries' locks. So every
+    commit whose reads can reach the other library holds both locks, taken in this order, before
+    it starts (``_locked``): no thread ever waits for the first library while holding the second."""
+    return sorted(stores, key=lambda store: os.fspath(store.root))
+
+
+@contextlib.contextmanager
+def _locked(*stores: LibraryStore):  # type: ignore[no-untyped-def]
+    """Hold every one of ``stores``' locks (re-entrant, per thread), taken in ``_lock_order``."""
+    with contextlib.ExitStack() as stack:
+        for store in _lock_order(stores):
+            stack.enter_context(store.lock)
+        yield
 
 
 def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]) -> SyncPlan:
@@ -558,8 +579,8 @@ class _Needs:
 def _art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes]) -> _Needs:
     """The files a blob, image object or placement needs (docs/SYNC.md, "Art"), read from the
     origin's bytes. Everything the resolver reads for it must be identical, so it resolves the same
-    on both devices; a placement the 018 batch would refuse there (W7 scope, unreadable payload, an
-    adjust with nothing inherited) is held."""
+    on both devices; a placement the 018 batch would refuse there (W7 scope, unreadable payload, W8's
+    ``validate_placement``, an adjust with nothing inherited) is held."""
     kind = syncable(path)
     if kind == "blob" or data is None:
         return _Needs()  # content-addressed: needs nothing
@@ -598,6 +619,9 @@ def _art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes]) -> _N
     mode, image, readable = placement_target(data)
     if not readable:
         return done("its mode or image cannot be read")
+    refused = _placement_refusal(ref, data)
+    if refused is not None:
+        return done(refused)
     subject = ref.subject
     if isinstance(subject, SourceRef):  # W5 (source admitted, entity exists), W7, W6
         present.add("/".join(manifest_parts(subject.source)))
@@ -643,6 +667,17 @@ def _art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes]) -> _N
         identical.add(inherited)
         hold = art(base_image)
     return done(hold)
+
+
+def _placement_refusal(ref: PlacementRef, data: bytes) -> str | None:
+    """Why 018 refuses this placement where it sits (its codec, then W8's ``validate_placement``, which
+    the batch and the resolver both apply: a source placement may only ``set``), else ``None``."""
+    try:
+        placement = placement_from_payload(parse_strict(data).get("payload"))
+    except (JsonError, ImageModelError) as error:
+        return f"its payload cannot be read ({error})"
+    problem = validate_placement(ref.subject, ref.slot, placement)
+    return None if problem is None else f"{problem[0]}: {problem[1]}"
 
 
 def _entity_head(origin: Mapping[str, bytes], entity: SourceRef) -> str | None:
@@ -1118,7 +1153,8 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
         return changes
 
     try:
-        result = txn.commit(handle, dict(approvals), on_denied=on_denied)
+        with _locked(*plan.stores.values()):  # a blob copy loads from the origin inside this commit
+            result = txn.commit(handle, dict(approvals), on_denied=on_denied)
     except (StaleWrite, WriteConflict, SyncInterrupted, *PER_PATH_ERRORS) as error:
         applied.consumed.extend(getattr(error, "consumed_approvals", ()))  # spent without a write (R16)
         raise SyncInterrupted(f"the data commit on {device} stopped: {error}", _report(plan, applied)) from error
@@ -1447,7 +1483,8 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     except (StaleWrite, *PER_PATH_ERRORS) as error:
         raise ResolveRefused(f"{path} cannot be resolved on {receiver}: {error}") from error
     try:
-        txn.commit(handles[receiver], dict((approvals or {}).get(receiver, {})))
+        with _locked(*stores.values()):  # a blob is loaded from the winner inside this commit
+            txn.commit(handles[receiver], dict((approvals or {}).get(receiver, {})))
     except WriteDenied as error:  # nothing was written: the grant refuses it, like any other refusal
         raise ResolveRefused(f"{path} cannot be resolved on {receiver}: {error}") from error
     try:
