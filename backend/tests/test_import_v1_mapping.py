@@ -303,7 +303,7 @@ def test_a_persona_saved_with_windows_line_endings_keeps_its_description(env):
 
 def test_a_path_with_no_legacy_id_leaves_only_its_record_out(env):
     scenes = env.v1 / CAMPAIGN / "scenes"
-    renamed = "001--bad\\name"  # a backslash: 011 refuses it a legacy id and says so
+    renamed = "001--bad\u200bname"  # a zero-width space (a format character): 011 refuses it a legacy id
     (scenes / f"{SID}.md").rename(scenes / f"{renamed}.md")
     path = env.v1 / CAMPAIGN / "appearances.json"
     path.write_text(path.read_text(encoding="utf-8").replace(SID, renamed), encoding="utf-8")
