@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 
 #: Character Card V3 (the ``spec`` value of a V3 card)
@@ -91,9 +91,9 @@ class LoreEntry:
     content: str
     enabled: bool = True
     secondary_keys: tuple[str, ...] = ()
-    settings: Mapping[str, object] = MappingProxyType({})
-    extensions: Mapping[str, object] = MappingProxyType({})
-    extras: Mapping[str, object] = MappingProxyType({})
+    settings: Mapping[str, object] = field(default_factory=_empty)
+    extensions: Mapping[str, object] = field(default_factory=_empty)
+    extras: Mapping[str, object] = field(default_factory=_empty)
     #: the entry's place in the book's ``entries`` array (from 0); preview paths use it
     index: int = 0
 
@@ -103,9 +103,9 @@ class Lorebook:
     name: str | None
     description: str | None
     entries: tuple[LoreEntry, ...]
-    settings: Mapping[str, object] = MappingProxyType({})
-    extensions: Mapping[str, object] = MappingProxyType({})
-    extras: Mapping[str, object] = MappingProxyType({})
+    settings: Mapping[str, object] = field(default_factory=_empty)
+    extensions: Mapping[str, object] = field(default_factory=_empty)
+    extras: Mapping[str, object] = field(default_factory=_empty)
 
 
 @dataclass(frozen=True)
@@ -117,7 +117,7 @@ class Asset:
     name: str | None
     ext: str | None
     #: unknown keys of the entry, verbatim
-    extras: Mapping[str, object] = MappingProxyType({})
+    extras: Mapping[str, object] = field(default_factory=_empty)
     #: the entry's place in the card's ``assets`` array (from 0), so a loss names the right entry
     index: int = 0
 
@@ -154,9 +154,9 @@ class CharacterCard:
     authorship: Authorship = Authorship()
     lorebook: Lorebook | None = None
     assets: tuple[Asset, ...] = ()
-    extensions: Mapping[str, object] = MappingProxyType({})
+    extensions: Mapping[str, object] = field(default_factory=_empty)
     #: unknown keys of ``data`` and of the top level (``data.<key>`` / ``<key>``), verbatim
-    extras: Mapping[str, object] = MappingProxyType({})
+    extras: Mapping[str, object] = field(default_factory=_empty)
     losses: tuple[Loss, ...] = ()
 
 
@@ -170,7 +170,7 @@ class CastRef:
     ref: str | None = None
     name: str | None = None
     #: the entry's other keys, verbatim
-    extras: Mapping[str, object] = MappingProxyType({})
+    extras: Mapping[str, object] = field(default_factory=_empty)
 
 
 @dataclass(frozen=True)
@@ -183,18 +183,18 @@ class ScenarioCard:
     openings: tuple[Greeting, ...] = ()
     instructions: str = ""
     #: other authored texts (``setting``: a V3 card's description imported as a scenario)
-    texts: Mapping[str, str] = MappingProxyType({})
+    texts: Mapping[str, str] = field(default_factory=_empty)  # type: ignore[assignment]
     cast: tuple[CastRef, ...] = ()
     tags: tuple[str, ...] = ()
     authorship: Authorship = Authorship()
     lorebook: Lorebook | None = None
     assets: tuple[Asset, ...] = ()
-    extensions: Mapping[str, object] = MappingProxyType({})
-    extras: Mapping[str, object] = MappingProxyType({})
+    extensions: Mapping[str, object] = field(default_factory=_empty)
+    extras: Mapping[str, object] = field(default_factory=_empty)
     losses: tuple[Loss, ...] = ()
     #: where a piece came from in the document, when that differs from its name (a V3 card read
     #: as a scenario: ``premise`` -> ``data.scenario``); used for preview field paths
-    paths: Mapping[str, str] = MappingProxyType({})
+    paths: Mapping[str, str] = field(default_factory=_empty)  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -203,7 +203,7 @@ class LorebookCard:
 
     format: str
     lorebook: Lorebook
-    extras: Mapping[str, object] = MappingProxyType({})
+    extras: Mapping[str, object] = field(default_factory=_empty)
     losses: tuple[Loss, ...] = ()
 
 
