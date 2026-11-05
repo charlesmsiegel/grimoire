@@ -253,9 +253,12 @@ def test_an_instance_file_with_no_bytes_to_read_fails_allocation_closed(store, m
         campaign_taken_ids(store, "c1")
 
 
-def test_a_party_that_is_a_moved_item_is_replanned_not_replaced(store, library):
+@pytest.mark.parametrize("hand_edit", [None, {"owner": None, "note": None, "fits": ["off-hand", "main-hand"]}])
+def test_a_party_that_is_a_moved_item_is_replanned_not_replaced(store, library, hand_edit):
     chest = created(library, make("make-1", name="Chest"))
     sword = created(library, make("make-2"))
+    if hand_edit:  # an equivalent origin, written back in canonical form by the next change
+        edit(store, chest, lambda d: d["payload"][POSSESSION_KEY]["origin"].update(hand_edit))
     planned = library.apply(sword, op("m1", Step.move(chest)), expected_rev=1)
     done(library, chest, op("m2", Step.move(TOMA)))  # the chest moved on: still the same chest
     planned.commit()
@@ -296,8 +299,10 @@ def test_an_item_that_breaks_before_commit_is_stale(store, library):
     item = created(library, make())
     change = library.apply(item, op("m1", Step.move(TOMA)), expected_rev=1)
     edit(store, item, lambda d: d["payload"][POSSESSION_KEY].update(schema="grimoire.possession/9"))
-    with pytest.raises(StaleWrite):
+    with pytest.raises(StaleWrite) as caught:
         change.commit()
+    assert not isinstance(caught.value, PartyReplaced)
     instance_file(store, item).write_bytes(b"{broken")
-    with pytest.raises(StaleWrite):
+    with pytest.raises(StaleWrite) as caught:
         change.commit()
+    assert not isinstance(caught.value, PartyReplaced)

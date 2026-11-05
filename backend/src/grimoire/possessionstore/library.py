@@ -154,8 +154,11 @@ class ItemChange:
         path = "/".join(address_parts(self.item))
         with store.lock:  # a replaced party outranks any other difference: a human decides
             instances = frozenset(store.campaign_instances(self.item.campaign_id))
-            now = self.library._party_etags(self.party_etags, instances)
-            changed = sorted(str(party) for party, etag in self.party_etags.items() if now.get(party) != etag)
+            parties = {party: etag for party, etag in self.party_etags.items() if party != self.item}
+            now = self.library._party_etags(parties, instances)  # the item itself: CAS and the replan below
+            changed = sorted(str(party) for party, etag in parties.items() if now.get(party) != etag)
+            if self.item in self.party_etags and self._item_replaced(self.party_etags[self.item]):
+                changed.append(str(self.item))
             if changed:
                 raise PartyReplaced([(path, f"party changed: {', '.join(changed)}")])
             try:
@@ -168,6 +171,16 @@ class ItemChange:
                 raise StaleWrite([(path, _unreadable_reason(error))]) from None
             if again.outcome != self.outcome or again.puts != self.puts:
                 raise StaleWrite([(path, "changed")])
+
+    def _item_replaced(self, pinned: str) -> bool:
+        """Whether the item's file now holds a different, readable item; a broken one is the replan's to report."""
+        try:
+            stored = self.library.store.read(self.item)
+            payload = stored.envelope.payload  # type: ignore[union-attr]
+            possession_from_payload(self.item, payload[POSSESSION_KEY])  # type: ignore[index]
+        except (StoreError, LibraryPathError, PossessionError, KeyError, TypeError):
+            return False
+        return _individual_pin(stored.envelope) != pinned  # type: ignore[arg-type]
 
     def commit(self, approvals: Mapping[str, str] | None = None) -> dict[str, str]:
         store = self.library.store
@@ -197,8 +210,15 @@ def _individual_pin(envelope: RecordEnvelope) -> str | None:
     payload = envelope.payload
     if not isinstance(payload, Mapping) or not isinstance(payload.get(POSSESSION_KEY), Mapping):
         return None
+    origin = payload[POSSESSION_KEY].get("origin")
+    if isinstance(envelope.address, InstanceRef):
+        try:  # canonical, so a hand-edited but equivalent origin pins the same before and after a rewrite
+            decoded = possession_from_payload(envelope.address, payload[POSSESSION_KEY])
+            origin = possession_to_payload(decoded)["origin"]
+        except PossessionError:
+            pass
     document = thaw({"payload": {key: value for key, value in payload.items() if key != POSSESSION_KEY},
-                     "origin": payload[POSSESSION_KEY].get("origin"), "name": envelope.name, "owner": envelope.owner,
+                     "origin": origin, "name": envelope.name, "owner": envelope.owner,
                      "derived_from": envelope.derived_from, "base": envelope.base, "base_etag": envelope.base_etag,
                      "extra": envelope.extra})
     text = json.dumps(document, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
