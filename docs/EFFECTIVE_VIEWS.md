@@ -129,7 +129,7 @@ Each source is a `SelectedSource(ref, role, resolved_revision=None, actor=None)`
 | Call | Answers |
 |---|---|
 | `sources()` | each selection with its pinned resolution or `BrokenReference`, plus notices |
-| `resolve(ref, role=None)` | the raw definition of a selected entity, or of a pinned **ancestor** in the chain of a selection (of that `role`, when given). **Raw ancestry is for merge owners** (027 voice, 018/038 art): it still holds content the portrayal cleared. |
+| `resolve(ref, role=None)` | the raw definition of a selected entity, or of a pinned **ancestor** in the chain of a selection (of that `role`, when given). **Raw ancestry is for merge owners** (027 voice, 038 art): it still holds content the portrayal cleared. |
 | `effective(ref, role=None)` | the `EffectiveDefinition` of a **selected** revision, memoized; `requested` is the ref as asked. Ancestors are reachable only raw, so content a portrayal cleared never reaches prompt assembly through this call. |
 | `entity(instance_ref)` | the captured instance composed over its selection's effective definition |
 | `instance`, `instance_etag` | the captured instance value and its etag |
@@ -173,6 +173,6 @@ Ancestry is walked separately from field composition (`portrayal.derivation_chai
 | Follow-head derivation, multiple bases, `overrides` | 022 later, 046 |
 | Reviewed rebase and inheritance UI | 042, 046 |
 | Relationship remapping between portrayals | 017 |
-| Voice item composition, and art placement merging | 027, 018/038 |
+| Voice item composition, and cross-source art inheritance and placement merging | 027, 038 |
 | Snapshot-aware control and damage, and prompt assembly | 035, 027, 031 |
 | Derivation-aware navigation filters | 065 |

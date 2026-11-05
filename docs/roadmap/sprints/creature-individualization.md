@@ -36,7 +36,7 @@ Works in mechanics-free play without character sheets; ruleset conversion is a s
 
 ## Obligations from 025
 
-Per-ability inherit/replace/clear for the single `abilities` facet ([fictional abilities](../../ABILITIES.md)) is a shared follow-up with 022: an individual should be able to evolve one species power without copying the rest.
+Per-ability inherit/replace/clear for the single `abilities` facet ([fictional abilities](../../ABILITIES.md)) is owned by 022 as a follow-up and consumed here: an individual should be able to evolve one species power without copying the rest.
 
 ## Open questions (answered by the first slice)
 - *Which scene evidence authorizes individualization?* An explicit human decision, never narrator or model output. If the actor has a controlling player, only that player decides; otherwise only the director (the table owner) does. Event ids are optional recorded grounds.

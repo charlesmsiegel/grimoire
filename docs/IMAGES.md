@@ -140,7 +140,7 @@ The result is a `Resolution`. Each slot is exactly one of:
 - An instance inherits from its derivation entity: `derived_from` if present, else `base`, taken unpinned.
   - If both are present and name different entities, or a value cannot be parsed, nothing is inherited. Only campaign images are then in scope.
   - An unreadable or newer-format instance is handled the same way.
-- A derived variant or alternate portrayal in another source does **not** inherit art in this slice. That policy belongs to [022](roadmap/sprints/effective-world-snapshots.md).
+- A derived variant or alternate portrayal in another source does **not** inherit art in this slice. That policy belongs to [038](roadmap/sprints/expression-and-art-lineage.md), over 022's derivation links.
 - **A damaged campaign layer never reveals the source picture.**
   - A campaign placement file that is a link or a directory gives its slot `Unavailable(invalid_placement)`.
   - If the instance's placement folder is a link, is unreadable, exists only under a look-alike spelling, holds any non-canonically named `.json` file (it could be a placement: `Avatar.json`, `avatar copy.json`, a sync tool's `Avatar.sync-conflict-….json`), or has a differently spelled sibling folder at any level below `placements/` (`Wren-b` beside `wren-b`), every inherited slot, and any `adjust` of one, is `Unavailable(invalid_placement, "campaign layer damaged")` instead of `Shown`, because the layer might be hiding something.

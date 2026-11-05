@@ -44,7 +44,7 @@ Consume the Wave 1 `DefinitionIndex`'s explicit `derived_variant` / `overrides` 
 
 ## Obligations from 025
 
-`abilities` ([fictional abilities](../../ABILITIES.md)) is a single facet, so evolving one ability on a sourced instance replaces a full copy that stops following head changes, and a head that gains the facet breaks an instance that *added* one. Per-ability inherit/replace/clear is a follow-up for this sprint (with 024).
+`abilities` ([fictional abilities](../../ABILITIES.md)) is a single facet, so evolving one ability on a sourced instance replaces a full copy that stops following head changes, and a head that gains the facet breaks an instance that *added* one. Per-ability inherit/replace/clear is owned by this sprint as a follow-up; 024 consumes it.
 
 ## Open questions
 - Virtual, compiled or hybrid?

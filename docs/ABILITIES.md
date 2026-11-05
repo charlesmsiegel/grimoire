@@ -197,11 +197,12 @@ At most 256 rulings may name one attempt id **for one actor**; rulings on other 
 - **Assess and charge each `attempt_id` once:** an obligation on 020, 021 and 029.
 - **Superseding a ruling** is not possible in this slice: an approve/refuse pair on the same labels is a named `conflicting_rulings`, never a silent overwrite. A supersede/revoke record, and whether a ruling should also pin the entity's `resolved_source`, belong to 029.
 - **Head gains the facet.** By 009's source-drift rule, an unpinned instance that *added* an `abilities` facet stops resolving (`added_shadows_trait`) once its definition's head gains one (tested): pin it, or move its powers into a `replaced` facet.
-- **Whole-facet limitation.** `abilities` is one facet. Evolving a single ability on a sourced instance means `replaced` with a copy of all of them, and that copy no longer follows head changes to the others (tested). Per-ability inherit, replace and clear is a follow-up for [022](roadmap/sprints/effective-world-snapshots.md) and [024](roadmap/sprints/creature-individualization.md).
+- **Whole-facet limitation.** `abilities` is one facet. Evolving a single ability on a sourced instance means `replaced` with a copy of all of them, and that copy no longer follows head changes to the others (tested). Per-ability inherit, replace and clear is owned by [022](roadmap/sprints/effective-world-snapshots.md), which composes facets; [024](roadmap/sprints/creature-individualization.md) consumes it so an individual can evolve one power.
 
 ## Not in this slice
 
 - observed consequences as evidence (020);
+- persisting an `AbilityRuling` and assessing and charging each `attempt_id` once across reloads (029, which may replace the ruling surface; 020 stores what 029 decides to record);
 - committed costs and cooldowns (milestone 2);
 - rules for combining abilities in one attempt (milestone 3): this slice reads them as `combination`, fail-closed until a director approves one case by case;
 - limits that evolve by rule, and novel high-concept power systems (milestone 3);
