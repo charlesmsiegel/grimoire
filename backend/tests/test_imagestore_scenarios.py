@@ -19,7 +19,8 @@ from grimoire.images import Crop, Expression, Focus, Hidden, Placement, Shown, U
 from grimoire.imagestore import ImageLibrary, InvalidBatch, InvalidImage, InvalidPlacement
 from grimoire.library import LibraryPathError
 from grimoire.store import (
-    BlobCorrupt, LibraryStore, LinkSpec, NameCollision, RecordEnvelope, SourceManifest, StaleWrite, WriteDenied,
+    BlobCorrupt, LibraryStore, LinkSpec, NameCollision, RecordEnvelope, SourceManifest, StaleWrite, StoreError,
+    WriteDenied,
 )
 from grimoire.store.layout import address_parts, blob_parts
 from grimoire.testing.fileops import snapshot
@@ -908,3 +909,15 @@ def test_a_newer_placement_is_reported_as_such_and_never_replaceable(pictured, s
     with pytest.raises(InvalidPlacement) as refused:
         pictured.read_placement(ref)
     assert refused.value.reason == "unsupported_format" and refused.value.etag is None
+
+
+def test_check_runs_the_commits_checks_read_only_and_not_after_commit(images, store):
+    batch = images.change()
+    batch.add_image(CARD, "mira", GIF)
+    batch.place(MIRA, "avatar", setp("avatar", ImageRef(CARD, "mira")), None)
+    before = snapshot(store.root)
+    batch.check()
+    assert snapshot(store.root) == before  # nothing written, no approval used
+    batch.commit()
+    with pytest.raises(StoreError, match="already committed"):
+        batch.check()
