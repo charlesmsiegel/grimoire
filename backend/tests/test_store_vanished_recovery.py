@@ -243,3 +243,21 @@ def test_a_revision_slot_taken_during_a_live_commit_is_a_write_conflict(tmp_path
         assert not (root / LIB / ".txn" / "journal.json").exists()
         assert dict(store.read_source(HARBOR).manifest.heads).get("character/wren") != "r2"
     assert any("manifest.json" in path for path in raised.value.preserved)
+
+
+def test_a_fully_published_revision_edited_later_is_not_reported_unwritten(tmp_path):
+    """Every entry landed before the crash; a later hand edit of the revision is not a revision the
+    commit failed to write, so recovery reports nothing incomplete."""
+    locker = ProcessLocker()
+    root = _root(tmp_path, locker)
+    crash = Crash(Target("replace", target=f"{LIB}/{MANIFEST}"), "after")
+    with pytest.raises(BaseException):
+        with LibraryStore.open(root / LIB, ops=RootedFileOps(root, plan=[crash], record=False),
+                               locker=locker) as store:
+            txn, revision = _head_move(store, other=True)
+            txn.commit(owner_handle())
+    (root / LIB / R2).write_bytes(revision + b"\n")
+    with LibraryStore.open(root / LIB, locker=locker) as store:
+        report = store.last_recovery
+        assert dict(store.read_source(HARBOR).manifest.heads).get("character/wren") == "r2"
+    assert report.incomplete == ()

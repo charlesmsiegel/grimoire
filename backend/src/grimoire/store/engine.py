@@ -364,12 +364,14 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
             journal, vanish_abort = journal.aborted(), True
             _replace_journal(access, journal)
     unwritten = set()  # targets of entries that will never be published
+    pending_manifests = {_manifest_source(entry.target) for entry in journal.entries
+                         if entry.temp in staged} - {None}
     for entry in journal.entries:
         if entry.temp not in staged:
             current_etag = access.etag_of(entry.target)
             vanished = current_etag != entry.new if live else (entry.old != entry.new and current_etag == entry.old)
-            if (not live and journal.state == "commit" and _source_of_revision(entry.target) is not None
-                    and current_etag != entry.new):
+            if (not live and journal.state == "commit" and current_etag != entry.new
+                    and _source_of_revision(entry.target) in pending_manifests):
                 # A revision an earlier recovery kept aside (its slot held other bytes) still holds
                 # back its head move: that decision lived only in memory and the recovery crashed.
                 vanished = True
