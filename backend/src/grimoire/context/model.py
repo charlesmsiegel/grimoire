@@ -11,7 +11,7 @@ import math
 import re
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from grimoire.core.identity import InstanceRef, SourceRef, validate_segment
 
@@ -65,7 +65,21 @@ def safe_text(value: object, limit: int) -> bool:
         return False
     if value.isascii():  # the only unsafe ASCII characters are controls
         return _ASCII_CONTROL.search(value) is None
-    return not any(char not in _ALLOWED and unicodedata.category(char) in _UNSAFE for char in value)
+    return not value.translate(_UNSAFE_ONLY)
+
+
+class _UnsafeTable(dict[int, str | None]):
+    """A ``str.translate`` table filled on demand that deletes every safe character, so a text is safe
+    when nothing is left. Each code point is classified once, then looked up in C."""
+
+    def __missing__(self, point: int) -> str | None:
+        char = chr(point)
+        value = char if char not in _ALLOWED and unicodedata.category(char) in _UNSAFE else None
+        self[point] = value
+        return value
+
+
+_UNSAFE_ONLY = _UnsafeTable()
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +97,8 @@ class LoreEntry:
     constant: bool = False
     audience: str = "director"
     order: int = 0
+    #: each key's normalized words, computed once here so every actor's lookup reuses them
+    key_sequences: tuple[tuple[str, ...], ...] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         try:
@@ -99,11 +115,13 @@ class LoreEntry:
             raise _fail(f"entry {self.entry_id}: keys must be a collection of text", "invalid_entry")
         if len(keys) > MAX_KEYS or len(set(keys)) != len(keys):
             raise _fail(f"entry {self.entry_id}: at most {MAX_KEYS} distinct keys", "invalid_entry")
-        if not all(safe_text(key, MAX_KEY_TEXT) and "\n" not in key and "\t" not in key and key_words(key)
-                   for key in keys):
+        sequences = tuple(key_words(key) if safe_text(key, MAX_KEY_TEXT) and "\n" not in key and "\t" not in key
+                          else () for key in keys)
+        if not all(sequences):
             raise _fail(f"entry {self.entry_id}: a key must be one safe line of at most {MAX_KEY_TEXT} characters "
                         "with at least one word", "invalid_entry")
         object.__setattr__(self, "keys", keys)
+        object.__setattr__(self, "key_sequences", sequences)
         if type(self.constant) is not bool:
             raise _fail(f"entry {self.entry_id}: constant must be a bool", "invalid_entry")
         if type(self.audience) is not str or self.audience not in AUDIENCES:
@@ -243,7 +261,9 @@ class Omission:
 
 @dataclass(frozen=True, slots=True)
 class SourceProblem:
-    """A bound source that contributed nothing, and why. Never a failure of the pack."""
+    """A problem or notice about a source this pack read: one that contributed nothing (and why), or one
+    that contributed but drifted. It describes the source as read, whole, so it is never a failure of
+    the pack."""
 
     code: str
     source: SourceRef
@@ -286,7 +306,10 @@ class ContextPack:
         return tuple(item.line for item in self.items)
 
     def render(self) -> str:
-        """The items' lines, one per line, in order. The newline is part of each item's overhead."""
+        """The items' lines, one per line, in order. The newline is part of each item's overhead.
+
+        An item's line never holds a line break (the packer joins a multi-line text into one line), so
+        a source's text cannot forge another item's line."""
         return "\n".join(self.lines())
 
 

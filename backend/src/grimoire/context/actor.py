@@ -313,6 +313,8 @@ def _lore(snapshot: EffectiveSnapshot, scene: SceneWords, readers: Mapping[str, 
         if refused is not None:
             problems.append(SourceProblem(refused[0], pinned, refused[1]))
             continue
+        scene.prime(sequence for entry in entries if entry.audience == "common" and not entry.constant
+                    for sequence in entry.key_sequences)  # one batch per source: a pass per key length
         quiet = 0
         for entry in entries:
             if entry.audience != "common":
@@ -320,7 +322,7 @@ def _lore(snapshot: EffectiveSnapshot, scene: SceneWords, readers: Mapping[str, 
             if entry.constant:
                 rank: tuple[object, ...] = (0, 0, entry.order, str(pinned), entry.entry_id)
             else:
-                hits = scene.hits(entry.keys)
+                hits = scene.count(entry.key_sequences)
                 if not hits:
                     quiet += 1
                     continue

@@ -28,6 +28,14 @@ class Candidate:
     claims: tuple[ClaimReading, ...] = ()
 
 
+def _one_line(text: str) -> str:
+    """``text`` as one line: every line break (``\\n``, ``\\r``, U+2028 ...) becomes a space, so an item
+    can never forge another item's line in a render."""
+    if "\n" not in text and text.isprintable():
+        return text
+    return " ".join(part.strip() for part in text.splitlines() if part.strip())
+
+
 def _cost(count: TokenCounter, line: str, overhead: int) -> int:
     tokens = count(line)
     if type(tokens) is not int or tokens < 0:
@@ -49,9 +57,10 @@ def pack(candidates: Iterable[Candidate], budget: Budget,
     for lane in LANES:
         lane_left = budget.cap(lane)
         for candidate in sorted(by_lane[lane], key=lambda c: c.rank):
-            tokens = _cost(count, candidate.line, budget.item_overhead)
+            line = _one_line(candidate.line)
+            tokens = _cost(count, line, budget.item_overhead)
             if tokens <= lane_left and tokens <= remaining:
-                items.append(PackedItem(lane, candidate.line, tokens, candidate.origin, candidate.stance,
+                items.append(PackedItem(lane, line, tokens, candidate.origin, candidate.stance,
                                         candidate.sequence, candidate.claims))
                 lane_left -= tokens
                 remaining -= tokens
