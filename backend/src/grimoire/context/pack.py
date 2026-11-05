@@ -26,6 +26,7 @@ class Candidate:
     stance: str | None = None
     sequence: int | None = None
     claims: tuple[ClaimReading, ...] = ()
+    audience: str | None = None
 
 
 def _one_line(text: str) -> str:
@@ -61,7 +62,7 @@ def pack(candidates: Iterable[Candidate], budget: Budget,
             tokens = _cost(count, line, budget.item_overhead)
             if tokens <= lane_left and tokens <= remaining:
                 items.append(PackedItem(lane, line, tokens, candidate.origin, candidate.stance,
-                                        candidate.sequence, candidate.claims))
+                                        candidate.sequence, candidate.claims, candidate.audience))
                 lane_left -= tokens
                 remaining -= tokens
             else:

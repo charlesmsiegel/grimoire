@@ -246,6 +246,8 @@ class PackedItem:
     sequence: int | None = None
     #: memory items: typed claim readings about focus nodes, when the caller passed 017 claim shapes
     claims: tuple[ClaimReading, ...] = ()
+    #: lore items: the entry's audience (``common``; a director lore pack may also hold ``director``)
+    audience: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,8 +317,43 @@ class ContextPack:
         return "\n".join(self.lines())
 
 
+@dataclass(frozen=True, slots=True)
+class LorePack:
+    """Bounded lore for the scene-level director reply: no actor, so no portrayal or memory.
+
+    Every item is in the ``lore`` lane and carries its entry's ``audience``: ``common`` lore is what
+    anyone in the setting may know, ``director`` lore is the director's alone and must never be
+    stated as table fact. ``omitted``, ``untriggered`` and ``problems`` read as in ``ContextPack``;
+    nothing here belongs to an actor, so nothing is withheld unreported. It is a provisional
+    in-memory value, never persisted.
+    """
+
+    budget: Budget
+    measurement: str
+    items: tuple[PackedItem, ...]
+    omitted: tuple[Omission, ...]
+    untriggered: tuple[tuple[SourceRef, int], ...]
+    problems: tuple[SourceProblem, ...]
+
+    @property
+    def tokens(self) -> int:
+        return sum(item.tokens for item in self.items)
+
+    def audience(self, audience: str) -> tuple[PackedItem, ...]:
+        if audience not in AUDIENCES:
+            raise _fail(f"unknown audience {audience!r}", "invalid_audience")
+        return tuple(item for item in self.items if item.audience == audience)
+
+    def lines(self) -> tuple[str, ...]:
+        return tuple(item.line for item in self.items)
+
+    def render(self) -> str:
+        """The items' lines, one per line, in order (see ``ContextPack.render``)."""
+        return "\n".join(self.lines())
+
+
 __all__ = [
     "AUDIENCES", "FORMAT", "LANES", "MAX_ENTRIES", "MAX_ENTRY_TEXT", "MAX_KEYS", "MAX_KEY_TEXT", "MAX_PRESENT",
     "MAX_SCENE_TEXT", "MAX_TOKENS", "Budget", "ClaimReading", "ContextError", "ContextPack", "EntryReader", "LoreEntry",
-    "Omission", "Origin", "PackedItem", "SourceProblem", "TokenCounter", "estimate_tokens", "safe_text",
+    "LorePack", "Omission", "Origin", "PackedItem", "SourceProblem", "TokenCounter", "estimate_tokens", "safe_text",
 ]

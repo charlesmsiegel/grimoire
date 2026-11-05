@@ -13,7 +13,7 @@ import pytest
 import context_fixtures as f
 from context_fixtures import (
     BESTIARY, LORE, LORE_SCHEMA, NPCS, PLOT, SCENARIO, SECRET, actor, card, entry, instance,
-    knowledge,
+    knowledge, selection, snapshot,
 )
 from grimoire.context import (
     FORMAT, LANES, MAX_ENTRIES, Budget, ClaimReading, ContextError, ContextPack, LoreEntry, Origin, SceneWords,
@@ -36,18 +36,6 @@ def reason(call) -> str:
     with pytest.raises(ContextError) as caught:
         call()
     return caught.value.reason
-
-
-def selection(*extra: SelectedSource, cast=EVERYONE, world=None, lore=True) -> SourceSelection:
-    sources = [SelectedSource(card(n), "character", actor=actor(n)) for n in cast]
-    if lore:
-        sources += [SelectedSource(LORE, "lorebook"), SelectedSource(SCENARIO, "scenario")]
-    return SourceSelection(world, (*sources, *extra))
-
-
-def snapshot(*extra: SelectedSource, index=None, cast=EVERYONE, world=None, lore=True) -> EffectiveSnapshot:
-    return EffectiveSnapshot(index or f.index(), selection(*extra, cast=cast, world=world, lore=lore),
-                             instances=[(instance(n), None) for n in cast])
 
 
 def build(who: str = "mara", *, snap=None, ledger=None, budget=None, **kwargs) -> ContextPack:

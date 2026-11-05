@@ -1,10 +1,14 @@
 """Sealed per-call briefs: one NPC's own perspective, or the scene's authored material.
 
 An ``NpcBrief`` is built only from one actor's ``ActorView`` (its own ``perspective`` projection,
-its composed card) and its resolved voice. It never takes director knowledge, another actor's
-records or a world truth, so the prompt it renders cannot hold them. A ``DirectorBrief`` takes
-authored scenario text and table-visible lines only: there is no knowledge parameter at all.
-Pure and deterministic; the runtime turns a brief into provider messages.
+its composed card) and its resolved voice, or from 031's ``ContextPack`` built for that same actor.
+It never takes director knowledge, another actor's records or a world truth, so the prompt it
+renders cannot hold them. A ``DirectorBrief`` takes authored scenario text, 031's director lore and
+table-visible lines only: there is no knowledge parameter at all. Pure and deterministic; the
+runtime turns a brief into provider messages.
+
+031's packs are the extension seam 027's own minimal rendering was built to leave open: this module
+imports their value types, never the packer's inputs, so 031 depends on nothing here.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import InitVar, dataclass
 
+from grimoire.context import ContextPack, LorePack
 from grimoire.core.authority import DIRECTOR
 from grimoire.core.identity import InstanceRef
 from grimoire.core.model import ActorView, ControlAssignment
@@ -260,6 +265,43 @@ def _sections(sections: object) -> tuple[tuple[str, str], ...]:
     return sections
 
 
+def _check_context(context: object, actor: InstanceRef, knowledge: ActorKnowledge, view: ActorView,
+                   voice: ResolvedVoice) -> ContextPack:
+    """``context`` if it is a pack built for this actor, at this moment, from this selected revision."""
+    if isinstance(context, LorePack):
+        # The director's lore may hold director-only entries: it is never an actor's.
+        raise GenerationError("foreign_context", f"{actor} was given the director's lore pack")
+    if not isinstance(context, ContextPack):
+        raise GenerationError("bad_context", "context must be a ContextPack from pack_actor_context")
+    if context.actor != actor:
+        raise GenerationError("foreign_context", f"the context pack was built for {context.actor}, not {actor}")
+    identity = context.items[0].origin if context.items else None
+    if identity is None or identity.kind != "identity" or identity.actor != actor:
+        raise GenerationError("bad_context", f"the context pack for {actor} does not open with its name")
+    if any(item.lane == "lore" and item.audience != "common" for item in context.items):
+        raise GenerationError("foreign_context", f"the context pack for {actor} holds lore no actor may read")
+    if context.as_of != knowledge.as_of:
+        # Its memory would be another moment's than the projection that decides what is learned.
+        raise GenerationError("context_mismatch", f"the context pack is as of {context.as_of}, "
+                              f"the actor's knowledge as of {knowledge.as_of}")
+    revision = view.resolved_source if view.resolved_source is not None else voice.actor_revision
+    if identity.source is not None and revision is not None and identity.source != revision:
+        # Built over another chat's or snapshot's selection: its card is another portrayal's.
+        raise GenerationError("context_mismatch", f"the context pack was built for {identity.source}, "
+                              f"not {revision}")
+    return context
+
+
+def _packed(context: ContextPack, lane: str) -> list[str]:
+    """A lane's lines as the brief shows them: never the name line, never the card's voice section."""
+    return [_one_line(item.line) for item in context.lane(lane) if item.origin.kind != "identity"
+            and not (item.origin.kind == "section" and item.origin.name == VOICE_SECTION)]
+
+
+def _listed(heading: str, lines: Sequence[str]) -> str:
+    return heading + "\n" + "\n".join(f"- {line}" for line in lines)
+
+
 def _leaks(text: str, hidden: tuple[SecretFact, ...], exposed: Sequence[str]) -> str | None:
     """The id of a hidden secret whose marker ``text`` states and nothing in ``exposed`` does."""
     for secret in hidden:
@@ -280,7 +322,8 @@ def _label(line: HeardLine, names: Mapping[InstanceRef, str], hidden: tuple[Secr
 def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLine] = (),
               secrets: Iterable[SecretFact], sections: Iterable[tuple[str, str]] = (),
               names: Mapping[InstanceRef, str] | None = None, knowledge_chars: int = KNOWLEDGE_CHARS,
-              context_chars: int = CONTEXT_CHARS, voice_chars: int = DEFAULT_MAX_CHARS) -> NpcBrief:
+              context_chars: int = CONTEXT_CHARS, voice_chars: int = DEFAULT_MAX_CHARS,
+              context: ContextPack | None = None) -> NpcBrief:
     """Build one NPC's sealed brief from its own view; ``secrets`` has no default on purpose.
 
     ``view`` must carry the actor's own ``ActorKnowledge`` (``no_knowledge``/``foreign_knowledge``
@@ -289,6 +332,13 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
     learned, as a line spoken earlier this turn does, so the caller must pass only lines this actor
     heard. A speaker label is not learned: one that states a hidden secret is shown as "Someone".
     ``names`` labels other actors in knowledge and in heard lines that carry an ``actor``.
+
+    ``context`` is 031's pack for this same actor (``pack_actor_context``): its portrayal, memory
+    and lore lanes replace the card context and knowledge this function renders itself, already
+    within the pack's token budget, so ``sections``, ``context_chars`` and ``knowledge_chars`` do not
+    apply. A pack for another actor, the director's lore, or one with director-only lore is
+    ``foreign_context``; one built as of another moment or for another selected revision is
+    ``context_mismatch``. Everything it shows counts as exposed to this actor when screening.
     """
     actor, knowledge = _check_view(view)
     # The voice reaches the prompt only through the screened fragment: the card's raw voice-evidence
@@ -303,7 +353,12 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
                               f"not {view.resolved_source}")
     secrets = _secrets(secrets)
     heard = heard_lines(heard)
-    sections = tuple(entry for entry in _sections(sections) if entry[0] != VOICE_SECTION)
+    sections = _sections(sections)
+    if context is not None:
+        context = _check_context(context, actor, knowledge, view, voice)
+        if sections:
+            raise GenerationError("bad_sections", "a context pack already carries the card's sections")
+    sections = tuple(entry for entry in sections if entry[0] != VOICE_SECTION)
     names = dict(names or {})
     if not all(isinstance(key, InstanceRef) and isinstance(value, str) for key, value in names.items()):
         raise GenerationError("bad_names", "names must map InstanceRef values to display names")
@@ -312,11 +367,20 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
 
     known = known_ids(knowledge)
     hidden = tuple(secret for secret in secrets if secret.fact_id not in known)
-    context = _context(view.description, sections, context_chars)
+    if context is None:
+        card = _context(view.description, sections, context_chars)
+        setting: list[str] = []
+        memory: list[str] = []
+    else:
+        card, setting, memory = (_packed(context, lane) for lane in ("portrayal", "lore", "memory"))
     # What the actor holds, in full: what its projection and its own card say, whatever the budget
-    # showed. Names come after, screened against this, so a label never exposes a secret.
+    # showed, and what its pack gave it (common lore only, checked above, so quoting it back is no
+    # leak and no director-only text becomes exposed). Names come after, screened against this, so
+    # a label never exposes a secret.
     own = _contents(knowledge) + ((view.description,) if has_words(view.description) else ()) + tuple(
         text for _name, text in sections)
+    if context is not None:
+        own += (*card, *setting, *memory)
     rendered = [text for _key, text in _knowledge_items(knowledge, names, hidden, own)]
     try:
         fragment = speaker_fragment(voice, secrets=secrets, known=known, max_chars=voice_chars)
@@ -325,17 +389,20 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
     name = _one_line(voice.name)
     if len(name) > MAX_NAME_CHARS:
         raise GenerationError("bad_voice", f"{actor} has a name longer than {MAX_NAME_CHARS} characters")
-    shown = _newest_within(rendered, knowledge_chars)
+    shown = _newest_within(rendered, knowledge_chars) if context is None else memory
     parts = [
         f"You are {name}, a character in a shared story. Write only {name}'s next contribution: what {name} "
         f"says and does, in {name}'s own voice. Never write for any other character, and never describe what "
         "anyone else thinks, feels or decides.",
         fragment.text,
     ]
-    if context:
-        parts.append("Who you are:\n" + "\n".join(context))
+    if card:
+        parts.append("Who you are:\n" + "\n".join(card))
+    if setting:
+        parts.append(_listed("What anyone here may know:", setting))
     if shown:
-        parts.append("What you know, oldest first:\n" + "\n".join(f"- {text}" for text in shown))
+        # 027's own rendering is in time order; a pack's memory is in 031's rank order.
+        parts.append(_listed("What you know, oldest first:" if context is None else "What you know:", shown))
     elif not rendered:
         parts.append("You know nothing yet beyond what you hear now.")
     names[actor] = name
@@ -345,8 +412,9 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
 
 def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
                    controls: Iterable[ControlAssignment], names: Mapping[str, str], heard: Iterable[HeardLine] = (),
-                   secrets: Iterable[SecretFact], scenario_chars: int = SCENARIO_CHARS) -> DirectorBrief:
-    """The scene-level reply's sealed brief: authored scenario text and table-visible lines only.
+                   secrets: Iterable[SecretFact], scenario_chars: int = SCENARIO_CHARS,
+                   lore: LorePack | None = None) -> DirectorBrief:
+    """The scene-level reply's sealed brief: authored scenario text, lore and table-visible lines only.
 
     The player characters are derived here from ``controls``, never passed in: every ``present``
     actor whose controller is a human. A present actor with no controller is ``unassigned_actor``.
@@ -354,6 +422,11 @@ def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
     brief forbids writing their words, thoughts, feelings or decisions. ``run_turn`` checks the
     same set against the plan and controls before any call. The reply is an unreviewed proposal:
     035's ``review_narration`` reviews it before it is kept.
+
+    ``lore`` is 031's ``director_lore`` for this scene (an actor's ``ContextPack`` is ``bad_lore``: its
+    memory is one actor's own). Its ``common`` entries are setting the table may hear, so narration
+    quoting one is no leak. Its ``director`` entries guide the narrator but are not exposed: narration
+    stating a hidden secret's marker from one is still ``unlearned_secret``.
     """
     if not isinstance(scenario, str) or not has_words(scenario):
         raise GenerationError("bad_scenario", "a director reply needs nonblank authored scenario text")
@@ -377,6 +450,8 @@ def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
     labels = [names.get(actor_id) for actor_id in players]
     if not all(isinstance(name, str) and has_words(name) and len(name) <= MAX_NAME_CHARS for name in labels):
         raise GenerationError("bad_players", "every present player character needs a nonblank display name")
+    if lore is not None and not isinstance(lore, LorePack):
+        raise GenerationError("bad_lore", "lore must be a LorePack from director_lore")
     secrets = _secrets(secrets)
     heard = heard_lines(heard)
     parts = ["You are the narrator of a shared story. Describe the scene and what happens next, and voice only "
@@ -386,9 +461,16 @@ def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
         parts.append(f"The player characters are: {listed}. Never write their words, thoughts, feelings or "
                      "decisions; their players do that.")
     parts.append("Scenario:\n" + scenario.strip())
+    common = [_one_line(item.line) for item in lore.audience("common")] if lore is not None else []
+    private = [_one_line(item.line) for item in lore.audience("director")] if lore is not None else []
+    if common:
+        parts.append(_listed("What anyone here may know:", common))
+    if private:
+        parts.append(_listed("Known only to you, the narrator. Let it shape what happens, but never state it "
+                             "outright:", private))
     # The player characters' names are table-visible: naming them in narration is not a leak.
     return DirectorBrief(campaign_id, frozenset(players), "\n\n".join(parts), heard, secrets,
-                         (scenario, *labels) + tuple(line.text for line in heard), _SEAL)
+                         (scenario, *labels, *common) + tuple(line.text for line in heard), _SEAL)
 
 
 def _transcript(lines: Sequence[HeardLine], names: Mapping[InstanceRef, str], hidden: tuple[SecretFact, ...],

@@ -29,32 +29,27 @@ that is the director's.
 
 from __future__ import annotations
 
-import copy
-import itertools
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
 from grimoire.core.entity import EntityError
-from grimoire.core.identity import InstanceRef, SourceRef
-from grimoire.core.index import Definition, MissingDefinition
+from grimoire.core.identity import InstanceRef
+from grimoire.core.index import MissingDefinition
 from grimoire.core.knowledge import Knowledge, Subject
 from grimoire.core.perspective import ActorKnowledge, actor_knowledge
 from grimoire.core.portrayal import PortrayalError
 from grimoire.core.snapshot import EffectiveSnapshot, Resolution
 from grimoire.graph import PREDICATES, ClaimSet
 
+from .lore import LORE_ROLES, Unpack, check_readers, lore, lore_problems
 from .model import (
-    MAX_ENTRIES, MAX_PRESENT, MAX_SCENE_TEXT, Budget, ClaimReading, ContextError, ContextPack, EntryReader,
-    LoreEntry, Origin, SourceProblem, TokenCounter, estimate_tokens,
+    MAX_PRESENT, MAX_SCENE_TEXT, Budget, ClaimReading, ContextError, ContextPack, EntryReader, Origin,
+    SourceProblem, TokenCounter, estimate_tokens,
 )
 from .pack import Candidate, pack
 from .trigger import SceneWords
 
-#: A raw selected definition -> its stored record schema and payload, or ``None`` when it has none.
-Unpack = Callable[[Definition], "tuple[str | None, Mapping[str, object]] | None"]
-#: The only roles read for lore. They bind no actor, so their content can only be lore, via a reader.
-LORE_ROLES = frozenset({"lorebook", "scenario"})
-#: A reader may not claim an entity schema: entities are composed (022), never read raw for lore.
-ENTITY_SCHEMA_FAMILY = "grimoire.entity/"
+#: A common entry is what anyone in the setting may know: the only lore an actor's pack holds.
+ACTOR_AUDIENCES = frozenset({"common"})
 MEASUREMENTS = frozenset({"estimated", "counted"})
 #: 014/027 own voice anchors and their screening; a card's voice section is theirs, not context.
 DEFAULT_EXCLUDED_SECTIONS = frozenset({"voice-evidence"})
@@ -87,10 +82,7 @@ def _check(knowledge: object, actor: object, as_of: object, budget: object, pres
         raise _fail("a present actor belongs to another campaign", "campaign_mismatch")
     if type(scene_text) is not str or len(scene_text) > MAX_SCENE_TEXT:
         raise _fail(f"scene_text must be text of at most {MAX_SCENE_TEXT} characters", "invalid_scene_text")
-    if not isinstance(readers, Mapping) or not all(type(k) is str and callable(v) for k, v in readers.items()):
-        raise _fail("readers must map a record schema to a callable", "invalid_readers")
-    if any(schema.startswith(ENTITY_SCHEMA_FAMILY) for schema in readers):
-        raise _fail("an entity schema is composed, never read for lore", "invalid_readers")
+    check_readers(readers)
     if type(measurement) is not str or measurement not in MEASUREMENTS:
         raise _fail(f"measurement must be one of {sorted(MEASUREMENTS)}", "invalid_measurement")
     if claims is not None:
@@ -226,48 +218,7 @@ def _perceived(held: ActorKnowledge) -> list[str]:
             + [belief.text for belief in held.current])
 
 
-# -- lore from bound sources ---------------------------------------------------------------------------
-
-def _plain(value: object) -> object:
-    """A fresh, mutable copy: mappings become dicts and arrays lists (the store's are read-only)."""
-    if isinstance(value, Mapping):
-        return {key: _plain(child) for key, child in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_plain(child) for child in value]
-    return copy.deepcopy(value)
-
-
-def _entries(reader: EntryReader, payload: Mapping[str, object]
-             ) -> tuple[tuple[LoreEntry, ...], tuple[str, str] | None]:
-    """The reader's entries, or none and ``(code, detail)`` when the source must contribute nothing.
-
-    The reader gets a fresh plain copy of the payload (dicts and lists, never the store's read-only
-    proxies), so it cannot change the loaded view it came from. A payload the reader cannot interpret
-    is that source's problem, never the turn's: ``ValueError`` (``ContextError`` from an invalid
-    ``LoreEntry`` is one), ``LookupError``, and the ``TypeError`` and ``AttributeError`` that malformed
-    JSON shapes raise are caught, so a reader's own typo is reported the same way, every turn. Any
-    other exception propagates. One bad entry blanks the whole source: a reader should skip, not
-    raise on, an entry it cannot build.
-    """
-    try:
-        copied = _plain(payload)
-    except RecursionError:
-        return (), ("unreadable_entries", "too_deep")
-    except (TypeError, copy.Error):  # a leaf that cannot be copied is not record data
-        return (), ("unreadable_entries", "uncopyable")
-    try:
-        entries = tuple(itertools.islice(reader(copied), MAX_ENTRIES + 1))
-    except (ValueError, TypeError, LookupError, AttributeError) as error:
-        detail = getattr(error, "reason", None)
-        return (), ("unreadable_entries", detail if type(detail) is str else type(error).__name__)
-    if not all(isinstance(entry, LoreEntry) for entry in entries):
-        return (), ("unreadable_entries", "not_lore_entry")
-    if len(entries) > MAX_ENTRIES:
-        return (), ("too_many_entries", f">{MAX_ENTRIES}")
-    if len({entry.entry_id for entry in entries}) != len(entries):
-        return (), ("unreadable_entries", "duplicate_entry")
-    return entries, None
-
+# -- problems with the sources read ------------------------------------------------------------------
 
 def _sources(snapshot: EffectiveSnapshot, actor: InstanceRef) -> list[SourceProblem]:
     """Broken bindings and drift notices, for the sources this pack read: the actor's own and lore.
@@ -277,60 +228,14 @@ def _sources(snapshot: EffectiveSnapshot, actor: InstanceRef) -> list[SourceProb
     """
     found: list[SourceProblem] = []
     for resolution in snapshot.sources():
-        if resolution.source.actor != actor and resolution.source.role not in LORE_ROLES:
-            continue
+        if resolution.source.actor != actor or resolution.source.role in LORE_ROLES:
+            continue  # lore bindings are reported once, by ``lore_problems``
         if resolution.resolved is None:
             reason = resolution.broken.reason if resolution.broken is not None else None
             found.append(SourceProblem("missing_source", resolution.source.ref, reason))
         found += [SourceProblem(notice.code, resolution.source.ref, notice.detail or None)
                   for notice in resolution.notices]
-    return found
-
-
-def _lore(snapshot: EffectiveSnapshot, scene: SceneWords, readers: Mapping[str, EntryReader],
-          unpack: Unpack | None) -> tuple[list[Candidate], list[tuple[SourceRef, int]], list[SourceProblem]]:
-    found: list[Candidate] = []
-    untriggered: list[tuple[SourceRef, int]] = []
-    problems: list[SourceProblem] = []
-    read: set[SourceRef] = set()
-    for resolution in snapshot.sources():
-        role, pinned = resolution.source.role, resolution.resolved
-        if role not in LORE_ROLES or pinned is None or pinned in read:
-            continue  # a revision selected under both lore roles is read once
-        read.add(pinned)
-        raw = snapshot.resolve(pinned, role)  # the selected leaf revision itself, never an ancestor
-        unpacked = unpack(raw) if unpack is not None else None
-        if unpacked is not None and not (isinstance(unpacked, tuple) and len(unpacked) == 2
-                                         and isinstance(unpacked[1], Mapping)):
-            problems.append(SourceProblem("unreadable_entries", pinned, "invalid_unpack"))
-            continue
-        schema, payload = unpacked if unpacked is not None else (None, {})
-        reader = readers.get(schema) if isinstance(schema, str) else None
-        if reader is None:
-            problems.append(SourceProblem("no_entry_reader", pinned, schema if isinstance(schema, str) else None))
-            continue
-        entries, refused = _entries(reader, payload)
-        if refused is not None:
-            problems.append(SourceProblem(refused[0], pinned, refused[1]))
-            continue
-        scene.prime(sequence for entry in entries if entry.audience == "common" and not entry.constant
-                    for sequence in entry.key_sequences)  # one batch per source: a pass per key length
-        quiet = 0
-        for entry in entries:
-            if entry.audience != "common":
-                continue  # withheld, and not reported: what an actor may not see is the director's
-            if entry.constant:
-                rank: tuple[object, ...] = (0, 0, entry.order, str(pinned), entry.entry_id)
-            else:
-                hits = scene.count(entry.key_sequences)
-                if not hits:
-                    quiet += 1
-                    continue
-                rank = (1, -hits, entry.order, str(pinned), entry.entry_id)
-            found.append(Candidate("lore", rank, entry.text, Origin("lore", pinned, name=entry.entry_id)))
-        if quiet:
-            untriggered.append((pinned, quiet))
-    return found, untriggered, problems
+    return found + lore_problems(snapshot)
 
 
 def pack_actor_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor: InstanceRef, *, as_of: int,
@@ -377,8 +282,9 @@ def pack_actor_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor:
     nodes = tuple(dict.fromkeys((actor, *sorted(cast, key=str))))
     focus, readings = _focus(knowledge, held, claims, nodes)
     candidates += _memory(held, focus, readings)
-    lore, untriggered, problems = _lore(snapshot, SceneWords([scene_text, *_perceived(held)]), readers, unpack)
-    candidates += lore
+    found, untriggered, problems = lore(snapshot, SceneWords([scene_text, *_perceived(held)]), readers, unpack,
+                                        ACTOR_AUDIENCES)
+    candidates += found
     items, omitted = pack(candidates, budget, count)
     if not items or items[0].origin.kind != "identity":
         raise _fail("the budget cannot hold even the actor's name", "budget_too_small")
@@ -388,5 +294,4 @@ def pack_actor_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor:
                        tuple(sorted(set(problems), key=lambda p: (str(p.source), p.code, p.detail or ""))))
 
 
-__all__ = ["DEFAULT_EXCLUDED_SECTIONS", "ENTITY_SCHEMA_FAMILY", "LORE_ROLES", "MEASUREMENTS", "Unpack",
-           "pack_actor_context"]
+__all__ = ["DEFAULT_EXCLUDED_SECTIONS", "MEASUREMENTS", "pack_actor_context"]

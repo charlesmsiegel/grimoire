@@ -3,7 +3,7 @@
 > **V2 scope correction:** Replace V1 transcript/lore-key dumping with *deterministic typed graph traversal and per-actor evidence filtering*, bounded by actual input token budgets. Embeddings are optional and may cost money; graph lookups do not require a model. See the [V2 ordered roadmap](../README.md) for prerequisites, waves and current first-slice proof. Older references to shipped V1 APIs describe behavior to *port*, not V2 capabilities.
 
 
-**Status:** first slice implemented ([CONTEXT](../../CONTEXT.md)): deterministic per-actor packing with audience rules, lanes and a token budget, over 022's frozen chat view and 020's ledger. Selecting unbound world records, recent history, embeddings and milestone 3's evaluation are still open.
+**Status:** first slice implemented ([CONTEXT](../../CONTEXT.md)): deterministic per-actor packing with audience rules, lanes and a token budget, over 022's frozen chat view and 020's ledger, and the director's lore (`director_lore`), triggered by table-visible text. The extension interface to 027 is the pack itself: `npc_brief(..., context=)` and `director_brief(..., lore=)` render them ([GENERATION](../../GENERATION.md#from-031s-packs)). Selecting unbound world records, recent history, embeddings and milestone 3's evaluation are still open.
 
 **Outcome:** Retrieve exactly the useful setting, actors and history for a turn within predictable model-context budgets.
 

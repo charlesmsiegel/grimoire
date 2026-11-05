@@ -1,10 +1,10 @@
 # Audience-aware context packing
 
 **Status:** first slice of [Context Retrieval](roadmap/sprints/context-retrieval.md) (Sprint 031, Wave 4). It is implemented as:
-- `grimoire.context` (pure): one actor's candidates, chosen by audience rules, then packed into a token budget;
+- `grimoire.context` (pure): one actor's candidates, chosen by audience rules, then packed into a token budget; and, with `director_lore`, the scene-level director reply's lore, triggered by table-visible text ([below](#director-lore));
 - `grimoire.contextstore`: an adapter that joins 022's `chat_snapshot`, 020's director ledger read and the store's envelopes.
 
-There is no prompt renderer, model call or UI. Nothing here writes or reads files on its own. The fixtures are synthetic.
+027's briefs render both ([GENERATION](GENERATION.md#from-031s-packs)): `npc_brief(..., context=pack)` and `director_brief(..., lore=lore)`. That is the seam: `grimoire.generation` imports these value types, and nothing here imports 027. There is no model call or UI here. Nothing here writes or reads files on its own. The fixtures are synthetic.
 
 ## What it does
 
@@ -71,6 +71,18 @@ Each `LoreEntry` normalizes its keys once. The perceived texts become word ids, 
 
 **Limit:** scripts written without spaces (Chinese, Japanese, Thai) form one word run per stretch, so a key there matches only a whole run; likewise a Korean noun with a particle attached is one word, which the bare noun does not match.
 
+## Director lore
+
+`director_lore(snapshot, *, table_text, budget, readers=None, unpack=None, count=estimate_tokens, measurement="estimated")` returns a `LorePack` for the scene-level director reply. A scenario-only chat has no speaking NPC, so without it no pack would carry the chat's lorebook to anyone.
+
+- The director is no actor: there is no portrayal or memory lane, and no card is read.
+- Lore comes from the same bound `lorebook` and `scenario` revisions, readers and `unpack` as an actor's, but **`common` and `director` entries** are both candidates.
+- Only `constant` entries and entries whose key occurs in **`table_text`** are candidates. **Caller obligation:** `table_text` is what the whole table saw (the visible transcript window), never a whisper, an NPC's private perception or a player's interiority. Lore never triggers lore.
+- Ranking, the budget's `lore` lane, `omitted`, `untriggered` (both audiences counted, since the director may know of them) and `problems` (the lore bindings) are as for an actor. The same refusals apply, with `invalid_scene_text` for `table_text`.
+- Every item carries its entry's `audience` (`PackedItem.audience`; `LorePack.audience("common")` selects them). The renderer keeps the two apart: `director_brief` lets the narrator repeat `common` lore but never treats `director` lore as table-visible.
+
+A `LorePack` is the director's alone. `npc_brief` refuses one (`foreign_context`), and refuses an actor pack holding any lore item that is not `common`.
+
 ## Ranking and the budget
 
 `Budget(max_tokens, lane_caps=(), item_overhead=4)`. `lane_caps` is a mapping, or a tuple or list of pairs, of lane to cap, normalized to lane order; an uncapped lane may use the whole remainder. A `memory` or `lore` cap of 0 shuts that lane; the `portrayal` cap must hold at least the name line. `item_overhead` (at least 1) is added to each item's count.
@@ -93,9 +105,9 @@ Packing is greedy and deterministic: lanes in order, each lane in rank order, fi
 
 ## Not in this slice
 
-- **Director packs, recursion and other actors' appearance:** an actor sees no description of anyone else; perception of appearance is a later milestone.
+- **Director knowledge, recursion and other actors' appearance:** the director gets bound lore only (`director_lore`), never the ledger; lore never triggers lore; an actor sees no description of anyone else, and perception of appearance is a later milestone.
 - **World records:** a world's locations and other definitions are read only when bound, and 022 selects only bound sources. Selecting world records by relevance waits for 022's world selection.
-- **Recent history:** transcript windows belong to 027 and 035; this slice takes `scene_text` from the caller.
+- **Recent history:** transcript windows belong to 027 and 035; this slice takes `scene_text` and `table_text` from the caller. Building every speaker's pack and the director's lore each turn is 035's.
 - **Holdings, mechanics and inventory** (an actor's own counted holdings and unique items in its pack: 031's next slice, unscheduled), **superseded beliefs**, **embeddings**, **real tokenizers** and **card-section audience** (a card section is its own actor's; per-section secrecy waits for 037/027).
 - **Binding time vs `as_of`:** the snapshot is the chat's bindings now; a source attached after `as_of` still contributes.
 - **CJK segmentation** (see Triggering).

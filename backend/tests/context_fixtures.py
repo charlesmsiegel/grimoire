@@ -16,11 +16,13 @@ from grimoire.core.entity import EntityDefinition, EntityInstance
 from grimoire.core.facets import Agent, Communicative, FacetSet, Physical
 from grimoire.core.identity import InstanceRef
 from grimoire.core.knowledge import Belief, Event, Knowledge, Moment, Perception, Proposition, Report, Ruling, Subject
+from grimoire.core.snapshot import EffectiveSnapshot, SelectedSource, SourceSelection
 from grimoire.graph import ClaimShape
 
 CAST, WORLD = "catalog:saltmarch-cast", "world:saltmarch"
 LORE_SCHEMA = "test.lorebook/0"
 NPCS = ("mara", "anya", "orrin", "tavi", "ines", "wren")
+EVERYONE = (*NPCS, "duke")
 DUKE = SourceRef(CAST, "character", "duke", "r1")
 LORE = SourceRef(CAST, "lorebook", "saltmarch-lore", "r1")
 BESTIARY = SourceRef(WORLD, "lorebook", "bestiary", "r1")
@@ -101,6 +103,9 @@ def index() -> DefinitionIndex:
                            definitions)
 
 
+_default_index = index  # ``snapshot`` takes an ``index`` argument of its own
+
+
 # -- the campaign ledger ------------------------------------------------------------------------------
 
 C = "c1"
@@ -112,6 +117,20 @@ def actor(entity: str) -> InstanceRef:
 
 def instance(entity: str) -> EntityInstance:
     return EntityInstance(actor(entity), card(entity))
+
+
+def selection(*extra: SelectedSource, cast=EVERYONE, world=None, lore=True) -> SourceSelection:
+    """Every cast card bound to its actor, plus the lorebook and the scenario unless ``lore`` is off."""
+    sources = [SelectedSource(card(n), "character", actor=actor(n)) for n in cast]
+    if lore:
+        sources += [SelectedSource(LORE, "lorebook"), SelectedSource(SCENARIO, "scenario")]
+    return SourceSelection(world, (*sources, *extra))
+
+
+def snapshot(*extra: SelectedSource, index=None, cast=EVERYONE, world=None, lore=True) -> EffectiveSnapshot:
+    """A frozen view of the chat's selection, with each cast member's instance captured."""
+    return EffectiveSnapshot(index or _default_index(), selection(*extra, cast=cast, world=world, lore=lore),
+                             instances=[(instance(n), None) for n in cast])
 
 
 def claim_shapes(campaign: str = C, actor_of=actor) -> list[ClaimShape]:
