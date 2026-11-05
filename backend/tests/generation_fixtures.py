@@ -14,7 +14,7 @@ from voice_fixtures import CAMPAIGN, PC, SECRETS, emberfall
 from grimoire.core import Event, InstanceRef, Knowledge, Moment, Perception, actor_knowledge
 from grimoire.core.inference import InferencePolicy, TurnUsageLedger
 from grimoire.core.model import ActorView
-from grimoire.generation import npc_brief, plan_generation_turn
+from grimoire.generation import director_brief, npc_brief, plan_generation_turn
 from grimoire.providers import ProviderEndpoint, ProviderRegistry, RouteChoice, StaticCredentials
 from grimoire.providers.adapter import ProviderAdapter
 from grimoire.providers.meter import TurnMeter
@@ -48,6 +48,15 @@ def view(actor: InstanceRef, name: str, *, description: str = "", knowledge=True
 def world():
     _definitions, _catalog, _actors, controls, voices = emberfall()
     return controls, voices
+
+
+NAMES = {PC: "Wren"}
+
+
+def scene(scenario: str, controls, *, present=(PC,), **kw):
+    """A director brief for this campaign; the player characters come from ``controls``."""
+    return director_brief(scenario, campaign_id=CAMPAIGN, present=present, controls=controls,
+                          names=kw.pop("names", NAMES), secrets=kw.pop("secrets", SECRETS), **kw)
 
 
 def brief(actor: InstanceRef, name: str, voices, **kw):

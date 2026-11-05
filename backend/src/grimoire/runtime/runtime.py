@@ -13,12 +13,13 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
+from grimoire.core.authority import DIRECTOR
 from grimoire.core.identity import InstanceRef, SourceRef
 from grimoire.core.inference import CallId, InferenceStage, PlannedCall
 from grimoire.core.model import ControlAssignment
 from grimoire.generation import (
-    DirectorBrief, GenerationError, HeardLine, NpcBrief, checked_controls, director_messages, npc_messages,
-    require_director, screen_reply,
+    DirectorBrief, GenerationError, HeardLine, NpcBrief, checked_controls, controller, director_messages,
+    npc_messages, require_director, screen_reply,
 )
 from grimoire.providers.adapter import Approvals, CallResult, ProviderAdapter
 from grimoire.providers.cancel import CancelToken
@@ -46,7 +47,8 @@ class GeneratedLine:
     call_id: CallId
     actor: InstanceRef | None
     speaker: str
-    portrayal: SourceRef | None
+    actor_revision: SourceRef | None  # the actor's own selected revision (a derived portrayal, say)
+    voice_profile: SourceRef | None  # the profile revision its voice came from (maybe an ancestor's)
     text: str = field(repr=False)
 
 
@@ -103,6 +105,11 @@ def _assign(meter: TurnMeter, briefs: tuple[NpcBrief, ...], director: DirectorBr
         if call.stage is InferenceStage.DIRECTOR_GENERATION:
             if director is None:
                 raise GenerationError("director_mismatch", "a director reply is planned but no director brief")
+            players = frozenset(actor_id for actor_id in plan.present_actor_ids
+                                if controller(plan.campaign_id, actor_id, controls) not in (None, DIRECTOR))
+            if director.campaign_id != plan.campaign_id or director.players != players:
+                raise GenerationError("director_mismatch",
+                                      "the director brief names other player characters than control does now")
             directed = True
             pairs.append((call, director))
             continue
@@ -209,10 +216,10 @@ class GenerationRuntime:
                     return ended("halted")
                 outcomes.append(CallOutcome(call.call_id, "accepted"))
                 if isinstance(brief, NpcBrief):
-                    lines.append(GeneratedLine(call.call_id, brief.actor, brief.name, brief.voice.portrayal,
-                                               result.reply.strip()))  # type: ignore[union-attr]
+                    lines.append(GeneratedLine(call.call_id, brief.actor, brief.name, brief.voice.actor_revision,
+                                               brief.voice.portrayal, result.reply.strip()))  # type: ignore[union-attr]
                 else:
-                    lines.append(GeneratedLine(call.call_id, None, NARRATOR, None,
+                    lines.append(GeneratedLine(call.call_id, None, NARRATOR, None, None,
                                                result.reply.strip()))  # type: ignore[union-attr]
             return ended("complete")
         finally:

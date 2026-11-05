@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from generation_fixtures import BELLAMY, LEDGER, ODA, PRIVATE, TRUTH, brief, view, world
-from voice_fixtures import CAMPAIGN, SECRETS
+from generation_fixtures import BELLAMY, LEDGER, NAMES, ODA, PRIVATE, TRUTH, brief, scene, view, world
+from voice_fixtures import CAMPAIGN, PC, SECRETS
 
 from grimoire.core import (
     InstanceRef, Knowledge, Moment, Perception, actor_knowledge, director_knowledge,
@@ -110,7 +110,7 @@ def test_briefs_are_sealed():
     with pytest.raises(GenerationError):
         NpcBrief(real.actor, real.name, real.voice, real.fragment, real.system, (), (), ())
     with pytest.raises(GenerationError):
-        DirectorBrief("x", (), (), ())
+        DirectorBrief(CAMPAIGN, frozenset(), "x", (), (), ())
 
 
 def test_npc_messages_carry_what_was_said_this_turn():
@@ -131,6 +131,7 @@ def test_screen_rejects_silence_copies_and_unlearned_secrets():
     assert screen_reply(oda, "Every ballad needs a villain, my sweet, and tonight", voices=scene) == "copied_example"
     assert screen_reply(oda, SECRET_LINE, voices=scene) == "unlearned_secret"
     assert screen_reply(oda, "Coin first.", voices=scene) is None
+    assert screen_reply(oda, "Coin first. " * 200, voices=scene) == "too_long"
 
 
 def test_a_secret_spoken_earlier_this_turn_is_exposed():
@@ -143,24 +144,36 @@ def test_a_secret_spoken_earlier_this_turn_is_exposed():
 # -- director brief -------------------------------------------------------------------------------
 
 def test_director_brief_holds_authored_material_and_names_player_characters():
-    scene = director_brief("A guild dinner in a flooded hall.", heard=[HeardLine("Wren", "I raise my cup.")],
-                           player_characters=["Wren"], secrets=SECRETS)
-    text = text_of(director_messages(scene))
+    controls, _voices = world()
+    narration = scene("A guild dinner in a flooded hall.", controls, heard=[HeardLine("Wren", "I raise my cup.")])
+    assert narration.players == frozenset({PC})
+    text = text_of(director_messages(narration))
     assert "A guild dinner in a flooded hall." in text and "Wren: I raise my cup." in text
     assert "The player characters are: Wren. Never write their words, thoughts, feelings or decisions" in text
-    assert screen_reply(scene, "Rain hammers the shutters.") is None
-    assert screen_reply(scene, "Somewhere, the duke sold the guild.") == "unlearned_secret"
+    assert screen_reply(narration, "Rain hammers the shutters.") is None
+    assert screen_reply(narration, "Somewhere, the duke sold the guild.") == "unlearned_secret"
 
 
 def test_director_brief_has_no_knowledge_parameter():
     with pytest.raises(TypeError):
-        director_brief("A hall.", player_characters=(), secrets=SECRETS, knowledge=LEDGER)  # type: ignore[call-arg]
+        director_brief("A hall.", campaign_id=CAMPAIGN, present=(), controls=(), names={}, secrets=SECRETS,
+                       knowledge=LEDGER)  # type: ignore[call-arg]
+
+
+def test_director_brief_takes_player_characters_from_control_and_needs_their_names():
+    controls, _voices = world()
+    assert scene("A hall.", controls, present=("npc-oda",)).players == frozenset()
+    for names in ({}, {PC: "  "}, {PC: "W" * 201}):
+        with pytest.raises(GenerationError) as caught:
+            scene("A hall.", controls, names=names)
+        assert caught.value.reason == "bad_players"
+    assert "Wren" in scene("A hall.", controls, names={**NAMES, "npc-oda": "Oda"}).system
 
 
 @pytest.mark.parametrize("scenario, reason", [("   ", "bad_scenario"), ("x" * 5000, "scenario_too_long")])
 def test_director_brief_needs_bounded_scenario_text(scenario, reason):
     with pytest.raises(GenerationError) as caught:
-        director_brief(scenario, player_characters=(), secrets=SECRETS)
+        scene(scenario, world()[0])
     assert caught.value.reason == reason
 
 
@@ -168,7 +181,7 @@ def test_heard_lines_are_validated():
     with pytest.raises(GenerationError):
         HeardLine("Wren", "  ")
     with pytest.raises(GenerationError):
-        director_brief("A hall.", heard=["Wren: hi"], player_characters=(), secrets=SECRETS)  # type: ignore[list-item]
+        scene("A hall.", world()[0], heard=["Wren: hi"])
 
 
 def test_npc_brief_needs_explicit_secrets():

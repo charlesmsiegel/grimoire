@@ -9,8 +9,8 @@ is called and nothing is billed. Each point runs twice; the traces must match.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from .providers import (
     REFERENCE_REPLY, CancelAt, ConnectFail, Garbage, ReadFail, Reply, ScriptedClock, ScriptedTransport, Status,
@@ -39,6 +39,7 @@ def _faults() -> dict[str, Step]:
         "status_429": Status(429, retry_after="1"), "status_503": Status(503),
         "finish_length": Reply(finish_reason="length"), "silent": _say(" ... "),
         "leak": _say(f"They whisper {SECRET_MARKER}."), "copy": _say(ASH_EXAMPLE),
+        "too_long": _say("Coin first. " * 200),  # longer than a heard line may be: rejected, never raised
     }
     for index in range(_REPLY_LINES + 1):
         faults[f"read_timeout@{index}"] = ReadFail(index, "timeout")

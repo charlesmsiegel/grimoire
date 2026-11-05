@@ -52,6 +52,14 @@ def test_clearing_voice_evidence_stops_inheritance():
     assert caught.value.reason == "no_profile"
 
 
+def test_a_layer_that_authors_its_own_voice_evidence_without_a_profile_does_not_inherit():
+    rewritten = derived(VAMPIRE_MARA, sections={"voice-evidence": "Hisses every sibilant."})
+    index = elderfen_index(base(), modern(), rewritten, namesake())
+    with pytest.raises(MissingVoice) as caught:
+        resolve_snapshot_voice(MARA, snapshot(VAMPIRE_MARA, index=index), VoiceCatalog([BASE_VOICE]))
+    assert caught.value.reason == "no_profile"
+
+
 def test_a_layer_that_clears_other_sections_still_inherits():
     voice = resolve_snapshot_voice(MARA, snapshot(VAMPIRE_MARA), VoiceCatalog([BASE_VOICE]))
     assert voice.portrayal == BASE

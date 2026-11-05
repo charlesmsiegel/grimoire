@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from grimoire.core.identity import InstanceRef
-from grimoire.core.portrayal import derivation_of
+from grimoire.core.portrayal import authored_sections, derivation_of
 from grimoire.core.snapshot import EffectiveSnapshot
 from grimoire.voice import (
     InvalidVoice, MissingVoice, ResolvedVoice, VoiceBinding, VoiceCatalog, VoiceMismatch, VoiceProfile,
@@ -19,15 +19,20 @@ def _inherited_profile(leaf, snapshot: EffectiveSnapshot, catalog: VoiceCatalog)
 
     The walk follows only the chain 022 composed (``derived_variant`` links the sources declared,
     pinned bases): never a name match, a namesake or an alternate portrayal. A leaf that authors a
-    profile does not inherit; a layer that clears ``voice-evidence`` stops the walk above it.
+    profile does not inherit. A derived layer with no profile that clears or replaces its base's
+    ``voice-evidence`` section stops the walk: the base's voice no longer describes it.
     """
     for node in snapshot.effective(leaf).chain:  # leaf first
         found = catalog.get(node.ref)
         if found is not None:
             return found
-        derivation = derivation_of(snapshot.definition(node.ref))
+        layer = snapshot.definition(node.ref)
+        derivation = derivation_of(layer)
         if derivation is None:
             break  # a complete definition: the chain ends here
+        if VOICE_SECTION in dict(authored_sections(layer)):
+            # It replaces its base's voice evidence but has no profile: inheriting would contradict it.
+            raise MissingVoice("no_profile", f"{node.ref} authors voice evidence but no voice profile")
         if VOICE_SECTION in derivation.clear_sections:
             raise MissingVoice("no_profile", f"{node.ref} clears the voice it would inherit and authors none")
     raise MissingVoice("no_profile", f"no voice is authored for {leaf} or its pinned bases")

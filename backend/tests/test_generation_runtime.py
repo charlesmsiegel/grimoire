@@ -10,7 +10,7 @@ from dataclasses import replace
 
 import pytest
 from generation_fixtures import (
-    BELLAMY, DIRECTOR_POLICY, ODA, PRIVATE, QUILL, TRUTH, Harness, brief, say, view, world,
+    BELLAMY, DIRECTOR_POLICY, ODA, PRIVATE, QUILL, TRUTH, Harness, brief, say, scene, view, world,
 )
 from portrayal_fixtures import BASE, MODERN_MARA, elderfen_index
 from voice_fixtures import CAMPAIGN, PC, SECRETS
@@ -23,7 +23,7 @@ from grimoire.core.entity import EntityInstance
 from grimoire.core.inference import InferencePolicy, InferenceStage, OptionalRequest, TurnUsageLedger, plan_turn
 from grimoire.core.snapshot import EffectiveSnapshot, SelectedSource, SourceSelection
 from grimoire.generation import (
-    GenerationError, director_brief, npc_brief, plan_generation_turn, resolve_snapshot_voice,
+    GenerationError, npc_brief, plan_generation_turn, resolve_snapshot_voice,
 )
 from grimoire.providers import RouteChoice
 from grimoire.providers.cancel import CancelToken
@@ -109,8 +109,8 @@ def test_c_a_scenario_only_chat_gets_one_optional_director_reply():
     harness = Harness([say("Rain drums on the shutters as the hall falls quiet.")])
     plan = harness.plan(controls, present=(PC,), speakers=(), director_reply=True, policy=DIRECTOR_POLICY)
     meter = harness.meter(plan)
-    scene = director_brief("A guild dinner in a flooded hall.", player_characters=["Wren"], secrets=SECRETS)
-    outcome = harness.runtime.run_turn(meter, [], controls=controls, director=scene)
+    narration = scene("A guild dinner in a flooded hall.", controls)
+    outcome = harness.runtime.run_turn(meter, [], controls=controls, director=narration)
     assert outcome.status == "complete"
     assert [(line.actor, line.speaker) for line in outcome.lines] == [(None, NARRATOR)]
     summary = meter.summary()
@@ -126,9 +126,9 @@ def test_c_with_the_default_policy_the_director_reply_is_declined_and_nothing_is
     assert [d.reason for d in plan.declined] == ["disabled"]
     outcome = harness.runtime.run_turn(harness.meter(plan), [], controls=controls)
     assert outcome.status == "complete" and outcome.lines == () and harness.transport.sends == []
-    scene = director_brief("A hall.", player_characters=["Wren"], secrets=SECRETS)
+    narration = scene("A hall.", controls)
     with pytest.raises(GenerationError) as caught:
-        harness.runtime.run_turn(harness.meter(plan), [], controls=controls, director=scene)
+        harness.runtime.run_turn(harness.meter(plan), [], controls=controls, director=narration)
     assert caught.value.reason == "director_mismatch"
 
 
@@ -136,8 +136,8 @@ def test_c_a_director_after_speakers_hears_their_lines():
     controls, voices = world()
     harness = Harness([say(ODA_LINE), say(BELLAMY_LINE), say("The candles gutter.")])
     _plan, meter, briefs = two_speakers(harness, controls, voices, director_reply=True, policy=DIRECTOR_POLICY)
-    scene = director_brief("A guild dinner.", player_characters=["Wren"], secrets=SECRETS)
-    outcome = harness.runtime.run_turn(meter, briefs, controls=controls, director=scene)
+    narration = scene("A guild dinner.", controls)
+    outcome = harness.runtime.run_turn(meter, briefs, controls=controls, director=narration)
     assert [line.speaker for line in outcome.lines] == ["Oda", "Bellamy", NARRATOR]
     assert ODA_LINE in harness.prompts()[2] and BELLAMY_LINE in harness.prompts()[2]
 
@@ -182,6 +182,16 @@ def test_d_base_and_modern_mara_are_separate_actors_with_inherited_voice():
     assert "phone" in modern_prompt and "phone" not in base_prompt
     assert "Data librarian." in modern_prompt and "Archivist." in base_prompt  # each one's composed card
     assert "Archivist." not in modern_prompt
+    assert modern_out.lines[0].actor_revision == MODERN_MARA and modern_out.lines[0].voice_profile == BASE
+    assert base_out.lines[0].actor_revision == base_out.lines[0].voice_profile == BASE
+
+
+def test_d_a_suppressed_voice_item_does_not_return_through_the_card():
+    binding = VoiceBinding("chat-base", "mara-1", suppress=("cadence",))
+    outcome, (prompt,) = mara_turn("chat-base", BASE, binding)
+    assert outcome.status == "complete"
+    assert "Answers questions with questions." not in prompt and "Archive words" in prompt
+    assert "Archivist." in prompt  # the rest of the card is still there
 
 
 # -- refusals before any call ---------------------------------------------------------------------
@@ -224,6 +234,22 @@ def test_a_hand_built_plan_cannot_voice_a_player_character():
     assert harness.transport.sends == []
 
 
+def test_a_director_brief_for_other_player_characters_is_refused():
+    controls, _voices = world()
+    harness = Harness([])
+    plan = harness.plan(controls, present=(PC,), speakers=(), director_reply=True, policy=DIRECTOR_POLICY)
+    stale_cast = scene("A hall.", controls, present=())  # built before Wren joined
+    with pytest.raises(GenerationError) as caught:
+        harness.runtime.run_turn(harness.meter(plan), [], controls=controls, director=stale_cast)
+    assert caught.value.reason == "director_mismatch"
+    narration = scene("A hall.", controls)
+    handed = tuple(c for c in controls if c.actor_id != PC) + (ControlAssignment(CAMPAIGN, PC, DIRECTOR),)
+    with pytest.raises(GenerationError) as caught:  # control changed after the brief was built
+        harness.runtime.run_turn(harness.meter(plan), [], controls=handed, director=narration)
+    assert caught.value.reason == "director_mismatch"
+    assert harness.transport.sends == []
+
+
 def test_a_meter_whose_calls_already_ran_is_refused():
     controls, voices = world()
     harness = Harness([say(ODA_LINE), say(BELLAMY_LINE)])
@@ -244,6 +270,15 @@ def test_a_call_that_does_not_end_with_a_screened_line_delivers_nothing_and_halt
     outcome = harness.runtime.run_turn(meter, briefs, controls=controls)
     assert outcome.status == "halted" and [line.speaker for line in outcome.lines] == ["Oda"]
     assert outcome.calls[1].status != "accepted"
+
+
+def test_an_overlong_reply_is_rejected_not_raised():
+    controls, voices = world()
+    harness = Harness([say("Coin first. " * 200), say(BELLAMY_LINE)])
+    _plan, meter, briefs = two_speakers(harness, controls, voices)
+    outcome = harness.runtime.run_turn(meter, briefs, controls=controls)
+    assert outcome.status == "halted" and outcome.lines == ()
+    assert [(c.status, c.reason) for c in outcome.calls] == [("rejected", "too_long"), ("not_issued", None)]
 
 
 def test_a_retry_never_duplicates_a_line():

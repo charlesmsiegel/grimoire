@@ -27,7 +27,7 @@ Failures raise `GenerationError` with a `reason`.
 
 1. The actor's selected **leaf** revision's own profile, if the catalog has one. A leaf that authors a profile does not inherit.
 2. Otherwise the **nearest ancestor's** profile along 022's pinned derivation chain (`snapshot.effective(leaf).chain`). The walk follows only that chain, so it never matches by name, never reaches a namesake, an unlinked derivation (the snapshot refuses it) or an alternate portrayal.
-3. A layer whose own `derivation.clear_sections` names `voice-evidence` stops the walk above it: clearing the base's voice evidence clears its voice.
+3. A layer with no profile of its own stops the walk above it when it clears `voice-evidence` (`derivation.clear_sections`) or authors its own `voice-evidence` section: either way the base's voice no longer describes it. (022 refuses a clear of a section the base does not author, `stale_clear`.)
 4. Then the campaign `VoiceBinding`'s replace/add/suppress, through the same merge as `resolve_voice` (`merge_binding`).
 
 Nothing found is `MissingVoice("no_profile")`. A binding's alternate `portrayal` is refused here (`VoiceMismatch("alternate_portrayal")`): a snapshot actor's portrayal is its selection. Item-level portrayal deltas for voice are later work.
@@ -42,9 +42,10 @@ A brief is a sealed value: only its builder makes one.
 - **Known propositions** are the ids the actor holds: reports it received or sent, and its beliefs. A secret (`SecretFact`, keyed by proposition id) not among them is **hidden** from this actor.
 - The voice fragment is 014's `speaker_fragment(voice, secrets=, known=)`, so an example revealing a hidden secret is screened out.
 - Knowledge is rendered **without ids**, newest first within `knowledge_chars`, shown oldest first. The actor's effective description and composed sections (`snapshot.effective(...).sections`) are added as context, whole parts only, within `context_chars`.
+- The card's `voice-evidence` section is **left out**: the voice reaches the prompt only through the screened fragment, so a suppressed binding item or an example revealing a hidden secret cannot return through the card.
 - `heard` is what the actor heard before this turn's calls. A heard line stating a marker of a hidden secret that the actor's own projection and card do not hold is refused as `leaky_cue`: the caller screened the cue too little, and nothing is sent.
 
-**`director_brief(scenario, *, heard=(), player_characters, secrets)`** takes authored scenario text and table-visible lines **only**: there is no knowledge parameter at all. It names the player characters and forbids writing their words, thoughts, feelings or decisions. Every secret is hidden from it.
+**`director_brief(scenario, *, campaign_id, present, controls, names, heard=(), secrets)`** takes authored scenario text and table-visible lines **only**: there is no knowledge parameter at all. The player characters are **derived from control** (every present actor with a human controller), never passed in; `names` must give each a nonblank display name (`bad_players`). The brief names them and forbids writing their words, thoughts, feelings or decisions. Every secret is hidden from it.
 
 `npc_messages(brief, spoken)` and `director_messages(brief, spoken)` render a brief and the lines spoken so far this turn as `(role, content)` messages.
 
@@ -57,6 +58,7 @@ A brief is a sealed value: only its builder makes one.
 | Reason | Meaning |
 |---|---|
 | `silent_reply` | Blank or punctuation only. |
+| `too_long` | Longer than a heard line may be (`MAX_LINE_CHARS`, 2000 characters). |
 | `copied_example` | Reproduces an authored example of any voice in the scene (014's `example_copies`). |
 | `unlearned_secret` | States a marker of a secret hidden from the speaker that nothing it held or heard exposed: its projection, its card, its heard lines, or a line spoken earlier this turn. |
 
@@ -68,14 +70,14 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 
 `run_turn(meter, briefs, *, controls, director=None, token=None, cancel=None) -> TurnOutcome`:
 
-- **Checked before any call** (`GenerationError`): every planned call is `npc_generation` or `director_generation` (`unsupported_stage`), each `npc_generation` call has exactly one brief (`missing_brief`, `extra_brief`, `duplicate_brief`), a director brief is given exactly when a director reply is planned (`director_mismatch`), no planned call already ran on `meter` (`call_already_run`), and every brief's actor is director-controlled **now**, so a hand-built plan cannot voice a player character.
+- **Checked before any call** (`GenerationError`): every planned call is `npc_generation` or `director_generation` (`unsupported_stage`), each `npc_generation` call has exactly one brief (`missing_brief`, `extra_brief`, `duplicate_brief`), a director brief is given exactly when a director reply is planned (`director_mismatch`), no planned call already ran on `meter` (`call_already_run`), every brief's actor is director-controlled **now**, so a hand-built plan cannot voice a player character, and the director brief names the same player characters that control gives now (`director_mismatch`).
 - **Calls run in plan order**, one `execute` each. Each later call hears the lines accepted before it; a planned director reply runs after the speakers.
 - **Only accepted, screened text becomes a line.** A provider status other than `accepted`, or a screen rejection, ends the turn: later calls are `not_issued`. A rejected call is still billed.
 - **Nothing streams to a consumer.** The runtime passes no `on_delta`: nothing is shown before acceptance, and a consumer would stop the adapter retrying a dropped stream. Streaming display is a later milestone.
-- **Fence.** `RunFence.claim(key)` returns a `FenceToken`; a newer claim on the same caller-chosen key (one chat thread) makes it stale and cancels the run's token at once. The runtime also checks before each call and before returning. A stale run returns **no lines**. Cross-process fencing is 030's.
+- **Fence.** `RunFence.claim(key)` returns a `FenceToken`; a newer claim on the same caller-chosen key (one chat thread) makes it stale and cancels the run's token at once. The runtime also checks before each call and before returning. A stale run returns **no lines**. Staleness is checked only up to the return: a caller that persists lines (035) must re-check `token.stale` inside its own commit. Cross-process fencing is 030's.
 - **Cancel.** One `CancelToken` for the run: the in-flight call ends `cancelled` and nothing runs after it.
 
-`TurnOutcome.status` is `complete` (every planned call produced a line), `halted`, `cancelled` or `stale`. `calls` holds every planned call's `CallOutcome` in plan order: `accepted`, `rejected` (with its screen reason), the adapter's `incomplete`/`failed`/`cancelled`/`refused`, or `not_issued`. Each `GeneratedLine` carries its call id, actor (`None` for the director, shown as `Narrator`), the voice's portrayal and the text: an **unreviewed proposal**.
+`TurnOutcome.status` is `complete` (every planned call produced a line), `halted`, `cancelled` or `stale`. `calls` holds every planned call's `CallOutcome` in plan order: `accepted`, `rejected` (with its screen reason), the adapter's `incomplete`/`failed`/`cancelled`/`refused`, or `not_issued`. Each `GeneratedLine` carries its call id, actor (`None` for the director, shown as `Narrator`), `actor_revision` (the actor's own selected revision, such as a derived portrayal), `voice_profile` (the profile revision its voice came from, maybe an ancestor's) and the text: an **unreviewed proposal**.
 
 ## Proofs
 
