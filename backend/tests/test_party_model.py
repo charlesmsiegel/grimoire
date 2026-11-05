@@ -164,3 +164,15 @@ def test_refusals_pickle():
     error = PartyRefused("m", "in_reserve", (GRUB,))
     copy = pickle.loads(pickle.dumps(error))
     assert (copy.reason, copy.members, str(copy)) == ("in_reserve", (GRUB,), "m")
+
+
+def test_a_pre_033_build_keeps_a_membership_file_unsupported_and_reserves_its_endpoints():
+    from fixtures import graph_codec_017 as old
+
+    from grimoire.graph import UnsupportedRelation
+    from grimoire.graph.codec import relation_to_payload
+
+    payload = relation_to_payload(rel(1, "in_reserve", GRUB, MARA, 1))
+    decoded = old.relation_from_payload(RelationRef(C, "r-1"), old.RELATION_SCHEMA, payload)
+    assert isinstance(decoded, UnsupportedRelation) and decoded.predicate == "in_reserve"
+    assert set(decoded.endpoints) == {GRUB, MARA}

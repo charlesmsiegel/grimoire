@@ -208,8 +208,10 @@ class PartyState:
 class SceneCast:
     """Who is present in one scene at one sequence: exactly the individuals ``stage`` selected, sorted.
 
-    Only ``stage`` builds one, so a cast never holds a reserved or ambiguous member; any other construction is
-    refused (``invalid_field``).
+    Only ``stage`` builds one; any other construction, ``dataclasses.replace`` included, is refused
+    (``invalid_field``). A cast records each member's membership chain as staged (its ``basis``). Membership can
+    still change at the same sequence after staging (a member boxed during the scene), so whether a member is
+    present is answered against a current state (``presence``, ``may_speak``), never by the cast alone.
     """
 
     campaign_id: str
@@ -217,10 +219,12 @@ class SceneCast:
     as_of: int
     present: tuple[InstanceRef, ...]
     _token: object = field(default=None, repr=False, compare=False)
+    basis: Mapping[InstanceRef, tuple] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self._token is not _STAGED:
             raise _refuse("invalid_field", "a scene cast is built by stage")
+        object.__setattr__(self, "_token", None)  # spent: a copy made with replace() cannot carry it
         _segment(self.campaign_id, "campaign_id")
         _segment(self.scene_id, "scene_id")
         if type(self.as_of) is not int or self.as_of < 0:
@@ -235,9 +239,10 @@ class SceneCast:
             raise _refuse("too_large", f"a cast has at most {MAX_CAST} individuals")
         object.__setattr__(self, "present", tuple(sorted(self.present, key=str)))
 
-    def may_speak(self, instance: InstanceRef) -> bool:
-        """Only a present individual may speak or act as present in this scene."""
-        return instance in self.present
+    def may_speak(self, instance: InstanceRef, state: PartyState) -> bool:
+        """Only a present individual may speak or act as present, judged against ``state`` (the scene's current
+        membership); a member whose membership changed since staging is refused with ``stale_cast``."""
+        return presence(state, self, instance) == "present"
 
 
 def stage(state: PartyState, scene_id: str, present: Iterable[InstanceRef], *,
@@ -280,7 +285,14 @@ def stage(state: PartyState, scene_id: str, present: Iterable[InstanceRef], *,
     conflicted = sorted((ref for ref in chosen if state.uncertain(ref)), key=str)
     if conflicted:
         raise _refuse("conflicting_membership", "membership is ambiguous", *conflicted)
-    return SceneCast(state.campaign_id, scene_id, state.as_of, chosen, _STAGED)
+    basis = MappingProxyType({ref: _signature(state, ref) for ref in chosen})
+    return SceneCast(state.campaign_id, scene_id, state.as_of, chosen, _STAGED, basis)
+
+
+def _signature(state: PartyState, instance: InstanceRef) -> tuple:
+    """What a member's standing rests on: each membership relation of its chain, and whether the walk was cut."""
+    chain, unknown = state.chain(instance)
+    return (tuple((m.relation, m.status) for m in chain), unknown)
 
 
 def presence(state: PartyState, cast: SceneCast, instance: InstanceRef) -> str:
@@ -291,7 +303,8 @@ def presence(state: PartyState, cast: SceneCast, instance: InstanceRef) -> str:
     of an anchor who is present, directly or through a group (nearby and available to join the scene, but not
     on stage and never a speaker). ``absent``: anything else, including every companion of an anchor who is
     not in the scene. Refused with ``relations_unreadable`` while the state is incomplete, and with
-    ``stale_cast`` for a cast of another campaign or sequence.
+    ``stale_cast`` for a cast of another campaign or sequence, or when a cast member's membership chain is no
+    longer the one it was staged with (it was boxed, moved or made ambiguous since).
     """
     if not isinstance(state, PartyState) or not isinstance(cast, SceneCast) or type(instance) is not InstanceRef:
         raise _refuse("invalid_field", "presence needs a PartyState, a SceneCast and an InstanceRef")
@@ -300,6 +313,9 @@ def presence(state: PartyState, cast: SceneCast, instance: InstanceRef) -> str:
     if cast.campaign_id != state.campaign_id or cast.as_of != state.as_of:
         raise _refuse("stale_cast", "the cast and the state must be of the same campaign and sequence")
     if instance in cast.present:
+        if cast.basis.get(instance) != _signature(state, instance):
+            raise _refuse("stale_cast", f"{instance}'s membership changed since the scene was staged; stage it again",
+                          instance)
         return "present"
     chain, unknown = state.chain(instance)
     if any(m.status == "reserve" for m in chain):

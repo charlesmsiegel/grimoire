@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from grimoire.core import InstanceRef, Moment
@@ -96,6 +98,20 @@ def test_a_stored_anchor_cannot_take_travellers(store):
     assert refused(lambda: party.stage(C, "s", [SNIK], as_of=3)).reason == "in_reserve"
 
 
+def test_a_member_boxed_during_the_scene_no_longer_speaks(store):
+    party = party_library(store)
+    party.join(MARA, GRUB, at=Moment(1), provenance="d").commit()
+    cast = party.stage(C, "s", [MARA, GRUB], as_of=6)
+    assert cast.may_speak(GRUB, party.view(C, as_of=6).state)
+    party.store_in_reserve(GRUB, at=Moment(6), provenance="d").commit()  # boxed mid-scene, same sequence
+    state = party.view(C, as_of=6).state
+    found = refused(lambda: cast.may_speak(GRUB, state))
+    assert found.reason == "stale_cast" and found.members == (GRUB,)
+    assert refused(lambda: presence(state, cast, GRUB)).reason == "stale_cast"
+    assert cast.may_speak(MARA, state)  # the others are unaffected
+    assert refused(lambda: dataclasses.replace(cast, present=(MARA,))).reason == "invalid_field"
+
+
 def test_a_party_cannot_contain_itself(store):
     party = party_library(store)
     party.join(CREW, MARA, at=Moment(1), provenance="d").commit()
@@ -148,6 +164,15 @@ def test_a_membership_change_since_the_preview_is_stale(store):
         unrelated.commit()
 
 
+def test_a_taken_relation_id_is_reported_stale_before_commit(store):
+    party = party_library(store)
+    change = party.join(MARA, SNIK, at=Moment(1), provenance="d")  # allocates r-1
+    relation_library(store).add(C, "owns", MARA, GRUB, since=Moment(1), provenance="d").commit()  # takes r-1
+    assert ("campaigns/c/relations/r-1.json", "exists") in change.stale()
+    with pytest.raises(StaleWrite):
+        change.commit()
+
+
 def test_a_replaced_endpoint_is_stale(store):
     party = party_library(store)
     change = party.join(MARA, SNIK, at=Moment(1), provenance="d")
@@ -177,4 +202,4 @@ def test_a_retracted_membership_does_not_count(store):
     party = party_library(store)
     assert party.view(C, as_of=2).state.membership(SNIK) is None
     party.join(MARA, SNIK, at=Moment(1), provenance="d").commit()  # a retraction is not history in the fiction
-    assert party.stage(C, "s", [MARA, SNIK], as_of=2).may_speak(SNIK)
+    assert party.stage(C, "s", [MARA, SNIK], as_of=2).may_speak(SNIK, party.view(C, as_of=2).state)

@@ -21,7 +21,9 @@ from grimoire.graph import Relation, UnsupportedRelation
 from grimoire.graph.codec import RelationCodecError, relation_from_payload
 from grimoire.graphstore import InvalidRelation, RelationChange, RelationLibrary
 from grimoire.party import MEMBERSHIP, PREDICATE_FOR, PartyRefused, PartyState, SceneCast, stage
-from grimoire.store import LibraryStore, LoadProblem, StaleWrite, StoreError
+from grimoire.library import LibraryPathError
+from grimoire.store import LibraryStore, LoadProblem, RecordNotFound, StaleWrite, StoreError
+from grimoire.store.layout import address_parts
 
 _ANY = "any"
 
@@ -121,6 +123,9 @@ class PartyChange:
                 stale.append((f"campaigns/{self.campaign_id}/relations", "memberships changed"))
             for change in self.relation_changes:
                 stale += change.stale(files.relations)
+                for record, expected in change.puts:  # a new file's id taken since the plan (commit says so too)
+                    if expected is None and not _absent(store, record.address):
+                        stale.append(("/".join(address_parts(record.address)), "exists"))
             return list(dict.fromkeys(stale))
 
     def commit(self, approvals: Mapping[str, str] | None = None) -> PartyCommit:
@@ -306,6 +311,16 @@ class PartyLibrary:
         if source in PREDICATE_FOR and (before is None or before[1] != source):
             raise _refuse("not_in_party" if source == "party" else "not_in_reserve",
                           f"{member} is not {'an active member' if source == 'party' else 'in a reserve'}", member)
+
+
+def _absent(store: LibraryStore, address: object) -> bool:
+    try:
+        store.read(address)  # type: ignore[arg-type]
+    except RecordNotFound:
+        return True
+    except (StoreError, LibraryPathError):
+        return False  # something is there, even if unreadable
+    return False
 
 
 def _instance(value: object, label: str) -> None:

@@ -46,12 +46,14 @@ Membership is a 017 relation from the member to its **party anchor**:
 - **Reserve is transitive.** `reserved(x)` is true when `x` is stored, or travels in a party whose anchor (or an anchor above it) is stored: a boxed group's members are boxed with it.
 - `uncertain(x)` is true when `x`'s membership, or an anchor's above it, is ambiguous.
 - A retracted membership never counts. An ended one counts before its `until`.
-- **Ambiguity is reported, never guessed.** A member holding two membership relations at once (a hand edit, two devices, or two accepted effects) is in `conflicted`, appears in no party, and is reported as `conflicting_membership`. `membership()` refuses it.
+- **Ambiguity is reported, never guessed.** A member holding two membership relations at once (a hand edit, two devices, or two accepted effects) is in `conflicted`, appears in no party, and is reported as `conflicting_membership`. `membership()` refuses it, and so does every `PartyLibrary` move of that member. **Repair** is editorial, through 017's `RelationLibrary`: end or retract the relation that is wrong (the problem lists both relation ids), and the member is moveable again.
 - **Unreadable files fail closed.** When a relation file or the folder cannot be read, `complete` is false and the state reports `relations_unreadable`: a reserve membership might be hiding in the unreadable file.
 
 ## Scene casts and presence
 
-A **scene cast** (`SceneCast(campaign_id, scene_id, as_of, present)`) is exactly who is present in one scene. `cast.may_speak(x)` is true only for a cast member. **Only `stage` builds a cast**: constructing one directly is refused (`invalid_field`), so a cast never holds a member `stage` would refuse.
+A **scene cast** (`SceneCast(campaign_id, scene_id, as_of, present)`) is exactly who is present in one scene.
+- **Only `stage` builds a cast.** Constructing one directly, or copying one with `dataclasses.replace`, is refused (`invalid_field`), so a cast is never made with a member `stage` would refuse.
+- **A cast is judged against current membership.** Membership can change at the cast's own sequence after staging, for example a member boxed during the scene. The cast keeps each member's membership chain as staged (`basis`). `cast.may_speak(x, state)` is true only for a cast member whose chain in `state` is still the staged one; otherwise it refuses with `stale_cast`, and the scene is staged again.
 
 `stage(state, scene_id, present, instances=…)` builds one. It refuses, with `PartyRefused.reason` and the offending `members`:
 
@@ -73,7 +75,7 @@ A **scene cast** (`SceneCast(campaign_id, scene_id, as_of, present)`) is exactly
 - `accompanying`: in the active party of an anchor who is present, directly or through a group. It is nearby and can join the scene, but it is not on stage and never a speaker;
 - `absent`: anything else, including every companion of an anchor who is not in the scene.
 
-`presence` refuses with `relations_unreadable` while the state is incomplete (a hidden membership could change the answer), and with `stale_cast` for a cast of another campaign or sequence.
+`presence` refuses with `relations_unreadable` while the state is incomplete (a hidden membership could change the answer), and with `stale_cast` for a cast of another campaign or sequence, or for a cast member whose membership chain changed since staging.
 
 `cast_report(state, cast, instances, controlled=…)` gives one `PresenceRow(instance, presence, membership, controlled)` per individual. `controlled` is the caller's set of player-controlled instances; this slice does not read the sovereignty ledger.
 
@@ -121,7 +123,7 @@ Each takes `at` (a 012 `Moment`) and `provenance` (attribution text, not authori
 - a relation file has become unreadable;
 - or a folded 017 change's own check fails: a replaced or vanished endpoint file, an id pair, or a duplicate.
 
-`stale()` reports the same reasons without committing. Pinning every membership file of the campaign is deliberately coarse: a concurrent move of another member also makes the change stale, and the caller plans again.
+`stale()` reports the same reasons without committing, plus `exists` when the relation id the add allocated has since been taken (the store's own check at commit). Pinning every membership file of the campaign is deliberately coarse: a concurrent move of another member also makes the change stale, and the caller plans again.
 
 ### Releasing keeps memories
 
@@ -138,4 +140,4 @@ A release only ends a relation. The member's instance file, its other relations,
 | Which present individuals actually speak, and what a newly present one is told | 027 (each speaker is its own generation call) and 032 |
 | Physical positions within a scene, and who can still reach whom | 041 |
 | An **audience**: individuals who perceive a scene without being on stage | 032 (who receives what) and 041 (who can see and hear); the cast here is only who is present |
-| Cross-device merge of memberships (relation files sync as 017's do) | 019/028 |
+| Cross-device merge of memberships. Relation files sync one at a time as 017's do, so a move's end could land on a device without its add (for example if the new anchor's instance file is refused there), leaving the member in no party on that device until the add follows. Not reproduced in tests | 019/028 |

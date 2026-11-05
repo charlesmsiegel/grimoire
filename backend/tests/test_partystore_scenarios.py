@@ -71,8 +71,8 @@ def test_the_boxed_monster_never_speaks_in_an_unrelated_scene(path):
         party = party_library(store)
         cast = party.stage(C, "s-inn", [MARA, INNKEEPER], as_of=6)
         assert cast.present == (INNKEEPER, MARA)
-        assert not cast.may_speak(GRUB) and not cast.may_speak(SNIK)
         view = party.view(C, as_of=6)
+        assert not cast.may_speak(GRUB, view.state) and not cast.may_speak(SNIK, view.state)
         assert presence(view.state, cast, GRUB) == "reserved"
         assert presence(view.state, cast, SNIK) == "accompanying"  # nearby with Mara, but not on stage
         with pytest.raises(PartyRefused) as refused:
@@ -93,10 +93,10 @@ def test_a_creature_is_cast_under_its_own_reference(path):
     with LibraryStore.open(path) as store:
         party = party_library(store)
         cast = party.stage(C, "s-road", [MARA, SNIK], as_of=6)
-        assert cast.present == (MARA, SNIK) and cast.may_speak(SNIK)
+        assert cast.present == (MARA, SNIK) and cast.may_speak(SNIK, party.view(C, as_of=6).state)
         assert SNIK.kind == "creature"
         party.withdraw(GRUB, at=Moment(7), provenance="director").commit()
-        assert party.stage(C, "s-road", [MARA, SNIK, GRUB], as_of=7).may_speak(GRUB)
+        assert party.stage(C, "s-road", [MARA, SNIK, GRUB], as_of=7).may_speak(GRUB, party.view(C, as_of=7).state)
         assert party.stage(C, "s-road", [MARA, SNIK], as_of=6).present == (MARA, SNIK)  # history is unchanged
 
 
