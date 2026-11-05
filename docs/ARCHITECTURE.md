@@ -31,6 +31,10 @@ One metered provider call per speaking NPC, each brief built only from that acto
 
 A derived portrayal names its pinned base in its own payload and composes over it with explicit inherit/replace/clear and field provenance. A chat or selection is frozen for one operation from one loaded library, with or without a world. See [EFFECTIVE_VIEWS.md](EFFECTIVE_VIEWS.md).
 
+### Context packing (first slice implemented: `grimoire.context`, `grimoire.contextstore`)
+
+One actor's bounded context from its own card, its own knowledge and the triggered common lore of the chat's bound sources, deterministic and model-free, with provenance and omissions beside each line. See [CONTEXT.md](CONTEXT.md).
+
 ### Device sync (first slice implemented: `grimoire.sync`)
 
 Two libraries exchange records directly, three-way against the last state both agreed on, and every overlapping edit becomes a named conflict kept on both devices rather than a silent overwrite. Families whose merge rules are not written yet are held back and reported. See [SYNC.md](SYNC.md).
