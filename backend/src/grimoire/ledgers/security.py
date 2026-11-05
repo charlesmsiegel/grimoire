@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from datetime import datetime, timezone
 
 from grimoire.security import (
@@ -22,7 +22,8 @@ from grimoire.security import (
 )
 from grimoire.security.policy import CONSEQUENTIAL
 from grimoire.store import LibraryStore
-from grimoire.store.errors import AuthorityUnavailable, LedgerInvalid
+from grimoire.store.errors import AuthorityUnavailable, LedgerInvalid, TakenIdsUnlisted
+from grimoire.store.layout import CAMPAIGNS, HOLDINGS, INSTANCES, PLACEMENTS, SUFFIX, name_key
 from grimoire.store.ledger import MAX_BATCH_ENTRIES, Head, Ledger, entry_cost
 from grimoire.store.library import LedgerWriter
 
@@ -33,6 +34,8 @@ from .codec import (
 
 SECURITY = "security"
 Clock = Callable[[], str]
+#: campaign folders whose next two segments are ``<kind>/<instance id>``: an address there names one individual
+_INSTANCE_FAMILIES = frozenset({INSTANCES, HOLDINGS, PLACEMENTS})
 
 
 def utc_now() -> str:
@@ -320,3 +323,97 @@ def _replay(kernel: Authorizer, owners: frozenset[str], entries) -> None:
             raise
         except (ValueError, TypeError, KeyError) as error:
             raise LedgerInvalid(f"security ledger entry {index + 1} ({kind}): {error}") from None
+
+
+# -- ids the security ledger keeps taken ------------------------------------------------------------
+
+def security_campaign_ids(store: LibraryStore, *, spent: Collection[tuple[str, str, str]] = ()) -> frozenset[str]:
+    """Every campaign id a grant or approval in the security ledger names: ``campaigns/<id>`` or anything
+    under it, except the approvals in ``spent`` (see ``_granted_addresses``).
+
+    A grant outlives a hand-deleted ``campaigns/<id>`` folder and covers whatever is later written
+    there, so a new campaign given that id would hand the grant's worker the new campaign. A campaign
+    id allocator must therefore find its id outside this set, as it must find no sovereignty ledger
+    (``campaign_authority_presence``). Scanned raw and failing closed, as ``security_instance_ids``.
+    """
+    return frozenset(parts[1] for parts in _granted_addresses(store, spent)
+                     if len(parts) >= 2 and parts[0] == CAMPAIGNS)
+
+
+def security_instance_ids(store: LibraryStore, campaign_id: str, *,
+                          spent: Collection[tuple[str, str, str]] = ()) -> frozenset[str]:
+    """Every instance id of this campaign that a grant or approval in the security ledger is scoped to.
+
+    Part of the one reservation set (``grimoire.chatstore.campaign_taken_ids``): a grant on one
+    individual's instance file (``campaigns/<id>/instances/<kind>/<instance id>.json``), holder file
+    (023) or placement folder (018), or on anything finer under them, survives a hand delete of that
+    individual and would cover a new one given the same id, who would inherit the permission. A grant
+    on a whole campaign, family or kind folder names no individual, so it reserves no instance id: it
+    covers every new actor there by design.
+
+    Batches are scanned raw, with no replay or chain check, so a broken ledger still protects its ids.
+    A revoked grant still reserves, as the sovereignty scan reserves on any mention: a raw scan cannot
+    tell which revocations replay would accept, and ``LibraryStore.repair_ledger`` moving a broken
+    tail aside undoes the revocations in it, so the grant can come back. A ledger folder or batch that
+    cannot be listed or read (a link, a look-alike, malformed) raises ``TakenIdsUnlisted``.
+
+    The cost grows with the whole library's audit history, not only this campaign's: the security
+    ledger also holds every recorded decision, and every batch must be read to fail closed. It is
+    paid only when a new id is needed.
+    """
+    folded = name_key(campaign_id)
+    taken: set[str] = set()
+    for parts in _granted_addresses(store, spent):
+        if len(parts) >= 5 and parts[0] == CAMPAIGNS and parts[1] == folded and parts[2] in _INSTANCE_FAMILIES:
+            name = parts[4]
+            # an instance or holder file name carries the suffix; a placement folder is the bare id
+            taken.add(name[:-len(SUFFIX)] if name.endswith(SUFFIX) else name)
+    return frozenset(taken)
+
+
+def _granted_addresses(store: LibraryStore,
+                       spent: Collection[tuple[str, str, str]] = ()) -> tuple[tuple[str, ...], ...]:
+    """The address of every grant's ``scope`` and every approval's ``resource`` in the security ledger,
+    split into segments, each folded with ``name_key``.
+
+    Only grants and approvals confer authority. A decision's ``resource`` is audit history: it names
+    whatever was asked for, allowed or not, and covers nothing later, so it is not collected (reserving
+    on it would keep every campaign ever touched taken, for no protection). Keyed on field names alone,
+    as the sovereignty scan keys on ``actor_id``: a grant is the object with a ``scope`` (the security
+    ledger holds no delegations), an approval the one with a ``payload_digest``. Replay accepts only
+    canonical addresses, so folding changes nothing for a sound ledger; for a garbled one it errs
+    toward taking the id an odd spelling folds to, as a look-alike campaign folder counts as taken.
+
+    ``spent`` holds ``(approval_id, resource, payload_digest)`` for the approvals the caller's own
+    commit supplies: an approval of the very bytes that commit writes, at the address it writes them
+    to. Such an approval reserves nothing, because it is how a new campaign or actor is written in the
+    first place (preview, register its approvals, commit), and all it can ever authorize is that
+    write, for the individual that commit creates. Only an exact match is spent: another approval of
+    the same address, or one of other bytes, still reserves.
+    """
+    documents, unread = store.ledger_documents(SECURITY)
+    if unread:
+        raise TakenIdsUnlisted(f"the security ledger cannot all be read ({', '.join(unread)}), so the campaign "
+                               "and instance ids its grants name cannot be reserved", unread)
+    found: list[tuple[str, ...]] = []
+    stack: list[object] = list(documents)
+    while stack:
+        value = stack.pop()
+        if isinstance(value, Mapping):
+            if value.get("kind") == "decision":  # most of the ledger, and never collected: not walked
+                continue
+            approval = "payload_digest" in value
+            address = value.get("resource") if approval else value.get("scope")
+            if approval and spent and _spent(value, spent):
+                continue  # this commit's own approval: it names nothing else, and is not walked
+            if isinstance(address, str):
+                found.append(tuple(name_key(part) for part in address.split("/")))
+            stack.extend(value.values())
+        elif isinstance(value, (list, tuple)):
+            stack.extend(value)
+    return tuple(found)
+
+
+def _spent(approval: Mapping[object, object], spent: Collection[tuple[str, str, str]]) -> bool:
+    key = (approval.get("approval_id"), approval.get("resource"), approval.get("payload_digest"))
+    return all(type(part) is str for part in key) and key in spent

@@ -22,8 +22,8 @@ This slice gives meaning to two top-level payload keys. The 009 codec already ke
 
 | Key | Shape | Rules |
 |---|---|---|
-| `sections` | `{name: text}` | Names follow the identity segment grammar (`validate_segment`). Text is nonblank, ≤ 8000 characters, and has no control, surrogate or line/paragraph-separator characters (Unicode `Cc`, `Cs`, `Zl`, `Zp`) except `\n` and `\t`. CRLF and a lone CR are read as `\n` (the stored text is unchanged). At most 64 sections. |
-| `derivation` | `{"base": "<pinned ref>", "clear_sections": [...], "clear_facets": [...], "clear_description": bool}` | `base` is required and must be pinned. The lists default to empty and may not repeat a name. Unknown keys are refused. |
+| `sections` | `{name: text}` | Names follow the identity segment grammar (`validate_segment`). Text is nonblank, ≤ 8000 characters, and has no control, surrogate or line/paragraph-separator characters (Unicode `Cc`, `Cs`, `Zl`, `Zp`) except `\n` and `\t`. CRLF and a lone CR are read as `\n` (the stored text is unchanged). At most 64 sections per revision, and at most 64 **composed** (see [the composed cap](#composition-rules)). |
+| `derivation` | `{"base": "<pinned ref>", "clear_sections": [...], "clear_facets": [...], "clear_description": bool}` | `base` is required, must be pinned, and must be another entity: the index never links an entity to itself, so a revision whose base is a revision of its own entity is `invalid_derivation`, not `unlinked_derivation`. The lists default to empty and may not repeat a name. Unknown keys are refused. |
 
 - A revision **with** a `derivation` key is a derived delta, even when its value is `null`: a non-object value is `invalid_derivation`, never ignored. A revision without the key is a complete, standalone definition. `sections: null` is likewise `invalid_sections`.
 - Sections are composed as **opaque whole-section text**. A `voice-evidence` section is just a section. Item-level voice override and suppress belong to 027 ([VOICE](VOICE.md)).
@@ -52,7 +52,7 @@ A payload derivation cycle is unreachable: every payload base must equal an acce
 
 - The base is exactly the payload's pinned ref. There is no follow-head derivation in this slice.
 - A base whose head is a different revision is still used pinned, with a `base_not_head` notice. Revisions are opaque, so the notice never claims "later".
-- A missing base is `missing_base`, with the reason in `.detail`: the index reason (`missing_source`, `missing_entity` or `missing_revision`), or, through `grimoire.effective`, the store's `excluded_source` or `entity_dropped` when the base exists on disk but its source or entity was left out of the load, or `unreadable_revision` when its file exists but could not be read. It never falls back by name.
+- A missing base is `missing_base`, with the reason in `.detail`: the index reason (`missing_source`, `missing_entity` or `missing_revision`), or, through `grimoire.effective`, the store's `excluded_source` or `entity_dropped` when the base exists on disk but its source or entity was left out of the load, or `unreadable_revision` when its file exists but could not be read. The most specific reason wins: `excluded_source` first, then `unreadable_revision`, then `entity_dropped`. An unreadable base whose entity the loader also dropped is `unreadable_revision` only when the drop is that file's own consequence (it is the declared head, or, with no head declared, the entity's only revision), so repairing the file is the whole fix. When the entity was dropped for another reason too (`kind_reuse`, `missing_head`, a head naming another revision), repairing the file would leave it dropped, and the reason is `entity_dropped`. A `missing_head` reported for another entity of the same source is read conservatively the same way. It never falls back by name.
 - A base that is not an entity definition is `not_entity_definition`. One that cannot be decoded is `undecodable`, with the codec reason in `.detail`.
 
 ### Composition rules
@@ -71,6 +71,7 @@ Composition runs from the root base down to the requested revision. Values at th
 - **Inheritance is the default.** Absence always means inherit.
 - **Clearing is explicit.** A clear is typed and recorded, never inferred from prose, `null` or empty text.
 - **Refusals.** Clearing what P lacks is `stale_clear`. Clearing and setting the same name is `clear_and_set`.
+- **The composed cap.** Each revision holds at most 64 sections, but a chain of 8 could compose 512, and prompt builders (027, 031) need bounded input. So the requested revision's composed result may hold at most 64 sections (`MAX_SECTIONS`); more is `too_many_sections`, with `.ref` the requested revision. It is refused, never truncated. The cap applies to the result, not to each step: a leaf that clears an over-full parent back to 64 or fewer composes, while that parent, requested on its own, is refused. Each section is already ≤ 8000 characters, so the composed text is bounded too. Ancestry does not read fields, so `derivation_chain` and a snapshot's raw ancestry still reach the pinned base for repair.
 - **Provenance rule.** An unmentioned value becomes `inherited`, keeping the node that authored it. Only `cleared` carries through unchanged, attributed to the layer that cleared it. `replaced` and `restated` are attributed to C: the child pins its own value, so a later base change would not flow into it.
 - **First-slice limit.** A child's own `traits` must be a valid `FacetSet` (009 constructor). So a derived portrayal that adds `durable` must restate `physical`, which is recorded as `restated`.
 
@@ -139,13 +140,14 @@ Each source is a `SelectedSource(ref, role, resolved_revision=None, actor=None)`
 Refusals:
 - `not_selected`: an unselected entity, or an actor no selection names.
 - `role_not_selected`: the entity is selected, but not under the requested role (and, for a pinned request, it is not a pinned ancestor of a selection of that role either).
-- `ancestry_unavailable`: a pinned request is not a known ancestor, but a selection's ancestry could not be walked; `.detail` is the walk's reason (and its own detail, as `reason/detail`). A lorebook or scenario selection has no ancestry, so it never causes this.
+- `ancestry_unavailable`: a pinned request is not a known ancestor, but a selection's ancestry could not be walked; `.detail` is the walk's reason (and its own detail, as `reason/detail`), and `.ref` is the revision whose walk failed. A lorebook or scenario selection has no ancestry, so it never causes this.
 - `ambiguous_selection`: an unpinned request for an entity selected under several roles; name the role.
 - `revision_not_selected`: a pinned request that matches no selection or chain member.
-- `MissingDefinition`: a broken selection.
+- `MissingDefinition`: a broken selection. That includes a pinned request for any revision of a broken head-following selection: a head always names a registered revision, so such a selection is broken only because its source or entity is absent, and then it selected no revision at all (never `revision_not_selected`).
+- From `effective` and `entity`: every composition refusal on this page (`missing_base`, `not_entity_definition`, `too_many_sections`, ...), propagated unchanged.
 - `unknown_instance`: the instance was not captured.
 - `actor_source_mismatch`: the actor's source names another entity.
-- `invalid_selection`, `conflicting_selection`: a malformed or duplicated selection, when it is built.
+- `invalid_selection`, `conflicting_selection`: a malformed or duplicated selection, when it is built (`sources` that are not a collection, such as one bare `SelectedSource`, are malformed too).
 - `conflicting_instance`: one instance captured twice.
 
 Ancestry is walked separately from field composition (`portrayal.derivation_chain`), and reads no field, so a portrayal that fails a field rule (`invalid_sections`, `stale_clear`, ...) still lets merge owners reach its pinned base to repair it.
@@ -156,7 +158,7 @@ Ancestry is walked separately from field composition (`portrayal.derivation_chai
 
 - `entity_decoder(stored)` decodes a `StoredDefinition` whose envelope's top-level `schema` is `grimoire.entity/0`. Any other record (a lorebook, a scenario) is `not_entity_definition`; `resolve` still returns it raw. Another `grimoire.entity/<n>` version (written by a newer client) is an entity this version cannot read, so it is `undecodable` (`unsupported_schema`), never ancestry-free.
 - `selection_snapshot(view, selection)` is a snapshot over `view.index`.
-- `explainer(view)` gives `missing_base` the store's `excluded_source`, `entity_dropped` or `unreadable_revision`; both snapshot helpers use it.
+- `explainer(view)` gives `missing_base` the store's `excluded_source`, `unreadable_revision` or `entity_dropped`, in that order of precedence; both snapshot helpers use it. It explains only bases: a broken *selection* keeps the index reason in its `BrokenReference` and `MissingDefinition`.
 - `chat_snapshot(view, chat_ref)` reads, **from the same `LibraryView`**, the chat, its scope and every roster instance, and returns a `ChatSnapshot(chat, chat_etag, scope, scope_etag, snapshot, problems)`. `scope_etag` is `None` when the scope could not be interpreted, so it is never a precondition for a record this version did not understand.
   - **Selection.** It is built only from the chat's **active** bindings: `(ref, role, resolved_revision, actor)`.
   - **Launch.** The launch is provenance only, so a detached launch binding is not selected.

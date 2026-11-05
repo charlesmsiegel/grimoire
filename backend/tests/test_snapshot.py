@@ -342,3 +342,26 @@ def test_a_roles_ancestor_is_reachable_when_its_entity_is_also_selected_under_an
     assert view.resolve(BASE, role="character").ref == BASE  # the character's pinned base
     assert reason(lambda: view.resolve(BASE.unpinned(), role="character")) == "role_not_selected"
     assert reason(lambda: view.effective(BASE, role="character")) == "role_not_selected"
+
+
+def test_a_pinned_request_for_a_broken_head_following_selection_is_missing_not_another_revision():
+    """A head-following selection of an absent entity selected no revision: every revision of it is missing."""
+    gone = SourceRef(CAST, "character", "seraphine")
+    view = snapshot(SelectedSource(gone, "character"))
+    for call in (lambda: view.resolve(gone.at("r1")), lambda: view.effective(gone.at("r1"))):
+        with pytest.raises(MissingDefinition) as caught:
+            call()
+        assert (caught.value.ref, caught.value.reason) == (gone, "missing_entity")
+
+
+def test_ancestors_stay_readable_when_the_composed_portrayal_is_over_the_section_cap():
+    from portrayal_fixtures import derived
+    crowded = derived(VAMPIRE_MARA, sections={f"rite{n}": f"Rite {n}." for n in range(60)})  # 9 + 60 composed
+    view = snapshot(SelectedSource(VAMPIRE_MARA, "character"), index=elderfen_index(base(), crowded))
+    assert reason(lambda: view.effective(VAMPIRE_MARA)) == "too_many_sections"
+    assert view.resolve(BASE).ref == BASE  # the merge owner can still reach the pinned base
+
+
+@pytest.mark.parametrize("sources", [None, SelectedSource(VAMPIRE_MARA, "character"), 7])
+def test_a_selection_whose_sources_are_not_a_collection_is_invalid(sources):
+    assert reason(lambda: SourceSelection(None, sources)) == "invalid_selection"

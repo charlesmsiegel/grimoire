@@ -84,6 +84,7 @@ batch.commit(approvals)                                    # one guarded store t
   - bytes already stored, or added twice in one batch, are put once;
   - a blob that appears on disk between `preview` and `commit` with identical bytes is simply dropped.
 - **Preview binding.** If what `commit` would write differs from the last `preview()` in any other way, it raises `StaleWrite`, and a new preview is needed.
+- **Pairs formed since.** If a placed instance's id was taken by another kind after its op was added (W11), `preview` and `commit` raise `StaleWrite` naming that instance's file (`instance_id_conflict`) and write nothing. The batch is unchanged, so it can be committed once the pair is undone.
 - **Convenience.** `images.add_image(...)`, `images.place(...)` and `images.repair_blob(...)` return one-op batches.
 - `put` accepts only `RecordEnvelope` and `SourceManifest`. Scope and chat records stay with [`ChatLibrary`](CHATS.md).
 
@@ -102,6 +103,7 @@ A refused rule writes nothing. Reasons are machine-readable: `InvalidImage.reaso
 | W8 | The mode, role, slot and field rules above | `invalid_field`, `mode_not_allowed`, `role_slot_mismatch` |
 | W9 | An `adjust` needs a shown inherited picture in that slot, and it must name that picture | `nothing_to_adjust`, `stale_adjust` |
 | W10 | Compare-and-swap on a placement's expected etag (`None` for a new one) | store `StaleWrite` |
+| W11 | A `set` or `adjust` may not name an instance whose id another kind of its campaign also uses: `load()` leaves both members of such a [pair](IDENTITY.md) out, so the id is no one individual. Only instances on disk count, since the store refuses a `put` that would form a pair. A `hide` stays allowed as the repair that takes art placed before the pair formed off the slot. Adding an image never names a subject, so a campaign image is unaffected. | `instance_id_conflict`; store `StaleWrite` at `preview`/`commit` for a pair formed since |
 
 ### Blob repair
 
@@ -192,7 +194,7 @@ The [inventory](MIGRATION_INVENTORY.md) rows map as follows. Test-only adapter: 
 ## Limits and later milestones
 
 - **Limits:**
-  - Gating uses `check_source`/`check_definition`, which consult the store's shared, cached [`excluded_sources`](STORAGE.md#read-only-helpers-107). A source excluded **only** by a cross-source `identity_conflict` therefore shows no art, exactly as `load()` would exclude it. Writing art never invalidates that cache; a batch verifies it once until a commit, and each preview, commit or resolution once ([STORAGE](STORAGE.md#read-only-helpers-107) has the costs and the one staleness limit). Reading many images one by one should be wrapped in one `store.read_pass()`.
+  - Gating uses `check_source`/`check_definition`, which consult the store's shared, cached [`excluded_sources`](STORAGE.md#read-only-helpers-107). A source excluded **only** by a cross-source `identity_conflict` therefore shows no art, exactly as `load()` would exclude it. [Device sync](SYNC.md#art) reads the same verdict on both devices: art of a source either one excludes is never copied, so a device never shows a picture the other excludes, until the source is repaired. Writing art never invalidates that cache; a batch verifies it once until a commit, and each preview, commit or resolution once ([STORAGE](STORAGE.md#read-only-helpers-107) has the costs and the one staleness limit). Reading many images one by one should be wrapped in one `store.read_pass()`.
   - A damaged campaign layer (a linked, unreadable or look-alike folder or file) shows no source picture at all: every inherited slot, and any `adjust` of one, is `Unavailable(invalid_placement)`.
   - Art follows the entity, not an instance's pinned `base` revision. Pinning placements to a revision or release belongs to 042/056.
   - There is no unplace or delete, because the store has no deletes. A source avatar can be removed only by hand.

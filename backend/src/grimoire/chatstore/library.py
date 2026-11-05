@@ -18,7 +18,7 @@ actor is ``not_witnessed``: it saw none of the chat's earlier history. A new act
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 
 from grimoire.chats import (
@@ -34,8 +34,9 @@ from grimoire.evidencestore import evidence_instance_ids
 from grimoire.graphstore import relation_endpoint_ids
 from grimoire.holdingstore import holdings_holder_ids, holdings_peer_ids
 from grimoire.imagestore import placement_subject_ids
-from grimoire.ledgers import sovereignty_actor_ids
+from grimoire.ledgers import security_campaign_ids, security_instance_ids, sovereignty_actor_ids
 from grimoire.library import LibraryPathError
+from grimoire.security import payload_digest
 from grimoire.store import (
     CampaignRecords, LibraryStore, LibraryView, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
     TakenIdsUnlisted,
@@ -53,9 +54,11 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     A hand-deleted individual's id must never go to a different one, who would silently inherit its
     past. Reserved: every instance file of any kind (a pair two kinds share keeps both); every id
     named by a relation (017), a chat roster (107), an accepted event (021), the events, evidence and
-    knowledge log (020), a holder file's log (023's move peers) or the sovereignty ledger (010b's bare
-    ``actor_id``s), each scanned raw so an undecodable record still protects its ids; every holder with
-    a holdings file (023) and every subject with a campaign placement folder (018), from file names.
+    knowledge log (020), a holder file's log (023's move peers), the sovereignty ledger (010b's bare
+    ``actor_id``s) or a security-ledger grant or approval scoped to one individual (its instance,
+    holder or placement address), each scanned raw so an undecodable record still protects its ids;
+    every holder with a holdings file (023) and every subject with a campaign placement folder (018),
+    from file names.
     Look-alike holder and placement names count as the ids they fold to.
 
     A file or folder that could name ids but cannot be read or listed raises ``TakenIdsUnlisted``
@@ -63,8 +66,13 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     allocator (107 here; 024, 026, 037 later) must use this at plan time and again under the store
     lock at commit, and any later record family that names instance ids must extend it. Its cost
     grows with play history: it reads every relation, chat, accepted-event, knowledge and holder file
-    and every sovereignty batch of the campaign.
+    and every sovereignty batch of the campaign, and every security batch of the library.
     """
+    return _taken_ids(store, campaign_id, security=True)
+
+
+def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool,
+               spent: Collection[tuple[str, str, str]] = ()) -> frozenset[str]:
     taken = {found.instance_id for found in store.campaign_instances(campaign_id)}
     taken |= _named_ids(store.campaign_relations(campaign_id), campaign_id, "relation")
     taken |= relation_endpoint_ids(store, campaign_id)
@@ -75,7 +83,18 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     taken |= evidence_instance_ids(store, campaign_id)
     taken |= placement_subject_ids(store, campaign_id)
     taken |= sovereignty_actor_ids(store, campaign_id)
+    if security:  # skipped only by _fresh_campaign_taken_ids
+        taken |= security_instance_ids(store, campaign_id, spent=spent)
     return frozenset(taken)
+
+
+def _fresh_campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+    """``campaign_taken_ids`` for a campaign id just found outside ``security_campaign_ids`` under the
+    same store lock: no grant or approval names ``campaigns/<id>`` or anything under it (at commit,
+    none but the approvals of that commit's own writes), so none can name another of its individuals
+    and the security ledger (a whole-library audit that can be large) is not read a second time. Only
+    a new scope's allocation and its commit re-check may use this."""
+    return _taken_ids(store, campaign_id, security=False)
 
 
 def _named_ids(found: CampaignRecords, campaign_id: str, family: str) -> set[str]:
@@ -172,13 +191,18 @@ class ChatChange:
             if self._committed:
                 raise StoreError("this change was already committed")
             campaign = self.scope.campaign_id
+            # the approvals this commit supplies for its own writes name the new campaign and actors
+            # by design (preview, register approvals, commit), so they do not count against them
+            spent = self._spent(approvals) if approvals and (self.new_scope or self.new_actors) else ()
             if self.new_scope:  # nothing may have started this campaign (or its ledger) since the plan
                 if store.campaign_presence(campaign) != "absent":
                     raise StaleWrite([(f"campaigns/{campaign}", "exists")])
                 if store.campaign_authority_presence(campaign) != "absent":
                     raise StaleWrite([(f"authority/campaigns/{campaign}", "exists")])
-            if self.new_actors:
-                taken = campaign_taken_ids(store, campaign)
+                if campaign in security_campaign_ids(store, spent=spent):
+                    raise StaleWrite([("authority/security", f"a grant or approval names campaigns/{campaign}")])
+            if self.new_actors:  # a new scope's id was just proven ungranted above, under this lock
+                taken = _taken_ids(store, campaign, security=not self.new_scope, spent=spent)
                 clash = [actor for actor in self.new_actors if actor.instance_id in taken]
                 if clash:
                     raise StaleWrite([("/".join(address_parts(actor)), "id taken") for actor in clash])
@@ -202,6 +226,13 @@ class ChatChange:
             result = self._transaction().commit(self.library.handle, approvals)
             self._committed = True
         return ChatCommit(result.etags, self.chat, self.scope, self.new_actors)
+
+    def _spent(self, approvals: Mapping[str, str]) -> frozenset[tuple[str, str, str]]:
+        """``(approval id, address, digest)`` of each supplied approval, for the bytes this change writes."""
+        preview = self.preview()
+        return frozenset((approval, address, payload_digest(preview[address]))
+                         for address, approval in approvals.items()
+                         if type(address) is str and type(approval) is str and address in preview)
 
 
 class _LazyTaken:
@@ -330,7 +361,7 @@ class ChatLibrary:
             scope, new_scope = self._allocate_scope(), True
             scope_puts.append((self._scope_record(PlayScope(scope, at)), None))
             fresh = scope.campaign_id  # nothing should name it yet; the commit re-checks with the same set
-            taken: set[str] | _LazyTaken = _LazyTaken(lambda: campaign_taken_ids(self.store, fresh))
+            taken: set[str] | _LazyTaken = _LazyTaken(lambda: _fresh_campaign_taken_ids(self.store, fresh))
         else:
             new_scope = False
             if self.store.campaign_presence(scope.campaign_id) != "present":
@@ -361,13 +392,21 @@ class ChatLibrary:
         return ChatChange(self, puts, scope, chat, tuple(actors), new_scope, tuple(reused), reused)
 
     def _allocate_scope(self) -> ScopeRef:
-        """A campaign id with no ``campaigns/<id>`` folder and no sovereignty ledger: a ledger outlives a
-        hand-deleted campaign folder, and a new campaign given its id would inherit its controls."""
+        """A campaign id with no ``campaigns/<id>`` folder, no sovereignty ledger and no security-ledger
+        grant or approval naming it. Both ledgers outlive a hand-deleted campaign folder: a new campaign
+        given its id would inherit its controls, or hand an old grant's worker the new campaign.
+
+        The security ledger is read once, and only once a drawn id is otherwise free, so a start that
+        never gets that far pays nothing for it; an unreadable one raises ``TakenIdsUnlisted``."""
+        granted: frozenset[str] | None = None
         for _ in range(_ALLOCATION_ATTEMPTS):
             campaign = self._id("q")
             if (self.store.campaign_presence(campaign) == "absent"  # a look-alike folder counts as taken
                     and self.store.campaign_authority_presence(campaign) == "absent"):
-                return ScopeRef(campaign)
+                if granted is None:
+                    granted = security_campaign_ids(self.store)
+                if campaign not in granted:
+                    return ScopeRef(campaign)
         raise StoreError("could not allocate an unused campaign id")
 
     # -- chat edits -----------------------------------------------------------------------------
