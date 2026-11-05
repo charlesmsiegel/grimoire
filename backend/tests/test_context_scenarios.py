@@ -104,7 +104,7 @@ def test_six_npcs_get_bounded_audience_safe_packs_in_a_world_less_chat(store, ch
     for name, built in packs.items():
         text = built.pack.render()
         assert not any(token in text for token in HIDDEN), (name, text)
-        assert built.pack.tokens <= BUDGET.max_tokens and built.pack.lines()[0].startswith(f"{name.title()}:")
+        assert built.pack.tokens <= BUDGET.max_tokens and built.pack.lines()[0] == f"You are {name.title()}."
         assert sum(item.tokens for item in built.pack.lane("lore")) <= 40
         assert (built.chat, built.problems, built.pack.problems) == (started.chat, (), ())
         assert built.chat_etag == chats.read_chat(started.chat)[1]
@@ -115,7 +115,11 @@ def test_six_npcs_get_bounded_audience_safe_packs_in_a_world_less_chat(store, ch
     assert {(c.predicate, c.node) for c in cousins.claims} == {("kin_of", cast["tavi"]), ("kin_of", cast["anya"])}
     assert all(not item.claims for name in NPCS if name != "mara" for item in packs[name].pack.items)
     lore = {name: [i.origin.name for i in built.pack.lane("lore")] for name, built in packs.items()}
-    assert lore["tavi"][0] == "tides" and set(lore["tavi"]) <= {"tides", "ferry", "lighthouse"}
+    # the scene names the ferry and the lighthouse; the 40-token lore cap sheds the lighthouse, and
+    # the guild, never mentioned, is only counted as untriggered
+    assert all(lore[name] == ["tides", "ferry"] for name in NPCS), lore
+    assert all([(o.origin.name, o.reason) for o in built.pack.omitted if o.lane == "lore"] == [("lighthouse", "lane_cap")]
+               and built.pack.untriggered == ((LORE, 1),) for built in packs.values())
 
 
 def test_the_store_pack_is_the_pure_pack_over_the_same_inputs(store, chats):
@@ -212,3 +216,21 @@ def test_the_adapter_refuses_mismatched_inputs(store, chats):
     assert caught.value.reason == "unresolved_audience"
     assert stored_record(definition("mara")) is None
     assert replace(ledger, quarantined=()).quarantined == ()
+
+
+def test_a_head_following_lorebook_that_moves_reports_drift_and_still_packs(store, chats):
+    started = chats.start_chat(Launch("character", card("mara")), attach=[(LORE.unpinned(), "lorebook")]).commit()
+    mara = started.actors[0]
+    evidence = EvidenceLibrary(store, owner_handle(), owner=OWNER)
+    first = actor_context(store.load(), started.chat, evidence.read(started.chat.campaign_id, requested_by=DIRECTOR),
+                          mara, as_of=9, budget=BUDGET, scene_text=SCENE, readers=f.READERS)
+    assert first.pack.problems == () and [i.origin.name for i in first.pack.lane("lore")] == ["tides", "ferry"]
+    newer = [{**e, "text": "Tides turn three times now."} if e["id"] == "tides" else e for e in f.LORE_ENTRIES]
+    put_head = store.transaction()
+    put_head.put(lore_envelope(LORE.at("r2"), "Saltmarch lore", newer), None)
+    put_head.put(manifest(CAST, heads={"lorebook/saltmarch-lore": "r2"}), store.read_source(CAST).etag)
+    put_head.commit(owner_handle())
+    later = actor_context(store.load(), started.chat, evidence.read(started.chat.campaign_id, requested_by=DIRECTOR),
+                          mara, as_of=9, budget=BUDGET, scene_text=SCENE, readers=f.READERS)
+    assert [(p.code, p.source, p.detail) for p in later.pack.problems] == [("binding_drift", LORE.unpinned(), "r1 -> r2")]
+    assert "Tides turn three times now." in later.pack.lines()

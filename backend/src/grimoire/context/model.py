@@ -87,6 +87,8 @@ class LoreEntry:
         if isinstance(self.keys, (str, bytes)) or not isinstance(self.keys, Iterable):
             raise _fail(f"entry {self.entry_id}: keys must be a collection of text", "invalid_entry")
         keys = tuple(self.keys)
+        if not all(type(key) is str for key in keys):
+            raise _fail(f"entry {self.entry_id}: keys must be a collection of text", "invalid_entry")
         if len(keys) > MAX_KEYS or len(set(keys)) != len(keys):
             raise _fail(f"entry {self.entry_id}: at most {MAX_KEYS} distinct keys", "invalid_entry")
         if not all(safe_text(key, MAX_KEY_TEXT) and "\n" not in key and "\t" not in key and words(key)
@@ -124,13 +126,14 @@ class Budget:
     """An input-token budget: a total, optional per-lane caps and a per-item framing allowance.
 
     ``item_overhead`` (at least 1) is added to every item's counted line, for the separator
-    ``ContextPack.render`` puts between items and any label a renderer adds. A lane capped at 0
-    contributes nothing. A real tokenizer is not additive across a join; choose an overhead that
-    covers that for the route.
+    ``ContextPack.render`` puts between items and any label a renderer adds. A ``memory`` or ``lore``
+    lane capped at 0 contributes nothing; the ``portrayal`` cap must hold at least the actor's name
+    line, or packing raises ``budget_too_small``. A real tokenizer is not additive across a join;
+    choose an overhead that covers that for the route.
     """
 
     max_tokens: int
-    #: given as a mapping of lane to tokens; kept as ``(lane, cap)`` pairs in lane order
+    #: given as a mapping or pairs of lane to tokens; kept as ``(lane, cap)`` pairs in lane order
     lane_caps: Mapping[str, int] | tuple[tuple[str, int], ...] = ()
     item_overhead: int = 4
 
@@ -138,13 +141,17 @@ class Budget:
         if type(self.max_tokens) is not int or not 1 <= self.max_tokens <= MAX_TOKENS:
             raise _fail(f"max_tokens must be an int from 1 to {MAX_TOKENS}", "invalid_budget")
         if isinstance(self.lane_caps, Mapping):
-            caps = dict(self.lane_caps)
-        elif isinstance(self.lane_caps, tuple) and all(isinstance(p, tuple) and len(p) == 2 for p in self.lane_caps):
-            caps = dict(self.lane_caps)
-            if len(caps) != len(self.lane_caps):
-                raise _fail("a lane is capped twice", "invalid_budget")
+            pairs = tuple(self.lane_caps.items())
+        elif isinstance(self.lane_caps, (tuple, list)) and all(
+                isinstance(p, (tuple, list)) and len(p) == 2 for p in self.lane_caps):
+            pairs = tuple((p[0], p[1]) for p in self.lane_caps)
         else:
-            raise _fail("lane_caps must be a mapping of lane to tokens", "invalid_budget")
+            raise _fail("lane_caps must be a mapping, or pairs, of lane to tokens", "invalid_budget")
+        if not all(type(lane) is str for lane, _ in pairs):
+            raise _fail(f"lanes are {LANES}", "invalid_budget")
+        caps = dict(pairs)
+        if len(caps) != len(pairs):
+            raise _fail("a lane is capped twice", "invalid_budget")
         for lane, cap in caps.items():
             if lane not in LANES:
                 raise _fail(f"unknown lane {lane!r}; lanes are {LANES}", "invalid_budget")
@@ -165,7 +172,9 @@ class Origin:
     """Where an item came from. Structured data for the trusted caller; never rendered into a prompt.
 
     ``kind`` and the fields it uses:
-    - ``identity``: ``source`` (the pinned leaf revision) and ``actor``; a campaign original has none;
+    - ``identity``: the name line; ``source`` (the pinned leaf revision) and ``actor``; a campaign
+      original has no source;
+    - ``description``: ``source`` (the revision that authored it, or the leaf) and ``actor``;
     - ``section``: ``source`` (the revision that authored the composed text), ``actor`` and ``name``;
     - ``perception``: ``record`` (the evidence id);
     - ``proposition``: ``record`` (the proposition id) and ``evidence``/``belief`` ids it rests on;

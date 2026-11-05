@@ -10,11 +10,13 @@ There is no prompt renderer, model call or UI. Nothing here writes or reads file
 
 `pack_actor_context(snapshot, knowledge, actor, *, as_of, budget, ...)` returns a `ContextPack` for **one actor** of one frozen view ([EFFECTIVE_VIEWS](EFFECTIVE_VIEWS.md)) at one moment of the [ledger](KNOWLEDGE.md). It works the same in a world-less chat and a world-based one ([CHATS](CHATS.md)).
 
+This slice packs for an **NPC**: memory is 012's `actor_knowledge`, so every current belief reads as the actor's own. A player-controlled actor's NPC-era beliefs are `inherited` under `player_knowledge`; packing for a PC's controller is 027's and 035's.
+
 A pack has three **lanes**, packed in this order:
 
 | Lane | What | From |
 |---|---|---|
-| `portrayal` | the actor's identity line (`Name: description`) and its composed card sections | 022's `entity(actor)` and `effective(...)` of the actor's **own** binding |
+| `portrayal` | the actor's name line (`You are Name.`), its description, and its composed card sections | 022's `entity(actor)` and `effective(...)` of the actor's **own** binding |
 | `memory` | what the actor perceived, was told, said and currently believes | 012's `actor_knowledge` as of `as_of` |
 | `lore` | `common` entries of bound `lorebook` and `scenario` sources | a reader for the stored record's schema |
 
@@ -29,7 +31,7 @@ Audience is decided before any ranking or budget, and only from inputs the actor
 3. **Memory is the actor's own projection.** Confirmed perceptions and held propositions with the current stance, never events, rulings, standing, true senders, unconfirmed evidence or other actors' records. A refuted rumour the actor suspects appears as `You suspect: ...`: it is evidence of a report, not of truth. Lines carry no record ids (012) and name no other actor beyond what the held text itself says.
 4. **Lore is `common` only.** A `LoreEntry` defaults to `audience="director"`, so an unclassified entry is withheld. Only `constant` entries and entries whose key occurs in **what the actor perceived** are candidates.
 5. **The director's graph is never consulted.** 012's `knowledge_about` and 017's `claims_about` for the actor and the present cast only **rank and annotate** items the actor already holds. A graph connection gives an actor nothing.
-6. **What was withheld is not reported.** `omitted` lists candidates the budget shed; `untriggered` counts `common` entries per source that no key matched. Director entries, other cards and unheld records appear in neither, because what an actor may not see is the director's.
+6. **What was withheld is not reported.** `omitted` lists candidates the budget shed; `untriggered` counts `common` entries per source that no key matched; `problems` covers only the actor's own binding and the lore bindings. Director entries, other cards, other actors' bindings and unheld records appear in none of them, because what an actor may not see is the director's. The chat's own problems are on `ChatContext.problems`.
 
 ### Caller obligations
 
@@ -43,17 +45,17 @@ These cannot be checked here:
 031 defines no lorebook schema; [Character Card Ingestion](roadmap/sprints/character-card-ingestion.md) (037) owns the imported formats. Instead a caller passes `readers`, a mapping of a stored record's `schema` (its envelope `extra["schema"]`) to a function from the record's payload to `LoreEntry` values, and `unpack`, which gives a raw definition's `(schema, payload)`. `grimoire.contextstore.stored_record` is the store's `unpack`.
 
 - A reader gets a fresh plain copy of the payload (dicts and lists), so it cannot change the loaded view.
-- Only the **selected revision** of a `lorebook` or `scenario` binding is read, never an ancestor.
+- Only the **selected revision** of a `lorebook` or `scenario` binding is read, never an ancestor. A revision selected under both roles is read once.
 - A reader may not claim a `grimoire.entity/` schema: entities are composed, never read raw for lore (`invalid_readers`).
 - A source that cannot be read contributes nothing and is reported in `problems`, never failing the turn:
 
 | `SourceProblem.code` | when |
 |---|---|
 | `no_entry_reader` | no reader for the record's schema (`detail`: the schema), or the definition has no record |
-| `unreadable_entries` | the reader raised `ValueError`, `TypeError`, `LookupError` or `AttributeError` (`detail`: the exception's reason or class), returned something other than `LoreEntry`s (`not_lore_entry`), returned an id twice (`duplicate_entry`), or the payload could not be copied (`too_deep`, `uncopyable`) |
-| `too_many_entries` | more than 4096 entries |
+| `unreadable_entries` | the reader raised `ValueError`, `TypeError`, `LookupError` or `AttributeError` (`detail`: the exception's text `reason`, else its class), returned something other than `LoreEntry`s (`not_lore_entry`), returned an id twice (`duplicate_entry`), the payload could not be copied (`too_deep`, `uncopyable`), or `unpack` gave something other than `(schema, mapping)` (`invalid_unpack`) |
+| `too_many_entries` | more than 4096 entries (`detail`: `>4096`; the reader's output is not read past that) |
 | `missing_source` | the binding does not resolve (`detail`: 022's broken reason) |
-| 022 notices | `binding_drift` and the other resolution notices, passed through |
+| 022 notices | `binding_drift` (`detail`: `r1 -> r2`) and the other resolution notices of a head-following binding, passed through; the pack still builds from the head now in effect |
 
 Any other exception from a reader is a bug and propagates.
 
@@ -63,19 +65,21 @@ Any other exception from a reader is a bug and propagates.
 
 ## Triggering
 
-Matching is deterministic and model-free (`grimoire.context.trigger`). Text is NFC-normalized, casefolded and split into Unicode word runs, so a key matches a whole word sequence: `ash` does not match `ashen`, `Black-Eyed` matches `black eyed`. Each perceived text is matched on its own, so a key never spans two texts. Keys that normalize alike count once.
+Matching is deterministic and model-free (`grimoire.context.trigger`). Text is NFC-normalized, casefolded and split into word runs of letters, marks, digits and connector punctuation (Unicode `L*`, `M*`, `N*`, `Pc`), so a key matches a whole word sequence: `ash` does not match `ashen`, `Black-Eyed` matches `black eyed`. Combining marks stay inside their word (a Devanagari or Arabic word with marks is one word), and `İstanbul` matches `istanbul`. Each perceived text is matched on its own, so a key never spans two texts. Keys that normalize alike count once.
+
+A lookup first checks that every word of the key occurs in a text, then scans only the occurrences of its rarest word; results and key normalization are remembered, so a lorebook at its limits (4096 entries of 64 keys) costs time linear in its keys.
 
 **Limit:** scripts written without spaces (Chinese, Japanese, Thai) form one word run per stretch, so a key there matches only a whole run.
 
 ## Ranking and the budget
 
-`Budget(max_tokens, lane_caps=(), item_overhead=4)`. `lane_caps` is a mapping or pairs of lane to cap, normalized to lane order; an uncapped lane may use the whole remainder. `item_overhead` (at least 1) is added to each item's count.
+`Budget(max_tokens, lane_caps=(), item_overhead=4)`. `lane_caps` is a mapping, or a tuple or list of pairs, of lane to cap, normalized to lane order; an uncapped lane may use the whole remainder. A `memory` or `lore` cap of 0 shuts that lane; the `portrayal` cap must hold at least the name line. `item_overhead` (at least 1) is added to each item's count.
 
-Packing is greedy and deterministic: lanes in order, each lane in rank order, first fit. An item is included when its cost fits both its lane's remainder and the pack's; otherwise it is omitted as `lane_cap` (it fit the pack but not its lane) or `over_budget`, and a smaller item later in the lane may still fit. The total never exceeds `max_tokens`. If even the identity line does not fit, `budget_too_small` is raised: a pack never leaves the actor nameless.
+Packing is greedy and deterministic: lanes in order, each lane in rank order, first fit. An item is included when its cost fits both its lane's remainder and the pack's; otherwise it is omitted as `lane_cap` (it fit the pack but not its lane) or `over_budget`, and a smaller item later in the lane may still fit. The total never exceeds `max_tokens`. If even the name line does not fit, `budget_too_small` is raised: a pack never leaves the actor nameless. A long card description is its own item, shed like any other.
 
 | Lane | Rank (first wins) |
 |---|---|
-| portrayal | identity, then sections in composed order |
+| portrayal | name, description, then sections in composed order |
 | memory | about the actor or a present actor first, then newest, then perceptions before propositions, then id |
 | lore | constant first (by `order`), then more distinct key hits, then `order`, then source and entry id |
 

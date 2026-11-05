@@ -30,6 +30,7 @@ that is the director's.
 from __future__ import annotations
 
 import copy
+import itertools
 from collections.abc import Callable, Iterable, Mapping
 
 from grimoire.core.entity import EntityError
@@ -99,10 +100,10 @@ def _check(knowledge: object, actor: object, as_of: object, budget: object, pres
             raise _fail("the claim shapes belong to another campaign", "campaign_mismatch")
     if isinstance(excluded, (str, bytes)) or not isinstance(excluded, Iterable):
         raise _fail("exclude_sections must be a collection of section names", "invalid_sections")
-    names = frozenset(excluded)
+    names = tuple(excluded)
     if not all(type(name) is str for name in names):
         raise _fail("exclude_sections must be a collection of section names", "invalid_sections")
-    return cast, names
+    return cast, frozenset(names)
 
 
 # -- the actor's own portrayal ------------------------------------------------------------------------
@@ -121,11 +122,15 @@ def _portrayal(snapshot: EffectiveSnapshot, actor: InstanceRef, excluded: frozen
         reason = getattr(error, "reason", type(error).__name__)
         raise _fail(f"the audience {actor} does not resolve in this snapshot ({reason})", "unresolved_audience",
                     reason) from None
+    authored = {} if effective is None else {entry.field: entry.source.ref for entry in effective.provenance}
+    # The name alone is the one line a pack must hold; a long card description is sheddable.
+    found = [Candidate("portrayal", (0, 0), f"You are {entity.name}.",
+                       Origin("identity", entity.resolved_source, actor))]
     description = entity.description.strip()
-    identity = f"{entity.name}: {description}" if description else entity.name
-    found = [Candidate("portrayal", (0, 0), identity, Origin("identity", entity.resolved_source, actor))]
+    if description:
+        source = authored.get("description", entity.resolved_source)
+        found.append(Candidate("portrayal", (0, 1), description, Origin("description", source, actor)))
     if effective is not None:
-        authored = {entry.field: entry.source.ref for entry in effective.provenance}
         for position, (name, text) in enumerate(effective.sections):
             if name in excluded:
                 continue
@@ -233,26 +238,34 @@ def _entries(reader: EntryReader, payload: Mapping[str, object]
     except (TypeError, copy.Error):  # a leaf that cannot be copied is not record data
         return (), ("unreadable_entries", "uncopyable")
     try:
-        entries = tuple(reader(copied))
+        entries = tuple(itertools.islice(reader(copied), MAX_ENTRIES + 1))
     except (ValueError, TypeError, LookupError, AttributeError) as error:
-        return (), ("unreadable_entries", getattr(error, "reason", type(error).__name__))
+        detail = getattr(error, "reason", None)
+        return (), ("unreadable_entries", detail if type(detail) is str else type(error).__name__)
     if not all(isinstance(entry, LoreEntry) for entry in entries):
         return (), ("unreadable_entries", "not_lore_entry")
     if len(entries) > MAX_ENTRIES:
-        return (), ("too_many_entries", str(len(entries)))
+        return (), ("too_many_entries", f">{MAX_ENTRIES}")
     if len({entry.entry_id for entry in entries}) != len(entries):
         return (), ("unreadable_entries", "duplicate_entry")
     return entries, None
 
 
-def _sources(snapshot: EffectiveSnapshot) -> list[SourceProblem]:
-    """What a caller should know about the bindings themselves: broken ones and drift notices."""
+def _sources(snapshot: EffectiveSnapshot, actor: InstanceRef) -> list[SourceProblem]:
+    """Broken bindings and drift notices, for the sources this pack read: the actor's own and lore.
+
+    Another actor's binding is not reported here, since its state is not this actor's to know; a
+    chat's own problems come from 022's ``chat_snapshot``.
+    """
     found: list[SourceProblem] = []
     for resolution in snapshot.sources():
+        if resolution.source.actor != actor and resolution.source.role not in LORE_ROLES:
+            continue
         if resolution.resolved is None:
             reason = resolution.broken.reason if resolution.broken is not None else None
             found.append(SourceProblem("missing_source", resolution.source.ref, reason))
-        found += [SourceProblem(notice.reason, resolution.source.ref, notice.detail) for notice in resolution.notices]
+        found += [SourceProblem(notice.code, resolution.source.ref, notice.detail or None)
+                  for notice in resolution.notices]
     return found
 
 
@@ -261,12 +274,18 @@ def _lore(snapshot: EffectiveSnapshot, scene: SceneWords, readers: Mapping[str, 
     found: list[Candidate] = []
     untriggered: list[tuple[SourceRef, int]] = []
     problems: list[SourceProblem] = []
+    read: set[SourceRef] = set()
     for resolution in snapshot.sources():
         role, pinned = resolution.source.role, resolution.resolved
-        if role not in LORE_ROLES or pinned is None:
-            continue
+        if role not in LORE_ROLES or pinned is None or pinned in read:
+            continue  # a revision selected under both lore roles is read once
+        read.add(pinned)
         raw = snapshot.resolve(pinned, role)  # the selected leaf revision itself, never an ancestor
         unpacked = unpack(raw) if unpack is not None else None
+        if unpacked is not None and not (isinstance(unpacked, tuple) and len(unpacked) == 2
+                                         and isinstance(unpacked[1], Mapping)):
+            problems.append(SourceProblem("unreadable_entries", pinned, "invalid_unpack"))
+            continue
         schema, payload = unpacked if unpacked is not None else (None, {})
         reader = readers.get(schema) if isinstance(schema, str) else None
         if reader is None:
@@ -318,7 +337,11 @@ def pack_actor_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor:
     ``count`` is the route's token counter, ``measurement`` says whether it is ``estimated`` or
     ``counted``. ``exclude_sections`` names composed card sections left to another owner (by
     default ``voice-evidence``, which 014/027 own). Raises ``ContextError("budget_too_small")`` when
-    even the actor's identity line does not fit: a pack never leaves the actor nameless.
+    even the actor's name does not fit: a pack never leaves the actor nameless.
+
+    **An NPC's pack.** Memory is 012's ``actor_knowledge``, so every current belief reads as the
+    actor's own. A player-controlled actor's NPC-era beliefs are ``inherited`` under
+    ``player_knowledge``; packing for a PC's controller is not this slice's (027/035).
     """
     if not isinstance(snapshot, EffectiveSnapshot):
         raise TypeError(f"expected an EffectiveSnapshot, not {type(snapshot).__name__}")
@@ -334,8 +357,8 @@ def pack_actor_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor:
     candidates += lore
     items, omitted = pack(candidates, budget, count)
     if not items or items[0].origin.kind != "identity":
-        raise _fail("the budget cannot hold even the actor's identity line", "budget_too_small")
-    problems += _sources(snapshot)
+        raise _fail("the budget cannot hold even the actor's name", "budget_too_small")
+    problems += _sources(snapshot, actor)
     return ContextPack(actor, as_of, budget, measurement, items, omitted,
                        tuple(sorted(untriggered, key=lambda pair: str(pair[0]))),
                        tuple(sorted(set(problems), key=lambda p: (str(p.source), p.code, p.detail or ""))))

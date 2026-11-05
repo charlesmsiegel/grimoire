@@ -6,6 +6,7 @@ Every fixture is synthetic (``context_fixtures``). No store, no model.
 from __future__ import annotations
 
 import pickle
+from dataclasses import replace
 
 import pytest
 
@@ -19,7 +20,8 @@ from grimoire.context import (
     estimate_tokens, pack_actor_context, words,
 )
 from grimoire.context.pack import Candidate, pack
-from grimoire.core import InstanceRef, SourceRef
+from grimoire.core import DefinitionIndex, InstanceRef, SourceDescriptor, SourceRef
+from grimoire.core.knowledge import Knowledge, Moment
 from grimoire.core.snapshot import EffectiveSnapshot, SelectedSource, SourceSelection
 from grimoire.graph import ClaimSet
 
@@ -140,9 +142,9 @@ def test_no_npc_sees_another_card_the_absent_duke_secret_or_any_director_text(wh
     built = build(who, present=[actor(n) for n in NPCS if n != who])
     text = built.render()
     assert not any(token in text for token in HIDDEN), text
-    assert built.lines()[0] == f"{who.title()}: A Saltmarch local called {who.title()}."
+    assert built.lines()[:2] == (f"You are {who.title()}.", f"A Saltmarch local called {who.title()}.")
     others = [n.title() for n in EVERYONE if n != who]
-    assert not any(line.startswith(f"{other}:") for line in built.lines() for other in others)
+    assert not any(f"called {other}" in text or f"{other} works" in text for other in others)
     assert "speaks in short sentences" not in text  # voice evidence is 014/027's, excluded by default
     assert {item.origin.source for item in built.items if item.origin.source is not None} <= {card(who), LORE}
     assert all(item.origin.actor in (None, actor(who)) for item in built.items)
@@ -194,9 +196,9 @@ def test_typed_claims_annotate_held_items_only():
     [item] = [i for i in built.items if i.origin.record == "p5"]
     assert item.claims == (ClaimReading("kin_of", "either", actor("tavi")),)
     assert all(i.claims == () for i in build("orrin", ledger=ledger, claims=claims, present=[actor("tavi")]).items)
-    assert reason(lambda: build("mara", claims=ClaimSet(knowledge("c2", lambda n: InstanceRef("c2", "character", f"{n}-1")),
-                                                        f.claim_shapes("c2", lambda n: InstanceRef("c2", "character", f"{n}-1"))))
-                  ) == "campaign_mismatch"
+    elsewhere = lambda n: InstanceRef("c2", "character", f"{n}-1")  # noqa: E731
+    foreign = ClaimSet(knowledge("c2", elsewhere), f.claim_shapes("c2", elsewhere))
+    assert reason(lambda: build("mara", claims=foreign)) == "campaign_mismatch"
     assert reason(lambda: build("mara", claims=dict(claims.shapes))) == "invalid_claims"
 
 
@@ -254,7 +256,7 @@ def test_a_reader_cannot_change_the_view_it_reads():
     (lambda p: [LoreEntry("bad id!", "t")], "unreadable_entries", "invalid_entry"),
     (lambda p: ["a string"], "unreadable_entries", "not_lore_entry"),
     (lambda p: [LoreEntry("a", "t"), LoreEntry("a", "u")], "unreadable_entries", "duplicate_entry"),
-    (lambda p: [LoreEntry(f"e{n}", "t") for n in range(MAX_ENTRIES + 1)], "too_many_entries", str(MAX_ENTRIES + 1)),
+    (lambda p: [LoreEntry(f"e{n}", "t") for n in range(MAX_ENTRIES + 1)], "too_many_entries", f">{MAX_ENTRIES}"),
 ])
 def test_an_unreadable_source_contributes_nothing_and_is_reported(reader, code, detail):
     built = build("mara", readers={LORE_SCHEMA: reader})
@@ -283,7 +285,7 @@ def test_a_source_without_a_reader_or_record_is_reported_not_fatal():
 
 def test_a_tight_budget_sheds_lore_and_memory_first_and_keeps_the_identity():
     built = build("mara", budget=Budget(20))
-    assert built.lines() == ("Mara: A Saltmarch local called Mara.",) and built.tokens <= 20
+    assert built.lines() == ("You are Mara.",) and built.tokens <= 20
     assert {o.reason for o in built.omitted} == {"over_budget"}
     assert reason(lambda: build("mara", budget=Budget(5))) == "budget_too_small"
 
@@ -304,7 +306,7 @@ def test_packing_is_deterministic_and_carries_its_format():
 
 def test_a_custom_counter_and_measurement_are_recorded():
     built = build("mara", count=lambda line: len(line.split()), measurement="counted")
-    assert built.measurement == "counted" and built.items[0].tokens == 6 + 4
+    assert built.measurement == "counted" and built.items[0].tokens == 3 + 4
 
 
 def test_excluded_sections_can_be_named():
@@ -340,3 +342,128 @@ def test_the_audience_must_resolve_in_this_campaign_and_snapshot():
     with pytest.raises(TypeError):
         pack_actor_context("snap", knowledge(), actor("mara"), as_of=1, budget=Budget(99))
 
+
+
+# -- review round 1 ----------------------------------------------------------------------------------
+
+def drifted_snapshot() -> EffectiveSnapshot:
+    """Mara's card, the duke's card and the lorebook follow their heads, which moved to r2."""
+    newer = [replace(f.definition(n), ref=card(n).at("r2")) for n in ("mara", "duke")]
+    lore = f.LoreRecord(LORE.at("r2"), "Saltmarch lore", LORE_SCHEMA, {"entries": [entry("tides", "Tides r2.", constant=True,
+                                                                                          audience="common")]})
+    base = f.index()
+    index = DefinitionIndex([SourceDescriptor(f.CAST, owner="human:owner"), SourceDescriptor(f.WORLD, owner="human:owner")],
+                            [*(base.resolve(ref) for ref in [card(n) for n in EVERYONE] + [LORE, SCENARIO]), *newer, lore],
+                            {card("mara").unpinned(): "r2", card("duke").unpinned(): "r2", LORE.unpinned(): "r2"})
+    follows = {"mara", "duke"}
+    sources = [SelectedSource(card(n).unpinned() if n in follows else card(n), "character",
+                              resolved_revision="r1" if n in follows else None, actor=actor(n)) for n in EVERYONE]
+    sources += [SelectedSource(LORE.unpinned(), "lorebook", resolved_revision="r1"), SelectedSource(SCENARIO, "scenario")]
+    return EffectiveSnapshot(index, SourceSelection(None, tuple(sources)), instances=[(instance(n), None) for n in EVERYONE])
+
+
+def test_drifted_bindings_are_reported_for_this_actors_sources_only():
+    built = build("mara", snap=drifted_snapshot())
+    assert {(p.code, p.source, p.detail) for p in built.problems} == {
+        ("binding_drift", card("mara").unpinned(), "r1 -> r2"), ("binding_drift", LORE.unpinned(), "r1 -> r2")}
+    assert "Tides r2." in built.lines()  # the head now in effect is what is read
+    assert {p.source for p in build("anya", snap=drifted_snapshot()).problems} == {LORE.unpinned()}
+    assert {p.source for p in build("duke", snap=drifted_snapshot()).problems} == {card("duke").unpinned(),
+                                                                                    LORE.unpinned()}
+
+
+def test_another_actors_broken_binding_is_not_reported():
+    ghost = SourceRef(f.CAST, "character", "ghost", "r1")
+    snap = snapshot(SelectedSource(ghost, "character", actor=actor("ghost")))
+    assert build("mara", snap=snap).problems == ()
+
+
+def test_a_long_description_is_shed_and_the_name_kept():
+    long = replace(f.definition("mara"), description="Sea-salt. " * 1200)
+    index = DefinitionIndex([SourceDescriptor(f.CAST, owner="human:owner"), SourceDescriptor(f.WORLD, owner="human:owner")],
+                            [long, *(f.index().resolve(r) for r in [card(n) for n in EVERYONE if n != "mara"]
+                                     + [LORE, SCENARIO, BESTIARY])])
+    built = build("mara", snap=snapshot(index=index), budget=Budget(300))
+    assert built.lines()[0] == "You are Mara." and built.lane("memory") and built.lane("lore")
+    assert [(o.origin.kind, o.reason) for o in built.omitted if o.lane == "portrayal"] == [("description", "over_budget")]
+
+
+@pytest.mark.parametrize("scene, key, hit", [
+    ("मेरी किताब यहाँ है", "त", False), ("मेरी किताब यहाँ है", "किताब", True),
+    ("ذهبت إلى المَدْرَسَة", "د", False), ("ذهبت إلى المَدْرَسَة", "المَدْرَسَة", True),
+    ("Welcome to ISTANBUL", "İstanbul", True), ("snake_case here", "snake case", False),
+])
+def test_marks_stay_inside_their_word(scene, key, hit):
+    assert SceneWords([scene]).contains(key) is hit
+
+
+def test_triggering_scales_with_a_lorebook_at_its_limits():
+    import time
+    scene = SceneWords([("the tide " * 5000)])
+    keys = [f"the tide the tide k{n}" for n in range(MAX_ENTRIES // 64)]
+    started = time.perf_counter()
+    for _ in range(64):
+        scene.hits(keys)
+    assert time.perf_counter() - started < 5  # a missing word ends the lookup; repeats are remembered
+
+
+class Opaque:
+    def __deepcopy__(self, memo):
+        raise TypeError("no copies")
+
+
+@pytest.mark.parametrize("payload, detail", [
+    ({"entries": [], "x": Opaque()}, "uncopyable"),
+])
+def test_an_uncopyable_payload_is_unreadable(payload, detail):
+    built = build("mara", unpack=lambda d: (LORE_SCHEMA, payload))
+    assert {(p.code, p.detail) for p in built.problems} == {("unreadable_entries", detail)}
+
+
+def test_a_too_deep_payload_is_unreadable():
+    deep: dict = {}
+    node = deep
+    for _ in range(5000):
+        node["x"] = {}
+        node = node["x"]
+    built = build("mara", unpack=lambda d: (LORE_SCHEMA, deep))
+    assert {(p.code, p.detail) for p in built.problems} == {("unreadable_entries", "too_deep")}
+
+
+def test_a_malformed_unpack_or_reason_is_a_source_problem():
+    assert {p.detail for p in build("mara", unpack=lambda d: (LORE_SCHEMA,)).problems} == {"invalid_unpack"}
+
+    def odd(payload):
+        error = ValueError("odd")
+        error.reason = ["not", "text"]
+        raise error
+
+    assert {p.detail for p in build("mara", readers={LORE_SCHEMA: odd}).problems} == {"ValueError"}
+
+
+def test_unhashable_names_and_keys_are_refused():
+    assert reason(lambda: build("mara", exclude_sections=[["x"]])) == "invalid_sections"
+    assert reason(lambda: LoreEntry("e", "t", (["a"],))) == "invalid_entry"
+
+
+def test_a_source_under_both_lore_roles_is_read_once():
+    sources = selection(lore=False).sources + (SelectedSource(LORE, "lorebook"), SelectedSource(LORE, "scenario"))
+    snap = EffectiveSnapshot(f.index(), SourceSelection(None, sources), instances=[(instance(n), None) for n in EVERYONE])
+    built = build("mara", snap=snap)
+    assert [i.origin.name for i in built.lane("lore")] == ["tides", "ferry", "lighthouse"]
+    assert built.untriggered == ((LORE, 1),)
+
+
+def test_a_rejected_belief_reads_as_disbelief():
+    ledger = knowledge()
+    rejected = replace(ledger.beliefs[0], belief_id="b2", stance="rejected", moment=Moment(4), supersedes="b1")
+    later = Knowledge(ledger.campaign_id, events=ledger.events, propositions=ledger.propositions,
+                      rulings=ledger.rulings, evidence=ledger.evidence, beliefs=[*ledger.beliefs, rejected])
+    [item] = [i for i in build("mara", ledger=later).items if i.origin.record == "p2"]
+    assert (item.line, item.stance, item.origin.belief) == (
+        "You do not believe: the duke paid off the harbor watch", "rejected", "b2")
+
+
+def test_lane_caps_accept_a_list_of_pairs():
+    assert Budget(50, [["lore", 5]]) == Budget(50, {"lore": 5})
+    assert reason(lambda: Budget(50, [(1, 5)])) == "invalid_budget"
