@@ -18,8 +18,9 @@ from pathlib import Path
 
 from grimoire.store import LibraryStore, StaleWrite, StoreError, WriteConflict, WriteDenied, etag
 from grimoire.store.layout import conflict_parts
-from grimoire.sync import Step
-from grimoire.sync.documents import archive_name, pending_name
+from grimoire.sync import Step, device_of
+from grimoire.sync.bookkeeping import only_forgets
+from grimoire.sync.documents import dismissed_name, pair_state
 
 from .errors import MirrorMismatch, PeerRefused
 from .wire import Channel
@@ -135,7 +136,6 @@ class StepBuffer:
             raise PeerRefused("empty", "a step with no writes")
         txn = store.transaction()
         targets: list[tuple[str, str, Callable[[], bytes | None]]] = []
-        allowed = {archive_name(self.peer), pending_name(self.peer)}
         records = False
         try:
             for header, body in ops:
@@ -155,8 +155,13 @@ class StepBuffer:
                     txn.keep_version(path, body, slot=header["slot"], regenerable=True)  # the peer still holds them
                     targets.append((target, target, _reader(store, target)))
                     records = True
-                elif op == "state" and header.get("name") in allowed and _etag_or_none(header.get("expected")):
+                elif op == "state" and pair_state(header.get("name"), self.peer) and _etag_or_none(header.get("expected")):
                     name = header["name"]
+                    if name == dismissed_name(self.peer) and not only_forgets(
+                            store.read_sync_state(name), body, tuple(sorted((device_of(store), self.peer)))):
+                        # a sync only ever forgets dismissals; adding one is this device's own decision,
+                        # authorized here (``grimoire.sync.dismiss``), never the peer's
+                        raise PeerRefused("invalid", "a peer may only forget this device's dismissals")
                     txn.put_sync_state(name, body, header.get("expected"))
                     targets.append((f".sync/{name}", name, lambda name=name: store.read_sync_state(name)))
                 else:  # only this pair's own .sync files, and records the peer's grants then decide

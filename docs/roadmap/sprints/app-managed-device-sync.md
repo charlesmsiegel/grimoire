@@ -28,10 +28,17 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 [019](sync-revisions-and-conflict-core.md) leaves these with this sprint as **first-proof obligations** ([SYNC](../../SYNC.md)):
 - **Merge rules for 021 accepted events and scene wrap-ups and 023 holdings.** They are still held back: never copied, and reported as `held` conflicts whenever the devices differ (with the 017 relations of any campaign holding an accepted event). Two devices accepting offline collide on ordinals, and both stores commit several files as one unit.
 - **Merging 020 knowledge logs** when both devices appended to one campaign offline (today a keep-both `missing_ancestor` conflict on the batch; a log moves only whole).
-- **Dismissing kept versions** (today the next sync delivers a deleted one again).
+- **Dismissing kept versions:** done. `dismiss` records the path and the dismissed bytes' etag per pair; a sync never keeps those bytes for that device again, a different later version still is, the other device is untouched, and the record ends with its conflict ([SYNC](../../SYNC.md#keep-both)).
 - **Deletion propagation**, and resolving toward a deletion.
 - **Per-device actor id allocation:** done in the first slice; an identified library numbers actors `<entity>-<tag>-<n>`, and 034's unique items the same way ([DEVICE_SYNC](../../DEVICE_SYNC.md#per-device-ids)).
-- **Archive compaction.** One archive and one pending marker per pair must fit 010's 8 MiB file cap: about 23,000 synced paths today, after which the whole sync is refused (`ArchiveTooLarge`). 018 art adds about three paths per picture.
+- **Archive compaction:** done. An archive or marker past one file is sharded by path hash (`grimoire.sync.archive/2`, `pending/2`), up to about six million paths per pair; a `/1` file is still read and written while it fits. Blob tombstones are dropped (provably redundant); record tombstones are kept, since each is a resurrection check ([SYNC](../../SYNC.md#sharding-and-tombstones-028)).
+
+## Milestone: merges before 044
+
+Still owed by this sprint, and due **before Sprint 044**:
+- **Merge rules for 021 accepted events and scene wrap-ups, and for 023 holdings.** Until then they stay `held`: never copied, reported whenever the devices differ.
+- **Merging 020 knowledge logs** that both devices appended to offline (today a keep-both `missing_ancestor` conflict on the batch).
+- **Deletion propagation**, and resolving toward a deletion.
 
 ## Wave 2 handoff: revision-safe transfers
 

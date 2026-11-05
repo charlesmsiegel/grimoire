@@ -29,7 +29,7 @@ from grimoire.store.jsonfmt import MAX_FILE_BYTES
 from grimoire.store.layout import name_key
 from grimoire.store.media import MAX_BLOB_BYTES
 from grimoire.store.replica import CanonicalScan
-from grimoire.sync.documents import DEVICE_FILE, archive_name, parse_device, pending_name
+from grimoire.sync.documents import DEVICE_FILE, archive_name, dismissed_name, pair_state, parse_device, pending_name
 
 from .errors import MirrorMismatch, TransportError
 from .pairing import peer_principal
@@ -255,7 +255,11 @@ def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -
     channel.send({"t": "grants", "grants": [
         {"scope": str(grant.scope), "permissions": sorted(permission.value for permission in grant.permissions)}
         for grant in authority.active_grants() if grant.principal == principal]})
-    for name in (DEVICE_FILE, archive_name(peer), pending_name(peer)):
+    # the pair's own files: archive, marker, every shard of either (stale ones too: the mirror must hold
+    # what a later commit's compare-and-swap expects) and this device's dismissals (028)
+    names = dict.fromkeys((DEVICE_FILE, archive_name(peer), pending_name(peer), dismissed_name(peer),
+                           *store.sync_state_names(peer)))
+    for name in names:
         data = store.read_sync_state(name)  # a read error stops the snapshot: unreadable is never absent
         if data is not None:
             channel.send({"t": "state", "name": name}, data)
@@ -416,7 +420,7 @@ def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Li
                 grants = header.get("grants")
             elif kind == "state":
                 name = header.get("name")
-                if name not in (DEVICE_FILE, archive_name(local), pending_name(local)) or name in states:
+                if (name != DEVICE_FILE and not pair_state(name, local)) or name in states:
                     raise TransportError(f"the snapshot carries an unexpected sync file {name!r}")
                 states[name] = body  # type: ignore[index]
             else:

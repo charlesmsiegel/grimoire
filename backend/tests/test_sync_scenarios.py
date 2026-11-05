@@ -17,7 +17,7 @@ from grimoire.sync import (
     ArchiveTooLarge, IdentityExists, NoDeviceIdentity, ResolveRefused, SameDevice, SyncInterrupted, identify,
     plan_sync, resolve, sync, sync_until_quiet,
 )
-from grimoire.sync import session as sync_session
+from grimoire.sync import resolution as sync_resolution, session as sync_session
 
 from store_helpers import OWNER, WREN_R1, instance, make_dir_link, owner_handle, seed
 from sync_helpers import (
@@ -1301,7 +1301,7 @@ def test_021_an_accepted_effect_and_the_relations_it_changed_are_held_back_toget
 def _crash_resolve_state(monkeypatch):
     def crash(*args, **kwargs):
         raise _Crash("power loss before resolve's archive step")
-    monkeypatch.setattr(sync_session, "_commit_state", crash)
+    monkeypatch.setattr(sync_resolution, "_commit_state", crash)
 
 
 @pytest.mark.parametrize("interrupt", ["none", "crash", "held archive"])

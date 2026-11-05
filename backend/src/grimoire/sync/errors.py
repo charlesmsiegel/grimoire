@@ -20,11 +20,15 @@ class IdentityExists(SyncError):
 
 
 class ArchiveTooLarge(SyncError):
-    """The pair's archive would exceed the store's file size limit (compaction is a later milestone)."""
+    """The pair's archive or marker would not fit even split into the widest shards (028)."""
 
 
 class ResolveRefused(SyncError):
     """A ``resolve`` request that cannot be applied safely; nothing was written."""
+
+
+class DismissRefused(SyncError):
+    """A ``dismiss`` request that cannot be recorded (not a kept version, not authorized); nothing was written."""
 
 
 class SyncInterrupted(SyncError):
