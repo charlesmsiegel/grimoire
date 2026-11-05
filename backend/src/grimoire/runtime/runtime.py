@@ -213,8 +213,12 @@ class GenerationRuntime:
                 else:
                     messages = director_messages(brief, spoken)
                 # No on_delta: nothing is shown before acceptance, and a consumer would block retries.
-                result = self._adapter.execute(meter, call, self._request(messages), self._routes, self._handle,
-                                               approvals=self._approvals, cancel=cancel)
+                try:
+                    result = self._adapter.execute(meter, call, self._request(messages), self._routes,
+                                                   self._handle, approvals=self._approvals, cancel=cancel)
+                except Exception as error:  # an approvals callback or adapter bug: keep the lines so far
+                    outcomes.append(CallOutcome(call.call_id, "failed", type(error).__name__))
+                    return ended("halted")
                 if result.status != "accepted":
                     outcomes.append(CallOutcome(call.call_id, result.status, _reason(result)))
                     return ended("cancelled" if result.status == "cancelled" else "halted")

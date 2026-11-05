@@ -400,6 +400,26 @@ def test_an_untrusted_handle_runs_with_per_attempt_approvals():
     assert outcome.status == "complete" and len(harness.approved) == 2
 
 
+def test_an_approval_callback_that_raises_halts_and_keeps_earlier_lines():
+    controls, voices = world()
+    harness = Harness([say(ODA_LINE), say(BELLAMY_LINE)], approve=True)
+    approve = harness.runtime._approvals
+    calls = []
+
+    def flaky(label, attempt, payload):
+        calls.append(label)
+        if len(calls) > 1:
+            raise TimeoutError("nobody answered")
+        return approve(label, attempt, payload)
+
+    runtime = GenerationRuntime(harness.adapter, (RouteChoice("primary", "model-a"),), harness.handle,
+                                approvals=flaky)
+    _plan, meter, briefs = two_speakers(harness, controls, voices)
+    outcome = runtime.run_turn(meter, briefs, controls=controls)
+    assert outcome.status == "halted" and [line.text for line in outcome.lines] == [ODA_LINE]
+    assert (outcome.calls[1].status, outcome.calls[1].reason) == ("failed", "TimeoutError")
+
+
 def test_an_untrusted_handle_without_approval_is_refused_and_halts():
     controls, voices = world()
     harness = Harness([], approve=True)

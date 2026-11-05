@@ -190,15 +190,22 @@ def _knowledge_items(knowledge: ActorKnowledge, names: Mapping[InstanceRef, str]
                      exposed: Sequence[str]) -> list[tuple[tuple, str]]:
     """Each item the actor knows, rendered without ids, with a stable campaign-order key."""
     items: list[tuple[tuple, str]] = []
+    labels: dict[InstanceRef | None, str] = {}
+
+    def who(ref: InstanceRef | None) -> str:  # one screen per actor named, not per item
+        if ref not in labels:
+            labels[ref] = _who(ref, names, hidden, exposed)
+        return labels[ref]
+
     for item in knowledge.evidence:
         if item.kind == "report":
-            text = f"{_who(item.attributed_to, names, hidden, exposed)} told you: {_one_line(item.content)}"
+            text = f"{who(item.attributed_to)} told you: {_one_line(item.content)}"
         else:
             text = f"You noticed ({_one_line(item.channel)}): {_one_line(item.content)}"
         items.append(((item.moment.sequence, 0, item.evidence_id), text))
     for report in knowledge.sent:
         items.append(((report.sent_at.sequence, 1, report.evidence_id),
-                      f"You told {_who(report.recipient, names, hidden, exposed)}: {_one_line(report.text)}"))
+                      f"You told {who(report.recipient)}: {_one_line(report.text)}"))
     for belief in knowledge.current:
         items.append(((belief.moment.sequence, 2, belief.belief_id),
                       f"{_STANCE.get(belief.stance, 'You believe')}: {_one_line(belief.text)}"))
@@ -209,11 +216,13 @@ def _knowledge_items(knowledge: ActorKnowledge, names: Mapping[InstanceRef, str]
 
 
 def _newest_within(texts: list[str], budget: int) -> list[str]:
-    """The newest whole items that fit ``budget``, shown oldest first."""
+    """The newest whole items that fit ``budget``, shown oldest first; an item too big alone is skipped."""
     kept: list[str] = []
     used = 0
     for text in reversed(texts):
         cost = len(text) + 3  # "- " and a newline
+        if cost > budget:
+            continue
         if used + cost > budget:
             break
         kept.append(text)
@@ -316,8 +325,10 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
     ]
     if context:
         parts.append("Who you are:\n" + "\n".join(context))
-    parts.append("What you know, oldest first:\n" + "\n".join(f"- {text}" for text in shown) if shown
-                 else "You know nothing yet beyond what you hear now.")
+    if shown:
+        parts.append("What you know, oldest first:\n" + "\n".join(f"- {text}" for text in shown))
+    elif not rendered:
+        parts.append("You know nothing yet beyond what you hear now.")
     names[actor] = name
     return NpcBrief(actor, name, voice, fragment, "\n\n".join(parts), heard, hidden,
                     own + (name,) + tuple(line.text for line in heard), tuple(names.items()), _SEAL)
@@ -365,8 +376,9 @@ def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
         parts.append(f"The player characters are: {listed}. Never write their words, thoughts, feelings or "
                      "decisions; their players do that.")
     parts.append("Scenario:\n" + scenario.strip())
+    # The player characters' names are table-visible: naming them in narration is not a leak.
     return DirectorBrief(campaign_id, frozenset(players), "\n\n".join(parts), heard, secrets,
-                         (scenario,) + tuple(line.text for line in heard), _SEAL)
+                         (scenario, *labels) + tuple(line.text for line in heard), _SEAL)
 
 
 def _transcript(lines: Sequence[HeardLine], names: Mapping[InstanceRef, str], hidden: tuple[SecretFact, ...],

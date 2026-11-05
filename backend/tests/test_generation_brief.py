@@ -236,3 +236,22 @@ def test_a_hidden_name_never_labels_knowledge_or_unlocks_the_screen():
     assert "Bellamy" not in text
     assert "Someone told you: The wine is watered" in text and "You told Someone: The wine is watered" in text
     assert screen_reply(oda, "Bellamy, you snake.", spoken=turn) == "unlearned_secret"
+
+
+def test_a_player_characters_name_is_table_visible_to_the_director():
+    controls, _voices = world()
+    narration = scene("A hall.", controls, names={PC: "Lady Aria"},
+                      secrets=(*SECRETS, SecretFact("heir", ("Lady Aria",))))
+    assert "Lady Aria" in narration.system
+    assert screen_reply(narration, "The steward bows to Lady Aria.") is None
+
+
+def test_an_item_too_big_for_the_budget_is_skipped_not_everything():
+    _controls, voices = world()
+    ledger = Knowledge(CAMPAIGN, events=LEDGER.events,
+                       evidence=[*LEDGER.evidence,
+                                 Perception(CAMPAIGN, "flood", BELLAMY, "letter", "sight", "water " * 500, Moment(2),
+                                            "director", confirmed=True)])
+    bellamy = npc_brief(replace(view(BELLAMY, "Bellamy"), knowledge=actor_knowledge(ledger, BELLAMY, as_of=2)),
+                        voices["npc-bellamy"], secrets=SECRETS)
+    assert PRIVATE in bellamy.system and "know nothing" not in bellamy.system
