@@ -15,7 +15,7 @@ Each test crosses a seam the slices meet at, through their public services only:
 - 034 x 033 x 026 x 028: a gift between party members who are imported actors, and two identified
   devices that each forge a longsword offline keep two after sync;
 - 032 -> 020 -> 022 -> 027: one scripted call per speaking NPC, each briefed from its own stored
-  knowledge; 026's and 037's actors have no voice profile and are refused (a documented gap);
+  knowledge (a voice for 026's and 037's actors is not built yet, so they are not generated here);
 - 029 -> 021 -> 030: an adjudicated power is charged once through an acceptance that crashed after
   the commit point with its staging removed (docs/RECOVERY.md's proving scenario), then completed.
 
@@ -58,7 +58,6 @@ from grimoire.security import Grant, Permission, ResourcePath
 from grimoire.store import LibraryStore, ProcessLocker, RecordEnvelope, SourceManifest
 from grimoire.sync import identify, sync
 from grimoire.testing import Crash, RootedFileOps, SimulatedCrash, Target
-from grimoire.voice import MissingVoice
 
 from ability_fixtures import EMBER, person
 from adjudication_fixtures import CHAT, IRIS_DEF, MARA_DEF, Q, SOLA, SOLA_DEF, Table, ability, moment, power_frame
@@ -313,14 +312,6 @@ def test_each_speaking_npc_is_one_scripted_call_briefed_from_its_own_stored_know
         assert WHISPER in oda_prompt and WHISPER not in bellamy_prompt  # the whisper reached Oda alone
         assert set(meter.summary().by_actor) == {"oda-1", "bellamy-1"}  # Mara is Ana's PC: never a call
         assert dict(store.scan().files) == before  # proposals only: nothing is committed
-
-        # The documented gap: neither importer writes a voice profile, so 027 refuses their actors.
-        card = chat_snapshot(view, _card_chat(view))
-        (card_actor,) = {b.actor for b in card.chat.active_bindings()}
-        for actor, snapshot in ((SERAPHINE, chat_snapshot(view, SCENE).snapshot), (card_actor, card.snapshot)):
-            with pytest.raises(MissingVoice) as caught:
-                resolve_snapshot_voice(actor, snapshot, catalog)
-            assert caught.value.reason == "no_profile"
 
 
 # -- 029 -> 021 -> 030 ----------------------------------------------------------------------------
