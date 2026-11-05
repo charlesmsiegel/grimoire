@@ -1,5 +1,7 @@
 # Fiction-First Adjudication and Fair Freeform Outcomes
 
+**Status:** **first slice implemented** (milestones 1 and 2), headless: `grimoire.adjudication` (pure frames, assessment, decisions and codecs) and `grimoire.adjudicationstore` (an authority ledger per campaign, the 003 `Resolution` bridge and the 021 hand-off). The contract, the 025 obligations it meets and its known limits are in [ADJUDICATION.md](../../ADJUDICATION.md). The bridge proving scenario runs on synthetic fixtures. Milestone 3 (contests and graded consequences) and verifying factor sources against 017/020/021 are still open.
+
 **Outcome:** Mechanics-free actions produce credible, consistent successes, failures and costs without relying on narratorial whim or assuming every action succeeds.
 
 **Prerequisite met:** [021's next slice](turn-effects-and-wrap-up.md#next-slice-holdings-and-ability-charges-delivered) (holdings operations from accepted effects, committing ability costs, charging each `attempt_id` once) is done ([EFFECTS](../../EFFECTS.md#holdings-and-ability-uses)). 021 checks `permitted` and records `charges`, but the `AbilityAssessment` it charges is the caller's: this sprint must compute and authenticate it.
