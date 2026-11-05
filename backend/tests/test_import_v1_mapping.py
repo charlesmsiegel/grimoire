@@ -362,3 +362,18 @@ def test_an_id_another_kind_takes_after_the_plan_stops_the_apply(env):
     _creature_named_mara(env)
     with pytest.raises(StaleWrite):
         plan.apply()
+
+
+def test_a_persona_with_no_front_matter_keeps_its_whole_text_as_description(env):
+    write(env.v1, "worlds/saltmarch/pcs/winifred/default.md", "A debtor without front matter.\n")
+    env.rescan()
+    preview = env.plan(WORLD_ONLY).preview()
+    winifred = next(data for key, data in preview.items() if "winifred.default/" in key)
+    assert json.loads(winifred)["payload"]["description"] == "A debtor without front matter."
+
+
+def test_a_selected_campaigns_own_lore_is_listed_as_not_imported(env):
+    write(env.v1, f"{CAMPAIGN}/lore/the-new-vow.md", frontmatter([("name", "The New Vow")], "A vow.\n"))
+    env.rescan()
+    review = env.plan(WITH_CAMPAIGN).review()
+    assert {"legacy_id": f"v1:{ARCHIVE}:{CAMPAIGN}/lore/the-new-vow.md", "family": "lore"} in review["not_imported"]

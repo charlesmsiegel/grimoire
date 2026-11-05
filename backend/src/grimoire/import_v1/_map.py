@@ -21,6 +21,7 @@ from grimoire.core.identity import (
     ChatRef, ImageRef, InstanceRef, LegacyId, PlacementRef, ScopeRef, SourceRef, validate_segment, validate_source_id,
 )
 from grimoire.images import Expression, Focus, ImageModelError, Placement, slot_role, validate_placement
+from grimoire.migrate_v1 import parse_frontmatter
 from grimoire.store.errors import UnstorableIdentifier
 from grimoire.store.layout import address_parts, manifest_parts
 
@@ -204,12 +205,8 @@ def _display(value: object, fallback: str) -> str:
 
 
 def _persona_body(text: str) -> str:
-    """The Markdown body of a V1 persona file (after its front matter), or ``""``."""
-    text = text.replace("\r\n", "\n").replace("\r", "\n")  # a copy for parsing: V1 accepts CRLF files
-    if not text.startswith("---\n"):
-        return ""
-    end = text.find("\n---\n", 3)
-    return "" if end < 0 else text[end + 5:].strip()
+    """The Markdown body of a V1 persona file, as V1 reads it: after the front matter, or all of an unfenced file."""
+    return parse_frontmatter(text)[1].strip()
 
 
 def _card_description(text: str) -> str:
@@ -410,8 +407,8 @@ class _Mapper:
         for row in self.m["identity_candidates"]["definitions"]:
             if row["family"] in (*ACTOR_FAMILIES, "world") or row.get("status") == "campaign_copy":
                 continue
-            world = (row.get("v1") or {}).get("world")
-            if world in self.sel.worlds:
+            v1 = row.get("v1") or {}
+            if v1.get("world") in self.sel.worlds or v1.get("campaign") in self.sel.campaigns:  # a campaign's own too
                 self.guarded(lambda row=row: self.out.not_imported.append(
                     {"legacy_id": self.legacy_of(row), "family": row["family"]}))
 
