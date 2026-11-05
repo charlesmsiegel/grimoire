@@ -39,6 +39,14 @@ _CLAUSE_BREAKS = frozenset({"as", "while", "when", "whenever", "who", "whom", "w
 #: After one of these a name starts its own clause ("Oda nods and Wren says"), unless it joins an
 #: object ("asks Oda and Hask").
 _CONJUNCTIONS = frozenset({"and", "then", "but", "or", "nor", "yet"})
+#: After a conjunction or comma these start a clause with its own subject ("and they mutter"),
+#: so a verb after them is not the earlier name's.
+_SUBJECT_PRONOUNS = frozenset({"he", "she", "they", "it", "we", "i", "you"})
+#: Where a noun phrase before ``to`` says where the subject is, not who acts ("steps into the
+#: light to announce"); ``for`` is left out ("waits for the guard to speak").
+_PLACES = (_PREPOSITIONS - {"for"}) | frozenset({
+    "across", "through", "under", "onto", "in", "on", "inside", "outside", "along", "off", "up",
+    "down", "out", "round", "beneath", "below", "above", "within"})
 _PUNCTUATION = frozenset({",", ";", ":", "-", QUOTE})
 #: A speech verb's search never crosses these: past them is another clause or the speech itself.
 _STOPS = frozenset({";", ":", QUOTE})
@@ -158,6 +166,8 @@ def _speaks(words: list[str], at: int, mentions: dict[int, _Mention], names: _Na
         word = words[index]
         if word in _STOPS or word in _CLAUSE_BREAKS or is_negation(word):
             return False
+        if word in _SUBJECT_PRONOUNS and words[index - 1] in _CONJUNCTIONS | {","}:
+            return False  # "and they mutter": a new subject
         aside = index + 1 < len(words) and words[index + 1] in _CLAUSE_BREAKS
         if word == "," and index == name.end + 1 and aside:
             close = _closing_comma(words, index + 1)
@@ -216,9 +226,8 @@ def _verb_is_subjects(words: list[str], index: int, width: int, name_end: int) -
         return None  # a noun: "hears a shout"
     if words[index].endswith("ing") and previous in _PREPOSITIONS:
         return None  # "leaves without saying"
-    if previous == "to" and any(word in _DETERMINERS or word in _PREPOSITIONS
-                                for word in words[max(name_end + 1, index - 4):index - 1]):
-        return None  # someone else's infinitive: "waits for the guard to speak"
+    if previous == "to" and _someone_elses_infinitive(words, index - 1, name_end):
+        return None  # "waits for the guard to speak", "asks the guard to explain"
     if _noun_subject(words, index, name_end):
         return False  # "and the crowd murmurs": the verb has its own subject
     follower = words[index + width] if index + width < len(words) else ""
@@ -229,15 +238,32 @@ def _verb_is_subjects(words: list[str], index: int, width: int, name_end: int) -
     return True
 
 
+def _someone_elses_infinitive(words: list[str], to: int, name_end: int) -> bool:
+    """Whether the infinitive after ``to`` is a noun phrase's just before it.
+
+    It is when that noun phrase follows ``for`` ("waits for the guard to speak") or a verb ("asks
+    the guard to explain"); after a place it is the subject's own ("leans over the counter to
+    whisper", "leans in to whisper").
+    """
+    for back in range(to - 1, max(name_end, to - 4), -1):
+        if words[back] in _PUNCTUATION or words[back] in _CONJUNCTIONS:
+            return False
+        if words[back] in _DETERMINERS:
+            before = words[back - 1] if back - 1 > name_end else ""
+            return before == "for" or (before != "" and before not in _PLACES
+                                       and before not in _PUNCTUATION)
+    return False
+
+
 def _noun_subject(words: list[str], index: int, name_end: int) -> bool:
     """Whether a noun phrase right before the verb at ``index`` is its subject ("the crowd
     murmurs"), rather than a place the subject is in ("Oda by the hearth murmurs")."""
     for back in range(index - 1, max(name_end, index - 4), -1):
         word = words[back]
-        if word in _PUNCTUATION or word in _CONJUNCTIONS:
-            return False
+        if word in _PUNCTUATION or word in _CONJUNCTIONS or word == "to":
+            return False  # a new clause, or an infinitive ("across the bar to whisper")
         if word in _DETERMINERS:
-            return words[back - 1] not in _PREPOSITIONS
+            return words[back - 1] not in _PLACES
     return False
 
 

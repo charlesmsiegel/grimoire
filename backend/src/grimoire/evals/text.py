@@ -129,6 +129,13 @@ SPEECH_PHRASES = frozenset({
     ("answers", "that"), ("answered", "that"), ("replies", "that"), ("replied", "that"),
     ("calls", "out"), ("called", "out"), ("calling", "out"),
 })
+#: ``answers that`` is speech only when a clause follows ("answers that the duke …", "replies that
+#: she …"), not when ``that`` points at a noun ("answers that question").
+_ANSWERS_THAT = frozenset({("answers", "that"), ("answered", "that"), ("replies", "that"),
+                           ("replied", "that")})
+_CLAUSE_OPENERS = frozenset({"a", "an", "the", "his", "her", "their", "its", "my", "your", "our",
+                             "no", "some", "this", "these", "those", "he", "she", "they", "it",
+                             "we", "i", "you", "everyone", "nobody", "someone", "there"})
 #: ``tell`` is speech only before who is told or a told thing ("tells Wren", "tells a story"),
 #: and not as perceiving ("can tell", "will tell") or in the passive ("is told").
 TELL_FORMS = frozenset({"tell", "tells", "told", "telling"})
@@ -187,7 +194,11 @@ def speech_verb_at(words: list[str], index: int, names: frozenset[str] = frozens
 
     ``names`` are the tokens that name actors, so ``tells Wren`` counts as telling.
     """
-    if tuple(words[index:index + 2]) in SPEECH_PHRASES:
+    pair = tuple(words[index:index + 2])
+    if pair in SPEECH_PHRASES:
+        if pair in _ANSWERS_THAT:
+            following = words[index + 2] if index + 2 < len(words) else ""
+            return 2 if following in _CLAUSE_OPENERS or following in names else 0
         return 2
     word = words[index]
     if word in SPEECH_VERBS:
@@ -199,13 +210,16 @@ def _tells(words: list[str], index: int, names: frozenset[str]) -> bool:
     """Whether the ``tell`` at ``index`` reports speech: who is told or a told tale follows."""
     if index and words[index - 1] in _NOT_TELLING:
         return False
-    following = words[index + 1:index + 4]
+    following = words[index + 1:index + 5]
     if not following:
         return False
     if following[0] in names or following[0] in _TOLD:
-        return True
-    # "tells a story", "tells the bawdy tale": one adjective may stand before the tale
-    return following[0] in ("a", "the") and any(word in _TALES for word in following[1:3])
+        # not "tells them apart" (distinguishing) nor "tells you nothing" (denied speech)
+        return not any(word == "apart" or is_negation(word) for word in following[1:3])
+    # "tells a story", "tells the bawdy tale": one adjective may stand before the tale; and
+    # "tells the guards that", "tells the whole room that": who is told, then what
+    return following[0] in ("a", "the") and (any(word in _TALES for word in following[1:3])
+                                             or "that" in following[2:4])
 
 
 def trigram_counts(text: str) -> Counter[str]:

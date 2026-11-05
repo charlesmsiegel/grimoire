@@ -201,22 +201,27 @@ punctuation, a quotation, a clause break (`as`, `while`, `when`, `who`, `though`
 `that`. A sentence gives NPC *X* speech when:
 
 - a subject name of *X* is followed within 8 words by a speech verb that is *X*'s. The verbs are
-  the closed list `grimoire.evals.text.SPEECH_VERBS`, the phrases `lets slip`, `answers that`,
-  `replies that` and `calls out` (each with its other tenses), and `tell` in any tense when
-  followed by an actor's name, `him`/`her`/`them`/`me`/`us`/`you`/`everyone`, `that`, or
-  `a`/`the` and (after at most one adjective) `story`, `tale`, `joke`, `lie` or `truth`, but not
+  the closed list `grimoire.evals.text.SPEECH_VERBS`; the phrases `lets slip` and `calls out`;
+  `answers that` and `replies that` (and their past tenses) when a clause follows, that is a
+  determiner, a pronoun or an actor's name (`answers that the duke …`, not `answers that
+  question`); and `tell` in any tense when followed by an actor's name,
+  `him`/`her`/`them`/`me`/`us`/`you`/`everyone` or `that` (but not `tells them apart` or `tells
+  you nothing`), or by `a`/`the` and (after at most one adjective) `story`, `tale`, `joke`, `lie`
+  or `truth`, or by `a`/`the`, one or two words and `that` (`tells the whole room that`); never
   after `can`, `could`, `will`, `would`, `to` or a form of `be`. The search stops at `;`, `:`, a
   quotation, an unbracketed clause break (`Oda listens as the crowd murmurs`), a negation (`not`,
-  `never`, `nothing`, `cannot`, a word ending in `n't`) and another subject name (except one
-  joined by `and`: `Oda and Hask whisper`). An aside bracketed by commas right after the name and
-  opened by a clause break is skipped (`Oda, as ever, mutters`). A speech verb right after an
-  object, or after an object and `to` and a verb, is the object's and ends the search (`Oda
-  waits for Wren to say something`, `Oda lets Wren speak`). A verb does not count right after a
-  determiner (`a shout`), as an `-ing` form right after a preposition (`without saying`), as an
-  infinitive after a determiner or preposition (`waits for the guard to speak`), or right before
-  a negation (`says nothing`); a verb whose own subject is a noun phrase (`and the crowd
-  murmurs`, but not `Oda by the hearth murmurs`) ends the search; and one followed by `at`
-  counts only when `that` or the speech follows (`Hask growls at nobody` is a sound); or
+  `never`, `nothing`, `cannot`, a word ending in `n't`), a subject pronoun after a conjunction or
+  comma (`Oda glares at the guards, and they mutter`) and another subject name (except one joined
+  by `and`: `Oda and Hask whisper`). An aside bracketed by commas right after the name and opened
+  by a clause break is skipped (`Oda, as ever, mutters`). A speech verb right after an object, or
+  after an object and `to` and a verb, is the object's and ends the search (`Oda waits for Wren
+  to say something`, `Oda lets Wren speak`). A verb does not count right after a determiner (`a
+  shout`), as an `-ing` form right after a preposition (`without saying`), as an infinitive whose
+  noun phrase before `to` follows `for` or a verb (`waits for the guard to speak`, `asks the
+  guard to explain`; after a place it is the subject's own: `leans across the bar to whisper`),
+  or right before a negation (`says nothing`); a verb whose own subject is a noun phrase (`and
+  the crowd murmurs`, but not `Oda by the hearth murmurs`) ends the search; and one followed by
+  `at` counts only when `that` or the speech follows (`Hask growls at nobody` is a sound); or
 - the sentence has a quotation and one of:
   - a speech verb stands right before *X*'s name (`"…," mutters Oda`);
   - *X* is the only subject actor named before the first quotation, wherever it stands
@@ -253,8 +258,9 @@ Marker matching catches stated phrases, not paraphrase. The `/3` attribution rul
 deterministic heuristic over English word order, not a parse; it is an eval check, not a
 boundary. It misses:
 
-- speech given to an NPC by a pronoun ("She mutters …"), by an epithet ("the old innkeeper
-  mutters …") or by an unnamed speaker ("a low voice says …");
+- speech given to an NPC by a pronoun ("She mutters …", "Oda nods. Then she mutters …", "Oda
+  nods at Hask, and he growls …" credits no one), by an epithet ("the old innkeeper mutters …")
+  or by an unnamed speaker ("a low voice says …");
 - a speech verb more than 8 words after the name. An object's words count toward the 8 ("Oda
   leans over the counter toward Wren and whispers" is exactly 8; one more adjective is a miss):
   the window is a cliff, not a judgement;
@@ -268,7 +274,8 @@ boundary. It misses:
   a quotation that is neither in the NPC's own sentence nor in the sentence right after one with
   the NPC as its only subject (or that comes before the NPC's sentence).
 
-It can also flag non-speech: the listed verbs can be non-speech ("Oda adds a coin"); a bare
+It can also flag non-speech: the listed verbs can be non-speech ("Oda adds a coin"), and
+`calls out` counts whatever is called ("Oda calls out the last orders"); a bare
 quotation right after a sentence whose only subject is the NPC is the NPC's (`Oda grunts.
 'Fine.' Wren pays.`), as is one after a colon, unless a sign, board, tune or the like is named
 (the list is short: `Oda points at the ledger. "Room four."` is credited to Oda); and a name

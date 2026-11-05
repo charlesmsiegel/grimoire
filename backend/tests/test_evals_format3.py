@@ -440,12 +440,20 @@ ODA_QUOTED = {LEAK} | voices("npc-oda", how="quotation")
     ("Oda waves Hask over and mutters that the duke sold the guild.", ODA_SPEAKS),
     ("Oda leans over the counter toward Wren and whispers that the duke sold the guild.",
      ODA_SPEAKS),
+    # after a place, the infinitive is the subject's own
+    ("Oda leans over the counter to whisper that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda leans across the bar to whisper that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda steps into the light to announce that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda pulls Wren into the cellar to whisper that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda bends low to whisper that the duke sold the guild.", ODA_SPEAKS),
     # a place the subject is in is not the verb's subject; an opening phrase is not either
     ("Oda by the hearth murmurs that the duke sold the guild.", ODA_SPEAKS),
     ("With a sigh Oda mutters that the duke sold the guild.", ODA_SPEAKS),
     # telling someone, or that, is speech
     ("Oda tells Wren that the duke sold the guild.", ODA_SPEAKS),
     ("Oda turns to Wren and tells her that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda tells the guards that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda tells the whole room that the duke sold the guild.", ODA_SPEAKS),
     ('"The duke sold the guild," Oda tells Wren.', ODA_SPEAKS),
     ("Oda answers that the duke sold the guild.", ODA_SPEAKS),
     ("Oda replies that the duke sold the guild.", ODA_SPEAKS),
@@ -491,6 +499,12 @@ def test_asides_objects_and_lead_ins_do_not_hide_the_speaker(text, expected):
     (2, "Oda and the guards ignore Wren, who shouts for service."),
     (2, "Oda serves Wren, and Wren asks for bread."),
     (2, "Bellamy plays as Wren asks about the duke."),
+    # after a conjunction or comma, a pronoun starts a clause with its own subject
+    (2, "Oda glares at the guards, and they mutter apologies."),
+    (2, "Oda frowns at the guards and they whisper among themselves."),
+    (2, "Oda nods to the guards and they shout for the cellar keys."),
+    (2, "Oda smiles at Wren, and she asks for a room."),
+    (2, "Oda turns, and the whole room whispers."),
     (2, "Hask stands guard while Wren whispers to Bellamy."),
     (2, "Oda counts coins. Wren says she will wait."),
     (2, 'Oda nods. "Room for the night?" Wren asks again.'),
@@ -510,6 +524,12 @@ def test_asides_objects_and_lead_ins_do_not_hide_the_speaker(text, expected):
 def test_narration_that_only_names_npcs_beside_speech_passes(turn, text):
     report = gate_narration(turn, text)
     assert report.passed, report.findings
+
+
+def test_a_pronoun_after_a_conjunction_takes_the_verb_from_the_earlier_name():
+    # "he" is not resolved to Hask (pronouns are a documented miss), but the verb is not Oda's
+    report = gate_narration(3, "Oda nods at Hask, and he growls that the duke sold the guild.")
+    assert not any(f.subject == "npc-oda" for f in report.findings), report.findings
 
 
 @pytest.mark.parametrize(("text", "npc"), [
@@ -534,6 +554,9 @@ def test_telling_someone_or_a_tale_is_speech(text, npc):
     "Oda's face tells Wren everything.",
     "Time will tell whether Oda keeps the ledger.",
     "The scar on Hask's cheek tells its own story.",
+    "Oda tells them apart by their boots.",
+    "Oda tells you nothing with her face.",
+    "Oda answers that question with a silent shrug.",
     "Oda answers Wren with a shrug.",
     "Oda answers the door.",
     "Hask answers to the captain alone.",
