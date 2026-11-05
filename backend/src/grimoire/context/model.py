@@ -307,7 +307,10 @@ class ContextPack:
     held memory: listed by count, so a large catalog is never dumped.
     What audience rules withheld is deliberately not reported here: that is the director's.
     ``notes`` are pack-level facts the trusted caller should see, such as ``knowledge_quarantined``.
-    ``basis`` is the campaign and the bindings it read (``SelectionBasis``).
+    ``basis`` is the campaign and the bindings it read (``SelectionBasis``). ``knowledge`` is the
+    digest of the actor's 012 projection it read (``knowledge_digest``): a ledger reload that
+    quarantines a record shrinks the projection at the same ``as_of`` and binding, so only this tells
+    a pack still holding the lost record from a current one.
     It is a provisional in-memory value (``FORMAT``), not a persisted schema.
     """
 
@@ -320,6 +323,7 @@ class ContextPack:
     untriggered: tuple[tuple[SourceRef, int], ...]
     problems: tuple[SourceProblem, ...]
     basis: SelectionBasis
+    knowledge: str
     notes: tuple[str, ...] = ()
 
     @property

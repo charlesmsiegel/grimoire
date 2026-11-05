@@ -16,6 +16,7 @@ import hashlib
 from grimoire.core.entity import EntityError
 from grimoire.core.identity import InstanceRef, SourceRef, validate_segment
 from grimoire.core.index import MissingDefinition
+from grimoire.core.perspective import ActorKnowledge
 from grimoire.core.portrayal import PortrayalError
 from grimoire.core.snapshot import EffectiveSnapshot, Resolution
 
@@ -80,4 +81,15 @@ def selection_basis(snapshot: EffectiveSnapshot, campaign_id: str, actor: Instan
     return SelectionBasis(campaign_id, actor, tuple(bindings), etag)
 
 
-__all__ = ["selection_basis"]
+def knowledge_digest(knowledge: ActorKnowledge) -> str:
+    """A digest of one actor's 012 projection, the memory a pack shows and its lore triggers read.
+
+    The projection is plain frozen values (ids, texts, moments and tuples of them), so its ``repr`` is
+    deterministic: equal projections digest alike, and one that lost or gained a record does not.
+    """
+    if type(knowledge) is not ActorKnowledge:
+        raise TypeError(f"expected an ActorKnowledge projection, not {type(knowledge).__name__}")
+    return "sha256:" + hashlib.sha256(repr(knowledge).encode("utf-8", "surrogatepass")).hexdigest()
+
+
+__all__ = ["knowledge_digest", "selection_basis"]

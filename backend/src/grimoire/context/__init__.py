@@ -9,7 +9,7 @@ model; ``grimoire.contextstore`` joins it to the store and 027's briefs render i
 """
 
 from .actor import DEFAULT_EXCLUDED_SECTIONS, MEASUREMENTS, pack_actor_context
-from .basis import selection_basis
+from .basis import knowledge_digest, selection_basis
 from .director import director_lore
 from .lore import ENTITY_SCHEMA_FAMILY, LORE_ROLES, Unpack
 from .model import (
@@ -25,5 +25,5 @@ __all__ = [
     "MAX_ENTRY_TEXT", "MAX_KEYS", "MAX_KEY_TEXT", "MAX_PRESENT", "MAX_SCENE_TEXT", "MAX_TOKENS", "MEASUREMENTS",
     "Budget", "Candidate", "ClaimReading", "ContextError", "ContextPack", "EntryReader", "LoreEntry", "LorePack",
     "Omission", "Origin", "PackedItem", "SceneWords", "SelectionBasis", "SourceProblem", "TokenCounter", "Unpack",
-    "director_lore", "estimate_tokens", "pack", "pack_actor_context", "selection_basis", "words",
+    "director_lore", "estimate_tokens", "knowledge_digest", "pack", "pack_actor_context", "selection_basis", "words",
 ]

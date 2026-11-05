@@ -18,7 +18,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import InitVar, dataclass
 
-from grimoire.context import ContextError, ContextPack, LorePack, selection_basis
+from grimoire.context import ContextError, ContextPack, LorePack, knowledge_digest, selection_basis
 from grimoire.core.authority import DIRECTOR
 from grimoire.core.entity import EntityError
 from grimoire.core.identity import InstanceRef, SourceRef
@@ -308,6 +308,11 @@ def _check_context(context: object, actor: InstanceRef, knowledge: ActorKnowledg
         # Its memory would be another moment's than the projection that decides what is learned.
         raise GenerationError("context_mismatch", f"the context pack is as of {context.as_of}, "
                               f"the actor's knowledge as of {knowledge.as_of}")
+    if context.knowledge != knowledge_digest(knowledge):
+        # Same moment, other records: a ledger reload quarantined (or restored) one. A stale pack would
+        # show a memory the actor no longer holds, and count it as exposed.
+        raise GenerationError("context_mismatch", f"the context pack for {actor} was built from another "
+                              "projection of its knowledge")
     try:
         # The view must be this snapshot's, so the snapshot names the brief's own selection.
         own = snapshot_actor_view(snapshot.instance(actor), snapshot, knowledge)

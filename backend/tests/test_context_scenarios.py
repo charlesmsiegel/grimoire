@@ -249,7 +249,7 @@ CROSSING = SecretFact("crossing", ("crosses the marsh at dusk",))
 VOICES = VoiceCatalog([VoiceProfile(card("mara"), (VoiceAnchor("cadence", "cadence", "Mara speaks plainly."),))])
 
 
-def mara_brief(store, started, cast, evidence, *, context_of=None):
+def mara_brief(store, started, cast, evidence, *, context_of=None, secrets=(CROSSING,)):
     """Mara's brief in ``started``'s chat, from her own pack there or from ``context_of``'s pack."""
     view = store.load()
     ledger = evidence.read(started.chat.campaign_id, requested_by=DIRECTOR)
@@ -258,7 +258,7 @@ def mara_brief(store, started, cast, evidence, *, context_of=None):
                                         scene_text=SCENE, readers=f.READERS)
     actor_view = snapshot_actor_view(snap.instance(cast["mara"]), snap,
                                      actor_knowledge(ledger.knowledge, cast["mara"], as_of=9))
-    return npc_brief(actor_view, resolve_snapshot_voice(cast["mara"], snap, VOICES), secrets=(CROSSING,),
+    return npc_brief(actor_view, resolve_snapshot_voice(cast["mara"], snap, VOICES), secrets=secrets,
                      context=built.pack, snapshot=snap)
 
 
@@ -353,3 +353,25 @@ def test_a_pack_from_before_a_hand_edit_of_the_bound_lorebook_is_refused(store, 
         director_brief("A flooded quay at night.", campaign_id=started.chat.campaign_id, present=(), controls=(),
                        names={}, secrets=(CROSSING,), lore=table, snapshot=edited)
     assert caught.value.reason == "context_mismatch"  # its ferry entry still reads as common
+
+
+def test_a_pack_from_before_a_reload_quarantined_one_of_her_records_is_refused(store, chats):
+    # Same chat, bindings and as_of: only the ledger read changed. Orrin's report to Mara is damaged on
+    # disk, so the reload quarantines it (and her belief that cites it), and her projection shrinks.
+    started, cast = start(chats)
+    evidence = record(store, started, cast)
+    bribe = (SecretFact("bribe", ("paid off the harbor watch",)),)
+    before = contexts(store, started.chat, evidence, cast)["mara"]
+    assert "You suspect: the duke paid off the harbor watch" in before.pack.lines()
+    told = mara_brief(store, started, cast, evidence, context_of=before, secrets=bribe)
+    assert screen_reply(told, "They say the duke paid off the harbor watch.") is None  # hers, until the reload
+    [report] = list((store.root / "campaigns" / started.chat.campaign_id).rglob("evidence/v2.json"))
+    report.write_text("{not json", encoding="utf-8")
+    with pytest.raises(GenerationError) as caught:
+        mara_brief(store, started, cast, evidence, context_of=before, secrets=bribe)
+    assert caught.value.reason == "context_mismatch"
+    after = contexts(store, started.chat, evidence, cast)["mara"]
+    assert "knowledge_quarantined" in after.pack.notes and "harbor watch" not in after.pack.render()
+    fresh = mara_brief(store, started, cast, evidence, context_of=after, secrets=bribe)
+    assert "harbor watch" not in fresh.system
+    assert screen_reply(fresh, "They say the duke paid off the harbor watch.") == "unlearned_secret"

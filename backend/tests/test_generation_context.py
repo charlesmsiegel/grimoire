@@ -25,6 +25,7 @@ from grimoire.core.authority import DIRECTOR
 from grimoire.core.entity import EntityInstance
 from grimoire.core.facets import Agent, FacetBundle, Physical
 from grimoire.core.identity import InstanceRef
+from grimoire.core.perspective import ActorKnowledge
 from grimoire.core.snapshot import EffectiveSnapshot, SelectedSource, SourceSelection
 from grimoire.generation import (
     GenerationError, HeardLine, director_brief, director_messages, npc_brief, npc_messages, resolve_snapshot_voice,
@@ -196,6 +197,16 @@ def test_a_pack_from_before_a_same_reference_edit_is_refused_even_without_stored
     current = lore(SCENE)
     assert "- The ferry crosses" in narration(current, snap=edited_in_place()).system
     assert refused(lambda: narration(current, snap=edited_in_place(entries=reclassified))) == "context_mismatch"
+
+
+def test_a_pack_from_a_projection_that_has_since_lost_records_is_refused():
+    snap = snapshot()
+    stale = pack("mara", snap)
+    assert "You suspect: the duke paid off the harbor watch" in stale.lines()
+    emptied = ActorKnowledge(actor("mara"), 9, (), (), (), ())  # the same moment, every record quarantined
+    voice = resolve_snapshot_voice(actor("mara"), snap, VOICES)
+    assert refused(lambda: npc_brief(snapshot_actor_view(instance("mara"), snap, emptied), voice, secrets=SECRETS,
+                                     context=stale, snapshot=snap)) == "context_mismatch"
 
 
 def test_a_campaign_originals_stale_pack_is_refused_though_it_has_no_card():
