@@ -299,3 +299,28 @@ def test_a_persona_saved_with_windows_line_endings_keeps_its_description(env):
     preview = env.plan(WORLD_ONLY).preview()
     winifred = next(data for key, data in preview.items() if "winifred.default/" in key)
     assert json.loads(winifred)["payload"]["description"] == "A debtor."
+
+
+def test_a_path_with_no_legacy_id_leaves_only_its_record_out(env):
+    scenes = env.v1 / CAMPAIGN / "scenes"
+    renamed = "001--bad\\name"  # a backslash: 011 refuses it a legacy id and says so
+    (scenes / f"{SID}.md").rename(scenes / f"{renamed}.md")
+    path = env.v1 / CAMPAIGN / "appearances.json"
+    path.write_text(path.read_text(encoding="utf-8").replace(SID, renamed), encoding="utf-8")
+    assert any(row.get("code") == "legacy_id_refused" for row in env.rescan()["findings"])
+    review = env.plan(WITH_CAMPAIGN).review()
+    refused = [row for row in review["unresolved"] if row["reason"] == "legacy_id_refused"]
+    assert [row["path"] for row in refused] == [f"{CAMPAIGN}/scenes/{renamed}.md"]
+    assert not any("/chats/" in path for path in review["writes"])
+    assert f"{CAMPAIGN_DIR}scope.json" in review["writes"]  # the rest of the campaign still imports
+
+
+def test_an_image_reference_in_an_imported_card_is_reported_not_rewritten(env):
+    url = "/api/worlds/saltmarch/characters/mara/versions/older/images/gallery_1"
+    write(env.v1, f"{MARA}/older.json", json.dumps({"spec": "chara_card_v3", "spec_version": "3.0", "data": {
+        "name": "Mara", "description": f"A diver. ![tide]({url})"}}, indent=2))
+    env.rescan()
+    review = env.plan(WORLD_ONLY).review()
+    rows = [row for row in review["unresolved"] if row["reason"] == "image_reference_not_translated"]
+    assert [row["legacy_id"] for row in rows] == [f"v1:{ARCHIVE}:{MARA}/older.json"]
+    assert any("mara.older/" in path for path in review["writes"])  # the card itself still imports

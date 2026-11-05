@@ -32,6 +32,14 @@ RESERVED_SOURCE = "import"  # first segment of the receipt source, ``import:<arc
 NAME_LIMIT = 200
 
 
+class _Refused(Exception):
+    """A V1 path that has no legacy id (011 reported it as ``legacy_id_refused``): its record is left out."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(path)
+        self.path = path
+
+
 class ImportRefused(ValueError):
     """The import cannot be planned at all; ``reason`` is machine-readable. Nothing was written."""
 
@@ -235,10 +243,31 @@ class _Mapper:
         self.declined: set[str] = set()
         self.declined_appearances: set[tuple[str, str]] = set()
         self.metadata_reported: set[str] = set()
+        #: V1 path -> legacy id of every text imported verbatim (a portrayal or a campaign's own copy)
+        self.imported_texts: dict[str, str] = {}
+        self.refused_paths: set[str] = set()
         self.entries = {row["path"]: row for row in manifest["entries"]}
 
     def legacy(self, path: str) -> str:
-        return str(LegacyId(self.archive, path))
+        try:
+            return str(LegacyId(self.archive, path))
+        except ValueError:  # a backslash or a control character: 011 reported it, and the record stays out
+            raise _Refused(path) from None
+
+    def legacy_of(self, row: Mapping) -> str:
+        """The legacy id 011 gave a row (``None`` when it refused the row's path)."""
+        if not isinstance(row.get("legacy_id"), str):
+            raise _Refused(row["path"])
+        return row["legacy_id"]
+
+    def guarded(self, step: Callable[..., object], *args: object) -> None:
+        """Run one record's step; a path with no legacy id leaves that record out, reported, not the run."""
+        try:
+            step(*args)
+        except _Refused as refused:
+            if refused.path not in self.refused_paths:
+                self.refused_paths.add(refused.path)
+                self.out.unresolved.append({"path": refused.path, "reason": "legacy_id_refused"})
 
     def unresolved(self, legacy_id: str, reason: str, detail: str | None = None) -> None:
         row = {"legacy_id": legacy_id, "reason": reason}
@@ -289,22 +318,26 @@ class _Mapper:
         for key in self.sel.unproposed:
             row = rows.get(tuple(key))
             if row is not None:
-                self.unresolved(self.legacy(row["path"]), "no_id_candidate", key[1])
+                self.guarded(lambda row=row, v1_id=key[1]: self.unresolved(self.legacy(row["path"]),
+                                                                          "no_id_candidate", v1_id))
 
     # -- worlds and portrayals -------------------------------------------------------------
     def worlds(self) -> None:
         for row in self.m["worlds"]:
-            source = self.sel.worlds.get(row["id"])
-            if source is None:
-                continue
-            legacy = self.legacy(row["path"])
-            if self.skipped(legacy):
-                continue
-            if not row.get("readable"):
-                self.unresolved(legacy, "unreadable_world")
-                continue
-            self.out.sources[source] = {"title": _display(row.get("name"), row["id"]), "legacy_id": legacy,
-                                        "world": row["id"], "links": []}
+            self.guarded(self.world, row)
+
+    def world(self, row: Mapping) -> None:
+        source = self.sel.worlds.get(row["id"])
+        if source is None:
+            return
+        legacy = self.legacy(row["path"])
+        if self.skipped(legacy):
+            return
+        if not row.get("readable"):
+            self.unresolved(legacy, "unreadable_world")
+            return
+        self.out.sources[source] = {"title": _display(row.get("name"), row["id"]), "legacy_id": legacy,
+                                    "world": row["id"], "links": []}
 
     def portrayal_rows(self) -> None:
         by_legacy = {row["legacy_id"]: row for row in self.m["identity_candidates"]["definitions"]}
@@ -315,16 +348,19 @@ class _Mapper:
             if source is None or source not in self.out.sources:
                 continue
             for version in actor["versions"]:
-                legacy = self.legacy(version["path"])
-                candidate = (by_legacy.get(legacy) or {}).get("candidate")
-                if self.skipped(legacy):
-                    if isinstance(candidate, Mapping) and isinstance(candidate.get("text"), str):
-                        self.declined.add(candidate["text"])
-                    continue
-                if version.get("malformed") or not isinstance(candidate, Mapping):
-                    self.unresolved(legacy, "malformed_portrayal" if version.get("malformed") else "no_candidate")
-                    continue
-                self.portrayal(source, actor, version, legacy, candidate)
+                self.guarded(self.version_row, by_legacy, source, actor, version)
+
+    def version_row(self, by_legacy: Mapping, source: str, actor: Mapping, version: Mapping) -> None:
+        legacy = self.legacy(version["path"])
+        candidate = (by_legacy.get(legacy) or {}).get("candidate")
+        if self.skipped(legacy):
+            if isinstance(candidate, Mapping) and isinstance(candidate.get("text"), str):
+                self.declined.add(candidate["text"])
+            return
+        if version.get("malformed") or not isinstance(candidate, Mapping):
+            self.unresolved(legacy, "malformed_portrayal" if version.get("malformed") else "no_candidate")
+            return
+        self.portrayal(source, actor, version, legacy, candidate)
 
     def portrayal(self, source: str, actor: Mapping, version: Mapping, legacy: str, candidate: Mapping) -> None:
         entry = self.entries.get(version["path"]) or {}
@@ -358,6 +394,7 @@ class _Mapper:
                                                actor["scope_id"])
         self.portrayals[(actor["scope_id"], actor["base"], actor["id"], version["id"])] = ref
         self.candidates[candidate["text"]] = ref
+        self.imported_texts[version["path"]] = legacy
 
     def links(self) -> None:
         for link in self.m["identity_candidates"].get("proposed_links", ()):
@@ -375,7 +412,8 @@ class _Mapper:
                 continue
             world = (row.get("v1") or {}).get("world")
             if world in self.sel.worlds:
-                self.out.not_imported.append({"legacy_id": row["legacy_id"], "family": row["family"]})
+                self.guarded(lambda row=row: self.out.not_imported.append(
+                    {"legacy_id": self.legacy_of(row), "family": row["family"]}))
 
     # -- campaigns -------------------------------------------------------------------------
     def campaigns(self) -> None:
@@ -384,25 +422,28 @@ class _Mapper:
         for row in self.m["scenes"]:
             scenes.setdefault(row["campaign"], []).append(row)
         for row in self.m["campaigns"]:
-            campaign_id = self.sel.campaigns.get(row["id"])
-            if campaign_id is None:
-                continue
-            legacy = self.legacy(f"{row['path']}/campaign.md")
-            if self.skipped(legacy):
-                continue
-            source = self.sel.worlds.get(row.get("world") or "")
-            if row.get("world_status") != "resolved" or source is None or source not in self.out.sources:
-                self.unresolved(legacy, "campaign_world", "its world is not resolved or not imported")
-                continue
-            if row.get("semantics") != "resolved":
-                self.unresolved(legacy, "campaign_semantics", str(row.get("semantics")))
-                continue
-            campaign = Campaign(row["id"], campaign_id, legacy, _display(row.get("name"), row["id"]), source)
-            for appearance in row["appearances"]:
-                self.appearance(campaign, row, appearance, instances.get((row["id"], appearance["ref"])))
-            for scene in sorted(scenes.get(row["id"], ()), key=lambda s: s["order"]):
-                self.scene(campaign, scene)
-            self.out.campaigns.append(campaign)
+            self.guarded(self.campaign, row, instances, scenes)
+
+    def campaign(self, row: Mapping, instances: Mapping, scenes: Mapping) -> None:
+        campaign_id = self.sel.campaigns.get(row["id"])
+        if campaign_id is None:
+            return
+        legacy = self.legacy(f"{row['path']}/campaign.md")
+        if self.skipped(legacy):
+            return
+        source = self.sel.worlds.get(row.get("world") or "")
+        if row.get("world_status") != "resolved" or source is None or source not in self.out.sources:
+            self.unresolved(legacy, "campaign_world", "its world is not resolved or not imported")
+            return
+        if row.get("semantics") != "resolved":
+            self.unresolved(legacy, "campaign_semantics", str(row.get("semantics")))
+            return
+        campaign = Campaign(row["id"], campaign_id, legacy, _display(row.get("name"), row["id"]), source)
+        for appearance in row["appearances"]:
+            self.guarded(self.appearance, campaign, row, appearance, instances.get((row["id"], appearance["ref"])))
+        for scene in sorted(scenes.get(row["id"], ()), key=lambda s: s["order"]):
+            self.guarded(self.scene, campaign, scene)
+        self.out.campaigns.append(campaign)
 
     def appearance(self, campaign: Campaign, row: Mapping, appearance: Mapping, candidate: Mapping | None) -> None:
         where = f"{row['path']}/appearances.json#{appearance['ref']}"
@@ -431,11 +472,12 @@ class _Mapper:
         if appearance.get("provenance") == "override" or appearance.get("sync") not in (None, "current"):
             # the campaign plays its own copy (an override, or a lock at a card the world has changed since):
             # the copy is kept verbatim, never replaced by the world's current text
-            copy = self.campaign_copy(row, appearance)
-            if copy is None:
+            found = self.campaign_copy(row, appearance)
+            if found is None:
                 self.unresolved(legacy, "campaign_copy_unreadable", appearance["ref"])
                 return
-            v1["campaign_copy"] = copy
+            v1["campaign_copy"], copy_path = found
+            self.imported_texts[copy_path] = v1["campaign_copy"]["legacy_id"]
             self.out.flags.append({"code": "campaign_copy_preserved", "instance": str(ref), "where": where})
         if appearance.get("sync") not in (None, "current"):
             self.out.flags.append({"code": f"appearance_{appearance.get('sync')}", "instance": str(ref),
@@ -443,7 +485,7 @@ class _Mapper:
         campaign.actors.append(Actor(ref, base, {"v1": v1}, str(appearance.get("control")),
                                      str(appearance.get("role"))))
 
-    def campaign_copy(self, row: Mapping, appearance: Mapping) -> dict | None:
+    def campaign_copy(self, row: Mapping, appearance: Mapping) -> tuple[dict, str] | None:
         """The campaign's own copy of an overridden portrayal, verbatim (``None`` if it cannot be read)."""
         version = appearance.get("version")
         actor = next((a for a in self.m["actors"] if a["scope"] == "campaign" and a["scope_id"] == row["id"]
@@ -456,7 +498,7 @@ class _Mapper:
             text = data.decode("utf-8")
         except (ValueError, KeyError):
             return None
-        return {"legacy_id": self.legacy(path), "sha256": _sha(data), "text": text}
+        return {"legacy_id": self.legacy(path), "sha256": _sha(data), "text": text}, path
 
     def scene(self, campaign: Campaign, row: Mapping) -> None:
         legacy = self.legacy(row["path"])
@@ -512,34 +554,51 @@ class _Mapper:
         layered = {layer.get("campaign_placement") for layer in images["campaign_layering"]}
         selected = {campaign.v1_id for campaign in self.out.campaigns}
         for row in images["placements"]:
-            owner = row["owner"]
-            if owner["scope"] != "world":
-                if owner["scope"] == "campaign" and owner.get("scope_id") in selected and row["path"] not in layered:
-                    # a campaign's own slot over no world art: not carried by this slice, and said so
-                    self.unresolved(row["legacy_id"], "campaign_only_placement", row["path"])
-                continue
-            source = self.sel.worlds.get(owner["scope_id"])
-            subject_pinned = self.portrayals.get((owner["scope_id"], owner["base"], owner["record"],
-                                                  owner.get("version")))
-            if source is None or source not in self.out.sources:
-                continue
-            if self.skipped(row["legacy_id"]):
-                world_rows[row["path"]] = (None, None)
-                continue
-            if subject_pinned is None:
-                self.unresolved(row["legacy_id"], "placement_subject_not_imported")
-                world_rows[row["path"]] = (None, None)
-                continue
-            world_rows[row["path"]] = self.world_placement(row, source, subject_pinned, objects, blobs)
+            self.guarded(self.placement_row, row, layered, selected, world_rows, objects, blobs)
         for layer in images.get("expression_layers", ()):
             owner = layer.get("owner") or {}
             if owner.get("scope") == "world" and self.sel.worlds.get(owner.get("scope_id")) in self.out.sources:
-                self.out.not_imported.append({"legacy_id": self.legacy(layer["path"]), "family": "expression_settings"})
+                self.guarded(lambda path=layer["path"]: self.out.not_imported.append(
+                    {"legacy_id": self.legacy(path), "family": "expression_settings"}))
         for row in images.get("legacy_images", ()) + images.get("collections", ()):
             if isinstance(row, Mapping) and "path" in row:
-                self.out.not_imported.append({"legacy_id": self.legacy(row["path"]), "family": "legacy_image"})
+                self.guarded(lambda path=row["path"]: self.out.not_imported.append(
+                    {"legacy_id": self.legacy(path), "family": "legacy_image"}))
         for layer in images["campaign_layering"]:
-            self.layering(layer, world_rows, objects, blobs, images["placements"])
+            self.guarded(self.layering, layer, world_rows, objects, blobs, images["placements"])
+        self.references(images.get("references", ()))
+
+    def placement_row(self, row: Mapping, layered: set, selected: set, world_rows: dict, objects: Mapping,
+                      blobs: Mapping) -> None:
+        owner = row["owner"]
+        if owner["scope"] != "world":
+            if owner["scope"] == "campaign" and owner.get("scope_id") in selected and row["path"] not in layered:
+                # a campaign's own slot over no world art: not carried by this slice, and said so
+                self.unresolved(self.legacy_of(row), "campaign_only_placement", row["path"])
+            return
+        source = self.sel.worlds.get(owner["scope_id"])
+        subject_pinned = self.portrayals.get((owner["scope_id"], owner["base"], owner["record"],
+                                              owner.get("version")))
+        if source is None or source not in self.out.sources:
+            return
+        world_rows[row["path"]] = (None, None)  # until it is placed: what builds on it waits
+        legacy = self.legacy_of(row)
+        if self.skipped(legacy):
+            return
+        if subject_pinned is None:
+            self.unresolved(legacy, "placement_subject_not_imported")
+            return
+        world_rows[row["path"]] = self.world_placement(row, source, subject_pinned, objects, blobs)
+
+    def references(self, rows: object) -> None:
+        """Markdown image references inside imported text keep their V1 URLs: reported, never rewritten."""
+        counts: dict[str, int] = {}
+        for row in rows if isinstance(rows, list) else ():
+            legacy = self.imported_texts.get(row.get("source")) if isinstance(row, Mapping) else None
+            if legacy is not None:
+                counts[legacy] = counts.get(legacy, 0) + 1
+        for legacy, count in sorted(counts.items()):
+            self.unresolved(legacy, "image_reference_not_translated", f"{count} reference(s)")
 
     def picture(self, scope: str, object_id: str | None, objects: Mapping, blobs: Mapping,
                 legacy: str) -> ImageRef | None:
@@ -582,7 +641,7 @@ class _Mapper:
 
     def world_placement(self, row: Mapping, source: str, pinned: SourceRef, objects: Mapping,
                         blobs: Mapping) -> tuple[Placing | None, ImageRef | None]:
-        legacy = row["legacy_id"]
+        legacy = self.legacy_of(row)
         if row.get("status") != "resolved":
             self.unresolved(legacy, str(row.get("status")), row.get("image"))
             return None, None
