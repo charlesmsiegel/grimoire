@@ -73,7 +73,8 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
 ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.capture", "grimoire.cardstore", "grimoire.chatstore", "grimoire.contextstore", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       "grimoire.import_v1", "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1",
-                      "grimoire.partystore", "grimoire.peersync", "grimoire.providers", "grimoire.runtime",
+                      "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
+                      "grimoire.runtime",
                       "grimoire.store", "grimoire.sync", "grimoire.testing"})
 
 
@@ -122,6 +123,9 @@ PURE_PACKAGES = (
     PurePackage("grimoire.images", ("grimoire.images", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Counted holdings (023): values, codec and the deterministic mutator; the service is an adapter.
     PurePackage("grimoire.holdings", ("grimoire.holdings", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
+    # Unique possessions (034): values, record codec and the deterministic mutator; the service is an adapter.
+    PurePackage("grimoire.possessions", ("grimoire.possessions", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
     # Fiction-first adjudication (029): frames, assessment, decisions and codecs; the service is an adapter.
     PurePackage("grimoire.adjudication", ("grimoire.adjudication", "grimoire.core"),

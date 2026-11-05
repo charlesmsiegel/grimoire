@@ -18,6 +18,8 @@ actor is ``not_witnessed``: it saw none of the chat's earlier history. A new act
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from hashlib import sha256
@@ -38,10 +40,11 @@ from grimoire.holdingstore import holdings_holder_ids, holdings_peer_ids
 from grimoire.imagestore import placement_subject_ids
 from grimoire.ledgers import security_campaign_ids, security_instance_ids, sovereignty_actor_ids
 from grimoire.library import LibraryPathError
+from grimoire.possessions import POSSESSION_KEY, party_ids
 from grimoire.security import payload_digest
 from grimoire.store import (
-    CampaignRecords, LibraryStore, LibraryView, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
-    TakenIdsUnlisted,
+    CampaignRecords, LibraryStore, LibraryView, LinkRefused, MalformedRecord, RecordEnvelope, RecordNotFound, ScopeRecord,
+    StaleWrite, StoreError, TakenIdsUnlisted, UnstorableIdentifier,
 )
 from grimoire.store.layout import address_parts, classify
 from grimoire.sync.documents import DEVICE_FILE, parse_device
@@ -61,15 +64,18 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str, *,
     knowledge log (020), a holder file's log (023's move peers), the sovereignty ledger (010b's bare
     ``actor_id``s), the adjudication ledger (029's frames, rulings and decisions) or a security-ledger grant or approval scoped to one individual (its instance,
     holder or placement address), each scanned raw so an undecodable record still protects its ids;
+    every owner, holder and wearer a unique item's possession record names (034, scanned raw);
     every holder with a holdings file (023) and every subject with a campaign placement folder (018),
     from file names.
     Look-alike holder and placement names count as the ids they fold to.
 
     A file or folder that could name ids but cannot be read or listed raises ``TakenIdsUnlisted``
-    (``HoldingsUnlisted`` is one case): allocation fails closed rather than guess. Every instance
+    (``HoldingsUnlisted`` is one case): allocation fails closed rather than guess. An instance file the
+    store cannot read as a record is the exception: every ``<kind>/<id>`` in its bytes is reserved, and a link or
+    folder at an instance path takes only its own id (the store never reads it as a record). Every instance
     allocator (107 here; 024, 026, 037 later) must use this at plan time and again under the store
     lock at commit, and any later record family that names instance ids must extend it. Its cost
-    grows with play history: it reads every relation, chat, accepted-event, knowledge and holder file
+    grows with play history: it reads every instance, relation, chat, accepted-event, knowledge and holder file
     and every sovereignty and adjudication batch of the campaign, and every security batch of the library.
 
     ``spent`` is ``(approval id, address, payload digest)`` of the approvals a commit supplies for
@@ -91,6 +97,7 @@ def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool,
     taken |= evidence_instance_ids(store, campaign_id)
     taken |= placement_subject_ids(store, campaign_id)
     taken |= sovereignty_actor_ids(store, campaign_id)
+    taken |= possession_party_ids(store, campaign_id)
     taken |= adjudication_actor_ids(store, campaign_id)
     if security:  # skipped only by _fresh_campaign_taken_ids
         taken |= security_instance_ids(store, campaign_id, spent=spent)
@@ -104,6 +111,82 @@ def _fresh_campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozense
     and the security ledger (a whole-library audit that can be large) is not read a second time. Only
     a new scope's allocation and its commit re-check may use this."""
     return _taken_ids(store, campaign_id, security=False)
+
+
+def possession_party_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+    """Instance ids named by the campaign's unique items (034): owners, holders and wearers, current and
+    logged, in each instance file's ``possession`` record, scanned raw. An instance file the store cannot
+    read as a record (malformed, a newer format) could be an item, so every ``<kind>/<id>`` in its exact
+    bytes is reserved. A link or a folder at an instance path is never read as a record, so it holds no
+    item the library can act on: only its own id is taken (from the listing), and the rest of the
+    campaign stays allocatable. One whose bytes cannot be read for any other reason (an I/O error)
+    raises ``TakenIdsUnlisted``. Reads every instance file of the campaign."""
+    taken: set[str] = set()
+    unread: list[str] = []
+    for ref in store.campaign_instances(campaign_id):
+        path = "/".join(address_parts(ref))
+        try:
+            stored = store.read(ref)
+        except (RecordNotFound, LinkRefused):
+            continue
+        except MalformedRecord:
+            try:
+                data = store.read_exact(path)
+            except (LinkRefused, UnstorableIdentifier):
+                continue  # a link or a folder: never an item's record
+            except (StoreError, LibraryPathError, ValueError):
+                data = None
+                unread.append(path)
+            if data is not None:
+                taken |= _party_ids_in_bytes(data)
+            continue
+        except (StoreError, LibraryPathError):
+            unread.append(path)
+            continue
+        payload = stored.envelope.payload  # type: ignore[union-attr]
+        if isinstance(payload, Mapping) and POSSESSION_KEY in payload:
+            taken |= party_ids(payload[POSSESSION_KEY])
+    if unread:
+        raise TakenIdsUnlisted(f"instance files of {campaign_id} cannot all be read ({', '.join(unread)}), so the "
+                               "instance ids a unique item names cannot be reserved", tuple(unread))
+    return frozenset(taken)
+
+
+_PARTY_TEXT = re.compile(r"(?<![a-z0-9._-])([a-z0-9][a-z0-9._-]*)/([a-z0-9][a-z0-9._-]*)")
+
+
+def _party_ids_in_bytes(data: bytes) -> frozenset[str]:
+    """Every instance id an instance file the store cannot read as a record might name as a party.
+
+    Every ``<kind>/<instance_id>`` in its text counts (an escaped ``\\/`` too), and, when the bytes parse
+    as JSON, every one inside each decoded string (a ``\\u`` escape too). Over-reserving only skips an id.
+    """
+    text = data.decode("utf-8", "replace")
+    strings = [text.replace("\\/", "/")]
+    try:
+        document = json.loads(text)
+    except (ValueError, RecursionError, MemoryError):  # not JSON, or nested past the parser: the text scan stands
+        document = None
+    stack: list[object] = [document]
+    while stack:  # every decoded string too, so an escaped slash anywhere in free text still counts
+        value = stack.pop()
+        if isinstance(value, str):
+            strings.append(value)
+        elif isinstance(value, Mapping):
+            stack.extend(value.keys())
+            stack.extend(value.values())
+        elif isinstance(value, list):
+            stack.extend(value)
+    return frozenset(instance_id for string in strings for kind, instance_id in _PARTY_TEXT.findall(string)
+                     if _is_party(kind, instance_id))
+
+
+def _is_party(kind: str, instance_id: str) -> bool:
+    try:
+        InstanceRef("c", kind, instance_id)
+    except ValueError:
+        return False
+    return True
 
 
 def _named_ids(found: CampaignRecords, campaign_id: str, family: str) -> set[str]:
