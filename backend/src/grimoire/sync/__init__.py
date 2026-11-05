@@ -13,13 +13,13 @@ from .errors import (
 )
 from .model import CONFLICT_CODES, Base, Decision, Side
 from .session import (
-    Conflict, Copy, Keep, SyncPlan, SyncReport, apply_sync, device_of, identify, plan_sync, resolve, sync,
+    Conflict, Copy, Keep, Step, SyncPlan, SyncReport, apply_sync, device_of, identify, plan_sync, resolve, sync,
     sync_until_quiet, syncable,
 )
 
 __all__ = [
     "ArchiveTooLarge", "Base", "CONFLICT_CODES", "Conflict", "Copy", "Decision", "IdentityExists", "Keep",
-    "NoDeviceIdentity", "ResolveRefused", "SameDevice", "Side", "SyncError", "SyncInterrupted", "SyncNotQuiet",
+    "NoDeviceIdentity", "ResolveRefused", "SameDevice", "Side", "Step", "SyncError", "SyncInterrupted", "SyncNotQuiet",
     "SyncPlan", "SyncReport", "apply_sync", "decide", "derive_base", "device_of", "identify", "plan_sync",
     "resolve", "sync", "sync_until_quiet", "syncable",
 ]

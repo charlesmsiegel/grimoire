@@ -15,6 +15,7 @@ import atexit
 import functools
 import shutil
 import tempfile
+from hashlib import sha256
 from pathlib import Path
 
 from grimoire.chats import Launch
@@ -40,7 +41,7 @@ from grimoire.images import Crop, Placement, Shown
 from grimoire.imagestore import ImageLibrary
 from grimoire.store import LibraryStore, RecordEnvelope, SourceManifest, etag
 from grimoire.store.layout import classify
-from grimoire.sync import identify, sync
+from grimoire.sync import device_of, identify, sync
 
 from ability_fixtures import attempt, light_bending, person, thruster_pack
 from chat_fixtures import Clock, Ids
@@ -401,7 +402,8 @@ def test_an_actor_added_after_sync_gets_a_fresh_id_and_knows_nothing(tmp_path):
         assert {"mara-1", "anya-1", "goblin-1", "guild", "key"} <= taken
         started = _chats(phone, "phone").start_chat(Launch("character", MARA_DEF.ref), scope=ScopeRef(Q)).commit()
         (actor,) = started.actors
-        assert actor.instance_id not in taken and actor == InstanceRef(Q, "character", "mara-2")
+        tag = sha256(device_of(phone).encode()).hexdigest()[:8]  # 028: numbered for the phone, never mara-2
+        assert actor.instance_id not in taken and actor == InstanceRef(Q, "character", f"mara-{tag}-1")
         known = _evidence(phone).actor_knowledge(Q, actor, as_of=99)
         assert (known.evidence, known.sent, known.current, known.history) == ((), (), (), ())
         assert leaks(known, PERCEPT, SUMMARY, MEMBERSHIP) == []

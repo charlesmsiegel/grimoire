@@ -1,0 +1,53 @@
+# Device sync: pairing and peer transfer
+
+**Status:** first slice of [App-Managed Device Sync](roadmap/sprints/app-managed-device-sync.md) (Wave 4, #028), implemented as `grimoire.peersync` over 019's [revision and conflict core](SYNC.md). Two **paired** libraries synchronize over one **authenticated** connection, and the transfer reports `synced`, `conflicts` or `incomplete`. It is headless: there is no pairing screen, no discovery, no background sync and no encryption yet. The proving test runs the serving device in its own process on loopback (`backend/tests/test_peersync.py`). Like 019, a green suite proves this contract, not a working phone app.
+
+## What it guarantees
+
+- **019 decides, unchanged.** A transfer is 019's `plan_sync` and `apply_sync` with one library replaced by a checked stand-in for the other device (below). Every merge rule, keep-both conflict, held family and crash guarantee in [SYNC](SYNC.md) holds as written there; this layer adds no rule of its own about content.
+- **Only paired devices talk.** Both sides prove they hold the pairing's 32-byte key before anything about either library is sent. A device that is not paired, holds another key or names another device is refused with nothing exchanged and nothing written.
+- **A peer is never an owner.** A paired device writes only as its peer principal, `app:peer:<device>`, through this library's own grants to it. It can supply no approval, issue no grant and touch no reserved root (`secrets`, the `authority` ledgers, `config`), its identity or another pair's sync state ([tool authority](TOOL_AUTHORITY.md#requirements-on-later-sprints)).
+- **Complete means verified.** `synced` is reported only for a pass in which every write, blobs and placements included, was committed and re-read on **both** devices with the planned bytes, and which then found nothing left to write and no conflict.
+- **A failure is never half a step.** Each 019 step that lands on the serving device is one 010 transaction there. A dropped connection, a refusal or a stale snapshot leaves both libraries exactly as a crash at that point of a local 019 sync would, and the next transfer converges.
+- **One chat stays one chat.** The world-less chat, its play scope, bindings, actors and pictures travel as 019 records; derived navigation indexes never travel and are rebuilt on each device, so a list by character on one device and a list by campaign on the other find the same chat ID ([chat model](roadmap/CHAT_MODEL.md)).
+
+## Pairing
+
+`pair(store, authority, peer, key, granted_by=human)` records the pairing on one library; the same key is entered on the other device for its pairing with this one. `new_pairing_key()` draws the key. Pairing is a direct human action, so `granted_by` must be a `human:` principal.
+
+- The key lives in `secrets/peers/<device>.json`, a reserved root that no grant reaches, the store's scan never lists, and no transfer ever sends.
+- Pairing grants `app:peer:<device>` `APPLY` on `sources`, `campaigns`, `kept` and `assets`: what 019 synchronizes. The grants are issued **before** the key is written, so an interrupted pairing leaves grants that no connection can use. Their IDs are named for the key, so pairing again with a new key never reuses an ID (grant IDs are never reused, per 010b).
+- Pairing again replaces the key and revokes the old grants. Pairing again with a key this library already used and ended is refused: pick a new key.
+- `unpair(store, authority, peer)` revokes every grant to the peer's principal first, then erases the key (the record keeps only `revoked`). A connection that was already open loses the right to write at once, because each commit is authorized against the live grants.
+
+## How a transfer works
+
+`transfer(store, authority, peer, address)` runs on the initiating device; `PeerServer(store, authority)` (or `python -m grimoire.peersync serve LIBRARY --owner human:you`) answers on the other. Either device can initiate.
+
+1. **Handshake.** The client sends its device ID, the device it wants and a fresh nonce. The server answers with its own nonce and an HMAC proof over both IDs and both nonces; the client checks it and answers with its own proof. Each direction then has its own session key derived from the pairing key and that transcript. Every later frame carries a sequence number and an HMAC-SHA256 tag, so a forged, altered, replayed, reordered or reflected frame ends the connection (`TransportError`).
+2. **Snapshot.** The server sends the grants it gives the client's principal, its device identity and this pair's archive and pending marker, every entry under `sources`, `campaigns`, `assets` and `.conflicts` exactly as on disk (a link or unreadable entry is sent as *blocked*, never as absent), and its own canonical scan.
+3. **Mirror.** The client rebuilds those folders as a scratch library and refuses to use it (`MirrorMismatch`) unless it scans exactly as the server's scan does: the same record files with the same bytes, the same blocked paths, blobs and cross-kind pairs. Everything 019 plans from is in that scan. Paths outside the synchronized roots, `..`, a second copy of one path or a sync file of another pair end the transfer.
+4. **Plan and apply.** 019 plans between the client's library and the mirror. As `apply_sync` commits each step on the mirror, an observer sends the same writes to the server, which commits them as one transaction under the client's principal, re-reads each file and answers with its etags. Only when those match the plan does 019 go on, so both real devices are written in 019's own order: data on each side, verify, archives, pending markers.
+5. **Passes.** A pass that wrote something is followed by another, up to four. A refusal (`stale` when the serving device changed since its snapshot, `denied` when a grant was revoked) or a mismatch makes the next pass plan again from both devices as they now are.
+
+### The report
+
+`TransferReport(peer, status, reason, passes)`:
+
+- `synced`: the last pass completed, wrote nothing and found no conflict.
+- `conflicts`: it completed with 019 conflicts (`report.conflicts`), each device keeping the other's version under `.conflicts`. `held` families count here, as in 019.
+- `incomplete`: no pass completed quietly. `reason` says why: `unreachable`, `disconnected`, the last refusal or mismatch, or that every pass still wrote something.
+
+`NotPaired` (this library holds no pairing) and `AuthenticationFailed` (with `code`: `unauthenticated`, `not_paired`, `wrong_device`, `protocol`) are raised before anything is exchanged.
+
+## Per-device actor IDs
+
+The audit left actor numbering with 028. 107 numbered a new actor by the first free number in its campaign, so two devices continuing one campaign offline both created `mara-1`, and 019 then merged two different actors into one file. A library with a device identity now numbers new actors `<entity>-<tag>-<n>` (`mara-3f2a91c0-1`), where the tag is the first eight hex digits of the SHA-256 of the device ID. Two devices never draw the same ID without coordinating, which offline work cannot. A library that was never identified has never synced and keeps `<entity>-<n>`, so existing libraries read exactly as before. A damaged or unreadable identity file refuses the new actor (`InvalidBinding`, reason `device_identity`) rather than falling back to the numbering that collides. Every other rule of [taken instance IDs](CHATS.md#taken-instance-ids) still applies on top.
+
+## Known limits
+
+- **Loopback only, not encrypted.** Frames are authenticated, not encrypted: anyone who can read the path reads the library's records. `PeerServer` therefore refuses any address that is not a loopback IP. Encrypted transport, LAN discovery and a user-chosen remote endpoint or relay are later milestones of this sprint.
+- **Whole snapshots.** Each pass sends the serving library whole and the mirror is rebuilt in a temporary folder (default limits: 250,000 entries, 8 GiB). Incremental snapshots and fetching blobs only when needed come later; until then a large library transfers slowly.
+- **Blocked entries need links.** A blocked entry is reproduced in the mirror as a dangling symbolic link. Where links cannot be made (Windows without the privilege), a library with a blocked entry cannot be mirrored and the transfer is `incomplete` with `MirrorMismatch`.
+- **A peer is trusted as a device of the same user.** Within its grants it can write any record content, and like any 019 writer it can claim any `previous` lineage through `put_exact` and write its own pair's markers ([SYNC](SYNC.md#limits)). Pairing is the user's decision that the other device is theirs; unpairing ends it.
+- **Still owed by 028** (each listed under [Inherited from 019](roadmap/sprints/app-managed-device-sync.md#inherited-from-019)): merge rules for 021 accepted events and wrap-ups and 023 holdings (still `held`), merging two devices' knowledge logs, dismissing kept versions, deletion propagation, archive compaction (019's `ArchiveTooLarge` limit still applies per pair), resolving a conflict over the transport, and background sync.

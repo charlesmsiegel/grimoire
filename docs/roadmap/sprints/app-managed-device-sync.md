@@ -2,6 +2,8 @@
 
 **Outcome:** Synchronization is a Grimoire capability, not a Syncthing requirement; use authenticated peer or remote transfer over the same revision protocol.
 
+**Status:** first slice implemented as `grimoire.peersync` ([DEVICE_SYNC](../../DEVICE_SYNC.md)): pairing, an authenticated loopback transfer over 019's core with `synced`/`conflicts`/`incomplete` status, and per-device actor IDs. The other obligations below are still open.
+
 ## Scope and first proof
 Demonstrate paired sync of a scene, character and picture between two processes over an authenticated connection with conflict/incomplete status.
 
@@ -28,7 +30,7 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 - **Merging 020 knowledge logs** when both devices appended to one campaign offline (today a keep-both `missing_ancestor` conflict on the batch; a log moves only whole).
 - **Dismissing kept versions** (today the next sync delivers a deleted one again).
 - **Deletion propagation**, and resolving toward a deletion.
-- **Per-device actor id allocation.** 107 numbers new actors by the first free number, so two devices can create byte-identical actors that merge; the offline allocation merge now also carries the 020 knowledge records that name them.
+- **Per-device actor id allocation:** done in the first slice; an identified library numbers actors `<entity>-<tag>-<n>` ([DEVICE_SYNC](../../DEVICE_SYNC.md#per-device-actor-ids)).
 - **Archive compaction.** One archive and one pending marker per pair must fit 010's 8 MiB file cap: about 23,000 synced paths today, after which the whole sync is refused (`ArchiveTooLarge`). 018 art adds about three paths per picture.
 
 ## Wave 2 handoff: revision-safe transfers
