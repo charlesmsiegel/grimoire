@@ -211,6 +211,8 @@ def test_a_collision_011_withheld_in_a_spelled_world_is_reported_the_same_way(tm
 
 
 def test_case_twin_worlds_each_import_under_their_own_source(env):
+    if (env.v1 / "worlds" / "old_coast").exists():
+        pytest.skip("this file system folds case, so Old_Coast and old_coast cannot both exist")
     os.rename(env.v1 / "worlds" / "realm", env.v1 / "worlds" / "old_coast")
     env.rescan()
     selection = Selection({OLD: "world:old_coast", "old_coast": "world:other"})
