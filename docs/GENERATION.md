@@ -92,7 +92,7 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 
 ## Running a turn
 
-`GenerationRuntime(adapter, routes, handle, *, approvals=None, max_output_tokens=400)` holds fixed routing. The handle and approvals pass through to `ProviderAdapter.execute` unchanged; tests cover a trusted app handle and an untrusted one approved per attempt (which of the two the app uses is still the requester's open question).
+`GenerationRuntime(adapter, routes, handle, *, approvals=None, max_output_tokens=400)` holds fixed routing. The handle and approvals pass through to `ProviderAdapter.execute` unchanged; tests cover a trusted app handle and an untrusted one approved per attempt. The app uses a trusted `app:` handle (decided; the limits are in [TOOL_AUTHORITY](TOOL_AUTHORITY.md#requirements-on-later-sprints)).
 
 `run_turn(meter, briefs, *, controls, director=None, token=None, cancel=None, scene_voices=()) -> TurnOutcome`:
 
@@ -123,7 +123,6 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 | Cross-process run fencing | 030 |
 | Director ledger knowledge in narration (bound director lore is in) | later |
 | Detecting player-character authorship in generated text | 035 (`review_narration`) |
-| Trusted vs untrusted handle for the app | the requester's open question |
 | Richer retrieval behind the same pack seam (recent history, unbound world records, embeddings) | 031 |
 | Building each speaker's pack and the director's lore every turn, with the transcript window as scene text | 035 |
 | Other optional stages in a generation turn (`select`/`decision` phases) | later |
