@@ -674,6 +674,9 @@ def _art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes], blobs
         _, base_image, ok = placement_target(inherited_data) if inherited_data is not None else (None, None, False)
         if not ok or base_image is None:
             return done(f"{entity} has no picture in {ref.slot!r} to adjust on the origin")
+        refused = _placement_refusal(PlacementRef(entity, ref.slot), inherited_data)  # type: ignore[arg-type]
+        if refused is not None:  # W9 reads it through 018 (``nothing_to_adjust``; ``invalid_placement``)
+            return done(f"{entity}'s placement in {ref.slot!r} cannot be adjusted: {refused}")
         if base_image != image:  # W9 ``stale_adjust``: the batch refuses an adjust of another picture
             return done(f"{entity} shows {base_image} in {ref.slot!r}, not the adjusted {image}")
         identical.add(inherited)

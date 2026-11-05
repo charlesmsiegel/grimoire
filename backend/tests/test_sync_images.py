@@ -669,3 +669,35 @@ def test_a_placement_with_another_schema_never_replaces_a_working_avatar(pair):
     with pytest.raises(ResolveRefused, match="schema"):
         resolve(desktop, phone, placement, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, H)
     assert (phone.root / placement).read_bytes() == theirs
+
+
+def test_an_adjust_of_an_inherited_placement_018_cannot_read_never_replaces_a_working_picture(unpaired):
+    """W9 reads the inherited placement an adjust re-crops through 018's own schema and codec. When that
+    source placement is unreadable on both devices (here: another schema, edited the same way on each),
+    the batch refuses the adjust (``nothing_to_adjust``) and the resolver reads it as ``invalid_placement``,
+    so sync holds the adjust instead of copying it over the receiver's working campaign picture."""
+    desktop, phone = unpaired
+    batch = _images(desktop).change()
+    first = batch.add_image(HARBOR, "first", PNG)
+    batch.place(SAILOR, "avatar", Placement("set", "avatar", first), None)
+    batch.commit()
+    wren = _campaign_art(desktop)
+    assert sync_until_quiet(desktop, phone, H).conflicts == ()
+    adjust = PlacementRef(WREN_A, "avatar")
+    _images(desktop).place(WREN_A, "avatar", Placement("adjust", "avatar", first, Crop(0, 0, 5000, 5000)),
+                           _images(desktop).read_placement(adjust)[1]).commit()
+    source = _path(PlacementRef(SAILOR, "avatar"))
+    for store in (desktop, phone):
+        text = (store.root / source).read_text()
+        assert '"schema": "grimoire.placement/0"' in text
+        (store.root / source).write_text(text.replace('"schema": "grimoire.placement/0"', '"schema": "grimoire.placement/9"'))
+    theirs = (phone.root / _path(adjust)).read_bytes()
+    report = sync_until_quiet(desktop, phone, H)
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == {_path(adjust): "head_dependency"}
+    assert "schema" in report.conflict(_path(adjust)).detail
+    assert (phone.root / _path(adjust)).read_bytes() == theirs
+    assert isinstance(_slot(phone), Shown) and _slot(phone).image == wren
+    mine = (desktop.root / _path(adjust)).read_bytes()
+    with pytest.raises(ResolveRefused, match="schema"):
+        resolve(desktop, phone, _path(adjust), etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, H)
+    assert (phone.root / _path(adjust)).read_bytes() == theirs
