@@ -79,6 +79,57 @@ def first_marker(text: str, markers: tuple[str, ...]) -> int | None:
     return None
 
 
+#: A sentence ends at ``.``, ``!``, ``?`` or ``…`` (and any closing quotes after it) before a space.
+_SENTENCE_END = re.compile(r"""[.!?\u2026]+["'\u00bb\u300d\u300f)\]]*(?=\s|$)""")
+#: Quoted speech: a double quote or guillemet/corner bracket anywhere, or a single quote that opens
+#: a word (``'They``), so an apostrophe (``duke's``, ``guards'``) is not a quotation.
+_QUOTATION = re.compile(r"""["\u00ab\u00bb\u300c\u300d\u300e\u300f]|(?<!\w)'(?=\w)""")
+_TOKEN = re.compile(r"\w+")
+#: Verbs that report speech, every form spelled out so the verdict never depends on a stemmer.
+#: Deliberately narrow: forms that are as often non-speech words (``calls``, ``cries``, ``adds``,
+#: ``barks``, ``admitted``, ``gossip``, ``promise``, ``warning``, ``demands``, ``remarks``) are left
+#: out, and quoted speech is caught by the quotes.
+SPEECH_VERBS = frozenset("""
+    say says said saying tell tells told telling ask asks asked asking
+    reply replies replied replying answer answers answered answering
+    respond responds responded responding retort retorts retorted retorting
+    speak speaks spoke spoken speaking talk talks talked talking
+    mutter mutters muttered muttering murmur murmurs murmured murmuring
+    whisper whispers whispered whispering mumble mumbles mumbled mumbling
+    grumble grumbles grumbled grumbling shout shouts shouted shouting yell yells yelled yelling
+    growl growls growled growling snarl snarls snarled snarling hiss hisses hissed hissing
+    drawl drawls drawled drawling quip quips quipped quipping
+    exclaim exclaims exclaimed exclaiming declare declares declared declaring
+    announce announces announced announcing proclaim proclaims proclaimed proclaiming
+    explain explains explained explaining insist insists insisted insisting
+    remarked remarking mentioned mentioning confess confesses confessed confessing
+    warn warns warned inform informs informing demanded demanding
+    interject interjects interjected interjecting gossiped gossiping
+    sing sings sang sung singing chanted chanting recite recites recited reciting
+""".split())
+
+
+def sentences(text: str) -> list[str]:
+    """``text`` normalised and cut into sentences (a quoted sentence ends with its quote)."""
+    normalized = normalize(text)
+    parts, start = [], 0
+    for end in _SENTENCE_END.finditer(normalized):
+        parts.append(normalized[start:end.end()].strip())
+        start = end.end()
+    parts.append(normalized[start:].strip())
+    return [part for part in parts if part]
+
+
+def speech_evidence(sentence: str) -> str | None:
+    """``"quotation"`` or ``"speech_verb"`` when ``sentence`` reports speech, else ``None``."""
+    normalized = normalize(sentence)
+    if _QUOTATION.search(normalized):
+        return "quotation"
+    if any(token in SPEECH_VERBS for token in _TOKEN.findall(normalized)):
+        return "speech_verb"
+    return None
+
+
 def trigram_counts(text: str) -> Counter[str]:
     padded = f" {normalize(text)} "
     return Counter(padded[index:index + 3] for index in range(len(padded) - 2))

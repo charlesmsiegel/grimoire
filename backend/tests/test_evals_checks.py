@@ -273,7 +273,7 @@ def test_blank_model_lines_are_silence(bench):
 def test_narration_copying_a_voice_sample_is_caught(bench):
     scenario, run = bench
     sample = "Darling, every song needs a villain, and tonight the hall is simply brimming"
-    found = findings_for(scenario, mutate(run, set_text(3, None, f"Bellamy sings: {sample}.")))
+    found = findings_for(scenario, mutate(run, set_text(3, None, f"The song runs: {sample}.")))
     assert checks(found) == {"voice_sample_copy"} and found[0].subject == "narration"
 
 

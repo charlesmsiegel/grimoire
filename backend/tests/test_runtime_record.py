@@ -25,8 +25,10 @@ from grimoire.evals.runtime_record import (
 )
 from grimoire.evals.story_quality import main
 from grimoire.generation import GenerationError
+from grimoire.providers import RouteChoice
 from grimoire.providers.meter import TurnMeter
-from grimoire.runtime import recorded_turn
+from grimoire.providers.request import ChatMessage, ModelRequest
+from grimoire.runtime.record import recorded_turn
 from grimoire.testing.providers import Reply
 
 PRESENT = ("npc-oda", "npc-bellamy", "npc-quill", PC)
@@ -226,3 +228,65 @@ def test_a_meter_whose_booking_failed_is_not_recorded():
     with pytest.raises(GenerationError) as caught:
         recorded_turn(1, meter, outcome)
     assert caught.value.reason == "poisoned_meter"
+
+
+def test_a_turn_recorded_twice_is_refused():
+    controls, voices = world()
+    once = two_npc_turn(controls, voices)
+    for again in (replace(once, turn=2),  # the same ledger renumbered: its bill counted twice
+                  two_npc_turn(controls, voices, number=2)):  # another take of the same plan turn
+        with pytest.raises(RuntimeRecordError) as caught:
+            record(scenario(), [once, again])
+        assert caught.value.code == "duplicate_turn"
+
+
+def run_swipe(controls, voices, plan, lines):
+    harness = Harness([say(text) for text in lines])
+    meter = harness.meter(plan)
+    outcome = harness.runtime.run_turn(meter, [brief(ODA, "Oda", voices), brief(BELLAMY, "Bellamy", voices)],
+                                       controls=controls)
+    assert outcome.status == "complete"
+    return meter, outcome
+
+
+def test_one_swipes_lines_are_never_paired_with_another_swipes_bill():
+    controls, voices = world()
+    plan = Harness([]).plan(controls, present=PRESENT, speakers=("npc-oda", "npc-bellamy"))
+    meter_a, outcome_a = run_swipe(controls, voices, plan, [ODA_LINE, BELLAMY_LINE])
+    meter_b, outcome_b = run_swipe(controls, voices, plan, ["Ledger's shut. Go.", "Oh my dear, scandal!"])
+    # Same plan, so the same call ids on both meters: only the outcome's own meter matches it.
+    assert [c.call_id for c in outcome_a.calls] == [c.call_id for c in outcome_b.calls]
+    for meter, outcome in ((meter_b, outcome_a), (meter_a, outcome_b)):
+        with pytest.raises(GenerationError) as caught:
+            recorded_turn(1, meter, outcome)
+        assert caught.value.reason == "outcome_mismatch"
+    assert recorded_turn(1, meter_a, outcome_a).ledger is meter_a.ledger
+
+
+def test_an_unused_meter_cannot_carry_a_finished_outcome():
+    controls, voices = world()
+    harness = Harness([])
+    plan = harness.plan(controls, present=PRESENT, speakers=("npc-oda", "npc-bellamy"))
+    _meter, outcome = run_swipe(controls, voices, plan, [ODA_LINE, BELLAMY_LINE])
+    with pytest.raises(GenerationError) as caught:  # refused here, not later by the run format
+        recorded_turn(1, harness.meter(plan), outcome)
+    assert caught.value.reason == "outcome_mismatch"
+
+
+def test_a_call_run_again_after_the_turn_no_longer_matches_its_outcome():
+    controls, voices = world()
+    harness = Harness([say("Word is, the duke's betrayal came cheap."), say(BELLAMY_LINE)])
+    plan = harness.plan(controls, present=PRESENT, speakers=("npc-oda", "npc-bellamy"))
+    meter = harness.meter(plan)
+    outcome = harness.runtime.run_turn(meter, [brief(ODA, "Oda", voices), brief(BELLAMY, "Bellamy", voices)],
+                                       controls=controls)
+    assert [c.status for c in outcome.calls] == ["rejected", "not_issued"]
+    recorded_turn(1, meter, outcome)  # as the turn ended, meter and outcome agree
+    # Bellamy's unissued call, issued by hand on the same meter, is billed but not in the outcome.
+    result = harness.adapter.execute(meter, plan.calls[1],
+                                     ModelRequest((ChatMessage("user", "Speak."),), max_output_tokens=64),
+                                     (RouteChoice("primary", "model-a"),), harness.handle)
+    assert result.status == "accepted"
+    with pytest.raises(GenerationError) as caught:
+        recorded_turn(1, meter, outcome)
+    assert caught.value.reason == "outcome_mismatch"

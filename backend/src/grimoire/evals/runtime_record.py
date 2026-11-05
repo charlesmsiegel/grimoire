@@ -1,7 +1,7 @@
 """Record 027 generation turns as a ``grimoire.story-quality/3`` run of source ``v2-runtime``.
 
 Pure: it reads each turn's usage ledger (``core.inference``) and the lines the runtime accepted,
-never a provider, file or clock. ``grimoire.runtime.recorded_turn`` unwraps a ``TurnMeter`` and
+never a provider, file or clock. ``grimoire.runtime.record.recorded_turn`` unwraps a ``TurnMeter`` and
 ``TurnOutcome`` into a ``RecordedTurn``.
 
 Call attribution is exact because it is copied, not inferred: the run's calls are the turn
@@ -111,7 +111,8 @@ def record_runtime_run(scenario: Scenario, turns: Iterable[RecordedTurn], *, run
     """The ``/3`` run dict for ``turns``, already validated by ``parse_run_v3``.
 
     Every turn must share one campaign and one inference policy: a run has one policy, so a
-    director reply enabled on one turn is enabled, and visible to the gate, on all of them.
+    director reply enabled on one turn is enabled, and visible to the gate, on all of them. Each
+    turn's ledger is a distinct plan turn (``duplicate_turn`` otherwise), so no bill counts twice.
     ``choice_outcomes`` defaults to ``unlabelled`` for every scripted choice, so the gate judges
     them on marker evidence only. A malformed result raises ``BenchmarkFormatError``.
     """
@@ -119,6 +120,14 @@ def record_runtime_run(scenario: Scenario, turns: Iterable[RecordedTurn], *, run
     if not turns or not all(isinstance(turn, RecordedTurn) for turn in turns):
         raise RuntimeRecordError("bad_turns", "turns must be a nonempty sequence of RecordedTurn")
     first = turns[0].ledger.plan
+    seen_turn_ids: set[str] = set()
+    for recorded in turns:
+        # One turn's bill recorded twice (re-sent, or renumbered) would double the run's cost. A
+        # ledger carries its plan, so the same ledger twice repeats its plan's turn id too.
+        if recorded.ledger.plan.turn_id in seen_turn_ids:
+            raise RuntimeRecordError("duplicate_turn",
+                                     f"turn {recorded.turn} repeats an earlier turn's ledger")
+        seen_turn_ids.add(recorded.ledger.plan.turn_id)
     for recorded in turns[1:]:
         plan = recorded.ledger.plan
         if plan.campaign_id != first.campaign_id:

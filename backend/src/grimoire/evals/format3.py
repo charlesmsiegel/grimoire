@@ -9,12 +9,20 @@ and ledgers, see ``format2``) except:
   policy gives it a cap, so a director call the policy does not enable is invalid input, never
   an implicit extra. It speaks for the scene (``actor_id`` null) at most once per turn.
 - A model contribution with ``speaker_id`` null is narration, and must name its turn's
-  completed ``director_generation`` call; that call's only contribution has no speaker.
+  completed ``director_generation`` call. That call contributes exactly one line, with no
+  speaker; a second line naming it is invalid input.
 - Sources are ``synthetic`` or ``v2-runtime``. A 0.2.1 capture has no director call under its
   profile and stays ``/2``, where its evidence is verified.
 
-The gate reads narration through the ``/1`` ``narration`` purpose, so the leak, sovereignty,
-continuity, attribution, orphan and voice-copy checks apply to it as to NPC lines.
+The gate reads narration through the ``/1`` ``narration`` purpose, so the sovereignty,
+continuity, attribution, orphan and voice-copy checks apply to it as to NPC lines, and two
+narration-only checks apply (``checks``, per sentence of the line):
+
+- ``knowledge_leak``: narration states a fact before any player character knows it, or a sentence
+  that states a fact names an NPC (scenario name or id) that does not know it yet on that turn.
+- ``narration_voices_actor``: a sentence names an actor (NPC or PC) and has quoted speech or a
+  speech verb (``text.SPEECH_VERBS``). Only an NPC's own call speaks for it, and only the player
+  for a PC, so the director may describe what an actor does but not what it says.
 """
 
 from __future__ import annotations

@@ -6,13 +6,13 @@ from pathlib import Path
 import pytest
 
 from evals_helpers import (
-    attempt_v2, director_call, guild_run_v2, guild_run_v3, load_benchmark, live_source,
+    attempt_v2, contribution, director_call, guild_run_v2, guild_run_v3, load_benchmark, live_source,
     minimal_run_v2, minimal_run_v3, minimal_scenario, mutate, narration_line,
 )
 from grimoire.core.inference import InferenceStage
 from grimoire.evals.format import BenchmarkFormatError, parse_run, parse_scenario
 from grimoire.evals.format2 import parse_run_v2
-from grimoire.evals.format3 import FORMAT_V3, STAGES_V3, RunV3, parse_run_v3
+from grimoire.evals.format3 import FORMAT_V3, RunV3, parse_run_v3
 from grimoire.evals.gate import compare
 from grimoire.evals.gate2 import compare_v2
 from grimoire.evals.loader import benchmark_file, load_any_run, load_json
@@ -48,12 +48,6 @@ def checks(report) -> set[str]:
 
 
 # --- the format ----------------------------------------------------------------------------------
-
-def test_stage_vocabulary_is_every_inference_stage():
-    assert FORMAT_V3 == "grimoire.story-quality/3"
-    assert set(STAGES_V3) == {stage.value for stage in InferenceStage}
-    assert STAGES_V3[-1] == "director_generation"
-
 
 def test_a_director_line_is_scene_narration_from_its_own_call():
     run = parse(mutate(minimal_run_v3(), narrated))
@@ -116,6 +110,14 @@ def test_narration_must_name_a_completed_director_call():
         r["calls"][1]["attempts"] = [attempt_v2(60, None, outcome="failed")]
     rejects(mutate(minimal_run_v3(), failed), "run.turns[0].contributions[2].call_id",
             says="completed")
+
+
+def test_a_director_call_contributes_one_line():
+    def twice(r):
+        narrated(r)
+        r["turns"][0]["contributions"].append(narration_line("The lamp gutters."))
+    rejects(mutate(minimal_run_v3(), twice), "run.turns[0].contributions[3].call_id",
+            says="already produced its one line")
 
 
 def test_a_director_call_cannot_voice_an_npc_or_a_player():
@@ -285,6 +287,78 @@ def test_no_checked_in_v3_run_is_live_or_provider_reported():
             assert all(each["measurement"] == "synthetic"
                        for call in data["calls"] for each in call["attempts"]), path
     assert seen >= 1
+
+
+# --- narration on the shipped benchmark: the director describes, it never speaks for anyone ------
+
+def gate_narration(turn: int, text: str, *, line: tuple[str, str] | None = None):
+    """The shipped baseline against itself with turn ``turn``'s narration (and one NPC line) set."""
+    raw_scenario, raw_run = guild_run_v3()
+    scenario = parse_scenario(raw_scenario)
+
+    def change(r):
+        contribution(r, turn, None)["text"] = text
+        if line is not None:
+            contribution(r, turn, line[0])["text"] = line[1]
+    baseline = parse(raw_run, scenario)
+    return compare_v2(scenario, baseline, parse(mutate(raw_run, change), scenario))
+
+
+def found(report) -> set[tuple]:
+    return {(f.check, f.turn, f.subject, f.evidence) for f in report.findings}
+
+
+def test_an_npc_secret_quoted_in_narration_fails_as_it_would_in_the_npcs_own_line():
+    # In guild-betrayal Oda never learns the duke's betrayal. Said in Oda's own line, it leaks ...
+    raw_scenario, raw_run = guild_run_v3()
+    scenario = parse_scenario(raw_scenario)
+    own = mutate(raw_run, lambda r: contribution(r, 3, "npc-oda").update(
+        text="Singing. Fine. They say the duke sold the guild. Keep it short."))
+    report = compare_v2(scenario, parse(raw_run, scenario), parse(own, scenario))
+    assert ("knowledge_leak", 3, "npc-oda", "duke-betrayal#0") in found(report)
+    # ... and written into the director's line instead it still fails, twice over.
+    report = gate_narration(3, "The song drifts through the hall. Oda leans over the counter and "
+                               "mutters, 'They say the duke sold the guild.' The tune fades.")
+    assert not report.passed
+    assert found(report) == {("knowledge_leak", 3, "narration", "duke-betrayal#0"),
+                             ("narration_voices_actor", 3, "npc-oda", "quotation")}
+    assert "npc-oda" in next(f.message for f in report.findings if f.check == "knowledge_leak")
+
+
+def test_a_silent_npc_voiced_in_narration_fails():
+    report = gate_narration(3, "The song drifts through the hall. From the corner Hask growls: "
+                               "'Everyone knows the duke sold the guild.'")
+    assert found(report) == {("knowledge_leak", 3, "narration", "duke-betrayal#0"),
+                             ("narration_voices_actor", 3, "npc-hask", "quotation")}
+    # Without the secret it is still Hask's speech, which only Hask's own call may produce.
+    report = gate_narration(3, "The song drifts through the hall. Hask growls at the door.")
+    assert found(report) == {("narration_voices_actor", 3, "npc-hask", "speech_verb")}
+
+
+def test_an_npc_line_moved_into_narration_fails_though_the_npc_knows_the_fact():
+    report = gate_narration(
+        3, "Bellamy sings softly: the duke sold the guild to the river barons, every last brick.",
+        line=("npc-bellamy", "Oh darling, very well."))
+    assert found(report) == {("narration_voices_actor", 3, "npc-bellamy", "speech_verb")}
+
+
+def test_narration_naming_an_npc_may_not_state_what_that_npc_does_not_know():
+    # Wren knows it by turn 3, so only the sentence naming Oda makes this a leak.
+    report = gate_narration(3, "The song ends. Oda broods, as if the duke sold the guild.")
+    assert found(report) == {("knowledge_leak", 3, "narration", "duke-betrayal#0")}
+    assert gate_narration(3, "The song ends. Bellamy beams, for the duke sold the guild.").passed
+    assert gate_narration(3, "Oda broods. Everyone now knows the duke sold the guild.").passed
+
+
+@pytest.mark.parametrize("text", [
+    "Oda's ledger lies open, and the guards' lamps gleam on the guest ledger.",  # apostrophes
+    "Oda pushes the guest ledger across. Somewhere a voice says the hour is late.",  # unnamed
+    "Wren listens while Oda slides the guest ledger over.",  # actors named, no speech
+    "Bellamy, who lives for gossip, admits Wren with a promise of wine and the guest ledger.",
+])
+def test_narration_describing_actors_without_their_speech_passes(text):
+    report = gate_narration(1, text)
+    assert report.passed, report.findings
 
 
 # --- the command line ----------------------------------------------------------------------------

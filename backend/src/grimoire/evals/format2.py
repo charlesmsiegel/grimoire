@@ -336,6 +336,7 @@ def parse_ledger_run(data: object, scenario: Scenario, dialect: Dialect) -> RunV
     by_id = {call.call_id: call for call in booked}
 
     parsed_turns = []
+    scene_lines: set[str] = set()
     for at, turn, raw_contributions in turns:
         contributions = []
         for position, item in enumerate(_list(raw_contributions, f"{at}.contributions")):
@@ -369,6 +370,12 @@ def parse_ledger_run(data: object, scenario: Scenario, dialect: Dialect) -> RunV
                     # The director's line is the scene's: it can never pose as an NPC or a PC.
                     raise _fail(f"{cat}.speaker_id",
                                 f"must be null: call {call_id!r} speaks for the scene")
+                if scene:
+                    # One reply is one line: a second would be a generation nobody paid for.
+                    if call_id in scene_lines:
+                        raise _fail(f"{cat}.call_id",
+                                    f"call {call_id!r} already produced its one line")
+                    scene_lines.add(call_id)
                 if not scene and speaker != call.actor_id:
                     raise _fail(f"{cat}.speaker_id",
                                 f"must be {call.actor_id!r}, the actor of call {call_id!r}"

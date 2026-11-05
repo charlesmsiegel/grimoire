@@ -195,6 +195,14 @@ def test_the_evals_file_edge_loads_no_network_module():
     assert _reached(loaded, NETWORK_MODULES) == []
 
 
+def test_the_generation_runtime_does_not_load_the_eval_recorder():
+    # The runtime is used in play; recording a turn for the story-quality gate is opt-in.
+    loaded = _newly_loaded("import grimoire.runtime")
+    assert "grimoire.runtime.runtime" in loaded
+    assert _reached(loaded, ("grimoire.runtime.record", "grimoire.evals.runtime_record",
+                             "grimoire.evals.format2", "grimoire.evals.format3")) == []
+
+
 def test_closure_check_sees_a_capability_module_loaded_indirectly():
     # Control: the same measurement catches a module pulled in through another import.
     loaded = _newly_loaded("import grimoire.core\nimport http.client")
