@@ -30,7 +30,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
-from grimoire.chatstore import campaign_taken_ids
+from grimoire.chatstore import DeviceIdentityUnusable, campaign_taken_ids, device_tag
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import ENTITY_SCHEMA, instance_to_payload
 from grimoire.core.facets import FacetBundle, Physical, Portable
@@ -374,10 +374,16 @@ class PossessionLibrary:
             etags = self._party_etags(parties, found.instances)
             _check_pins(pins, etags)
             source_fields: dict[str, object] = {}
+            individual = False
             if creation.source is not None:
-                source_fields = self._source(creation.source, kind, found)
+                source_fields, individual = self._source(creation.source, kind, found)
             taken = campaign_taken_ids(self.store, campaign)
             base = (creation.source.entity_id if creation.source is not None else kind)[:100]
+            if not individual:  # one particular artifact: two devices making it must meet on one id
+                try:
+                    base += device_tag(self.store)
+                except DeviceIdentityUnusable as error:
+                    raise PossessionRefused("device_identity", str(error)) from error
             item = next((InstanceRef(campaign, kind, f"{base}-{n}") for n in range(1, _MAX_ID_TRIES)
                          if f"{base}-{n}" not in taken), None)
             if item is None:
@@ -395,8 +401,9 @@ class PossessionLibrary:
         return ItemChange(self, "applied", item, None, after, None, ((envelope, None),), etags,
                           lambda: self._plan_create(creation, kind, at, pins))
 
-    def _source(self, source: SourceRef, kind: str, found: CampaignItems) -> dict[str, object]:
-        """The definition a sourced item is an instance of, checked; the envelope's lineage fields."""
+    def _source(self, source: SourceRef, kind: str, found: CampaignItems) -> tuple[dict[str, object], bool]:
+        """The definition a sourced item is an instance of, checked: the envelope's lineage fields, and
+        whether it is an ``individual`` (one particular artifact)."""
         stored = self.store.check_definition(source)
         if isinstance(stored, str):
             raise PossessionRefused("missing_definition", f"{source} does not resolve: {stored}")
@@ -414,7 +421,8 @@ class PossessionLibrary:
             if twins:
                 raise PossessionRefused("duplicate_individual", f"{source.unpinned()} is one particular thing, "
                                         f"already the unique item {', '.join(twins)}")
-        return {"derived_from": str(source), "base": str(stored.ref), "base_etag": stored.etag}
+        return ({"derived_from": str(source), "base": str(stored.ref), "base_etag": stored.etag},
+                definition.nature == "individual")
 
     # -- changing --------------------------------------------------------------------------------
 

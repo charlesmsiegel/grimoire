@@ -3,7 +3,10 @@
 Trusted application code; never handed to a worker. See docs/CHATS.md.
 """
 
-from .library import BrokenBinding, ChatChange, ChatCommit, ChatLibrary, ChatView, InvalidBinding, campaign_taken_ids
+from .library import (
+    BrokenBinding, ChatChange, ChatCommit, ChatLibrary, ChatView, DeviceIdentityUnusable, InvalidBinding,
+    campaign_taken_ids, device_tag,
+)
 
-__all__ = ["BrokenBinding", "ChatChange", "ChatCommit", "ChatLibrary", "ChatView", "InvalidBinding",
-           "campaign_taken_ids"]
+__all__ = ["BrokenBinding", "ChatChange", "ChatCommit", "ChatLibrary", "ChatView", "DeviceIdentityUnusable",
+           "InvalidBinding", "campaign_taken_ids", "device_tag"]
