@@ -18,7 +18,7 @@ actor is ``not_witnessed``: it saw none of the chat's earlier history. A new act
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 
 from grimoire.chats import (
@@ -36,6 +36,7 @@ from grimoire.holdingstore import holdings_holder_ids, holdings_peer_ids
 from grimoire.imagestore import placement_subject_ids
 from grimoire.ledgers import security_campaign_ids, security_instance_ids, sovereignty_actor_ids
 from grimoire.library import LibraryPathError
+from grimoire.security import payload_digest
 from grimoire.store import (
     CampaignRecords, LibraryStore, LibraryView, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
     TakenIdsUnlisted,
@@ -70,7 +71,8 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     return _taken_ids(store, campaign_id, security=True)
 
 
-def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool) -> frozenset[str]:
+def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool,
+               spent: Collection[tuple[str, str, str]] = ()) -> frozenset[str]:
     taken = {found.instance_id for found in store.campaign_instances(campaign_id)}
     taken |= _named_ids(store.campaign_relations(campaign_id), campaign_id, "relation")
     taken |= relation_endpoint_ids(store, campaign_id)
@@ -82,15 +84,16 @@ def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool) -> froz
     taken |= placement_subject_ids(store, campaign_id)
     taken |= sovereignty_actor_ids(store, campaign_id)
     if security:  # skipped only by _fresh_campaign_taken_ids
-        taken |= security_instance_ids(store, campaign_id)
+        taken |= security_instance_ids(store, campaign_id, spent=spent)
     return frozenset(taken)
 
 
 def _fresh_campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     """``campaign_taken_ids`` for a campaign id just found outside ``security_campaign_ids`` under the
-    same store lock: no grant or approval names ``campaigns/<id>`` or anything under it, so none can
-    name one of its individuals and the security ledger (a whole-library audit that can be large) is
-    not read a second time. Only a new scope's allocation and its commit re-check may use this."""
+    same store lock: no grant or approval names ``campaigns/<id>`` or anything under it (at commit,
+    none but the approvals of that commit's own writes), so none can name another of its individuals
+    and the security ledger (a whole-library audit that can be large) is not read a second time. Only
+    a new scope's allocation and its commit re-check may use this."""
     return _taken_ids(store, campaign_id, security=False)
 
 
@@ -188,15 +191,18 @@ class ChatChange:
             if self._committed:
                 raise StoreError("this change was already committed")
             campaign = self.scope.campaign_id
+            # the approvals this commit supplies for its own writes name the new campaign and actors
+            # by design (preview, register approvals, commit), so they do not count against them
+            spent = self._spent(approvals) if approvals and (self.new_scope or self.new_actors) else ()
             if self.new_scope:  # nothing may have started this campaign (or its ledger) since the plan
                 if store.campaign_presence(campaign) != "absent":
                     raise StaleWrite([(f"campaigns/{campaign}", "exists")])
                 if store.campaign_authority_presence(campaign) != "absent":
                     raise StaleWrite([(f"authority/campaigns/{campaign}", "exists")])
-                if campaign in security_campaign_ids(store):
+                if campaign in security_campaign_ids(store, spent=spent):
                     raise StaleWrite([("authority/security", f"a grant or approval names campaigns/{campaign}")])
             if self.new_actors:  # a new scope's id was just proven ungranted above, under this lock
-                taken = (_fresh_campaign_taken_ids if self.new_scope else campaign_taken_ids)(store, campaign)
+                taken = _taken_ids(store, campaign, security=not self.new_scope, spent=spent)
                 clash = [actor for actor in self.new_actors if actor.instance_id in taken]
                 if clash:
                     raise StaleWrite([("/".join(address_parts(actor)), "id taken") for actor in clash])
@@ -220,6 +226,13 @@ class ChatChange:
             result = self._transaction().commit(self.library.handle, approvals)
             self._committed = True
         return ChatCommit(result.etags, self.chat, self.scope, self.new_actors)
+
+    def _spent(self, approvals: Mapping[str, str]) -> frozenset[tuple[str, str, str]]:
+        """``(approval id, address, digest)`` of each supplied approval, for the bytes this change writes."""
+        preview = self.preview()
+        return frozenset((approval, address, payload_digest(preview[address]))
+                         for address, approval in approvals.items()
+                         if type(address) is str and type(approval) is str and address in preview)
 
 
 class _LazyTaken:

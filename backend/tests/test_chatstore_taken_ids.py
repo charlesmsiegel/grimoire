@@ -23,7 +23,7 @@ from grimoire.holdingstore import HoldingsUnlisted
 from grimoire.images import Hidden, Placement
 from grimoire.imagestore import ImageLibrary, placement_subject_ids
 from grimoire.ledgers import DurableAuthority
-from grimoire.security import Grant, Permission, ResourcePath
+from grimoire.security import Approval, Grant, Permission, ResourcePath, payload_digest
 from grimoire.store import LibraryStore, StaleWrite, TakenIdsUnlisted
 
 from chat_fixtures import ANYA, LORE, MARA, chat_library, seed_sources
@@ -382,6 +382,73 @@ def test_an_unreadable_security_ledger_fails_both_allocations_closed(tmp_path, m
         with pytest.raises(TakenIdsUnlisted):
             chats.start_chat(Launch("character", MARA))  # a new scope
         assert _files(store) == before
+
+
+def _approved_commit(authority: DurableAuthority, change, *, digest_of=None):
+    """The documented gated flow: the human approves the previewed bytes, then the change commits."""
+    approvals = {}
+    for number, (address, data) in enumerate(sorted(change.preview().items())):
+        authority.register_approval(Approval(f"ok-{number}", GRANTEE, Permission.APPLY, ResourcePath.parse(address),
+                                             payload_digest(data if digest_of is None else digest_of), OWNER))
+        approvals[address] = f"ok-{number}"
+    return change.commit(approvals)
+
+
+def _gated(store: LibraryStore) -> DurableAuthority:
+    """A durable authority whose grantee needs an approval for every write, anywhere in ``campaigns``."""
+    authority = open_authority(store)
+    authority.add_grant(Grant("g1", GRANTEE, frozenset({Permission.APPLY}), ResourcePath.parse("campaigns"), OWNER))
+    return authority
+
+
+def test_a_new_scope_commits_with_its_own_approvals(tmp_path):
+    with LibraryStore.create(tmp_path / "lib") as store:
+        seed_sources(store)
+        authority = _gated(store)
+        change = chat_library(store, authority.handle_for(GRANTEE)).start_chat(Launch("character", MARA))
+        assert _approved_commit(authority, change).actors == (MARA_1,)
+        assert (store.root / "campaigns" / Q / "instances" / "character" / "mara-1.json").is_file()
+        authority.close()
+
+
+def test_a_new_actor_in_an_existing_scope_commits_with_its_own_approvals(tmp_path):
+    with LibraryStore.create(tmp_path / "lib") as store:
+        _first(store)
+        authority = _gated(store)
+        chats = chat_library(store, authority.handle_for(GRANTEE))
+        chats._new_id.counts.update({"q": 1, "t": 1})
+        change = chats.start_chat(Launch("character", MARA), scope=ScopeRef(Q))
+        assert _approved_commit(authority, change).actors == (InstanceRef(Q, "character", "mara-2"),)
+        authority.close()
+
+
+def test_an_approval_of_other_bytes_still_reserves_its_campaign(tmp_path):
+    """Only an approval of exactly what this commit writes is its own: any other one still names the id."""
+    with LibraryStore.create(tmp_path / "lib") as store:
+        seed_sources(store)
+        authority = _gated(store)
+        change = chat_library(store, authority.handle_for(GRANTEE)).start_chat(Launch("character", MARA))
+        with pytest.raises(StaleWrite) as caught:
+            _approved_commit(authority, change, digest_of=b"other bytes")
+        assert caught.value.stale == (("authority/security", f"a grant or approval names campaigns/{Q}"),)
+        assert not (store.root / "campaigns" / Q).exists()
+        authority.close()
+
+
+def test_an_approval_left_on_a_hand_deleted_individual_keeps_its_id_from_a_gated_actor(tmp_path):
+    """The control for the gated tests above: only an approval of this commit's own bytes is spent."""
+    with LibraryStore.create(tmp_path / "lib") as store:
+        chat = _first(store)
+        authority = _gated(store)
+        old = f"campaigns/{Q}/instances/character/mara-1.json"
+        authority.register_approval(Approval("stale", GRANTEE, Permission.APPLY, ResourcePath.parse(old),
+                                             payload_digest(b"{}"), OWNER))
+        _hand_delete_chat_and_actor(store, chat)
+        chats = chat_library(store, authority.handle_for(GRANTEE))
+        chats._new_id.counts.update({"q": 1, "t": 1})
+        change = chats.start_chat(Launch("character", MARA), scope=ScopeRef(Q))
+        assert change.new_actors == (InstanceRef(Q, "character", "mara-2"),)
+        authority.close()
 
 
 def test_a_new_scope_reads_the_security_ledger_once_to_plan_and_once_to_commit(tmp_path, monkeypatch):

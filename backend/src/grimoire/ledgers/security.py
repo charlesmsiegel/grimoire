@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from datetime import datetime, timezone
 
 from grimoire.security import (
@@ -327,19 +327,21 @@ def _replay(kernel: Authorizer, owners: frozenset[str], entries) -> None:
 
 # -- ids the security ledger keeps taken ------------------------------------------------------------
 
-def security_campaign_ids(store: LibraryStore) -> frozenset[str]:
+def security_campaign_ids(store: LibraryStore, *, spent: Collection[tuple[str, str, str]] = ()) -> frozenset[str]:
     """Every campaign id a grant or approval in the security ledger names: ``campaigns/<id>`` or anything
-    under it.
+    under it, except the approvals in ``spent`` (see ``_granted_addresses``).
 
     A grant outlives a hand-deleted ``campaigns/<id>`` folder and covers whatever is later written
     there, so a new campaign given that id would hand the grant's worker the new campaign. A campaign
     id allocator must therefore find its id outside this set, as it must find no sovereignty ledger
     (``campaign_authority_presence``). Scanned raw and failing closed, as ``security_instance_ids``.
     """
-    return frozenset(parts[1] for parts in _granted_addresses(store) if len(parts) >= 2 and parts[0] == CAMPAIGNS)
+    return frozenset(parts[1] for parts in _granted_addresses(store, spent)
+                     if len(parts) >= 2 and parts[0] == CAMPAIGNS)
 
 
-def security_instance_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+def security_instance_ids(store: LibraryStore, campaign_id: str, *,
+                          spent: Collection[tuple[str, str, str]] = ()) -> frozenset[str]:
     """Every instance id of this campaign that a grant or approval in the security ledger is scoped to.
 
     Part of the one reservation set (``grimoire.chatstore.campaign_taken_ids``): a grant on one
@@ -361,7 +363,7 @@ def security_instance_ids(store: LibraryStore, campaign_id: str) -> frozenset[st
     """
     folded = name_key(campaign_id)
     taken: set[str] = set()
-    for parts in _granted_addresses(store):
+    for parts in _granted_addresses(store, spent):
         if len(parts) >= 5 and parts[0] == CAMPAIGNS and parts[1] == folded and parts[2] in _INSTANCE_FAMILIES:
             name = parts[4]
             # an instance or holder file name carries the suffix; a placement folder is the bare id
@@ -369,7 +371,8 @@ def security_instance_ids(store: LibraryStore, campaign_id: str) -> frozenset[st
     return frozenset(taken)
 
 
-def _granted_addresses(store: LibraryStore) -> tuple[tuple[str, ...], ...]:
+def _granted_addresses(store: LibraryStore,
+                       spent: Collection[tuple[str, str, str]] = ()) -> tuple[tuple[str, ...], ...]:
     """The address of every grant's ``scope`` and every approval's ``resource`` in the security ledger,
     split into segments, each folded with ``name_key``.
 
@@ -380,6 +383,13 @@ def _granted_addresses(store: LibraryStore) -> tuple[tuple[str, ...], ...]:
     ledger holds no delegations), an approval the one with a ``payload_digest``. Replay accepts only
     canonical addresses, so folding changes nothing for a sound ledger; for a garbled one it errs
     toward taking the id an odd spelling folds to, as a look-alike campaign folder counts as taken.
+
+    ``spent`` holds ``(approval_id, resource, payload_digest)`` for the approvals the caller's own
+    commit supplies: an approval of the very bytes that commit writes, at the address it writes them
+    to. Such an approval reserves nothing, because it is how a new campaign or actor is written in the
+    first place (preview, register its approvals, commit), and all it can ever authorize is that
+    write, for the individual that commit creates. Only an exact match is spent: another approval of
+    the same address, or one of other bytes, still reserves.
     """
     documents, unread = store.ledger_documents(SECURITY)
     if unread:
@@ -392,10 +402,18 @@ def _granted_addresses(store: LibraryStore) -> tuple[tuple[str, ...], ...]:
         if isinstance(value, Mapping):
             if value.get("kind") == "decision":  # most of the ledger, and never collected: not walked
                 continue
-            address = value.get("resource") if "payload_digest" in value else value.get("scope")
+            approval = "payload_digest" in value
+            address = value.get("resource") if approval else value.get("scope")
+            if approval and spent and _spent(value, spent):
+                continue  # this commit's own approval: it names nothing else, and is not walked
             if isinstance(address, str):
                 found.append(tuple(name_key(part) for part in address.split("/")))
             stack.extend(value.values())
         elif isinstance(value, (list, tuple)):
             stack.extend(value)
     return tuple(found)
+
+
+def _spent(approval: Mapping[object, object], spent: Collection[tuple[str, str, str]]) -> bool:
+    key = (approval.get("approval_id"), approval.get("resource"), approval.get("payload_digest"))
+    return all(type(part) is str for part in key) and key in spent
