@@ -17,7 +17,7 @@ from grimoire.store import LibraryStore, NameCollision, StaleWrite, StoreError, 
 from grimoire.store.layout import definition_parts, manifest_parts
 from grimoire.store.replica import CanonicalScan, pinned_by
 
-from . import bookkeeping, session
+from . import bookkeeping, keeps as kept_record, session
 from .art import art_needs, art_unmet
 from .decide import archive_candidate
 from .documents import ArchiveView, PendingView, syncable
@@ -31,11 +31,11 @@ from .session import (
 
 
 def _archive(store: LibraryStore, peer: str, pair: tuple[str, str]) -> ArchiveView:
-    return cast(ArchiveView, bookkeeping.parse("archive", bookkeeping.pair_files(store, "archive", peer), peer, pair))
+    return cast(ArchiveView, bookkeeping.read_document(store, "archive", peer, pair))
 
 
 def _pending(store: LibraryStore, peer: str, pair: tuple[str, str]) -> PendingView:
-    return cast(PendingView, bookkeeping.parse("pending", bookkeeping.pair_files(store, "pending", peer), peer, pair))
+    return cast(PendingView, bookkeeping.read_document(store, "pending", peer, pair))
 
 
 def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expected: Mapping[str, str | None],
@@ -162,7 +162,7 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         marked[done] = {"from": None if ours is None else etag(ours), "to": tags[done],
                         "base": _archived(archive_candidate(done, *archived))}
     files, _ = bookkeeping.render_files("pending", other[receiver], pair, marked, session.ARCHIVE_LIMIT)
-    bookkeeping.stage(txn, bookkeeping.changes(files, pendings[receiver].files))
+    bookkeeping.stage(txn, bookkeeping.changes(stores[receiver], files, pendings[receiver].files))
     try:
         txn.check()
     except (StaleWrite, *PER_PATH_ERRORS) as error:
@@ -187,7 +187,12 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         for done in resolved:
             entries[done] = ("agreed", tags[done])
         files, _ = bookkeeping.render_files("archive", other[device], pair, entries, session.ARCHIVE_LIMIT)
-        states = bookkeeping.changes(files, archive.files)
+        states = bookkeeping.changes(store, files, archive.files)
+        # the conflicts this resolve ended take their kept-version entries with them (028): a dismissal
+        # never outlives its conflict, even before the next sync completes
+        record = kept_record.without(kept_record.read_keeps(store, other[device], pair), other[device], pair, resolved)
+        if record is not None:
+            states.append(record)
         if states:
             writes = store.transaction()
             bookkeeping.stage(writes, states)
@@ -200,7 +205,7 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         files, _ = bookkeeping.render_files("pending", other[device], pair, {
             key: value for key, value in pending.entries.items() if key not in resolved}, session.ARCHIVE_LIMIT)
         writes = store.transaction()
-        bookkeeping.stage(writes, bookkeeping.changes(files, pending.files))
+        bookkeeping.stage(writes, bookkeeping.changes(store, files, pending.files))
         _commit_state(writes, device)
     return receiver
 

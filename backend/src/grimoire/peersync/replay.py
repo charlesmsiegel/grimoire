@@ -19,8 +19,9 @@ from pathlib import Path
 from grimoire.store import LibraryStore, StaleWrite, StoreError, WriteConflict, WriteDenied, etag
 from grimoire.store.layout import conflict_parts
 from grimoire.sync import Step, device_of
-from grimoire.sync.bookkeeping import only_forgets
-from grimoire.sync.documents import dismissed_name, pair_state
+from grimoire.sync.bookkeeping import is_shard, listed_shards, root_name
+from grimoire.sync.documents import keeps_name, pair_state
+from grimoire.sync.keeps import kept_slots, peer_may_write
 
 from .errors import MirrorMismatch, PeerRefused
 from .wire import Channel
@@ -137,6 +138,10 @@ class StepBuffer:
         txn = store.transaction()
         targets: list[tuple[str, str, Callable[[], bytes | None]]] = []
         records = False
+        # the roots this step writes, by name: a shard is accepted only as its own root lists it
+        roots = {header.get("name"): body for header, body in ops
+                 if header.get("op") == "state" and header.get("name") in (
+                     root_name("archive", self.peer), root_name("pending", self.peer))}
         try:
             for header, body in ops:
                 op, path = header.get("op"), header.get("path")
@@ -157,12 +162,8 @@ class StepBuffer:
                     records = True
                 elif op == "state" and pair_state(header.get("name"), self.peer) and _etag_or_none(header.get("expected")):
                     name = header["name"]
-                    if name == dismissed_name(self.peer) and not only_forgets(
-                            store.read_sync_state(name), body, tuple(sorted((device_of(store), self.peer)))):
-                        # a sync only ever forgets dismissals; adding one is this device's own decision,
-                        # authorized here (``grimoire.sync.dismiss``), never the peer's
-                        raise PeerRefused("invalid", "a peer may only forget this device's dismissals")
-                    txn.put_sync_state(name, body, header.get("expected"))
+                    expected = self._state_expected(store, name, body, header.get("expected"), roots)
+                    txn.put_sync_state(name, body, expected)
                     targets.append((f".sync/{name}", name, lambda name=name: store.read_sync_state(name)))
                 else:  # only this pair's own .sync files, and records the peer's grants then decide
                     raise PeerRefused("invalid", f"a write this device does not accept: {op!r}")
@@ -182,6 +183,29 @@ class StepBuffer:
                 raise PeerRefused("verification", f"{key} is missing after the commit")
             found[key] = etag(data)
         return found
+
+
+    def _state_expected(self, store: LibraryStore, name: str, body: bytes, expected: str | None,
+                        roots: dict) -> str | None:  # type: ignore[type-arg]
+        """The etag a state write of the pair must replace, after checking the write is one a sync makes."""
+        if name == keeps_name(self.peer) and not peer_may_write(
+                store.read_sync_state(name), body, tuple(sorted((device_of(store), self.peer))),  # type: ignore[arg-type]
+                lambda path, tag: bool(kept_slots(store, path, tag))):
+            # a sync records only versions this device holds kept, and never dismisses one: dismissing
+            # is this device's own decision, authorized here (``grimoire.sync.dismiss``), never the peer's
+            raise PeerRefused("invalid", "a peer may not dismiss, or record a kept version this device lacks")
+        for kind in ("archive", "pending"):
+            if not is_shard(name, kind, self.peer):
+                continue
+            # a sync writes a shard only with the root that lists it, so a peer can never plant one
+            if listed_shards(kind, self.peer, roots.get(root_name(kind, self.peer))).get(name) != etag(body):
+                raise PeerRefused("invalid", f"{name} is not a shard its root lists in this step")
+            if name not in listed_shards(kind, self.peer, store.read_sync_state(root_name(kind, self.peer))):
+                # a shard this device's root does not list is stale and never read or sent, so the
+                # client could not know its etag; its own root's compare-and-swap guards the document
+                current = store.read_sync_state(name)
+                return None if current is None else etag(current)
+        return expected
 
 
 def _spooled(path: Path) -> Callable[[], bytes | None]:

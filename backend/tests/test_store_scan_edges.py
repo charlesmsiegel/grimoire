@@ -17,6 +17,7 @@ from grimoire.store import (
 from grimoire.store.envelope import record_document
 from grimoire.store.journal import Entry, Journal
 from grimoire.store.jsonfmt import render
+from grimoire.store.syncstate import sync_peers
 from grimoire.sync import identify, sync
 
 from store_helpers import HARBOR, OWNER, WREN_A, WREN_R1, harbor_manifest, instance, make_dir_link, owner_handle, seed, wren
@@ -144,7 +145,7 @@ def test_sync_peers_under_a_lookalike_folder_is_a_collision_not_empty(lib):
     (lib.root / ".sync" / "Peers" / "phone").mkdir(parents=True)
     (lib.root / ".sync" / "Peers" / "phone" / "archive.json").write_bytes(b"{}")
     with pytest.raises(NameCollision):
-        lib.sync_peers()
+        sync_peers(lib)
 
 
 def test_a_replace_whose_hold_vanished_live_never_publishes(tmp_path, monkeypatch):

@@ -52,7 +52,7 @@ from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, reemitted_imprecise, render
 from .layout import (
     ACCEPTED, CAMPAIGN_LEDGERS, CAMPAIGNS, CHATS, CONFLICTS, DISCARD_MARKER, IMAGES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
-    PLACEMENTS, REPAIR_MARKER, SECRETS, SYNC, SYNC_PEERS, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify,
+    PLACEMENTS, REPAIR_MARKER, SECRETS, SYNC, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify,
     conflict_parts,
     definition_parts, image_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
     SUFFIX, ledger_parts, ledger_seq, logical, manifest_parts, name_key, secret_parts, sync_state_parts,
@@ -1021,51 +1021,6 @@ class LibraryStore:
                     raise NotADirectoryError(errno.ENOTDIR, f"{'/'.join(parts[:depth])} is not a folder")
             return self._access.read(parts)
 
-    def sync_peers(self) -> tuple[str, ...]:
-        """The names under ``.sync/peers/`` (sync, 019), sorted; empty when there is none.
-
-        Only names are returned; ``read_sync_state`` decides whether each holds valid state.
-        """
-        with self.lock:
-            self._require_consistent()
-            presence = self._access.presence((SYNC, SYNC_PEERS))
-            if presence == "mismatch":  # on a case-insensitive filesystem it *is* the folder
-                raise NameCollision(f"{SYNC}/{SYNC_PEERS} exists only under another spelling")
-            if presence != "present":
-                return ()
-            return tuple(sorted(self._access.list_dir((SYNC, SYNC_PEERS))))
-
-    def sync_state_names(self, peer: str) -> tuple[str, ...]:
-        """The ``.sync`` state names this library holds for one pair: every entry of ``.sync/peers/<peer>/``
-        that ``read_sync_state`` accepts (028's archive and marker shards included), sorted; empty when the
-        folder does not exist. Other entries are not state and are left out.
-
-        ``ValueError`` if ``peer`` is not a device name. A look-alike spelling of the folder or of one
-        above it is ``NameCollision``, and a file where the folder belongs is ``NotADirectoryError``
-        (unreadable is never absent), as for ``read_sync_state``.
-        """
-        folder = sync_state_parts(f"{SYNC_PEERS}/{peer}/archive.json")[:-1]  # validates the device name
-        with self.lock:
-            self._require_consistent()
-            for depth in range(1, len(folder) + 1):
-                presence = self._access.presence(folder[:depth])
-                if presence == "mismatch":
-                    raise NameCollision(f"{'/'.join(folder[:depth])} exists only under another spelling")
-                if presence == "absent":
-                    return ()
-            info = lstat_or_none(self._access.path(folder))
-            if info is not None and not stat.S_ISDIR(info.st_mode) and not is_link(self._access.path(folder)):
-                raise NotADirectoryError(errno.ENOTDIR, f"{'/'.join(folder)} is not a folder")
-            names = []
-            for entry in self._access.list_dir(folder):
-                name = f"{SYNC_PEERS}/{peer}/{entry}"
-                try:
-                    sync_state_parts(name)
-                except ValueError:
-                    continue
-                names.append(name)
-            return tuple(sorted(names))
-
     def read_exact(self, path: str) -> bytes | None:
         """The exact bytes of a canonical record or kept-version file, or ``None`` when it is absent;
         never through a link. A look-alike spelling of it or of a folder above it is ``NameCollision``."""
@@ -1412,12 +1367,8 @@ class Transaction:
 
     def put_sync_state(self, name: str, data: bytes, expected: str | None, *,
                        authorize: ResourcePath | None = None) -> str:
-        """Stage a device-local ``.sync`` file: trusted bookkeeping, not authorized.
-
-        With ``authorize`` the write records a user's decision rather than bookkeeping (028's dismissal
-        of a kept version): it is authorized once, as ``APPLY`` on that address like any record, keyed
-        by the address for approvals and ``preview``, and the commit needs an issued handle. It is
-        still journaled as ``state``: an aborted commit drops it."""
+        """Stage a device-local ``.sync`` file: trusted bookkeeping, not authorized. With ``authorize`` (028's
+        dismissal, a user's decision) it is authorized as ``APPLY`` on that address and keyed by it."""
         if expected is not None and not is_etag(expected):
             raise InvalidEnvelope("expected must be None or an etag")
         if authorize is not None and not isinstance(authorize, ResourcePath):
@@ -1518,8 +1469,7 @@ class Transaction:
                                  "see stale listings")
             puts = tuple(self._puts.values())
             self._check_replaces(puts)
-            # sync state alone is trusted bookkeeping; an authorized state put (a dismissal) is not
-            if any(put.kind != "state" or put.address is not None for put in puts):
+            if any(put.kind != "state" or put.address is not None for put in puts):  # bookkeeping is trusted
                 self._require_writable_records(handle)
             self._committed = True
             try:

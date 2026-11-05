@@ -29,7 +29,8 @@ from grimoire.store.jsonfmt import MAX_FILE_BYTES
 from grimoire.store.layout import name_key
 from grimoire.store.media import MAX_BLOB_BYTES
 from grimoire.store.replica import CanonicalScan
-from grimoire.sync.documents import DEVICE_FILE, archive_name, dismissed_name, pair_state, parse_device, pending_name
+from grimoire.sync.bookkeeping import orphan_shards, pair_files
+from grimoire.sync.documents import DEVICE_FILE, keeps_name, pair_state, parse_device
 
 from .errors import MirrorMismatch, TransportError
 from .pairing import peer_principal
@@ -255,14 +256,20 @@ def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -
     channel.send({"t": "grants", "grants": [
         {"scope": str(grant.scope), "permissions": sorted(permission.value for permission in grant.permissions)}
         for grant in authority.active_grants() if grant.principal == principal]})
-    # the pair's own files: archive, marker, every shard of either (stale ones too: the mirror must hold
-    # what a later commit's compare-and-swap expects) and this device's dismissals (028)
-    names = dict.fromkeys((DEVICE_FILE, archive_name(peer), pending_name(peer), dismissed_name(peer),
-                           *store.sync_state_names(peer)))
-    for name in names:
-        data = store.read_sync_state(name)  # a read error stops the snapshot: unreadable is never absent
+    # the pair's own files as 019 reads them (028): its archive and marker, each a root and the shards it
+    # lists and never another shard (a stale or planted file is not read here, nor sent), and its
+    # kept-version record. A read error stops the snapshot: unreadable is never absent.
+    states: dict[str, bytes] = {}
+    for name in (DEVICE_FILE, keeps_name(peer)):
+        data = store.read_sync_state(name)
         if data is not None:
-            channel.send({"t": "state", "name": name}, data)
+            states[name] = data
+    for kind in ("archive", "pending"):
+        # a root lost while its shards stand: their names alone (empty, never read) keep the mirror's
+        # document ignored, as this device's own is
+        states.update(pair_files(store, kind, peer) or dict.fromkeys(orphan_shards(store, kind, peer), b""))
+    for name, data in states.items():
+        channel.send({"t": "state", "name": name}, data)
     summary = scan_summary(store)  # before the walk: a file changed after it fails the client's check
     count = 0
     for kind, path, data in walk(store.root, frozenset(summary["blocked"])):  # type: ignore[arg-type]

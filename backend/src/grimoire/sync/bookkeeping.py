@@ -19,9 +19,11 @@ its old shards or the new root with its new ones. The root's etag list binds the
 is missing, damaged, edited or left over from another commit makes the **whole document ignored**,
 exactly as a damaged single-file archive is (every path it names becomes uncertain, never trusted
 and never forgotten). Shards of another width left by an earlier commit are not listed, so they
-are never trusted; they stay on disk until a later width overwrites them, and are read only to
-take their etags for that compare-and-swap (and, best effort, the paths they name when the
-document is ignored).
+are never trusted and **never read**: only the shards a root lists are read, so a stale or planted
+file costs nothing on later syncs and never travels (028's snapshot sends what ``pair_files``
+reads). A later write of such a name takes its etag for the compare-and-swap then, lazily
+(``changes``). Where the root itself is missing, the folder is only listed: shard names without
+their root make the document ignored, never a first sync.
 """
 
 from __future__ import annotations
@@ -33,11 +35,11 @@ from types import MappingProxyType
 from grimoire.store import LibraryStore, LinkRefused, NameCollision, UnstorableIdentifier, etag
 from grimoire.store.jsonfmt import JsonError, is_etag, parse_strict, render
 from grimoire.store.layout import SYNC_MAX_SHARD_WIDTH
+from grimoire.store.syncstate import sync_state_names
 
 from .documents import (
-    ArchiveView, DismissedView, PendingView, archive_body, archive_entries, dismissed_name, named_paths,
-    parse_archive, parse_dismissed, parse_pending, pending_body, pending_entries, render_archive,
-    render_dismissed, render_pending,
+    RETIRED_FORMAT, ArchiveView, PendingView, archive_body, archive_entries, named_paths, parse_archive,
+    parse_pending, pending_body, pending_entries, render_archive, render_pending,
 )
 from .errors import ArchiveTooLarge, SyncInterrupted
 
@@ -63,7 +65,7 @@ def read_state(store: LibraryStore, name: str) -> bytes | None:
 def state_names(store: LibraryStore, peer: str) -> tuple[str, ...]:
     """Every ``.sync`` file this library holds for the pair with ``peer``; unlistable stops the sync."""
     try:
-        return store.sync_state_names(peer)
+        return sync_state_names(store, peer)
     except (OSError, UnstorableIdentifier, LinkRefused, NameCollision) as error:
         raise SyncInterrupted(f"cannot list .sync/peers/{peer} on {store.root}: {error}") from error
 
@@ -108,19 +110,50 @@ def width_for(paths: Iterable[str], limit: int) -> int | None:
     return None
 
 
+def listed_shards(kind: str, peer: str, root: bytes | None) -> dict[str, str | None]:
+    """The shard names a root lists, each with the etag it must have: a ``/2`` root's shards, or the
+    shards a retired root was retired with (no etag: they are only read for what they name)."""
+    try:
+        document = parse_strict(root) if root is not None else None
+    except JsonError:
+        return {}
+    if not isinstance(document, Mapping):
+        return {}
+    if document.get("format") == FORMATS[kind] and isinstance(document.get("shards"), Mapping):
+        return {shard_name(kind, peer, prefix): tag for prefix, tag in document["shards"].items()  # type: ignore[union-attr]
+                if isinstance(prefix, str) and is_shard(shard_name(kind, peer, prefix), kind, peer) and is_etag(tag)}
+    if document.get("format") == RETIRED_FORMAT and isinstance(document.get("shards"), tuple):
+        return {name: None for name in document["shards"] if isinstance(name, str) and is_shard(name, kind, peer)}  # type: ignore[union-attr]
+    return {}
+
+
 def pair_files(store: LibraryStore, kind: str, peer: str) -> dict[str, bytes]:
-    """The root (always read: a look-alike spelling or an unreadable file stops the sync) and every
-    shard of ``kind`` present for the pair, by name."""
-    files: dict[str, bytes] = {}
+    """The root (always read: a look-alike spelling or an unreadable file stops the sync) and the
+    shards it lists, by name. No other file of the pair is read."""
     root = read_state(store, root_name(kind, peer))
-    if root is not None:
-        files[root_name(kind, peer)] = root
-    for name in state_names(store, peer):
-        if is_shard(name, kind, peer):
-            data = read_state(store, name)
-            if data is not None:
-                files[name] = data
+    if root is None:
+        return {}
+    files = {root_name(kind, peer): root}
+    for name in listed_shards(kind, peer, root):
+        data = read_state(store, name)
+        if data is not None:
+            files[name] = data
     return files
+
+
+def orphan_shards(store: LibraryStore, kind: str, peer: str) -> tuple[str, ...]:
+    """Shard names of ``kind`` standing in the pair's folder (listed, never read): asked only when the
+    root is missing, where any of them means the document was sharded and lost its root."""
+    return tuple(name for name in state_names(store, peer) if is_shard(name, kind, peer))
+
+
+def read_document(store: LibraryStore, kind: str, peer: str, devices: tuple[str, str]) -> ArchiveView | PendingView:
+    """The pair's archive or marker on this device, as ``parse`` reads ``pair_files``."""
+    files = pair_files(store, kind, peer)
+    if not files and orphan_shards(store, kind, peer):
+        cls = ArchiveView if kind == "archive" else PendingView
+        return cls("ignored", MappingProxyType({}), "its root document is missing")  # type: ignore[arg-type]
+    return parse(kind, files, peer, devices)
 
 
 def _digest(document: Mapping[str, object]) -> str:
@@ -224,44 +257,25 @@ def render_files(kind: str, peer: str, devices: tuple[str, str], entries: Mappin
     return files, width
 
 
-def changes(new: Mapping[str, bytes], old: Mapping[str, bytes], *,
+def changes(store: LibraryStore, new: Mapping[str, bytes], old: Mapping[str, bytes], *,
             every: bool = False) -> list[tuple[str, bytes, str | None]]:
-    """``(name, bytes, expected etag)`` for each file of ``new`` that differs from what is on disk
-    (``every``: each file of ``new``, so a later denial can still replace any of them)."""
-    return [(name, data, None if old.get(name) is None else etag(old[name]))
-            for name, data in sorted(new.items()) if every or old.get(name) != data]
+    """``(name, bytes, expected etag)`` for each file of ``new`` that differs from ``old`` (what was
+    read: ``pair_files``), or ``every`` file of ``new``, so a later denial can still replace any.
+
+    A name ``old`` lacks may still stand on disk, unlisted (a stale or planted shard): it is read
+    only now, as one of this write's targets, for the etag its compare-and-swap needs."""
+    found = []
+    for name, data in sorted(new.items()):
+        if name in old:
+            if every or old[name] != data:
+                found.append((name, data, etag(old[name])))
+            continue
+        current = read_state(store, name)
+        if every or current != data:
+            found.append((name, data, None if current is None else etag(current)))
+    return found
 
 
 def stage(txn, states: list[tuple[str, bytes, str | None]]) -> dict[str, str]:  # type: ignore[no-untyped-def]
     """Stage ``states``; returns each staged key's ``.sync`` name."""
     return {txn.put_sync_state(name, data, expected): name for name, data, expected in states}
-
-
-# -- dismissals (028, see ``dismiss``) ------------------------------------------------------------
-
-def read_dismissed(store: LibraryStore, peer: str, devices: tuple[str, str]) -> DismissedView:
-    return parse_dismissed(read_state(store, dismissed_name(peer)), devices)
-
-
-def forget_dismissals(view: DismissedView, peer: str, devices: tuple[str, str],
-                      open_paths: Iterable[str]) -> tuple[str, bytes, str | None] | None:
-    """The rewrite that drops every dismissal whose path is no longer in conflict with this peer, or
-    ``None``. A dismissal ends with its conflict: if the same bytes come back in a later conflict,
-    they are another conflict's version and are kept again. An ignored record is left as it is
-    (reported on every sync; ``dismiss`` replaces it), since its contents were never honoured."""
-    if view.state != "valid":
-        return None
-    still = set(open_paths)
-    kept = {path: tags for path, tags in view.entries.items() if path in still}
-    if kept == dict(view.entries):
-        return None
-    return dismissed_name(peer), render_dismissed(devices, kept), None if view.data is None else etag(view.data)
-
-
-def only_forgets(old: bytes | None, new: bytes, devices: tuple[str, str]) -> bool:
-    """Whether ``new`` is a valid dismissal record of the pair that dismisses nothing ``old`` did not:
-    the only rewrite a sync makes of it (``forget_dismissals``), and so the only one a peer may replay."""
-    after, before = parse_dismissed(new, devices), parse_dismissed(old, devices)
-    if after.state != "valid" or before.state != "valid":
-        return False
-    return all(tags <= before.entries.get(path, frozenset()) for path, tags in after.entries.items())

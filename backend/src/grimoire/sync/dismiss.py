@@ -2,26 +2,27 @@
 
 Keep-both delivers the peer's version of a conflict under ``.conflicts/``, and 019 delivers it
 again whenever its slot is empty, so deleting a kept file by hand never sticks. ``dismiss`` records
-the decision instead. Like every 019 decision it is made from bytes, never from timestamps:
+the decision instead, in the pair's kept-version record (``keeps``). Like every 019 decision it is
+made from bytes, never from timestamps:
 
-- it is keyed by the **path and the etag of the dismissed bytes**, in this device's own
-  ``.sync/peers/<peer>/dismissed.json`` for the pair (``grimoire.sync.dismissed/1``, with the
-  pair's devices and a ``check`` digest; an invalid one is ignored and reported, and then every
-  kept version is delivered as before: the safe direction);
-- a sync never keeps a dismissed version for that device again, and reports it in
-  ``Conflict.dismissed``; a **different** version from the peer (other bytes) is kept as usual;
+- only a version a **completed sync delivered here from the peer** for a conflict still open can be
+  dismissed: the record lists those etags, so this device's own version, and any version
+  ``resolve`` held (perhaps its only copy anywhere), is refused;
+- a sync never keeps a dismissed version for that device again while the conflict stands on the
+  same archive base, and reports it in ``Conflict.dismissed``; a **different** version from the
+  peer (other bytes) is kept as usual;
 - it never touches the other device: the peer's file stays its canonical record, the conflict is
   still reported until a human ends it, and only this device's keep is withheld;
-- a dismissal lasts as long as its conflict: once a completed sync finds the path no longer in
-  conflict, it is dropped in that sync's last (pending) step, so the record stays small and the
-  same bytes in a later conflict are kept again.
+- a dismissal ends with its conflict: once a completed sync finds the path no longer in conflict,
+  or its base moved, or ``resolve`` ends it, the entry is dropped, so the same bytes in a later
+  conflict are kept again.
 
 The record is written in one 010 transaction, authorized like a keep: ``APPLY`` on the kept
 version's own address (``kept/<hash16>/<digest12>/<name>``), so a handle that may not write a
 kept version may not dismiss one either, and an approval policy applies as it does to any write.
 It is journaled as ``.sync`` state, so a crash leaves it either written or not. The kept files
-themselves are not deleted (010 commits never delete); ``Dismissal.slots`` lists the ones still
-holding those bytes, which the app or the person may now delete and which no sync rewrites.
+themselves are not deleted (010 commits never delete); ``Dismissal.slots`` lists the ones holding
+those bytes: the peer's version as delivered, so deleting them loses nothing the peer did not hold.
 """
 
 from __future__ import annotations
@@ -30,20 +31,20 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from grimoire.store import LibraryStore, NameCollision, StaleWrite, StoreError, WriteConflict, WriteDenied, etag
-from grimoire.store.engine import MAX_CONFLICT_ATTEMPTS
 from grimoire.store.jsonfmt import MAX_FILE_BYTES, is_etag
-from grimoire.store.layout import conflict_parts, kept_address
+from grimoire.store.layout import kept_address
 
-from .bookkeeping import read_state
-from .documents import check_device_id, dismissed_name, parse_dismissed, render_dismissed, syncable
+from .documents import KeptEntry, check_device_id, keeps_name, render_keeps, syncable
 from .errors import DismissRefused, SyncInterrupted
-from .session import device_of
+from .keeps import kept_slots, read_keeps
+from .identity import device_of
 
 
 @dataclass(frozen=True)
 class Dismissal:
     """What ``dismiss`` recorded: ``wrote`` is false when it was already dismissed. ``slots`` are the
-    kept-version files on this device that still hold the dismissed bytes (safe to delete now)."""
+    kept-version files on this device that hold the dismissed bytes: the peer's version as a sync
+    delivered it, so the app may delete them, and no sync writes them again."""
 
     peer: str
     path: str
@@ -58,9 +59,10 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
 
     Refused (``DismissRefused``, nothing written): a ``peer`` that is not another device, a path
     that is not a synchronized record that can have kept versions (a blob never has one), an etag
-    that is not one, this device's own current version of ``path``, a record that would exceed
-    010's file cap, or a write the handle may not make. A dismissal record that is unreadable stops
-    it (``SyncInterrupted``); one that is invalid is replaced, since none of it was honoured.
+    that is not one, this device's own current version of ``path``, any version a completed sync did
+    not keep here from ``peer`` for a conflict still open (a version ``resolve`` held included), a
+    record that would exceed 010's file cap, or a write the handle may not make. A record that is
+    unreadable stops it (``SyncInterrupted``).
     """
     device = device_of(store)
     try:
@@ -82,21 +84,23 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
     if mine is not None and etag(mine) == kept:
         raise DismissRefused(f"{kept} is this device's own version of {path}, not a kept one")
     devices: tuple[str, str] = tuple(sorted((device, peer)))  # type: ignore[assignment]
-    old = read_state(store, dismissed_name(peer))
-    view = parse_dismissed(old, devices)
-    slots = _slots(store, parts, kept)
-    entries = dict(view.entries) if view.state == "valid" else {}
-    if kept in entries.get(path, frozenset()):
+    view = read_keeps(store, peer, devices)
+    entry = view.entries.get(path) if view.state == "valid" else None
+    if entry is None or kept not in entry.delivered:
+        raise DismissRefused(f"{kept} is not a version of {path} that a completed sync kept here from {peer} "
+                             "for a conflict still open")
+    slots = kept_slots(store, path, kept)
+    if kept in entry.dismissed:
         return Dismissal(peer, path, kept, slots, False)
-    entries[path] = entries.get(path, frozenset()) | {kept}
+    entries = {**view.entries, path: KeptEntry(entry.base, entry.delivered, entry.dismissed | {kept})}
     try:
-        data = render_dismissed(devices, entries)
+        data = render_keeps(devices, entries)
     except StoreError as error:  # larger than any reader accepts
-        raise DismissRefused(f"the dismissal record would be too large: {error}") from error
+        raise DismissRefused(f"the kept-version record would be too large: {error}") from error
     if len(data) > MAX_FILE_BYTES:
-        raise DismissRefused("the dismissal record would exceed the file size limit")
+        raise DismissRefused("the kept-version record would exceed the file size limit")
     txn = store.transaction()
-    txn.put_sync_state(dismissed_name(peer), data, None if old is None else etag(old),
+    txn.put_sync_state(keeps_name(peer), data, None if view.data is None else etag(view.data),
                        authorize=kept_address(parts, kept))
     try:
         txn.commit(handle, dict(approvals or {}))
@@ -106,16 +110,3 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
         raise SyncInterrupted(f"the dismissal record changed while it was written; try again: {error}") from error
     return Dismissal(peer, path, kept, slots, True)
 
-
-def _slots(store: LibraryStore, parts: tuple[str, ...], kept: str) -> tuple[str, ...]:
-    """The kept-version files of ``parts`` on this device that hold exactly the dismissed bytes."""
-    found = []
-    for attempt in range(MAX_CONFLICT_ATTEMPTS):
-        slot = "/".join(conflict_parts(parts, kept, attempt))
-        try:
-            data = store.read_exact(slot)
-        except (NameCollision, StoreError, OSError):  # unreadable or a look-alike: not listed, never deleted here
-            continue
-        if data is not None and etag(data) == kept:
-            found.append(slot)
-    return tuple(found)

@@ -1,6 +1,7 @@
 """028 over the transport: a sharded archive and marker, and dismissed kept versions, travel between
-paired devices exactly as they behave in a local sync. Every library is synthetic (peersync_helpers'
-desktop and phone, serving on loopback)."""
+paired devices exactly as they behave in a local sync, and a paired peer can write neither a shard
+its root does not list nor a dismissal. Every library is synthetic (peersync_helpers' desktop and
+phone, serving on loopback)."""
 
 from __future__ import annotations
 
@@ -13,9 +14,10 @@ from grimoire.core.identity import InstanceRef
 from grimoire.peersync import PeerRefused, read_pairing, transfer
 from grimoire.peersync.wire import client_handshake
 from grimoire.store import RecordEnvelope, etag
+from grimoire.store.jsonfmt import render
 from grimoire.sync import bookkeeping, dismiss
 from grimoire.sync import session as sync_session
-from grimoire.sync.documents import render_dismissed
+from grimoire.sync.documents import KeptEntry, parse_keeps, render_keeps
 
 from peersync_helpers import DESKTOP, PHONE, Device, paired, serving
 
@@ -64,7 +66,7 @@ def test_a_sharded_archive_travels_and_the_next_transfer_has_nothing_to_do(tmp_p
     for device, peer in ((desktop, PHONE), (phone, DESKTOP)):
         root = json.loads((device.store.root / f".sync/peers/{peer}/archive.json").read_bytes())
         assert root["format"] == "grimoire.sync.archive/2"
-        archive = bookkeeping.parse("archive", bookkeeping.pair_files(device.store, "archive", peer), peer, PAIR)
+        archive = bookkeeping.read_document(device.store, "archive", peer, PAIR)
         assert archive.state == "valid" and len(archive.entries) == 120
 
 
@@ -85,30 +87,75 @@ def test_a_dismissal_on_the_serving_device_is_honoured_and_forgotten_with_its_co
     with serving(phone) as server:
         report = transfer(desktop.store, desktop.authority, PHONE, server.address)
     assert report.status == "synced" and report.conflicts == ()
-    record = json.loads((phone.store.root / f".sync/peers/{DESKTOP}/dismissed.json").read_bytes())
+    record = json.loads((phone.store.root / f".sync/peers/{DESKTOP}/keeps.json").read_bytes())
     assert record["entries"] == {}
 
 
-def test_a_peer_may_not_add_a_dismissal_for_the_device_it_writes_to(tmp_path):
-    """Only this device decides what it no longer wants delivered; a peer could otherwise hide its
-    own version of a conflict from it."""
+def _raw_step(desktop, server, *ops: tuple[str, bytes]) -> None:  # type: ignore[no-untyped-def]
+    """Send one step of ``.sync`` writes as a hostile but authenticated desktop would; it must be refused."""
+    pairing = read_pairing(desktop.store, PHONE)
+    channel = client_handshake(socket.create_connection(server.address, timeout=10), DESKTOP, PHONE, pairing.key)
+    for name, body in ops:
+        channel.send({"t": "op", "op": "state", "name": name, "expected": None}, body)
+    channel.send({"t": "commit", "step": "pending"})
+    with pytest.raises(PeerRefused) as refused:
+        channel.recv()
+    assert refused.value.code == "invalid"
+    channel.close()
+
+
+@pytest.mark.parametrize("claim", ["a dismissal", "a kept version it lacks"])
+def test_a_peer_may_not_dismiss_for_the_device_it_writes_to_nor_claim_a_keep(tmp_path, claim):
+    """Only this device decides what it no longer wants delivered (a peer could otherwise hide its own
+    version of a conflict from it), and only a version it holds kept can ever be dismissed here."""
     desktop, phone = _conflict(tmp_path)
     mine = (desktop.store.root / WREN_PATH).read_bytes()
-    name = f"peers/{DESKTOP}/dismissed.json"
-    body = render_dismissed(PAIR, {WREN_PATH: frozenset({etag(mine)})})
+    name = f"peers/{DESKTOP}/keeps.json"
+    before = (phone.store.root / ".sync" / name).read_bytes()
+    entry = parse_keeps(before, PAIR).entries[WREN_PATH]
+    claimed = {
+        "a dismissal": KeptEntry(entry.base, entry.delivered, frozenset({etag(mine)})),
+        "a kept version it lacks": KeptEntry(entry.base, entry.delivered | {etag(b"never kept here")}),
+    }[claim]
     with serving(phone) as server:
-        pairing = read_pairing(desktop.store, PHONE)
-        channel = client_handshake(socket.create_connection(server.address, timeout=10), DESKTOP, PHONE, pairing.key)
-        channel.send({"t": "op", "op": "state", "name": name, "expected": None}, body)
-        channel.send({"t": "commit", "step": "pending"})
-        with pytest.raises(PeerRefused) as refused:
-            channel.recv()
-        assert refused.value.code == "invalid"
-        channel.close()
-    assert not (phone.store.root / ".sync" / name).exists()
+        _raw_step(desktop, server, (name, render_keeps(PAIR, {WREN_PATH: claimed})))
+    assert (phone.store.root / ".sync" / name).read_bytes() == before
     # and the phone still receives the desktop's later version as before
     _put(desktop, WREN, {"hp": 10})
     with serving(phone) as server:
         report = transfer(desktop.store, desktop.authority, PHONE, server.address)
     assert report.passes[-1].conflict(WREN_PATH).dismissed == ()
     assert (desktop.store.root / WREN_PATH).read_bytes() in _kept(phone)
+
+
+def test_a_peer_may_not_plant_a_shard_no_root_of_its_step_lists(tmp_path):
+    desktop, phone, _ = paired(tmp_path)
+    junk = render({"x": "a" * 1024})
+    names = [f"peers/{DESKTOP}/archive.{prefix:02x}.json" for prefix in range(3)]
+    with serving(phone) as server:
+        _raw_step(desktop, server, *((name, junk) for name in names))
+    assert not any((phone.store.root / ".sync" / name).exists() for name in names)
+
+
+def test_a_shard_no_root_lists_is_never_read_nor_sent(tmp_path, monkeypatch):
+    """A stale shard (here one that cannot even be read: a folder in its place) blocks nothing: only
+    the shards a root lists are read, locally and for the snapshot, and a later write of its name
+    still replaces it."""
+    monkeypatch.setattr(sync_session, "ARCHIVE_LIMIT", LIMIT)
+    desktop, phone, _ = paired(tmp_path)
+    _put(desktop, WREN, {"hp": 1})
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+    (phone.store.root / f".sync/peers/{DESKTOP}/archive.ff.json").mkdir()  # unreadable, and unlisted
+    stale = phone.store.root / f".sync/peers/{DESKTOP}/archive.3.json"
+    stale.write_bytes(b"left over from an earlier width")  # unlisted while the archive is one file
+    txn = desktop.store.transaction()
+    for number in range(120):
+        txn.put(RecordEnvelope(InstanceRef("c9", "character", f"extra-{number:03d}"), {"n": number}), None)
+    txn.commit(desktop.handle)
+    with serving(phone) as server:
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert report.status == "synced" and len(report.copied) == 120
+    archive = bookkeeping.read_document(phone.store, "archive", DESKTOP, PAIR)
+    assert archive.state == "valid" and len(archive.entries) == 121
+    assert json.loads(stale.read_bytes())["shard"] == "3"  # overwritten as a listed shard of the new width

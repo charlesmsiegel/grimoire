@@ -13,7 +13,7 @@ import socket
 import threading
 
 from grimoire.store import LibraryStore, StoreError
-from grimoire.sync import device_of
+from grimoire.sync import SyncInterrupted, device_of
 from grimoire.sync.documents import check_device_id
 
 from .errors import AuthenticationFailed, PeerRefused, TransportError
@@ -133,7 +133,7 @@ class PeerServer:
             except PeerRefused as refusal:
                 buffer.reset()
                 channel.refuse(refusal.code, str(refusal))
-            except (OSError, ValueError, StoreError) as error:  # an unreadable .sync file, say
+            except (OSError, ValueError, StoreError, SyncInterrupted) as error:  # an unreadable .sync file, say
                 # Refused as a whole: the client reads one reply per request, so a refusal is
                 # sent only for a request that expects one (a snapshot or a commit). A snapshot
                 # half-sent when the error came is ended by the refusal, which the client's

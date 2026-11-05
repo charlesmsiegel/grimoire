@@ -31,14 +31,12 @@ from grimoire.store.replica import (
     SHADOWED, CanonicalScan, chats_named, instances_named, parse_exact, pinned_by, previous_of,
 )
 
-from . import bookkeeping
+from . import bookkeeping, keeps as kept_record
 from .art import art_needs, art_unmet
 from .decide import archive_candidate, decide, derive_base
-from .documents import (
-    DEVICE_FILE, ArchiveView, DismissedView, PendingView, syncable, archive_name, check_device_id, parse_device,
-    pending_name, render_device, render_retired, named_paths, is_retired,
-)
-from .errors import ArchiveTooLarge, IdentityExists, NoDeviceIdentity, SameDevice, SyncInterrupted, SyncNotQuiet
+from .documents import ArchiveView, KeepsView, PendingView, syncable
+from .errors import ArchiveTooLarge, SameDevice, SyncInterrupted, SyncNotQuiet
+from .identity import device_of, identify
 from .model import ASSET_KINDS, CAMPAIGN_LOCAL, HELD_BACK_KINDS, HOLDS_RELATIONS, Base, Side
 
 _SLOT = re.compile(r"~[0-9a-f]{12}(?:\.([1-9][0-9]*))?$")
@@ -52,55 +50,6 @@ PER_PATH_ERRORS = (InvalidSourceState, NameCollision, UnstorableIdentifier, Link
                    InvalidEnvelope, ImmutableRevision, RevisionReferenced, InstanceIdConflict, ImmutableImage)
 #: The largest file of a pair's archive or marker: past it, the document is split into shards (028).
 ARCHIVE_LIMIT = MAX_FILE_BYTES
-
-
-# -- identity ------------------------------------------------------------------------
-
-def device_of(store: LibraryStore) -> str:
-    try:
-        data = store.read_sync_state(DEVICE_FILE)
-    except (UnstorableIdentifier, LinkRefused) as error:  # not a file: no usable identity
-        raise NoDeviceIdentity(f"{store.root}/.sync/{DEVICE_FILE} is not a readable file: {error}") from error
-    except (OSError, NameCollision) as error:  # a look-alike spelling must never read as "no identity"
-        raise SyncInterrupted(f"cannot read .sync/{DEVICE_FILE} on {store.root}: {error}") from error
-    device = parse_device(data)
-    if device is None:
-        raise NoDeviceIdentity(f"{store.root} has no readable .sync/{DEVICE_FILE}; call identify first")
-    return device
-
-
-def identify(store: LibraryStore, device_id: str, *, replace: bool = False) -> str:
-    """Give a library its device ID (an explicit human or app action; IDs are never generated here).
-
-    A damaged identity is replaced. Changing a valid ID needs ``replace=True`` (the fix for a
-    library copied with its ``.sync``). In the same commit every peer archive and marker of the old
-    ID is *retired*: kept present, so the next sync of the new ID is conservative, but never valid
-    again, so renaming the devices back cannot revive a stale base. If both devices take new IDs,
-    their next sync is a true first sync.
-    """
-    check_device_id(device_id)
-    current = store.read_sync_state(DEVICE_FILE)  # a read error propagates as itself
-    existing = parse_device(current)
-    if existing == device_id:
-        return device_id
-    if existing is not None and not replace:
-        raise IdentityExists(f"{store.root} is already device {existing!r}")
-    txn = store.transaction()
-    txn.put_sync_state(DEVICE_FILE, render_device(device_id), None if current is None else etag(current))
-    if existing is not None:
-        for peer in store.sync_peers():
-            try:  # every archive and marker file of the pair, shards included (each keeps what it named)
-                names = sorted({archive_name(peer), pending_name(peer), *(
-                    name for name in store.sync_state_names(peer)
-                    if bookkeeping.is_shard(name, "archive", peer) or bookkeeping.is_shard(name, "pending", peer))})
-            except ValueError:  # not a device name: never read as state, nothing to retire
-                continue
-            for name in names:
-                data = store.read_sync_state(name)
-                if data is not None and not is_retired(data):
-                    txn.put_sync_state(name, render_retired(existing, named_paths(data)), etag(data))
-    txn.commit(None)
-    return device_id
 
 
 # -- plan ----------------------------------------------------------------------------
@@ -148,6 +97,7 @@ class Conflict:
     #: device -> whether it now holds the other device's version under ``.conflicts``
     kept: Mapping[str, bool] = field(default_factory=dict)
     #: devices that dismissed the other device's current version (``dismiss``): not kept for them again
+    #: while the conflict stands on the same archive base
     dismissed: tuple[str, ...] = ()
 
 
@@ -186,8 +136,8 @@ class SyncPlan:
     ungranted: dict[str, list[Copy]] = field(default_factory=dict)  # blob copies the receiver may not write
     #: per device, the sources its ``load()`` excludes, read once per plan and only if art is copied
     exclusions: dict[str, frozenset[str]] = field(default_factory=dict)
-    #: per device, the kept versions it dismissed for this pair (028's ``dismiss``)
-    dismissed: dict[str, DismissedView] = field(default_factory=dict)
+    #: per device, the peer's versions kept there for open conflicts, and those it dismissed (028)
+    kept_records: dict[str, KeepsView] = field(default_factory=dict)
 
     def other(self, device: str) -> str:
         return self.devices[1] if device == self.devices[0] else self.devices[0]
@@ -257,16 +207,14 @@ def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]
     a, b = pair
     scans = {device: stores[device].scan() for device in pair}
     other = {a: b, b: a}
-    archives = {device: bookkeeping.parse("archive", bookkeeping.pair_files(stores[device], "archive", other[device]),
-                                          other[device], pair) for device in pair}
-    pendings = {device: bookkeeping.parse("pending", bookkeeping.pair_files(stores[device], "pending", other[device]),
-                                          other[device], pair) for device in pair}
-    dismissed = {device: bookkeeping.read_dismissed(stores[device], other[device], pair) for device in pair}
+    archives = {device: bookkeeping.read_document(stores[device], "archive", other[device], pair) for device in pair}
+    pendings = {device: bookkeeping.read_document(stores[device], "pending", other[device], pair) for device in pair}
+    records = {device: kept_record.read_keeps(stores[device], other[device], pair) for device in pair}
     notices = [f"{device}: archive ignored ({view.reason})" for device, view in archives.items()
                if view.state == "ignored"]
     notices += [f"{device}: pending marker ignored ({view.reason})" for device, view in pendings.items()
                 if view.state == "ignored"]
-    notices += [f"{device}: dismissed kept versions ignored ({view.reason})" for device, view in dismissed.items()
+    notices += [f"{device}: dismissed kept versions ignored ({view.reason})" for device, view in records.items()
                 if view.state == "ignored"]
     paths: set[str] = set()
     for device in pair:
@@ -286,7 +234,7 @@ def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]
     plan = SyncPlan(pair, stores, scans, archives, pendings, ordered, sides, bases,
                     copies={a: [], b: []}, keeps={a: [], b: []}, ungranted={a: [], b: []}, notices=notices,
                     skipped=skipped, held={path for path in ordered if _held_relation(path, held)},
-                    dismissed=dismissed)
+                    kept_records=records)
     ungranted = _verify_blobs(plan, handles)
     for path in ordered:
         if path in plan.held:  # never decided, copied or archived; an uncertain base stays pending
@@ -772,7 +720,8 @@ def _plan_keeps(plan: SyncPlan, device: str) -> None:
         base = plan.bases[path]
         if base.kind == "agreed" and side.etag == base.etag and mine.state == "present":
             continue  # the other device holds the version this device already moved on from
-        if plan.dismissed[device].dismissed(path, side.etag):  # 028: seen and dismissed here; never kept again
+        token = kept_record.base_token(archive_candidate(path, *plan.archives.values()))
+        if plan.kept_records[device].dismissed(path, side.etag, token):  # 028: dismissed here in this conflict
             plan.conflicts[path] = replace(plan.conflicts[path], dismissed=(*plan.conflicts[path].dismissed, device))
             continue
         data = plan.scans[other].files[path]  # type: ignore[attr-defined]
@@ -982,10 +931,11 @@ def apply_sync(plan: SyncPlan, handles: Mapping[str, object],
         _commit_data(plan, device, handles[device], approvals.get(device, {}), applied)
     _verify(plan, applied)
     resolved = _resolved(plan, applied)
+    archived = {device: _new_archive(plan, device, resolved) for device in plan.devices}
     for device in reversed(plan.devices):
-        _commit_archive(plan, device, resolved, applied)
+        _commit_archive(plan, device, archived[device], applied)
     for device in reversed(plan.devices):
-        _commit_pending(plan, device, resolved, applied)
+        _commit_pending(plan, device, resolved, archived, applied)
     return _report(plan, applied)
 
 
@@ -1010,7 +960,7 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
         raise SyncInterrupted(f"the data commit on {device} stopped: {error}", _report(plan, applied)) from error
     marker_keys: dict[str, str] = {}  # every file of the marker, so a denial can still rewrite any of them
     if _marker_needed(plan, device, entries, files):
-        marker_keys = bookkeeping.stage(txn, bookkeeping.changes(files, old, every=True))
+        marker_keys = bookkeeping.stage(txn, bookkeeping.changes(store, files, old, every=True))
     dropped: set[str] = set()
 
     def on_denied(keys: frozenset[str]) -> dict[str, bytes | None]:
@@ -1189,11 +1139,9 @@ def _new_archive(plan: SyncPlan, device: str,
     return {path: entry for path, entry in entries.items() if entry[0] != "deleted" or syncable(path) != "blob"}
 
 
-def _commit_archive(plan: SyncPlan, device: str, resolved: Mapping[str, tuple[str, str] | None],
-                    applied: _Applied) -> None:
-    entries = _new_archive(plan, device, resolved)
+def _commit_archive(plan: SyncPlan, device: str, entries: Mapping[str, tuple[str, str]], applied: _Applied) -> None:
     files, _ = bookkeeping.render_files("archive", plan.other(device), plan.devices, entries, ARCHIVE_LIMIT)
-    states = bookkeeping.changes(files, plan.archives[device].files)
+    states = bookkeeping.changes(plan.stores[device], files, plan.archives[device].files)
     if not states:
         return
     txn = plan.stores[device].transaction()
@@ -1207,9 +1155,10 @@ def _commit_archive(plan: SyncPlan, device: str, resolved: Mapping[str, tuple[st
     applied.observe(Step("archive", device, states=tuple(states)))
 
 
-def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object], applied: _Applied) -> None:
-    """The marker without what this sync resolved, and (028) this device's dismissals without the paths
-    no longer in conflict, in one commit: the last step of a completed sync."""
+def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object],
+                    archived: Mapping[str, Mapping[str, tuple[str, str]]], applied: _Applied) -> None:
+    """The marker without what this sync resolved, and (028) the kept-version record of the conflicts
+    still open, in one commit: the last step of a completed sync."""
     current = dict(plan.pendings[device].files)
     if device in applied.pending_written:
         entries, written = applied.pending_written[device]
@@ -1221,10 +1170,16 @@ def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object],
     states = []
     if bookkeeping.root_name("pending", peer) in current or desired:
         files, _ = bookkeeping.render_files("pending", peer, plan.devices, desired, ARCHIVE_LIMIT)
-        states = bookkeeping.changes(files, current)
-    forgotten = bookkeeping.forget_dismissals(plan.dismissed[device], peer, plan.devices, plan.conflicts)
-    if forgotten is not None:
-        states.append(forgotten)
+        states = bookkeeping.changes(plan.stores[device], files, current)
+    # a keep verified here (written now, or already in its slot) is the peer's version as delivered; the
+    # base is the one the next sync reads from the archives just written
+    a, b = plan.devices
+    opened = {path: (kept_record.archived_token(archived[a].get(path), archived[b].get(path)),
+                     plan.sides[path][peer].etag if conflict.kept.get(device) else None)
+              for path, conflict in plan.conflicts.items()}
+    record = kept_record.next_keeps(plan.kept_records[device], peer, plan.devices, opened)
+    if record is not None:
+        states.append(record)
     if not states:
         return
     txn = plan.stores[device].transaction()

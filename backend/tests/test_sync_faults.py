@@ -331,7 +331,9 @@ def test_s9u_a_crash_or_error_at_any_commit_boundary_never_forgets_archive_borne
     points = commit_boundaries(_uncertain_trace())
     commits = [op for op in _uncertain_trace() if _is_journal_replace(op)]
     # no copies, but each device's data commit records the uncertainty before any archive is rewritten
-    assert len(commits) == 4  # marker(a), marker(b), archive(b), archive(a); the markers already say it all
+    # marker(a), marker(b), archive(b), archive(a); the markers already say it all, so the last step
+    # writes only (028) each device's record of the versions it now keeps
+    assert len(commits) == 6
     crashes = explore_crashes(_uncertain_scenario(), tmp_path / "crash", torn=False,
                               select=_select(points, {"before", "after"}))
     crashes.assert_ok()

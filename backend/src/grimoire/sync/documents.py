@@ -1,4 +1,4 @@
-"""Device identity, per-pair archive, pending-marker and dismissal documents (``.sync/``), parsed strictly.
+"""Device identity, per-pair archive, pending-marker and kept-version documents (``.sync/``), parsed strictly.
 
 A document that is not exactly valid is *ignored and reported*, never partially trusted. The
 archive and pending marker carry a ``check`` digest of their own content, so a hand edit or a
@@ -24,8 +24,9 @@ DEVICE_FORMAT = "grimoire.sync.device/1"
 ARCHIVE_FORMAT = "grimoire.sync.archive/1"
 PENDING_FORMAT = "grimoire.sync.pending/1"
 RETIRED_FORMAT = "grimoire.sync.retired/1"  # an archive or marker set aside when its device took a new ID
-#: 028: the kept versions this device dismissed, per pair (``dismiss``): never redelivered for the same bytes.
-DISMISSED_FORMAT = "grimoire.sync.dismissed/1"
+#: 028: per pair and open conflict, the peer's versions a sync delivered here as kept versions, and which
+#: of them this device dismissed (``dismiss``).
+KEEPS_FORMAT = "grimoire.sync.keeps/1"
 DEVICE_FILE = "device.json"
 
 
@@ -37,13 +38,13 @@ def pending_name(peer: str) -> str:
     return f"peers/{peer}/pending.json"
 
 
-def dismissed_name(peer: str) -> str:
-    return f"peers/{peer}/dismissed.json"
+def keeps_name(peer: str) -> str:
+    return f"peers/{peer}/keeps.json"
 
 
 def pair_state(name: object, peer: str) -> bool:
     """Whether ``name`` is one of this pair's own ``.sync`` files on this device (its archive, marker,
-    their shards or its dismissals): what 028 sends of a pair and lets a peer write, and nothing else."""
+    their shards or its kept-version record): what 028 sends of a pair and lets a peer write, nothing else."""
     if type(name) is not str or not name.startswith(f"peers/{peer}/"):
         return False
     try:
@@ -234,14 +235,17 @@ def parse_pending(data: bytes | None, devices: tuple[str, str]) -> PendingView:
     return PendingView("valid", MappingProxyType(parsed), None, data)
 
 
-def render_retired(old_device: str, paths: frozenset[str] = frozenset()) -> bytes:
+def render_retired(old_device: str, paths: frozenset[str] = frozenset(), shards: tuple[str, ...] = ()) -> bytes:
     """What an archive or marker becomes when its device takes a new ID: present, never valid again.
 
     Kept present (not deleted) so a sync of the new ID stays conservative rather than a first sync;
     never valid again, so renaming the devices back cannot revive a stale base. ``paths`` (what it
-    named) keeps those paths uncertain, so a tombstone is not forgotten with it.
+    named) keeps those paths uncertain, so a tombstone is not forgotten with it. A sharded root
+    (028) also lists the ``shards`` it retired with it, each retired in turn: they are still read
+    for what they name, and only the shards a root lists are ever read.
     """
-    return render({"format": RETIRED_FORMAT, "device": check_device_id(old_device), "paths": sorted(paths)})
+    document = {"format": RETIRED_FORMAT, "device": check_device_id(old_device), "paths": sorted(paths)}
+    return render({**document, "shards": sorted(shards)} if shards else document)
 
 
 def archive_body(entries: Mapping[str, tuple[str, str]]) -> dict[str, dict[str, str]]:
@@ -264,38 +268,67 @@ def render_pending(devices: tuple[str, str], entries: Mapping[str, Mapping[str, 
                    "check": _digest(devices, body)})
 
 
-# -- dismissals (028) ---------------------------------------------------------------------------
+# -- kept versions delivered and dismissed (028) -------------------------------------------------
 
 @dataclass(frozen=True)
-class DismissedView:
-    """``missing``, ``ignored`` (not a valid dismissal record of this pair: nothing in it is honoured, so
-    every kept version is delivered as before) or ``valid``: per path, the kept etags this device dismissed."""
+class KeptEntry:
+    """One open conflict's kept versions on this device. ``base`` is the archive base both devices'
+    archives held for the path when they were delivered (``none``, ``agreed:<etag>`` or
+    ``deleted:<etag>``): the same bytes under another base belong to another conflict."""
+
+    base: str
+    delivered: frozenset[str]  # the peer's versions a completed sync kept here
+    dismissed: frozenset[str] = frozenset()  # of those, the ones this device never wants delivered again
+
+
+@dataclass(frozen=True)
+class KeepsView:
+    """``missing`` (also a retired record: its device took a new ID), ``ignored`` (not a valid record of
+    this pair: nothing in it is honoured, so every kept version is delivered as before) or ``valid``."""
 
     state: str
-    entries: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    entries: Mapping[str, KeptEntry] = field(default_factory=dict)
     reason: str | None = None
     data: bytes | None = None
 
-    def dismissed(self, path: str, tag: str | None) -> bool:
-        return self.state == "valid" and tag in self.entries.get(path, frozenset())
+    def dismissed(self, path: str, tag: str | None, base: str | None) -> bool:
+        entry = self.entries.get(path) if self.state == "valid" else None
+        return entry is not None and base is not None and entry.base == base and tag in entry.dismissed
 
 
-def parse_dismissed(data: bytes | None, devices: tuple[str, str]) -> DismissedView:
+def is_base_token(value: object) -> bool:
+    if value == "none":
+        return True
+    kind, _, tag = value.partition(":") if isinstance(value, str) else ("", "", "")
+    return kind in ("agreed", "deleted") and is_etag(tag)
+
+
+def _etag_list(value: object) -> bool:  # one canonical spelling: sorted, no repeats
+    return (isinstance(value, tuple) and all(is_etag(tag) for tag in value)
+            and list(value) == sorted(set(value)))  # type: ignore[type-var]
+
+
+def parse_keeps(data: bytes | None, devices: tuple[str, str]) -> KeepsView:
     if data is None:
-        return DismissedView("missing")
-    entries, reason = _envelope(data, DISMISSED_FORMAT, devices)
+        return KeepsView("missing")
+    if is_retired(data):  # its device took a new ID: nothing of the old pair carries over, nor is reported
+        return KeepsView("missing", data=data)
+    entries, reason = _envelope(data, KEEPS_FORMAT, devices)
     if entries is None:
-        return DismissedView("ignored", MappingProxyType({}), reason, data)
-    parsed: dict[str, frozenset[str]] = {}
-    for path, tags in entries.items():
-        if (not _syncable(path) or not isinstance(tags, tuple) or not tags or not all(is_etag(tag) for tag in tags)
-                or list(tags) != sorted(set(tags))):  # one canonical spelling: sorted, no repeats
-            return DismissedView("ignored", MappingProxyType({}), f"bad entry for {path!r}", data)
-        parsed[path] = frozenset(tags)
-    return DismissedView("valid", MappingProxyType(parsed), None, data)
+        return KeepsView("ignored", MappingProxyType({}), reason, data)
+    parsed: dict[str, KeptEntry] = {}
+    for path, entry in entries.items():
+        if (not _syncable(path) or not isinstance(entry, Mapping)
+                or set(entry) != {"base", "delivered", "dismissed"} or not is_base_token(entry["base"])
+                or not _etag_list(entry["delivered"]) or not entry["delivered"] or not _etag_list(entry["dismissed"])
+                or not set(entry["dismissed"]) <= set(entry["delivered"])):
+            return KeepsView("ignored", MappingProxyType({}), f"bad entry for {path!r}", data)
+        parsed[path] = KeptEntry(entry["base"], frozenset(entry["delivered"]), frozenset(entry["dismissed"]))
+    return KeepsView("valid", MappingProxyType(parsed), None, data)
 
 
-def render_dismissed(devices: tuple[str, str], entries: Mapping[str, frozenset[str]]) -> bytes:
-    body = {path: sorted(tags) for path, tags in sorted(entries.items()) if tags}
-    return render({"format": DISMISSED_FORMAT, "devices": list(devices), "entries": body,
+def render_keeps(devices: tuple[str, str], entries: Mapping[str, KeptEntry]) -> bytes:
+    body = {path: {"base": entry.base, "delivered": sorted(entry.delivered), "dismissed": sorted(entry.dismissed)}
+            for path, entry in sorted(entries.items()) if entry.delivered}
+    return render({"format": KEEPS_FORMAT, "devices": list(devices), "entries": body,
                    "check": _digest(devices, body)})
