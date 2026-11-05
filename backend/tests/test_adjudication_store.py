@@ -1,0 +1,292 @@
+"""Fiction-first adjudication on the store (Sprint 029): the proving scenario, authority and fail-closed replay."""
+
+from __future__ import annotations
+
+import pytest
+
+from grimoire.adjudication import AdjudicationError, Decision, Factor
+from grimoire.adjudicationstore import AdjudicationLibrary, adjudication_actor_ids
+from grimoire.chatstore import campaign_taken_ids
+from grimoire.core import DIRECTOR
+from grimoire.core.ability_use import AbilityRuling, assess_attempt
+from grimoire.core.authority import AuthorityError
+from grimoire.core.identity import InstanceRef
+from grimoire.effects import EffectProposal
+from grimoire.effectstore import InvalidEffect, TurnEffectsLibrary
+from grimoire.ledgers import LedgerInvalid
+from grimoire.security import Authorizer, Grant, Permission, ResourcePath
+from grimoire.store import LibraryStore, ProcessLocker, TakenIdsUnlisted
+from grimoire.store.ledger import render_batches
+
+from ability_fixtures import effective
+from adjudication_fixtures import (
+    ACROBAT, ANA, BOB, CHAT, COLLAPSE, GAP, IRIS, MARA, Q, SOLA, SOLA_DEF, Table, ability, bridge, build_library,
+    moment, power_frame, vault,
+)
+from chat_fixtures import Clock, Ids
+from ledger_helpers import OWNER
+
+PARTIAL = Decision("partial", "adjudicated", {"acrobat", "collapse"}, {"satchel"})
+STRETCH = dict(needs=("light", "force", "flight"), effect_id=None)  # flight by radiation pressure
+
+
+@pytest.fixture
+def table(tmp_path):
+    locker = ProcessLocker()
+    store = LibraryStore.create(tmp_path / "lib", locker=locker)
+    build_library(store)
+    seated = Table(store).seat()
+    seated.locker = locker
+    yield seated
+    seated.close()
+    seated.store.close()
+
+
+def _reopen(table: Table) -> Table:
+    table.close()
+    table.store.close()
+    fresh = Table(LibraryStore.open(table.store.root, locker=table.locker))
+    fresh.locker = table.locker
+    table.store, table.authority, table.key = fresh.store, fresh.authority, fresh.key
+    return table
+
+
+def _reason(call, *args, **kwargs) -> str:
+    with pytest.raises(AdjudicationError) as caught:
+        call(*args, **kwargs)
+    return caught.value.reason
+
+
+# -- the proving scenario ---------------------------------------------------------------------
+
+def test_mara_vaults_the_collapsing_bridge_and_every_retry_keeps_the_outcome(table):
+    library = table.library()
+    library.frame(bridge(), contribution=vault())
+    assessment = library.assess(Q, "c10")
+    assert (assessment.classification, assessment.allowed) == ("uncertain", ("failure", "partial", "success"))
+    # A difficulty invented with the outcome has no cause on record: the fiat is refused, nothing written.
+    invented = Decision("failure", "adjudicated", {"rotten-plank"}, {"fall"})
+    assert _reason(library.decide, Q, "c10", invented) == "unknown_factor"
+    outcome = library.decide(Q, "c10", PARTIAL)
+    assert (outcome.classification, outcome.decided_by) == ("uncertain", "app:adjudicator")
+    # A retry asks again and gets the same outcome; it can never get another one.
+    assert library.decide(Q, "c10", PARTIAL) == outcome
+    assert _reason(library.decide, Q, "c10", Decision("success", "adjudicated", {"acrobat"})) == "already_decided"
+    assert _reason(library.frame, bridge(factors=(ACROBAT,)), contribution=vault()) == "already_decided"
+    resolution = library.resolutions(Q)
+    assert [(r.attempt_id, r.result) for r in resolution] == [("c10", "partial")]
+    assert len(table.store.read_ledger(f"adjudication/{Q}").entries) == 2
+
+    _reopen(table)
+    again = table.library()
+    assert again.outcome(Q, "c10") == outcome and again.resolutions(Q) == resolution
+    assert again.decide(Q, "c10", PARTIAL) == outcome
+
+
+def test_a_frame_is_revised_until_the_decision_and_decided_on_its_latest_revision(table):
+    library = table.library()
+    library.frame(bridge(factors=(GAP, COLLAPSE)), contribution=vault())
+    assert library.assess(Q, "c10").allowed == ("failure",)
+    revised = library.frame(bridge(), contribution=vault())
+    assert revised.revision == 2
+    library.decide(Q, "c10", PARTIAL)  # supported only by the revision that records her training
+    state = _reopen(table).library().state(Q)
+    assert [entry.revision for entry in state.frames["c10"]] == [1, 2]
+    assert state.decisions["c10"].revision == 2
+
+
+# -- who may frame and decide -----------------------------------------------------------------
+
+@pytest.mark.parametrize("frame, contribution, reason", [
+    (bridge(), None, "pc_authorship"),  # a PC's action comes from the player
+    (bridge(), vault(by=BOB), "invalid_expression"),  # another player's words
+    (bridge(), vault(cid="c11"), "invalid_expression"),  # another contribution
+    (bridge(), vault(turn="t9"), "invalid_expression"),
+    (bridge(), vault(kind="speech"), "invalid_expression"),
+    (bridge(actor=IRIS, attempt_id="c10"), vault(actor_id="iris-1"), "unexpected_backing"),
+], ids=["no-contribution", "other-player", "other-id", "other-turn", "speech", "npc-backed"])
+def test_only_the_controllers_own_action_frames_a_player_character(table, frame, contribution, reason):
+    library = table.library()
+    assert _reason(library.frame, frame, contribution=contribution) == reason
+    assert library.state(Q).frames == {}
+
+
+def test_an_actor_outside_the_chat_cannot_act_in_it(table):
+    stranger = InstanceRef(Q, "character", "wren-1")
+    table.control("wren-1", DIRECTOR)
+    assert _reason(table.library().frame, bridge(actor=stranger, attempt_id="w1")) == "not_in_chat"
+
+
+def test_only_the_adjudication_key_records(table):
+    with pytest.raises(AuthorityError):
+        AdjudicationLibrary(table.store, table.authority, table.authority.handle_for("app:narrator"))
+    foreign = Authorizer(["human:owner"]).handle_for("app:adjudicator", trusted=True)
+    with pytest.raises(AuthorityError):
+        AdjudicationLibrary(table.store, table.authority, foreign)
+
+
+def test_consent_is_the_controllers_setback_for_their_own_character(table):
+    library = table.library()
+    library.frame(bridge(factors=(ACROBAT,)), contribution=vault())  # unopposed: it would simply succeed
+    messy = Decision("partial", "consent", consequences={"satchel"})
+    assert _reason(library.decide, Q, "c10", messy) == "not_controller"
+    assert _reason(library.decide, Q, "c10", messy, consent=table.player(BOB)) == "not_controller"
+    assert _reason(library.decide, Q, "c10", messy,
+                   consent=table.authority.handle_for(ANA)) == "not_controller"  # not trusted
+    outcome = library.decide(Q, "c10", messy, consent=table.player(ANA))
+    assert (outcome.consented_by, outcome.resolution().result) == (ANA, "partial")
+    assert _reopen(table).library().outcome(Q, "c10") == outcome
+
+
+def test_the_director_consents_alone_for_an_actor_no_player_controls(table):
+    library = table.library()
+    library.frame(bridge(actor=SOLA, attempt_id="s-1"))
+    setback = Decision("failure", "consent", consequences={"fall"})
+    assert _reason(library.decide, Q, "s-1", setback, consent=table.player(ANA)) == "consent_mismatch"
+    assert library.decide(Q, "s-1", setback).consented_by == DIRECTOR
+
+
+# -- abilities (025) and the handoff to accepted effects (021) --------------------------------
+
+def test_a_stretch_waits_for_a_ruling_then_charges_once_through_an_accepted_effect(table):
+    library = table.library()
+    sail = ability(SOLA, **STRETCH)
+    library.frame(power_frame(sail, intent="Rise on a sail of sunlight."))
+    assert library.assess(Q, "a-1").classification == "clarify"
+    assert _reason(library.decide, Q, "a-1", Decision("failure", "rule")) == "needs_clarification"
+    assert _reason(library.rule, AbilityRuling("r1", sail, "new_ability", "approved", "director")) == \
+        "wrong_classification"
+    library.rule(AbilityRuling("r1", sail, "extrapolation", "refused", "director"))
+    assert library.assess(Q, "a-1").classification == "impossible"
+    # The director changes their mind before the outcome: the new ruling supersedes the refusal.
+    library.rule(AbilityRuling("r2", sail, "extrapolation", "approved", "director"), supersedes=["r1"])
+    assert library.assess(Q, "a-1").classification == "uncertain"
+    library.decide(Q, "a-1", Decision("partial", "adjudicated", {"#ability", "#ability-uncertain"}, {"fall"}))
+    assert _reason(library.rule, AbilityRuling("r3", sail, "extrapolation", "refused", "director"),
+                   supersedes=["r2"]) == "already_decided"
+
+    used = library.ability_use(Q, "a-1")
+    assert (used.ruling_id, [cost.id for _, cost in used.charges]) == ("r2", ["eye_strain", "migraine"])
+    proposal = EffectProposal(Q, CHAT, moment(), "Sola rises on a sail of sunlight.", (), "director",
+                              abilities=(used,))
+    library.check_effect(proposal)
+    table.authority.add_grant(Grant("g-fx", OWNER, frozenset({Permission.APPLY}), ResourcePath.parse("campaigns"),
+                                    OWNER))
+    effects = TurnEffectsLibrary(table.store, table.owner, issued=table.authority.issued, clock=Clock(),
+                                 new_id=Ids(), owner=OWNER)
+    ref = effects.accept(proposal, controls=[]).commit().ref
+    accepted, _ = effects.read(ref, requested_by=DIRECTOR)
+    assert [(charge.attempt.attempt_id, charge.charges) for charge in accepted.abilities] == \
+        [("a-1", (("light_bending", "eye_strain"), ("light_bending", "migraine")))]
+    assert effects.accept(proposal, controls=[]).commit().ref == ref  # a retry charges nothing more
+    again = EffectProposal(Q, CHAT, moment(11, "t11"), "Sola rises again.", (), "director",
+                           abilities=(used,))
+    with pytest.raises(InvalidEffect) as caught:
+        effects.accept(again, controls=[]).commit()
+    assert caught.value.reason == "attempt_reused"
+
+    # A caller cannot charge an assessment it made up: only what was adjudicated here.
+    made_up = assess_attempt(sail, effective(SOLA_DEF, Q), [AbilityRuling("x", sail, "extrapolation", "approved", "director")])
+    forged = EffectProposal(Q, CHAT, moment(), "Sola rises.", (), "director", abilities=(made_up,))
+    assert _reason(library.check_effect, forged) == "assessment_mismatch"
+    replayed = _reopen(table).library()
+    assert replayed.ability_use(Q, "a-1") == used
+    assert [entry.ruling.ruling_id for entry in replayed.state(Q).rulings] == ["r1", "r2"]
+
+
+def test_flight_beyond_a_limit_is_impossible_and_no_ruling_changes_that(table):
+    library = table.library()
+    flight = ability(IRIS, **STRETCH)
+    library.frame(power_frame(flight))
+    assert library.assess(Q, "a-1").classification == "impossible"
+    assert _reason(library.rule, AbilityRuling("r1", flight, "extrapolation", "approved", "director")) == \
+        "limit_not_approvable"
+    library.decide(Q, "a-1", Decision("failure", "rule", {"#ability"}, {"fall"}))
+    assert _reason(library.ability_use, Q, "a-1") == "ability_not_permitted"
+
+
+def test_rulings_belong_to_a_recorded_frame_labelled_exactly_as_there(table):
+    library = table.library()
+    sail = ability(SOLA, **STRETCH)
+    assert _reason(library.rule, AbilityRuling("r1", sail, "extrapolation", "approved", "director")) == \
+        "ruling_mismatch"
+    library.frame(power_frame(sail))
+    relabelled = ability(SOLA, needs=("light", "flight"), effect_id=None)
+    assert _reason(library.rule, AbilityRuling("r1", relabelled, "extrapolation", "approved", "director")) == \
+        "ruling_mismatch"
+    library.rule(AbilityRuling("r1", sail, "extrapolation", "approved", "director"))
+    assert _reason(library.rule, AbilityRuling("r1", sail, "extrapolation", "approved", "director")) == \
+        "duplicate_ruling"
+    assert _reason(library.rule, AbilityRuling("r2", sail, "extrapolation", "approved", "director"),
+                   supersedes=["r9"]) == "unknown_ruling"
+    assert _reason(library.ability_use, Q, "a-1") == "undecided"
+
+
+# -- the ledger fails closed ------------------------------------------------------------------
+
+def _forge(table: Table, kind: str, value: dict) -> None:
+    name = f"adjudication/{Q}"
+    head = table.store.read_ledger(name).head
+    entry = {"schema": 1, "kind": kind, "recorded_at": "x", "recorded_by": "app:adjudicator", "value": value}
+    parts, data = render_batches(name, head, [entry])[0]
+    (table.store.root / "/".join(parts)).write_bytes(data)
+
+
+@pytest.mark.parametrize("decision, match", [
+    ({"result": "success", "basis": "adjudicated", "cites": [], "consequences": []}, "uncited_result"),
+    ({"result": "failure", "basis": "rule", "cites": ["gap"], "consequences": ["fall"]}, "rule_mismatch"),
+    ({"classification": "straightforward"}, "classification_mismatch"),
+    ({"revision": 2}, "stale_frame"),
+])
+def test_a_forged_decision_makes_the_ledger_unreadable(table, decision, match):
+    library = table.library()
+    library.frame(bridge(), contribution=vault())
+    value = {"attempt_id": "c10", "actor": str(MARA), "revision": 1, "classification": "uncertain",
+             "result": "partial", "basis": "adjudicated", "cites": ["acrobat", "gap"], "consequences": ["satchel"],
+             "consented_by": None, "ability": None, **decision}
+    _forge(table, "decision", value)
+    with pytest.raises(LedgerInvalid, match=match):
+        _reopen(table).library().state(Q)
+
+
+def test_a_second_decision_on_record_is_refused_on_replay(table):
+    library = table.library()
+    library.frame(bridge(), contribution=vault())
+    library.decide(Q, "c10", PARTIAL)
+    _forge(table, "decision", {"attempt_id": "c10", "actor": str(MARA), "revision": 1,
+                               "classification": "uncertain", "result": "success", "basis": "adjudicated",
+                               "cites": ["acrobat"], "consequences": [], "consented_by": None, "ability": None})
+    with pytest.raises(LedgerInvalid, match="already_decided"):
+        _reopen(table).library().state(Q)
+
+
+# -- ids and campaign reservation -------------------------------------------------------------
+
+def test_the_ledger_reserves_the_ids_of_the_actors_it_names(table):
+    library = table.library()
+    library.frame(bridge(), contribution=vault())
+    library.frame(bridge(actor=SOLA, attempt_id="s-1", factors=(Factor("x", "hinders", "x", 1, "s"),)))
+    assert adjudication_actor_ids(table.store, Q) == {"mara-1", "sola-1"}
+    assert {"mara-1", "sola-1"} <= campaign_taken_ids(table.store, Q)
+    assert table.store.campaign_authority_presence("q-9") == "absent"
+
+
+def test_an_unreadable_ledger_fails_allocation_closed(table):
+    table.library().frame(bridge(), contribution=vault())
+    folder = table.store.root / "authority" / "adjudication" / Q
+    next(folder.iterdir()).write_bytes(b"not json")
+    with pytest.raises(TakenIdsUnlisted):
+        adjudication_actor_ids(table.store, Q)
+
+
+def test_an_adjudication_ledger_keeps_a_campaign_id_taken(tmp_path):
+    store = LibraryStore.create(tmp_path / "lib", locker=ProcessLocker())
+    table = Table(store)
+    entry = {"schema": 1, "kind": "frame", "recorded_at": "x", "recorded_by": "app:adjudicator", "value": {}}
+    parts, data = render_batches("adjudication/q-7", None, [entry])[0]
+    path = store.root / "/".join(parts)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(data)
+    assert store.campaign_authority_presence("q-7") == "present"
+    table.close()
+    store.close()

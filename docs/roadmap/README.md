@@ -160,6 +160,10 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 | 033 | [Party And Presence](sprints/party-and-presence.md) | **P1** | [Creature Individualization](sprints/creature-individualization.md) | actors / party state | Separate present cast, controlled actors and reserves; owns non-character actors (an individualized creature) in chat and scene casts |
 | 034 | [Unique Equipment](sprints/unique-equipment.md) | **P1** | [Counted Inventory](sprints/counted-inventory.md) | inventory / unique possessions | Keep two similar artifacts distinct by owner and revision |
 
+#### Wave 4 status
+
+- **029:** fiction-first adjudication of a mechanics-free action: frames with causes and stakes on record before the result, deterministic classification, decisions that cite only those, 025 rulings and assessments persisted in an authority ledger, and the hand-off to 021 ([ADJUDICATION](../ADJUDICATION.md)). Graded consequences and contests (milestone 3) and verifying factor sources are still open.
+
 <a id="wave-5"></a>
 
 ### Wave 5 — First playable world-less chat and imported-world campaign

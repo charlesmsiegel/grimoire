@@ -5,7 +5,7 @@
 - `ability_use.py`: labelled attempts, provisional rulings and the assessment;
 - `entity_codec.py`: the facet's payload form.
 
-There is no runner, no prompt and no model call. Nothing is adjudicated: [Fiction-First Adjudication](roadmap/sprints/fiction-first-adjudication.md) (029) consumes the assessment. All scenarios are synthetic.
+There is no runner, no prompt and no model call. Nothing is adjudicated here: [Fiction-First Adjudication](ADJUDICATION.md) (029) consumes the assessment, persists rulings and authenticates the assessment 021 charges. All scenarios are synthetic.
 
 ## What it is for
 
@@ -190,20 +190,20 @@ At most 256 rulings may name one attempt id **for one actor**; rulings on other 
 ## Authority and obligations
 
 - **Rulings** come only from the rule/adjudication channel, as a `Resolution` does, and never from narration or model output.
-  - Who may issue one is not checked here. Authenticating the issuer is a **029/035 obligation**.
-  - "Player/director approval" maps to two things: the player's attempt, which must come from their own contribution (whose id is the `attempt_id`, checked by 029/035), and the director's ruling.
+  - Who may issue one is not checked here. 029 records rulings only through its adjudication key ([ADJUDICATION](ADJUDICATION.md#the-store-service)); minting that key only for the adjudication channel is a 035 obligation.
+  - "Player/director approval" maps to two things: the player's attempt, which must come from their own contribution (whose id is the `attempt_id`, checked by 029 when it records the frame), and the director's ruling.
 - **Instance ability changes** (`added`/`replaced`) come only from authored edits or, later, accepted state changes (021), never from narration or model output.
   - For a player-controlled actor, consent to a changed power is a **035 obligation**.
 - **Charge each `attempt_id` once:** met by 021. An accepted effect charges each use's attempt at most once while an event holds it; `permitted` is checked at accept, **after** the duplicate check, so a retry of a charged use whose re-assessment changed is still a no-op; a revoked event's charges no longer count.
-- **Assess each `attempt_id` once, and authenticate the assessment:** an obligation on 029 (020 stores what 029 records). Today the assessment 021 charges is the caller's, as its `controls` are.
-- **Superseding a ruling** is not possible in this slice: an approve/refuse pair on the same labels is a named `conflicting_rulings`, never a silent overwrite. A supersede/revoke record, and whether a ruling should also pin the entity's `resolved_source`, belong to 029.
+- **Assess each `attempt_id` once, and authenticate the assessment:** met by 029. Its adjudication ledger decides each attempt once and records the assessment it relied on; `ability_use` hands that assessment to 021 only while a re-assessment still matches, and `check_effect` verifies a proposal's. 021 still accepts a caller's assessment, so a caller that skips 029 is not refused there.
+- **Superseding a ruling:** 025 alone never overwrites one (an approve/refuse pair on the same labels is `conflicting_rulings`). 029 records a ruling that supersedes earlier ones on the same attempt, before its decision only; after it nothing is revoked. A ruling does not pin `resolved_source`: the decision records the assessment it relied on, and a later change is caught at hand-off (`assessment_changed`).
 - **Head gains the facet.** By 009's source-drift rule, an unpinned instance that *added* an `abilities` facet stops resolving (`added_shadows_trait`) once its definition's head gains one (tested): pin it, or move its powers into a `replaced` facet.
 - **Whole-facet limitation.** `abilities` is one facet. Evolving a single ability on a sourced instance means `replaced` with a copy of all of them, and that copy no longer follows head changes to the others (tested). Per-ability inherit, replace and clear is owned by [022](roadmap/sprints/effective-world-snapshots.md), which composes facets; [024](roadmap/sprints/creature-individualization.md) consumes it so an individual can evolve one power.
 
 ## Not in this slice
 
 - observed consequences as evidence (020);
-- persisting an `AbilityRuling` and assessing each `attempt_id` once across reloads (029, which may replace the ruling surface; 020 stores what 029 decides to record);
+- persisting an `AbilityRuling` and assessing each `attempt_id` once across reloads: done by [029](ADJUDICATION.md), in its own authority ledger, not in 020;
 - committed costs and cooldowns (milestone 2): 021 records the charges of permitted uses, and the effect's holdings part consumes a counted resource; a cooldown is only a charged cost id, with no timing; rules tying a cost to a resource are 029's and 034's;
 - rules for combining abilities in one attempt (milestone 3): this slice reads them as `combination`, fail-closed until a director approves one case by case;
 - limits that evolve by rule, and novel high-concept power systems (milestone 3);
