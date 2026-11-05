@@ -72,9 +72,9 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
 #: grimoire packages that are adapters or test infrastructure, not pure.
 ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.capture", "grimoire.cardstore", "grimoire.chatstore", "grimoire.contextstore", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
-                      "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1", "grimoire.partystore",
-                      "grimoire.peersync", "grimoire.providers", "grimoire.runtime", "grimoire.store", "grimoire.sync",
-                      "grimoire.testing"})
+                      "grimoire.import_v1", "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1",
+                      "grimoire.partystore", "grimoire.peersync", "grimoire.providers", "grimoire.runtime",
+                      "grimoire.store", "grimoire.sync", "grimoire.testing"})
 
 
 @dataclass(frozen=True)

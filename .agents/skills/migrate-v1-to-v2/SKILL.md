@@ -5,7 +5,7 @@ description: "Use when inspecting, planning, importing, verifying or repairing G
 
 # Grimoire 0.2.1 → V2 migration
 
-**Status: the read-only inventory scanner is implemented (Wave 2 Sprint 011); nothing else is.** `python -m grimoire.migrate_v1 scan` inspects a frozen 0.2.1 library and writes a reviewable manifest ([contract](../../../docs/MIGRATION_INVENTORY.md)). V2 canonical import/apply remains Wave 4 Sprint 026, and playable scenes remain Wave 5. Do not claim importing or play works merely because these instructions or a clean inventory exist.
+**Status: the read-only inventory scanner is implemented (Wave 2 Sprint 011); nothing else is.** `python -m grimoire.migrate_v1 scan` inspects a frozen 0.2.1 library and writes a reviewable manifest ([contract](../../../docs/MIGRATION_INVENTORY.md)). Sprint 026's **headless first apply slice** is implemented too, as a library call with no command yet: `grimoire.import_v1.plan_import` imports worlds, portrayals, campaign actors, scenes as chats (no transcripts) and art from the reviewed manifest, idempotently and with a receipt ([contract](../../../docs/IMPORT_V1.md)). Playable scenes remain Wave 5. Do not claim importing or play works merely because these instructions or a clean inventory exist.
 
 **Source:** an explicitly supplied, quiescent Grimoire **0.2.1** store or full backup. V1's default is `~/.grimoire/`; never discover or read it automatically. **Destination:** explicitly confirmed V2 store, default `~/.grimoire-v2/` on desktop; the source and destination MUST NOT resolve to the same path or nested writable trees. A V1 library is read-only throughout migration.
 
@@ -33,6 +33,6 @@ description: "Use when inspecting, planning, importing, verifying or repairing G
 - A content hash or image ID is not an authorization to expose an image from a different library. Provenance, scope and allowed placement must be checked.
 - Never treat PC/NPC as distinct V2 entity species: both become campaign actors with explicit controller assignments and preserved historical authored identities.
 - If a source cannot be mapped losslessly, leave the original data intact, show an unresolved item and offer a manual review path. No silent loss.
-- **Readiness gate:** Current V2 has these instructions and the **read-only inventory**. **Nothing applies to a canonical V2 library** until Wave 4's guarded apply/verification actually exists. Distinguish procedural document, runnable inventory and authorized import in every status report.
+- **Readiness gate:** Current V2 has these instructions and the **read-only inventory**. Only `grimoire.import_v1` applies to a canonical V2 library, and only what [IMPORT_V1](../../../docs/IMPORT_V1.md) lists; everything else stays unapplied. Distinguish procedural document, runnable inventory and authorized import in every status report.
 
 See the [V2 roadmap](../../../docs/roadmap/README.md) for the separate **migration-skill**, **image-identity**, **import-apply**, and **first-playable** work.
