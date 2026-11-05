@@ -162,6 +162,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 
 #### Wave 4 status
 
+- **026:** reviewed V0.2.1 import apply. It verifies 011's manifest against the unchanged V1 library and writes worlds, one definition per portrayal, campaign scopes and actors, scenes as chats (no transcripts) and shared art in one transaction with a receipt; re-runs never duplicate, overwrite or recreate ([IMPORT_V1](../IMPORT_V1.md)).
 - **027 first slice:** one metered call per speaking NPC, each from its own sealed brief (own projection, own pinned or inherited voice), an optional scene-level `director_generation` reply for scenario-only chats, reply screening, run fencing and cancel, all headless with scripted providers ([GENERATION](../GENERATION.md)). It returns proposals and commits nothing; `story-quality/3` is its next slice.
 - **028 first slice:** pairing and an authenticated loopback peer transfer over 019's core, reporting `synced`, `conflicts` or `incomplete`, plus per-device actor ids ([DEVICE_SYNC](../DEVICE_SYNC.md)). Encryption, discovery, relays, background sync and 019's held families remain.
 - **029:** fiction-first adjudication of a mechanics-free action: frames with causes and stakes on record before the result, deterministic classification, decisions that cite only those, 025 rulings and assessments persisted in an authority ledger, and the hand-off to 021 ([ADJUDICATION](../ADJUDICATION.md)). Graded consequences and contests (milestone 3) and verifying factor sources are still open.

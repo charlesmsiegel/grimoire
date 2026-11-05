@@ -54,7 +54,8 @@ ReuseMap = Mapping[tuple[str, tuple[str, str, str]], InstanceRef]
 _ALLOCATION_ATTEMPTS = 16
 
 
-def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+def campaign_taken_ids(store: LibraryStore, campaign_id: str, *,
+                       spent: Collection[tuple[str, str, str]] = ()) -> frozenset[str]:
     """Every instance id a new individual in this campaign must not take: the one reservation set.
 
     A hand-deleted individual's id must never go to a different one, who would silently inherit its
@@ -75,8 +76,12 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     lock at commit, and any later record family that names instance ids must extend it. Its cost
     grows with play history: it reads every instance, relation, chat, accepted-event, knowledge and holder file
     and every sovereignty and adjudication batch of the campaign, and every security batch of the library.
+
+    ``spent`` is ``(approval id, address, payload digest)`` of the approvals a commit supplies for
+    its own writes: at that commit's re-check they name its new individuals by design and do not
+    count against them (as ``ChatChange.commit`` does).
     """
-    return _taken_ids(store, campaign_id, security=True)
+    return _taken_ids(store, campaign_id, security=True, spent=spent)
 
 
 def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool,

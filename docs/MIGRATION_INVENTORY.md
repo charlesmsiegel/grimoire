@@ -1,6 +1,6 @@
 # V0.2.1 read-only inventory (`grimoire.migrate_v1`)
 
-**Status:** first slice implemented ([sprint 011](roadmap/sprints/v1-to-v2-migration-skill.md)). It reads an explicitly chosen, frozen Grimoire **0.2.1** library and reports what a later import would have to carry. **Nothing is imported**: no V2 record is written, no picture is copied, no model is called. The reviewed import is [sprint 026](roadmap/sprints/v1-to-v2-import-apply.md). The agent workflow is the [migration skill](../.agents/skills/migrate-v1-to-v2/SKILL.md).
+**Status:** first slice implemented ([sprint 011](roadmap/sprints/v1-to-v2-migration-skill.md)). It reads an explicitly chosen, frozen Grimoire **0.2.1** library and reports what a later import would have to carry. **Nothing is imported**: no V2 record is written, no picture is copied, no model is called. The reviewed import is [sprint 026](roadmap/sprints/v1-to-v2-import-apply.md) ([IMPORT_V1](IMPORT_V1.md)). The agent workflow is the [migration skill](../.agents/skills/migrate-v1-to-v2/SKILL.md).
 
 ## Command
 
@@ -119,7 +119,7 @@ Candidates are **proposals**, never a mapping, and they are unpinned: the import
 
 ### Status and the importer contract
 
-`blocked` means the importer must refuse until the source is fixed and rescanned. Any item listed in `unresolved` must not be applied without an explicit user decision. Before applying, the importer re-verifies each entry's sha256 and the `source_fingerprint` against the source; it never performs a second, hidden scan.
+`blocked` means the importer must refuse until the source is fixed and rescanned. Any item listed in `unresolved` must not be applied without an explicit user decision. Before applying, the importer re-verifies each entry's sha256 and the `source_fingerprint` against the source; it never performs a second, hidden scan. `open_verified(source, manifest, destination=…)` does this for 026: it also refuses a `blocked` manifest, one for another destination, and one that is not exactly what this scanner derives from the unchanged source (`ManifestMismatch`, with `reason`), then serves reads of the verified snapshot only ([IMPORT_V1](IMPORT_V1.md#flow)).
 
 ## Findings
 

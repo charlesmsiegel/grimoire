@@ -159,7 +159,7 @@ Actor ids are `<entity_id>-<n>` (`<entity_id>-<tag>-<n>` in a library with a dev
 
 ### Taken instance ids
 
-`grimoire.chatstore.campaign_taken_ids(store, campaign_id)` is the one reservation set: every instance id a new individual in the campaign must not take, so a hand-deleted individual's id never goes to a different one who would inherit its past. 107 checks it at allocation and again under the store lock at commit (a clash raises `StaleWrite`). Every instance allocator (024, 026, 037) must use it the same way. It reserves:
+`grimoire.chatstore.campaign_taken_ids(store, campaign_id)` is the one reservation set: every instance id a new individual in the campaign must not take, so a hand-deleted individual's id never goes to a different one who would inherit its past. 107 checks it at allocation and again under the store lock at commit (a clash raises `StaleWrite`). `spent=` names approvals (id, address, digest) that the commit itself spends, so a writer's own approvals do not reserve the ids they approve. Every instance allocator (024, 026, 037) must use it the same way. It reserves:
 
 - every instance file's id, of any kind;
 - every instance id of the campaign named anywhere in a relation file (017), a chat file's roster or bindings (107), an accepted-event file (021), or an events, evidence or knowledge-log file (020). These are scanned raw, so a record that fails decoding still protects its ids. 020 persists no bare control ids;
