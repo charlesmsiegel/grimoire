@@ -1,5 +1,7 @@
-# TEST FIXTURE: the 017 relation codec as merged at 735fca0, verbatim except for this comment and the import of
-# ``grimoire.graph.model`` (made absolute). It stands in for a pre-021 build reading a reopened relation file.
+# TEST FIXTURE: the 017 relation codec as merged at 735fca0, verbatim except for this comment, the import of
+# ``grimoire.graph.model`` (made absolute) and the predicate check, which uses 017's own frozen predicate names
+# (``PREDICATES_017``) so that 033's later predicates decode as that build would: unsupported. It stands in for a
+# pre-021 build reading a reopened relation file, and a pre-033 build reading a membership file.
 """Relation payloads to and from plain JSON-compatible data (Sprint 017).
 
 The store's ``grimoire.scope-record/1`` envelope carries the payload opaquely and owns the
@@ -18,6 +20,10 @@ from grimoire.core.json_value import JsonObject, JsonValueError, thaw
 from grimoire.core.knowledge import KnowledgeError, Moment
 
 from grimoire.graph.model import PREDICATES, Ending, GraphError, Relation, Retraction, UnsupportedRelation
+
+#: the predicates 017 knew (033 added ``in_party`` and ``in_reserve`` later)
+PREDICATES_017 = frozenset({"member_of", "located_in", "owns", "carries", "knows", "has_met", "kin_of", "allied_with"})
+assert PREDICATES_017 <= set(PREDICATES)
 
 RELATION_SCHEMA = "grimoire.relation/0"
 ADDRESS_KEYS = frozenset({"ref", "address", "campaign_id", "relation_id", "schema"})
@@ -120,7 +126,7 @@ def relation_from_payload(ref: RelationRef, schema: str, payload: object) -> Rel
     predicate = payload.get("predicate")
     if type(predicate) is not str:
         raise _invalid("predicate must be text")
-    if predicate not in PREDICATES:  # written by a newer version: keep it, never interpret it
+    if predicate not in PREDICATES_017:  # written by a newer version: keep it, never interpret it
         try:
             raw = JsonObject(payload)
         except JsonValueError:
