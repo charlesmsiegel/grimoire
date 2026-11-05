@@ -286,7 +286,7 @@ def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -
 
 # -- client side ------------------------------------------------------------------------------
 
-class _MirrorStore(LibraryStore):
+class MirrorStore(LibraryStore):
     """The mirror library, whose scan gives each blocked entry the serving device's own reason.
 
     The mirror reproduces every blocked entry as a dangling link, so its own scan says ``link``
@@ -389,7 +389,8 @@ def _materialize(root: Path, kind: str, parts: tuple[str, ...], body: bytes) -> 
         raise MirrorMismatch(f"cannot reproduce {'/'.join(parts)} here: {error}") from error
 
 
-def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Limits()) -> Mirror:
+def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Limits(), *,
+                   store_type: type[MirrorStore] = MirrorStore) -> Mirror:
     """Read one snapshot from ``channel`` into a new library at ``root`` and check its scan.
 
     A snapshot is always read to its ``end``, even once the mirror is known to be unusable (an
@@ -397,7 +398,7 @@ def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Li
     new snapshot on the same connection, and leftover frames of this one would be read as the
     start of that. Only ``MirrorMismatch`` is raised after draining; a frame that breaks the
     protocol, or a snapshot over ``limits`` (which cannot be drained safely), ends the session
-    with ``TransportError``.
+    with ``TransportError``. ``store_type`` opens the mirror (resolve's relays its commits to the peer).
     """
     peer = channel.peer
     LibraryStore.create(root).close()
@@ -453,7 +454,7 @@ def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Li
             target.write_bytes(data)
     except OSError as error:  # a full disk, say: this pass cannot use the mirror
         raise MirrorMismatch(f"cannot write the peer's sync state here: {error}") from error
-    store = _MirrorStore.open(root)
+    store = store_type.open(root)
     try:
         if not isinstance(summary, Mapping) or _comparable(scan_summary(store)) != _comparable(summary):
             raise MirrorMismatch("the rebuilt library does not scan as the peer's own scan")

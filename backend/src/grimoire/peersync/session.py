@@ -61,20 +61,12 @@ def transfer(store: LibraryStore, authority, peer: str, address: tuple[str, int]
     Raises ``NotPaired`` or ``AuthenticationFailed`` before anything is exchanged; every later
     failure is an ``incomplete`` report, never a half-applied step (docs/DEVICE_SYNC.md).
     """
-    if not is_loopback(address[0]):
-        raise ValueError("this slice connects to loopback addresses only: its frames are not encrypted")
-    pairing = read_pairing(store, peer)
-    if pairing is None:
-        raise NotPaired(f"this library is not paired with {peer}")
+    pairing, local_handle = pairing_for(store, authority, peer, address)
     local = device_of(store)
-    local_handle = authority.handle_for(peer_principal(peer), trusted=True)
     try:
-        connection = socket.create_connection(address, timeout=min(timeout, 10.0))
+        connection = dial(address, timeout)
     except OSError as error:
         return TransferReport(peer, "incomplete", f"unreachable: {error}")
-    # Then wait as long as the peer may take to scan its library or commit a large step.
-    connection.settimeout(timeout)
-    no_delay(connection)
     channel: Channel | None = None
     try:
         channel = client_handshake(connection, local, peer, pairing.key)
@@ -82,12 +74,40 @@ def transfer(store: LibraryStore, authority, peer: str, address: tuple[str, int]
     except TransportError as error:
         return TransferReport(peer, "incomplete", f"disconnected: {error}")
     finally:
-        if channel is not None:
-            try:
-                channel.send({"t": "bye"})
-            except TransportError:
-                pass
-        connection.close()
+        hang_up(channel, connection)
+
+
+def pairing_for(store: LibraryStore, authority, peer: str, address: tuple[str, int]):  # type: ignore[no-untyped-def]
+    """The pairing with ``peer`` and this library's handle for its principal; refused before any connection.
+
+    The handle is the peer principal's, never the owner's: what arrives from a paired device
+    is written here only as far as this library's grants to that device reach.
+    """
+    if not is_loopback(address[0]):
+        raise ValueError("this slice connects to loopback addresses only: its frames are not encrypted")
+    pairing = read_pairing(store, peer)
+    if pairing is None:
+        raise NotPaired(f"this library is not paired with {peer}")
+    return pairing, authority.handle_for(peer_principal(peer), trusted=True)
+
+
+def dial(address: tuple[str, int], timeout: float) -> socket.socket:
+    """A connection to ``address``; ``OSError`` if it cannot be reached."""
+    connection = socket.create_connection(address, timeout=min(timeout, 10.0))
+    # Then wait as long as the peer may take to scan its library or commit a large step.
+    connection.settimeout(timeout)
+    no_delay(connection)
+    return connection
+
+
+def hang_up(channel: Channel | None, connection: socket.socket) -> None:
+    """Say goodbye if the session got that far (the server then frees its one slot at once), and close."""
+    if channel is not None:
+        try:
+            channel.send({"t": "bye"})
+        except TransportError:
+            pass
+    connection.close()
 
 
 def _passes(store: LibraryStore, channel: Channel, local: str, local_handle: object, key: bytes,

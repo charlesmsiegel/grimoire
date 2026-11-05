@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 
 from grimoire.store import LibraryStore, StaleWrite, StoreError, WriteConflict, WriteDenied, etag
@@ -38,26 +38,45 @@ MAX_STEP_MEMORY = 1024 * 1024 * 1024
 
 def send_step(channel: Channel, step: Step, blob_reader: Callable[[str, int], bytes | None]) -> None:
     """Send ``step``'s writes and wait until the peer has committed and verified every one of them."""
+    def ops() -> Iterator[Op]:
+        for copy in step.copies:
+            if copy.data is None:  # a blob: the stand-in now holds the verified bytes
+                data = blob_reader(copy.path, copy.size)  # type: ignore[arg-type]
+                if data is None:
+                    raise MirrorMismatch(f"the blob {copy.path} vanished from the mirror before it could be sent")
+                yield {"op": "blob", "path": copy.path, "size": copy.size}, data, copy.path, copy.etag
+            else:
+                yield {"op": "put", "path": copy.path, "expected": copy.expected}, copy.data, copy.path, copy.etag
+        for keep in step.keeps:
+            yield ({"op": "keep", "path": keep.path, "slot": keep.slot}, keep.data,
+                   kept_target(keep.path, keep.data, keep.slot), etag(keep.data))
+        for name, data, old in step.states:
+            yield {"op": "state", "name": name, "expected": old}, data, f".sync/{name}", etag(data)
+    send_ops(channel, step.kind, ops())
+
+
+#: One write of a step: its ``op`` header, its body, and the file it lands in with the etag it must then hold.
+Op = tuple[dict, bytes, str, str]  # type: ignore[type-arg]
+
+
+def send_ops(channel: Channel, kind: str, ops: Iterable[Op]) -> None:
+    """Stream one step's writes, commit them, and check the peer's reply against what they must hold.
+
+    ``ops`` is consumed as it is sent, so a step of many blobs never holds them all in memory.
+    """
     expected: dict[str, str] = {}
-    for copy in step.copies:
-        if copy.data is None:  # a blob: the stand-in now holds the verified bytes
-            data = blob_reader(copy.path, copy.size)  # type: ignore[arg-type]
-            if data is None:
-                raise MirrorMismatch(f"the blob {copy.path} vanished from the mirror before it could be sent")
-            channel.send({"t": "op", "op": "blob", "path": copy.path, "size": copy.size}, data)
-        else:
-            channel.send({"t": "op", "op": "put", "path": copy.path, "expected": copy.expected}, copy.data)
-        expected[copy.path] = copy.etag
-    for keep in step.keeps:
-        channel.send({"t": "op", "op": "keep", "path": keep.path, "slot": keep.slot}, keep.data)
-        expected["/".join(conflict_parts(tuple(keep.path.split("/")), etag(keep.data), keep.slot))] = etag(keep.data)
-    for name, data, old in step.states:
-        channel.send({"t": "op", "op": "state", "name": name, "expected": old}, data)
-        expected[f".sync/{name}"] = etag(data)
-    channel.send({"t": "commit", "step": step.kind})
+    for header, body, target, tag in ops:
+        channel.send({"t": "op", **header}, body)
+        expected[target] = tag
+    channel.send({"t": "commit", "step": kind})
     header, _ = channel.recv()
     if header.get("t") != "committed" or header.get("count") != len(expected) or header.get("digest") != confirmation(expected):
-        raise PeerRefused("verification", f"the peer did not confirm the {step.kind} step's planned bytes")
+        raise PeerRefused("verification", f"the peer did not confirm the {kind} step's planned bytes")
+
+
+def kept_target(path: str, data: bytes, slot: int) -> str:
+    """Where a kept version of ``path`` holding ``data`` lands in ``slot``."""
+    return "/".join(conflict_parts(tuple(path.split("/")), etag(data), slot))
 
 
 def confirmation(etags: dict[str, str]) -> str:
@@ -82,10 +101,17 @@ class StepBuffer:
     Blob bodies are spooled to a private temporary folder as they arrive and read back one at a
     time when the commit stages them, so a first sync of many pictures never holds them all in
     memory; record bodies (each at most 010's 8 MiB file cap, 1 GiB in all) stay in memory until the commit.
+
+    ``resolving`` is the one path a resolve request named, while the session is resolving it.
+    Only then may a write carry resolve's two powers, and only for that path: replacing an
+    unreferenced definition revision (``replace``) and keeping the replaced version as a *hold*,
+    which an aborted commit preserves (``hold``). A sync step never needs either: what it keeps
+    is the other device's version, which that device still holds.
     """
 
     def __init__(self, peer: str) -> None:
         self.peer = peer
+        self.resolving: str | None = None
         self.ops: list[tuple[dict, bytes | Path]] = []  # type: ignore[type-arg]
         self.size = self.memory = 0
         self.poisoned: PeerRefused | None = None
@@ -160,12 +186,17 @@ class StepBuffer:
                     targets.append((path, path, _reader(store, path)))
                     records = True
                 elif op == "put" and type(path) is str and _etag_or_none(header.get("expected")):
-                    txn.put_exact(path, body, header.get("expected"), regenerable=True)
+                    manifests = self._replacing(header, path)
+                    txn.put_exact(path, body, header.get("expected"), regenerable=True,
+                                  replace_unreferenced=manifests is not None, allowed_manifests=manifests or frozenset())
                     targets.append((path, path, _reader(store, path)))
                     records = True
                 elif op == "keep" and type(path) is str and type(header.get("slot")) is int:
-                    target = "/".join(conflict_parts(tuple(path.split("/")), etag(body), header["slot"]))
-                    txn.keep_version(path, body, slot=header["slot"], regenerable=True)  # the peer still holds them
+                    target = kept_target(path, body, header["slot"])
+                    # A sync keeps the peer's version, which the peer still holds; resolve holds the
+                    # version it replaces here, which may exist nowhere else.
+                    hold = self._resolve_power(header, "hold", path)
+                    txn.keep_version(path, body, slot=header["slot"], regenerable=not hold)
                     targets.append((target, target, _reader(store, target)))
                     records = True
                 elif op == "state" and pair_state(header.get("name"), self.peer) and _etag_or_none(header.get("expected")):
@@ -191,6 +222,33 @@ class StepBuffer:
                 raise PeerRefused("verification", f"{key} is missing after the commit")
             found[key] = etag(data)
         return found
+
+    def _resolve_power(self, header: dict, name: str, path: str) -> bool:  # type: ignore[type-arg]
+        """Whether this write uses one of resolve's powers (``replace``, ``hold``); refused unless it is
+        for the path the session's resolve request named."""
+        value = header.get(name, False)
+        if value is False:
+            return False
+        if value is not True or self.resolving is None or path != self.resolving:
+            raise PeerRefused("invalid", f"{name!r} is only for the path a resolve request named")
+        return True
+
+    def _replacing(self, header: dict, path: str) -> frozenset[str] | None:  # type: ignore[type-arg]
+        """The manifests whose references a revision replace may ignore, or ``None`` for an ordinary put.
+
+        These are the receiver's manifests byte-identical to the winner's (019's identical-manifest
+        exemption): taken on the peer's word, as a local resolve takes its caller's (docs/SYNC.md).
+        """
+        if not self._resolve_power(header, "replace", path):
+            return None
+        allowed = header.get("allowed", [])
+        if not isinstance(allowed, list) or len(allowed) > 1 or not all(type(tag) is str for tag in allowed):
+            raise PeerRefused("invalid", "a revision replace names at most one identical manifest")
+        return frozenset(allowed)
+
+    def names(self, path: str) -> bool:
+        """Whether the step under way writes the record at ``path`` itself (not a kept version of it)."""
+        return any(header.get("op") in ("put", "blob") and header.get("path") == path for header, _ in self.ops)
 
 
     def _state_expected(self, store: LibraryStore, name: str, body: bytes, expected: str | None,
