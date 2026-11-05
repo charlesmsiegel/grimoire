@@ -595,3 +595,54 @@ def test_a_look_alike_blob_is_blamed_on_the_portrait_not_the_target(store):
         with pytest.raises(CardError) as caught:
             importer(store).plan(encode(V3), portrait=PORTRAIT, target=target)
         assert (caught.value.reason, caught.value.detail) == ("portrait_unstorable", "portrait")
+
+
+def test_a_cast_ref_no_portable_path_can_hold_is_reported_not_raised(store):
+    document = {"format": "grimoire.scenario-card/1", "title": "T", "premise": "p",
+                "cast": [{"ref": "world:con/character/x"}, {"ref": "world:harbor/character/con"}]}
+    cast = importer(store).plan(encode(document)).report.cast
+    assert [status.status for status in cast] == ["invalid_ref", "missing_entity"]
+
+
+def test_only_a_card_source_can_be_a_destination(store):
+    data = encode(V3)
+    planned = land(store, data)
+    record = store.check_definition(SourceRef(planned.report.source, "card-import", "import"))
+    # another namespace's source carrying a look-alike import record steers nothing
+    txn = store.transaction()
+    txn.put(SourceManifest("world:pack", OWNER, "Pack", {"card-import/import": "r1"}), None)
+    txn.put(RecordEnvelope(SourceRef("world:pack", "card-import", "import", "r1"), dict(record.envelope.payload),
+                           name="Pack", owner=OWNER, extra={"schema": "grimoire.card-import/1"}), None)
+    txn.commit(owner_handle())
+    again = importer(store).plan(data).report
+    assert again.source == "card:mara-vell" and again.status == "unchanged"
+    with pytest.raises(CardError) as caught:
+        importer(store).plan(data, target="world:pack")
+    assert caught.value.reason == "not_a_card_source"
+
+
+def test_the_global_marker_survives_a_capped_field_at_the_limit(store):
+    imprecise = b"0.10000000000000000001"
+    extensions = {f"k{n}": 0.5 for n in range(179)}
+    extensions["z"] = [0.5] * 22
+    losses = importer(store).plan(encode(card(extensions=extensions)).replace(b"0.5", imprecise)).report.losses
+    assert losses[-2:] == (Loss("data.extensions.z[*]", "more_losses"), Loss("*", "more_losses"))
+    huge = {f"k{n}": 0.5 for n in range(250)}
+    data = encode(card(extensions=huge, personality="x" * 100_000)).replace(b"0.5", imprecise)
+    losses = importer(store).plan(data).report.losses
+    assert len(losses) == 201 and losses[-1] == Loss("*", "more_losses")
+
+
+def test_an_origin_label_must_be_encodable(store):
+    with pytest.raises(CardError) as caught:
+        importer(store).plan(encode(V3), origin="\udcffmara.json")
+    assert caught.value.reason == "invalid_options"
+
+
+def test_a_damaged_stored_portrait_blob_is_repaired_by_the_import(store):
+    land(store, encode(V3), portrait=PORTRAIT)
+    sha = hashlib.sha256(PORTRAIT).hexdigest()
+    (blob,) = (store.root / "assets" / "blobs" / sha[:2]).glob(f"{sha}.*")
+    blob.write_bytes(b"garbage")
+    land(store, encode(card(name="Other")), portrait=PORTRAIT)
+    assert blob.read_bytes() == PORTRAIT

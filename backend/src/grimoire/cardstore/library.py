@@ -31,7 +31,7 @@ from grimoire.cards import (
 from grimoire.cards.records import ENTITY_SCHEMA
 from grimoire.core.identity import ImageRef, PlacementRef, SourceRef, validate_source_id
 from grimoire.images.model import Placement
-from grimoire.imagestore import ImageCommit, ImageLibrary, InvalidPlacement
+from grimoire.imagestore import ImageCommit, ImageLibrary, InvalidImage, InvalidPlacement
 from grimoire.security import Permission
 from grimoire.store import (
     InvalidEnvelope, LibraryStore, RecordEnvelope, RecordNotFound, SourceManifest, StoredDefinition, StoredSource,
@@ -258,9 +258,9 @@ def _rounded(losses: Sequence[Loss], data: bytes, prefix: str) -> list[Loss]:
             return "stop"
         field = _field(prefix + path)
         counts[field] = counts.get(field, 0) + 1
-        if counts[field] > MAX_LOSSES_PER_FIELD + 1:
+        if counts[field] > MAX_LOSSES_PER_FIELD + 1 and shown < MAX_LOSSES:
             return "skip"  # past the field's ``more_losses``: it cannot change the report
-        shown += 1
+        shown += 1  # with the report full, any further loss is what makes ``_bounded`` add ``*``
         return "keep"
 
     paths = _imprecise_paths(data, (loss.path for loss in losses), take)
@@ -298,7 +298,7 @@ def _origin(origin: object) -> str | None:
     if origin is None:
         return None
     if type(origin) is not str or not origin.strip() or len(origin) > MAX_ORIGIN or any(
-            ord(char) < 0x20 or 0x7F <= ord(char) < 0xA0 for char in origin):
+            ord(char) < 0x20 or 0x7F <= ord(char) < 0xA0 or 0xD800 <= ord(char) < 0xE000 for char in origin):
         raise CardError(f"origin must be a short single line of text (at most {MAX_ORIGIN})", "invalid_options",
                         "origin")
     return origin
@@ -445,6 +445,9 @@ class CardImporter:
     def _card_sources(self, sources: Mapping[str, StoredSource]) -> dict[str, StoredDefinition]:
         found = {}
         for source_id in sorted(sources):
+            # only the card namespace: another source's import record never steers a destination
+            if not source_id.startswith(f"{CARD_NAMESPACE}:"):
+                continue
             if f"{IMPORT_KIND}/{IMPORT_ID}" not in sources[source_id].manifest.heads:
                 continue
             record = self._import_record(source_id)
@@ -470,8 +473,8 @@ class CardImporter:
             if target not in sources and self._taken(target, sources):
                 raise CardError("the target source exists but cannot be read as a card source", "not_a_card_source",
                                 "target")
-            if target not in cards and not target.startswith(f"{CARD_NAMESPACE}:"):
-                raise CardError("a new card source must be in the card namespace", "invalid_target", "target")
+            if not target.startswith(f"{CARD_NAMESPACE}:"):
+                raise CardError("a card source must be in the card namespace", "invalid_target", "target")
             chosen = target
         else:
             earlier = sorted(source for source, record in cards.items() if _get(record, "digest") == digest)
@@ -580,7 +583,7 @@ class CardImporter:
                     heads[f"{kind}/{entity_id}"] = found.ref.revision
         entities, losses = self._entities(plan, previous_entities | previous_kept, heads,
                                           frozenset(entity_id for _, entity_id in files))
-        plan.losses.extend(losses)
+        plan.losses[:] = _bounded(plan.losses + losses)  # bounded once more: a bounded list re-bounds to itself
 
         writes: list[RecordEnvelope] = []
         records: dict[str, SourceRef] = {}
@@ -701,12 +704,25 @@ class CardImporter:
                 if place:
                     if portrait_ref is not None and not _image_present(self.images, portrait_ref):
                         try:
-                            batch.add_image(source_id, portrait_ref.image_id, plan.portrait, _provenance(plan))
+                            try:
+                                batch.add_image(source_id, portrait_ref.image_id, plan.portrait, _provenance(plan))
+                            except InvalidImage as error:
+                                if error.reason != "blob_corrupt":
+                                    raise
+                                # the stored copy of these exact bytes is damaged: this import repairs it
+                                batch.repair_blob(plan.portrait)
+                                batch.add_image(source_id, portrait_ref.image_id, plan.portrait, _provenance(plan))
                         except NameCollision:  # the shared blob store, not the destination: no target helps
                             raise CardError("the library's picture store holds a differently spelled copy of "
                                             "this portrait's file", "portrait_unstorable", "portrait") from None
-                    batch.place(main_ref, PORTRAIT_SLOT, Placement("set", PORTRAIT_SLOT, portrait_ref),
-                                placement_expected)
+                    try:
+                        batch.place(main_ref, PORTRAIT_SLOT, Placement("set", PORTRAIT_SLOT, portrait_ref),
+                                    placement_expected)
+                    except InvalidPlacement as error:
+                        if error.reason != "invalid_image":
+                            raise
+                        raise CardError("the destination holds this portrait's image record, but it cannot be "
+                                        "read", "portrait_unstorable", "portrait") from None
                 preview = batch.preview()
                 # the commit's own checks on every write (records, image, blob, placement), run
                 # read-only now, so a plan that passes approval is not refused at commit for the
@@ -808,7 +824,11 @@ class CardImporter:
                 except ValueError:
                     found.append(CastStatus(cast.ref, "invalid_ref"))
                     continue
-                checked = self.store.check_definition(ref)
+                try:
+                    checked = self.store.check_definition(ref)
+                except (UnstorableIdentifier, ValueError):  # a ref no portable path can hold
+                    found.append(CastStatus(cast.ref, "invalid_ref"))
+                    continue
                 found.append(CastStatus(cast.ref, "resolves" if isinstance(checked, StoredDefinition)
                                         else str(checked)))
             else:
