@@ -7,6 +7,18 @@
 - recording a human repair of a skipped holdings undo, which 021 reports as `partial_revocation` until then;
 - orphan detection and duplicate recognition beyond the holders' bounded logs.
 
+## First slice (delivered)
+
+A partly published acceptance (021) is finished or aborted exactly once ([RECOVERY](../../RECOVERY.md)):
+`EffectRecovery.complete` writes the changes an event's receipts name that never landed, `adopt` records changes
+that landed without their event, and `revoke(partial=True)` aborts. 023 gained `complete` (finish an operation at
+its receipt's exact seqs) and 017 `add(relation_id=...)`. The proving scenario runs with the real journal: the
+store publishes relations before the event and holder files, so a crash leaves the companion registered and the
+ball not yet spent (the reverse comes only from sync or a restore, and is tested too). Left for later slices: a
+partly published revocation; recording a human repair of a skipped holdings undo; recognition beyond the bounded
+holder log; persisting the proposal before commit so restart can adopt (with 035); the 007 decision audit; the
+multi-transaction operation record (milestone 2).
+
 ## Scope
 - Carry forward Mechanics II's existing Action/Effect/journal proposal rather than inventing a rival engine.
 - Validate prerequisites, expected versions, logged randomness and all intended writes before publication.

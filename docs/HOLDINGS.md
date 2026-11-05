@@ -95,6 +95,7 @@ Holdings are neither a relation nor an entity. They grant no knowledge and no co
   - `preview()`: the exact bytes per logical path, empty when already applied. The summary and the bytes come from the same plan, so what a human reads is what they approve.
   - `commit(approvals=None)`: one store transaction with CAS on every holder file. A no-op commits nothing and returns `{}`. Committing twice raises.
   - `puts` and `recheck()` let a larger writer (021's accepted effects, which do this; later 030) fold the files into its own transaction. It must hold `store.lock` from `recheck()` through its commit, and must merge two changes for one holder into one operation (the store refuses a path written twice). Approvals stay pinned to these bytes.
+- `complete(op, *, seqs)` (030) finishes an operation that landed on some holders only, at the exact seqs `seqs` (a receipt) names, with 023's pure `complete`. It returns a `HoldingsChange` that puts, and pins, only the holders it writes ([RECOVERY](RECOVERY.md#023-complete)).
 - **A paired holder.** A holder whose id another kind of the campaign also uses is refused with `instance_id_conflict`: `load()` leaves both members of such a [pair](IDENTITY.md) out, so the id is no one holder. Replay still comes first (a landed operation is `already_applied`); otherwise it is named ahead of every other refusal except `holder_replaced`.
 - **At commit,** each holder is re-checked under the store lock against the instance file's exact bytes recorded when the change was planned (as 017 pins relation endpoints). A holder whose instance file vanished (`holder gone`), or whose id another kind has taken since (`instance_id_conflict`), raises `StaleWrite`. One whose file was replaced, perhaps by a different individual given the same id (`holder changed`), raises `HolderReplaced`, a `StaleWrite` that is never retried automatically: a human decides. A malformed instance file is pinned by its raw bytes; one that can no longer be read at all (now a link, an I/O error) is `holder gone`.
   - **Limits:** the pin is byte identity, not individual identity, and 107's instance files carry no creation stamp. Every allocator takes new ids outside [`campaign_taken_ids`](CHATS.md#taken-instance-ids), which keeps a hand-deleted holder's id taken while any record still names it (its holdings file, a chat roster, a relation, a ledger entry, ...). Once nothing does (its chat deleted by hand too, and no holdings file yet because this change is its first credit), 107 can regenerate the same id with identical bytes for the same source, and a change planned before the deletion and committed after the regeneration passes the pin and credits the new individual. The same holds for a file put back by hand or restored with the same bytes. Any hand edit of the instance file in between counts as replaced. A creation stamp in 107's instance envelope, or a per-file identity ([030](roadmap/sprints/durable-action-recovery.md)), would close this.
@@ -117,7 +118,7 @@ After `StaleWrite`, `WriteConflict` or `CommitIncomplete`, or after reopening a 
 
 A re-created change has new bytes, so it needs fresh approvals.
 
-**Repairing a partial operation** is a human decision. First check whether the missing holder's file was deliberately reset or restored: completing the operation would then re-credit what the human removed. Otherwise apply an `adjust` (or a corrective operation) under a **fresh** op id. The partial op id stays refused, which keeps the repair visible. Automatic completion belongs to [Durable Action Recovery (030)](roadmap/sprints/durable-action-recovery.md).
+**Repairing a partial operation** is a human decision. First check whether the missing holder's file was deliberately reset or restored: completing the operation would then re-credit what the human removed. Otherwise apply an `adjust` (or a corrective operation) under a **fresh** op id. The partial op id stays refused, which keeps the repair visible. For an operation that an accepted effect's receipt names, 030's `complete` finishes it at the receipt's exact seqs, and refuses once a holder changed since (so a hand repair is never doubled) ([RECOVERY](RECOVERY.md#023-complete)).
 
 ### Driven by accepted effects (021)
 
@@ -153,6 +154,7 @@ An accepted turn effect may carry one holdings operation ([EFFECTS](EFFECTS.md#h
 | The UI editor and the tracking toggle | UI sprints (`adjust` is the headless editor) |
 | Item display labels, item definitions, unique objects | 034 |
 | Cross-device merge of counts (sync reports a divergence as a `held` conflict until then) | [028](roadmap/sprints/app-managed-device-sync.md) |
-| Exactly-once beyond the bounded log; automatic partial completion | 030 |
+| Exactly-once beyond the bounded log | 030 |
+| Completing a partly published operation at known seqs: `complete` ([RECOVERY](RECOVERY.md#023-complete)) | 030 (delivered) |
 | Who may mutate whose holdings beyond the store's per-path `APPLY` | 003/104 |
 | Migrating V1 inventories | 026 |

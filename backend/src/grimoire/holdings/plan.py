@@ -111,8 +111,101 @@ def plan(op: Operation, current: Mapping[InstanceRef, Holdings | None], at: str,
             raise HoldingsRefused("beyond_history", f"{holder}'s log is missing seq {missing[0]} since {seen}; "
                                   f"whether {op.op_id} landed can no longer be told")
 
+    stacks, touched = _apply_lines(op, {holder: state[holder] for holder in holders})
+
+    seqs = {holder: state[holder].seq + 1 for holder in holders}
+    values, summary = {}, []
+    for holder in holders:
+        before = state[holder]
+        entry = LogEntry(op.op_id, seqs[holder], at, op.lines,
+                         {other: seqs[other] for other in holders if other != holder},
+                         {item: stacks[holder].get(item, 0) for item in touched[holder]}, op.note, op.cause)
+        values[holder] = _evict(before, seqs[holder], stacks[holder], (*before.log, entry), size, max_file)
+        summary += [SummaryRow(holder, item, before.count(item), stacks[holder].get(item, 0),
+                               item not in before.stacks and stacks[holder].get(item, 0) > 0)
+                    for item in sorted(touched[holder])]
+    return Applied(values, tuple(summary))
+
+
+def complete(op: Operation, current: Mapping[InstanceRef, Holdings | None], at: str, *,
+             seqs: Mapping[InstanceRef, int], exists: Callable[[InstanceRef], bool], size: Sizer,
+             max_file: int = MAX_FILE) -> Applied | AlreadyApplied:
+    """Finish ``op`` where it landed on some holders only, at the exact seqs it was given (Sprint 030).
+
+    ``seqs`` is the receipt: the seq ``op`` took (or was to take) on each of its holders. A holder either
+    logs ``op`` at its seq with the other holders' seqs as peers and nothing after it (it landed), or has no
+    entry for it and is at exactly one before its seq (it never got it). Anything else means a holder moved
+    on, or was restored further back, since: completing it now would not be what was committed (a later
+    operation may be a hand repair of this very partial), so it is refused as ``seq_moved``.
+    The missing holders get the entry the original operation would have written there; the landed ones
+    are not touched. Every holder landed: ``AlreadyApplied``.
+    """
+    if type(op) is not Operation:
+        raise TypeError("complete takes an Operation")
+    check_timestamp(at)
+    holders = op.holders
+    if not isinstance(seqs, Mapping) or set(seqs) != set(holders):
+        raise HoldingsRefused("invalid_field", f"seqs must name exactly the holders {_names(holders)}")
+    for holder, seq in seqs.items():
+        if type(seq) is not int or not 1 <= seq <= 10 ** 15:
+            raise HoldingsRefused("invalid_field", f"the seq for {holder} must be a positive integer")
+    absent = [holder for holder in holders if holder not in current]
+    if absent:
+        raise ValueError(f"current state is missing holders {_names(absent)}")
+    state = {holder: current[holder] or Holdings.empty(holder) for holder in holders}
+    for holder, value in state.items():
+        if value.holder != holder:
+            raise ValueError(f"the state given for {holder} belongs to {value.holder}")
+
+    landed: dict[InstanceRef, LogEntry] = {}
+    moved_on: list[InstanceRef] = []
+    for holder in holders:
+        entry, value = state[holder].entry(op.op_id), state[holder]
+        peers = {other: seqs[other] for other in holders if other != holder}
+        if entry is not None:
+            if not entry.same_operation(op):
+                raise HoldingsRefused("op_id_reused", f"{op.op_id} was logged with other content by {holder}")
+            if entry.seq != seqs[holder] or dict(entry.peers) != peers:
+                raise HoldingsRefused("seq_moved", f"{holder} logs {op.op_id} at seq {entry.seq} with other "
+                                      "peers than its receipt names")
+            landed[holder] = entry
+            if value.seq != entry.seq:  # anything since (a repair of this very partial) may already make up for it
+                moved_on.append(holder)
+        elif value.seq != seqs[holder] - 1:
+            raise HoldingsRefused("seq_moved", f"{holder} is at seq {value.seq}, not {seqs[holder] - 1}: it was "
+                                  f"changed or restored since {op.op_id} was committed")
+    if len(landed) == len(holders):
+        return AlreadyApplied(landed)
+    if moved_on:
+        raise HoldingsRefused("seq_moved", f"{_names(moved_on)} changed after logging {op.op_id}: completing it "
+                              "now could give twice what a later operation already made up for")
+    missing = tuple(holder for holder in holders if holder not in landed)
+    gone = [holder for holder in missing if not exists(holder)]
+    if gone:
+        raise HoldingsRefused("missing_holder", f"no instance file for {_names(gone)}")
+    stacks, touched = _apply_lines(op, {holder: state[holder] for holder in missing})
+    values, summary = {}, []
+    for holder in missing:
+        before = state[holder]
+        entry = LogEntry(op.op_id, seqs[holder], at, op.lines,
+                         {other: seqs[other] for other in holders if other != holder},
+                         {item: stacks[holder].get(item, 0) for item in touched[holder]}, op.note, op.cause)
+        values[holder] = _evict(before, seqs[holder], stacks[holder], (*before.log, entry), size, max_file)
+        summary += [SummaryRow(holder, item, before.count(item), stacks[holder].get(item, 0),
+                               item not in before.stacks and stacks[holder].get(item, 0) > 0)
+                    for item in sorted(touched[holder])]
+    return Applied(values, tuple(summary))
+
+
+def _apply_lines(op: Operation, state: Mapping[InstanceRef, Holdings]
+                 ) -> tuple[dict[InstanceRef, dict[str, int]], dict[InstanceRef, list[str]]]:
+    """Apply ``op``'s lines, in order, to the stacks of the holders in ``state`` only.
+
+    A line's effect on one holder depends only on that holder's own counts, so restricting the lines to a
+    subset of the holders gives each of them exactly what the whole operation would have given it.
+    """
     stacks = {holder: dict(value.stacks) for holder, value in state.items()}
-    touched: dict[InstanceRef, list[str]] = {holder: [] for holder in holders}
+    touched: dict[InstanceRef, list[str]] = {holder: [] for holder in state}
 
     def change(holder: InstanceRef, item: str, count: int) -> None:
         if count > MAX_COUNT:
@@ -132,35 +225,28 @@ def plan(op: Operation, current: Mapping[InstanceRef, Holdings | None], at: str,
 
     for line in op.lines:
         holder, item = line.holder, line.item
+        if line.kind == "move":
+            if holder in stacks:
+                take(holder, item, line.amount)  # type: ignore[arg-type]
+            target = line.target
+            if target in stacks:
+                change(target, item, stacks[target].get(item, 0) + line.amount)  # type: ignore[index, operator]
+            continue
+        if holder not in stacks:
+            continue
         if line.kind == "add":
             change(holder, item, stacks[holder].get(item, 0) + line.amount)  # type: ignore[operator]
         elif line.kind == "consume":
             take(holder, item, line.amount)  # type: ignore[arg-type]
-        elif line.kind == "adjust":
+        else:
             have = stacks[holder].get(item, 0)
             if have != line.seen:
                 raise HoldingsRefused("stale_count", f"{holder} holds {have} {item}, not the {line.seen} seen")
             change(holder, item, line.to)  # type: ignore[arg-type]
-        else:
-            take(holder, item, line.amount)  # type: ignore[arg-type]
-            target = line.target
-            change(target, item, stacks[target].get(item, 0) + line.amount)  # type: ignore[index, operator]
-    for holder in holders:
+    for holder in state:
         if len(stacks[holder]) > MAX_STACKS:
             raise HoldingsRefused("stack_limit", f"{holder} would hold more than {MAX_STACKS} stacks")
-
-    seqs = {holder: state[holder].seq + 1 for holder in holders}
-    values, summary = {}, []
-    for holder in holders:
-        before = state[holder]
-        entry = LogEntry(op.op_id, seqs[holder], at, op.lines,
-                         {other: seqs[other] for other in holders if other != holder},
-                         {item: stacks[holder].get(item, 0) for item in touched[holder]}, op.note, op.cause)
-        values[holder] = _evict(before, seqs[holder], stacks[holder], (*before.log, entry), size, max_file)
-        summary += [SummaryRow(holder, item, before.count(item), stacks[holder].get(item, 0),
-                               item not in before.stacks and stacks[holder].get(item, 0) > 0)
-                    for item in sorted(touched[holder])]
-    return Applied(values, tuple(summary))
+    return stacks, touched
 
 
 def _basis(basis: Mapping[InstanceRef, int] | None, holders: tuple[InstanceRef, ...]) -> Mapping[InstanceRef, int]:

@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from grimoire.core.identity import HoldingsRef, InstanceRef, paired_instances
 from grimoire.holdings import (
     HOLDINGS_SCHEMA, AlreadyApplied, Holdings, HoldingsCodecError, HoldingsRefused, LogEntry, Operation,
-    SummaryRow, entry_to_payload, holdings_from_payload, holdings_to_payload, plan,
+    SummaryRow, complete, entry_to_payload, holdings_from_payload, holdings_to_payload, plan,
 )
 from grimoire.library import LibraryPathError
 from grimoire.store import (
@@ -321,6 +321,45 @@ class HoldingsLibrary:
                                      owner=owner, extra=extra), previous))
         entries = {holder: value.log[-1] for holder, value in result.values.items()}
         return HoldingsChange(self, result.outcome, result.summary, entries, tuple(puts), holder_etags)
+
+    def complete(self, op: Operation, *, seqs: Mapping[InstanceRef, int]) -> HoldingsChange:
+        """Finish ``op`` on the holders it never reached, at the exact seqs of its receipt (Sprint 030).
+
+        Reads like ``apply``; refusals raise ``HoldingsRefused`` (023's ``complete``). The change puts, and
+        pins the instance files of, only the holders it writes; ``entries`` names every holder's entry. A
+        caller that relies on the landed holders' files staying as read pins those itself.
+        """
+        if type(op) is not Operation:
+            raise TypeError("complete takes an Operation")
+        with self.store.lock:
+            views = {holder: self._view(holder) for holder in op.holders}
+            instances = set(self.store.campaign_instances(op.campaign_id))
+            holder_etags = {holder: etag for holder in op.holders if holder in instances
+                            if (etag := self._instance_etag(holder)) is not None}
+        envelopes = {}
+        for holder, view in views.items():
+            if view.envelope is None:
+                envelopes[holder] = (self._owner, {}, None)
+            else:
+                envelopes[holder] = (view.envelope.owner, view.envelope.extra, view.etag)
+        result = complete(op, {holder: view.holdings if view.etag else None for holder, view in views.items()},
+                          self._clock(), seqs=seqs, exists=holder_etags.__contains__, size=_StoreSizer(envelopes))
+        if isinstance(result, AlreadyApplied):
+            return HoldingsChange(self, result.outcome, entries=result.entries)
+        paired = sorted(str(holder) for holder in set(result.values) & paired_instances(instances))
+        if paired:
+            raise HoldingsRefused("instance_id_conflict", f"another kind also uses these holders' ids: {paired}")
+        puts = []
+        for holder in sorted(result.values, key=str):
+            owner, extra, previous = envelopes[holder]
+            puts.append((ScopeRecord(HoldingsRef.of(holder), HOLDINGS_SCHEMA, holdings_to_payload(result.values[holder]),
+                                     owner=owner, extra=extra), previous))
+        entries = {holder: views[holder].holdings.entry(op.op_id) for holder in op.holders
+                   if holder not in result.values}
+        entries.update({holder: value.log[-1] for holder, value in result.values.items()})
+        written = {holder: etag for holder, etag in holder_etags.items() if holder in result.values}
+        return HoldingsChange(self, result.outcome, result.summary, dict(sorted(entries.items(), key=lambda p: str(p[0]))),
+                              tuple(puts), written)
 
     def campaign_holdings(self, campaign_id: str) -> CampaignHoldings:
         """Every holder file of one campaign, decoded, plus the files that cannot be used as they are.
