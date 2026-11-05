@@ -184,3 +184,38 @@ def test_a_chat_commit_rechecks_a_reused_actor_for_a_pair(tmp_path, how):
         assert caught.value.stale == ((f"campaigns/{mara.campaign_id}/instances/character/{mara.instance_id}.json",
                                        "instance_id_conflict"),)
         assert snapshot(store.root) == before
+
+
+@pytest.mark.parametrize("how", ["start_chat", "attach_source", "set_persona"])
+@pytest.mark.parametrize("edit", ["replaced", "deleted"])
+def test_a_chat_commit_rechecks_a_reused_actors_file(tmp_path, how, edit):
+    """107: a reused actor's file replaced by hand between plan and commit (the same id, perhaps a
+    different individual) or deleted is never bound: the commit compares the etag read at plan time."""
+    with new_library(tmp_path / "lib") as store:
+        seed_sources(store)
+        chats = chat_library(store)
+        (mara,) = chats.start_chat(Launch("character", MARA)).commit().actors
+        scope = ScopeRef(mara.campaign_id)
+        if how == "start_chat":
+            change = chats.start_chat(Launch("character", MARA), scope=scope,
+                                      reuse_actors={("character", MARA.entity_key): mara})
+        else:
+            second = chats.start_chat(Launch("character", ANYA), scope=scope).commit().chat
+            _, etag = chats.read_chat(second)
+            if how == "attach_source":
+                change = chats.attach_source(second, MARA, "character", expected=etag, actor=mara)
+            else:
+                change = chats.set_persona(second, MARA, expected=etag, actor=mara)
+        path = f"campaigns/{mara.campaign_id}/instances/character/{mara.instance_id}.json"
+        anya = chats.start_chat(Launch("character", ANYA), scope=scope)
+        anya_bytes = next(data for name, data in anya.preview().items() if "/instances/" in name)
+        if edit == "replaced":  # now an instance of Anya under Mara's id
+            store.root.joinpath(path).write_bytes(anya_bytes.replace(anya.new_actors[0].instance_id.encode(),
+                                                                     mara.instance_id.encode()))
+        else:
+            store.root.joinpath(path).unlink()
+        before = snapshot(store.root)
+        with pytest.raises(StaleWrite) as caught:
+            change.commit()
+        assert caught.value.stale == ((path, "changed" if edit == "replaced" else "absent"),)
+        assert snapshot(store.root) == before

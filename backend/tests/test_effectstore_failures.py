@@ -856,3 +856,35 @@ def test_a_revoked_event_is_never_bridged_as_objective_fact(world):
     event, _ = library.read(done.ref, requested_by=DIRECTOR)
     with pytest.raises(EffectError, match="revoked_event"):
         as_knowledge_event(event)
+
+
+# -- instance-id pairs (IDENTITY.md): an id two kinds share is no one actor ------------------------
+
+@pytest.mark.parametrize(("paired", "ops"), [(WREN, ("0", "1")),  # the agent of both operations
+                                             (TAM, ("1",)),  # an endpoint only
+                                             (KEY1, ("0", "1"))])
+def test_an_acceptance_naming_a_paired_actor_is_refused(world, paired, ops):
+    from graph_fixtures import hand_pair
+    store, handles, library = world
+    hand_pair(store, paired)
+    before = snapshot(store.root)
+    with pytest.raises(InvalidEffect) as caught:
+        accept(library, handles)
+    assert (caught.value.reason, caught.value.records) == ("instance_id_conflict", ops)
+    assert snapshot(store.root) == before
+
+
+@pytest.mark.parametrize("paired", [WREN, TAM])
+def test_an_acceptance_rechecks_for_a_pair_formed_since_the_preview(world, paired):
+    from graph_fixtures import hand_pair
+    store, handles, library = world
+    change = accept(library, handles)
+    hand_pair(store, paired)
+    path = f"campaigns/c/instances/character/{paired.instance_id}.json"
+    with store.lock:
+        assert change.stale() == [(path, "instance_id_conflict")]
+    before = snapshot(store.root)
+    with pytest.raises(StaleWrite) as caught:
+        change.commit()
+    assert caught.value.stale == ((path, "instance_id_conflict"),)
+    assert snapshot(store.root) == before

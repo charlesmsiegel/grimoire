@@ -21,7 +21,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
-from grimoire.core.identity import HoldingsRef, InstanceRef
+from grimoire.core.identity import HoldingsRef, InstanceRef, paired_instances
 from grimoire.holdings import (
     HOLDINGS_SCHEMA, AlreadyApplied, Holdings, HoldingsCodecError, HoldingsRefused, LogEntry, Operation,
     SummaryRow, entry_to_payload, holdings_from_payload, holdings_to_payload, plan,
@@ -110,24 +110,27 @@ class HoldingsChange:
 
     def recheck(self) -> None:
         """Every holder still has the very instance file it was planned against (same bytes): a file
-        replaced since then may hold a different individual under the same id. The caller holds
+        replaced since then may hold a different individual under the same id. No holder's id may have
+        been taken by another kind since (``instance_id_conflict``: no one individual). The caller holds
         ``store.lock`` through the commit."""
         store = self.library.store
         with store.lock:
-            gone, changed = [], []
+            gone, changed, paired = [], [], []
             for envelope, _ in self.puts:
                 holder = envelope.address.holder  # type: ignore[union-attr]
                 path = "/".join(address_parts(holder))
-                etag = (self.library._instance_etag(holder)
-                        if holder in store.campaign_instances(holder.campaign_id) else None)
+                instances = store.campaign_instances(holder.campaign_id)
+                etag = self.library._instance_etag(holder) if holder in instances else None
                 if etag is None:  # vanished, or no longer readable (a link, an I/O error): no holder to pin
                     gone.append((path, "holder gone"))
                 elif etag != self.holder_etags.get(holder):
                     changed.append((path, "holder changed"))
+                elif holder in paired_instances(instances):
+                    paired.append((path, "instance_id_conflict"))
             if changed:
-                raise HolderReplaced(changed + gone)
-            if gone:
-                raise StaleWrite(gone)
+                raise HolderReplaced(changed + gone + paired)
+            if gone or paired:
+                raise StaleWrite(gone + paired)
 
     def commit(self, approvals: Mapping[str, str] | None = None) -> dict[str, str]:
         store = self.library.store
@@ -283,6 +286,7 @@ class HoldingsLibrary:
                             if (etag := self._instance_etag(holder)) is not None}  # unreadable: no holder
         replaced = sorted(str(holder) for holder, pinned in pins.items()
                           if holder in holder_etags and holder_etags[holder] != pinned)
+        paired = sorted(str(holder) for holder in set(op.holders) & paired_instances(instances))
         envelopes = {}
         for holder, view in views.items():
             if view.envelope is None:
@@ -293,13 +297,15 @@ class HoldingsLibrary:
             result = plan(op, {holder: view.holdings if view.etag else None for holder, view in views.items()},
                           self._clock(), exists=holder_etags.__contains__, size=_StoreSizer(envelopes), basis=basis)
         except HoldingsRefused:
-            if not replaced:
+            if not (replaced or paired):
                 raise
             result = None
         if isinstance(result, AlreadyApplied):
             return HoldingsChange(self, result.outcome, entries=result.entries)
         if replaced:
             raise HoldingsRefused("holder_replaced", f"instance files changed since first planned: {replaced}")
+        if paired:  # load() leaves both members of a pair out: the id is no one holder (IDENTITY.md)
+            raise HoldingsRefused("instance_id_conflict", f"another kind also uses these holders' ids: {paired}")
         assert result is not None
         puts = []
         for holder in sorted(result.values, key=str):  # a pinned order: the files publish in this order

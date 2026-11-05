@@ -9,6 +9,7 @@ ledger folder or batch that cannot be listed or read fails allocation closed.
 from __future__ import annotations
 
 import json
+import shutil
 
 import pytest
 
@@ -18,7 +19,7 @@ from grimoire.core.identity import InstanceRef, ScopeRef
 from grimoire.core.model import ControlAssignment
 from grimoire.ledgers import ControlChange, SovereigntyLedger, sovereignty_actor_ids
 from grimoire.security import Grant, Permission, ResourcePath
-from grimoire.store import LibraryStore, TakenIdsUnlisted
+from grimoire.store import LibraryStore, StaleWrite, TakenIdsUnlisted
 
 from chat_fixtures import MARA, chat_library, seed_sources
 from ledger_helpers import OWNER, open_authority
@@ -164,3 +165,40 @@ def test_an_unreadable_ledger_fails_allocation_closed(tmp_path, monkeypatch, dam
         with pytest.raises(TakenIdsUnlisted):
             chats.start_chat(Launch("character", MARA), scope=ScopeRef(Q))
         assert sorted(path.name for path in (store.root / "campaigns" / Q / "chats").iterdir()) == before
+
+
+# -- a campaign id whose ledger outlives its folder ----------------------------------------------------
+
+def test_a_new_scope_never_takes_a_deleted_campaigns_id_while_its_ledger_survives(tmp_path):
+    """Deleting ``campaigns/q-1`` by hand leaves ``authority/campaigns/q-1``: a new campaign given that
+    id would inherit its controls (or fail to commit), so the allocator skips it."""
+    lib = tmp_path / "lib"
+    with LibraryStore.create(lib) as store:
+        _start(store)
+    _make_pc(lib)
+    with LibraryStore.open(lib) as store:
+        authority = open_authority(store)
+        authority.add_grant(Grant("g1", OWNER, frozenset({Permission.APPLY}), ResourcePath.parse("campaigns"), OWNER))
+        shutil.rmtree(store.root / "campaigns" / Q)
+        ledger = sorted(path.name for path in store.root.joinpath(*LEDGER).iterdir())
+        chats = chat_library(store, authority.handle_for(OWNER, trusted=True))  # a fresh counter offers q-1 first
+        change = chats.start_chat(Launch("character", MARA))
+        assert change.scope == ScopeRef("q-2")
+        started = change.commit()
+        assert started.actors == (InstanceRef("q-2", "character", "mara-1"),)
+        assert sorted(path.name for path in store.root.joinpath(*LEDGER).iterdir()) == ledger
+        assert not (store.root / "campaigns" / Q).exists()
+        assert SovereigntyLedger(authority).load("q-2").controls == ()  # nobody's PC
+        authority.close()
+
+
+def test_a_new_scope_commit_rechecks_for_a_ledger_made_since_the_plan(tmp_path):
+    with LibraryStore.create(tmp_path / "lib") as store:
+        seed_sources(store)
+        change = chat_library(store).start_chat(Launch("character", MARA))
+        assert change.scope == ScopeRef(Q)
+        store.root.joinpath(*LEDGER).mkdir(parents=True)  # another program starts q-1's ledger
+        with pytest.raises(StaleWrite) as caught:
+            change.commit()
+        assert caught.value.stale == ((f"authority/campaigns/{Q}", "exists"),)
+        assert not (store.root / "campaigns" / Q).exists()

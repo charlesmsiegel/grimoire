@@ -20,12 +20,14 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
-from grimoire.core.identity import AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, WrapUpRef, validate_segment
+from grimoire.core.identity import (
+    AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, WrapUpRef, paired_instances, validate_segment,
+)
 from grimoire.core.knowledge import Event, Moment
 from grimoire.core.model import ControlAssignment
 from grimoire.effects import (
     ACCEPTED_SCHEMA, WRAPUP_SCHEMA, AcceptedEvent, AcceptedOperation, EffectCodecError, EffectError, EffectProblem,
-    EffectProposal, EndorsementRecord, EndStep, Receipt, Revocation, SceneWrapUp, Skipped, accepted_from_payload,
+    EffectProposal, EndorsementRecord, EndStep, Op, Receipt, Revocation, SceneWrapUp, Skipped, accepted_from_payload,
     accepted_to_payload, accepted_token, authorize, bridge_problems, check_citations, ledger_problems, orphans,
     parse_token, plan,
     edited_effects, partial_revocations, receipt_failure, revocation_fingerprint, revoked_token, verify_receipts,
@@ -59,6 +61,11 @@ class InvalidEffect(ValueError):
 
     def __reduce__(self) -> tuple[object, ...]:
         return (type(self), (str(self), self.reason, self.records))
+
+
+def _actors(op: Op) -> frozenset[InstanceRef]:
+    """The individuals an operation names: its endpoints and its agent."""
+    return frozenset(ref for ref in (op.subject, op.object, op.agent) if ref is not None)
 
 
 def _refused(error: EffectError) -> InvalidEffect:
@@ -139,6 +146,7 @@ class EffectChange:
     duplicate_of: AcceptedRef | None = None
     checks_relations: bool = False  # an acceptance: its preconditions need every relation file readable
     agent_etags: Mapping = field(default_factory=dict)  # an acceptance: each agent's instance file as checked
+    actors: frozenset = frozenset()  # an acceptance: every endpoint and agent, re-checked for an id pair
     rechecks_readability: bool = False  # a revocation: every relation file must still be readable at commit
     _committed: bool = field(default=False, repr=False)
 
@@ -172,11 +180,15 @@ class EffectChange:
         for agent, etag in self.agent_etags.items():  # a replaced file may be a different individual
             if self.library._etag(agent) != etag:
                 found.append(("/".join(address_parts(agent)), "agent missing or changed"))
+        if self.actors:  # another kind may have taken an actor's id since: no one individual (IDENTITY.md)
+            paired = paired_instances(self.library.store.campaign_instances(self.campaign_id))
+            found += [("/".join(address_parts(actor)), "instance_id_conflict")
+                      for actor in sorted(self.actors & paired, key=str)]
         event_id = getattr(self.ref, "event_id", None)
         if self.checks_relations and not self.library._absent(KnowledgeRef(self.campaign_id, "event", event_id)):
             found.append((f"campaigns/{self.campaign_id}/events/{event_id}.json",
                           "a 020 event took this id"))
-        return found
+        return list(dict.fromkeys(found))  # an endpoint's pair is also reported by its 017 change
 
     def commit(self, approvals: Mapping[str, str] | None = None) -> EffectCommit:
         store = self.library.store
@@ -308,6 +320,11 @@ class TurnEffectsLibrary:
             if unreadable:  # a new effect's preconditions could be hidden by any damaged relation file
                 raise InvalidEffect("a relation file cannot be read, so preconditions cannot be checked",
                                     "undecodable_relation")
+            paired = paired_instances(self.store.campaign_instances(campaign))  # load() leaves both members out
+            clash = [str(number) for number, op in enumerate(proposal.operations) if _actors(op) & paired]
+            if clash:
+                raise InvalidEffect("an operation names an actor whose id another kind also uses",
+                                    "instance_id_conflict", clash)
             try:
                 authorization = authorize(proposal, controls, contributions)
             except EffectError as error:
@@ -359,7 +376,8 @@ class TurnEffectsLibrary:
             record = ScopeRecord(ref, ACCEPTED_SCHEMA, accepted_to_payload(event), owner=self._owner)
             agents = {op.agent: self._etag(op.agent) for op in proposal.operations if op.agent is not None}
             return EffectChange(self, ref, ((record, None),), tuple(changes), campaign, snap.state, proposal.chat,
-                                checks_relations=True, agent_etags=agents)
+                                checks_relations=True, agent_etags=agents,
+                                actors=frozenset().union(*(_actors(op) for op in proposal.operations)))
 
     # -- revoking -----------------------------------------------------------------------------
 

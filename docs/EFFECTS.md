@@ -124,6 +124,8 @@ Narration holds neither key. A player alone can never make their character's act
    `revoke` fails closed the same way (`undecodable_relation`, also with `partial=True`), so a damaged receipt or a hidden overlap is never skipped silently. **Limit:** 017's own `reopen`, called directly, does not block on undecodable files.
 
    The repair for any of these is to fix the file or move it out of the library by hand.
+
+   **No paired actor.** Then, before authority, no operation's endpoint or agent may share its id with an instance of another kind in the campaign (`instance_id_conflict`, naming the operations): `load()` leaves both members of such a [pair](IDENTITY.md) out, so the id is no one actor. A duplicate (step 4) writes nothing and is still reported as in force. Revocation does not check it, so a pair formed after an acceptance never blocks its undo.
 6. **Authorize** (two keys, above).
 7. **One accepted effect per turn.** An active event for the same chat, scene and turn with a *different* fingerprint refuses the acceptance (`turn_already_accepted`). Another swipe's effect needs the accepted one revoked first, and several things that happen in one turn are one proposal (up to 32 operations). This also stops a turn retried at a newly allocated sequence after a later event restored the state, which the preconditions alone would let through.
 8. **Sequence floor.** The sequence must be at least the highest sequence of any active event (`stale_sequence`); equal sequences are allowed (different turns or chats at one moment). Sequences are campaign-wide. **Obligation on 035:** allocate one non-decreasing sequence across all chats of a scope.
@@ -146,6 +148,7 @@ Narration holds neither key. A player alone can never make their character's act
    - that the set and etags of the accepted-event files are unchanged;
    - that the chat still exists;
    - that each agent's instance file still has the bytes it was checked against (a replaced file may be a different individual);
+   - that no endpoint or agent has since become one of an instance-id pair (`instance_id_conflict`; an endpoint of a `begin` is reported once, though 017's check finds it too);
    - that no 020 event has taken the new event's id meanwhile (`events/<event_id>.json` is still absent).
 
    If anything changed, it raises `StaleWrite`, writes nothing and reallocates nothing. Committing a **duplicate** re-checks the same way: the accepted-event files must be unchanged, and the event must still be active with receipts that verify against a fresh graph. A retry is therefore never told that a since-revoked or hand-undone event is in force.

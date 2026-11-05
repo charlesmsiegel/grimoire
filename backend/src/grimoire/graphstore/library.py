@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
-from grimoire.core.identity import InstanceRef, RelationRef, validate_segment
+from grimoire.core.identity import InstanceRef, RelationRef, paired_instances, validate_segment
 from grimoire.core.knowledge import Moment
 from grimoire.graph import (
     PREDICATES, Ending, GraphError, GraphIndex, Relation, Reopening, Retraction, UnsupportedRelation,
@@ -233,6 +233,11 @@ class RelationLibrary:
         for endpoint in (subject, object):
             if endpoint not in existing:
                 raise InvalidRelation(f"{endpoint} has no instance file", "missing_endpoint")
+        paired = paired_instances(existing)  # load() leaves both members of a pair out: no one individual
+        for endpoint in (subject, object):
+            if endpoint in paired:
+                raise InvalidRelation(f"{endpoint}'s id is also used by another kind in {campaign_id}",
+                                      "instance_id_conflict")
         etags = {endpoint: self._instance_etag(endpoint) for endpoint in (subject, object)}
         at = self._clock()
         ref = self._allocate(campaign_id)
@@ -349,7 +354,8 @@ class RelationLibrary:
         """Why an add previewed earlier may no longer be written (checked under the store lock).
 
         An endpoint file that was replaced since the preview may hold a different individual
-        under the same id, so its bytes must be the ones checked then.
+        under the same id, so its bytes must be the ones checked then; and an endpoint whose id
+        another kind has taken since is no one individual (``instance_id_conflict``).
         """
         campaign = relation.ref.campaign_id
         existing = set(self.store.campaign_instances(campaign))
@@ -357,6 +363,9 @@ class RelationLibrary:
                  if end not in existing]
         stale += [(_path(end), "endpoint changed") for end in (relation.subject, relation.object)
                   if end in existing and end in etags and self._instance_etag(end) != etags[end]]
+        paired = paired_instances(existing)  # another kind may have taken an endpoint's id since
+        stale += [(_path(end), "instance_id_conflict") for end in (relation.subject, relation.object)
+                  if end in paired]
         if any(isinstance(other, Relation) and other.ref != relation.ref and other.overlaps(relation)
                for other in (_decoded(self.store, campaign) if relations is None else relations)):
             stale.append((_path(relation.ref), "duplicate recorded"))

@@ -676,6 +676,16 @@ class LibraryStore:
             with self._access.cached_listings():
                 return self._access.presence((CAMPAIGNS, campaign_id))
 
+    def campaign_authority_presence(self, campaign_id: str) -> str:
+        """``absent``, ``present`` or ``mismatch`` for the campaign's authority ledger folder
+        (``authority/campaigns/<id>``, 010b's sovereignty ledger), which outlives ``campaigns/<id>``
+        when that folder is deleted by hand. Decided from listings, as ``campaign_presence``."""
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return self._access.presence(ledger_folder(f"{CAMPAIGNS}/{campaign_id}"))
+
     def campaign_instances(self, campaign_id: str) -> tuple[InstanceRef, ...]:
         """Every canonically named instance file of one campaign, across kinds; reads no content."""
         validate_segment(campaign_id, "campaign_id")

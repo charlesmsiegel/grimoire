@@ -125,12 +125,12 @@ Every mutating method returns a `ChatChange`:
 1. `preview()` returns the exact bytes per logical path, for a human to approve.
 2. `commit(approvals=None)` performs one store transaction with CAS on every touched record. Under an approval-gated policy, register an approval for each previewed path and pass them in.
 
-`commit` re-checks under the store lock that a newly allocated campaign is still absent, that each new actor id is still outside [`campaign_taken_ids`](#taken-instance-ids), and that no reused actor's id has since been taken by another kind (`instance_id_conflict`). A conflict raises `StaleWrite` and never reallocates, because the approvals pinned those bytes.
+`commit` re-checks under the store lock that a newly allocated campaign is still absent (its folder and its sovereignty ledger), that each new actor id is still outside [`campaign_taken_ids`](#taken-instance-ids), that each reused actor's instance file still has the etag it was checked at (a file replaced by hand may hold a different individual under the same id: `changed`, or `absent` if deleted), and that no reused actor's id has since been taken by another kind (`instance_id_conflict`). A conflict raises `StaleWrite` and never reallocates, because the approvals pinned those bytes.
 
 ### Methods
 
 - `start_chat(launch, attach=…, persona=…, label=…, scope=None, reuse_actors=None)`:
-  - **New scope:** the campaign id is drawn until `campaign_presence` is `absent`; a look-alike folder counts as taken.
+  - **New scope:** the campaign id is drawn until both `campaign_presence` and `campaign_authority_presence` are `absent`; a look-alike folder counts as taken. The sovereignty ledger (`authority/campaigns/<id>`) outlives a hand-deleted `campaigns/<id>` folder, and a new campaign given that id would inherit its controls, so its id stays taken while the ledger exists. New actors in the new scope are then numbered outside `campaign_taken_ids` as in an existing one.
   - **Continuing a scope:** pass `scope=`. A campaign without `scope.json` (one from before 107, or from 026) gets one lazily. To reuse existing campaign actors instead of creating new ones, pass `reuse_actors={(role, entity_key): InstanceRef}`. A reused actor must be a character instance of the same entity.
 - `read_chat(chat)` / `read_scope(scope)` return the decoded record and its etag, the `expected` value for an edit.
 - `attach_source(chat, ref, role, expected=…, actor=None)`: `actor=` explicitly reuses an existing campaign actor of the same entity, for example when re-attaching a detached character. The default is a new actor.

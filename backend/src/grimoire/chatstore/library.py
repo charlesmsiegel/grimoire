@@ -35,6 +35,7 @@ from grimoire.graphstore import relation_endpoint_ids
 from grimoire.holdingstore import holdings_holder_ids, holdings_peer_ids
 from grimoire.imagestore import placement_subject_ids
 from grimoire.ledgers import sovereignty_actor_ids
+from grimoire.library import LibraryPathError
 from grimoire.store import (
     CampaignRecords, LibraryStore, LibraryView, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
     TakenIdsUnlisted,
@@ -151,6 +152,8 @@ class ChatChange:
     new_actors: tuple[InstanceRef, ...] = ()
     new_scope: bool = False
     reused_actors: tuple[InstanceRef, ...] = ()  # existing actors this change binds; re-checked for a pair
+    #: each reused actor's instance-file etag as checked; a file replaced since may hold a different individual
+    reused_etags: Mapping[InstanceRef, str] = field(default_factory=dict)
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -169,13 +172,28 @@ class ChatChange:
             if self._committed:
                 raise StoreError("this change was already committed")
             campaign = self.scope.campaign_id
-            if self.new_scope and store.campaign_presence(campaign) != "absent":
-                raise StaleWrite([(f"campaigns/{campaign}", "exists")])
+            if self.new_scope:  # nothing may have started this campaign (or its ledger) since the plan
+                if store.campaign_presence(campaign) != "absent":
+                    raise StaleWrite([(f"campaigns/{campaign}", "exists")])
+                if store.campaign_authority_presence(campaign) != "absent":
+                    raise StaleWrite([(f"authority/campaigns/{campaign}", "exists")])
             if self.new_actors:
                 taken = campaign_taken_ids(store, campaign)
                 clash = [actor for actor in self.new_actors if actor.instance_id in taken]
                 if clash:
                     raise StaleWrite([("/".join(address_parts(actor)), "id taken") for actor in clash])
+            replaced = []
+            for actor, etag in self.reused_etags.items():  # the very file checked at plan time, same bytes
+                try:
+                    current: str | None = store.read(actor).etag
+                except RecordNotFound:
+                    current = None
+                except (StoreError, LibraryPathError):
+                    current = ""  # there, but unreadable now: not the file that was checked
+                if current != etag:
+                    replaced.append(("/".join(address_parts(actor)), "absent" if current is None else "changed"))
+            if replaced:
+                raise StaleWrite(replaced)
             if self.reused_actors:  # another kind may have taken a reused actor's id since the plan
                 paired = paired_instances(store.campaign_instances(campaign))
                 clash = [actor for actor in self.reused_actors if actor in paired]
@@ -309,9 +327,10 @@ class ChatLibrary:
         scope_puts: list[tuple[RecordEnvelope | ScopeRecord, str | None]] = []
         actor_puts: list[tuple[RecordEnvelope | ScopeRecord, str | None]] = []
         if scope is None:
-            taken: set[str] | _LazyTaken = set()
             scope, new_scope = self._allocate_scope(), True
             scope_puts.append((self._scope_record(PlayScope(scope, at)), None))
+            fresh = scope.campaign_id  # nothing should name it yet; the commit re-checks with the same set
+            taken: set[str] | _LazyTaken = _LazyTaken(lambda: campaign_taken_ids(self.store, fresh))
         else:
             new_scope = False
             if self.store.campaign_presence(scope.campaign_id) != "present":
@@ -323,27 +342,31 @@ class ChatLibrary:
             campaign = scope.campaign_id
             taken = _LazyTaken(lambda: campaign_taken_ids(self.store, campaign))
         chat = ChatRef(scope.campaign_id, self._id("t"))
-        bindings, actors, reused = [], [], []
+        bindings, actors, reused = [], [], {}
         for ref, role in wanted:
-            binding, envelope = self._prepare(scope.campaign_id, ref, role, reuse.pop((role, ref.entity_key), None),
-                                              taken)
+            binding, envelope, etag = self._prepare(scope.campaign_id, ref, role,
+                                                    reuse.pop((role, ref.entity_key), None), taken)
             bindings.append(binding)
             if envelope is not None:
                 actors.append(binding.actor)
                 actor_puts.append((envelope, None))
             elif binding.actor is not None:
-                reused.append(binding.actor)
+                assert etag is not None  # _check_reuse returned it
+                reused[binding.actor] = etag
         if reuse:
             raise InvalidBinding(f"actors to reuse match no binding: {sorted(map(str, reuse.values()))}",
                                  "reuse_unmatched")
         record = ChatRecord.start(chat, launch, at, tuple(bindings), label)
         puts = (*scope_puts, (self._chat_record(record), None), *actor_puts)
-        return ChatChange(self, puts, scope, chat, tuple(actors), new_scope, tuple(reused))
+        return ChatChange(self, puts, scope, chat, tuple(actors), new_scope, tuple(reused), reused)
 
     def _allocate_scope(self) -> ScopeRef:
+        """A campaign id with no ``campaigns/<id>`` folder and no sovereignty ledger: a ledger outlives a
+        hand-deleted campaign folder, and a new campaign given its id would inherit its controls."""
         for _ in range(_ALLOCATION_ATTEMPTS):
             campaign = self._id("q")
-            if self.store.campaign_presence(campaign) == "absent":  # a look-alike folder counts as taken
+            if (self.store.campaign_presence(campaign) == "absent"  # a look-alike folder counts as taken
+                    and self.store.campaign_authority_presence(campaign) == "absent"):
                 return ScopeRef(campaign)
         raise StoreError("could not allocate an unused campaign id")
 
@@ -353,8 +376,9 @@ class ChatLibrary:
                       actor: InstanceRef | None = None) -> ChatChange:
         record, base = self._current(chat, expected)
         taken = _LazyTaken(lambda: self._taken(chat, record))
-        binding, envelope = self._prepare(chat.campaign_id, ref, role, actor, taken)
-        return self._chat_change(chat, record.attach(binding, self._clock()), base, expected, envelope, binding.actor)
+        binding, envelope, etag = self._prepare(chat.campaign_id, ref, role, actor, taken)
+        return self._chat_change(chat, record.attach(binding, self._clock()), base, expected, envelope, binding.actor,
+                                 etag)
 
     def detach_source(self, chat: ChatRef, ref: SourceRef, role: str, *, expected: str) -> ChatChange:
         """Tombstone a binding; works for a broken reference (the repair path). Actors stay."""
@@ -371,13 +395,13 @@ class ChatLibrary:
                     and current.actor in self.store.campaign_instances(chat.campaign_id)):
                 actor = current.actor  # the same persona (perhaps another revision) keeps its body
             record = record.detach(current.ref, "persona", at)
-        envelope = bound = None
+        envelope = bound = etag = None
         if ref is not None:
             detached = record
-            binding, envelope = self._prepare(chat.campaign_id, ref, "persona", actor,
-                                              _LazyTaken(lambda: self._taken(chat, detached)))
+            binding, envelope, etag = self._prepare(chat.campaign_id, ref, "persona", actor,
+                                                    _LazyTaken(lambda: self._taken(chat, detached)))
             record, bound = record.attach(binding, at), binding.actor
-        return self._chat_change(chat, record, base, expected, envelope, bound)
+        return self._chat_change(chat, record, base, expected, envelope, bound, etag)
 
     def set_label(self, chat: ChatRef, label: str | None, *, expected: str) -> ChatChange:
         record, base = self._current(chat, expected)
@@ -431,15 +455,16 @@ class ChatLibrary:
         return found.ref.revision, found.etag  # type: ignore[return-value]
 
     def _prepare(self, campaign: str, ref: SourceRef, role: str, reuse: InstanceRef | None,
-                 taken: set[str] | _LazyTaken) -> tuple[NewBinding, RecordEnvelope | None]:
+                 taken: set[str] | _LazyTaken) -> tuple[NewBinding, RecordEnvelope | None, str | None]:
+        """The binding, a new actor's envelope (or ``None``) and a reused actor's etag as checked (or ``None``)."""
         revision, definition_etag = self._resolve(ref, role)
         if role not in ACTOR_ROLES:
             if reuse is not None:
                 raise InvalidBinding(f"a {role} binding has no actor", "role_kind")
-            return NewBinding(ref, role, revision), None
+            return NewBinding(ref, role, revision), None, None
         if reuse is not None:
-            self._check_reuse(campaign, reuse, ref)
-            return NewBinding(ref, role, revision, reuse, CAMPAIGN_CONTINUITY), None
+            etag = self._check_reuse(campaign, reuse, ref)
+            return NewBinding(ref, role, revision, reuse, CAMPAIGN_CONTINUITY), None, etag
         base, number = ref.entity_id[:100], 1
         while f"{base}-{number}" in taken:
             number += 1
@@ -449,9 +474,10 @@ class ChatLibrary:
             actor, instance_to_payload(EntityInstance(actor, source=ref)), owner=self._owner,
             derived_from=str(ref), base=str(ref.at(revision)), base_etag=definition_etag,
             extra={"schema": ENTITY_SCHEMA})
-        return NewBinding(ref, role, revision, actor, NOT_WITNESSED), envelope
+        return NewBinding(ref, role, revision, actor, NOT_WITNESSED), envelope, None
 
-    def _check_reuse(self, campaign: str, actor: InstanceRef, ref: SourceRef) -> None:
+    def _check_reuse(self, campaign: str, actor: InstanceRef, ref: SourceRef) -> str:
+        """The etag of the actor's file as checked: the commit binds only these very bytes."""
         if actor.campaign_id != campaign or actor.kind != "character":
             raise InvalidBinding(f"{actor} is not a character of {campaign}", "actor_mismatch")
         try:
@@ -466,6 +492,7 @@ class ChatLibrary:
             raise InvalidBinding(f"{actor} is not an instance of {ref.unpinned()}", "actor_mismatch")
         if actor in paired_instances(self.store.campaign_instances(campaign)):  # load() leaves both members out
             raise InvalidBinding(f"{actor}'s id is also used by another kind in {campaign}", "instance_id_conflict")
+        return stored.etag
 
     def _chat_record(self, record: ChatRecord, base: ScopeRecord | None = None) -> ScopeRecord:
         return self._envelope(record.ref, CHAT_SCHEMA, chat_to_payload(record), base)
@@ -480,17 +507,22 @@ class ChatLibrary:
         return ScopeRecord(ref, schema, payload, owner=base.owner, extra=base.extra)
 
     def _chat_change(self, chat: ChatRef, record: ChatRecord, base: ScopeRecord, expected: str,
-                     envelope: RecordEnvelope | None = None, bound: InstanceRef | None = None) -> ChatChange:
-        """``bound`` is the actor the change binds: new if ``envelope`` creates it, otherwise reused."""
+                     envelope: RecordEnvelope | None = None, bound: InstanceRef | None = None,
+                     bound_etag: str | None = None) -> ChatChange:
+        """``bound`` is the actor the change binds: new if ``envelope`` creates it, otherwise reused, its
+        file then pinned at ``bound_etag`` (the etag ``_check_reuse`` read)."""
         puts: list[tuple[RecordEnvelope | ScopeRecord, str | None]] = [(self._chat_record(record, base), expected)]
         actors: tuple[InstanceRef, ...] = ()
         reused: tuple[InstanceRef, ...] = ()
+        etags: dict[InstanceRef, str] = {}
         if envelope is not None:
             puts.append((envelope, None))
             actors = (envelope.address,)  # type: ignore[assignment]
         elif bound is not None:
             reused = (bound,)
-        return ChatChange(self, tuple(puts), chat.scope, chat, actors, reused_actors=reused)
+            if bound_etag is not None:
+                etags[bound] = bound_etag
+        return ChatChange(self, tuple(puts), chat.scope, chat, actors, reused_actors=reused, reused_etags=etags)
 
     def _scope_change(self, scope: ScopeRef, expected: str,
                       change: Callable[[PlayScope], PlayScope]) -> ChatChange:

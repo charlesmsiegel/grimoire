@@ -319,6 +319,31 @@ def test_vanished_holder(store, library):
     instance.write_bytes(kept)
 
 
+def test_a_paired_holder_is_refused(store, library):
+    """An id two kinds share is no one holder (IDENTITY.md); a landed retry is still already applied."""
+    from graph_fixtures import hand_pair
+    done(library, op("a1", Line.add(MARA, ORDINARY, 5)))
+    hand_pair(store, MARA)
+    before = snapshot(store.root)
+    assert refused(library, op("a2", Line.add(MARA, ORDINARY, 1))).reason == "instance_id_conflict"
+    assert refused(library, op("m1", Line.move(TOMA, MARA, ORDINARY, 1))).reason == "instance_id_conflict"
+    assert library.apply(op("a1", Line.add(MARA, ORDINARY, 5))).outcome == "already_applied"
+    assert snapshot(store.root) == before
+
+
+def test_a_commit_rechecks_for_a_pair_formed_since_the_plan(store, library):
+    from graph_fixtures import hand_pair
+    from grimoire.holdingstore import HolderReplaced
+    change = library.apply(op("a1", Line.add(MARA, ORDINARY, 5)))
+    hand_pair(store, MARA)
+    before = snapshot(store.root)
+    with pytest.raises(StaleWrite) as caught:
+        change.commit()
+    assert not isinstance(caught.value, HolderReplaced)  # the holder's own file is unchanged
+    assert caught.value.stale == (("campaigns/c1/instances/character/mara-1.json", "instance_id_conflict"),)
+    assert snapshot(store.root) == before
+
+
 def test_a_replaced_holder_is_not_credited_by_a_stale_change(store, library):
     """A change planned for one individual never lands on a different one given the same id since."""
     change = library.apply(op("g1", Line.add(MARA, "gold-coin", 500)))

@@ -370,3 +370,26 @@ def test_an_end_of_a_relation_with_a_missing_endpoint_still_commits(store, libra
     change = library.end(done.relation, until=Moment(9), provenance="director: repair", expected=etag)
     change.commit()  # the repair path: pinned as missing, still missing
     assert library.read(done.relation)[0].ending.until == Moment(9)
+
+
+# -- instance-id pairs (IDENTITY.md): an id two kinds share is no one endpoint ---------------------
+
+def test_an_add_naming_a_paired_endpoint_is_refused(store, library):
+    from graph_fixtures import hand_pair
+    hand_pair(store, WREN)
+    before = snapshot(store.root)
+    assert reason(lambda: add(library)) == "instance_id_conflict"
+    assert snapshot(store.root) == before
+
+
+def test_an_add_rechecks_for_a_pair_formed_since_the_preview(store, library):
+    from graph_fixtures import hand_pair
+    change = add(library)
+    hand_pair(store, GUILD, "place")
+    stale = [("campaigns/c/instances/organization/ashen-guild.json", "instance_id_conflict")]
+    assert change.stale() == stale
+    before = snapshot(store.root)
+    with pytest.raises(StaleWrite) as caught:
+        change.commit()
+    assert list(caught.value.stale) == stale
+    assert snapshot(store.root) == before

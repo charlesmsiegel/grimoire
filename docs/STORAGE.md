@@ -217,6 +217,7 @@ All of these take the store lock, require a consistent library, and read listing
 
 - `read(ScopeRef | ChatRef)` returns a `StoredScopeRecord` (and since 017/021/023, `read(RelationRef | AcceptedRef | WrapUpRef | HoldingsRef)` too).
 - `campaign_presence(id)` returns `absent`, `present`, or `mismatch` when only a look-alike folder exists.
+- `campaign_authority_presence(id)` returns the same for the campaign's authority ledger folder (`authority/campaigns/<id>`), which a campaign id allocator must also find `absent`.
 - `campaign_instances(id)` returns canonically named instance files across kinds. It reads names only and refuses links. Both members of a [cross-kind pair](#instance-ids-are-never-reused) are listed.
 - `campaign_chats(id)` returns one campaign's chat records as `CampaignRecords(records, problems)`, contained as `load()` contains them, reading only that campaign's `chats/`.
 - `campaign_placement_subjects(id)` returns `(refs, complete)`: the instance subjects of one campaign's placements, from **listings only** (every `<id>` entry under `placements/<kind>/`). Look-alikes count under the names they fold to, as for `campaign_holding_names`, and `complete=False` when a folder that could hold a subject is a link or cannot be listed, or the campaign folder exists only as a look-alike.
@@ -283,6 +284,7 @@ A distinct format, rather than an extension of `scope-record/1`, keeps a parser 
 An instance id is unique within a campaign across kinds and never goes to a different individual ([IDENTITY](IDENTITY.md)):
 
 - the commit refuses a cross-kind pair (`InstanceIdConflict`, step 5) and `load()` leaves an existing pair out (both members);
+- a campaign id stays taken while its sovereignty ledger (`authority/campaigns/<id>`) exists, even after `campaigns/<id>` is deleted by hand (`campaign_authority_presence`, [CHATS](CHATS.md#methods));
 - every instance allocator takes its new id outside `grimoire.chatstore.campaign_taken_ids(store, campaign_id)`, at plan time and again under the store lock at commit ([CHATS](CHATS.md#taken-instance-ids)). It reserves every id an instance file, relation, chat roster, accepted event, holdings file (its name and the move peers in its log), 020 knowledge file, campaign placement folder or campaign sovereignty ledger (`actor_id`s) names. Anything that could name ids but cannot be read or listed raises `TakenIdsUnlisted` (fail closed);
 - **any later record family that names instance ids must extend `campaign_taken_ids`**, so an allocator never has to know the families.
 

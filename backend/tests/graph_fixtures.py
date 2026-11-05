@@ -37,3 +37,16 @@ def seed_campaign(store: LibraryStore, refs=EVERYONE) -> None:
 
 def relation_library(store: LibraryStore, handle=None) -> RelationLibrary:
     return RelationLibrary(store, handle or owner_handle(), clock=Clock(), new_id=Ids(), owner=OWNER)
+
+
+def hand_pair(store: LibraryStore, ref: InstanceRef, kind: str = "creature") -> InstanceRef:
+    """Place, by hand, an instance of ``kind`` under ``ref``'s id: a cross-kind pair the store refuses to
+    commit, as a hand edit or two devices could make one. ``load()`` leaves both members out."""
+    other = InstanceRef(ref.campaign_id, kind, ref.instance_id)
+    txn = store.transaction()
+    txn.put(instance_record(other), None)
+    (data,) = txn.preview().values()
+    path = store.root.joinpath("campaigns", other.campaign_id, "instances", kind, f"{other.instance_id}.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return other
