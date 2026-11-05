@@ -215,8 +215,13 @@ class RelationLibrary:
     # -- writing ------------------------------------------------------------------------------
 
     def add(self, campaign_id: str, predicate: str, subject: InstanceRef, object: InstanceRef, *, since: Moment,
-            provenance: str, until: Moment | None = None, relations: list | None = None) -> RelationChange:
-        """A new relation; with ``until``, a past or bounded stint written already ended."""
+            provenance: str, until: Moment | None = None, relations: list | None = None,
+            relation_id: str | None = None) -> RelationChange:
+        """A new relation; with ``until``, a past or bounded stint written already ended.
+
+        ``relation_id`` (030's completion only) writes it under a chosen id instead of a fresh one: create-only,
+        refused as ``relation_id_taken`` when any file (even an unreadable one) already has that id.
+        """
         validate_segment(campaign_id, "campaign_id")
         if self.store.campaign_presence(campaign_id) != "present":  # a look-alike folder is not the campaign
             raise InvalidRelation(f"campaign {campaign_id} does not exist", "missing_campaign")
@@ -240,7 +245,7 @@ class RelationLibrary:
                                       "instance_id_conflict")
         etags = {endpoint: self._instance_etag(endpoint) for endpoint in (subject, object)}
         at = self._clock()
-        ref = self._allocate(campaign_id)
+        ref = self._allocate(campaign_id) if relation_id is None else self._chosen(campaign_id, relation_id)
         try:
             ending = None if until is None else Ending(until, provenance, at)
             relation = Relation(ref, predicate, subject, object, since, provenance, at, ending)
@@ -312,6 +317,17 @@ class RelationLibrary:
             except (StoreError, LibraryPathError):
                 continue  # a file (or a link) is there, even if unreadable
         raise StoreError("could not allocate an unused relation id")
+
+    def _chosen(self, campaign_id: str, relation_id: str) -> RelationRef:
+        validate_segment(relation_id, "relation_id")
+        ref = RelationRef(campaign_id, relation_id)
+        try:
+            self.store.read(ref)
+        except RecordNotFound:  # exact presence only, as ``_allocate``; the commit's create-only put races
+            return ref
+        except (StoreError, LibraryPathError):
+            pass
+        raise InvalidRelation(f"{ref} already has a file", "relation_id_taken")
 
     def _current(self, ref: RelationRef, expected: str) -> tuple[Relation, StoredScopeRecord]:
         found = self.store.read(ref)

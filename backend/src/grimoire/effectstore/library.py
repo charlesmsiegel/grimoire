@@ -140,6 +140,10 @@ class EffectChange:
     #: each holder file read to decide this change but not written by it, as read: an adopted or skipped undo's,
     #: and those an acceptance's attempt check read to free a revoked event's attempt
     holder_pins: Mapping = field(default_factory=dict)
+    #: each relation file the change relies on but does not write, as read: 030's landed changes
+    relation_pins: Mapping = field(default_factory=dict)
+    #: a further check of the decision (030: the 021 tokens naming the event, as read): why it no longer holds
+    rests_on: Callable[[], list[tuple[str, str]]] | None = None
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -175,6 +179,9 @@ class EffectChange:
         for holder, pin in self.holder_pins.items():  # the adoption or skip was decided on exactly these files
             if self.library._holder_pin(holder) != pin:
                 found.append(("/".join(address_parts(HoldingsRef.of(holder))), "holder file changed"))
+        for relation, etag in self.relation_pins.items():  # a completion or adoption rests on these as read
+            if self.library._etag(relation) != etag:
+                found.append(("/".join(address_parts(relation)), "relation changed"))
         for agent, etag in self.agent_etags.items():  # a replaced file may be a different individual
             if self.library._etag(agent) != etag:
                 found.append(("/".join(address_parts(agent)), "agent missing or changed"))
@@ -182,6 +189,8 @@ class EffectChange:
             paired = paired_instances(self.library.store.campaign_instances(self.campaign_id))
             found += [("/".join(address_parts(actor)), "instance_id_conflict")
                       for actor in sorted(self.actors & paired, key=str)]
+        if self.rests_on is not None:
+            found += self.rests_on()
         event_id = getattr(self.ref, "event_id", None)
         if self.checks_relations and not self.library._absent(KnowledgeRef(self.campaign_id, "event", event_id)):
             found.append((f"campaigns/{self.campaign_id}/events/{event_id}.json",
@@ -306,52 +315,10 @@ class TurnEffectsLibrary:
                 raise InvalidEffect(f"{proposal.chat} does not exist", "missing_chat")
             snap = self._snapshot(campaign)
             self._require_trustworthy(snap)
-            unreadable = _relations_unreadable(snap.graph)
-            wanted = proposal.fingerprint
-            for event in snap.active():
-                # A duplicate writes nothing, so it needs no keys: a retry after control changed hands, or with a
-                # stale endorsement, is still told that the effect is in force rather than refused for authority.
-                # Its receipts name exact relation files, so damage elsewhere does not refuse it (#586 follow-up);
-                # when they fail while a file is damaged, the damage is named, never a mismatch.
-                if event.fingerprint == wanted:
-                    if verify_receipts(event, snap.graph.index):
-                        if unreadable:
-                            raise InvalidEffect("a relation file cannot be read, so the accepted effect cannot be "
-                                                "checked", "undecodable_relation")
-                        raise InvalidEffect(f"{event.ref} is accepted but its receipts do not match the relations",
-                                            "receipt_mismatch", (event.event_id,))
-                    if parts.duplicate_holdings(event, self._holdings()) is not None:
-                        raise InvalidEffect(f"{event.ref} is accepted but its holdings do not match the holders",
-                                            "receipt_mismatch", (event.event_id,))
-                    return EffectChange(self, event.ref, campaign_id=campaign, state=snap.state,
-                                        duplicate_of=event.ref)
-            parts.check_permitted(proposal)  # after the duplicate check: a retry of a charged use stays a no-op
-            if unreadable:  # a new effect's preconditions could be hidden by any damaged relation file
-                raise InvalidEffect("a relation file cannot be read, so preconditions cannot be checked",
-                                    "undecodable_relation")
-            paired = paired_instances(self.store.campaign_instances(campaign))  # load() leaves both members out
-            clash = [str(number) for number, op in enumerate(proposal.operations) if _actors(op) & paired]
-            clash += sorted(str(actor) for actor in parts.holdings_actors(proposal) & paired)
-            if clash:
-                raise InvalidEffect("an operation names an actor whose id another kind also uses",
-                                    "instance_id_conflict", clash)
-            try:
-                authorization = authorize(proposal, controls, contributions)
-            except EffectError as error:
-                raise _refused(error) from None
-            records = self._check_endorsements(authorization.endorsers, endorsements, proposal.fingerprint)
-            turn = (proposal.chat, proposal.moment.scene_id, proposal.moment.turn_id)
-            same_turn = [e.event_id for e in snap.active()
-                         if (e.chat, e.moment.scene_id, e.moment.turn_id) == turn]
-            if same_turn:  # one accepted effect per turn: another swipe's effect needs a revocation first
-                raise InvalidEffect(f"turn {proposal.moment.turn_id} already has an accepted effect",
-                                    "turn_already_accepted", same_turn)
-            floor = max((e.moment.sequence for e in snap.active()), default=0)
-            if proposal.moment.sequence < floor:
-                raise InvalidEffect(f"sequence {proposal.moment.sequence} is behind an accepted event at {floor}",
-                                    "stale_sequence")
-            consulted = parts.check_attempts(proposal, snap.events.values(), self._holdings())
-            pins = {holder: self._holder_pin(holder) for holder in sorted(consulted, key=str)}
+            duplicate = self._duplicate(proposal, snap)
+            if duplicate is not None:
+                return duplicate
+            authorization, records, pins = self._admit(proposal, snap, controls, contributions, endorsements)
             try:
                 steps = plan(proposal, snap.graph.index)
             except EffectError as error:
@@ -361,45 +328,121 @@ class TurnEffectsLibrary:
                 raise InvalidEffect("a holder file cannot be read, so the holdings cannot be checked",
                                     "undecodable_holdings")
             ref = self._allocate(campaign, _token_ids(self.store, campaign) | held_tokens)
-            token = accepted_token(ref.event_id)
-            relations = self._relations()
-            known = snap.relations()  # decoded once, under this lock; no per-operation re-read
-            changes, receipts = [], []
-            for step, op in zip(steps, proposal.operations):
-                try:
-                    if isinstance(step, EndStep):
-                        change = relations.end(step.relation, until=proposal.moment, provenance=token,
-                                               expected=snap.graph.etags[step.relation])
-                    else:
-                        change = relations.add(campaign, op.predicate, op.subject, op.object, since=proposal.moment,
-                                               provenance=token, relations=known)
-                except InvalidRelation as error:
-                    reason = "precondition_failed" if error.reason == "duplicate_relation" else error.reason
-                    raise InvalidEffect(f"operation {step.op} is refused: {error.reason}", reason,
-                                        (str(step.op),)) from None
-                changes.append(change)
-                receipts.append(Receipt(step.op, change.relation))
+            changes = self._relation_changes(proposal, steps, ref, snap)
+            receipts = [Receipt(step.op, change.relation) for step, change in zip(steps, changes)]
             planned = parts.plan_holdings(self._holdings(), proposal, snap.events.values(), ref.event_id,
                                           authorization.holdings_domains)
-            charged = parts.charges(proposal, authorization.ability_domains)
             ordinal = 1 + max((e.ordinal for e in snap.events.values()), default=0)
-            try:
-                event = AcceptedEvent(
-                    ref, proposal.chat, proposal.moment, proposal.summary, proposal.proposed_by,
-                    tuple(AcceptedOperation(op, domain) for op, domain in zip(proposal.operations,
-                                                                               authorization.domains)),
-                    authorization.contributions, records, authorization.controls, str(self.handle.principal),  # type: ignore[attr-defined]
-                    self._clock(), ordinal, tuple(receipts), attempt_id=proposal.attempt_id,
-                    holdings=None if planned is None else planned[1], abilities=charged)
-            except EffectError as error:
-                raise _refused(error) from None
+            event = self._event(ref, proposal, authorization, records, tuple(receipts),
+                                None if planned is None else planned[1], ordinal)
             record = ScopeRecord(ref, accepted_schema(event), accepted_to_payload(event), owner=self._owner)
-            acting = {op.agent for op in proposal.operations if op.agent is not None} | parts.acting_agents(proposal)
-            agents = {agent: self._etag(agent) for agent in sorted(acting, key=str)}
-            actors = frozenset().union(*(_actors(op) for op in proposal.operations)) | parts.holdings_actors(proposal)
+            agents, actors = self._acting(proposal)
             return EffectChange(self, ref, ((record, None),), tuple(changes), campaign, snap.state, proposal.chat,
                                 checks_relations=True, agent_etags=agents, actors=actors,
                                 holdings_changes=() if planned is None else (planned[0],), holder_pins=pins)
+
+    def _duplicate(self, proposal: EffectProposal, snap: _Snapshot) -> EffectChange | None:
+        """The no-op of an effect that is already accepted and applied; ``None`` when no active event has it.
+
+        A duplicate writes nothing, so it needs no keys: a retry after control changed hands, or with a stale
+        endorsement, is still told that the effect is in force rather than refused for authority. Its receipts
+        name exact relation files, so damage elsewhere does not refuse it (#586 follow-up); when they fail
+        while a file is damaged, the damage is named, never a mismatch.
+        """
+        unreadable = _relations_unreadable(snap.graph)
+        for event in snap.active():
+            if event.fingerprint != proposal.fingerprint:
+                continue
+            if verify_receipts(event, snap.graph.index):
+                if unreadable:
+                    raise InvalidEffect("a relation file cannot be read, so the accepted effect cannot be "
+                                        "checked", "undecodable_relation")
+                raise InvalidEffect(f"{event.ref} is accepted but its receipts do not match the relations",
+                                    "receipt_mismatch", (event.event_id,))
+            if parts.duplicate_holdings(event, self._holdings()) is not None:
+                raise InvalidEffect(f"{event.ref} is accepted but its holdings do not match the holders",
+                                    "receipt_mismatch", (event.event_id,))
+            return EffectChange(self, event.ref, campaign_id=proposal.campaign_id, state=snap.state,
+                                duplicate_of=event.ref)
+        return None
+
+    def _admit(self, proposal: EffectProposal, snap: _Snapshot, controls: tuple, contributions: Iterable,
+               endorsements: tuple) -> tuple:
+        """Every check a new acceptance makes before planning: ``(authorization, endorsement records, holder pins)``.
+
+        Permitted uses, readable relations, no paired actor, the keys, one effect per turn, the sequence floor
+        and the attempts. 030's adoption makes exactly these checks too.
+        """
+        campaign = proposal.campaign_id
+        parts.check_permitted(proposal)  # after the duplicate check: a retry of a charged use stays a no-op
+        if _relations_unreadable(snap.graph):  # a new effect's preconditions could be hidden by any damaged file
+            raise InvalidEffect("a relation file cannot be read, so preconditions cannot be checked",
+                                "undecodable_relation")
+        paired = paired_instances(self.store.campaign_instances(campaign))  # load() leaves both members out
+        clash = [str(number) for number, op in enumerate(proposal.operations) if _actors(op) & paired]
+        clash += sorted(str(actor) for actor in parts.holdings_actors(proposal) & paired)
+        if clash:
+            raise InvalidEffect("an operation names an actor whose id another kind also uses",
+                                "instance_id_conflict", clash)
+        try:
+            authorization = authorize(proposal, controls, contributions)
+        except EffectError as error:
+            raise _refused(error) from None
+        records = self._check_endorsements(authorization.endorsers, endorsements, proposal.fingerprint)
+        turn = (proposal.chat, proposal.moment.scene_id, proposal.moment.turn_id)
+        same_turn = [e.event_id for e in snap.active() if (e.chat, e.moment.scene_id, e.moment.turn_id) == turn]
+        if same_turn:  # one accepted effect per turn: another swipe's effect needs a revocation first
+            raise InvalidEffect(f"turn {proposal.moment.turn_id} already has an accepted effect",
+                                "turn_already_accepted", same_turn)
+        floor = max((e.moment.sequence for e in snap.active()), default=0)
+        if proposal.moment.sequence < floor:
+            raise InvalidEffect(f"sequence {proposal.moment.sequence} is behind an accepted event at {floor}",
+                                "stale_sequence")
+        consulted = parts.check_attempts(proposal, snap.events.values(), self._holdings())
+        pins = {holder: self._holder_pin(holder) for holder in sorted(consulted, key=str)}
+        return authorization, records, pins
+
+    def _event(self, ref: AcceptedRef, proposal: EffectProposal, authorization, records: tuple,  # type: ignore[no-untyped-def]
+               receipts: tuple[Receipt, ...], holdings, ordinal: int) -> AcceptedEvent:
+        """The accepted-event value of a new acceptance (or an adoption) under ``ref``."""
+        charged = parts.charges(proposal, authorization.ability_domains)
+        try:
+            return AcceptedEvent(
+                ref, proposal.chat, proposal.moment, proposal.summary, proposal.proposed_by,
+                tuple(AcceptedOperation(op, domain) for op, domain in zip(proposal.operations, authorization.domains)),
+                authorization.contributions, records, authorization.controls, str(self.handle.principal),  # type: ignore[attr-defined]
+                self._clock(), ordinal, receipts, attempt_id=proposal.attempt_id, holdings=holdings, abilities=charged)
+        except EffectError as error:
+            raise _refused(error) from None
+
+    def _relation_changes(self, proposal: EffectProposal, steps: tuple, ref: AcceptedRef, snap: _Snapshot
+                          ) -> list[RelationChange]:
+        """The 017 change of each planned step, made in ``ref``'s name, in step order."""
+        token, relations = accepted_token(ref.event_id), self._relations()
+        known = snap.relations()  # decoded once, under this lock; no per-operation re-read
+        changes = []
+        for step in steps:
+            op = proposal.operations[step.op]
+            try:
+                if isinstance(step, EndStep):
+                    change = relations.end(step.relation, until=proposal.moment, provenance=token,
+                                           expected=snap.graph.etags[step.relation])
+                else:
+                    change = relations.add(proposal.campaign_id, op.predicate, op.subject, op.object,
+                                           since=proposal.moment, provenance=token, relations=known)
+            except InvalidRelation as error:
+                reason = "precondition_failed" if error.reason == "duplicate_relation" else error.reason
+                raise InvalidEffect(f"operation {step.op} is refused: {error.reason}", reason,
+                                    (str(step.op),)) from None
+            changes.append(change)
+        return changes
+
+    def _acting(self, proposal: EffectProposal) -> tuple[dict, frozenset]:
+        """Each acting agent's instance file as read now, and every actor, both re-checked at commit."""
+        acting = {op.agent for op in proposal.operations if op.agent is not None} | parts.acting_agents(proposal)
+        agents = {agent: self._etag(agent) for agent in sorted(acting, key=str)}
+        actors = frozenset().union(*(_actors(op) for op in proposal.operations)) | parts.holdings_actors(proposal)
+        return agents, actors
 
     # -- revoking -----------------------------------------------------------------------------
 

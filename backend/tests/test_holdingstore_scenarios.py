@@ -564,7 +564,8 @@ def test_huge_envelope_extra_is_too_large_at_plan_time(store, library):
 
 def test_no_api_erases_holdings(store, library):
     public = {name for name in dir(HoldingsLibrary) if not name.startswith("_")}
-    assert public == {"apply", "campaign_holdings", "read", "view"}  # view: a read without the instance check (021)
+    # view: a read without the instance check (021); complete: finish a partial operation at known seqs (030)
+    assert public == {"apply", "campaign_holdings", "complete", "read", "view"}
     done(library, op("a1", Line.add(MARA, ORDINARY, 5)))
     done(library, op("j1", Line.adjust(MARA, ORDINARY, 5, 0)))
     assert (store.root / MARA_FILE).exists() and library.read(MARA).lookup("a1") is not None
