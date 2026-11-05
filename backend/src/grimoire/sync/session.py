@@ -242,8 +242,9 @@ def _lock_order(stores) -> list[LibraryStore]:  # type: ignore[no-untyped-def]
     A commit that copies a blob loads it lazily from the origin (``put_blob_exact``), taking the
     origin's lock inside the destination's commit; a plan holds both libraries' locks. So every
     commit whose reads can reach the other library holds both locks, taken in this order, before
-    it starts (``_locked``): no thread ever waits for the first library while holding the second."""
-    return sorted(stores, key=lambda store: os.fspath(store.root))
+    it starts (``_locked``): no thread ever waits for the first library while holding the second.
+    Two opens of one folder share a root, so the lock's identity breaks the tie (a total order)."""
+    return sorted(stores, key=lambda store: (os.fspath(store.root), id(store.lock)))
 
 
 @contextlib.contextmanager
