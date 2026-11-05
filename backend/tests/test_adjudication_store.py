@@ -20,7 +20,7 @@ from grimoire.store.ledger import render_batches
 
 from ability_fixtures import effective
 from adjudication_fixtures import (
-    ACROBAT, ANA, BOB, CHAT, COLLAPSE, GAP, IRIS, MARA, Q, SOLA, SOLA_DEF, Table, ability, bridge, build_library,
+    ACROBAT, ANA, BOB, CHAT, COLLAPSE, FALL, GAP, IRIS, MARA, Q, SATCHEL, SOLA, SOLA_DEF, Table, ability, bridge, build_library,
     moment, power_frame, vault,
 )
 from chat_fixtures import Clock, Ids
@@ -61,7 +61,7 @@ def _reason(call, *args, **kwargs) -> str:
 
 def test_mara_vaults_the_collapsing_bridge_and_every_retry_keeps_the_outcome(table):
     library = table.library()
-    library.frame(bridge(), contribution=vault())
+    library.frame(bridge(), contribution=vault(), author=table.player())
     assessment = library.assess(Q, "c10")
     assert (assessment.classification, assessment.allowed) == ("uncertain", ("failure", "partial", "success"))
     # A difficulty invented with the outcome has no cause on record: the fiat is refused, nothing written.
@@ -72,7 +72,7 @@ def test_mara_vaults_the_collapsing_bridge_and_every_retry_keeps_the_outcome(tab
     # A retry asks again and gets the same outcome; it can never get another one.
     assert library.decide(Q, "c10", PARTIAL) == outcome
     assert _reason(library.decide, Q, "c10", Decision("success", "adjudicated", {"acrobat"})) == "already_decided"
-    assert _reason(library.frame, bridge(factors=(ACROBAT,)), contribution=vault()) == "already_decided"
+    assert _reason(library.frame, bridge(factors=(ACROBAT,)), contribution=vault(), author=table.player()) == "already_decided"
     resolution = library.resolutions(Q)
     assert [(r.attempt_id, r.result) for r in resolution] == [("c10", "partial")]
     assert len(table.store.read_ledger(f"adjudication/{Q}").entries) == 2
@@ -85,14 +85,14 @@ def test_mara_vaults_the_collapsing_bridge_and_every_retry_keeps_the_outcome(tab
 
 def test_a_frame_is_revised_until_the_decision_and_decided_on_its_latest_revision(table):
     library = table.library()
-    library.frame(bridge(factors=(GAP, COLLAPSE)), contribution=vault())
+    library.frame(bridge(factors=(GAP, COLLAPSE)), contribution=vault(), author=table.player())
     assert library.assess(Q, "c10").allowed == ("failure",)
-    revised = library.frame(bridge(), contribution=vault())
+    revised = library.frame(bridge(), contribution=vault(), author=table.player())
     assert revised.revision == 2
     # A revision is the same action: it cannot move to a later moment that admits later facts.
     later = Factor("snap", "hinders", "A plank snaps.", 11, "event:e-snap")
     moved = bridge(factors=(ACROBAT, GAP, later), at=moment(12, "t10"))
-    assert _reason(library.frame, moved, contribution=vault()) == "frame_moved"
+    assert _reason(library.frame, moved, contribution=vault(), author=table.player()) == "frame_moved"
     library.decide(Q, "c10", PARTIAL)  # supported only by the revision that records her training
     state = _reopen(table).library().state(Q)
     assert [entry.revision for entry in state.frames["c10"]] == [1, 2]
@@ -111,7 +111,7 @@ def test_a_frame_is_revised_until_the_decision_and_decided_on_its_latest_revisio
 ], ids=["no-contribution", "other-player", "other-id", "other-turn", "speech", "npc-backed"])
 def test_only_the_controllers_own_action_frames_a_player_character(table, frame, contribution, reason):
     library = table.library()
-    assert _reason(library.frame, frame, contribution=contribution) == reason
+    assert _reason(library.frame, frame, contribution=contribution, author=table.player()) == reason
     assert library.state(Q).frames == {}
 
 
@@ -131,7 +131,7 @@ def test_only_the_adjudication_key_records(table):
 
 def test_consent_is_the_controllers_setback_for_their_own_character(table):
     library = table.library()
-    library.frame(bridge(factors=(ACROBAT,)), contribution=vault())  # unopposed: it would simply succeed
+    library.frame(bridge(factors=(ACROBAT,)), contribution=vault(), author=table.player())  # unopposed: it would simply succeed
     messy = Decision("partial", "consent", consequences={"satchel"})
     assert _reason(library.decide, Q, "c10", messy) == "not_controller"
     assert _reason(library.decide, Q, "c10", messy, consent=table.player(BOB)) == "not_controller"
@@ -142,12 +142,53 @@ def test_consent_is_the_controllers_setback_for_their_own_character(table):
     assert _reopen(table).library().outcome(Q, "c10") == outcome
 
 
-def test_the_director_consents_alone_for_an_actor_no_player_controls(table):
+def test_no_one_consents_for_an_actor_no_player_controls(table):
+    # A setback the rules would not force needs someone with standing to choose it; the director deciding
+    # alone would be an uncaused outcome, so the actor's failure must come from a recorded cause instead.
     library = table.library()
     library.frame(bridge(actor=SOLA, attempt_id="s-1"))
     setback = Decision("failure", "consent", consequences={"fall"})
+    assert _reason(library.decide, Q, "s-1", setback) == "consent_mismatch"
     assert _reason(library.decide, Q, "s-1", setback, consent=table.player(ANA)) == "consent_mismatch"
-    assert library.decide(Q, "s-1", setback).consented_by == DIRECTOR
+    assert "s-1" not in library.state(Q).decisions
+
+
+def test_a_contribution_is_given_only_through_its_authors_own_handle(table):
+    library = table.library()
+    assert _reason(library.frame, bridge(), contribution=vault()) == "not_controller"  # a bare value
+    assert _reason(library.frame, bridge(), contribution=vault(), author=table.player(BOB)) == "not_controller"
+    untrusted = table.authority.handle_for(ANA)
+    assert _reason(library.frame, bridge(), contribution=vault(), author=untrusted) == "not_controller"
+    assert library.state(Q).frames == {}
+    assert library.frame(bridge(), contribution=vault(), author=table.player()).revision == 1
+
+
+def test_a_change_of_control_before_the_decision_stops_it(table):
+    library = table.library()
+    library.frame(bridge(), contribution=vault(), author=table.player())
+    table.control("mara-1", BOB)
+    assert _reason(library.decide, Q, "c10", PARTIAL) == "control_changed"
+    table.control("mara-1", ANA)
+    assert library.decide(Q, "c10", PARTIAL).resolution().result == "partial"
+
+
+def test_a_revision_cannot_add_a_hindrance_or_a_stake_the_action_did_not_have(table):
+    library = table.library()
+    library.frame(bridge(factors=(ACROBAT, GAP), stakes=(FALL,)), contribution=vault(), author=table.player())
+    worse = bridge(factors=(ACROBAT, GAP, COLLAPSE), stakes=(FALL,))
+    assert _reason(library.frame, worse, contribution=vault(), author=table.player()) == "frame_worsened"
+    costlier = bridge(factors=(ACROBAT, GAP), stakes=(FALL, SATCHEL))
+    assert _reason(library.frame, costlier, contribution=vault(), author=table.player()) == "frame_worsened"
+    # Dropping a hindrance, or adding a recorded fact that favours the action, stays open.
+    assert library.frame(bridge(factors=(ACROBAT,), stakes=(FALL,)), contribution=vault(),
+                         author=table.player()).revision == 2
+
+
+def test_an_unstorable_contribution_is_refused_before_anything_is_written(table):
+    library = table.library()
+    broken = vault("I vault \ud800 the gap")
+    assert _reason(library.frame, bridge(), contribution=broken, author=table.player()) == "invalid_field"
+    assert library.state(Q).frames == {}
 
 
 # -- abilities (025) and the handoff to accepted effects (021) --------------------------------
@@ -209,6 +250,15 @@ def test_flight_beyond_a_limit_is_impossible_and_no_ruling_changes_that(table):
     assert _reason(library.ability_use, Q, "a-1") == "ability_not_permitted"
 
 
+def test_a_failed_use_of_a_power_charges_nothing(table):
+    library = table.library()
+    glare = ability(SOLA, ("light", "glare"), effect_id="dazzle")
+    library.frame(power_frame(glare, intent="Dazzle the guard."))
+    assert library.assess(Q, "a-1").classification == "uncertain"  # a feat: its own uncertainty hinders it
+    library.decide(Q, "a-1", Decision("failure", "adjudicated", {"#ability-uncertain"}, {"fall"}))
+    assert _reason(library.ability_use, Q, "a-1") == "action_failed"
+
+
 def test_rulings_belong_to_a_recorded_frame_labelled_exactly_as_there(table):
     library = table.library()
     sail = ability(SOLA, **STRETCH)
@@ -241,10 +291,12 @@ def _forge(table: Table, kind: str, value: dict) -> None:
     ({"result": "failure", "basis": "rule", "cites": ["gap"], "consequences": ["fall"]}, "rule_mismatch"),
     ({"classification": "straightforward"}, "classification_mismatch"),
     ({"revision": 2}, "stale_frame"),
+    ({"result": "failure", "basis": "consent", "cites": [], "consequences": ["fall"], "consented_by": BOB},
+     "consent_mismatch"),  # consent from someone other than the player who authored the action
 ])
 def test_a_forged_decision_makes_the_ledger_unreadable(table, decision, match):
     library = table.library()
-    library.frame(bridge(), contribution=vault())
+    library.frame(bridge(), contribution=vault(), author=table.player())
     value = {"attempt_id": "c10", "actor": str(MARA), "revision": 1, "classification": "uncertain",
              "result": "partial", "basis": "adjudicated", "cites": ["acrobat", "gap"], "consequences": ["satchel"],
              "consented_by": None, "ability": None, **decision}
@@ -255,7 +307,7 @@ def test_a_forged_decision_makes_the_ledger_unreadable(table, decision, match):
 
 def test_a_second_decision_on_record_is_refused_on_replay(table):
     library = table.library()
-    library.frame(bridge(), contribution=vault())
+    library.frame(bridge(), contribution=vault(), author=table.player())
     library.decide(Q, "c10", PARTIAL)
     _forge(table, "decision", {"attempt_id": "c10", "actor": str(MARA), "revision": 1,
                                "classification": "uncertain", "result": "success", "basis": "adjudicated",
@@ -268,7 +320,7 @@ def test_a_second_decision_on_record_is_refused_on_replay(table):
 
 def test_the_ledger_reserves_the_ids_of_the_actors_it_names(table):
     library = table.library()
-    library.frame(bridge(), contribution=vault())
+    library.frame(bridge(), contribution=vault(), author=table.player())
     library.frame(bridge(actor=SOLA, attempt_id="s-1", factors=(Factor("x", "hinders", "x", 1, "s"),)))
     assert adjudication_actor_ids(table.store, Q) == {"mara-1", "sola-1"}
     assert {"mara-1", "sola-1"} <= campaign_taken_ids(table.store, Q)
@@ -276,7 +328,7 @@ def test_the_ledger_reserves_the_ids_of_the_actors_it_names(table):
 
 
 def test_an_unreadable_ledger_fails_allocation_closed(table):
-    table.library().frame(bridge(), contribution=vault())
+    table.library().frame(bridge(), contribution=vault(), author=table.player())
     folder = table.store.root / "authority" / "adjudication" / Q
     next(folder.iterdir()).write_bytes(b"not json")
     with pytest.raises(TakenIdsUnlisted):

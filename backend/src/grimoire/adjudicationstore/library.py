@@ -40,7 +40,7 @@ from grimoire.ledgers import DurableAuthority, SovereigntyLedger
 from grimoire.ledgers.codec import envelope, exact
 from grimoire.security import is_human, is_valid_principal
 from grimoire.store import LibraryStore, RecordNotFound
-from grimoire.store.errors import LedgerInvalid, TakenIdsUnlisted
+from grimoire.store.errors import InvalidEnvelope, LedgerInvalid, TakenIdsUnlisted
 from grimoire.store.ledger import Head
 
 _KINDS = frozenset({"frame", "ruling", "decision"})
@@ -130,6 +130,15 @@ class _Builder:
                 frame.chat, frame.moment, contribution):
             # The same action: a later moment would admit facts established after it was attempted.
             raise _refused("a revision keeps the action's chat, moment and contribution", "frame_moved")
+        if revisions:
+            first = revisions[0].frame
+            against = {f for f in first.factors if f.bearing != "favours"}
+            added = [f.factor_id for f in frame.factors if f.bearing != "favours" and f not in against]
+            stakes = [s.stake_id for s in frame.stakes if s not in first.stakes]
+            if added or stakes:
+                # A difficulty or a consequence invented after the action was framed is fiat by revision.
+                raise _refused(f"a revision adds no new hindrance or stake: {', '.join(added + stakes)}",
+                               "frame_worsened")
         if frame.attempt_id in self.decisions:
             raise _refused(f"attempt {frame.attempt_id!r} is already decided", "already_decided")
         if contribution is not None:
@@ -179,8 +188,10 @@ class _Builder:
         check_decision(assessment, decision)
         if (decision.basis == "consent") != (consented_by is not None):
             raise _refused("a consent decision, and only one, names who consented", "consent_mismatch")
-        if consented_by is not None and consented_by != DIRECTOR and not is_human(consented_by):
-            raise _refused("consent comes from a human controller or the director", "consent_mismatch")
+        if consented_by is not None:
+            backing = revisions[-1].contribution
+            if backing is None or backing.submitted_by != consented_by:
+                raise _refused("consent comes from the player who authored the action", "consent_mismatch")
         return Outcome(frame, assessment.classification, decision, "", consented_by)
 
     def add_frame(self, entry: FrameEntry) -> None:
@@ -204,12 +215,22 @@ def _check_backing(frame: ActionFrame, contribution: PlayerContribution) -> None
             or contribution.scene_id != frame.moment.scene_id or contribution.turn_id != frame.moment.turn_id):
         raise _refused("the contribution is not this actor's action for this turn under this attempt id",
                        "invalid_expression")
-    for label in ("contribution_id", "scene_id", "turn_id", "actor_id", "submitted_by"):
+    for label in ("contribution_id", "scene_id", "turn_id", "actor_id", "submitted_by", "text"):
         value = getattr(contribution, label)
-        if type(value) is not str or len(value) > TEXT_MAX:
+        if type(value) is not str or not _storable(value):
             raise _refused(f"the contribution's {label} cannot be stored", "invalid_field")
-    if type(contribution.text) is not str or len(contribution.text) > PROSE_MAX:
+        if label != "text" and len(value) > TEXT_MAX:
+            raise _refused(f"the contribution's {label} cannot be stored", "invalid_field")
+    if len(contribution.text) > PROSE_MAX:
         raise _refused(f"the contribution is longer than {PROSE_MAX} characters", "contribution_too_long")
+
+
+def _storable(value: str) -> bool:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:  # a lone surrogate could never be stored
+        return False
+    return True
 
 
 def adjudication_actor_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
@@ -289,7 +310,8 @@ class AdjudicationLibrary:
         """025's assessment of a decided, permitted ability use, for 021 to charge: only while it still holds.
 
         Refused: ``undecided``, ``no_ability``, ``ability_not_permitted`` (the decision relied on a use
-        the power does not permit), and ``assessment_changed`` (a re-assessment now, against the chat and
+        the power does not permit), ``action_failed`` (a failed action charges and applies nothing in
+        this slice), and ``assessment_changed`` (a re-assessment now, against the chat and
         live rulings, is not what the decision recorded: a definition or ruling changed since).
         """
         state = self.state(campaign_id)
@@ -301,6 +323,8 @@ class AdjudicationLibrary:
             raise _refused(f"attempt {attempt_id!r} relies on no ability", "no_ability")
         if not entry.ability.permitted:
             raise _refused("the decided use is not one the power permits", "ability_not_permitted")
+        if entry.outcome.decision.result == "failure":
+            raise _refused("the action failed, so the power did nothing to charge or apply", "action_failed")
         assessment = self._ability(frame, state.live_rulings())
         if AbilityFinding.of(assessment) != entry.ability:  # type: ignore[arg-type]
             raise _refused("the ability use no longer assesses as it was decided", "assessment_changed")
@@ -322,29 +346,39 @@ class AdjudicationLibrary:
 
     # -- recording ----------------------------------------------------------------------------
 
-    def frame(self, frame: ActionFrame, *, contribution: PlayerContribution | None = None) -> FrameEntry:
+    def frame(self, frame: ActionFrame, *, contribution: PlayerContribution | None = None,
+              author: object = None) -> FrameEntry:
         """Record ``frame`` (a new attempt, or a revision of an undecided one).
 
         The actor must be in the frame's chat, with its definitions resolving. A player-controlled
         actor's frame must be backed by the controller's own action ``contribution`` for this turn
-        (``pc_authorship`` without one); an actor no human controls takes none (``unexpected_backing``).
+        (``pc_authorship`` without one), given through ``author``, the controller's own trusted human
+        handle from this authority (``not_controller`` otherwise): the adjudication key labels actions,
+        it never speaks for a player. An actor no human controls takes neither (``unexpected_backing``).
         """
         if type(frame) is not ActionFrame:
             raise TypeError("expected an ActionFrame")
         campaign_id = frame.campaign_id
-        controller = self._controller(campaign_id, frame.actor.instance_id)
-        if controller is None or controller == DIRECTOR:
-            if contribution is not None:
-                raise _refused("an actor no player controls has no contribution to back it", "unexpected_backing")
-        elif not is_human(controller):
-            raise _refused(f"{frame.actor} is controlled by {controller!r}, not a human", "non_human_controller")
-        elif contribution is None:
-            raise _refused("a player character's action is backed by the player's own contribution", "pc_authorship")
-        elif contribution.submitted_by != controller:
-            raise _refused("the contribution is not the current controller's", "invalid_expression")
-        self._entity(frame)
+        if contribution is not None:
+            _check_backing(frame, contribution)
         payload = frame_to_payload(frame, contribution)
-        with self._authority.lock:
+        with self._authority.lock:  # control is read and the entry appended as one step
+            controller = self._controller(campaign_id, frame.actor.instance_id)
+            if controller is None or controller == DIRECTOR:
+                if contribution is not None or author is not None:
+                    raise _refused("an actor no player controls has no contribution to back it",
+                                   "unexpected_backing")
+            elif not is_human(controller):
+                raise _refused(f"{frame.actor} is controlled by {controller!r}, not a human", "non_human_controller")
+            elif contribution is None:
+                raise _refused("a player character's action is backed by the player's own contribution",
+                               "pc_authorship")
+            elif contribution.submitted_by != controller:
+                raise _refused("the contribution is not the current controller's", "invalid_expression")
+            elif not self._is_own(author, controller):
+                raise _refused("only the controller's own trusted handle gives their contribution",
+                               "not_controller")
+            self._entity(frame)
             builder = self._builder(campaign_id)
             revision = builder.check_frame(frame, contribution)
             entry = FrameEntry(frame, contribution, revision, self._principal)
@@ -395,8 +429,10 @@ class AdjudicationLibrary:
                 if done.outcome.decision == decision:
                     return done.outcome
                 raise _refused(f"attempt {attempt_id!r} is already decided", "already_decided")
-            frame = self._latest(state, attempt_id).frame
-            consented_by = self._consent(frame, decision, consent)
+            latest = self._latest(state, attempt_id)
+            frame = latest.frame
+            self._check_control(latest)
+            consented_by = self._consent(latest, decision, consent)
             ability = self._ability(frame, state.live_rulings())
             finding = None if ability is None else AbilityFinding.of(ability)
             revision = len(state.frames[attempt_id])
@@ -422,21 +458,33 @@ class AdjudicationLibrary:
         controls = SovereigntyLedger(self._authority).load(campaign_id).controls
         return controller_of(campaign_id, actor_id, controls)
 
-    def _consent(self, frame: ActionFrame, decision: Decision, consent: object) -> str | None:
+    def _is_own(self, handle: object, principal: str) -> bool:
+        return (self._authority.issued(handle) and getattr(handle, "trusted", False) is True
+                and getattr(handle, "principal", None) == principal)
+
+    def _check_control(self, entry: FrameEntry) -> None:
+        """The actor is still controlled as when it was framed: by its author, or by no player."""
+        frame = entry.frame
+        controller = self._controller(frame.campaign_id, frame.actor.instance_id)
+        player = controller if controller is not None and is_human(controller) else None
+        author = None if entry.contribution is None else entry.contribution.submitted_by
+        if player != author:
+            raise _refused(f"control of {frame.actor} changed since the action was framed; frame it again",
+                           "control_changed")
+
+    def _consent(self, entry: FrameEntry, decision: Decision, consent: object) -> str | None:
         if decision.basis != "consent":
             if consent is not None:
                 raise _refused("only a consent decision takes a consenting handle", "consent_mismatch")
             return None
-        controller = self._controller(frame.campaign_id, frame.actor.instance_id)
-        if controller is None or controller == DIRECTOR:
-            if consent is not None:
-                raise _refused("an actor no player controls is the director's to decide", "consent_mismatch")
-            return DIRECTOR
-        if not (self._authority.issued(consent) and getattr(consent, "trusted", False) is True
-                and getattr(consent, "principal", None) == controller):
-            raise _refused("only the controller's own trusted handle consents for a player character",
-                           "not_controller")
-        return controller
+        if entry.contribution is None:
+            # The director has rule and adjudicated decisions, which cite causes; an uncaused setback
+            # is a player's own authorial choice, never the director's.
+            raise _refused("only a player consents, for their own character's action", "consent_mismatch")
+        author = entry.contribution.submitted_by
+        if not self._is_own(consent, author):
+            raise _refused("only the action's author consents, with their own trusted handle", "not_controller")
+        return author
 
     def _entity(self, frame: ActionFrame) -> EffectiveEntity:
         """The actor as the frame's chat composes it now; refusals name what is missing."""
@@ -466,6 +514,8 @@ class AdjudicationLibrary:
         entry = envelope(kind, self._authority.now(), recorded_by=self._principal, value=payload)
         try:
             builder.head = self._authority._append(name, [entry], builder.head)
+        except InvalidEnvelope as error:  # text the store cannot hold; nothing was written
+            raise _refused(str(error), "invalid_field") from None
         except ValueError as error:  # no batch could hold it; nothing was written
             raise _refused(str(error), "too_large") from None
 

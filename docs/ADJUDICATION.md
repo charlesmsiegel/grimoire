@@ -16,7 +16,7 @@ Narrator fiat is an outcome with no cause on record, or a difficulty invented in
 2. For an action that relies on a power, any [025 ability ruling](ABILITIES.md) is recorded against the frame's exact attempt.
 3. The **decision** records the result. It may cite only recorded factors, and bring only declared stakes.
 
-A frame may be revised, and a ruling superseded, only until the attempt is decided. A decision is final in this slice.
+A frame may be revised, and a ruling superseded, only until the attempt is decided. A revision may drop a hindrance or add a favouring fact, but never add a hindrance, a preventing fact or a stake the first revision did not have (`frame_worsened`): a difficulty found after the action was framed cannot be slipped in before the ruling. A decision is final in this slice.
 
 ## Frames
 
@@ -54,7 +54,7 @@ A power becomes **derived factors**. A permitted use (025's `permitted`, never `
 |---|---|---|
 | `rule` | A straightforward or impossible action: its one allowed result. | `rule_mismatch` |
 | `adjudicated` | An uncertain action: the director's choice among the allowed results. Success and partial must cite a favouring factor; failure and partial must cite a hindering or preventing one. | `not_uncertain`, `result_not_allowed`, `uncited_result` |
-| `consent` | The actor's controller chooses a setback the rules would not force: failure, or a result worse than the best the frame allows. Consent never turns a risk into a success. | `result_not_allowed` |
+| `consent` | The player who authored the action chooses a setback the rules would not force: failure, or a result worse than the best the frame allows. Consent never turns a risk into a success. Only a player character can consent; the director cannot consent alone. | `result_not_allowed` |
 
 For every basis: no clarifying action can be decided (`needs_clarification`); cites must be recorded factors (`unknown_factor`); consequences must be declared stakes (`undeclared_consequence`); a success brings none (`success_with_consequence`); a partial success names its cost (`partial_without_cost`).
 
@@ -66,7 +66,7 @@ An `Outcome` is a recorded decision. `Outcome.resolution()` is the 003 `Resoluti
 
 | Call | Does |
 |---|---|
-| `frame(frame, contribution=None)` | Records a new attempt, or a revision of an undecided one (`FrameEntry.revision` counts from 1). A revision is the same action: same actor, chat, moment and contribution (`frame_moved`), so it cannot admit facts established after the attempt. |
+| `frame(frame, contribution=None, author=None)` | Records a new attempt, or a revision of an undecided one (`FrameEntry.revision` counts from 1). A revision is the same action: same actor, chat, moment and contribution (`frame_moved`), so it cannot admit facts established after the attempt, and it cannot worsen the action (`frame_worsened`). |
 | `rule(ruling, supersedes=())` | Records a 025 `AbilityRuling` on a recorded frame's exact ability attempt, after 025's `check_ruling`. `supersedes` names live rulings on the same attempt that this one replaces. |
 | `decide(campaign, attempt_id, decision, consent=None)` | Assesses the latest frame revision now and records the decision. Deciding the same again returns the recorded outcome; a different one is `already_decided`. |
 | `assess`, `outcome`, `resolutions`, `state` | Read. |
@@ -75,21 +75,23 @@ An `Outcome` is a recorded decision. `Outcome.resolution()` is the 003 `Resoluti
 
 **Player characters.** Control is read from the [sovereignty ledger](PLAYER_SOVEREIGNTY.md#persistence-010b).
 - The frame of a player-controlled actor is backed by the controller's own `action` contribution for that scene and turn, whose id is the `attempt_id`. Without one it is `pc_authorship`; with another player's, another turn's or another kind's, it is `invalid_expression`.
-- An actor no human controls takes no contribution (`unexpected_backing`).
-- A `consent` decision for a player character needs the controller's own trusted human handle (`not_controller` otherwise). For an actor no player controls, the director consents alone (`consented_by` is `director`).
+- The contribution is given through `author`, the controller's own trusted handle issued by this authority. A bare value, another principal's handle or an untrusted one is `not_controller`: the adjudication key alone cannot put words in a player's mouth.
+- An actor no human controls takes no contribution or author (`unexpected_backing`); one controlled by a non-human principal is `non_human_controller`.
+- Control is read under the authority's lock, and read again at the decision: if the actor's human controller is no longer the contribution's author, the decision is `control_changed`.
+- A `consent` decision needs the authoring player's own trusted handle (`not_controller` otherwise) and is recorded with them as `consented_by`. A frame with no contribution has no one to consent (`consent_mismatch`); a director-controlled actor's setback must come from a recorded cause.
 
 **Abilities.** The library computes the 025 assessment itself, from the chat's snapshot and the campaign's live (not superseded) rulings. A caller cannot supply it. The decision records what it relied on as an `AbilityFinding`: classification, approval, ruling id, uncertainty and charges.
-- `ability_use` re-assesses now and refuses when the result differs from the record (`assessment_changed`, for example after an authored change to the ability). It also refuses an undecided attempt (`undecided`), one with no ability (`no_ability`) and a use the power does not permit (`ability_not_permitted`).
+- `ability_use` re-assesses now and refuses when the result differs from the record (`assessment_changed`, for example after an authored change to the ability). It also refuses an undecided attempt (`undecided`), one with no ability (`no_ability`), a use the power does not permit (`ability_not_permitted`) and a failed action (`action_failed`): in this slice a power that failed charges and applies nothing.
 - 021 then charges that assessment once.
 - A ruling never pins the entity's `resolved_source`. The decision's finding is the pin: a later change shows up as `assessment_changed` at hand-off.
 
-**Other refusals.** `missing_chat`, `not_in_chat`, `unresolved_actor`, `attempt_reused` (an attempt id is another actor's), `frame_moved`, `ruling_mismatch` (no frame, or other labels), `duplicate_ruling`, `unknown_ruling`, `unknown_attempt`, `stale_frame`, `consent_mismatch`, and 025's own reasons from `check_ruling` (`limit_not_approvable`, `wrong_classification` and so on). A refusal writes nothing.
+**Other refusals.** `missing_chat`, `not_in_chat`, `unresolved_actor`, `attempt_reused` (an attempt id is another actor's), `frame_moved`, `frame_worsened`, `invalid_field` (text that could never be stored), `ruling_mismatch` (no frame, or other labels), `duplicate_ruling`, `unknown_ruling`, `unknown_attempt`, `stale_frame`, `consent_mismatch`, and 025's own reasons from `check_ruling` (`limit_not_approvable`, `wrong_classification` and so on). A refusal writes nothing.
 
 ## Persistence
 
 Each campaign has one authority ledger, `authority/adjudication/<campaign_id>` ([STORAGE](STORAGE.md#authority-ledgers-010b)), with three entry kinds: `frame`, `ruling` and `decision`. Each entry is `{"schema": 1, "kind", "recorded_at", "recorded_by", "value"}`. The value is the exact JSON of `grimoire.adjudication`'s codecs: sets are sorted lists and every key is present.
 
-- **Replay** re-checks every entry with the rules used at record time: frame revisions and attempt ownership, rulings on recorded frames, and each decision against its frame revision, its recorded finding and the live rulings it names. Anything else is `LedgerInvalid`, and the library fails closed.
+- **Replay** re-checks every entry with the rules used at record time: frame revisions and attempt ownership, rulings on recorded frames, and each decision against its frame revision, its recorded finding, the live rulings it names and, for consent, the contribution's author. Anything else is `LedgerInvalid`, and the library fails closed.
 - **Not re-checked on replay:** who controlled the actor when a frame was recorded (replay does not join the sovereignty ledger's control history), and the entity a finding was computed from. Both are checked at record time; the finding is re-verified at hand-off.
 - **State is shared.** The replayed state lives on the `DurableAuthority`, so every library over one authority shares it. A batch written by anything else poisons the authority until it is reopened and the ledger replayed.
 - **Reserved ids.** `adjudication_actor_ids` scans the batches raw and is part of [`campaign_taken_ids`](CHATS.md#taken-instance-ids), so a hand-deleted actor's id never goes to a new individual who would inherit its outcomes. `campaign_authority_presence` counts this ledger too, so a new campaign never takes the id of one whose adjudication ledger survives.
@@ -99,6 +101,8 @@ Each campaign has one authority ledger, `authority/adjudication/<campaign_id>` (
 
 - **Factor sources are attributed, not verified.** Nothing checks that a factor's `source` exists or says what the factor claims, or that `established` matches it. Checking against 017 relations, 020 events and 021 accepted events is a later slice. Until then the guarantee rests on the labeller and on the order of records.
 - **The labeller is trusted.** As in 003 and 025, the classification is only as good as the labels. Under-labelling a hindrance makes an action straightforward.
+- **One key labels and decides.** The adjudication key records both frames and decisions. The order of records and `frame_worsened` stop a hindrance invented after the fact, but a caller holding the key could still frame an action thinly and decide it at once. Separating the labeller from the decider is 035's job.
+- **The moment is the caller's.** Nothing checks `moment.sequence` against the campaign's real sequence, so `established < moment.sequence` holds only as far as the labeller is honest.
 - **Decisions are final.** Revising a decided outcome needs coordination with 021 revocation and is deferred.
 - **No graded consequences or contests** (milestone 3). Each consequence is one declared stake, and there is no opposed action between two actors.
 - **Tail forgery.** As for every authority ledger, a valid batch appended at the tail with local file access is not detected by the chain. Replay still refuses one that breaks the rules above.
