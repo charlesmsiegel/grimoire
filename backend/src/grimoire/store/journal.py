@@ -16,7 +16,7 @@ from typing import Literal
 
 from .errors import RecoveryFailed
 from .jsonfmt import JsonError, is_etag, parse_strict, render
-from .layout import Parts, classify, is_kept_target, is_sync_state
+from .layout import Parts, classify, is_kept_target, is_secret_state, is_sync_state
 
 JOURNAL_FORMAT = "grimoire.journal/1"
 STAGING_SUFFIX = ".new"
@@ -25,7 +25,7 @@ _TEMP = re.compile(r"[A-Za-z0-9][A-Za-z0-9_~-]*\.new")
 State = Literal["commit", "abort"]
 #: ``publish`` a canonical record; ``replica`` a canonical record holding another library's exact
 #: bytes; ``keep`` a kept copy of another library's version under ``.conflicts``; ``hold`` a kept
-#: version whose bytes exist nowhere else; ``state`` a device-local ``.sync`` file. Replica, keep
+#: version whose bytes exist nowhere else; ``state`` a device-local ``.sync`` file or 028 pairing record. Replica, keep
 #: and state entries are never preserved: dropped instead (their bytes are regenerable).
 Kind = Literal["publish", "replica", "keep", "hold", "state"]
 KINDS = ("publish", "replica", "keep", "hold", "state")
@@ -38,7 +38,7 @@ def valid_target(kind: str, target: Parts) -> bool:
         return classify(target) is not None
     if kind in ("keep", "hold"):
         return is_kept_target(target)
-    return kind == "state" and is_sync_state(target)
+    return kind == "state" and (is_sync_state(target) or is_secret_state(target))
 
 
 @dataclass(frozen=True)

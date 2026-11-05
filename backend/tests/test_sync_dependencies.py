@@ -35,11 +35,12 @@ def test_d4_a_chat_never_lands_without_an_actor_that_collided(tmp_path):
     desktop, phone = _chat_pair(tmp_path)
     try:
         started = chat_library(desktop).start_chat(Launch("character", MARA)).commit()
+        name = started.actors[0].instance_id  # numbered for the desktop (028), mara-<tag>-1
         folder = phone.root / "campaigns" / "q-1" / "instances" / "character"
         folder.mkdir(parents=True)
-        (folder / "Mara-1.json").write_bytes(b"{}")
+        (folder / f"M{name[1:]}.json").write_bytes(b"{}")  # a look-alike spelling of it on the phone
         report = sync(desktop, phone, handles())
-        actor = "campaigns/q-1/instances/character/mara-1.json"
+        actor = f"campaigns/q-1/instances/character/{name}.json"
         chat = "campaigns/q-1/chats/t-1.json"
         assert report.conflict(actor).code == "name_collision"
         assert report.conflict(chat).code == "head_dependency", report.conflicts
@@ -64,11 +65,12 @@ def test_d3_two_hop_dependency_chat_actor_revision(tmp_path):
             txn = store.transaction()
             txn.put(RecordEnvelope(SourceRef(CARDS, "character", "mara", "r2"), {"bio": bio}, name="Mara"), None)
             txn.commit(owner_handle())
-        chat_library(desktop).start_chat(Launch("character", MARA)).commit()  # chat binds r1 (agreed)
+        started = chat_library(desktop).start_chat(Launch("character", MARA)).commit()  # chat binds r1 (agreed)
+        name = started.actors[0].instance_id
         r2 = SourceRef(CARDS, "character", "mara", "r2")
-        put(desktop, instance(InstanceRef("q-1", "character", "mara-1"), r2, base=r2))  # actor pins r2
+        put(desktop, instance(InstanceRef("q-1", "character", name), r2, base=r2))  # actor pins r2
         report = sync(desktop, phone, handles())
-        actor = "campaigns/q-1/instances/character/mara-1.json"
+        actor = f"campaigns/q-1/instances/character/{name}.json"
         chat = "campaigns/q-1/chats/t-1.json"
         assert report.conflict(actor).code == "head_dependency"
         assert report.conflict(chat).code == "head_dependency", report.conflicts
@@ -369,8 +371,8 @@ def test_a_chat_waits_while_its_actor_is_blocked_on_the_origin(tmp_path):
         identify(desktop, DESKTOP)
         identify(phone, PHONE)
         sync(desktop, phone, handles())
-        chat_library(desktop).start_chat(Launch("character", MARA)).commit()
-        actor = desktop.root / "campaigns" / "q-1" / "instances" / "character" / "mara-1.json"
+        started = chat_library(desktop).start_chat(Launch("character", MARA)).commit()
+        actor = desktop.root / "campaigns" / "q-1" / "instances" / "character" / f"{started.actors[0].instance_id}.json"
         actor.unlink()
         actor.mkdir()  # the origin's own actor file cannot be read: unknown, never "absent on both"
         report = sync(desktop, phone, handles())

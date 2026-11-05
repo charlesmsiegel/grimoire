@@ -23,7 +23,8 @@ from .errors import InvalidEnvelope, LinkRefused, RevisionReferenced, Unstorable
 from .jsonfmt import MAX_FILE_BYTES, JsonError, parse_strict
 from .jsonfmt import etag as _etag
 from .layout import (
-    ASSETS, BLOBS, CAMPAIGNS, CONFLICTS, IMAGES, MARKER, PLACEMENTS, SCOPE, SOURCE_DIR, SOURCES, SUFFIX, SYNC, TXN,
+    ASSETS, BLOBS, CAMPAIGNS, CONFLICTS, IMAGES, MARKER, PLACEMENTS, SCOPE, SECRETS, SOURCE_DIR, SOURCES, SUFFIX, SYNC,
+    TXN,
     Parts, blob_parts, classify, chat_parts, definition_parts, instance_parts, is_noise, name_key,
 )
 from .media import MAX_BLOB_BYTES, MEDIA
@@ -44,7 +45,8 @@ ASSET_RECORD_KINDS = frozenset({"image", "placement"})
 INSTANCE_ID_CONFLICT = "instance_id_conflict"
 _EXTENSION = {media: ext for ext, media in MEDIA.items()}
 #: Root entries that are device-local or the library's own marker: never transferred, never reported.
-_LOCAL = frozenset({TXN, CONFLICTS, SYNC, MARKER})
+#: ``secrets`` holds 028's pairing records (device credentials).
+_LOCAL = frozenset({TXN, CONFLICTS, SYNC, SECRETS, MARKER})
 
 
 @dataclass(frozen=True)

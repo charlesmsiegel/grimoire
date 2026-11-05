@@ -22,6 +22,7 @@ import json
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
+from hashlib import sha256
 
 from grimoire.adjudicationstore import adjudication_actor_ids
 from grimoire.chats import (
@@ -46,6 +47,7 @@ from grimoire.store import (
     StoreError, TakenIdsUnlisted,
 )
 from grimoire.store.layout import address_parts, classify
+from grimoire.sync.documents import DEVICE_FILE, parse_device
 
 #: (role, entity key) -> an existing campaign actor to reuse instead of creating one
 ReuseMap = Mapping[tuple[str, tuple[str, str, str]], InstanceRef]
@@ -584,7 +586,7 @@ class ChatLibrary:
         if reuse is not None:
             etag = self._check_reuse(campaign, reuse, ref)
             return NewBinding(ref, role, revision, reuse, CAMPAIGN_CONTINUITY), None, etag
-        base, number = ref.entity_id[:100], 1
+        base, number = ref.entity_id[:100] + self._device_tag(), 1
         while f"{base}-{number}" in taken:
             number += 1
         actor = InstanceRef(campaign, "character", f"{base}-{number}")
@@ -594,6 +596,34 @@ class ChatLibrary:
             derived_from=str(ref), base=str(ref.at(revision)), base_etag=definition_etag,
             extra={"schema": ENTITY_SCHEMA})
         return NewBinding(ref, role, revision, actor, NOT_WITNESSED), envelope, None
+
+    def _device_tag(self) -> str:
+        """``-`` and eight hex digits naming this library's device, or ``""`` for a library with none.
+
+        028: the first free number is only free on *this* device. Two paired devices that each start
+        a chat with the same character offline would both create ``mara-1``, and 019 would then merge
+        two different people (their knowledge, holdings and evidence) into one file, or report a
+        conflict on what are really two actors. Qualifying the number with a short digest of the
+        device ID (``mara-3f2a91c0-1``) keeps the two apart without any coordination between the
+        devices, which is the whole point of offline work. A library that was never given a device
+        identity has never synced, so it keeps the original numbering (``mara-1``) and every existing
+        library and test fixture reads exactly as before. The digest, not the ID itself, goes in the
+        actor ID: device IDs are free-form within the segment rules and could be long, and an actor ID
+        should not carry a label the user chose for a machine.
+
+        A damaged or unreadable identity file fails closed rather than falling back to plain numbers:
+        a library that *was* paired must never quietly go back to the numbering that collides.
+        """
+        try:
+            data = self.store.read_sync_state(DEVICE_FILE)
+        except (StoreError, OSError) as error:
+            raise InvalidBinding(f"cannot read this library's device identity: {error}", "device_identity") from error
+        if data is None:
+            return ""
+        device = parse_device(data)
+        if device is None:
+            raise InvalidBinding("this library's device identity is damaged; repair .sync/device.json", "device_identity")
+        return "-" + sha256(device.encode()).hexdigest()[:8]
 
     def _check_reuse(self, campaign: str, actor: InstanceRef, ref: SourceRef) -> str:
         """The etag of the actor's file as checked: the commit binds only these very bytes."""

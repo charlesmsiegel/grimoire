@@ -63,8 +63,8 @@ def _impure_module_attribute(module_name: str, attr: str) -> bool:
 #: edge included (whose ``importlib.resources`` legitimately loads ``tempfile``).
 NETWORK_MODULES = ("socket", "ssl", "select", "selectors", "http.client", "urllib.request",
                    "subprocess", "multiprocessing", "asyncio", "ctypes", "sqlite3",
-                   "grimoire.capture", "grimoire.ledgers", "grimoire.library", "grimoire.providers",
-                   "grimoire.store", "grimoire.sync", "grimoire.testing")
+                   "grimoire.capture", "grimoire.ledgers", "grimoire.library", "grimoire.peersync",
+                   "grimoire.providers", "grimoire.store", "grimoire.sync", "grimoire.testing")
 #: ...and what its pure modules must not pull in either.
 CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob", "random", "time",
                                          "datetime", "uuid", "secrets")
@@ -73,8 +73,8 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
 ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.capture", "grimoire.cardstore", "grimoire.chatstore", "grimoire.contextstore", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1", "grimoire.partystore",
-                      "grimoire.possessionstore", "grimoire.providers", "grimoire.runtime", "grimoire.store",
-                      "grimoire.sync", "grimoire.testing"})
+                      "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers", "grimoire.runtime",
+                      "grimoire.store", "grimoire.sync", "grimoire.testing"})
 
 
 @dataclass(frozen=True)
