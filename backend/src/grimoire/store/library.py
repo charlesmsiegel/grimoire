@@ -51,9 +51,9 @@ from .guard import Guard, Limits, RootIdentity
 from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, reemitted_imprecise, render
 from .layout import (
-    ACCEPTED, CAMPAIGNS, CHATS, CONFLICTS, DISCARD_MARKER, IMAGES, INSTANCES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
+    ACCEPTED, CAMPAIGNS, CHATS, CONFLICTS, DISCARD_MARKER, IMAGES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
     PLACEMENTS, REPAIR_MARKER, SYNC, SYNC_PEERS, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify, conflict_parts,
-    definition_parts, image_parts, instance_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
+    definition_parts, image_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
     ledger_parts, ledger_seq, logical, manifest_parts, name_key, sync_state_parts,
 )
 from .ledger import Head, Ledger, read_ledger, render_batches

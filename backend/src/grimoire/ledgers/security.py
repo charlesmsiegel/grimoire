@@ -27,7 +27,7 @@ from grimoire.store.ledger import MAX_BATCH_ENTRIES, Head, Ledger, entry_cost
 from grimoire.store.library import LedgerWriter
 
 from .codec import (
-    MAX_ID, check_size, decode_approval, decode_decision, decode_grant, encode_approval, encode_decision,
+    decode_approval, decode_decision, decode_grant, encode_approval, encode_decision,
     encode_grant, envelope, exact,
 )
 
