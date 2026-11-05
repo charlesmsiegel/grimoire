@@ -31,7 +31,7 @@ from grimoire.evidence import (
 )
 from grimoire.store import (
     CommitIncomplete, InvalidEnvelope, KnowledgeRecord, KnowledgeScan, LibraryStore, RecordNotFound, StaleWrite, StoreError,
-    UnstorableIdentifier, WriteConflict, etag,
+    TakenIdsUnlisted, UnstorableIdentifier, WriteConflict, etag,
 )
 from grimoire.store.layout import address_parts, logical
 
@@ -49,6 +49,47 @@ class EvidenceWriteError(ValueError):
 
     def __reduce__(self) -> tuple[object, ...]:
         return (type(self), (self.reason, self.records))
+
+
+def evidence_instance_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+    """Every instance id of this campaign named anywhere in its events, evidence and knowledge-log files.
+
+    Part of the one reservation set (``grimoire.chatstore.campaign_taken_ids``): a hand-deleted
+    actor's id must never go to a different individual, who would read the old one's private
+    perceptions and beliefs. The raw payloads are scanned without decoding (every string, key or
+    value, that parses as an ``InstanceRef`` of this campaign), so a record that fails validation
+    still protects its ids; 020 persists no bare control ids. A file or folder the store cannot read
+    at all (malformed, a link, a look-alike, a stray) may hold private knowledge, so it raises
+    ``TakenIdsUnlisted``: allocation fails closed. It reads every knowledge file of the campaign, as
+    every evidence read does.
+    """
+    scan = store.campaign_knowledge(campaign_id)
+    if scan.damaged or scan.problems:
+        paths = tuple(sorted({"/".join(address_parts(ref)) for ref in scan.damaged}
+                             | {problem.path for problem in scan.problems}))
+        raise TakenIdsUnlisted(f"knowledge files of {campaign_id} cannot all be read ({', '.join(paths)}), so the "
+                               "instance ids they name cannot be reserved", paths)
+    taken: set[str] = set()
+    for stored in scan.records.values():
+        _instance_ids(stored.record.payload, campaign_id, taken)
+    return frozenset(taken)
+
+
+def _instance_ids(value: object, campaign_id: str, into: set[str]) -> None:
+    if isinstance(value, str):
+        try:
+            ref = InstanceRef.parse(value)
+        except ValueError:
+            return
+        if ref.campaign_id == campaign_id:
+            into.add(ref.instance_id)
+    elif isinstance(value, Mapping):
+        for key, item in value.items():
+            _instance_ids(key, campaign_id, into)
+            _instance_ids(item, campaign_id, into)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _instance_ids(item, campaign_id, into)
 
 
 @dataclass(frozen=True)
@@ -259,6 +300,10 @@ class EvidenceLibrary:
         unknown = sorted(_name(r) for r in new if _actors(r) - present)
         if unknown:
             raise EvidenceWriteError("unknown_actor", unknown)
+        paired = {ref for ref in actors if any(other.instance_id == ref.instance_id and other != ref
+                                               for other in present)}  # an id two kinds share is no one actor
+        if paired:
+            raise EvidenceWriteError("instance_id_conflict", sorted(_name(r) for r in new if _actors(r) & paired))
         # 4: only an intact ledger is extended.
         assembly, scan, files = self._assembly(campaign_id)
         if not assembly.clean or scan.problems:

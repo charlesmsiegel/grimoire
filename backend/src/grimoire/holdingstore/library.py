@@ -28,7 +28,8 @@ from grimoire.holdings import (
 )
 from grimoire.library import LibraryPathError
 from grimoire.store import (
-    LibraryStore, MalformedRecord, RecordNotFound, ScopeRecord, StaleWrite, StoreError, UnstorableIdentifier,
+    LibraryStore, MalformedRecord, RecordNotFound, ScopeRecord, StaleWrite, StoreError, TakenIdsUnlisted,
+    UnstorableIdentifier,
 )
 from grimoire.store.envelope import scope_record_document
 from grimoire.store.layout import address_parts, classify
@@ -147,10 +148,10 @@ class HolderReplaced(StaleWrite):
     now has the id. Never retried automatically (``apply(..., holders=)`` refuses it as ``holder_replaced``)."""
 
 
-class HoldingsUnlisted(StoreError):
+class HoldingsUnlisted(TakenIdsUnlisted):
     """A folder that could hold the campaign's holder files is a link or cannot be listed (or the
     campaign folder exists only as a look-alike), so the holder ids it may contain cannot be reserved:
-    allocation fails closed rather than guess."""
+    allocation fails closed rather than guess. One case of the store's ``TakenIdsUnlisted``."""
 
 
 def holdings_holder_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
@@ -164,7 +165,8 @@ def holdings_holder_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]
     refs, complete = store.campaign_holding_names(campaign_id)
     if not complete:
         raise HoldingsUnlisted(f"campaigns/{campaign_id}/holdings cannot be fully listed (a linked or unlistable "
-                               "folder, or a look-alike campaign folder), so holder ids cannot be reserved")
+                               "folder, or a look-alike campaign folder), so holder ids cannot be reserved",
+                               (f"campaigns/{campaign_id}/holdings",))
     return frozenset(ref.instance_id for ref in refs)
 
 

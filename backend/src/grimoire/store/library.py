@@ -40,8 +40,8 @@ from .envelope import (
     source_document,
 )
 from .errors import (
-    BlobCorrupt, CommitIncomplete, ImmutableBlob, ImmutableImage, ImmutableRevision, InvalidEnvelope,
-    InvalidSourceState, LinkRefused, NameCollision, NotALibrary, LedgerBusy, PendingRecovery, RecordNotFound,
+    BlobCorrupt, CommitIncomplete, ImmutableBlob, ImmutableImage, ImmutableRevision, InstanceIdConflict,
+    InvalidEnvelope, InvalidSourceState, LinkRefused, NameCollision, NotALibrary, LedgerBusy, PendingRecovery, RecordNotFound,
     RecoveryBlocked, RecoveryFailed, StaleWrite, StoreError, UnstorableIdentifier, WriteConflict, WriteDenied,
 )
 from .replica import CanonicalScan
@@ -49,7 +49,7 @@ from .guard import Guard, Limits, RootIdentity
 from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, render
 from .layout import (
-    ACCEPTED, CAMPAIGNS, CONFLICTS, DISCARD_MARKER, IMAGES, INSTANCES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
+    ACCEPTED, CAMPAIGNS, CHATS, CONFLICTS, DISCARD_MARKER, IMAGES, INSTANCES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
     PLACEMENTS, REPAIR_MARKER, SYNC, SYNC_PEERS, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify, conflict_parts,
     definition_parts, image_parts, instance_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
     ledger_parts, ledger_seq, logical, manifest_parts, name_key, sync_state_parts,
@@ -677,6 +677,20 @@ class LibraryStore:
             self._require_consistent()
             with self._access.cached_listings():
                 return loader.campaign_holding_names(self._access, campaign_id)
+
+    def campaign_chats(self, campaign_id: str) -> CampaignRecords:
+        """One campaign's chat records (107) and their problems, as ``load()`` reports them, reading only
+        that campaign's ``chats/`` folder (so an allocator never loads the whole library)."""
+        return self._campaign_family(campaign_id, CHATS)
+
+    def campaign_placement_subjects(self, campaign_id: str) -> tuple[tuple[InstanceRef, ...], bool]:
+        """The instance subjects of one campaign's placements (018), from listings only, and whether
+        the listing was complete (``False`` if a folder that could hold one is a link or unreadable)."""
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return loader.campaign_placement_subjects(self._access, campaign_id)
 
     def campaign_holdings(self, campaign_id: str) -> CampaignHoldingRecords:
         """One campaign's holdings records (023) and their problems, contained per file as ``load()``
@@ -1326,6 +1340,7 @@ class _Commit:
             self._check_local_roots()
             self._check_revisions()                       # 4. compare-and-swap
             self._check_names()                           # 5. collisions
+            self._check_instance_kinds()                  # 5b. one instance id per campaign, across kinds
             if not any(put.ledger for put in self.puts):
                 self._check_sources()                     # 6. loader-consistent sources
         return staging
@@ -1462,6 +1477,31 @@ class _Commit:
                 raise NameCollision(f"{'/'.join(put.parts)} collides with a differently spelled existing entry")
             if put.journal_kind == "publish":  # a hold is preserved into its own folder's next slot
                 self.access.check_conflict_folder(conflict_parts(put.parts, etag(put.data)))
+
+    def _check_instance_kinds(self) -> None:
+        """A new instance file never shares its id with an instance of another kind in its campaign,
+        on disk or created in this transaction (IDENTITY.md). Refused per path (``InstanceIdConflict``);
+        an edit of an existing pair's member is allowed, so a human can repair the pair. Ids are
+        compared folded, so a look-alike file or kind folder counts."""
+        created: dict[tuple[str, str], list[InstanceRef]] = {}
+        for put in self.puts:
+            if put.kind != "record" or put.expected is not None:
+                continue
+            hit = classify(put.parts)
+            if hit is not None and hit[0] == "instance":
+                ref = hit[1]
+                assert isinstance(ref, InstanceRef)
+                created.setdefault((ref.campaign_id, name_key(ref.instance_id)), []).append(ref)
+        refused, listed = [], {}
+        for (campaign, folded), refs in created.items():
+            if campaign not in listed:  # one listing per campaign, however many instances a sync copies
+                listed[campaign] = loader.instance_kinds(self.access, campaign)
+            on_disk = listed[campaign].get(folded, set())
+            for ref in refs:
+                if (on_disk - {ref.kind}) or any(other.kind != ref.kind for other in refs):
+                    refused.append("/".join(address_parts(ref)))
+        if refused:
+            raise InstanceIdConflict(sorted(refused))
 
     def _check_sources(self) -> None:
         touched: dict[str, tuple[SourceManifest | None, list[SourceRef]]] = {}

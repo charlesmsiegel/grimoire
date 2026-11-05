@@ -12,7 +12,8 @@ chat and building navigation do load the library, and they never fail because a 
 broken references are reported, never rebound.
 
 No model call is made anywhere. Binding a source writes no event, belief or evidence, and a new
-actor is ``not_witnessed``: it saw none of the chat's earlier history.
+actor is ``not_witnessed``: it saw none of the chat's earlier history. A new actor's id is never one
+``campaign_taken_ids`` reserves, so it inherits no other individual's past.
 """
 
 from __future__ import annotations
@@ -29,16 +30,71 @@ from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import ENTITY_SCHEMA, instance_to_payload
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, validate_segment
 from grimoire.effectstore import accepted_instance_ids
+from grimoire.evidencestore import evidence_instance_ids
 from grimoire.graphstore import relation_endpoint_ids
 from grimoire.holdingstore import holdings_holder_ids
+from grimoire.imagestore import placement_subject_ids
 from grimoire.store import (
-    LibraryStore, LibraryView, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
+    CampaignRecords, LibraryStore, LibraryView, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
+    TakenIdsUnlisted,
 )
 from grimoire.store.layout import address_parts, classify
 
 #: (role, entity key) -> an existing campaign actor to reuse instead of creating one
 ReuseMap = Mapping[tuple[str, tuple[str, str, str]], InstanceRef]
 _ALLOCATION_ATTEMPTS = 16
+
+
+def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+    """Every instance id a new individual in this campaign must not take: the one reservation set.
+
+    A hand-deleted individual's id must never go to a different one, who would silently inherit its
+    past. Reserved: every instance file of any kind (a pair two kinds share keeps both); every id
+    named by a relation (017), a chat roster (107), an accepted event (021) or the events, evidence and
+    knowledge log (020), each scanned raw so an undecodable record still protects its ids; every holder
+    with a holdings file (023) and every subject with a campaign placement folder (018), from file names.
+    Look-alike holder and placement names count as the ids they fold to.
+
+    A file or folder that could name ids but cannot be read or listed raises ``TakenIdsUnlisted``
+    (``HoldingsUnlisted`` is one case): allocation fails closed rather than guess. Every instance
+    allocator (107 here; 024, 026, 037 later) must use this at plan time and again under the store
+    lock at commit, and any later record family that names instance ids must extend it. Its cost
+    grows with play history: it reads every relation, chat, accepted-event and knowledge file.
+    """
+    taken = {found.instance_id for found in store.campaign_instances(campaign_id)}
+    taken |= _named_ids(store.campaign_relations(campaign_id), campaign_id, "relation")
+    taken |= relation_endpoint_ids(store, campaign_id)
+    taken |= _named_ids(store.campaign_chats(campaign_id), campaign_id, "chat")
+    taken |= accepted_instance_ids(store, campaign_id)
+    taken |= holdings_holder_ids(store, campaign_id)
+    taken |= evidence_instance_ids(store, campaign_id)
+    taken |= placement_subject_ids(store, campaign_id)
+    return frozenset(taken)
+
+
+def _named_ids(found: CampaignRecords, campaign_id: str, family: str) -> set[str]:
+    """Instance ids of this campaign anywhere in a family's raw payloads; fails closed on any problem."""
+    if found.problems:
+        paths = tuple(sorted({problem.path for problem in found.problems}))
+        raise TakenIdsUnlisted(f"{family} files of {campaign_id} cannot all be read ({', '.join(paths)}), so the "
+                               "instance ids they name cannot be reserved", paths)
+    taken: set[str] = set()
+    stack: list[object] = [stored.record.payload for stored in found.records.values()]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str):
+            try:
+                ref = InstanceRef.parse(value)
+            except ValueError:
+                continue
+            if ref.campaign_id == campaign_id:
+                taken.add(ref.instance_id)
+        elif isinstance(value, Mapping):
+            stack.extend(value.keys())
+            stack.extend(value.values())
+        elif isinstance(value, (list, tuple)):
+            stack.extend(value)
+    return taken
 
 
 class InvalidBinding(ValueError):
@@ -110,7 +166,7 @@ class ChatChange:
             if self.new_scope and store.campaign_presence(campaign) != "absent":
                 raise StaleWrite([(f"campaigns/{campaign}", "exists")])
             if self.new_actors:
-                taken = self.library._campaign_taken(campaign)
+                taken = campaign_taken_ids(store, campaign)
                 clash = [actor for actor in self.new_actors if actor.instance_id in taken]
                 if clash:
                     raise StaleWrite([("/".join(address_parts(actor)), "id taken") for actor in clash])
@@ -254,7 +310,7 @@ class ChatLibrary:
             except RecordNotFound:  # a campaign from before 107 (or 026): give it a scope record now
                 scope_puts.append((self._scope_record(PlayScope(scope, at)), None))
             campaign = scope.campaign_id
-            taken = _LazyTaken(lambda: self._campaign_taken(campaign))
+            taken = _LazyTaken(lambda: campaign_taken_ids(self.store, campaign))
         chat = ChatRef(scope.campaign_id, self._id("t"))
         bindings, actors = [], []
         for ref, role in wanted:
@@ -349,15 +405,9 @@ class ChatLibrary:
         return record, stored
 
     def _taken(self, chat: ChatRef, record: ChatRecord) -> set[str]:
-        """Actor ids a new actor may not use: every instance file, and this chat's roster even if a file vanished."""
-        return self._campaign_taken(chat.campaign_id) | {entry.actor.instance_id for entry in record.roster}
-
-    def _campaign_taken(self, campaign: str) -> set[str]:
-        """Every instance file's id, and every id a relation (017), an accepted event (021) or a holdings
-        file (023) names: a vanished endpoint's, individual's or holder's id stays taken."""
-        taken = {found.instance_id for found in self.store.campaign_instances(campaign)}
-        return (taken | relation_endpoint_ids(self.store, campaign) | accepted_instance_ids(self.store, campaign)
-                | holdings_holder_ids(self.store, campaign))
+        """Actor ids a new actor may not use: ``campaign_taken_ids``, and this chat's roster as read."""
+        return set(campaign_taken_ids(self.store, chat.campaign_id)) | {entry.actor.instance_id
+                                                                        for entry in record.roster}
 
     def _resolve(self, ref: SourceRef, role: str) -> tuple[str, str]:
         if role not in ROLE_KINDS or ref.kind != ROLE_KINDS[role]:
@@ -401,6 +451,9 @@ class ChatLibrary:
             source = None
         if source is None or source.entity_key != ref.entity_key:
             raise InvalidBinding(f"{actor} is not an instance of {ref.unpinned()}", "actor_mismatch")
+        if any(other.instance_id == actor.instance_id and other != actor
+               for other in self.store.campaign_instances(campaign)):  # load() leaves both members of a pair out
+            raise InvalidBinding(f"{actor}'s id is also used by another kind in {campaign}", "instance_id_conflict")
 
     def _chat_record(self, record: ChatRecord, base: ScopeRecord | None = None) -> ScopeRecord:
         return self._envelope(record.ref, CHAT_SCHEMA, chat_to_payload(record), base)

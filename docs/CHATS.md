@@ -125,7 +125,7 @@ Every mutating method returns a `ChatChange`:
 1. `preview()` returns the exact bytes per logical path, for a human to approve.
 2. `commit(approvals=None)` performs one store transaction with CAS on every touched record. Under an approval-gated policy, register an approval for each previewed path and pass them in.
 
-`commit` re-checks under the store lock that a newly allocated campaign is still absent and that each new actor id is still unused by any kind. A conflict raises `StaleWrite` and never reallocates, because the approvals pinned those bytes.
+`commit` re-checks under the store lock that a newly allocated campaign is still absent and that each new actor id is still outside [`campaign_taken_ids`](#taken-instance-ids). A conflict raises `StaleWrite` and never reallocates, because the approvals pinned those bytes.
 
 ### Methods
 
@@ -155,7 +155,17 @@ No mutating method calls `load()` (tested). A changed source is scanned again; a
 
 ### Actor ids
 
-Actor ids are `<entity_id>-<n>`, the smallest number used neither by an instance file of any kind in the campaign nor by this chat's roster, even when an actor's file has vanished. Ids named by a relation (017) or an accepted event (021), or owning a holdings file (023), are taken too, so a hand-deleted endpoint's, individual's or holder's id never goes to a different individual. **Limit:** an instance file deleted by hand can free its id for a *different* chat in the same campaign. A look-alike instance file (`Mara-1.json`) is invisible to that listing, so the commit fails with `NameCollision` rather than reallocating.
+Actor ids are `<entity_id>-<n>`, the smallest number not in `campaign_taken_ids(store, campaign_id)` (below) and not in this chat's roster. So an id stays taken when an actor's file has vanished, whichever chat's roster or record names it. A look-alike instance file (`Mara-1.json`) is invisible to the instance listing, so the commit fails with `NameCollision` rather than reallocating. An actor to reuse whose id another kind also uses is refused (`instance_id_conflict`): `load()` leaves both out.
+
+### Taken instance ids
+
+`grimoire.chatstore.campaign_taken_ids(store, campaign_id)` is the one reservation set: every instance id a new individual in the campaign must not take, so a hand-deleted individual's id never goes to a different one who would inherit its past. 107 checks it at allocation and again under the store lock at commit (a clash raises `StaleWrite`). Every instance allocator (024, 026, 037) must use it the same way. It reserves:
+
+- every instance file's id, of any kind;
+- every instance id of the campaign named anywhere in a relation file (017), a chat file's roster or bindings (107), an accepted-event file (021), or an events, evidence or knowledge-log file (020). These are scanned raw, so a record that fails decoding still protects its ids. 020 persists no bare control ids;
+- every holder with a holdings file (023) and every subject with a campaign placement folder (`placements/<kind>/<id>/`, 018), from file names only. A look-alike (`Holdings/`, `Character/`, `Mara-2.json`, `Mara-2/`) keeps the id it folds to taken.
+
+A file or folder that could name ids but cannot be read or listed (malformed, a link, a look-alike family folder or campaign folder, an unreadable folder) makes the allocation fail closed with `TakenIdsUnlisted` (`grimoire.store`; `.paths` names what could not be read). `HoldingsUnlisted` is one case. Private 020 knowledge is never guessed past. Taken ids are computed only when a new actor id is needed, so binding a scenario or lorebook, or reusing an actor, never lists them. The cost grows with play history: each allocation reads every relation, chat, accepted-event and knowledge file of the campaign.
 
 ### Actor instances
 
@@ -178,5 +188,3 @@ Actor instances are written as `grimoire.record/1` with:
 | A persisted navigation cache and the richer library browser | 065 |
 
 Binding a source creates no event, belief or evidence record and never makes anyone aware of its content.
-
-New actor ids skip every id named by the campaign's relation files (`relation_endpoint_ids`, 017) and accepted events (`accepted_instance_ids`, [021](EFFECTS.md)), and every id with a holdings file (`holdings_holder_ids`, 023, from file names only), at allocation and again under the store lock at commit, so a hand-deleted endpoint's, individual's or holder's id never goes to a different individual. A look-alike holder file or folder (`Mara-2.json`, `Holdings`) keeps the id it folds to taken. If a folder that could hold holder files cannot be listed (a link, an unreadable or uninspectable folder, or a look-alike campaign folder), allocating a new actor id fails closed with `HoldingsUnlisted`. Taken ids are computed only when a new actor id is needed, so binding a scenario or lorebook, or reusing an actor, never lists them. See [GRAPH](GRAPH.md#endpoint-ids-stay-taken).

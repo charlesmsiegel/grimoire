@@ -165,7 +165,7 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 
 1. **Read-only.** A read-only store, or no handle → `read_only`.
 2. **Shape.** 1–500 012 records of this campaign (`empty`, `too_many`, `invalid_record`, `campaign_mismatch`).
-3. **Existence.** The campaign (a play scope or an instance file; an empty leftover folder is not one), the chat (of this campaign) and every actor named must already exist as files (`unknown_campaign`, `unknown_chat`, `unknown_actor`). That covers holder, sender, `attributed_to`, participants and instance subjects. There is no name lookup, and a typo never creates a campaign.
+3. **Existence.** The campaign (a play scope or an instance file; an empty leftover folder is not one), the chat (of this campaign) and every actor named must already exist as files (`unknown_campaign`, `unknown_chat`, `unknown_actor`). That covers holder, sender, `attributed_to`, participants and instance subjects. There is no name lookup, and a typo never creates a campaign. An actor whose id another kind of the campaign also uses is no one actor (`instance_id_conflict`; see [STORAGE](STORAGE.md#instance-ids-are-never-reused)).
 4. **Integrity.** Only an intact ledger is extended. Any quarantine or problem → `ledger_damaged`, naming the quarantined records and the problem paths. A write validated against a partial ledger could change meaning once a human repairs it.
 5. **Fresh IDs.** An ID already on disk → `duplicate_id`. (A damaged or look-alike file has already been refused at step 4.)
    - **Accepted (021) ids.** An event id that is an accepted event's id in this campaign is reserved for that event's bridge, `as_knowledge_event(accepted)` ([EFFECTS](EFFECTS.md#continuity-the-next-response)): any other event there → `accepted_id`; the bridge of a revoked event → `revoked` (an undone turn is never stored as objective fact). Fail closed: while any accepted-event file, link or folder of the campaign cannot be read, or the one under a new event's id cannot be decoded, an append holding an event → `accepted_unreadable`. Appends without events are unaffected. The accepted files are read through the store and decoded with 021's pure codec.
@@ -186,6 +186,10 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 - It then commits one transaction. The batch's create-only CAS also stops a concurrent append.
 - A refusal before the commit point (`StaleWrite`, `WriteDenied`, `UnstorableIdentifier` — a Windows `MAX_PATH` overflow is only caught here — `NameCollision`, or an `OSError` while staging, which may leave empty folders that are not state) writes nothing. After `WriteDenied`, register fresh approvals for any it consumed and commit again. After `StaleWrite`, build a fresh `append`: the change's snapshot no longer matches. A change commits at most once.
 - After a `WriteConflict` partial publish, the next read reports `unlisted`/`missing` and appends refuse until the damage is repaired. The `.conflicts/` copies hold director-private evidence and stay on the device.
+
+### Instance ids stay taken
+
+`evidence_instance_ids(store, campaign_id)` returns every instance id of the campaign named anywhere in its events, evidence and knowledge-log files. The raw payloads are scanned without decoding (every string, key or value, that parses as an `InstanceRef` of this campaign), so a quarantined record still protects its ids. 020 persists no bare control ids. It is part of the one reservation set, [`campaign_taken_ids`](CHATS.md#taken-instance-ids), so a hand-deleted actor's id never goes to a new individual who would read the old one's private perceptions and beliefs. Because this is private knowledge, any damaged file or problem in either tree (malformed, a link, a look-alike, a stray) raises `TakenIdsUnlisted`: allocation fails closed, as an append does at step 4.
 
 ### Trust boundaries (documented, not checked here)
 

@@ -72,7 +72,7 @@ In this slice the remedy is to pin the instance to the earlier revision. Reviewe
 
 ## Control: the campaign roster
 
-Authority and intent keep naming an actor by its campaign-local segment (`ControlAssignment.actor_id`, `RoutingContext.active_pc`). **An instance id is unique within a campaign across kinds, and is never reused for a different individual**, so that segment is unambiguous. Enforcing no-reuse across history (tombstones) belongs to the file store and sync sprints (010, 019).
+Authority and intent keep naming an actor by its campaign-local segment (`ControlAssignment.actor_id`, `RoutingContext.active_pc`). **An instance id is unique within a campaign across kinds, and is never reused for a different individual**, so that segment is unambiguous. The store enforces it: a commit refuses a cross-kind pair, `load()` leaves a pair found on disk out (both members), and allocators take new ids outside `campaign_taken_ids` ([STORAGE](STORAGE.md#instance-ids-are-never-reused)).
 
 `CampaignRoster(campaign_id, instances)` is the one explicit adapter. Any repeated instance id, even the same value twice, is an `IdentityConflict`.
 

@@ -25,11 +25,28 @@ from grimoire.images import (
 from grimoire.store import (
     AssetRecord, BlobCorrupt, ImageBlob, InvalidBlob, LibraryStore, LinkRefused, MalformedRecord, NameCollision,
     RecordEnvelope, RecordNotFound, SourceManifest, StaleWrite, StoredAssetRecord, StoredDefinition, StoredRecord,
-    SourceFacts, StoredSource, StoreError, UnstorableIdentifier, UnsupportedFormat,
+    SourceFacts, StoredSource, StoreError, TakenIdsUnlisted, UnstorableIdentifier, UnsupportedFormat,
 )
 from grimoire.store.layout import address_parts, blob_parts, classify, manifest_parts
 
 BlobKey = tuple[str, str]  # (sha256, ext)
+
+
+def placement_subject_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+    """Every instance id with a campaign placement folder (``placements/<kind>/<id>/``), from listings only.
+
+    Part of the one reservation set (``grimoire.chatstore.campaign_taken_ids``): a hand-deleted
+    actor's id must never go to a different individual, who would show the old one's ``hide`` or
+    ``set`` art. No placement file is read. A look-alike folder keeps the id it folds to taken. A
+    folder that could hold one but is a link or cannot be listed (or a look-alike campaign folder)
+    raises ``TakenIdsUnlisted``: allocation fails closed rather than guess.
+    """
+    refs, complete = store.campaign_placement_subjects(campaign_id)
+    if not complete:
+        folder = f"campaigns/{campaign_id}/placements"
+        raise TakenIdsUnlisted(f"{folder} cannot be fully listed (a linked or unlistable folder, or a look-alike "
+                               "campaign folder), so placement subject ids cannot be reserved", (folder,))
+    return frozenset(ref.instance_id for ref in refs)
 
 
 class InvalidImage(ValueError):

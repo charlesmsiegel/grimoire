@@ -200,12 +200,12 @@ Writers must also follow these rules, which the text is not checked for, as in 0
 
 ### Endpoint ids stay taken
 
-`relation_endpoint_ids(store, campaign_id)` returns every instance id named by the campaign's decodable and unsupported relation files. [107's actor allocator](CHATS.md) treats those ids as taken. A hand-deleted endpoint's id is therefore never given to a different individual, who would otherwise silently inherit the relations.
+`relation_endpoint_ids(store, campaign_id)` returns every instance id named by the campaign's decodable and unsupported relation files. The one reservation set, [`campaign_taken_ids`](CHATS.md#taken-instance-ids), also scans every relation file raw, so an undecodable one still protects its ids, and it fails closed (`TakenIdsUnlisted`) when a relation file or folder cannot be read. A hand-deleted endpoint's id is therefore never given to a different individual, who would otherwise silently inherit the relations.
 
-**Obligation:** every future instance allocator (024, 026, 037) must use it, together with 023's `holdings_holder_ids` ([HOLDINGS](HOLDINGS.md)), which protects holder ids from file names alone (so an unreadable holder file still claims its id, unlike a relation's) and fails closed when the folder cannot be fully listed (where a linked `relations/` protects nothing).
+**Obligation:** every instance allocator (024, 026, 037) uses `campaign_taken_ids`, never this function alone.
 
 **Limits (pinned by tests):**
-- an id named only by an undecodable file is not protected;
+- `relation_endpoint_ids` alone does not protect an id named only by an undecodable file (`campaign_taken_ids` does);
 - a pre-017 build does not protect these ids.
 
 ## Boundaries and deferrals

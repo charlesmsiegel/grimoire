@@ -672,7 +672,7 @@ def test_an_agent_that_does_not_exist_is_refused(world):
 
 
 def test_ids_named_by_accepted_events_stay_taken_for_new_actors(world):
-    from grimoire.chatstore import ChatLibrary
+    from grimoire.chatstore import campaign_taken_ids
     from grimoire.effectstore import accepted_instance_ids
     store, handles, library = world
     pact = EffectProposal(C, CHAT, moment(), "Ines makes Wren and the guild allies.",
@@ -680,8 +680,7 @@ def test_ids_named_by_accepted_events_stay_taken_for_new_actors(world):
     library.accept(pact, controls=CONTROLS).commit()
     (store.root / "campaigns/c/instances/character/ines.json").unlink()  # ines is named only as an agent now
     assert "ines" in accepted_instance_ids(store, C)
-    chats = ChatLibrary(store, handles.app, clock=Clock(), new_id=Ids(), owner=OWNER)
-    assert "ines" in chats._campaign_taken(C)
+    assert "ines" in campaign_taken_ids(store, C)
 
 
 def test_a_wrap_up_through_another_scene_is_refused(world):

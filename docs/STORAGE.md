@@ -136,7 +136,7 @@ Fields:
 - `load()` adds `LibraryView.relations`. Bad files are contained per file, as for chats. Anything else under `relations/` (a sub-directory, another suffix, a look-alike name) is `unrecognized` or `name_mismatch`, and a `relations` that is a file is `unrecognized`.
 - `read(RelationRef)` returns a `StoredScopeRecord`. `campaign_relations(id)` returns `CampaignRelations(records, problems)` for **one** campaign, contained exactly as `load()` contains it (a parity test). Links are reported and never followed.
 - Writes read every relation file of the campaign (no cap; O(n)).
-- **Instance allocators must use `grimoire.graphstore.relation_endpoint_ids`** (see [GRAPH](GRAPH.md#endpoint-ids-stay-taken)), so the id of a hand-deleted relation endpoint is never reused.
+- Instance allocators reserve relation endpoint ids through [`campaign_taken_ids`](#instance-ids-are-never-reused).
 
 **Rollback:** a pre-017 build skips `relations/` (it is reserved there), and never writes or deletes it. Its allocators do not protect relation endpoint ids. It **cannot recover a journal that names a relation path**: it raises `RecoveryFailed`, and reads then raise `PendingRecovery`. Recover with a 017+ build, or run `LibraryStore.discard_journal` (tested).
 
@@ -206,7 +206,7 @@ Fields:
 - **`load()` skips `holdings/`**, as it skips 020's `events/` and `evidence/`: a holder's operation log is campaign history (up to 7 MiB per holder), so whole-library loads such as opening a chat never pay for it. There is no `LibraryView.holdings`.
 - `campaign_holdings(id)` returns `CampaignHoldingRecords(records, problems)` for **one** campaign, contained per file in the same way `load()` contains the other families: bad files, links (including a linked look-alike `Holdings`), look-alikes and an unreadable campaign folder are problems, never a crashed read. `read(HoldingsRef)` reads one file. `grimoire.holdingstore` uses only these and never loads the whole library (tested).
 - `campaign_holding_names(id)` returns `(refs, complete)`: the campaign's holder files from **listings only** (no file is read). A look-alike that a case-insensitive filesystem or a case-only rename could turn into a holder file (`Holdings/`, `Character/`, `Mara-2.json`) counts under the name it folds to; a folder whose name can fold to no kind (`New folder`, `@eaDir`) is ignored. `complete=False` only when something that could hold holder files cannot be listed: the campaign folder exists only as a look-alike, or a holdings or kind folder is a link or cannot be listed or inspected.
-- **Instance allocators must treat ids with a holdings file as taken** (`grimoire.holdingstore.holdings_holder_ids`, built on `campaign_holding_names`, which 107's allocator uses alongside 017's `relation_endpoint_ids` and 021's `accepted_instance_ids`), so a hand-deleted holder's id never goes to a different individual.
+- Instance allocators reserve every id with a holdings file (`holdings_holder_ids`, built on `campaign_holding_names`) through [`campaign_taken_ids`](#instance-ids-are-never-reused).
 - **Rollback:**
   - A pre-023 build reports `holdings/` as `unrecognized` and never touches it. Its allocators do not protect holder ids.
   - It **cannot recover a journal naming a holdings path** (`RecoveryFailed`). Recover with a 023+ build, or run `discard_journal` (both tested).
@@ -217,7 +217,9 @@ All of these take the store lock, require a consistent library, and read listing
 
 - `read(ScopeRef | ChatRef)` returns a `StoredScopeRecord` (and since 017/021/023, `read(RelationRef | AcceptedRef | WrapUpRef | HoldingsRef)` too).
 - `campaign_presence(id)` returns `absent`, `present`, or `mismatch` when only a look-alike folder exists.
-- `campaign_instances(id)` returns canonically named instance files across kinds. It reads names only and refuses links.
+- `campaign_instances(id)` returns canonically named instance files across kinds. It reads names only and refuses links. Both members of a [cross-kind pair](#instance-ids-are-never-reused) are listed.
+- `campaign_chats(id)` returns one campaign's chat records as `CampaignRecords(records, problems)`, contained as `load()` contains them, reading only that campaign's `chats/`.
+- `campaign_placement_subjects(id)` returns `(refs, complete)`: the instance subjects of one campaign's placements, from **listings only** (every `<id>` entry under `placements/<kind>/`). Look-alikes count under the names they fold to, as for `campaign_holding_names`, and `complete=False` when a folder that could hold a subject is a link or cannot be listed, or the campaign folder exists only as a look-alike.
 - `excluded_sources()` returns every source `load()` would report as excluded, including by a cross-source `identity_conflict`. It runs `load()`'s own exclusion algorithm (`loader.admit`, shared with `load()` and given read-only scans) without reading campaigns. It is **incremental and cached**:
   - each source has a stat-only fingerprint of its `manifest.json` and everything under its `records/`: names, types, sizes, inodes, and nanosecond modification and change times. No file is read;
   - a source is scanned again only when its fingerprint changed, and the exclusion algorithm then reruns in memory over the cached scans;
@@ -276,6 +278,14 @@ A distinct format, rather than an extension of `scope-record/1`, keeps a parser 
 
 **Sync:** knowledge files and the log are canonical user data that 019/028 will transfer. Merging two devices' logs belongs to 019.
 
+## Instance ids are never reused
+
+An instance id is unique within a campaign across kinds and never goes to a different individual ([IDENTITY](IDENTITY.md)):
+
+- the commit refuses a cross-kind pair (`InstanceIdConflict`, step 5) and `load()` leaves an existing pair out (both members);
+- every instance allocator takes its new id outside `grimoire.chatstore.campaign_taken_ids(store, campaign_id)`, at plan time and again under the store lock at commit ([CHATS](CHATS.md#taken-instance-ids)). It reserves every id an instance file, relation, chat roster, accepted event, holdings file, 020 knowledge file or campaign placement folder names. Anything that could name ids but cannot be read or listed raises `TakenIdsUnlisted` (fail closed);
+- **any later record family that names instance ids must extend `campaign_taken_ids`**, so an allocator never has to know the families.
+
 ## Writing
 
 `LibraryStore` is trusted application code. It is never handed to a worker; workers reach it only through a `WorkerHandle` decision. Reads take no handle.
@@ -302,6 +312,8 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
    - paths fit the platform's limits: 259 UTF-16 units on Windows, `pathconf` elsewhere.
 4. **Compare-and-swap.** Any target whose current etag differs from `expected` (including exists versus absent), or whose current file is in a newer format, raises `StaleWrite` and lists every stale address.
 5. **Name collisions.** A new name that differs only by case or Unicode form from an existing sibling raises `NameCollision`. Existence is always decided from directory listings by exact spelling, never by opening a composed path, because macOS and Windows filesystems are case-insensitive.
+
+   **One instance id per campaign.** A new instance file whose id another kind of the same campaign already holds, on disk (a look-alike file or kind folder counts, compared folded) or created in the same transaction, raises `InstanceIdConflict` (reason `instance_id_conflict`, `.paths` the refused files). It is a per-path refusal, checked under the store lock, so `put_exact` copies are refused the same way. Edits of an existing pair's members are allowed, so a human can repair one.
 6. **Source consistency.** New or worsened problems in the entities and links the transaction touches raise `InvalidSourceState`:
    - a head naming a missing or unreadable revision;
    - several revision files and no head;
@@ -400,6 +412,7 @@ Damage is contained as locally as blame allows:
 | entity | `missing_head`, `bad_head`, `kind_reuse` | the entity is dropped; the rest of the source loads |
 | link | `bad_link` (invalid, duplicate, or closes a derivation cycle) | the link is dropped; sources stay |
 | source | `malformed`/`unsupported_format` manifest, `ownership`, `identity_conflict` | the source is excluded |
+| instance pair | `instance_id_conflict` on each of the campaign's instance files that share an id across kinds (hand-made, or formed across devices) | **both** are left out of `instances`, never one picked |
 | library | `link`, `unrecognized`, `name_mismatch`, `unreadable` (a directory that cannot be listed) | reported only |
 
 **Link order.** In-source links register first, then cross-source links, each group ordered by declaring source and then by file order. When two sources' cross-source links together close a derivation cycle, the link from the alphabetically later declarer is the one dropped. **Accepted policy** (requester decision on PR 568), as is judging only the committing source's own links in step 6.

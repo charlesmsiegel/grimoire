@@ -41,7 +41,8 @@ from grimoire.graphstore import CampaignGraph, InvalidRelation, RelationChange, 
 from grimoire.library import LibraryPathError
 from grimoire.security.policy import is_human
 from grimoire.store import (
-    KnowledgeScan, LibraryStore, LoadProblem, RecordNotFound, ScopeRecord, StaleWrite, StoreError, StoredScopeRecord,
+    KnowledgeScan, LibraryStore, LinkRefused, LoadProblem, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
+    StoredScopeRecord, TakenIdsUnlisted,
 )
 from grimoire.store.layout import address_parts
 
@@ -549,11 +550,19 @@ class TurnEffectsLibrary:
             return None
 
     def _absent(self, ref: AcceptedRef | KnowledgeRef) -> bool:
-        """Exact presence only: a look-alike fails the commit with NameCollision; an unreadable file counts."""
+        """Exact presence only: a look-alike fails the commit with NameCollision; an unreadable file counts.
+
+        A linked or unlistable folder (a symlinked ``events/``) cannot say whether the id is free, so it
+        raises ``TakenIdsUnlisted`` rather than counting every id as taken until allocation gives up.
+        """
         try:
             self.store.read(ref)
         except RecordNotFound:
             return True
+        except (LinkRefused, OSError) as error:
+            folder = "/".join(address_parts(ref)[:-1])
+            raise TakenIdsUnlisted(f"{folder} cannot be read ({type(error).__name__}), so it cannot be told "
+                                   "whether an id is free", (folder,)) from error
         except (StoreError, LibraryPathError, ValueError):
             return False
         return False
@@ -687,11 +696,17 @@ def accepted_instance_ids(store: LibraryStore, campaign_id: str) -> frozenset[st
     Like 017's ``relation_endpoint_ids``, every instance allocator must treat these as taken, so a
     hand-deleted individual's id never goes to a different one that would silently inherit its past
     effects. It scans the raw payloads without decoding them, so an event that fails validation still
-    protects its ids. Only a file the store cannot read at all is not protected (a documented limit).
+    protects its ids. A file or folder the store cannot read at all (malformed, a link, a look-alike)
+    may name ids too, so it raises ``TakenIdsUnlisted``: allocation fails closed rather than skip it.
     It reads every accepted-event file of the campaign: an allocator's cost grows with play history.
     """
+    found = store.campaign_accepted(campaign_id)
+    if found.problems:
+        paths = tuple(sorted({problem.path for problem in found.problems}))
+        raise TakenIdsUnlisted(f"accepted-event files of {campaign_id} cannot all be read ({', '.join(paths)}), so "
+                               "the instance ids they name cannot be reserved", paths)
     taken: set[str] = set()
-    for stored in store.campaign_accepted(campaign_id).records.values():
+    for stored in found.records.values():
         _collect_ids(stored.record.payload, campaign_id, taken)
     return frozenset(taken)
 

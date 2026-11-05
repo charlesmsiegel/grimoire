@@ -20,7 +20,7 @@ from grimoire.holdings import (
 )
 from grimoire.holdingstore import HoldingsLibrary
 from grimoire.security import Approval, Authorizer, Grant, Permission, ResourcePath, payload_digest
-from grimoire.store import LibraryStore, StaleWrite, StoreError, WriteDenied
+from grimoire.store import InstanceIdConflict, LibraryStore, RecordEnvelope, StaleWrite, StoreError, WriteDenied
 from grimoire.testing.fileops import snapshot
 
 from holdings_fixtures import CHEST, GREAT, MARA, ORDINARY, STRONG, TOMA, Clock, holdings_library, seed_holders
@@ -421,9 +421,16 @@ def test_an_instance_file_that_became_a_link_is_gone_at_commit(store, library, t
 
 
 def test_kind_reuse_does_not_inherit(store, library):
+    """The store refuses a second kind with the same id; one made by hand still inherits nothing."""
     done(library, op("a1", Line.add(MARA, ORDINARY, 5)))
     item_mara = InstanceRef("c1", "item", "mara-1")
-    seed_holders(store, (item_mara,))
+    with pytest.raises(InstanceIdConflict):
+        seed_holders(store, (item_mara,))
+    txn = store.transaction()
+    txn.put(RecordEnvelope(item_mara, {"note": "synthetic holder"}), None)
+    (data,) = txn.preview().values()
+    path = store.root / "campaigns/c1/instances/item/mara-1.json"
+    path.write_bytes(data)  # by hand, as another program could (the chest is an item: the folder exists)
     assert library.read(item_mara).counts() == {} and library.read(MARA).counts() == {ORDINARY: 5}
 
 
