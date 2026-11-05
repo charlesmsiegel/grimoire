@@ -95,11 +95,16 @@ It never contains a cleared value, campaign memory, relationships, observations 
 
 A **raw derived definition is refused** (`derived_definition`), both here and through `effective_entity(instance, index)`. A value that is not an authored base (a legacy `CharacterDefinition`, text) is `not_entity_definition`.
 
+Two consumers take the composed form:
+
+- **Perspective.** `snapshot_actor_view(instance, snapshot, knowledge=None)` (in `grimoire.core.resolve`) is `actor_view` for an instance the snapshot captured, derived portrayals included. `instance` must equal the captured value (`PortrayalError` `instance_mismatch`). The actor is composed by `snapshot.entity`, so it follows the actor's binding and the snapshot's refusals propagate. The view is the same `ActorView`, with the same agent and knowledge rules as the index path. It shows the composed name and description, and `resolved_source` is the leaf pinned revision. Sections, ancestry, provenance and notices stay in the snapshot. For a standalone actor both paths give an equal view. The index-only `actor_view(instance, index)` keeps refusing a derived portrayal with `derived_definition`, so no caller skips composition silently.
+- **Promotion (024).** `is_generic` and `individualize` accept the template's `EffectiveDefinition` in place of the index (`snapshot.effective(source)`); see [Individualizing a template instance](ENTITIES.md#individualizing-a-template-instance). An unpinned or missing base has no effective definition, so it still refuses with this page's reasons (`invalid_derivation`, `missing_base`).
+
 **Named limitation, owned by 035:**
-- `CampaignRoster.assign_control`, `check_controls`, `actor_view` and `propose_damage` still resolve through `effective_entity(index)`.
-- So a derived-portrayal actor cannot yet be given a controller, a perspective view or a damage proposal.
+- `CampaignRoster.assign_control`, `check_controls` and `propose_damage` still resolve through `effective_entity(index)`.
+- So a derived-portrayal actor cannot yet be given a controller or a damage proposal.
 - They fail visibly with `derived_definition`; `check_controls` reports it as `unresolved`.
-- For a **standalone** source those paths follow the instance's own `source`, while a snapshot follows the actor's binding. So when 107 rebinds a reused actor to another revision, the two can name different revisions in the same turn. This is pinned by a test, and joining the two paths is 035's.
+- For a **standalone** source those paths (and `actor_view`) follow the instance's own `source`, while a snapshot (and `snapshot_actor_view`) follows the actor's binding. So when 107 rebinds a reused actor to another revision, the two can name different revisions in the same turn. This is pinned by a test, and joining the two paths is 035's.
 
 ## Snapshots (`grimoire.core.snapshot`)
 
@@ -169,5 +174,5 @@ Ancestry is walked separately from field composition (`portrayal.derivation_chai
 | Reviewed rebase and inheritance UI | 042, 046 |
 | Relationship remapping between portrayals | 017 |
 | Voice item composition, and art placement merging | 027, 018/038 |
-| Snapshot-aware control and perspective, and prompt assembly | 035, 027, 031 |
+| Snapshot-aware control and damage, and prompt assembly | 035, 027, 031 |
 | Derivation-aware navigation filters | 065 |

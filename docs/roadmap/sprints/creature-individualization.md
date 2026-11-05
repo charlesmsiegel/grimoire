@@ -5,6 +5,7 @@
 - the other two stay generic;
 - a second goblin can become Mog;
 - template updates flow into an unpinned individual without changing its identity.
+- an instance of a derived species template (a 022 portrayal) is promoted through its effective definition, recording the portrayal's pinned revision.
 
 The provisional codec carries the record, and a test-local join proves it round-trips through the 010 store. Synthetic fixtures only; there is no runner or UI. What is still open:
 - **Portrait clause.** The proving scenario is met except for its portrait clause ("changing the first's portrait does not change the species card"). Art inheritance and milestone 2's separate art wait for 018 placements, and relations for 017. Both attach to the individual's distinct reference.

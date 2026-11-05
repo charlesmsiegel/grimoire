@@ -22,12 +22,17 @@ from dataclasses import dataclass, replace
 from .authority import DIRECTOR, AuthorityError, controller_of
 from .entity import (
     EntityDefinition, EntityError, EntityInstance, Individuality, _invalid, _segment, _segments, _text,
-    effective_entity,
+    compose_instance,
 )
 from .identity import InstanceRef
 from .index import DefinitionIndex
 from .model import ControlAssignment
+from .portrayal import EffectiveDefinition
 from .roster import CampaignRoster
+
+#: Where a template comes from: the index (a complete definition), or the effective definition of a
+#: derived portrayal (022), composed by the caller's snapshot. Never a snapshot itself.
+Definitions = DefinitionIndex | EffectiveDefinition
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,14 +76,38 @@ def _records(individuality: Individuality, decision: IndividualizationDecision) 
             and individuality.event_ids == decision.event_ids)
 
 
-def _template(instance: EntityInstance, index: DefinitionIndex) -> EntityDefinition:
+def _check_definitions(definitions: object) -> None:
+    if not isinstance(definitions, (DefinitionIndex, EffectiveDefinition)):
+        raise TypeError(f"expected a DefinitionIndex or an EffectiveDefinition, not {type(definitions).__name__}")
+
+
+def _source_definition(instance: EntityInstance,
+                       definitions: Definitions) -> EntityDefinition | EffectiveDefinition:
+    """What the instance's source resolves to: from the index, or the given effective definition.
+
+    An effective definition must be the instance's own source entity, and, for a pinned source,
+    exactly the pinned revision (the index path would resolve nothing else), so the recorded
+    template is always the revision the source names or, unpinned, the one the caller composed.
+    """
+    source = instance.source
+    assert source is not None
+    if isinstance(definitions, DefinitionIndex):
+        definition = definitions.resolve(source)
+        if not isinstance(definition, EntityDefinition):
+            raise EntityError(f"{source} is a {type(definition).__name__}; convert it explicitly",
+                              "not_entity_definition")
+        return definition
+    if definitions.ref.entity_key != source.entity_key or (source.pinned and definitions.ref != source):
+        raise EntityError(f"{instance.ref} has source {source}; the effective definition is of "
+                          f"{definitions.ref}", "source_mismatch")
+    return definitions
+
+
+def _template(instance: EntityInstance, definitions: Definitions) -> EntityDefinition | EffectiveDefinition:
     if instance.source is None:
         raise EntityError(f"{instance.ref} is a campaign original and already an individual",
                           "not_template")
-    definition = index.resolve(instance.source)
-    if not isinstance(definition, EntityDefinition):
-        raise EntityError(f"{instance.source} is a {type(definition).__name__}; convert it explicitly",
-                          "not_entity_definition")
+    definition = _source_definition(instance, definitions)
     if definition.nature != "template":
         raise EntityError(f"{instance.ref} is an instance of individual {definition.ref}, "
                           "already an individual", "not_template")
@@ -86,9 +115,14 @@ def _template(instance: EntityInstance, index: DefinitionIndex) -> EntityDefinit
 
 
 def individualize(roster: CampaignRoster, decision: IndividualizationDecision,
-                  index: DefinitionIndex,
+                  index: Definitions,
                   controls: Iterable[ControlAssignment]) -> Individualization:
     """Promote one generic template instance in place; replaying a decision is a no-op.
+
+    ``index`` is a ``DefinitionIndex``, or, for an instance of a derived species template (022),
+    the ``EffectiveDefinition`` its snapshot composed (``snapshot.effective(source)``). The index
+    path refuses a derived template (``derived_definition``) rather than read its delta as a
+    complete card. Either way ``Individuality.template`` is the leaf pinned revision.
 
     ``controls`` is required, as in every authority API: an omitted argument
     must never read as "nobody controls this actor". Pass ``()`` only when the
@@ -105,8 +139,7 @@ def individualize(roster: CampaignRoster, decision: IndividualizationDecision,
         raise TypeError(f"expected a CampaignRoster, not {type(roster).__name__}")
     if not isinstance(decision, IndividualizationDecision):
         raise TypeError(f"expected an IndividualizationDecision, not {type(decision).__name__}")
-    if not isinstance(index, DefinitionIndex):
-        raise TypeError(f"expected a DefinitionIndex, not {type(index).__name__}")
+    _check_definitions(index)
     controls = tuple(controls)
     for control in controls:
         if not isinstance(control, ControlAssignment):
@@ -136,29 +169,35 @@ def individualize(roster: CampaignRoster, decision: IndividualizationDecision,
     individual = replace(instance, local_name=decision.name, individuality=Individuality(
         decision.decision_id, decision.name, decision.decided_by, decision.scene_id, template.ref,
         decision.event_ids))
-    effective_entity(individual, index)
+    compose_instance(individual, template)  # the index path: exactly effective_entity(individual, index)
     others = tuple(other for other in roster.instances if other.ref != instance.ref)
     return Individualization(CampaignRoster(roster.campaign_id, (*others, individual)), individual,
                              applied=True)
 
 
-def is_generic(instance: EntityInstance, index: DefinitionIndex) -> bool:
+def is_generic(instance: EntityInstance, index: Definitions) -> bool:
     """A not-yet-individualized instance of a template; ``MissingDefinition`` propagates.
 
     This only classifies the instance. It does not run ``effective_entity``,
     so it can answer ``True`` for an instance that still fails resolution
     (for example ``added_shadows_trait`` after a head move) and that
     ``individualize`` will refuse. Check ``effective_entity`` before offering
-    promotion.
+    promotion. On the index path a derived template still answers ``True``;
+    promote it by passing its ``EffectiveDefinition``, which this also accepts
+    (an effective definition of another entity or revision is ``source_mismatch``).
     """
     if not isinstance(instance, EntityInstance):
         raise TypeError(f"expected an EntityInstance, not {type(instance).__name__}")
-    if not isinstance(index, DefinitionIndex):
-        raise TypeError(f"expected a DefinitionIndex, not {type(index).__name__}")
+    _check_definitions(index)
     if instance.individuality is not None or instance.source is None:
         return False
-    definition = index.resolve(instance.source)
-    return isinstance(definition, EntityDefinition) and definition.nature == "template"
+    try:
+        definition = _source_definition(instance, index)
+    except EntityError as error:
+        if error.reason == "not_entity_definition":
+            return False
+        raise
+    return definition.nature == "template"
 
 
 __all__ = ["Individualization", "IndividualizationDecision", "individualize", "is_generic"]
