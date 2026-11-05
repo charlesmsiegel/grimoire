@@ -84,10 +84,12 @@ def scenario(home: Path):
         normalize=drop_empty_dirs)
 
 
-#: ``crashes`` and ``fails`` split ``errors`` (crash and I/O-error plans) in two disjoint halves so neither
-#: nears the 120 s watchdog on Windows; recovery crashes run only with GRIMOIRE_EXHAUSTIVE_RECOVERY=1.
+#: ``crashes-before``, ``crashes-after`` and ``fails`` split ``errors`` (crash and I/O-error plans) in three
+#: disjoint parts so none nears the 120 s watchdog on Windows (one crash pass took longer there);
+#: recovery crashes run only with GRIMOIRE_EXHAUSTIVE_RECOVERY=1.
 MODES = {
-    "crashes": explore_mode("crashes"),
+    "crashes-before": {**explore_mode("crashes"), "select": lambda op: {"before"}},
+    "crashes-after": {**explore_mode("crashes"), "select": lambda op: {"after", "torn"}},
     "fails": {"errors": True, "select": lambda op: {"fail"}},
     "recovery-crashes": explore_mode("recovery-crashes"),
     FAIL_RECOVERY: explore_mode(FAIL_RECOVERY),
@@ -95,7 +97,7 @@ MODES = {
 
 
 @pytest.mark.parametrize("mode", [
-    "crashes", "fails", *(pytest.param(mode, marks=EXHAUSTIVE_RECOVERY) for mode in ("recovery-crashes", FAIL_RECOVERY)),
+    "crashes-before", "crashes-after", "fails", *(pytest.param(mode, marks=EXHAUSTIVE_RECOVERY) for mode in ("recovery-crashes", FAIL_RECOVERY)),
 ])
 def test_an_import_apply_survives_every_crash_error_and_recovery_crash(tmp_path, mode):
     home = tmp_path / "home"
