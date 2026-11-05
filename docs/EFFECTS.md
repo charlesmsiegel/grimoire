@@ -174,7 +174,7 @@ Narration holds neither key. A player alone can never make their character's act
     - an active event holds it → `attempt_reused`;
     - a revoked event holds it with the same fingerprint → `attempt_revoked`: a late retry of a revoked effect is refused, never accepted again;
     - a revoked event whose holdings undo was skipped while its change may still be in force (`Revocation.holdings_left`) holds **every** attempt it records, holdings and ability uses alike → `attempt_revoked`. A revision reusing the ability attempt with a fresh holdings attempt would otherwise spend again for the same use;
-    - a revoked event whose applied undo some holder file does not confirm (the revocation landed its event file but not every holder file) holds every attempt it records too → `attempt_revoked`, since part of its change is still in force. An unreadable holder file there is `undecodable_holdings`.
+    - a revoked event whose applied undo some holder file does not confirm (the revocation landed its event file but not every holder file) holds every attempt it records too → `attempt_revoked`, since part of its change is still in force. An unreadable holder file there is `undecodable_holdings`. The holder files this check read are pinned to the commit, so one changed before it is a `StaleWrite` ("holder file changed").
 
     A revision (another fingerprint) of a cleanly revoked attempt is allowed, and so is one whose skipped undo was `never applied` (see Revoking). These checks come after steps 8 and 9.
 11. **Ordinal.** The new event gets `ordinal = 1 + max` over every event file, active or revoked. This is the order of the undo stack.

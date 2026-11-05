@@ -119,10 +119,20 @@ def revoke_hop(ops, root, locker):
 
 
 def charged_once(fuel: int, retry) -> Invariant:
-    """From the recovered state, retrying the action leaves Orin with ``fuel``: the hop is charged once, never twice."""
+    """From the recovered state, retrying the action leaves Orin with ``fuel``: the hop is charged once, never twice.
+
+    Atomic recovery leaves only a few distinct states, so each is retried once (the exploration stays in budget)."""
+    seen: dict[tuple, str | None] = {}
+
     def check(outcome) -> str | None:  # type: ignore[no-untyped-def]
+        state = tuple(sorted(outcome.recovered.items()))
+        if state not in seen:
+            seen[state] = _retried(state)
+        return seen[state]
+
+    def _retried(state: tuple) -> str | None:
         with tempfile.TemporaryDirectory() as folder:
-            for key, data in sorted(outcome.recovered.items()):
+            for key, data in state:
                 path = Path(folder) / key
                 if data is None:
                     path.mkdir(parents=True, exist_ok=True)

@@ -137,7 +137,8 @@ class EffectChange:
     actors: frozenset = frozenset()  # an acceptance: every endpoint and agent, re-checked for an id pair
     rechecks_readability: bool = False  # a revocation: every relation file must still be readable at commit
     holdings_changes: tuple[HoldingsChange, ...] = ()  # the holder files, folded into this transaction
-    #: a revocation that writes no holder file (an adopted or skipped undo): each touched holder file as read
+    #: each holder file read to decide this change but not written by it, as read: an adopted or skipped undo's,
+    #: and those an acceptance's attempt check read to free a revoked event's attempt
     holder_pins: Mapping = field(default_factory=dict)
     _committed: bool = field(default=False, repr=False)
 
@@ -349,7 +350,8 @@ class TurnEffectsLibrary:
             if proposal.moment.sequence < floor:
                 raise InvalidEffect(f"sequence {proposal.moment.sequence} is behind an accepted event at {floor}",
                                     "stale_sequence")
-            parts.check_attempts(proposal, snap.events.values(), self._holdings())
+            consulted = parts.check_attempts(proposal, snap.events.values(), self._holdings())
+            pins = {holder: self._holder_pin(holder) for holder in sorted(consulted, key=str)}
             try:
                 steps = plan(proposal, snap.graph.index)
             except EffectError as error:
@@ -397,7 +399,7 @@ class TurnEffectsLibrary:
             actors = frozenset().union(*(_actors(op) for op in proposal.operations)) | parts.holdings_actors(proposal)
             return EffectChange(self, ref, ((record, None),), tuple(changes), campaign, snap.state, proposal.chat,
                                 checks_relations=True, agent_etags=agents, actors=actors,
-                                holdings_changes=() if planned is None else (planned[0],))
+                                holdings_changes=() if planned is None else (planned[0],), holder_pins=pins)
 
     # -- revoking -----------------------------------------------------------------------------
 

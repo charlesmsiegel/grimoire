@@ -81,7 +81,8 @@ def holder_tokens(store: LibraryStore, campaign_id: str) -> tuple[frozenset[str]
     return frozenset(ids), unread
 
 
-def check_attempts(proposal: EffectProposal, events: Iterable[AcceptedEvent], holdings: HoldingsLibrary) -> None:
+def check_attempts(proposal: EffectProposal, events: Iterable[AcceptedEvent], holdings: HoldingsLibrary
+                   ) -> frozenset[InstanceRef]:
     """At most one event holds an attempt: one attempt is charged and applied once.
 
     An active event holding it refuses (``attempt_reused``). A revoked event holding it refuses a late retry
@@ -89,10 +90,13 @@ def check_attempts(proposal: EffectProposal, events: Iterable[AcceptedEvent], ho
     change in force (``attempt_revoked``): a revision would spend again what was never given back. That is
     a skipped undo, and an applied undo whose receipt no holder file confirms (a revocation that landed its
     event file but not every holder file).
+
+    Returns the holders whose files the check read, for the acceptance to pin to its commit.
     """
     wanted, fingerprint = proposal.attempts, proposal.fingerprint
+    consulted: set[InstanceRef] = set()
     if not wanted:
-        return
+        return frozenset()
     for event in sorted(events, key=lambda e: e.event_id):
         shared = sorted(wanted & event.attempts)
         if not shared:
@@ -101,14 +105,16 @@ def check_attempts(proposal: EffectProposal, events: Iterable[AcceptedEvent], ho
             raise InvalidEffect(f"attempt {shared[0][:64]!r} is already charged by {event.ref}", "attempt_reused",
                                 (event.event_id,))
         if event.fingerprint == fingerprint or event.revocation.holdings_left \
-                or _undo_unconfirmed(event, holdings):  # type: ignore[union-attr]
+                or _undo_unconfirmed(event, holdings, consulted):  # type: ignore[union-attr]
             raise InvalidEffect(f"attempt {shared[0][:64]!r} was revoked with {event.ref}; a new acceptance needs "
                                 "a fresh attempt", "attempt_revoked", (event.event_id,))
+    return frozenset(consulted)
 
 
-def _undo_unconfirmed(event: AcceptedEvent, holdings: HoldingsLibrary) -> bool:
+def _undo_unconfirmed(event: AcceptedEvent, holdings: HoldingsLibrary, consulted: set[InstanceRef]) -> bool:
     if event.holdings is None or not event.revocation.holdings_seqs:  # type: ignore[union-attr]
         return False
+    consulted.update(event.holdings.holdings.holders)
     holders = read_holders(holdings, event.holdings.holdings.holders)
     failures = holdings_failures(event, holders)
     refuse_unreadable(failures)

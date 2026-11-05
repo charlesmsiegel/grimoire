@@ -271,6 +271,23 @@ def test_a_holder_file_changed_after_a_skip_was_planned_is_stale(world):
     assert reason(lambda: library.accept(hop(sequence=8, fuel=2), controls=CONTROLS)) == "attempt_reused"
 
 
+def test_holder_files_that_freed_a_revoked_attempt_are_pinned_to_the_commit(world):
+    """A revision reusing a cleanly revoked attempt is stale if the revoked event's holder changes before commit."""
+    store, _, library, holdings = world
+    library.accept(hop(), controls=CONTROLS).commit()
+    forward = (store.root / ORIN_FILE).read_bytes()
+    revoke(library).commit()
+    revision = EffectProposal(C, CHAT, moment(8), "Orin hops; Tam's knife snaps.", (), "director",
+                              attempt_id="hop-1", holdings=EffectHoldings((Line.consume(TAM, "knife", 1),)),
+                              abilities=(assessment(),))
+    planned = library.accept(revision, controls=CONTROLS)  # Orin's undo is confirmed: the attempt is free
+    (store.root / ORIN_FILE).write_bytes(forward)  # the hop's fuel burn is back: the undo is no longer confirmed
+    with pytest.raises(StaleWrite):
+        planned.commit()
+    assert counts(holdings, TAM) == {"knife": 1}
+    assert reason(lambda: library.accept(revision, controls=CONTROLS)) == "attempt_revoked"
+
+
 def test_an_entry_naming_an_event_that_never_touched_its_holder_is_an_orphan(world):
     """The op id alone does not make an entry recorded: the event must touch that holder."""
     _, _, library, holdings = world
