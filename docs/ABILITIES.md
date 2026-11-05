@@ -74,14 +74,14 @@ Abilities therefore persist in any record that carries an entity payload, such a
 | `actor` | an exact `InstanceRef` (subclasses are refused). Ids and text in ability values, attempts and rulings must be plain `str`. |
 | `effect_id` | the declared effect the labeller says it uses, or none. |
 | `provenance` | attribution text up to 512 characters, never authority. |
-| `conditions_met` | up to 64 prerequisite ids that the labeller says hold: a plain id names a prerequisite of the **named ability**; `<ability>/<id>` names one of an ability the attempt draws on (needed for a `combination`). Anything else is stale (`relabel`, also when the named ability is missing). These are asserted, not checked against scene facts; checking them is 029's job. |
+| `conditions_met` | up to 64 prerequisite ids that the labeller says hold: a plain id names a prerequisite of the **named ability**; `<ability>/<id>` names one of an ability the attempt draws on (needed for a `combination`), and for the named ability itself is an alias of its plain id (the spelling `terms` uses). Anything else is stale (`relabel`, also when the named ability is missing). These are asserted, not checked against scene facts; checking them is 029's job. |
 
 **Labelling is the trust boundary.** These fields come from a labeller that is **not the narrator**, the same rule as for `NarrationClaim`. The assessment is only as good as the labels and the shared vocabulary.
 - A labeller that writes `push` for `force` escapes `no_force`. The unused tag then shows up in `unknown_tags`.
 - Filing an attempt under an invented id, or a sibling ability, does **not** escape another ability. Unless the named effect fully covers the attempt, an attempt that shares a needed tag with another of the actor's abilities (`other_drawn`) *draws on* it:
   - it is a `combination`: approvable only case by case by an explicit director ruling, and fail-closed until then;
-  - every participating ability, the named one included, is treated alike, so the result does not depend on which one the attempt is filed under;
-  - their limits on a needed tag (`binding_limits`) and unmet prerequisites are **terms**: they bind until an approving ruling that names exactly those terms sets them aside (a prerequisite can instead be met: `<ability>/<id>` in `conditions_met`);
+  - every participating ability, the named one included, is treated alike, so the classification and the charges do not depend on which one the attempt is filed under. The `terms` do: they list the effects drawn on from the *other* abilities, so a ruling names the terms of the filing it decides;
+  - their limits on a needed tag (`binding_limits`) and unmet prerequisites are **terms**: they bind until an approving ruling that names exactly those terms sets them aside (a prerequisite can instead be met: list the term as it is spelled, `<ability>/<id>`, in `conditions_met`; the plain id also meets one of the named ability);
   - their unknown fields fail closed and their costs are charged (`charges`);
   - an attempt another ability covers, or one that is not a use of the named ability at all, reads `relabel` (file it there).
 
