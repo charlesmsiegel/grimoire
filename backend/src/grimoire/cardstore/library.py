@@ -168,13 +168,13 @@ class _Imprecise:
 
 
 def _imprecise_paths(data: bytes, dropped: Iterable[str] = (),
-                     stop: Callable[[list[str]], bool] | None = None) -> tuple[str, ...]:
+                     take: Callable[[str], str] | None = None) -> tuple[str, ...]:
     """Paths (``data.extensions.n``, ``tags[2]``) of numbers that become a nearby double, in document order.
 
     A number inside a value whose path is in ``dropped`` is skipped (it was not kept). A document
     with no such number is read once and nothing else is built. Otherwise paths are built only for
     the numbers found, each ancestor once (shared by its siblings), so the walk stays linear in the
-    document; ``stop`` ends it early once the paths found are enough.
+    document. ``take`` decides each path: ``keep`` it, ``skip`` it, or ``stop`` the walk.
     """
     marker = _Imprecise()
     count = 0
@@ -214,10 +214,16 @@ def _imprecise_paths(data: bytes, dropped: Iterable[str] = (),
     while stack:
         item, node = stack.pop()
         if item is marker:
-            path, inside = resolve(node)
-            if not inside:
-                found.append(path)
-                if stop is not None and stop(found):
+            if node is None:
+                continue  # a bare number is no document this reads
+            parent, segment = node
+            path, inside = resolve(parent)  # the number's own node is not kept: only its ancestors are
+            path = path + segment if segment.startswith("[") else (f"{path}.{segment}" if path else segment)
+            if not (inside or path in gone):
+                verdict = take(path) if take is not None else "keep"
+                if verdict == "keep":
+                    found.append(path)
+                elif verdict == "stop":
                     break
             continue
         if isinstance(item, dict):
@@ -233,13 +239,14 @@ def _imprecise_paths(data: bytes, dropped: Iterable[str] = (),
 def _rounded(losses: Sequence[Loss], data: bytes, prefix: str) -> list[Loss]:
     """``rounded_number`` losses for imprecise numbers that were kept (not inside a dropped value).
 
-    The scan stops once the report could hold no more of them (every field shown is at its cap,
-    and the caps add up past ``MAX_LOSSES``), so what ``_bounded`` keeps is what a full scan gives.
+    Only what ``_bounded`` can show is kept: a field's numbers up to its cap and one past it (its
+    ``more_losses``), counting the losses already in the report first; the scan stops once the
+    report could hold no more. What ``_bounded`` then keeps is what a full scan gives.
     """
     counts: dict[str, int] | None = None
     shown = 0
 
-    def full(found: list[str]) -> bool:
+    def take(path: str) -> str:
         nonlocal counts, shown
         if counts is None:  # the losses already in the report count first (read only when needed)
             counts = {}
@@ -247,13 +254,16 @@ def _rounded(losses: Sequence[Loss], data: bytes, prefix: str) -> list[Loss]:
                 field = _field(prefix + loss.path)
                 counts[field] = counts.get(field, 0) + 1
             shown = sum(min(count, MAX_LOSSES_PER_FIELD + 1) for count in counts.values())
-        field = _field(prefix + found[-1])
+        if shown > MAX_LOSSES:
+            return "stop"
+        field = _field(prefix + path)
         counts[field] = counts.get(field, 0) + 1
-        if counts[field] <= MAX_LOSSES_PER_FIELD + 1:  # a loss, or the field's ``more_losses``
-            shown += 1
-        return shown > MAX_LOSSES
+        if counts[field] > MAX_LOSSES_PER_FIELD + 1:
+            return "skip"  # past the field's ``more_losses``: it cannot change the report
+        shown += 1
+        return "keep"
 
-    paths = _imprecise_paths(data, (loss.path for loss in losses), full)
+    paths = _imprecise_paths(data, (loss.path for loss in losses), take)
     return [Loss(prefix + path, "rounded_number") for path in paths]
 
 
@@ -690,7 +700,11 @@ class CardImporter:
                     batch.put(envelope, None)
                 if place:
                     if portrait_ref is not None and not _image_present(self.images, portrait_ref):
-                        batch.add_image(source_id, portrait_ref.image_id, plan.portrait, _provenance(plan))
+                        try:
+                            batch.add_image(source_id, portrait_ref.image_id, plan.portrait, _provenance(plan))
+                        except NameCollision:  # the shared blob store, not the destination: no target helps
+                            raise CardError("the library's picture store holds a differently spelled copy of "
+                                            "this portrait's file", "portrait_unstorable", "portrait") from None
                     batch.place(main_ref, PORTRAIT_SLOT, Placement("set", PORTRAIT_SLOT, portrait_ref),
                                 placement_expected)
                 preview = batch.preview()

@@ -574,3 +574,24 @@ def test_a_manifest_holding_an_imprecise_number_is_refused_at_plan(store):
     with pytest.raises(CardError) as caught:
         importer(store).plan(encode(card(personality="v2")), target="card:mara-vell")
     assert caught.value.reason == "invalid_target"
+
+
+def test_a_cast_entry_with_nothing_usable_to_name_it_is_dropped_whole(store):
+    document = {**SCENARIO, "cast": [{"ref": "", "role": "villain", "w": 0.5}, {"name": "Captain Osk"}]}
+    data = encode(document).replace(b"0.5", b"0.10000000000000000001")
+    planned = importer(store).plan(data)
+    losses = planned.report.losses
+    assert Loss("cast[0]", "wrong_type") in losses
+    assert not [loss for loss in losses if loss.path.startswith("cast[0].")]
+    assert [cast.written for cast in planned.report.cast] == ["Captain Osk"]
+
+
+def test_a_look_alike_blob_is_blamed_on_the_portrait_not_the_target(store):
+    sha = hashlib.sha256(PORTRAIT).hexdigest()
+    folder = store.root / "assets" / "blobs" / sha[:2]
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{sha}.PNG").write_bytes(PORTRAIT)
+    for target in (None, "card:elsewhere"):
+        with pytest.raises(CardError) as caught:
+            importer(store).plan(encode(V3), portrait=PORTRAIT, target=target)
+        assert (caught.value.reason, caught.value.detail) == ("portrait_unstorable", "portrait")

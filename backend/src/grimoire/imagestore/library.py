@@ -423,6 +423,8 @@ class ImageBatch:
         raise before authorizing (a name collision, a source that cannot hold the writes). Consumes no
         approval and writes nothing."""
         with self.library.store.read_pass():
+            if self._committed:
+                raise StoreError("this batch was already committed")
             puts, _, _ = self._build()
             if puts:
                 self._transaction(puts).check()

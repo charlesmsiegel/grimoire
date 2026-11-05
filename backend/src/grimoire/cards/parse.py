@@ -390,13 +390,12 @@ def _cast(document: Mapping, reader: _Reader) -> tuple[CastRef, ...]:
             continue
         named = {key: item[key] for key in ("ref", "name")
                  if key in item and type(item[key]) is str and item[key].strip()}
+        if not named:  # nothing to name a cast member by: the whole entry is dropped
+            reader.lose(here, "wrong_type")
+            continue
         for key in ("ref", "name"):
             if key in item and key not in named:
                 reader.lose(f"{here}.{key}", "wrong_type")
-        if not named:
-            if "ref" not in item and "name" not in item:
-                reader.lose(here, "wrong_type")
-            continue
         cast.append(CastRef(named.get("ref"), named.get("name"),
                             MappingProxyType(reader.unknown(item, frozenset({"ref", "name"}), here))))
     return tuple(cast)

@@ -272,9 +272,11 @@ def test_lore_entries_keep_their_own_places_past_a_dropped_entry():
 
 def test_a_cast_entry_keeps_its_other_keys():
     document = {**SCENARIO, "cast": [{"name": "Captain Osk", "role": "antagonist"},
-                                     {"ref": "world:harbor/character/innkeeper", "note": "x"}, {"name": 3}]}
+                                     {"ref": "world:harbor/character/innkeeper", "note": "x"}, {"name": 3},
+                                     {"name": "Mira", "ref": 7}]}
     parsed = parse_card(document)
     assert [(cast.ref, cast.name, dict(cast.extras)) for cast in parsed.cast] == [
-        (None, "Captain Osk", {"role": "antagonist"}), ("world:harbor/character/innkeeper", None, {"note": "x"})]
-    assert Loss("cast[2].name", "wrong_type") in parsed.losses
+        (None, "Captain Osk", {"role": "antagonist"}), ("world:harbor/character/innkeeper", None, {"note": "x"}),
+        (None, "Mira", {})]
+    assert Loss("cast[2]", "wrong_type") in parsed.losses and Loss("cast[3].ref", "wrong_type") in parsed.losses
     assert scenario_payload(parsed)["cast"][0] == {"name": "Captain Osk", "extras": {"role": "antagonist"}}

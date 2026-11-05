@@ -99,7 +99,7 @@ The importer allocates no actor and writes nothing under `campaigns/`. Starting 
 
 - `unsupported_format`, with `detail`: `png`, `charx` (zip), `chara_card_v2`, `chara_card_v1`, `sillytavern_world_info`, `unknown`, and `chara_card_v3_version` for a V3 `spec` whose `spec_version` is not `3.x`.
 - `invalid_json` (not strict UTF-8 JSON: a byte-order mark, lone surrogates, duplicate keys, non-finite numbers, integers over 4,300 digits, nesting deeper than 100), `invalid_card` (not an object; a missing or blank name or title; a scenario with neither premise nor opening; wrong top-level shapes), `too_large` (a card or lorebook file over 2 MiB, or a record the store would refuse as too large), `invalid_options`, `invalid_target`, `not_a_card_source` (also for a target that exists but is excluded or unreadable).
-- 018's `InvalidImage` for a portrait that is not a supported picture.
+- 018's `InvalidImage` for a portrait that is not a supported picture; `portrait_unstorable` (`detail` `portrait`) when the library's shared blob store holds a differently spelled copy of the portrait's file name, which no other target avoids.
 
 Error messages never echo card text.
 
