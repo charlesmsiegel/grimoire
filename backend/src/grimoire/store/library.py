@@ -52,9 +52,10 @@ from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, reemitted_imprecise, render
 from .layout import (
     ACCEPTED, CAMPAIGN_LEDGERS, CAMPAIGNS, CHATS, CONFLICTS, DISCARD_MARKER, IMAGES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
-    PLACEMENTS, REPAIR_MARKER, SYNC, SYNC_PEERS, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify, conflict_parts,
+    PLACEMENTS, REPAIR_MARKER, SECRETS, SYNC, SYNC_PEERS, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify,
+    conflict_parts,
     definition_parts, image_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
-    SUFFIX, ledger_parts, ledger_seq, logical, manifest_parts, name_key, sync_state_parts,
+    SUFFIX, ledger_parts, ledger_seq, logical, manifest_parts, name_key, secret_parts, sync_state_parts,
 )
 from .ledger import Head, Ledger, read_ledger, render_batches, scan_ledger
 from .loader import (
@@ -997,7 +998,18 @@ class LibraryStore:
         must never look like a missing one). A look-alike spelling of the file or of a folder above
         it (``Pending.json``; on a case-insensitive filesystem it *is* the file) is ``NameCollision``.
         """
-        parts = sync_state_parts(name)
+        return self._read_state(sync_state_parts(name))
+
+    def read_secret(self, name: str) -> bytes | None:
+        """The exact bytes of ``secrets/<name>`` (028's ``peers/<id>.json`` pairing records).
+
+        Trusted code only: a secret is never reachable through a grant (``secrets`` is a reserved
+        root), never a record and never transferred. ``None`` only when the file does not exist;
+        a read error or a look-alike spelling propagates, as for ``read_sync_state``.
+        """
+        return self._read_state(secret_parts(name))
+
+    def _read_state(self, parts: Parts) -> bytes | None:
         with self.lock:
             self._require_consistent()
             for depth in range(1, len(parts) + 1):
@@ -1377,6 +1389,19 @@ class Transaction:
         self._add(_Put(parts, None, bytes(data), expected, None, "state", key, rendered=True))
         return key
 
+    def put_secret(self, name: str, data: bytes, expected: str | None) -> str:
+        """Stage a device credential under ``secrets`` (028's pairing record): trusted, not authorized.
+
+        Committed like ``.sync`` state (journal kind ``state``: an aborted commit drops it), so a
+        pairing that did not finish leaves no credential behind."""
+        if expected is not None and not is_etag(expected):
+            raise InvalidEnvelope("expected must be None or an etag")
+        parts = secret_parts(name)
+        _check_state_bytes(data)
+        key = "/".join(parts)
+        self._add(_Put(parts, None, bytes(data), expected, None, "state", key, rendered=True))
+        return key
+
     def preview(self) -> dict[str, bytes]:
         """The exact bytes each target will hold, keyed by what is approved: a record's logical
         address, a kept version's ``kept/...`` address, or a ``.sync/...`` path (not authorized).
@@ -1496,12 +1521,14 @@ class _Commit:
         """``.conflicts`` / ``.sync`` are spelled exactly and are not links, where this commit needs them.
 
         A transaction with no puts checks both (the library check); otherwise ``.sync`` only for
-        sync-state puts and ``.conflicts`` only for kept versions, so a stray sync folder never
-        blocks an ordinary write.
+        sync-state puts, ``secrets`` only for 028 pairing records and ``.conflicts`` only for kept
+        versions, so a stray sync folder never blocks an ordinary write.
         """
         names = []
-        if not self.puts or any(put.kind == "state" for put in self.puts):
+        if not self.puts or any(put.kind == "state" and put.parts[0] == SYNC for put in self.puts):
             names.append(SYNC)
+        if any(put.kind == "state" and put.parts[0] == SECRETS for put in self.puts):
+            names.append(SECRETS)
         if not self.puts or any(put.kind == "keep" for put in self.puts):
             names.append(CONFLICTS)
         for name in names:

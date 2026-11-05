@@ -43,6 +43,10 @@ KEPT = "kept"
 SYNC_DEVICE = "device.json"
 SYNC_PEERS = "peers"
 SYNC_PEER_FILES = frozenset({"archive.json", "pending.json"})
+#: Device credentials (028): one pairing record per peer device under ``secrets/peers/``. Trusted
+#: bookkeeping like ``.sync``: written without a grant, never a record, never transferred.
+SECRETS = "secrets"
+SECRET_PEERS = "peers"
 _LEDGER_FILE = re.compile(r"[0-9]{10}\.json")
 SOURCE_DIR = "_source"
 MANIFEST = "manifest.json"
@@ -399,6 +403,31 @@ def sync_state_parts(name: str) -> Parts:
         else:
             return (SYNC, *pieces)
     raise ValueError(f"not a sync state name: {name!r}")
+
+
+def secret_parts(name: str) -> Parts:
+    """``peers/<device>.json`` under ``secrets`` (028's pairing records); refuses anything else."""
+    pieces = name.split("/") if isinstance(name, str) else []
+    if len(pieces) == 2 and pieces[0] == SECRET_PEERS and pieces[1].endswith(SUFFIX):
+        device = pieces[1][:-len(SUFFIX)]
+        try:
+            validate_segment(device, "device")
+            ResourcePath((device,))
+        except (ValueError, InvalidResourcePath):
+            pass
+        else:
+            return (SECRETS, *pieces)
+    raise ValueError(f"not a secret name: {name!r}")
+
+
+def is_secret_state(parts: Parts) -> bool:
+    parts = tuple(parts)
+    if not parts or parts[0] != SECRETS:
+        return False
+    try:
+        return secret_parts("/".join(parts[1:])) == parts
+    except ValueError:
+        return False
 
 
 def is_sync_state(parts: Parts) -> bool:

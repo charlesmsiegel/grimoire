@@ -12,7 +12,7 @@ import contextlib
 import functools
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
@@ -817,11 +817,16 @@ def _kept(plan: SyncPlan, path: str, device: str, kept: bool, detail: str = "") 
 
 @dataclass
 class _Applied:
+    observer: Callable[[Step], None] | None = None
     published: dict[str, list[Copy]] = field(default_factory=dict)
     kept: dict[str, list[Keep]] = field(default_factory=dict)
     pending_written: dict[str, bytes] = field(default_factory=dict)
     wrote: bool = False
     consumed: list[str] = field(default_factory=list)
+
+    def observe(self, step: Step) -> None:
+        if self.observer is not None:
+            self.observer(step)
 
 
 def _pending_entries(plan: SyncPlan, device: str) -> dict[str, Mapping[str, object]]:
@@ -945,11 +950,34 @@ def _report(plan: SyncPlan, applied: _Applied) -> SyncReport:
                       MappingProxyType(skipped), tuple(plan.notices), applied.wrote, tuple(applied.consumed))
 
 
+@dataclass(frozen=True)
+class Step:
+    """One committed ``apply_sync`` step on one device, exactly as it was written.
+
+    ``kind`` is ``data``, ``archive`` or ``pending``. A data step carries the copies and kept
+    versions its commit published (after any denial) and, in ``states``, the pending marker it
+    wrote; an archive or pending step carries only its ``.sync`` file. Each state is ``(name,
+    bytes, expected etag)``. 028's peer transfer replays a step on the device a local stand-in
+    represents, in the same order (docs/DEVICE_SYNC.md).
+    """
+
+    kind: str
+    device: str
+    copies: tuple[Copy, ...] = ()
+    keeps: tuple[Keep, ...] = ()
+    states: tuple[tuple[str, bytes, str | None], ...] = ()
+
+
 def apply_sync(plan: SyncPlan, handles: Mapping[str, object],
-               approvals: Mapping[str, Mapping[str, str]] | None = None) -> SyncReport:
-    """Write the plan: data(a), data(b), verify, archive(b), archive(a), pending(b), pending(a)."""
+               approvals: Mapping[str, Mapping[str, str]] | None = None, *,
+               observer: Callable[[Step], None] | None = None) -> SyncReport:
+    """Write the plan: data(a), data(b), verify, archive(b), archive(a), pending(b), pending(a).
+
+    ``observer`` is called with each step that wrote something, right after its commit and
+    before the next step starts; an exception it raises stops the sync there, unchanged, so
+    nothing after that step is written (028 replays a stand-in's steps on the real device)."""
     approvals = approvals or {}
-    applied = _Applied()
+    applied = _Applied(observer)
     for device in plan.devices:
         _commit_data(plan, device, handles[device], approvals.get(device, {}), applied)
     _verify(plan, applied)
@@ -1044,6 +1072,11 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
         applied.pending_written[device] = marker[0]
     applied.wrote = applied.wrote or bool(result.etags)
     plan.copies[device] = published
+    if result.etags:
+        written = applied.pending_written.get(device)
+        applied.observe(Step("data", device, tuple(published), tuple(applied.kept[device]),
+                             () if written is None else ((pending_name(plan.other(device)), written,
+                                                          None if old is None else etag(old)),)))
 
 
 def _marker_needed(plan: SyncPlan, data: bytes, old: bytes | None) -> bool:
@@ -1154,13 +1187,15 @@ def _commit_archive(plan: SyncPlan, device: str, resolved: Mapping[str, tuple[st
     if len(data) > ARCHIVE_LIMIT:
         raise ArchiveTooLarge(f"the archive for {device} would be {len(data)} bytes")
     txn = plan.stores[device].transaction()
-    txn.put_sync_state(archive_name(plan.other(device)), data, None if old is None else etag(old))
+    state = (archive_name(plan.other(device)), data, None if old is None else etag(old))
+    txn.put_sync_state(*state)
     try:
         txn.commit(None)
     except (StaleWrite, WriteConflict) as error:
         raise SyncInterrupted(f"the archive on {device} changed during the sync: {error}",
                               _report(plan, applied)) from error
     applied.wrote = True
+    applied.observe(Step("archive", device, states=(state,)))
 
 
 def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object], applied: _Applied) -> None:
@@ -1176,13 +1211,15 @@ def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object],
     if data == current:
         return
     txn = plan.stores[device].transaction()
-    txn.put_sync_state(pending_name(plan.other(device)), data, None if current is None else etag(current))
+    state = (pending_name(plan.other(device)), data, None if current is None else etag(current))
+    txn.put_sync_state(*state)
     try:
         txn.commit(None)
     except (StaleWrite, WriteConflict) as error:
         raise SyncInterrupted(f"the pending marker on {device} changed during the sync: {error}",
                               _report(plan, applied)) from error
     applied.wrote = True
+    applied.observe(Step("pending", device, states=(state,)))
 
 
 # -- entry points ----------------------------------------------------------------------
