@@ -131,7 +131,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 - **107:** world-less play scopes, chat records, source bindings and a rebuildable navigation index ([CHATS](../CHATS.md)).
 - **017:** persisted typed relations, a director-only bounded traversal and per-node actor claims ([GRAPH](../GRAPH.md)).
 - **018:** content-addressed image blobs, image objects and per-entity and per-campaign placements ([IMAGES](../IMAGES.md)).
-- **020:** durable events and evidence with read-time quarantine ([EVIDENCE](../EVIDENCE.md)), and 017's claim shapes stored with their propositions ([EVIDENCE](../EVIDENCE.md#claim-shapes-017)). Running `check_subjects` on write is still open.
+- **020:** durable events and evidence with read-time quarantine ([EVIDENCE](../EVIDENCE.md)), and 017's claim shapes stored with their propositions ([EVIDENCE](../EVIDENCE.md#claim-shapes-017)). Running `check_subjects` on write, and definition-subject and future-instance validity, are still open.
 - **021:** two-key acceptance of turn effects, committed once with their relation changes, latest-first revocation and scene wrap-ups ([EFFECTS](../EFFECTS.md)). Holdings operations and ability costs are its unscheduled next slice.
 - **022:** pinned derived-portrayal composition with inherit/replace/clear provenance, and frozen chat and selection snapshots ([EFFECTIVE_VIEWS](../EFFECTIVE_VIEWS.md)).
 - **023:** counted holdings per holder instance with idempotent operation ids ([HOLDINGS](../HOLDINGS.md)).

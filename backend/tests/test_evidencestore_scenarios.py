@@ -203,7 +203,7 @@ def test_a4_an_npc_era_belief_is_inherited_after_reopen(tmp_path):
         append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER), upto=5)
     with LibraryStore.open(root, writable=False) as store:
         view = EvidenceLibrary(store).player_knowledge(C, PLAYER, PC_CONTROLS, as_of=9).actors[0]
-        assert view.current == () and [b.belief_id for b in view.inherited] == ["b-sam-1"]
+        assert view.current == () and [b.belief_id for b in view.inherited] == ["b-sam-1", "b-sam-member"]
     with LibraryStore.open(root) as store:
         append_u_tail = batches()[5]
         EvidenceLibrary(store, owner_handle(), owner=OWNER).append(

@@ -24,8 +24,8 @@ from grimoire.graph import ClaimSet, ClaimShape, claims_about
 from grimoire.store import LibraryStore, StaleWrite
 
 from evidence_fixtures import (
-    ACTORS, C, CLAIMS, DUKE, GUILD, INES, MEMBER_TEXT, NPC_CONTROLS, PC_CONTROLS, PLAYER, TAVI, WREN, fake_etag, in_memory_files,
-    m,
+    ACTORS, C, CLAIMS, DUKE, GUILD, INES, MEMBER_TEXT, NPC_CONTROLS, ORRIN, PC_CONTROLS, PLAYER, SAM, TAVI, WREN,
+    fake_etag, in_memory_files, m,
 )
 from store_helpers import OWNER, owner_handle
 from test_evidence_assemble import AS_OF, U, U_CLAIMS, reasons
@@ -66,6 +66,23 @@ def test_an_unshaped_proposition_is_byte_for_byte_what_it_was():
     assert encode(proposition)[1] == SCHEMAS[Proposition] == "grimoire.proposition/1"
     assert "claim" not in encode(proposition)[2]
     assert decode_claimed(*encode(proposition)) == (proposition, None, None)
+
+
+def test_an_unshaped_proposition_keeps_its_pinned_form():
+    """A golden literal, not this code against itself: /1 and its payload are exactly what 020 wrote before."""
+    proposition = Proposition(C, "p-g", "the duke is a sworn member of the guild", m(3, "s1"), "director",
+                              about=instance(DUKE, GUILD))
+    assert encode(proposition) == (KnowledgeRef(C, "proposition", "p-g"), "grimoire.proposition/1", {
+        "text": "the duke is a sworn member of the guild", "moment": {"sequence": 3, "scene_id": "s1"},
+        "provenance": "director", "about": [{"kind": "instance", "ref": "campaign:c1/character/duke"},
+                                            {"kind": "instance", "ref": "campaign:c1/group/guild"}]})
+
+
+@pytest.mark.parametrize("variant", [" campaign:c1/character/duke", "campaign:c1/character/duke ",
+                                     "campaign:c1/character/duke/", "campaign:c1//character/duke",
+                                     "CAMPAIGN:c1/character/duke", "campaign:c1/character/DUKE"])
+def test_a_claim_endpoint_in_any_other_spelling_is_refused(variant):
+    assert _refused(*_claim(subject=variant)) in ("invalid_field", "non_canonical", "not_overt")
 
 
 def test_plain_decode_never_reads_a_proposition_without_its_shape():
@@ -205,10 +222,17 @@ def test_claims_survive_reopen_exactly_for_every_actor_node_and_moment(tmp_path)
         duke = evidence.claims_about(C, WREN, DUKE, as_of=9).items
         assert [(c.proposition_id, c.predicate, c.position, c.text) for c in duke] == [
             ("p-member", "member_of", "subject", MEMBER_TEXT)]
-        assert [h.attributed_to for h in duke[0].heard] == [DUKE] and duke[0].stance is None
+        assert [h.attributed_to for h in duke[0].heard] == [DUKE] and duke[0].stance == "rejected"
+        assert evidence.claims_about(C, WREN, DUKE, as_of=6).items[0].stance == "believed"  # before reconsidering
+        # Orrin sent it to Sam: Orrin recalls sending it, and Sam's NPC-era suspicion is inherited once a PC
+        (orrin,) = evidence.claims_about(C, ORRIN, GUILD, as_of=9).items
+        assert orrin.heard == () and [r.proposition_id for r in orrin.sent] == ["p-member"] and orrin.stance is None
+        (sam,) = evidence.player_claims_about(C, PLAYER, PC_CONTROLS, DUKE, as_of=9)
+        assert [(c.stance, c.inherited_stance) for c in sam.items] == [(None, "suspected")]
+        assert [c.stance for c in evidence.claims_about(C, SAM, DUKE, as_of=9).items] == ["suspected"]
         assert evidence.claims_about(C, WREN, GUILD, as_of=9).items[0].position == "object"
         assert evidence.claims_about(C, WREN, DUKE, as_of=4).items == ()  # told at 5
-        for actor in (TAVI, INES, DUKE, GUILD):  # holders of nothing about it: the same empty answer
+        for actor in (TAVI, INES, DUKE, GUILD, MARA):  # holders of nothing about it: the same empty answer
             assert evidence.claims_about(C, actor, DUKE, as_of=9).items == ()
         assert "kind='group'" not in repr(evidence.claims_about(C, WREN, DUKE, as_of=9))  # no other endpoint
 

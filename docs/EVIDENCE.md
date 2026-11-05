@@ -176,6 +176,8 @@ These are tested against the undamaged ledger U, for every actor, the player and
 | `claims_about(campaign, actor, node, *, as_of)` | 017's `claims_about` over `actor_knowledge` and the stored shapes, from one assembly. This is an actor (NPC) read, so `inherited_stance` is always `None` |
 | `player_claims_about(campaign, player_id, controls, node, *, as_of)` | the same for each actor of `player_knowledge`, in its order, so NPC-era beliefs stay `inherited` |
 
+Each read is its own scan and assembly, so two `claims_about` calls about different nodes can straddle an append. A caller that needs several nodes from one ledger (031 packing one turn's context) takes one director `read` and calls 017's pure `claims_about(actor_knowledge(stored.knowledge, …), stored.claims, node)` per node. That is trusted application code, and only the result goes toward the actor.
+
 `claims` is a 017 `ClaimSet` over the assembled ledger. It names every shaped proposition's endpoints, held or not, so it is the director's: never hand it to an actor-facing caller, which reads `claims_about` instead.
 
 There is no widening flag. Every read scans the campaign's knowledge files and assembles them. That is linear in the number of files; log verification walks only the batch files present, so a stray huge sequence number costs one file. A cascade from missing references is removed in linear passes. Only records that fail other 012 rules are removed one validation at a time, which is quadratic in their number. Nothing is cached or persisted.

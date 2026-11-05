@@ -8,7 +8,8 @@ U exercises every chain the quarantine rules protect:
 - a delayed, addressed letter from the duke to Ines (``sent_at`` before the high-water mark);
 - an unconfirmed off-stage line overheard by Orrin;
 - two disclosures of one event;
-- a shaped proposition (017 claim: the duke is a member of the guild), reported to Wren only.
+- a shaped proposition (017 claim: the duke is a member of the guild), reported to Wren (who believes, then
+  rejects it) and, sent by Orrin, to Sam (whose NPC-era suspicion is ``inherited`` once Sam is a PC).
 
 ``tavi`` is a bystander, and ``guild`` (a group) and the duke are participants of the private event.
 The private event's summary contains ``SUMMARY-TOKEN``, and Mara's percept contains ``PERCEPT-TOKEN``.
@@ -90,17 +91,23 @@ def batches() -> list[list]:
             Report(C, "v-orrin", ORRIN, "p-lie", "overheard", m(5), "director", confirmed=False),
             Report(C, "v-wren-member", WREN, "p-member", "told", m(5), "director", confirmed=True,
                    attributed_to=DUKE),
+            Report(C, "v-sam-member", SAM, "p-member", "told", m(5), "director", confirmed=True, sender=ORRIN,
+                   attributed_to=DUKE, addressed=True, sent_at=m(5)),
             Disclosure(C, "d1", "e1", m(5), "director"),
         ],
         [  # 4: the lie is refuted; Ines believes it anyway; a second disclosure of e1
             Ruling(C, "r-lie", "p-lie", "refuted", m(6), "director", grounds=(E1,)),
             Belief(C, "b-ines-1", INES, "p-lie", "believed", m(6), DIRECTOR, ("v-ines",)),
             Disclosure(C, "d2", "e1", m(6), "director"),
+            Belief(C, "b-wren-1", WREN, "p-member", "believed", m(6), DIRECTOR, ("v-wren-member",)),
+            Belief(C, "b-sam-member", SAM, "p-member", "suspected", m(6), DIRECTOR, ("v-sam-member",)),
         ],
         [  # 5: rulings change; Mara reconsiders
             Ruling(C, "r-rumor-2", "p-rumor", "refuted", m(7), "director", grounds=(E2,)),
             Ruling(C, "r-mis-2", "p-mis", "refuted", m(7), "director", grounds=(E1,)),
             Belief(C, "b-mara-2", MARA, "p-mis", "rejected", m(7), DIRECTOR, ("v-mara",), supersedes="b-mara-1"),
+            Belief(C, "b-wren-2", WREN, "p-member", "rejected", m(7), DIRECTOR, ("v-wren-member",),
+                   supersedes="b-wren-1"),
         ],
         [  # 6: Sam is now a PC; Ines grows doubtful
             Belief(C, "b-sam-2", SAM, "p-rain", "rejected", m(8, "s3", "t1"), PLAYER, ("v-sam",),
