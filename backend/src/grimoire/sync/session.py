@@ -17,7 +17,9 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef
-from grimoire.images import ImageModelError, placement_from_payload, validate_placement
+from grimoire.images import (
+    IMAGE_SCHEMA, PLACEMENT_SCHEMA, ImageModelError, image_from_payload, placement_from_payload, validate_placement,
+)
 from grimoire.security import Permission
 from grimoire.store import (
     BlobCorrupt, CrossDevice, ImmutableImage, ImmutableRevision, InstanceIdConflict, InvalidEnvelope, InvalidSourceState,
@@ -517,7 +519,8 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
                 return (origin_scan.blocked_reason(path) is not None or dest_scan.blocked_reason(path) is not None
                         or any(side.state == "blocked" for side in plan.sides.get(path, {}).values()))
             if syncable(copy.path) in ASSET_KINDS:
-                why = _art_unmet(_art_needs(copy.path, copy.data, origin_files), blocked, final_etag,
+                needs = _art_needs(copy.path, copy.data, origin_files, origin_scan.blobs)  # type: ignore[attr-defined]
+                why = _art_unmet(needs, blocked, final_etag,
                                  lambda path, origin=copy.origin: _etag_on(plan, origin, path), here, dest)
                 if why:
                     newly[copy.path] = why
@@ -577,10 +580,11 @@ class _Needs:
     hold: str | None = None  # the origin itself is in a state the batch refuses: never copied
 
 
-def _art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes]) -> _Needs:
+def _art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes], blobs: Mapping[str, int]) -> _Needs:
     """The files a blob, image object or placement needs (docs/SYNC.md, "Art"), read from the
-    origin's bytes. Everything the resolver reads for it must be identical, so it resolves the same
-    on both devices; a placement the 018 batch would refuse there (W7 scope, unreadable payload, W8's
+    origin's bytes and its scan's blob sizes (``blobs``: listed, never read). Everything the resolver
+    reads for it must be identical, so it resolves the same on both devices; art the 018 batch would
+    refuse there (W6 an image it cannot show, W7 scope, unreadable payload, W8's
     ``validate_placement``, an adjust with nothing inherited) is held."""
     kind = syncable(path)
     if kind == "blob" or data is None:
@@ -599,6 +603,9 @@ def _art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes]) -> _N
         blob = None if image_data is None else image_blob(image_data)
         if blob is None:
             return f"{image} or its blob is not readable on the origin"
+        refused = _image_refusal(image_data, "/".join(blob), blobs)  # type: ignore[arg-type]
+        if refused is not None:
+            return f"{image} cannot be shown: {refused}"
         identical.update((image_path, "/".join(blob)))
         return None
 
@@ -610,6 +617,10 @@ def _art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes]) -> _N
         blob = image_blob(data)
         if blob is None:
             return done("it names no storable blob")
+        # create-only: copied broken, a repair on the origin could never follow it, so it waits there
+        refused = _image_refusal(data, "/".join(blob), blobs)
+        if refused is not None:
+            return done(refused)
         identical.add("/".join(blob))
         if ref.campaign_id is not None:
             return done(campaign=ref.campaign_id)
@@ -670,11 +681,36 @@ def _art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes]) -> _N
     return done(hold)
 
 
-def _placement_refusal(ref: PlacementRef, data: bytes) -> str | None:
-    """Why 018 refuses this placement where it sits (its codec, then W8's ``validate_placement``, which
-    the batch and the resolver both apply: a source placement may only ``set``), else ``None``."""
+def _image_refusal(data: bytes, blob: str, blobs: Mapping[str, int]) -> str | None:
+    """Why 018 cannot show this image object (W6, as the batch's ``_check_placement`` and the resolver
+    read it: ``invalid_image``, ``missing_blob``, ``blob_size_mismatch``), else ``None``: another schema,
+    a payload its codec refuses, or a ``blob`` the origin lists at another size than the object
+    declares. ``blobs`` is the origin scan's listing (sizes, never bytes); a blob it does not list is
+    an unmet ``identical`` need instead."""
     try:
-        placement = placement_from_payload(parse_strict(data).get("payload"))
+        document = parse_strict(data)
+        schema = document.get("schema") if isinstance(document, Mapping) else None
+        if schema != IMAGE_SCHEMA:
+            return f"its schema is {schema!r}, not {IMAGE_SCHEMA!r} (invalid_image)"
+        image = image_from_payload(document.get("payload"))  # type: ignore[union-attr]
+    except (JsonError, ImageModelError) as error:
+        return f"its payload cannot be read ({error}) (invalid_image)"
+    size = blobs.get(blob)
+    if size is not None and size != image.blob.size:
+        return f"it declares a {image.blob.size}-byte blob, but {blob} is {size} bytes (blob_size_mismatch)"
+    return None
+
+
+def _placement_refusal(ref: PlacementRef, data: bytes) -> str | None:
+    """Why 018 refuses this placement where it sits (its schema and codec, then W8's
+    ``validate_placement``, which the batch and the resolver both apply: a source placement may only
+    ``set``), else ``None``. The resolver reads a placement under another schema as ``invalid_placement``."""
+    try:
+        document = parse_strict(data)
+        schema = document.get("schema") if isinstance(document, Mapping) else None
+        if schema != PLACEMENT_SCHEMA:
+            return f"its schema is {schema!r}, not {PLACEMENT_SCHEMA!r} (invalid_placement)"
+        placement = placement_from_payload(document.get("payload"))  # type: ignore[union-attr]
     except (JsonError, ImageModelError) as error:
         return f"its payload cannot be read ({error})"
     problem = validate_placement(ref.subject, ref.slot, placement)
@@ -1534,7 +1570,7 @@ def _resolve_art(stores: Mapping[str, LibraryStore], scans: Mapping[str, Canonic
     """``resolve`` delivers an image object or placement only where sync would copy it (``_art_needs``):
     every file it needs identical on both devices and blocked on neither (blobs hashed on the
     receiver), every owner or subject it needs present on the receiver."""
-    needs = _art_needs(path, data, scans[winner].files)
+    needs = _art_needs(path, data, scans[winner].files, scans[winner].blobs)  # type: ignore[attr-defined]
 
     def held(where: str) -> bool:
         return any(scans[device].blocked_reason(where) is not None for device in scans)

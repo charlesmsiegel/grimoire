@@ -589,3 +589,83 @@ def test_a_blob_copy_never_deadlocks_with_a_planner(pair, monkeypatch, how):
     assert not any(thread.is_alive() for thread in threads), "a blob copy and a planner deadlocked"
     assert all(isinstance(error, SyncInterrupted) for error in errors), errors
     assert loading.is_set() and (phone.root / _blob(PNG)).read_bytes() == PNG
+
+
+def _new_avatar_over_the_synced_one(desktop: LibraryStore, phone: LibraryStore) -> tuple[ImageRef, str]:
+    """Wren's avatar shows ``wren`` (PNG) on both devices; the desktop then places a new picture
+    ``wren-new`` (PNG_2) over it, through its own batch. Returns the new image and the placement path."""
+    first = _campaign_art(desktop)
+    assert sync_until_quiet(desktop, phone, H).conflicts == ()
+    assert isinstance(_slot(phone), Shown) and _slot(phone).image == first
+    placement = PlacementRef(WREN_A, "avatar")
+    batch = _images(desktop).change()
+    second = batch.add_image("campaign:c1", "wren-new", PNG_2)
+    batch.place(WREN_A, "avatar", Placement("set", "avatar", second), _images(desktop).read_placement(placement)[1])
+    batch.commit()
+    return second, _path(placement)
+
+
+# a hand edit of the new image object, before its first sync, that the 018 batch and resolver refuse (W6)
+IMAGE_EDITS = {
+    "blob_size_mismatch": (f'"size": {len(PNG_2)}', f'"size": {len(PNG_2) + 1}'),
+    "unreadable_payload": (f'"size": {len(PNG_2)}', f'"size": "{len(PNG_2)}"'),
+    "another_schema": ('"schema": "grimoire.image/0"', '"schema": "grimoire.image/9"'),
+}
+
+
+@pytest.mark.parametrize("edit", sorted(IMAGE_EDITS))
+def test_an_image_the_batch_cannot_show_never_replaces_a_working_avatar(pair, edit):
+    """W6: a placement shows an image only if that image object reads (schema, 018 codec) and its blob
+    is present at the size it declares (``missing_blob`` in the batch; ``invalid_image`` or
+    ``blob_size_mismatch`` in the resolver). Such an image object, edited by hand on the origin, is
+    held with every placement that shows it; the receiver keeps showing its working avatar."""
+    desktop, phone = pair
+    second, placement = _new_avatar_over_the_synced_one(desktop, phone)
+    image = desktop.root / _path(second)
+    old, new = IMAGE_EDITS[edit]
+    text = image.read_text()
+    assert old in text
+    image.write_text(text.replace(old, new))
+    with pytest.raises(Exception, match="missing|wrong size|invalid|schema"):  # the origin's own batch refuses it
+        _images(desktop).place(WREN_B, "avatar", Placement("set", "avatar", second), None).commit()
+    theirs = (phone.root / placement).read_bytes()
+    report = sync_until_quiet(desktop, phone, H)
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == {
+        _path(second): "head_dependency", placement: "head_dependency"}
+    assert "refuse" in report.conflict(placement).detail and "refuse" in report.conflict(_path(second)).detail
+    assert (_blob(PNG_2), PHONE) in report.copied  # the blob needs nothing: it still lands
+    assert not (phone.root / _path(second)).exists() and (phone.root / placement).read_bytes() == theirs
+    shown = _slot(phone)
+    assert isinstance(shown, Shown) and shown.image == ImageRef("campaign:c1", "wren")
+    mine = (desktop.root / placement).read_bytes()  # resolve applies the same rule: refused
+    with pytest.raises(ResolveRefused, match="refuse"):
+        resolve(desktop, phone, placement, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, H)
+    edited = image.read_bytes()
+    with pytest.raises(ResolveRefused, match="refuse"):
+        resolve(desktop, phone, _path(second), etag(edited), {DESKTOP: etag(edited), PHONE: None}, H)
+    assert (phone.root / placement).read_bytes() == theirs and not (phone.root / _path(second)).exists()
+    image.write_text(text)  # repaired on the origin: never copied, so the image is still new and syncs
+    assert sync_until_quiet(desktop, phone, H).conflicts == ()
+    assert _slot(phone) == _slot(desktop) and _slot(phone).image == second
+
+
+def test_a_placement_with_another_schema_never_replaces_a_working_avatar(pair):
+    """The resolver reads a placement only under 018's placement schema (otherwise ``invalid_placement``),
+    so a placement edited by hand to another schema is held, never copied over a working one."""
+    desktop, phone = pair
+    second, placement = _new_avatar_over_the_synced_one(desktop, phone)
+    edited = desktop.root / placement
+    text = edited.read_text()
+    assert '"schema": "grimoire.placement/0"' in text
+    edited.write_text(text.replace('"schema": "grimoire.placement/0"', '"schema": "grimoire.placement/9"'))
+    theirs = (phone.root / placement).read_bytes()
+    report = sync_until_quiet(desktop, phone, H)
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == {placement: "head_dependency"}
+    assert "schema" in report.conflict(placement).detail
+    assert {(_path(second), PHONE), (_blob(PNG_2), PHONE)} <= set(report.copied)  # the image still lands
+    assert (phone.root / placement).read_bytes() == theirs
+    assert isinstance(_slot(phone), Shown) and _slot(phone).image == ImageRef("campaign:c1", "wren")
+    mine = edited.read_bytes()
+    with pytest.raises(ResolveRefused, match="schema"):
+        resolve(desktop, phone, placement, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, H)
+    assert (phone.root / placement).read_bytes() == theirs
