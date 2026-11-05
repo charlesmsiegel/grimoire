@@ -27,6 +27,10 @@ Planned, authorized, fully booked OpenAI-compatible model calls. Endpoints are t
 
 A derived portrayal names its pinned base in its own payload and composes over it with explicit inherit/replace/clear and field provenance. A chat or selection is frozen for one operation from one loaded library, with or without a world. See [EFFECTIVE_VIEWS.md](EFFECTIVE_VIEWS.md).
 
+### Device sync (first slice implemented: `grimoire.sync`)
+
+Two libraries exchange records directly, three-way against the last state both agreed on, and every overlapping edit becomes a named conflict kept on both devices rather than a silent overwrite. Families whose merge rules are not written yet are held back and reported. See [SYNC.md](SYNC.md).
+
 ### Library location and V1 isolation (implemented: `grimoire.library`)
 
 `resolve_library()` returns the V2 library and what selected it (`default` or `env`); `python -m grimoire.library` prints the same. Resolution is **read-only**: it creates nothing and never opens or lists a V1 directory.
@@ -52,29 +56,31 @@ A derived portrayal names its pinned base in its own payload and composes over i
   The writer's post-creation re-check is the backstop for these.
 
 ```text
-~/.grimoire-v2/                        # target example; not implemented yet
-  catalogs/                           # optional shared, reusable definitions
-  worlds/<world>/                     # self-contained setting and authored content
+~/.grimoire-v2/                       # the default library root (implemented; exact layout in STORAGE.md)
+  grimoire-library.json               # library marker and format
+  sources/<segments>/_source/         # one source: manifest, definition revisions, its image objects and placements (018)
   campaigns/<campaign>/
-    instances/                        # individual entities and overrides
     scope.json                        # the play scope; world optional (107, see CHATS.md)
     chats/                            # one record per chat thread (107)
-    holdings/<kind>/                  # counted stacks per holder instance (023, see HOLDINGS.md)
-    scenes/                           # accepted authored contributions, exact text
-    events/                           # committed happenings and consequences
-    evidence/                         # observations, reports, beliefs and provenance
-    relations/                        # scoped typed relationship records
+    instances/<kind>/                 # individual entities and overrides
+    relations/                        # scoped typed relationship records (017)
+    events/                           # objective 012 events (020)
+    evidence/                         # observations, reports, beliefs, rulings and the knowledge log (020)
     accepted/                         # accepted fictional events and their receipts (021)
     wrapups/                          # retrospective scene summaries; never actor memory (021)
-  assets/                             # content-addressed image blobs (018; objects and placements live with their owner)
-  .cache/                             # disposable derived graph, search, embeddings
+    holdings/<kind>/                  # counted stacks per holder instance (023, see HOLDINGS.md)
+    images/, placements/              # the campaign's own image objects and placements (018)
+  assets/blobs/                       # content-addressed image bytes (018)
+  .txn/, .conflicts/, .sync/          # writer journal, preserved conflict versions, device-local sync state
 ```
+
+Not implemented yet: optional shared `catalogs/` and `worlds/` folders as named here (today every source, a world included, lives under `sources/`), `campaigns/<campaign>/scenes/` for accepted authored contributions, and a disposable `.cache/` for derived graph, search and embeddings.
 
 Image objects and placements (018) deliberately live under their owning source's `_source/` or their campaign, not in `assets/`; only content-addressed blobs are library-global. See [IMAGES](IMAGES.md). The native store's accepted first-slice layout (`sources/<segments>/_source/…`, `campaigns/<id>/instances/…`) and its revision, recovery and isolation contract are in [STORAGE.md](STORAGE.md); the first-slice relation schema (`campaigns/<id>/relations/`) and graph semantics are in [GRAPH.md](GRAPH.md); accepted turn effects (`accepted/`, `wrapups/`) are in [EFFECTS.md](EFFECTS.md). `accepted/` is not `events/`: an accepted event is an authority record with operations and receipts, while `events/` holds 020's objective 012 `Event`s, bridged by `as_knowledge_event`. Data files must remain usable by humans and external agents. Derived indexes, embeddings and cached actor views are disposable and may not become a second canonical store.
 
-## Wave 2 independent domain and storage contracts (planned)
+## Wave 2 independent domain and storage contracts
 
-The authoritative first-slice ownership and acceptance rules are in [Wave 2 handoffs](roadmap/WAVE2_HANDOFFS.md). This section is a design decision, **not** an assertion that the V2 headless runtime already implements it.
+The authoritative first-slice ownership and acceptance rules are in [Wave 2 handoffs](roadmap/WAVE2_HANDOFFS.md). Each first slice below is implemented as a headless library with synthetic tests (015's live baseline capture is still pending); none of it is a playable runtime yet.
 
 - **Entity type versus persistence:** `009` owns native typed, compositional entity definitions/instances and the mapping from actor control roles to `InstanceRef`; the low-level store `010` reads/writes **generic source-qualified record envelopes** with revision preconditions and opaque authored payloads. It is intentionally not a `CharacterCardRecord`, a special `PC` writer or a universal graph database. Both sprints independently consume Wave 1 identity and can develop concurrently; 022 joins their interfaces in Wave 3.
 - **Read-only legacy inspection:** `011` must be a **runnable V0.2.1 inventory scanner** with a deterministic, source-faithful manifest separating legacy picture objects, bytes and occurrence-specific art placements. It does not write canonical V2 records and does not wait for 009/010. First slice implemented as `grimoire.migrate_v1` ([contract](MIGRATION_INVENTORY.md)); a report may be written only where `grimoire.library.check_report_destination` allows (never in, or under, a source, destination or V1 library). 026 owns the first reviewed apply.
@@ -84,7 +90,7 @@ The authoritative first-slice ownership and acceptance rules are in [Wave 2 hand
 
 Wave 2's independent exit proofs are both **native revisioned storage with typed definitions/instances** and a **working, read-only V0.2.1 asset inventory**. Model/provider and narrative contracts have additional first-slice tests; none makes V2 playable before Wave 5.
 
-## World-optional chats and reusable characters (planned after 010)
+## World-optional chats and reusable characters
 
 A reusable authored character may exist in a standalone catalog **outside any world**. Elderfen's Regency, Modern, Mecha and Vampire character portrayals can declare **explicit pinned derivation links** to an optional shared Mara concept, retaining distinct authored occupations, species, biographies, relationships and sources. **Same name does not mean same individual or derivation.** The 009 entity implementation composes definition-to-instance facets, but it does *not* compose one definition from another; that first proof belongs to **022** (first slice implemented: [EFFECTIVE_VIEWS](EFFECTIVE_VIEWS.md)), with explicit inherit/replace/clear and source-revision provenance. Art, voice, source merge and relation remapping remain separately owned.
 
