@@ -129,8 +129,9 @@ def reemitted_imprecise(old: bytes, new: bytes) -> tuple[str, ...]:
     """Where ``new`` re-emits, as its rounded float, a number ``old``'s text held more exactly.
 
     Locations are JSON pointers. A location the new document drops or sets to another value is a
-    deliberate change and is not listed; identical bytes change nothing. Only readable JSON
-    objects are compared: anything else is the reader's to refuse.
+    deliberate change and is not listed; identical bytes change nothing. Comparison is location by
+    location, so a number moved to another location (an item inserted before it in a list) is not
+    caught. Only readable JSON objects are compared: anything else is the reader's to refuse.
     """
     if old == new:
         return ()

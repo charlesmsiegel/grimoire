@@ -76,3 +76,37 @@ def test_a_refused_commit_removes_only_the_empty_folders_it_created(tmp_path):
     assert not (root / "lib" / "campaigns" / "c9").exists()  # created by this commit, still empty: gone
     assert keep.is_dir() and (keep / "kept.json").is_file()  # existed before: untouched
     assert not any(name.endswith(".new") for name in (p.name for p in (root / "lib" / ".txn").iterdir()))
+
+
+def test_a_commit_refused_for_a_swapped_staging_folder_removes_nothing_through_it(tmp_path):
+    """Another program swaps ``.txn`` for a link after the staged write: the recheck refuses the
+    commit, and the cleanup never follows the link to delete what now lies elsewhere."""
+    import os
+
+    from grimoire.store import LinkRefused
+
+    locker = ProcessLocker()
+    root = tmp_path / "root"
+    root.mkdir()
+    with new_library(root / "lib", locker=locker) as store:
+        seed(store)
+    elsewhere = tmp_path / "elsewhere"
+
+    def swap(ops, r):  # the staged temp is written: move .txn away and leave a link in its place
+        os.rename(r / "lib" / ".txn", elsewhere)
+        os.symlink(elsewhere, r / "lib" / ".txn", target_is_directory=True)
+
+    ops = RootedFileOps(root, plan=[Interleave(Target("write_bytes", path="lib/.txn/rec*"), swap)], record=False)
+    store = LibraryStore.open(root / "lib", ops=ops, locker=locker)
+    try:
+        txn = store.transaction()
+        txn.put(instance(InstanceRef("c9", "character", "x"), WREN_R1), None)
+        with pytest.raises(LinkRefused):
+            txn.commit(owner_handle())
+        staged = [path.name for path in elsewhere.iterdir() if path.name.endswith(".new")]
+        assert staged, "the staged file that now lies outside the library must not be deleted"
+    finally:
+        try:
+            store.close()
+        except Exception:
+            pass

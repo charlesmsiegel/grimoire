@@ -54,7 +54,7 @@ from .layout import (
     ACCEPTED, CAMPAIGNS, CHATS, CONFLICTS, DISCARD_MARKER, IMAGES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
     PLACEMENTS, REPAIR_MARKER, SYNC, SYNC_PEERS, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify, conflict_parts,
     definition_parts, image_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
-    ledger_parts, ledger_seq, logical, manifest_parts, name_key, sync_state_parts,
+    SUFFIX, ledger_parts, ledger_seq, logical, manifest_parts, name_key, sync_state_parts,
 )
 from .ledger import Head, Ledger, read_ledger, render_batches
 from .loader import (
@@ -1509,7 +1509,8 @@ class _Commit:
         try:
             self._recheck(staging)                        # still ours, just before the commit point
         except Exception:                                 # refused: nothing committed, undo step 8
-            self._unstage([self.access.path((TXN, entry.temp)) for entry in entries])
+            if self._still_verifiable():  # never clean up through a root or .txn that failed the check
+                self._unstage([self.access.path((TXN, entry.temp)) for entry in entries])
             raise
         self._commit_point(journal)                       # 9. journal replace
         try:
@@ -1590,10 +1591,37 @@ class _Commit:
             elif data is not None and put.rendered and (where := reemitted_imprecise(data, put.data)):
                 # The document was read as floats; writing it back would silently change these numbers.
                 imprecise["/".join(put.parts)] = where
+            elif (data is None and put.rendered and (head := self._head_revision_bytes(put.parts)) is not None
+                  and (where := reemitted_imprecise(head, put.data))):
+                # A definition is edited by writing a new revision: compare it with the head it replaces.
+                imprecise["/".join(put.parts)] = where
         if stale:
             raise StaleWrite(stale)
         if imprecise:
             raise ImpreciseNumber(imprecise)
+
+    def _head_revision_bytes(self, parts: Parts) -> bytes | None:
+        """For a new definition revision, the bytes of its entity's head on disk now (the revision an
+        edit was read from): the declared head, or the one other revision when none is declared."""
+        found = classify(parts)
+        if found is None or found[0] != "definition":
+            return None
+        ref = found[1]
+        assert isinstance(ref, SourceRef)
+        try:
+            manifest = self.access.read(manifest_parts(ref.source))
+            heads = parse_strict(manifest).get("heads") if manifest is not None else None
+            head = heads.get(f"{ref.kind}/{ref.entity_id}") if isinstance(heads, Mapping) else None
+            if head is None:  # no declared head: the entity's one other revision is its head
+                folder = definition_parts(ref)[:-1]
+                others = [name[:-len(SUFFIX)] for name in self.access.list_dir(folder)
+                          if name.endswith(SUFFIX) and name != ref.revision + SUFFIX]
+                head = others[0] if len(others) == 1 else None
+            if type(head) is not str or head == ref.revision:
+                return None
+            return self.access.read(definition_parts(ref.unpinned().at(head)))
+        except (JsonError, StoreError, ValueError, OSError):
+            return None  # an unreadable head is the loader's to report; there is nothing to compare
 
     def _check_names(self) -> None:
         for put in self.puts:
@@ -1732,7 +1760,9 @@ class _Commit:
         access, temps = self.access, []
         try:
             entries = []
-            for put in self.puts:
+            # Manifests are staged, and so published, after everything else: a manifest that has
+            # landed then proves the revisions its heads name landed first (or were kept aside).
+            for put in sorted(self.puts, key=lambda put: _is_manifest(put.parts)):
                 self._created.extend(access.make_parent(put.parts))
                 temp = access.ops.make_temp(access.path((TXN,)), prefix="rec", suffix=".new")
                 temps.append(temp)
@@ -1741,9 +1771,21 @@ class _Commit:
                                      put.journal_kind))  # type: ignore[arg-type]
             return tuple(entries)
         except (OSError, StaleWrite) as error:
-            self._unstage(temps)
+            if self._still_verifiable():
+                self._unstage(temps)
             self._note(error)
             raise
+
+    def _still_verifiable(self) -> bool:
+        """Whether the root and ``.txn`` still pass their checks, so paths under them may be removed.
+        When they do not (a ``.txn`` swapped for a link, a replaced root), the temps and directories
+        are left for the next recovery's staging cleanup rather than removed through elsewhere."""
+        try:
+            self.access.guard.check_root()
+            self.access.check_staging()
+        except (OSError, StoreError, ValueError):  # LibraryPathError is a ValueError
+            return False
+        return True
 
     def _unstage(self, temps: list[str]) -> None:
         """A commit refused before its commit point leaves no temp and no directory it created
@@ -1775,6 +1817,11 @@ class _Commit:
                            *([temp] if temp else [])])
             self._note(error)
             raise
+
+
+def _is_manifest(parts: Parts) -> bool:
+    found = classify(parts)
+    return found is not None and found[0] == "manifest"
 
 
 def _unsupported(data: bytes, envelope: object) -> bool:

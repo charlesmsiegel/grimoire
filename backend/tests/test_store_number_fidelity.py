@@ -94,3 +94,25 @@ def test_an_exact_copy_of_a_file_with_an_imprecise_number_is_byte_identical(tmp_
         txn.put_exact(PATH, replaced, a.read(WREN_A).etag)
         txn.commit(owner_handle())
         assert (tmp_path / "a" / PATH).read_bytes() == replaced
+
+
+def test_a_new_revision_that_would_round_the_head_it_was_edited_from_is_refused(tmp_path):
+    """A definition is edited by writing a new revision, so it is compared with the head it replaces."""
+    from store_helpers import HARBOR, WREN_R1, WREN_R2, harbor_manifest, seed
+
+    root = tmp_path / "lib"
+    with LibraryStore.create(root) as store:
+        seed(store)
+        r1 = next(root.rglob("r1.json"))
+        text = r1.read_text().rstrip().rstrip("}").rstrip()
+        r1.write_text(text + f',\n  "x-weight": {IMPRECISE["x-precise"]}\n}}\n')
+        old = store.read(WREN_R1)
+        source = store.read_source(HARBOR)
+        txn = store.transaction()
+        txn.put(RecordEnvelope(WREN_R2, {**old.envelope.payload, "bio": "a captain"}, name="Wren",
+                               extra=old.envelope.extra), None)
+        txn.put(harbor_manifest({"character/wren": "r2"}), source.etag)
+        with pytest.raises(ImpreciseNumber) as refused:
+            txn.commit(owner_handle())
+        assert list(refused.value.where.values()) == [("/x-weight",)]
+        assert not r1.with_name("r2.json").exists()

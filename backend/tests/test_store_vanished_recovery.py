@@ -108,3 +108,48 @@ def test_a_partly_published_journal_never_publishes_a_head_without_its_revision(
     assert len(report.preserved) == 1 and report.preserved[0].startswith(".conflicts/")
     _, conflicts = _assert_still_r1(root, locker)
     assert report.preserved[0] in conflicts
+
+
+def test_a_manifest_put_first_is_still_published_last(tmp_path):
+    """Sync copies in path order, so a manifest is usually put before its revision. The journal
+    still publishes it last: a crash after an unrelated entry plus a vanished revision never
+    leaves a head on a revision that is not there."""
+    locker = ProcessLocker()
+    root = _root(tmp_path, locker)
+    other = f"{LIB}/campaigns/other/instances/character/late.json"
+    crash = Crash(Target("replace", target=other), "after")
+    with pytest.raises(BaseException):
+        with LibraryStore.open(root / LIB, ops=RootedFileOps(root, plan=[crash], record=False),
+                               locker=locker) as store:
+            source = store.read_source(HARBOR)
+            txn = store.transaction()
+            txn.put(harbor_manifest({"character/wren": "r2"}), source.etag)  # the manifest first
+            txn.put(RecordEnvelope(OTHER, {"n": 1}), None)
+            txn.put(wren("r2", "a captain"), None)
+            revision = next(data for key, data in txn.preview().items() if key.endswith("r2.json"))
+            txn.commit(owner_handle())
+    _remove_staged(root, revision)
+    with LibraryStore.open(root / LIB, locker=locker) as store:
+        report = store.last_recovery
+    assert set(report.incomplete) == {R2, MANIFEST}
+    _assert_still_r1(root, locker)
+
+
+def test_a_crash_after_a_manifest_put_first_lands_finds_its_revision_in_place(tmp_path):
+    locker = ProcessLocker()
+    root = _root(tmp_path, locker)
+    crash = Crash(Target("replace", target=f"{LIB}/{MANIFEST}"), "after")
+    with pytest.raises(BaseException):
+        with LibraryStore.open(root / LIB, ops=RootedFileOps(root, plan=[crash], record=False),
+                               locker=locker) as store:
+            source = store.read_source(HARBOR)
+            txn = store.transaction()
+            txn.put(harbor_manifest({"character/wren": "r2"}), source.etag)
+            txn.put(wren("r2", "a captain"), None)
+            txn.commit(owner_handle())
+    assert not any(path.name.endswith(".new") for path in (root / LIB / ".txn").iterdir())  # all landed
+    with LibraryStore.open(root / LIB, locker=locker) as store:
+        assert dict(store.read_source(HARBOR).manifest.heads)["character/wren"] == "r2"
+        view = store.load()
+        assert view.problems == ()
+        assert view.index.resolve(WREN).envelope.payload["bio"] == "a captain"
