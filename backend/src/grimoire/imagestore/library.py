@@ -418,6 +418,15 @@ class ImageBatch:
             self._preview = self._transaction(puts).preview() if puts else {}
         return dict(self._preview)
 
+    def check(self) -> None:
+        """Run the commit's own checks on the batch as built, read-only: raises what ``commit`` would
+        raise before authorizing (a name collision, a source that cannot hold the writes). Consumes no
+        approval and writes nothing."""
+        with self.library.store.read_pass():
+            puts, _, _ = self._build()
+            if puts:
+                self._transaction(puts).check()
+
     def commit(self, approvals: Mapping[str, str] | None = None) -> ImageCommit:
         store = self.library.store
         with store.read_pass():  # the lock: nothing can change between these checks and the commit

@@ -937,6 +937,14 @@ class LibraryStore:
                 return self.check_definition(ref, self.source_facts(), _retried=True)
             return StoredDefinition(found.ref, found.name, stored.envelope, stored.etag)  # type: ignore[attr-defined]
 
+    def source_entities(self, source_id: str) -> dict[tuple[str, str], tuple[str, ...]]:
+        """Every ``(kind, entity_id)`` with a revision file in ``source_id``, headed or not and readable
+        or not, with its revision names: what a commit's id-reuse and head checks see. Read-only."""
+        with self.lock:
+            self._require_consistent()
+            scan = loader.scan_source(self._access, source_id)
+        return {key: tuple(sorted(revisions)) for key, revisions in scan.revisions.items()}
+
     def read_source(self, source_id: str) -> StoredSource:
         with self.lock:
             self._require_consistent()
