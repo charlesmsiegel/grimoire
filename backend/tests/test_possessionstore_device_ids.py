@@ -9,15 +9,19 @@ from hashlib import sha256
 
 import pytest
 
-from grimoire.core.identity import SEGMENT_MAX, validate_segment
+from grimoire.core.entity import EntityDefinition
+from grimoire.core.entity_codec import ENTITY_SCHEMA, definition_to_payload
+from grimoire.core.facets import FacetSet, Physical, Portable
+from grimoire.core.identity import SEGMENT_MAX, SourceRef, validate_segment
 from grimoire.possessions import PossessionRefused, Step
-from grimoire.store import LibraryStore, StaleWrite
+from grimoire.store import LibraryStore, RecordEnvelope, SourceManifest, StaleWrite
 from grimoire.sync import identify, sync
 
 from possession_fixtures import CHEST, LONGSWORD, MARA, STARFALL, TOMA, make, op, possession_library, seed
-from store_helpers import owner_handle
+from store_helpers import OWNER, owner_handle
 
 SCOPES = ("sources", "campaigns", "kept")
+RELICS = "catalog:relics"
 
 
 def tag(device: str) -> str:
@@ -109,13 +113,14 @@ def test_a_creation_planned_before_pairing_is_stale_once_the_library_is_paired(s
     assert instance_files(store) == before
 
 
+@pytest.mark.parametrize("source", [LONGSWORD, STARFALL], ids=["template", "individual"])
 @pytest.mark.parametrize("damage", [b"{not json", b'{"format": "grimoire.sync.device/1"}'])
-def test_a_damaged_device_identity_refuses_new_items_rather_than_plain_numbers(store, damage):
+def test_a_damaged_device_identity_refuses_new_items_rather_than_plain_numbers(store, damage, source):
     identify(store, "desktop")
     (store.root / ".sync" / "device.json").write_bytes(damage)
     before = instance_files(store)
     with pytest.raises(PossessionRefused) as refused:
-        possession_library(store).create(make("make-1", name="Longsword", source=LONGSWORD))
+        possession_library(store).create(make("make-1", name="Longsword", source=source))
     assert refused.value.reason == "device_identity"
     assert instance_files(store) == before
 
@@ -128,15 +133,57 @@ def test_a_long_base_is_cut_before_the_tag_so_the_id_stays_one_segment(store):
     validate_segment(item.instance_id, "instance id")
 
 
+def artifact_tag(source) -> str:
+    return sha256(str(source.unpinned()).encode()).hexdigest()[:8]
+
+
+def add_relic_starfall(store: LibraryStore):
+    """A second catalog with its own one-of-a-kind ``starfall``: same entity id, a different artifact."""
+    relic = SourceRef(RELICS, "item", "starfall", "r1")
+    txn = store.transaction()
+    txn.put(SourceManifest(RELICS, OWNER, "Relics"), None)
+    definition = EntityDefinition(relic, "Starfall", "individual", FacetSet((Physical("glass"), Portable())))
+    txn.put(RecordEnvelope(relic, definition_to_payload(definition), name="Starfall",
+                           extra={"schema": ENTITY_SCHEMA}), None)
+    txn.commit(owner_handle())
+    return relic
+
+
 def test_one_particular_artifact_made_on_two_devices_meets_on_one_id(tmp_path):
     """An ``individual`` definition is one thing per campaign: the clash is real and must stay visible."""
     desktop, phone, handles = paired_pair(tmp_path)
     on_desktop = created(possession_library(desktop), make("make-desktop", name="Starfall", source=STARFALL))
     on_phone = created(possession_library(phone), make("make-phone", holder=TOMA, owner=TOMA, name="Starfall",
                                                        source=STARFALL))
-    assert on_desktop == on_phone and on_desktop.instance_id == "starfall-1"
-    path = f"campaigns/{on_desktop.campaign_id}/instances/item/starfall-1.json"
+    assert on_desktop == on_phone and on_desktop.instance_id == f"starfall-{artifact_tag(STARFALL)}-1"
+    path = f"campaigns/{on_desktop.campaign_id}/instances/item/{on_desktop.instance_id}.json"
     assert sync(desktop, phone, handles).conflict(path) is not None  # keep-both, never two Starfalls
+
+
+def test_two_different_artifacts_with_one_name_never_meet(tmp_path):
+    """Two catalogs each with their own ``starfall``: whatever either device made first, no false clash."""
+    desktop, phone, handles = paired_pair(tmp_path)
+    relic = add_relic_starfall(desktop)
+    assert not sync(desktop, phone, handles).conflicts
+    first = created(possession_library(desktop), make("make-relic", name="Starfall", source=relic))
+    on_desktop = created(possession_library(desktop), make("make-arms", name="Starfall", source=STARFALL))
+    on_phone = created(possession_library(phone), make("make-phone", holder=TOMA, owner=TOMA, name="Starfall",
+                                                       source=STARFALL))
+    assert first != on_desktop and on_desktop == on_phone  # the same blade drew one id on both devices
+    report = sync(desktop, phone, handles)
+    path = f"campaigns/{first.campaign_id}/instances/item/{first.instance_id}.json"
+    assert report.conflict(path) is None
+    assert possession_library(phone).read(first).possession.origin.source == relic
+
+
+def test_an_identity_damaged_after_the_plan_writes_nothing(store):
+    identify(store, "desktop")
+    change = possession_library(store).create(make("make-1", name="Longsword", source=LONGSWORD))
+    (store.root / ".sync" / "device.json").write_bytes(b"{not json")
+    before = instance_files(store)
+    with pytest.raises(StaleWrite):
+        change.commit()
+    assert instance_files(store) == before
 
 
 @pytest.mark.parametrize("shape", ["link", "folder"])

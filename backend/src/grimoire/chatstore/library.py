@@ -73,9 +73,10 @@ def device_tag(store: LibraryStore) -> str:
     the segment rules and could be long, and an instance ID should not carry a label the user chose
     for a machine. Only new IDs change: an existing instance keeps the ID it was given.
 
-    A damaged or unreadable identity file raises ``DeviceIdentityUnusable`` rather than falling back
-    to plain numbers: a library that *was* paired must never quietly go back to the numbering that
-    collides.
+    A damaged or unreadable identity file (a link or folder included) raises ``DeviceIdentityUnusable``
+    rather than falling back to plain numbers, so a broken identity never quietly brings back the
+    numbering that collides. A library whose ``.sync`` folder was deleted outright reads as never
+    identified, until ``identify`` is run again.
     """
     try:
         data = store.read_sync_state(DEVICE_FILE)

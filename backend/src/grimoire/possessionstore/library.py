@@ -343,6 +343,13 @@ class PossessionLibrary:
         A sourced item is an instance of that definition; an ``individual`` definition (one particular
         artifact) may be a unique item only once per campaign (``duplicate_individual``). ``parties`` is a
         retry's pin, as for ``apply``.
+
+        The id is ``<base>-<n>``, the first free number for the definition's entity id (or the kind). On a
+        library with a device identity (028) the base carries a tag: the device's ``device_tag``, so two
+        devices making the same template offline never mint one id; for an ``individual``, a digest of the
+        definition's unpinned source ref instead, so every device draws the same id for that one artifact
+        (and only for it) and two devices that each made it offline collide on one file, which 019 keeps
+        both of as a conflict. A damaged or unreadable identity refuses (``device_identity``).
         """
         if type(creation) is not Creation:
             raise TypeError("create takes a Creation")
@@ -379,11 +386,13 @@ class PossessionLibrary:
                 source_fields, individual = self._source(creation.source, kind, found)
             taken = campaign_taken_ids(self.store, campaign)
             base = (creation.source.entity_id if creation.source is not None else kind)[:100]
-            if not individual:  # one particular artifact: two devices making it must meet on one id
-                try:
-                    base += device_tag(self.store)
-                except DeviceIdentityUnusable as error:
-                    raise PossessionRefused("device_identity", str(error)) from error
+            try:
+                tag = device_tag(self.store)
+            except DeviceIdentityUnusable as error:
+                raise PossessionRefused("device_identity", str(error)) from error
+            if tag and individual and creation.source is not None:  # one artifact: one id on every device
+                tag = "-" + hashlib.sha256(str(creation.source.unpinned()).encode()).hexdigest()[:8]
+            base += tag
             item = next((InstanceRef(campaign, kind, f"{base}-{n}") for n in range(1, _MAX_ID_TRIES)
                          if f"{base}-{n}" not in taken), None)
             if item is None:
