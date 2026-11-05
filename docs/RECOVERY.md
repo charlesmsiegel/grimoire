@@ -68,14 +68,18 @@ so the receipts then verify. The event file is never rewritten.
 7. The commit re-checks: accepted events unchanged, each relation change's own `stale()`, every relation file
    readable, every receipted relation that verified pinned as read (`relation changed`), each written holder's
    instance file (023's `recheck`), every other receipted holder file pinned as read (`holder file changed`),
-   the agents' instance files (`agent missing or changed`) and no actor id paired with another kind.
+   the agents' instance files (`agent missing or changed`), no actor id paired with another kind, and that the
+   relation and holder files naming the event in a 021 token are still exactly those read: a revocation landing
+   in between is `StaleWrite`, not completed over.
 
 ### `adopt(proposal, *, controls, contributions=(), endorsements=())`: finish shape B
 
-The retry of an acceptance whose changes landed without its event file. It presents the same proposal and keys
-and is checked exactly like `accept` (campaign, chat, fail closed, permitted uses, actor pairs, authorization and
-endorsements, one effect per turn, the sequence floor, the attempts), then writes the event file under the
-orphan's id X, with receipts naming the landed changes, plus whichever changes are still missing.
+The retry of an acceptance whose changes landed without its event file. It presents the same proposal and keys.
+After the campaign, chat and fail-closed checks and the duplicate path below, it finds the orphan (any unreadable
+relation or holder file refuses first, since the orphan could be in it), then makes every check `accept` makes
+(permitted uses, actor pairs, authorization and endorsements, one effect per turn, the sequence floor, the
+attempts), then writes the event file under the orphan's id X, with receipts naming the landed changes, plus
+whichever changes are still missing.
 
 - An active event with this fingerprint already exists: exactly `accept`'s duplicate path (a no-op, or
   `receipt_mismatch`, for which `complete` is the way). This is the exactly-once retry after the adoption landed.
@@ -96,8 +100,14 @@ orphan's id X, with receipts naming the landed changes, plus whichever changes a
 - Holdings landed on every holder: the entries' seqs are the receipt. On some: the rest are completed at the seqs
   the landed entries' `peers` name, as `complete` does. On none: applied as `accept` applies it, with cause
   `effect:accepted/<X>`. Another unrecorded change on a touched holder still refuses (`orphan_effect`).
+- **A human repair is never doubled.** A touched holder that logged anything after this effect's entry, or, when
+  no entry landed but relations did, anything stamped at or after the earliest landed relation change (its
+  `recorded_at`, or its ending's `at` for an `end`), refuses (`not_completable`, `holdings`): that change may be
+  a hand refund of the stray spend (which a later abort would refund again) or a hand charge (which adopting
+  would charge again).
 - The event gets `ordinal = 1 + max`, `accepted_at` now and `committed_by` the outcome key, like any acceptance.
-  The commit re-checks as `accept`'s does, plus every landed relation and holder file pinned as read.
+  The commit re-checks as `accept`'s does, plus every landed relation and holder file pinned as read, and the
+  files naming X in a 021 token still exactly those read (`StaleWrite` when another history arrives).
 
 ### Aborting
 
@@ -166,6 +176,11 @@ its event names.
 - **A hand-deleted event file cannot always be told from a vanished one.** A revoked event whose revocation left no
   `effect:revoked/<X>` token anywhere (every operation and the holdings undo skipped) and whose file is then
   deleted by hand can be adopted back as active.
+- **The "touched since" test for a relation-only orphan reads timestamps.** Holder logs carry no seq tied to a
+  relation, so the test compares each log entry's `at` with the landed relation change's time. It is
+  conservative for changes stamped later (an unrelated later change of the ball count refuses the adoption, which
+  is then a human repair), but trusts the clocks: a hand charge stamped earlier than the relation, on a device
+  whose clock lags, is not seen and adopting charges again. The preview shows the holder files it writes.
 - **Restart does not recover by itself.** Nothing detects a partial publication and runs these operations, and
   shape B needs the original proposal and endorsements, which a crashed process no longer holds. **Obligation on
   035 (and milestone 2):** persist the proposal and its endorsements before committing an acceptance, so a

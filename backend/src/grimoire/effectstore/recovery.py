@@ -17,6 +17,7 @@ need only the outcome key: they publish what was already accepted. See docs/RECO
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from datetime import datetime
 
 from grimoire.core.authority import DIRECTOR, PlayerContribution
 from grimoire.core.identity import AcceptedRef, InstanceRef, KnowledgeRef, RelationRef
@@ -87,9 +88,8 @@ class EffectRecovery:
             if _relations_unreadable(snap.graph):
                 raise InvalidEffect("a relation file cannot be read, so the completion cannot be checked",
                                     "undecodable_relation")
-            states = _relation_tokens(lib, campaign, event.event_id)
-            held = _holder_tokens(lib, campaign, event.event_id)
-            if any("revoked" in found for found in (*states.values(), *held.values())):
+            tokens = _tokens(lib, campaign, event.event_id)
+            if any("revoked" in found for found in tokens.values()):
                 raise InvalidEffect(f"a revocation of {ref} was partly published; completing it would undo that",
                                     "not_completable", ("revocation",))
             changes = [self._complete_operation(event, number, snap) for number in failing]
@@ -105,7 +105,8 @@ class EffectRecovery:
                 lib, ref, (), tuple(changes), campaign, snap.state, rechecks_readability=True, agent_etags=agents,
                 actors=actors, holdings_changes=() if holdings_change is None else (holdings_change,),
                 holder_pins={holder: lib._holder_pin(holder) for holder in landed},
-                relation_pins={relation: snap.graph.etags[relation] for relation in sorted(verified, key=str)})
+                relation_pins={relation: snap.graph.etags[relation] for relation in sorted(verified, key=str)},
+                rests_on=_unchanged_tokens(lib, campaign, event.event_id, tokens))
 
     def _complete_operation(self, event: AcceptedEvent, number: int, snap) -> RelationChange:  # type: ignore[no-untyped-def]
         lib, item = self.library, event.operations[number]
@@ -184,7 +185,7 @@ class EffectRecovery:
             if len(named) > 1:
                 raise InvalidEffect("the landed changes name more than one event", "ambiguous_orphan", sorted(named))
             orphan = named.pop()
-            ref = self._orphan_ref(proposal, orphan, landed, entries)
+            ref, tokens = self._orphan_ref(proposal, orphan, landed, entries)
             authorization, records, pins = lib._admit(proposal, snap, controls, contributions, endorsements)
             try:
                 steps = plan(proposal, snap.graph.index, landed=frozenset(landed))
@@ -194,8 +195,8 @@ class EffectRecovery:
             receipted: dict[int, RelationRef] = {number: relation.ref for number, (relation, _) in landed.items()}
             receipted.update({step.op: change.relation for step, change in zip(steps, changes)})
             receipts = tuple(Receipt(number, receipted[number]) for number in range(len(proposal.operations)))
-            holdings_change, accepted, written = self._adopt_holdings(proposal, snap, orphan, entries, holders,
-                                                                      authorization.holdings_domains)
+            holdings_change, accepted, written = self._adopt_holdings(proposal, snap, orphan, landed, entries,
+                                                                      holders, authorization.holdings_domains)
             ordinal = 1 + max((e.ordinal for e in snap.events.values()), default=0)
             event = lib._event(ref, proposal, authorization, records, receipts, accepted, ordinal)
             for number in landed:  # the very check continuity makes, on the changes this event now claims
@@ -211,7 +212,8 @@ class EffectRecovery:
                 checks_relations=True, agent_etags=agents, actors=actors,
                 holdings_changes=() if holdings_change is None else (holdings_change,), holder_pins=pins,
                 relation_pins={relation.ref: snap.graph.etags[relation.ref]
-                               for relation, _ in sorted(landed.values(), key=lambda pair: str(pair[0].ref))})
+                               for relation, _ in sorted(landed.values(), key=lambda pair: str(pair[0].ref))},
+                rests_on=_unchanged_tokens(lib, campaign, orphan, tokens))
 
     def _landed_entries(self, proposal: EffectProposal, recorded: set[str]) -> tuple[dict, dict]:
         """Each touched holder logging this effect's derived op id under an X with no event file:
@@ -238,8 +240,10 @@ class EffectRecovery:
             found[holder] = (entry, parsed[1])
         return found, holders  # type: ignore[return-value]
 
-    def _orphan_ref(self, proposal: EffectProposal, orphan: str, landed: Mapping, entries: Mapping) -> AcceptedRef:
-        """X as an event id that is free and has no other history than these landed changes."""
+    def _orphan_ref(self, proposal: EffectProposal, orphan: str, landed: Mapping, entries: Mapping
+                    ) -> tuple[AcceptedRef, dict]:
+        """X as an event id that is free and has no other history than these landed changes, and every 021
+        token naming X as read (the commit re-checks them)."""
         lib, campaign = self.library, proposal.campaign_id
         try:
             ref = AcceptedRef(campaign, orphan)
@@ -247,18 +251,15 @@ class EffectRecovery:
             raise InvalidEffect("the landed changes name an id no event can have", "orphan_effect") from None
         if not lib._absent(ref) or not lib._absent(KnowledgeRef(campaign, "event", orphan)):
             raise InvalidEffect(f"{orphan} already names an event file", "orphan_effect", (orphan,))
-        expected_relations = {relation.ref for relation, _ in landed.values()}
-        for relation, states in _relation_tokens(lib, campaign, orphan).items():
-            if relation not in expected_relations or states != ["accepted"]:
-                raise InvalidEffect(f"{orphan} has another history in {relation}", "orphan_effect", (orphan,))
-        for holder, states in _holder_tokens(lib, campaign, orphan).items():
-            if holder not in entries or states != ["accepted"]:
-                raise InvalidEffect(f"{orphan} has another history in {holder}'s holdings", "orphan_effect",
-                                    (orphan,))
-        return ref
+        expected = {relation.ref for relation, _ in landed.values()} | set(entries)
+        tokens = _tokens(lib, campaign, orphan)
+        for where, states in tokens.items():
+            if where not in expected or states != ["accepted"]:
+                raise InvalidEffect(f"{orphan} has another history in {where}", "orphan_effect", (orphan,))
+        return ref, tokens
 
-    def _adopt_holdings(self, proposal: EffectProposal, snap, orphan: str, entries: Mapping,  # type: ignore[no-untyped-def]
-                        holders: Mapping, domains: tuple[str, ...]
+    def _adopt_holdings(self, proposal: EffectProposal, snap, orphan: str, landed: Mapping,  # type: ignore[no-untyped-def]
+                        entries: Mapping, holders: Mapping, domains: tuple[str, ...]
                         ) -> tuple[HoldingsChange | None, AcceptedHoldings | None, frozenset]:
         """The holdings change still to write under X, its receipt, and the holders it writes."""
         part = proposal.holdings
@@ -272,6 +273,18 @@ class EffectRecovery:
                                 sorted({p.detail.removeprefix("holdings ") for p in others}))
         op_id = holdings_op_id(proposal.campaign_id, proposal.fingerprint)
         op = part.operation(op_id, accepted_token(orphan))
+        moved = sorted(str(holder) for holder, (entry, _) in entries.items() if decoded[holder].seq != entry.seq)
+        if moved:  # changed after logging it: a later operation may be a hand repair of this very orphan
+            raise InvalidEffect(f"{', '.join(moved)} changed after logging this effect's holdings change",
+                                "not_completable", ("holdings",))
+        if not entries and landed:  # nothing logged, but the relations landed: anything logged since may repair it
+            since = min(_instant(_written_at(relation, proposal.operations[number].kind))
+                        for number, (relation, _) in landed.items())
+            later = sorted(str(holder) for holder, held in decoded.items()
+                           if any(_instant(logged.at) >= since for logged in held.log))
+            if later:
+                raise InvalidEffect(f"{', '.join(later)} changed after this effect's relation changes were written",
+                                    "not_completable", ("holdings",))
         if entries:  # landed on some or all holders: the rest at the seqs the landed entries' peers name
             first, (entry, _) = sorted(entries.items(), key=lambda pair: str(pair[0]))[0]
             seqs = {first: entry.seq, **entry.peers}
@@ -351,24 +364,37 @@ def _acting(lib: TurnEffectsLibrary, event: AcceptedEvent) -> tuple[dict, frozen
     return {agent: lib._etag(agent) for agent in sorted(acting, key=str)}, frozenset(actors)
 
 
-def _relation_tokens(lib: TurnEffectsLibrary, campaign_id: str, event_id: str) -> dict[RelationRef, list[str]]:
-    """Every relation file whose raw payload names ``event_id`` in an exact 021 token, with each token's state."""
-    found = {}
+def _tokens(lib: TurnEffectsLibrary, campaign_id: str, event_id: str) -> dict:
+    """Every relation file (by ``RelationRef``) and holder file (by holder) whose raw payload names ``event_id`` in
+    an exact 021 token, with each token's state."""
+    found: dict = {}
     for ref, stored in lib.store.campaign_relations(campaign_id).records.items():
         states = _states(stored.record.payload, event_id)
         if states:
             found[ref] = states
-    return found
-
-
-def _holder_tokens(lib: TurnEffectsLibrary, campaign_id: str, event_id: str) -> dict[InstanceRef, list[str]]:
-    """Every holder file whose raw payload names ``event_id`` in an exact 021 token, with each token's state."""
-    found = {}
     for ref, stored in lib.store.campaign_holdings(campaign_id).records.items():
         states = _states(stored.record.payload, event_id)
         if states:
             found[ref.holder] = states
     return found
+
+
+def _unchanged_tokens(lib: TurnEffectsLibrary, campaign_id: str, event_id: str, seen: dict):  # type: ignore[no-untyped-def]
+    """A commit-time check: the files naming ``event_id`` are still exactly those read (another history may arrive)."""
+    def check() -> list[tuple[str, str]]:
+        if _tokens(lib, campaign_id, event_id) != seen:
+            return [(f"campaigns/{campaign_id}", f"the records naming {event_id} changed")]
+        return []
+    return check
+
+
+def _written_at(relation: Relation, kind: str) -> str:
+    """When the orphan's landed change was written: the relation's record time, or its ending's for an ``end``."""
+    return relation.ending.at if kind == "end" and relation.ending is not None else relation.recorded_at
+
+
+def _instant(text: str) -> datetime:
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
 def _states(value: object, event_id: str) -> list[str]:

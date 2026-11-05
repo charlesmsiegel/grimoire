@@ -13,11 +13,13 @@ from grimoire.core.identity import InstanceRef, RelationRef
 from grimoire.effects import ActedLine, EffectHoldings, EffectProposal, Op
 from grimoire.effectstore import EffectChange, EffectRecovery
 from grimoire.holdings import Line, Operation
+from grimoire.holdingstore import HoldingsLibrary
 from grimoire.store import LibraryStore
 
 from effects_fixtures import C, CHAT, CONTROLS, TAM, Handles, effects_library, moment, seed
 from graph_fixtures import seed_campaign
 from holdings_fixtures import holdings_library
+from store_helpers import owner_handle
 
 WISP = InstanceRef(C, "creature", "wisp")
 BALL = "ordinary-ball"
@@ -33,7 +35,8 @@ def seed_capture(store: LibraryStore, handles: Handles) -> None:
     """The 021 cast and chat, the wisp, and Tam's 3 balls."""
     seed(store, handles)
     seed_campaign(store, (WISP,))
-    holdings_library(store).apply(Operation("balls", (Line.add(TAM, BALL, 3),))).commit()
+    seeded = HoldingsLibrary(store, owner_handle(), clock=lambda: "2026-10-30T10:00:00Z", owner="human:owner")
+    seeded.apply(Operation("balls", (Line.add(TAM, BALL, 3),))).commit()  # before any acceptance writes
 
 
 def planned(store: LibraryStore, handles: Handles, proposal: EffectProposal | None = None) -> EffectChange:

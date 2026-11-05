@@ -142,6 +142,8 @@ class EffectChange:
     holder_pins: Mapping = field(default_factory=dict)
     #: each relation file the change relies on but does not write, as read: 030's landed changes
     relation_pins: Mapping = field(default_factory=dict)
+    #: a further check of the decision (030: the 021 tokens naming the event, as read): why it no longer holds
+    rests_on: Callable[[], list[tuple[str, str]]] | None = None
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -187,6 +189,8 @@ class EffectChange:
             paired = paired_instances(self.library.store.campaign_instances(self.campaign_id))
             found += [("/".join(address_parts(actor)), "instance_id_conflict")
                       for actor in sorted(self.actors & paired, key=str)]
+        if self.rests_on is not None:
+            found += self.rests_on()
         event_id = getattr(self.ref, "event_id", None)
         if self.checks_relations and not self.library._absent(KnowledgeRef(self.campaign_id, "event", event_id)):
             found.append((f"campaigns/{self.campaign_id}/events/{event_id}.json",

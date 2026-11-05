@@ -388,3 +388,112 @@ def test_landed_changes_naming_two_events_are_ambiguous(world):
     publish(store, first, relations=True)
     publish(store, other, holders=True)  # the holder file of a second, separately allocated acceptance
     _refused(lambda: recovery(store, handles).adopt(throw(), controls=CONTROLS), "ambiguous_orphan")
+
+
+# -- round-1 review: never double a human repair, never act on a history that arrives after the plan -------
+
+def test_adopt_refuses_after_a_hand_refund_of_a_synced_spend(world):
+    """Sync delivered only the holder file; a human refunded the ball. Adopting would let a later abort refund
+    it a second time, so the holder having moved on since the effect's entry stops the adoption."""
+    store, handles = world
+    publish(store, planned(store, handles), holders=True)
+    holdings_library(store).apply(Operation("refund-throw", (Line.add(TAM, BALL, 1),), "refund", "hand repair")
+                                  ).commit()
+    _refused(lambda: recovery(store, handles).adopt(throw(), controls=CONTROLS), "not_completable")
+    assert balls(store) == 3 and allies(store) == []
+
+
+def test_adopt_refuses_after_a_hand_charge_of_a_landed_relation(world):
+    """The companion landed and a human charged the ball by hand: adopting would charge it again."""
+    store, handles = world
+    publish(store, planned(store, handles), relations=True)
+    holdings_library(store).apply(Operation("charge-throw", (Line.consume(TAM, BALL, 1),), "throw", "hand repair")
+                                  ).commit()
+    _refused(lambda: recovery(store, handles).adopt(throw(), controls=CONTROLS), "not_completable")
+    assert balls(store) == 2
+
+
+def test_adopt_proceeds_when_the_holder_changed_only_before_the_relation_landed(world):
+    store, handles = world
+    publish(store, planned(store, handles), relations=True)
+    recovery(store, handles).adopt(throw(), controls=CONTROLS).commit()  # the 3 balls were seeded earlier
+    _completed(store, handles)
+
+
+def test_a_token_arriving_between_adopt_and_its_commit_is_stale(world):
+    store, handles = world
+    publish(store, planned(store, handles), relations=True)
+    change = recovery(store, handles).adopt(throw(), controls=CONTROLS)
+    relation_library(store).add(C, "knows", TAM, INES, since=moment(4), provenance=revoked_token("e-1")).commit()
+    with pytest.raises(StaleWrite):
+        change.commit()
+    _refused(lambda: recovery(store, handles).adopt(throw(), controls=CONTROLS), "orphan_effect")
+
+
+def test_a_revocation_arriving_between_complete_and_its_commit_is_stale(world):
+    store, handles = world
+    publish(store, planned(store, handles), event=True, holders=True)
+    change = recovery(store, handles).complete(EVENT, expected=_etag(store, handles))
+    relation_library(store).add(C, "knows", TAM, INES, since=moment(4), provenance=revoked_token("e-1")).commit()
+    with pytest.raises(StaleWrite):
+        change.commit()
+    assert allies(store) == []
+
+
+def test_adopt_refuses_an_orphan_whose_own_relation_carries_its_revocation(world):
+    """The event file is gone but its revocation already ended the companion: X has a revoked history."""
+    store, handles = world
+    planned(store, handles).commit()
+    revocation = effects_library(store, handles).revoke(EVENT, reason="abort", expected=_etag(store, handles))
+    publish(store, revocation, relations=True)
+    (store.root / "campaigns/c/accepted/e-1.json").unlink()
+    _refused(lambda: recovery(store, handles).adopt(throw(), controls=CONTROLS), "orphan_effect")
+
+
+def test_complete_refuses_after_a_holder_only_partial_revocation(world):
+    store, handles = world
+    publish(store, planned(store, handles), event=True, holders=True)  # the companion never landed
+    revocation = effects_library(store, handles).revoke(EVENT, reason="abort", expected=_etag(store, handles),
+                                                       partial=True)
+    publish(store, revocation, holders=True)  # the refund landed, the event is still active
+    assert balls(store) == 3
+    error = _refused(lambda: recovery(store, handles).complete(EVENT, expected=_etag(store, handles)),
+                     "not_completable")
+    assert error.records == ("revocation",)
+    assert allies(store) == []
+
+
+def _give_change(store, handles):  # type: ignore[no-untyped-def]
+    proposal = give(sequence=7)
+    return effects_library(store, handles).accept(proposal, controls=CONTROLS, contributions=[contribution()],
+                                                  endorsements=[handles.endorse(proposal)])
+
+
+def test_complete_finishes_an_end_that_never_landed(world):
+    store, handles = world
+    publish(store, _give_change(store, handles), event=True)
+    assert problems(store, handles) != []
+    recovery(store, handles).complete(EVENT, expected=_etag(store, handles)).commit()
+    assert problems(store, handles) == []
+
+
+def test_complete_finishes_the_end_when_only_the_begin_landed(world):
+    store, handles = world
+    change = _give_change(store, handles)
+    txn = store.transaction()
+    for put in [put for relation in change.relation_changes for put in relation.puts if put[1] is None]:
+        txn.put(*put)  # the new holder relation, not the rewrite that ends the old one
+    for put in change.puts:
+        txn.put(*put)
+    txn.commit(change.library.handle)
+    recovery(store, handles).complete(EVENT, expected=_etag(store, handles)).commit()
+    assert problems(store, handles) == []
+
+
+def test_complete_refuses_a_begin_whose_endpoint_is_gone(world):
+    store, handles = world
+    publish(store, planned(store, handles), event=True, holders=True)
+    [wisp] = [path for path in store.root.rglob("wisp.json") if "holdings" not in path.parts]
+    wisp.unlink()
+    _refused(lambda: recovery(store, handles).complete(EVENT, expected=_etag(store, handles)), "missing_endpoint")
+    assert allies(store) == []
