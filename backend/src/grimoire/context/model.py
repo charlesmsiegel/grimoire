@@ -73,6 +73,8 @@ class _UnsafeTable(dict[int, str | None]):
     when nothing is left. Each code point is classified once, then looked up in C."""
 
     def __missing__(self, point: int) -> str | None:
+        if len(self) >= 1 << 16:  # start over rather than grow for good on hostile text
+            self.clear()
         char = chr(point)
         value = char if char not in _ALLOWED and unicodedata.category(char) in _UNSAFE else None
         self[point] = value

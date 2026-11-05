@@ -1,7 +1,7 @@
 """Deterministic lore triggering: whole-word key matching over audience-visible text (031).
 
-Text is NFKC-normalized and casefolded, invisible format characters (Unicode ``Cf``: soft hyphen,
-zero-width space and joiners, bidi marks) are dropped, and the rest is split into word runs: maximal
+Invisible format characters (Unicode ``Cf``: soft hyphen, zero-width space and joiners, bidi marks)
+are dropped first, then text is NFKC-normalized and casefolded and split into word runs: maximal
 runs of letters, marks, digits and connector punctuation (``L*``, ``M*``, ``N*`` and ``Pc``). A key
 matches a whole word sequence wherever it occurs: ``ash`` does not match ``ashen``, ``Black-Eyed``
 matches ``black eyed``, ``C-3PO`` matches ``c 3po``, and ``Mara's`` contains the word ``mara``.
@@ -13,8 +13,9 @@ always give the same answer.
 
 **Cost:** ``SceneWords.prime`` takes a batch of keys, hashes them into one small table per key
 length, and makes one rolling-hash pass over the texts per length: time is the texts' words times
-the distinct key lengths asked, plus the keys; memory is the texts' words plus the keys, never a
-table of every window.
+the distinct key lengths asked, plus the keys, and a length's pass stops once all its keys are
+found; memory is the texts' words plus the keys, never a table of every window, and the character
+tables behind ``words`` start over past ``_TABLE_LIMIT`` code points.
 
 **Limits:** scripts written without spaces (Chinese, Japanese, Thai) form one word run per stretch
 of text, so a key there matches only a whole run; likewise a Korean noun with a particle attached
@@ -34,11 +35,17 @@ _MODULUS = (1 << 61) - 1
 _BASE = 1_000_003
 
 
+_TABLE_LIMIT = 1 << 16  # code points a lookup table remembers before it starts over
+
+
 class _WordTable(dict[int, str | None]):
     """A ``str.translate`` table filled on demand: a word character stays, a format character goes,
-    anything else becomes a space. Each code point is classified once, then looked up in C."""
+    anything else becomes a space. Each code point is classified once, then looked up in C; the
+    table starts over past ``_TABLE_LIMIT`` entries, so hostile text cannot grow it for good."""
 
     def __missing__(self, point: int) -> str | None:
+        if len(self) >= _TABLE_LIMIT:
+            self.clear()
         char = chr(point)
         category = unicodedata.category(char)
         value = None if category == "Cf" else char if category[0] in "LMN" or category == "Pc" else " "
@@ -46,14 +53,27 @@ class _WordTable(dict[int, str | None]):
         return value
 
 
+class _FormatTable(dict[int, str | None]):
+    """Like ``_WordTable``, but only deletes format characters and keeps everything else."""
+
+    def __missing__(self, point: int) -> str | None:
+        if len(self) >= _TABLE_LIMIT:
+            self.clear()
+        value = None if unicodedata.category(chr(point)) == "Cf" else chr(point)
+        self[point] = value
+        return value
+
+
 _TABLE = _WordTable()
+_FORMAT = _FormatTable()
 
 
 def words(text: str) -> tuple[str, ...]:
     """The normalized word sequence of ``text``."""
     if text.isascii():  # the common case: NFKC and casefold are plain lowercasing here
         return tuple(_ASCII_WORD.findall(text.lower()))
-    folded = unicodedata.normalize("NFKC", text).casefold().replace("i" + _DOT_ABOVE, "i")
+    # format characters go first, so an accent or a jamo after one still composes with its base
+    folded = unicodedata.normalize("NFKC", text.translate(_FORMAT)).casefold().replace("i" + _DOT_ABOVE, "i")
     return tuple(unicodedata.normalize("NFKC", folded).translate(_TABLE).split())
 
 
@@ -89,10 +109,11 @@ class SceneWords:
     def prime(self, sequences: Iterable[tuple[str, ...]]) -> None:
         """Answer every normalized key in ``sequences`` that is not yet known, in one pass per length."""
         pending: dict[int, dict[int, dict[tuple[int, ...], tuple[str, ...]]]] = {}
+        answers: dict[tuple[str, ...], bool] = {}  # written to _seen only once the batch is answered
         for wanted in sequences:
-            if wanted in self._seen:
+            if wanted in self._seen or wanted in answers:
                 continue
-            self._seen[wanted] = False
+            answers[wanted] = False
             if not wanted or any(word not in self._ids for word in wanted):
                 continue
             ids = tuple(self._ids[word] for word in wanted)
@@ -113,9 +134,12 @@ class SceneWords:
                         continue
                     wanted = group.pop(tuple(sequence[start:start + size]), None)
                     if wanted is not None:
-                        self._seen[wanted] = True
+                        answers[wanted] = True
                         if not group:
                             del by_hash[value]
+                            if not by_hash:
+                                break  # every key of this length is found
+        self._seen.update(answers)
 
     def count(self, sequences: Iterable[tuple[str, ...]]) -> int:
         """How many distinct normalized keys occur (primed first if needed)."""
