@@ -12,10 +12,13 @@ import pytest
 
 from grimoire.core.identity import InstanceRef
 from grimoire.peersync import PeerRefused, read_pairing, transfer
+from grimoire.peersync.pairing import peer_principal
+from grimoire.peersync.replay import StepBuffer
 from grimoire.peersync.wire import client_handshake
 from grimoire.store import RecordEnvelope, etag
 from grimoire.store.jsonfmt import render
-from grimoire.sync import DismissRefused, bookkeeping, dismiss, resolve
+from grimoire.store.layout import conflict_parts
+from grimoire.sync import DismissRefused, bookkeeping, dismiss, identify, resolve
 from grimoire.sync import session as sync_session
 from grimoire.sync.documents import KeptEntry, parse_keeps, render_keeps
 
@@ -32,6 +35,11 @@ def _put(device: Device, ref: InstanceRef, payload: dict) -> None:  # type: igno
     txn = device.store.transaction()
     txn.put(RecordEnvelope(ref, payload), etag(current.read_bytes()) if current.exists() else None)
     txn.commit(device.handle)
+
+
+def _base(device: Device) -> str:
+    """The archive base of wren's conflict, as a sync reads it (and a dismissal records it)."""
+    return "{}:{}".format(*bookkeeping.read_document(device.store, "archive", DESKTOP, PAIR).entries[WREN_PATH])
 
 
 def _kept(device: Device) -> list[bytes]:
@@ -135,8 +143,7 @@ def test_a_peer_may_never_label_a_version_resolve_held_here_as_delivered(tmp_pat
     record = phone.store.root / ".sync" / name
     before = record.read_bytes()
     assert parse_keeps(before, PAIR).entries[WREN_PATH].held == {etag(theirs)}
-    base = "{}:{}".format(*bookkeeping.read_document(phone.store, "archive", DESKTOP, PAIR).entries[WREN_PATH])
-    claim = render_keeps(PAIR, {WREN_PATH: KeptEntry(base, frozenset({etag(theirs)}))})
+    claim = render_keeps(PAIR, {WREN_PATH: KeptEntry(None, frozenset({etag(theirs)}))})
     steps = [("pending", [({"op": "state", "name": name, "expected": etag(before)}, claim)])]
     if forged == "delivered again":
         steps.insert(0, ("data", [({"op": "keep", "path": WREN_PATH, "slot": 1}, theirs)]))
@@ -144,6 +151,39 @@ def test_a_peer_may_never_label_a_version_resolve_held_here_as_delivered(tmp_pat
         replies = _steps(desktop, server, *steps)
     assert isinstance(replies[-1], PeerRefused) and replies[-1].code == "invalid"
     assert record.read_bytes() == before
+    with pytest.raises(DismissRefused):
+        dismiss(phone.store, DESKTOP, WREN_PATH, etag(theirs), phone.handle)
+    assert theirs in _kept(phone)
+
+
+@pytest.mark.parametrize("reidentified", [False, True])
+def test_a_keep_that_writes_nothing_never_makes_a_hold_delivered(tmp_path, reidentified):
+    """A keep op of the hold's own bytes into the hold's own slot writes nothing (beside one real keep,
+    so the step commits), so the step may not record those bytes as delivered. ``identify`` carries
+    the hold into the new ID's record, so a re-identified device refuses it the same way."""
+    desktop, phone = _conflict(tmp_path)
+    mine, theirs = (desktop.store.root / WREN_PATH).read_bytes(), (phone.store.root / WREN_PATH).read_bytes()
+    resolve(desktop.store, phone.store, WREN_PATH, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)},
+            {DESKTOP: desktop.handle, PHONE: phone.handle})
+    pair = PAIR
+    if reidentified:
+        identify(phone.store, "phone-two", replace=True)
+        pair = tuple(sorted((DESKTOP, "phone-two")))  # type: ignore[assignment]
+    record = phone.store.root / f".sync/peers/{DESKTOP}/keeps.json"
+    before = record.read_bytes()
+    assert parse_keeps(before, pair).entries[WREN_PATH].held == {etag(theirs)}
+    hold = "/".join(conflict_parts(tuple(WREN_PATH.split("/")), etag(theirs), 0))
+    assert (phone.store.root / hold).read_bytes() == theirs
+    buffer = StepBuffer(DESKTOP)
+    for header, body in (({"op": "keep", "path": WREN_PATH, "slot": 0}, theirs),
+                         ({"op": "keep", "path": "campaigns/c3/instances/character/other.json", "slot": 0},
+                          render({"anything": 1})),
+                         ({"op": "state", "name": f"peers/{DESKTOP}/keeps.json", "expected": etag(before)},
+                          render_keeps(pair, {WREN_PATH: KeptEntry(None, frozenset({etag(theirs)}))}))):
+        buffer.add({"t": "op", **header}, body)
+    with pytest.raises(PeerRefused) as refused:
+        buffer.commit(phone.store, phone.authority.handle_for(peer_principal(DESKTOP), trusted=True))
+    assert refused.value.code == "invalid" and record.read_bytes() == before
     with pytest.raises(DismissRefused):
         dismiss(phone.store, DESKTOP, WREN_PATH, etag(theirs), phone.handle)
     assert theirs in _kept(phone)
@@ -186,7 +226,7 @@ def test_a_peer_may_not_dismiss_for_the_device_it_writes_to_nor_claim_a_keep(tmp
     before = (phone.store.root / ".sync" / name).read_bytes()
     entry = parse_keeps(before, PAIR).entries[WREN_PATH]
     claimed = {
-        "a dismissal": KeptEntry(entry.base, entry.delivered, frozenset({etag(mine)})),
+        "a dismissal": KeptEntry(_base(phone), entry.delivered, frozenset({etag(mine)})),
         "a kept version it lacks": KeptEntry(entry.base, entry.delivered | {etag(b"never kept here")}),
     }[claim]
     with serving(phone) as server:

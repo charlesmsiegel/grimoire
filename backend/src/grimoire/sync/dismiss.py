@@ -5,17 +5,18 @@ again whenever its slot is empty, so deleting a kept file by hand never sticks. 
 the decision instead, in the pair's kept-version record (``keeps``). Like every 019 decision it is
 made from bytes, never from timestamps:
 
-- only a version a **completed sync wrote here from the peer** for a conflict still open can be
-  dismissed: the record lists those etags. This device's own version is refused, and so is any
-  version ``resolve`` held here (perhaps its only copy anywhere), which every pair's record lists
-  apart as held: a slot a sync merely found standing is never recorded as delivered;
+- only a version a **sync wrote here from the peer** can be dismissed: the record lists those etags,
+  recorded in the commit that wrote the keep, and only for the first copy of those bytes at the
+  path. This device's own version is refused, and so is any version ``resolve`` held here (perhaps
+  its only copy anywhere), which every pair's record lists apart as held: a slot a sync merely
+  found standing, or a second copy beside one, is never recorded as delivered;
 - a sync never keeps a dismissed version for that device again while the conflict stands on the
-  same archive base, and reports it in ``Conflict.dismissed``; a **different** version from the
-  peer (other bytes) is kept as usual;
+  archive base this device's archive held when it was dismissed, and reports it in
+  ``Conflict.dismissed``; a **different** version from the peer (other bytes) is kept as usual;
 - it never touches the other device: the peer's file stays its canonical record, the conflict is
   still reported until a human ends it, and only this device's keep is withheld;
 - a dismissal ends with its conflict: once a completed sync finds the path no longer in conflict,
-  or its base moved, or ``resolve`` ends it, the entry is dropped, so the same bytes in a later
+  or its base moved, or ``resolve`` ends it, the dismissal is dropped, so the same bytes in a later
   conflict are kept again.
 
 The record is written in one 010 transaction, authorized like a keep: ``APPLY`` on the kept
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import cast
 
 from grimoire.store import LibraryStore, NameCollision, StaleWrite, StoreError, WriteConflict, WriteDenied, etag
 from grimoire.store.jsonfmt import MAX_FILE_BYTES, is_etag
@@ -38,7 +40,8 @@ from grimoire.store.layout import kept_address
 
 from .documents import KeptEntry, check_device_id, keeps_name, render_keeps, syncable
 from .errors import DismissRefused, SyncInterrupted
-from .keeps import held_anywhere, kept_slots, read_keeps
+from .bookkeeping import read_document
+from .keeps import archived_token, held_anywhere, kept_slots, read_keeps
 from .identity import device_of
 
 
@@ -61,8 +64,8 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
 
     Refused (``DismissRefused``, nothing written): a ``peer`` that is not another device, a path
     that is not a synchronized record that can have kept versions (a blob never has one), an etag
-    that is not one, this device's own current version of ``path``, any version a completed sync did
-    not write here from ``peer`` for a conflict still open, any version ``resolve`` held here (by
+    that is not one, this device's own current version of ``path``, any version no sync delivered
+    here from ``peer``, a pair whose archive here is not valid yet, any version ``resolve`` held here (by
     any pair's record, or possibly: one this device cannot read as valid), a record that would
     exceed 010's file cap, or a write the handle may not make. A record that is unreadable stops it
     (``SyncInterrupted``).
@@ -90,15 +93,21 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
     view = read_keeps(store, peer, devices)
     entry = view.entries.get(path) if view.state == "valid" else None
     if entry is None or kept not in entry.delivered:
-        raise DismissRefused(f"{kept} is not a version of {path} that a completed sync kept here from {peer} "
-                             "for a conflict still open")
+        raise DismissRefused(f"{kept} is not a version of {path} that a sync kept here from {peer}")
     if held_anywhere(store, device, path, kept):  # another pair's resolve held the same bytes here
         raise DismissRefused(f"{kept} is (or may be) a version of {path} that resolve held on this device, "
                              "perhaps its only copy; it is never dismissed")
+    archive = read_document(store, "archive", peer, devices)
+    if archive.state != "valid":  # the conflict's base is unknown here: nothing could ever honour it
+        raise DismissRefused(f"the archive for {peer} on this device is {archive.state}; sync the devices first")
+    # the base the conflict stands on, as a sync reads it from both archives (when they agree)
+    entry_here = cast("tuple[str, str] | None", archive.entries.get(path))
+    base = archived_token(entry_here, entry_here)
     slots = kept_slots(store, path, kept)
-    if kept in entry.dismissed:
+    if kept in entry.dismissed and entry.base == base:
         return Dismissal(peer, path, kept, slots, False)
-    entries = {**view.entries, path: KeptEntry(entry.base, entry.delivered, entry.dismissed | {kept}, entry.held)}
+    dismissed = (entry.dismissed if entry.base == base else frozenset()) | {kept}  # an older base's are over
+    entries = {**view.entries, path: KeptEntry(base, entry.delivered, dismissed, entry.held)}
     try:
         data = render_keeps(devices, entries)
     except StoreError as error:  # larger than any reader accepts

@@ -22,7 +22,7 @@ from grimoire.sync import Step, device_of
 from grimoire.sync.bookkeeping import is_shard, listed_shards, root_name
 from grimoire.sync.bookkeeping import parse as parse_document
 from grimoire.sync.documents import keeps_name, pair_state
-from grimoire.sync.keeps import kept_slots, peer_may_write
+from grimoire.sync.keeps import first_copies, peer_may_write, slot_stands
 
 from .errors import MirrorMismatch, PeerRefused
 from .wire import Channel
@@ -81,11 +81,6 @@ class StepBuffer:
     Blob bodies are spooled to a private temporary folder as they arrive and read back one at a
     time when the commit stages them, so a first sync of many pictures never holds them all in
     memory; record bodies (each at most 010's 8 MiB file cap, 1 GiB in all) stay in memory until the commit.
-
-    ``delivered`` outlives the step: the ``(path, etag)`` of every kept version the peer's keep ops
-    wrote in this sync (since its snapshot), as committed here. Only those may the sync's last step
-    record as delivered (028), so a peer can never label a version this device already held,
-    ``resolve``'s holds above all, as one it delivered.
     """
 
     def __init__(self, peer: str) -> None:
@@ -94,12 +89,6 @@ class StepBuffer:
         self.size = self.memory = 0
         self.poisoned: PeerRefused | None = None
         self._spool: tempfile.TemporaryDirectory[str] | None = None
-        self.delivered: set[tuple[str, str]] = set()
-
-    def new_sync(self) -> None:
-        """A snapshot starts a new sync: drop the step under way and what earlier syncs delivered."""
-        self.reset()
-        self.delivered = set()
 
     def reset(self) -> None:
         """Drop the step under way, its spooled blobs included."""
@@ -154,9 +143,13 @@ class StepBuffer:
         roots = {header.get("name"): body for header, body in ops
                  if header.get("op") == "state" and header.get("name") in (
                      root_name("archive", self.peer), root_name("pending", self.peer))}
-        keeps: set[tuple[str, str]] = set()
         try:
             self._check_documents(store, roots, ops)
+            # 028: the keeps of this step that write the first copy of their bytes at their path, read
+            # before anything is staged: only those may this step's record add as delivered. A keep of
+            # bytes some slot already holds writes nothing new, or a second copy of what may be a hold.
+            first = first_copies(store, [(header["path"], body) for header, body in ops if header.get("op") == "keep"
+                                         and type(header.get("path")) is str and isinstance(body, bytes)])
             for header, body in ops:
                 op, path = header.get("op"), header.get("path")
                 if isinstance(body, Path):  # a spooled blob: read back only when staged
@@ -173,17 +166,15 @@ class StepBuffer:
                     target = "/".join(conflict_parts(tuple(path.split("/")), etag(body), header["slot"]))
                     txn.keep_version(path, body, slot=header["slot"], regenerable=True)  # the peer still holds them
                     targets.append((target, target, _reader(store, target)))
-                    keeps.add((path, etag(body)))
                     records = True
                 elif op == "state" and pair_state(header.get("name"), self.peer) and _etag_or_none(header.get("expected")):
                     name = header["name"]
-                    expected = self._state_expected(store, name, body, header.get("expected"), roots)
+                    expected = self._state_expected(store, name, body, header.get("expected"), roots, first)
                     txn.put_sync_state(name, body, expected)
                     targets.append((f".sync/{name}", name, lambda name=name: store.read_sync_state(name)))
                 else:  # only this pair's own .sync files, and records the peer's grants then decide
                     raise PeerRefused("invalid", f"a write this device does not accept: {op!r}")
             txn.commit(handle if records else None, {})  # the peer can never supply an approval
-            self.delivered |= keeps
         except PeerRefused:
             raise
         except (StaleWrite, WriteConflict) as error:
@@ -202,14 +193,14 @@ class StepBuffer:
 
 
     def _state_expected(self, store: LibraryStore, name: str, body: bytes, expected: str | None,
-                        roots: dict) -> str | None:  # type: ignore[type-arg]
+                        roots: dict, first: set[tuple[str, str]]) -> str | None:  # type: ignore[type-arg]
         """The etag a state write of the pair must replace, after checking the write is one a sync makes."""
         if name == keeps_name(self.peer) and not peer_may_write(
                 store.read_sync_state(name), body, tuple(sorted((device_of(store), self.peer))),  # type: ignore[arg-type]
-                lambda path, tag: (path, tag) in self.delivered, lambda path, tag: bool(kept_slots(store, path, tag))):
-            # a sync records as delivered only what its own keeps wrote here, keeps a held version recorded
-            # while its slot stands, and never dismisses one: dismissing is this device's own decision,
-            # authorized here (``grimoire.sync.dismiss``), never the peer's
+                lambda path, tag: (path, tag) in first, lambda path, tag: slot_stands(store, path, tag)):
+            # a sync records as delivered only the first copies its own keeps write in the same commit, keeps
+            # a held version recorded while its slot stands, and never dismisses one: dismissing is this
+            # device's own decision, authorized here (``grimoire.sync.dismiss``), never the peer's
             raise PeerRefused("invalid", "a peer may not dismiss, drop a hold, or record a version it did not deliver")
         for kind in ("archive", "pending"):
             if not is_shard(name, kind, self.peer):

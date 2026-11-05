@@ -153,10 +153,14 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         txn.keep_version(path, mine)
         # 028: the hold is recorded in the same commit, so neither a peer's sync nor ``dismiss`` can ever
         # take this device's own version (perhaps its only copy) for the peer's delivered one
-        held = kept_record.with_held(kept_record.read_keeps(stores[receiver], other[receiver], pair),
-                                     other[receiver], pair, path, etag(mine))
-        if held is not None:
-            bookkeeping.stage(txn, [held])
+        held = [kept_record.with_held(kept_record.read_keeps(stores[receiver], other[receiver], pair),
+                                      other[receiver], pair, path, etag(mine))]
+        for peer in kept_record.other_peers(stores[receiver], receiver):  # the hold may reuse another pair's slot
+            if peer != other[receiver]:
+                devices: tuple[str, str] = tuple(sorted((receiver, peer)))  # type: ignore[assignment]
+                held.append(kept_record.not_delivered(kept_record.read_keeps(stores[receiver], peer, devices),
+                                                      peer, devices, path, etag(mine)))
+        bookkeeping.stage(txn, [state for state in held if state is not None])
     # Like a sync's copy, the resolve's copy is marked in the same commit: if the archives are not
     # written after it (a crash, a held file), the next sync still knows the peer held these bytes,
     # and a revert on either device is a conflict rather than an "unchanged" side.

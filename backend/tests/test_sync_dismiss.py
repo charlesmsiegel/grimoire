@@ -15,7 +15,9 @@ from pathlib import Path
 import pytest
 
 from grimoire.store import LibraryStore, ProcessLocker, etag
-from grimoire.sync import DismissRefused, dismiss, identify, resolve, sync, sync_until_quiet
+from grimoire.sync import (
+    DismissRefused, SyncInterrupted, apply_sync, dismiss, identify, plan_sync, resolve, sync, sync_until_quiet,
+)
 from grimoire.sync import resolution as sync_resolution
 from grimoire.sync import session as sync_session
 from grimoire.sync.documents import KeptEntry, parse_keeps, render_keeps
@@ -23,7 +25,7 @@ from grimoire.testing import CrashScenario, Invariant, explore_crashes, idempote
 from grimoire.testing.fileops import snapshot
 
 from store_helpers import drop_empty_dirs, owner_handle
-from sync_helpers import DESKTOP, PATHS, PHONE, WREN_A, edit_instance, handle, handles, kept, make_pair
+from sync_helpers import DESKTOP, PATHS, PHONE, WREN_A, WREN_B, edit_instance, handle, handles, kept, make_pair
 
 PATH = PATHS["wren_a"]
 RECORD = f".sync/peers/{PHONE}/keeps.json"  # the desktop's kept versions from the phone, and its dismissals
@@ -169,7 +171,7 @@ def test_a_version_resolve_held_is_never_dismissable(tmp_path):
     assert mine not in kept(phone)
     resolve(desktop, phone, PATH, etag(theirs), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
     assert _copies((desktop, phone), mine) and mine in kept(desktop)  # held: the only copy
-    with pytest.raises(DismissRefused, match="completed sync kept here"):
+    with pytest.raises(DismissRefused, match="sync kept here"):
         dismiss(desktop, PHONE, PATH, etag(mine), handle())
     sync_until_quiet(desktop, phone, handles())
     with pytest.raises(DismissRefused):  # nor after the next syncs: a hold is never a delivered version
@@ -194,7 +196,7 @@ def test_resolve_ends_a_dismissal_before_any_sync_so_a_new_conflict_keeps_the_sa
     mine, theirs = (desktop.root / PATH).read_bytes(), _theirs(phone)
     _delete(desktop, dismiss(desktop, PHONE, PATH, etag(theirs), handle()).slots)
     resolve(desktop, phone, PATH, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
-    assert _entries(desktop) == {}  # dropped by resolve itself, in its own commit
+    assert not any(entry["dismissed"] for entry in _entries(desktop).values())  # dropped by resolve, in its own commit
     # a new conflict: the phone restores its old version, the desktop edits on
     (phone.root / PATH).write_bytes(theirs)
     edit_instance(desktop, WREN_A, 11)
@@ -234,7 +236,7 @@ def test_a_hold_stays_recorded_until_its_slot_is_gone(tmp_path):
         if slot.is_file() and slot.read_bytes() == mine:
             slot.unlink()
     sync(desktop, phone, handles())
-    assert _entries(desktop) == {}
+    assert _entries(desktop).get(PATH, {}).get("held", []) == []
 
 
 def test_the_peers_version_found_in_a_hold_is_never_recorded_as_delivered(tmp_path):
@@ -248,7 +250,7 @@ def test_the_peers_version_found_in_a_hold_is_never_recorded_as_delivered(tmp_pa
     for _ in range(2):
         conflict = sync(desktop, phone, handles()).conflict(PATH)
         assert conflict.code == "concurrent" and conflict.kept[DESKTOP]
-    assert _entries(desktop)[PATH]["delivered"] == [] and _entries(desktop)[PATH]["held"] == [etag(mine)]
+    assert etag(mine) not in _entries(desktop)[PATH]["delivered"] and _entries(desktop)[PATH]["held"] == [etag(mine)]
     with pytest.raises(DismissRefused):
         dismiss(desktop, PHONE, PATH, etag(mine), handle())
     assert mine in kept(desktop)
@@ -259,12 +261,53 @@ def test_a_hold_of_one_pair_is_never_dismissed_through_another(tmp_path):
     delivered the same bytes (its record written here as its sync would) still cannot have them dismissed."""
     desktop, phone = _conflict(tmp_path)
     mine, theirs = (desktop.root / PATH).read_bytes(), _theirs(phone)
-    resolve(desktop, phone, PATH, etag(theirs), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
     other = desktop.root / ".sync/peers/laptop/keeps.json"
     other.parent.mkdir()
-    other.write_bytes(render_keeps((DESKTOP, "laptop"), {PATH: KeptEntry("none", frozenset({etag(mine)}))}))
+    delivered = render_keeps((DESKTOP, "laptop"), {PATH: KeptEntry(None, frozenset({etag(mine)}))})
+    other.write_bytes(delivered)
+    resolve(desktop, phone, PATH, etag(theirs), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+    # the hold takes those bytes out of every pair's delivered versions, in its own commit
+    assert other.read_bytes() != delivered and _entries(desktop, "laptop") == {}
+    with pytest.raises(DismissRefused):
+        dismiss(desktop, "laptop", PATH, etag(mine), handle())
+    other.write_bytes(delivered)  # and were the laptop's record to claim them again, the hold still refuses
     with pytest.raises(DismissRefused, match="resolve held"):
         dismiss(desktop, "laptop", PATH, etag(mine), handle())
+    assert mine in kept(desktop)
+
+
+def test_a_third_device_delivering_a_holds_bytes_never_makes_them_dismissable(tmp_path):
+    """The desktop holds its old version after resolving with the phone; a tablet then comes back to those
+    very bytes. Keep-both finds them already in a slot here, so the tablet delivered nothing."""
+    desktop, phone = make_pair(tmp_path)
+    tablet = LibraryStore.create(tmp_path / "tablet")
+    identify(tablet, "tablet")
+    pair = {DESKTOP: handle(), "tablet": handle()}
+    sync(desktop, tablet, pair)
+    edit_instance(desktop, WREN_A, 9)
+    edit_instance(phone, WREN_A, 4)
+    mine, theirs = (desktop.root / PATH).read_bytes(), _theirs(phone)
+    sync(desktop, phone, handles())
+    resolve(desktop, phone, PATH, etag(theirs), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+    (tablet.root / PATH).write_bytes(mine)
+    edit_instance(desktop, WREN_A, 12)
+    conflict = sync(desktop, tablet, pair).conflict(PATH)
+    assert conflict is not None and conflict.kept[DESKTOP]
+    with pytest.raises(DismissRefused):
+        dismiss(desktop, "tablet", PATH, etag(mine), handle())
+    assert mine in kept(desktop)
+
+
+def test_a_new_identity_keeps_every_hold_recorded(tmp_path):
+    desktop, phone = _conflict(tmp_path)
+    mine, theirs = (desktop.root / PATH).read_bytes(), _theirs(phone)
+    resolve(desktop, phone, PATH, etag(theirs), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+    identify(desktop, "desk-two", replace=True)
+    record = parse_keeps((desktop.root / RECORD).read_bytes(), ("desk-two", PHONE))
+    assert record.state == "valid" and dict(record.entries) == {PATH: KeptEntry(None, frozenset(), held=frozenset({etag(mine)}))}
+    sync_until_quiet(desktop, phone, {"desk-two": handle(), PHONE: handle()})
+    with pytest.raises(DismissRefused):
+        dismiss(desktop, PHONE, PATH, etag(mine), handle())
     assert mine in kept(desktop)
 
 
@@ -282,10 +325,9 @@ def test_a_dismissal_holds_only_on_the_archive_base_its_conflict_stands_on(tmp_p
     assert report.notices == () and report.conflict(PATH).dismissed == () and theirs in kept(desktop)
 
 
-def test_a_keep_is_dismissable_only_once_a_completed_sync_recorded_it(tmp_path, monkeypatch):
-    """A crash after the keep but before the sync's last step leaves it unrecorded: dismissing is
-    refused (the safe direction). A later sync finds the slot standing, which is no delivery (it
-    could be a hold), so it stays refused until the slot is gone and a sync writes it again."""
+def test_a_keep_is_recorded_in_the_commit_that_writes_it(tmp_path, monkeypatch):
+    """A crash after the data commit, before the sync's later steps: the keep and its delivery
+    landed together, so the version can be dismissed at once, and the next sync honours it."""
     desktop, phone = make_pair(tmp_path)
     edit_instance(desktop, WREN_A, 9)
     edit_instance(phone, WREN_A, 4)
@@ -298,16 +340,27 @@ def test_a_keep_is_dismissable_only_once_a_completed_sync_recorded_it(tmp_path, 
         sync(desktop, phone, handles())
     monkeypatch.undo()
     assert theirs in kept(desktop)
-    with pytest.raises(DismissRefused):
-        dismiss(desktop, PHONE, PATH, etag(theirs), handle())
-    sync(desktop, phone, handles())  # the slot already holds it: not delivered by this sync
-    with pytest.raises(DismissRefused):
-        dismiss(desktop, PHONE, PATH, etag(theirs), handle())
-    for slot in (desktop.root / ".conflicts").rglob("*"):
-        if slot.is_file() and slot.read_bytes() == theirs:
-            slot.unlink()
-    sync(desktop, phone, handles())  # written again, and recorded
-    assert theirs in kept(desktop) and dismiss(desktop, PHONE, PATH, etag(theirs), handle()).wrote
+    _delete(desktop, dismiss(desktop, PHONE, PATH, etag(theirs), handle()).slots)
+    assert sync(desktop, phone, handles()).conflict(PATH).dismissed == (DESKTOP,) and theirs not in kept(desktop)
+
+
+def test_a_sync_interrupted_after_its_data_commit_leaves_its_keeps_dismissable(tmp_path):
+    """No crash: the person edits a copied record while the sync verifies it, so the sync stops after
+    its data commits. Its keeps are recorded already; nothing a later sync does unrecords them."""
+    desktop, phone = make_pair(tmp_path)
+    edit_instance(desktop, WREN_A, 9)
+    edit_instance(phone, WREN_A, 4)
+    edit_instance(desktop, WREN_B, 7)  # a copy to the phone, so there is something to verify
+    theirs, copied = _theirs(phone), phone.root / PATHS["wren_b"]
+
+    def observer(step):  # type: ignore[no-untyped-def]
+        if step.kind == "data" and step.device == PHONE:
+            copied.write_bytes(copied.read_bytes().replace(b"7", b"8"))
+    with pytest.raises(SyncInterrupted):
+        apply_sync(plan_sync(desktop, phone, handles()), handles(), observer=observer)
+    assert theirs in kept(desktop) and etag(theirs) in _entries(desktop)[PATH]["delivered"]
+    sync_until_quiet(desktop, phone, handles())
+    assert dismiss(desktop, PHONE, PATH, etag(theirs), handle()).wrote
 
 
 def test_a_new_identity_leaves_no_dismissal_behind_and_no_notice(tmp_path):

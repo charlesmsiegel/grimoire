@@ -961,6 +961,8 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
     marker_keys: dict[str, str] = {}  # every file of the marker, so a denial can still rewrite any of them
     if _marker_needed(plan, device, entries, files):
         marker_keys = bookkeeping.stage(txn, bookkeeping.changes(store, files, old, every=True))
+    delivery = kept_record.Delivery(store, plan.kept_records[device], plan.other(device), plan.devices, keeps)
+    delivery.stage(txn)  # 028: a keep's delivery is recorded in the commit that writes it
     dropped: set[str] = set()
 
     def on_denied(keys: frozenset[str]) -> dict[str, bytes | None]:
@@ -1000,9 +1002,10 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
                 drop(path, why)
             if len(dropped) == before:
                 break
-        for keep in keeps:
-            if str(_kept_key(keep)) in keys:
-                _kept(plan, keep.path, device, False, "keeping it was not authorized")
+        refused = [keep for keep in keeps if str(_kept_key(keep)) in keys]
+        for keep in refused:
+            _kept(plan, keep.path, device, False, "keeping it was not authorized")
+        changes.update(delivery.deny(refused))
         if marker_keys:  # fewer copies only shrink the marker: the same width holds it
             remaining = [copy for copy in copies if copy.path not in dropped]
             shrunk = _marker(plan, device, remaining)
@@ -1029,8 +1032,9 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
         applied.pending_written[device] = (marker[0][0], {name: data for name, data, _ in states})
     applied.wrote = applied.wrote or bool(result.etags)
     plan.copies[device] = published
+    plan.kept_records[device], recorded = delivery.committed(result.etags)
     if result.etags:
-        applied.observe(Step("data", device, tuple(published), tuple(applied.kept[device]), states))
+        applied.observe(Step("data", device, tuple(published), tuple(applied.kept[device]), (*states, *recorded)))
 
 
 def _marker_needed(plan: SyncPlan, device: str, entries: Mapping[str, object], files: Mapping[str, bytes]) -> bool:
@@ -1157,8 +1161,7 @@ def _commit_archive(plan: SyncPlan, device: str, entries: Mapping[str, tuple[str
 
 def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object],
                     archived: Mapping[str, Mapping[str, tuple[str, str]]], applied: _Applied) -> None:
-    """The marker without what this sync resolved, and (028) the kept-version record of the conflicts
-    still open, in one commit: the last step of a completed sync."""
+    """The marker without what this sync resolved, and (028) the kept-version record: a completed sync's last step."""
     current = dict(plan.pendings[device].files)
     if device in applied.pending_written:
         entries, written = applied.pending_written[device]
@@ -1171,13 +1174,10 @@ def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object],
     if bookkeeping.root_name("pending", peer) in current or desired:
         files, _ = bookkeeping.render_files("pending", peer, plan.devices, desired, ARCHIVE_LIMIT)
         states = bookkeeping.changes(plan.stores[device], files, current)
-    # only a keep this sync wrote is the peer's version as delivered (a slot found standing may be a hold
-    # of this device's own version); the base is the one the next sync reads from the archives just written
-    a, b = plan.devices
-    bases = {path: kept_record.archived_token(archived[a].get(path), archived[b].get(path)) for path in plan.conflicts}
-    delivered = {keep.path: etag(keep.data) for keep in applied.kept.get(device, [])}
-    record = kept_record.next_keeps(plan.kept_records[device], peer, plan.devices, bases, delivered,
-                                    lambda path, tag: bool(kept_record.kept_slots(plan.stores[device], path, tag)))
+    bases = {path: kept_record.archived_token(*(archived[d].get(path) for d in plan.devices))  # what the next sync reads
+             for path in plan.conflicts}
+    record = kept_record.next_keeps(plan.kept_records[device], peer, plan.devices, bases,
+                                    functools.partial(kept_record.slot_stands, plan.stores[device]))
     if record is not None:
         states.append(record)
     if not states:

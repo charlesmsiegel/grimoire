@@ -12,7 +12,8 @@ from grimoire.store.syncstate import sync_peers
 
 from . import bookkeeping
 from .documents import (
-    DEVICE_FILE, check_device_id, is_retired, keeps_name, named_paths, parse_device, render_device, render_retired,
+    DEVICE_FILE, KeptEntry, check_device_id, is_retired, keeps_name, named_paths, parse_device, parse_keeps,
+    render_device, render_keeps, render_retired,
 )
 from .errors import IdentityExists, NoDeviceIdentity, SyncInterrupted
 
@@ -37,7 +38,7 @@ def identify(store: LibraryStore, device_id: str, *, replace: bool = False) -> s
     library copied with its ``.sync``). In the same commit every peer archive and marker of the old
     ID is *retired*: kept present, so the next sync of the new ID is conservative, but never valid
     again, so renaming the devices back cannot revive a stale base. If both devices take new IDs,
-    their next sync is a true first sync.
+    their next sync is a true first sync. A kept-version record keeps only its ``resolve`` holds.
     """
     check_device_id(device_id)
     current = store.read_sync_state(DEVICE_FILE)  # a read error propagates as itself
@@ -56,11 +57,22 @@ def identify(store: LibraryStore, device_id: str, *, replace: bool = False) -> s
                 continue
             for kind in ("archive", "pending"):
                 _retire(txn, store, existing, kind, peer)
-            data = store.read_sync_state(keeps_name(peer))  # the old pair's kept versions: a record of nothing now
+            data = store.read_sync_state(keeps_name(peer))
             if data is not None and not is_retired(data):
-                txn.put_sync_state(keeps_name(peer), render_retired(existing), etag(data))
+                txn.put_sync_state(keeps_name(peer), _keeps_after(data, existing, device_id, peer), etag(data))
     txn.commit(None)
     return device_id
+
+
+def _keeps_after(data: bytes, existing: str, device_id: str, peer: str) -> bytes:
+    """The kept-version record under the new ID: the old pair's deliveries and dismissals end with it,
+    but this device's own versions that ``resolve`` held here are still its own, perhaps their only
+    copy, so the new ID's record still lists them and they never become dismissable."""
+    view = parse_keeps(data, tuple(sorted((existing, peer))))  # type: ignore[arg-type]
+    held = {path: KeptEntry(None, frozenset(), held=entry.held) for path, entry in view.entries.items() if entry.held}
+    if view.state != "valid" or not held or device_id == peer:
+        return render_retired(existing)
+    return render_keeps(tuple(sorted((device_id, peer))), held)  # type: ignore[arg-type]
 
 
 def _retire(txn, store: LibraryStore, existing: str, kind: str, peer: str) -> None:  # type: ignore[no-untyped-def]
