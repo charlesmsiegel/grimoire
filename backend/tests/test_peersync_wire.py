@@ -298,3 +298,60 @@ def test_a_file_named_with_a_colon_stays_on_its_device_and_blocks_nothing(tmp_pa
         report = transfer(desktop.store, desktop.authority, PHONE, server.address)
     assert report.status == "synced", report
     assert not (desktop.store.root / "sources" / "notes 10:30.txt").exists()
+
+
+def test_recovery_leftovers_under_conflicts_never_leave_their_device(tmp_path):
+    desktop, phone, key = paired(tmp_path)
+    start_scene(phone)
+    tablet_key = new_pairing_key().hex().encode()
+    leftovers = phone.store.root / ".conflicts"
+    (leftovers / "discarded-1").mkdir(parents=True)
+    (leftovers / "discarded-1" / "x1.new").write_bytes(b'{"key": "' + tablet_key + b'"}')  # a staged pairing
+    (leftovers / "ledger-security-1").mkdir()
+    (leftovers / "ledger-security-1" / "0000000013.json").write_bytes(b'{"grant": "moved aside"}')
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+    for path in desktop.store.root.rglob("*"):
+        if path.is_file():
+            data = path.read_bytes()
+            assert tablet_key not in data and b"moved aside" not in data, path
+    assert not (desktop.store.root / ".conflicts" / "discarded-1").exists()
+
+
+def test_a_look_alike_name_holding_a_colon_blocks_nothing(tmp_path):
+    if os.name == "nt":
+        pytest.skip("this filesystem cannot hold a colon in a name")
+    desktop, phone, _ = paired(tmp_path)
+    start_scene(phone)
+    try:
+        (phone.store.root / "sources" / "catalog" / "Notes 10:30.txt").write_bytes(b"a note")
+    except OSError:
+        pytest.skip("this filesystem cannot hold a colon in a name")
+    with serving(phone) as server:
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert report.status == "synced", report
+
+
+def test_a_look_alike_root_folder_is_a_conflict_not_a_failed_transfer(tmp_path):
+    desktop, phone, _ = paired(tmp_path)
+    look_alike = phone.store.root / "Campaigns" / "q-1"
+    look_alike.mkdir(parents=True)
+    (look_alike / "scope.json").write_bytes(b"{}")
+    with serving(phone) as server:
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert report.status != "incomplete", report
+    assert not (desktop.store.root / "campaigns").exists() and not (desktop.store.root / "Campaigns").exists()
+
+
+def test_a_server_can_listen_on_the_ipv6_loopback(tmp_path):
+    if not socket.has_ipv6:
+        pytest.skip("this system has no IPv6")
+    desktop, phone, _ = paired(tmp_path)
+    start_scene(desktop)
+    try:
+        server = PeerServer(phone.store, phone.authority, host="::1")
+    except OSError:
+        pytest.skip("this system has no IPv6 loopback")
+    server.close()
+    with serving(phone, host="::1") as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"

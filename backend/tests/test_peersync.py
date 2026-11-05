@@ -147,6 +147,26 @@ def test_both_devices_changing_one_chat_offline_is_a_conflict_with_both_versions
         assert len([path for path in _files(device.store.root) if path.startswith(".conflicts/")]) == 1
 
 
+def test_a_kept_slot_the_server_cannot_send_still_counts_as_taken(tmp_path):
+    from grimoire.store import etag
+    from grimoire.store.layout import conflict_parts
+    desktop, phone, _ = paired(tmp_path)
+    started, _ = start_scene(desktop)
+    chat = started.chat
+    path = f"campaigns/{chat.campaign_id}/chats/{chat.chat_id}.json"
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+        _relabel(desktop, chat, "Saltmarch docks")
+        _relabel(phone, chat, "The night crossing")
+        ours = (desktop.store.root / path).read_bytes()
+        slot = phone.store.root.joinpath(*conflict_parts(tuple(path.split("/")), etag(ours), 0))
+        slot.parent.mkdir(parents=True, exist_ok=True)
+        slot.write_bytes(b"\0" * (9 * 1024 * 1024))  # something already there, too big to send
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert report.status == "conflicts", report  # the mirror picked the next slot, as the phone did
+    assert slot.read_bytes() == b"\0" * (9 * 1024 * 1024)
+
+
 def test_offline_scenes_on_both_devices_get_different_actors_in_one_campaign(tmp_path):
     desktop, phone, _ = paired(tmp_path)
     started, _ = start_scene(desktop)

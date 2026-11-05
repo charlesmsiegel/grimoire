@@ -106,7 +106,7 @@ def _passes(store: LibraryStore, channel: Channel, local: str, local_handle: obj
         except (SyncInterrupted, MirrorMismatch) as error:
             reason = f"{type(error).__name__}: {error}"
             continue
-        except (SyncError, StoreError, OSError) as error:  # ArchiveTooLarge, an unreadable library ...
+        except (SyncError, StoreError, OSError, ValueError) as error:  # ArchiveTooLarge, a refused link ...
             # The same next time: say why, rather than raise out of a transfer whose earlier
             # steps may already have landed (each one whole, as 019 leaves them after a crash).
             return TransferReport(peer, "incomplete", f"{type(error).__name__}: {error}", tuple(reports))

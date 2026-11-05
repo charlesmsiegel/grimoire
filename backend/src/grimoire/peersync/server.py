@@ -37,7 +37,8 @@ class PeerServer:
         self.store, self.authority = store, authority
         self.timeout, self.handshake_timeout = timeout, handshake_timeout
         self.device = device_of(store)
-        self._socket = socket.create_server((host, port))
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET  # "::1" needs the IPv6 family
+        self._socket = socket.create_server((host, port), family=family)
         self._socket.settimeout(0.2)
         self._stop = threading.Event()
 

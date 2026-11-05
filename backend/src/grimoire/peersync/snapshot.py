@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass
@@ -35,6 +36,9 @@ from .wire import Channel
 #: (keep-both picks a kept-version slot by what ``.conflicts`` already holds).
 ROOTS = ("sources", "campaigns", "assets", ".conflicts")
 _BLOB_ROOT = "assets"
+_KEPT_ROOT = ".conflicts"
+_KEPT_FOLDER = re.compile(r"[0-9a-f]{16}")
+_KEPT_FILE = re.compile(r".+~[0-9a-f]{12}(?:\.[1-9][0-9]{0,8})?")
 _MAX_DEPTH = 64
 #: A stand-in owner for the mirror's in-memory authority (never written anywhere).
 _MIRROR_OWNER = "human:mirror"
@@ -60,7 +64,10 @@ class Limits:
 # -- serving side -----------------------------------------------------------------------------
 
 def _in_roots(path: str) -> bool:
-    return path.split("/", 1)[0] in ROOTS
+    """Whether 019 can plan from ``path`` here: under a synchronized root, and spelled with no
+    character that never names a record (a Finder ``notes 10:30.txt`` that the scan reports as a
+    look-alike, say). The walk never sends such a name, so neither end may compare it."""
+    return path.split("/", 1)[0] in ROOTS and not any(char in path for char in _UNSAFE)
 
 
 def scan_summary(store: LibraryStore) -> dict[str, object]:
@@ -94,8 +101,53 @@ def walk(root: Path, blocked: Collection[str] = frozenset()) -> Iterator[tuple[s
     which the serving scan simply skips because 019 plans nothing from it, would then make the
     two scans differ on every pass, while a local 019 sync of the same libraries converges.
     """
+    try:
+        present = set(os.listdir(root))
+    except OSError:  # the serving scan fails the same way, so the snapshot never gets this far
+        present = set()
     for name in ROOTS:
-        yield from _walk(root, (name,), 0, blocked)
+        if name in blocked:  # a link, or a look-alike (``Campaigns``) the scan reports in its place
+            yield "blocked", name, b""
+        elif name not in present:
+            continue  # never ``lstat`` it: a case-insensitive disk would answer with the look-alike
+        elif name == _KEPT_ROOT:
+            yield from _walk_kept(root)
+        else:
+            yield from _walk(root, (name,), 0, blocked)
+
+
+def _walk_kept(root: Path) -> Iterator[tuple[str, str, bytes]]:
+    """Only the kept-version layout of ``.conflicts``: ``<16 hex>/<file>~<12 hex>[.N]``.
+
+    ``.conflicts`` also holds recovery leftovers: a discarded journal's staged files (which can be
+    a pairing record with its key), ledger batches moved aside by a repair. 019 reads none of
+    them; it reads the kept-version slots, to pick the next free one. So only those are sent, and
+    a slot whose file cannot be sent as itself goes as an empty placeholder: its bytes never match
+    a version being kept, so the mirror moves to the next slot exactly as this library will.
+    """
+    base = root / _KEPT_ROOT
+    if is_link(base) or not base.is_dir():
+        return
+    try:
+        folders = sorted(os.listdir(base))
+    except OSError:
+        return
+    yield "dir", _KEPT_ROOT, b""
+    for folder in folders:
+        path = base / folder
+        if not _KEPT_FOLDER.fullmatch(folder) or is_link(path) or not path.is_dir():
+            continue
+        try:
+            names = sorted(os.listdir(path))
+        except OSError:
+            continue
+        yield "dir", f"{_KEPT_ROOT}/{folder}", b""
+        for name in names:
+            if not _KEPT_FILE.fullmatch(name) or any(char in name for char in _UNSAFE):
+                continue
+            relative = f"{_KEPT_ROOT}/{folder}/{name}"
+            found = list(_walk(root, (_KEPT_ROOT, folder, name), 2, frozenset({relative})))
+            yield found[0] if found and found[0][0] == "file" else ("file", relative, b"")
 
 
 def _unsendable(relative: str, blocked: Collection[str]) -> Iterator[tuple[str, str, bytes]]:
@@ -196,6 +248,10 @@ def _parts(path: object) -> tuple[str, ...]:
     if parts[0] not in ROOTS or len(parts) > _MAX_DEPTH + 1 or any(
             not part or part in (".", "..") or any(char in part for char in _UNSAFE) for part in parts):
         raise TransportError(f"a snapshot path is outside the synchronized roots: {path!r}")
+    if parts[0] == _KEPT_ROOT and not (
+            len(parts) == 1 or (_KEPT_FOLDER.fullmatch(parts[1]) and (len(parts) == 2 or (
+                len(parts) == 3 and _KEPT_FILE.fullmatch(parts[2]))))):
+        raise TransportError(f"a snapshot path is not a kept version: {path!r}")
     if os.name == "nt" and any(part.strip(".") == "" or part[-1] in ". " for part in parts):
         # Windows drops trailing dots and spaces from a name, so "..." or "x." would name another
         # entry (or a folder above) here: a name this filesystem cannot hold as itself.
