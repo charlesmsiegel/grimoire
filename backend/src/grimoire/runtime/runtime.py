@@ -9,7 +9,8 @@ No text reaches a consumer before it is accepted and screened.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+import weakref
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -66,14 +67,16 @@ class CallOutcome:
 class TurnOutcome:
     """The turn's lines (none when stale) and every planned call's outcome, in plan order.
 
-    ``meter`` is the meter ``run_turn`` billed these calls to. Two meters on one plan have the same
-    call ids, so only this reference ties the lines to their own bill (``record.recorded_turn``).
+    ``meter_ref`` is a weak reference to the meter ``run_turn`` billed these calls to. Two meters on
+    one plan have the same call ids, so only it ties the lines to their own bill
+    (``record.recorded_turn``). It is weak because the adapter refuses a second live meter for a
+    turn: an outcome kept on screen must not stop the turn from being generated again.
     """
 
     status: TurnStatus
     lines: tuple[GeneratedLine, ...]
     calls: tuple[CallOutcome, ...]
-    meter: TurnMeter | None = field(default=None, repr=False, compare=False)
+    meter_ref: Callable[[], TurnMeter | None] | None = field(default=None, repr=False, compare=False)
 
 
 def _briefs(briefs: object) -> tuple[NpcBrief, ...]:
@@ -211,7 +214,7 @@ class GenerationRuntime:
             if token is not None and token.stale:
                 status = "stale"
             return TurnOutcome(status, () if status == "stale" else tuple(lines), tuple(outcomes + rest),
-                               meter=meter)
+                               meter_ref=weakref.ref(meter))
 
         try:
             for call, brief in pairs:

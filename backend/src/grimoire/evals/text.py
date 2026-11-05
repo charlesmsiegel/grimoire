@@ -81,19 +81,21 @@ def first_marker(text: str, markers: tuple[str, ...]) -> int | None:
 
 #: A sentence ends at ``.``, ``!``, ``?`` or ``…`` (and any closing quotes after it) before a space.
 _SENTENCE_END = re.compile(r"""[.!?\u2026]+["'\u00bb\u300d\u300f)\]]*(?=\s|$)""")
-#: Quoted speech: a double quote or guillemet/corner bracket anywhere, or a single quote that opens
-#: a word (``'They``), so an apostrophe (``duke's``, ``guards'``) is not a quotation.
-_QUOTATION = re.compile(r"""["\u00ab\u00bb\u300c\u300d\u300e\u300f]|(?<!\w)'(?=\w)""")
-_TOKEN = re.compile(r"\w+")
-#: Verbs that report speech, every form spelled out so the verdict never depends on a stemmer.
-#: Deliberately narrow: forms that are as often non-speech words (``calls``, ``cries``, ``adds``,
-#: ``barks``, ``admitted``, ``gossip``, ``promise``, ``warning``, ``demands``, ``remarks``) are left
-#: out, and quoted speech is caught by the quotes.
+#: A quotation is a matched pair: double quotes, guillemets, corner brackets, or single quotes
+#: whose opening quote starts a word and whose closing quote ends one. So an apostrophe
+#: (``duke's``, ``guards'``) or an elision (``'til dawn``) is not a quotation.
+_QUOTATION = re.compile(
+    r"""".+?"|\u00ab.+?\u00bb|\u300c.+?\u300d|\u300e.+?\u300f|(?<!\w)'(?=\w).*?(?<=\S)'(?!\w)""")
+#: Words, keeping an inner apostrophe or hyphen: ``oda's``, ``doesn't``, ``npc-oda`` are one token.
+_TOKEN = re.compile(r"\w+(?:['-]\w+)*")
+#: Verb forms that report speech when they follow a named speaker, every form spelled out so the
+#: verdict never depends on a stemmer. Heuristic and deliberately narrow: forms as often used as
+#: nouns or for non-speech (``talk``, ``answer``, ``reply``, ``tell``, ``call``, ``cry``, ``sing``,
+#: ``joke``, ``boast``, ``promise``) are left out.
 SPEECH_VERBS = frozenset("""
-    say says said saying tell tells told telling ask asks asked asking
-    reply replies replied replying answer answers answered answering
+    say says said saying ask asks asked asking
     respond responds responded responding retort retorts retorted retorting
-    speak speaks spoke spoken speaking talk talks talked talking
+    speak speaks spoke spoken speaking
     mutter mutters muttered muttering murmur murmurs murmured murmuring
     whisper whispers whispered whispering mumble mumbles mumbled mumbling
     grumble grumbles grumbled grumbling shout shouts shouted shouting yell yells yelled yelling
@@ -105,8 +107,18 @@ SPEECH_VERBS = frozenset("""
     remarked remarking mentioned mentioning confess confesses confessed confessing
     warn warns warned inform informs informing demanded demanding
     interject interjects interjected interjecting gossiped gossiping
-    sing sings sang sung singing chanted chanting recite recites recited reciting
+    chanted chanting recite recites recited reciting
+    confide confides confided confiding blurt blurts blurted blurting
+    admit admits admitted admitting reveal reveals revealed revealing add adds added adding
+    breathe breathes breathed breathing croon croons crooned crooning
+    beg begs begged begging jokes joked joking boasts boasted boasting
+    plead pleads pleaded pled pleading threaten threatens threatened threatening
+    promises promised promising
 """.split())
+#: Two-word speech verbs, as token pairs.
+SPEECH_PHRASES = frozenset({("lets", "slip"), ("let", "slip"), ("letting", "slip")})
+#: Words that deny the speech they stand next to ("never says", "says nothing").
+NEGATIONS = frozenset({"not", "never", "nothing", "cannot"})
 
 
 def sentences(text: str) -> list[str]:
@@ -120,14 +132,24 @@ def sentences(text: str) -> list[str]:
     return [part for part in parts if part]
 
 
-def speech_evidence(sentence: str) -> str | None:
-    """``"quotation"`` or ``"speech_verb"`` when ``sentence`` reports speech, else ``None``."""
-    normalized = normalize(sentence)
-    if _QUOTATION.search(normalized):
-        return "quotation"
-    if any(token in SPEECH_VERBS for token in _TOKEN.findall(normalized)):
-        return "speech_verb"
-    return None
+def tokens(text: str) -> list[str]:
+    """The normalised words of ``text``."""
+    return _TOKEN.findall(normalize(text))
+
+
+def has_quotation(text: str) -> bool:
+    return _QUOTATION.search(normalize(text)) is not None
+
+
+def is_negation(token: str) -> bool:
+    return token in NEGATIONS or token.endswith("n't")
+
+
+def speech_verb_at(words: list[str], index: int) -> int:
+    """How many tokens of a speech verb start at ``words[index]`` (0 when none does)."""
+    if tuple(words[index:index + 2]) in SPEECH_PHRASES:
+        return 2
+    return 1 if words[index] in SPEECH_VERBS else 0
 
 
 def trigram_counts(text: str) -> Counter[str]:

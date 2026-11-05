@@ -7,6 +7,7 @@ two-NPC turn two NPC calls and no director call, even when its policy would allo
 
 from __future__ import annotations
 
+import gc
 import json
 from dataclasses import replace
 
@@ -290,3 +291,16 @@ def test_a_call_run_again_after_the_turn_no_longer_matches_its_outcome():
     with pytest.raises(GenerationError) as caught:
         recorded_turn(1, meter, outcome)
     assert caught.value.reason == "outcome_mismatch"
+
+
+def test_keeping_an_outcome_never_blocks_regenerating_its_turn():
+    controls, voices = world()
+    harness = Harness([say(ODA_LINE), say(BELLAMY_LINE), say("Ledger's shut. Go."), say("Oh my dear, scandal!")])
+    plan = harness.plan(controls, present=PRESENT, speakers=("npc-oda", "npc-bellamy"))
+    briefs = [brief(ODA, "Oda", voices), brief(BELLAMY, "Bellamy", voices)]
+    first = harness.runtime.run_turn(harness.meter(plan), briefs, controls=controls)
+    gc.collect()  # the first meter is gone; only its outcome is kept (on screen, say)
+    meter = harness.meter(plan)  # the adapter refuses a second meter for a turn while one is alive
+    second = harness.runtime.run_turn(meter, briefs, controls=controls)
+    assert (first.status, second.status) == ("complete", "complete")
+    assert recorded_turn(1, meter, second).ledger is meter.ledger

@@ -4,7 +4,8 @@ Usage is judged only from the ledgers ``parse_run_v2`` rebuilt. A count that was
 is missing, never zero, so a cost comparison needs every attempt's input, output and cache-read
 counts on both sides; otherwise the comparison says ``usage_incomplete`` instead of guessing.
 "Measured" needs verified capture evidence as well as a provider-reported ledger. A ``/3`` run is
-gated the same way; its director lines are narration to the hard checks.
+gated the same way; its director lines are narration to the hard checks, plus the NPC attribution
+rules of ``checks._voiced``.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from grimoire.core.inference import Measurement, UsageTotals
 from .checks import Finding, distinguishability, finding_key, hard_findings, scorecard
 from .format import Scenario
 from .format2 import RunV2
+from .format3 import FORMAT_V3
 from .gate import _increase_exceeds
 from .policy import GatePolicy
 from .text import has_words
@@ -166,11 +168,13 @@ def compare_v2(scenario: Scenario, baseline: RunV2, candidate: RunV2,
             findings.append(Finding("evidence_unverified", "comparison",
                                     f"supplied evidence does not verify: {evidence.reason}",
                                     subject=who))
-    for finding in hard_findings(scenario, baseline.scoring_view()):
+    for finding in hard_findings(scenario, baseline.scoring_view(),
+                                 director_narration=baseline.format == FORMAT_V3):
         findings.append(Finding("baseline_invalid", "comparison",
                                 "the baseline itself violates a hard invariant", finding.turn,
                                 finding.check, finding.subject))
-    findings.extend(hard_findings(scenario, candidate.scoring_view()))
+    findings.extend(hard_findings(scenario, candidate.scoring_view(),
+                                  director_narration=candidate.format == FORMAT_V3))
 
     base = scorecard_v2(scenario, baseline, policy, baseline_evidence)
     cand = scorecard_v2(scenario, candidate, policy, candidate_evidence)

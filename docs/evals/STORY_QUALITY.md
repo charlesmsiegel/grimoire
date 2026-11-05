@@ -83,8 +83,7 @@ keeps the calls of a dropped turn is invalid input (exit 2), while one that drop
 failure (`script_incomplete`, exit 1).
 
 In the shipped benchmark Wren hears the secret in Bellamy's turn-3 song (`known_from` turn 3), so
-narration may mention it on turn 3 but not on turns 1–2, and never in a sentence naming Oda, who
-never learns it.
+narration may mention it on turn 3 but not on turns 1–2.
 
 ## Format `grimoire.story-quality/2`
 
@@ -104,7 +103,8 @@ Runs only; scenarios keep format `/1`. A `/2` run is rebuilt turn by turn as a
   would refuse or decline (a PC's generation, a second generation for one NPC, a disabled or
   over-cap optional stage) is a located error; so are out-of-order or over-limit attempts.
 - **Contributions:** a model contribution must name a `npc_generation` call of the same turn,
-  whose actor is its speaker, with a `completed` attempt. A planned call with no attempts and no
+  whose actor is its speaker, with a `completed` attempt, and a call contributes at most one line
+  (a second line naming it is a located error, not a `separate_generation` finding). A planned call with no attempts and no
   contribution is *unmetered*: reported as missing data, never free.
 - **Sources:** `synthetic`; `v0.2.1-capture` (`mode` `dry_run`/`live`, pinned `v1_commit`,
   `harness`, `evidence_sha256`, `profile`, `llm_retries`, `route`); `v2-runtime` (`harness`,
@@ -140,12 +140,12 @@ other. Everything in `/2` holds, and additionally:
   call; no other stage produces a contribution.
 - **Sources** are `synthetic` or `v2-runtime`. A 0.2.1 capture has no director call under its
   profile and stays `/2`, where its evidence is verified.
-- **Gate:** director lines are narration to the hard checks (`/1` purpose `narration`), so PC
-  authorship, continuity, attribution, orphan calls and voice-sample copies are checked on them as
-  on NPC lines. Narration is cut into sentences and has two checks of its own: a fact may not be
-  stated before some player character knows it, nor in a sentence naming an NPC before that NPC
-  knows it (`knowledge_leak`); and a sentence that names an actor and has quoted speech or a speech
-  verb is `narration_voices_actor`, because the director describes, it does not speak for anyone.
+- **Gate:** director lines are narration to the `/1` hard checks (purpose `narration`): knowledge
+  leaks against the player characters, PC authorship, continuity, attribution, orphan calls and
+  voice-sample copies. They also get two attribution rules that `/1` narration does not, because
+  only an NPC's own call may speak for it: a sentence that gives a named NPC speech is
+  `narration_voices_actor`, and stating there a fact that NPC does not know yet is a
+  `knowledge_leak` (rule below). `/1` and `/2` verdicts are unchanged.
   Opting into `director_generation` is judged from the policy, so a
   candidate that enables it when the baseline did not is `flag_not_allowed` unless allowed. Cast
   distinguishability needs NPC lines; when neither run has one and both have narration (a
@@ -170,8 +170,8 @@ Hard invariants (the candidate fails on any; a baseline that has one is `baselin
 
 | Check | Fails when |
 |---|---|
-| `knowledge_leak` | an NPC line states a fact before that NPC's `known_from` turn; narration states a fact no player character knows yet; a narration sentence states a fact and names (by scenario name or id) an NPC that does not know it yet |
-| `narration_voices_actor` | a narration sentence names an actor (scenario name or id, whole words) and has quoted speech (a double quote, guillemet or corner bracket, or a single quote opening a word) or a speech verb from the closed list `grimoire.evals.text.SPEECH_VERBS`; an NPC speaks only in its own call, a PC only through the player |
+| `knowledge_leak` | an NPC line states a fact before that NPC's `known_from` turn; narration states a fact no player character knows yet; in `/3`, a director sentence that gives a named NPC speech states a fact that NPC does not know yet |
+| `narration_voices_actor` | `/3` only: a director sentence gives a named NPC speech (the attribution rule below) |
 | `player_sovereignty` | the model authors a player character's contribution, or any model text contains a PC authorship marker |
 | `player_input_altered` | each scripted choice is not played exactly once, verbatim, or other player contributions appear |
 | `choice_negated` | the outcome label is `negated`; model text in the window has a negation marker; or no model text after the player's line (and in the window) has an effect marker (`unrealized`). Identical repeated choices each need evidence after their own line |
@@ -181,6 +181,26 @@ Hard invariants (the candidate fails on any; a baseline that has one is `baselin
 | `orphan_generation` | an `npc_generation`/`narration` call produced nothing (paying for a silent NPC) |
 | `unflagged_inference` | any other call is not behind a flag listed in the run's `enabled_flags` |
 | `voice_sample_copy` | any model line (NPC or narration) shares 24+ contiguous normalised characters with a voice sample |
+
+**Attribution rule** (`/3` director lines; `checks._voiced`). The line is normalised and cut into
+sentences at `.`, `!`, `?` or `…` (with any closing quotes) before a space, and each sentence into
+word tokens (an inner apostrophe or hyphen stays in the token). An NPC's name tokens are each
+word of its scenario name (except filler such as `the` or `of`) and its id; a possessive
+(`Oda's`) is not its name. A sentence gives NPC *X* speech when:
+
+- a name token of *X* is followed within 6 tokens by a speech verb from the closed list
+  `grimoire.evals.text.SPEECH_VERBS` (or `lets slip`), with no other actor's name and no
+  negation (`not`, `never`, `nothing`, `cannot`, a word ending in `n't`) before it, the verb not
+  right after a determiner (`a shout`, `the answer` are nouns) and not right before a negation
+  (`says nothing`); or
+- the sentence has a quotation (a matched pair of double quotes, guillemets or corner brackets, or
+  single quotes opening and closing a word, so `duke's` and `'til` are not quotations) and either
+  a speech verb stands right before *X*'s name (`"…," mutters Oda`), or the sentence names no
+  actor but *X* and the sentence just before has *X* as its subject (*X* named within its first
+  4 tokens, before any other actor).
+
+Player characters are never given speech by this rule: restating a PC's action is narration's
+job, and PC authorship is checked by its markers and by 035's narration review.
 
 Comparisons with the baseline: `incomparable` (any `conditions` value differs),
 `flag_not_allowed` (candidate enables a flag the baseline didn't and the gate did not allow),
@@ -198,8 +218,12 @@ distinguishability below baseline minus tolerance), `cost_regression` and opt-in
 
 ## Limitations
 
-Marker matching catches stated phrases, not paraphrase. Narration attribution is by name: a
-sentence that gives an actor's speech with only a pronoun ("She mutters, ...") names no actor, so
-only the player-character leak rule applies to it. Outcome labels are recorded inputs, used
+Marker matching catches stated phrases, not paraphrase. The `/3` attribution rule is a
+deterministic heuristic, not a parse: it misses speech given to an NPC by a pronoun ("She
+mutters …"), by an epithet ("the old innkeeper mutters …"), by an unnamed speaker ("a low voice
+says …"), or in a quotation more than one sentence from the NPC that is its subject (or before
+it); and its verb list is heuristic both ways: verbs left out because they are as often nouns or
+non-speech (`sings`, `cries`, `calls`, `talks`, `answers`, `tells`) let speech through, and listed
+ones can flag non-speech ("Oda adds a coin"). Outcome labels are recorded inputs, used
 only next to marker evidence. Within-turn ordering of *learning* is not modelled; `known_from` is
 per turn.

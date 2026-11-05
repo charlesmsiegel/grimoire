@@ -11,13 +11,23 @@ from types import MappingProxyType
 from .format import NARRATION, NPC_GENERATION, Actor, Call, Contribution, Run, Scenario
 from .policy import GatePolicy
 from .text import (
-    contains_marker, cosine, first_marker, has_words, longest_shared_run, sentences, speech_evidence,
-    trigram_counts,
+    SPEECH_VERBS, cosine, first_marker, has_quotation, has_words, is_negation, longest_shared_run,
+    sentences, speech_verb_at, tokens, trigram_counts,
 )
 
 #: A model NPC line sharing this many contiguous normalised characters with a voice sample is a copy.
 SAMPLE_COPY_CHARS = 24
 RP_PURPOSES = (NPC_GENERATION, NARRATION)
+#: How many tokens after an NPC's name a speech verb may stand and still be that NPC's
+#: ("Oda leans over the counter and mutters" is six).
+SPEECH_WINDOW = 6
+#: How early in a sentence a name must stand to be its subject ("From the corner Hask ...").
+SUBJECT_TOKENS = 4
+#: A word after one of these is a noun ("hears a shout", "finds the answer"), not a verb.
+_DETERMINERS = frozenset({"a", "an", "the", "his", "her", "their", "its", "my", "your", "our",
+                          "no", "some", "any", "this", "that", "each", "every"})
+#: Words of a multi-word name that never identify the actor on their own.
+_NAME_FILLER = frozenset({"a", "an", "the", "of", "de", "la", "le", "van", "von"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,21 +95,17 @@ def _who(contribution: Contribution) -> str:
 
 # --- individual checks --------------------------------------------------------------------------
 
-def _names(sentence: str, actor: Actor) -> bool:
-    """Whether ``sentence`` names ``actor`` by its scenario name or id (whole words)."""
-    return contains_marker(sentence, actor.name) or contains_marker(sentence, actor.actor_id)
-
-
-def _leaks(scenario: Scenario, run: Run) -> list[tuple[Finding, bool]]:
+def _leaks(scenario: Scenario, run: Run, *,
+           director_narration: bool = False) -> list[tuple[Finding, bool]]:
     """Knowledge leaks, each flagged True when it is in an NPC line (not narration).
 
-    Narration must not state a fact before some player character knows it. A narration sentence
-    that states a fact and names an NPC must not state it before that NPC knows it either, so the
-    director cannot put a secret in an NPC's mouth (or head) that the NPC's own line could not say.
+    Narration must not state a fact before some player character knows it. With
+    ``director_narration`` (``/3`` director lines), narration that gives an NPC speech
+    (``_voiced``) must also not state, in that speech's sentence, a fact the NPC does not know yet:
+    the director cannot say for an NPC what the NPC's own line could not.
     """
     directors = set(scenario.director_ids())
     players = [actor.actor_id for actor in scenario.actors if actor.control == "player"]
-    npcs = [actor for actor in scenario.actors if actor.control == "director"]
     results = []
     for turn, position, line in _model_lines(run):
         is_npc = line.speaker_id in directors
@@ -110,47 +116,104 @@ def _leaks(scenario: Scenario, run: Run) -> list[tuple[Finding, bool]]:
             if index is None:
                 continue
             knowers = [line.speaker_id] if is_npc else players
-            if not any(fact.known_from.get(actor, turn + 1) <= turn for actor in knowers):
-                message = (f"NPC states fact before learning it (contribution {position})" if is_npc
-                           else f"narration states a fact no player character knows yet "
-                                f"(contribution {position})")
-                results.append((Finding("knowledge_leak", "invariant", message, turn, _who(line),
-                                        f"{fact.fact_id}#{index}"), is_npc))
-            if is_npc:
+            if any(fact.known_from.get(actor, turn + 1) <= turn for actor in knowers):
                 continue
-            for number, sentence in enumerate(sentences(line.text)):
-                marker = first_marker(sentence, fact.markers)
-                if marker is None:
-                    continue
-                for actor in npcs:
-                    if _names(sentence, actor) and fact.known_from.get(actor.actor_id, turn + 1) > turn:
-                        results.append((Finding(
-                            "knowledge_leak", "invariant",
-                            f"narration ties a fact to {actor.actor_id} before it knows it "
-                            f"(contribution {position}, sentence {number})", turn, "narration",
-                            f"{fact.fact_id}#{marker}"), False))
+            message = (f"NPC states fact before learning it (contribution {position})" if is_npc
+                       else f"narration states a fact no player character knows yet "
+                            f"(contribution {position})")
+            results.append((Finding("knowledge_leak", "invariant", message, turn, _who(line),
+                                    f"{fact.fact_id}#{index}"), is_npc))
+        if is_npc or not director_narration:
+            continue
+        parts = sentences(line.text)
+        for number, actor_id, _evidence in _voiced(scenario, parts):
+            for fact in scenario.facts:
+                index = first_marker(parts[number], fact.markers)
+                if index is not None and fact.known_from.get(actor_id, turn + 1) > turn:
+                    results.append((Finding(
+                        "knowledge_leak", "invariant",
+                        f"narration has {actor_id} say a fact before it knows it "
+                        f"(contribution {position}, sentence {number})", turn, "narration",
+                        f"{fact.fact_id}#{index}"), False))
     return results
 
 
-def _narration_voices(scenario: Scenario, run: Run) -> Iterator[Finding]:
-    """Narration that speaks for an actor: an NPC's words need its own call, a PC's the player.
+def _name_tokens(actor: Actor) -> frozenset[str]:
+    """The tokens that name ``actor``: each word of its name, and its id."""
+    words = tokens(actor.name)
+    names = {word for word in words if word not in _NAME_FILLER} or set(words)
+    return frozenset(names | set(tokens(actor.actor_id)))
 
-    A narration sentence voices an actor when it names the actor (scenario name or id) and has
-    quoted speech or a speech verb (``text.SPEECH_VERBS``), as in "Oda mutters, 'Go.'" or
-    "Bellamy sings of the duke".
+
+def _speaks_after(words: list[str], at: int, named: dict[int, set[str]]) -> bool:
+    """Whether a speech verb within ``SPEECH_WINDOW`` tokens after the name at ``at`` is its.
+
+    The search stops at another actor's name (the nearer name owns the verb) and at a negation
+    ("Oda never says"). A verb right after a determiner is a noun ("hears a shout"), and one
+    right before a negation is denied speech ("says nothing").
     """
+    for index in range(at + 1, min(len(words), at + 1 + SPEECH_WINDOW)):
+        if index in named or is_negation(words[index]):
+            return False
+        width = speech_verb_at(words, index)
+        if width and words[index - 1] not in _DETERMINERS:
+            follower = words[index + width] if index + width < len(words) else ""
+            return not is_negation(follower)
+    return False
+
+
+def _voiced(scenario: Scenario, parts: list[str]) -> list[tuple[int, str, str]]:
+    """``(sentence, npc_id, evidence)`` for each narration sentence that gives an NPC speech.
+
+    A sentence gives a named NPC speech (``speech_verb``) when a token of its name is followed,
+    as ``_speaks_after`` reads it, by a speech verb. A sentence with a quotation also gives it
+    (``quotation``) to an NPC named right after a speech verb ("mutters Oda"), or to the NPC that
+    is the subject of the sentence just before (named within its first ``SUBJECT_TOKENS``
+    tokens before any other actor) when the quotation's sentence names no other actor. Player
+    characters are never voiced here: restating a PC's action is narration's job.
+    """
+    npcs = set(scenario.director_ids())
+    names = [(actor.actor_id, _name_tokens(actor)) for actor in scenario.actors]
+    found: list[tuple[int, str, str]] = []
+    previous_subject: str | None = None
+    for number, part in enumerate(parts):
+        words = tokens(part)
+        named: dict[int, set[str]] = {}
+        for index, word in enumerate(words):
+            ids = {actor_id for actor_id, tokens_ in names if word in tokens_}
+            if ids:
+                named[index] = ids
+        voiced: dict[str, str] = {}
+        for index, ids in named.items():
+            for actor_id in sorted(ids & npcs):
+                if _speaks_after(words, index, named):
+                    voiced.setdefault(actor_id, "speech_verb")
+        if has_quotation(part):
+            for index, ids in named.items():
+                if index and words[index - 1] in SPEECH_VERBS:
+                    for actor_id in sorted(ids & npcs):
+                        voiced.setdefault(actor_id, "quotation")
+            others = set().union(*named.values()) if named else set()
+            if previous_subject is not None and others <= {previous_subject}:
+                voiced.setdefault(previous_subject, "quotation")
+        found.extend((number, actor_id, evidence) for actor_id, evidence in sorted(voiced.items()))
+        first = min(named) if named else None
+        previous_subject = None
+        if first is not None and first < SUBJECT_TOKENS and len(named[first]) == 1:
+            (subject,) = named[first]
+            previous_subject = subject if subject in npcs else None
+    return found
+
+
+def _narration_voices(scenario: Scenario, run: Run) -> Iterator[Finding]:
+    """Director narration that gives an NPC speech; only the NPC's own call may (``_voiced``)."""
     for turn, position, line in _model_lines(run):
         if line.speaker_id is not None:
             continue
-        for number, sentence in enumerate(sentences(line.text)):
-            evidence = speech_evidence(sentence)
-            if evidence is None:
-                continue
-            for actor in scenario.actors:
-                if _names(sentence, actor):
-                    yield Finding("narration_voices_actor", "invariant",
-                                  f"narration attributes speech to an actor (contribution "
-                                  f"{position}, sentence {number})", turn, actor.actor_id, evidence)
+        for number, actor_id, evidence in _voiced(scenario, sentences(line.text)):
+            yield Finding("narration_voices_actor", "invariant",
+                          f"narration gives an NPC speech (contribution {position}, sentence "
+                          f"{number})", turn, actor_id, evidence)
 
 
 def _sovereignty(scenario: Scenario, run: Run) -> Iterator[Finding]:
@@ -306,11 +369,19 @@ def _sample_copies(scenario: Scenario, run: Run) -> Iterator[Finding]:
                               _who(line), f"{actor_id}#sample{index}")
 
 
-def hard_findings(scenario: Scenario, run: Run) -> tuple[Finding, ...]:
-    """Every invariant violation of ``run``; empty means none of the hard checks failed."""
-    findings = [finding for finding, _ in _leaks(scenario, run)]
-    for check in (_narration_voices, _sovereignty, _player_input, _choices, _continuity, _script,
-                  _calls, _sample_copies):
+def hard_findings(scenario: Scenario, run: Run, *,
+                  director_narration: bool = False) -> tuple[Finding, ...]:
+    """Every invariant violation of ``run``; empty means none of the hard checks failed.
+
+    ``director_narration`` adds the narration attribution rules (``_voiced``) for ``/3``
+    director lines; ``/1`` narration keeps its ``/1`` checks.
+    """
+    findings = [finding for finding, _ in _leaks(scenario, run,
+                                                  director_narration=director_narration)]
+    checks = [_sovereignty, _player_input, _choices, _continuity, _script, _calls, _sample_copies]
+    if director_narration:
+        checks.insert(0, _narration_voices)
+    for check in checks:
         findings.extend(check(scenario, run))
     return tuple(sorted(findings, key=finding_key))
 

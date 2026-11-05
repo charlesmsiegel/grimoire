@@ -43,7 +43,7 @@ def recorded_turn(turn: int, meter: TurnMeter, outcome: TurnOutcome, *,
         raise GenerationError("bad_meter", "recorded_turn needs the turn's TurnMeter")
     if not isinstance(outcome, TurnOutcome):
         raise GenerationError("bad_outcome", "recorded_turn needs the turn's TurnOutcome")
-    if outcome.meter is not meter:
+    if outcome.meter_ref is None or outcome.meter_ref() is not meter:
         raise GenerationError("outcome_mismatch", "the outcome was not produced on this meter")
     plan = meter.ledger.plan
     if tuple(call.call_id for call in outcome.calls) != tuple(call.call_id for call in plan.calls):
