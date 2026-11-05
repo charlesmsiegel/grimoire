@@ -50,8 +50,12 @@ def candidates(index: GraphIndex, op: Op) -> list:
     return sorted(found, key=lambda entry: entry.ref.relation_id)
 
 
-def plan(proposal: EffectProposal, index: GraphIndex) -> tuple[Step, ...]:
-    """Per operation, what to write; refusals are ``EffectError`` naming the operation index."""
+def plan(proposal: EffectProposal, index: GraphIndex, *, landed: frozenset[int] = frozenset()) -> tuple[Step, ...]:
+    """Per operation, what to write; refusals are ``EffectError`` naming the operation index.
+
+    ``landed`` (030's adoption) names operations whose change is already in the graph: they are not planned
+    (their own record would fail their precondition), but their agent must still exist.
+    """
     if type(index) is not GraphIndex or index.campaign_id != proposal.campaign_id:
         raise EffectError("campaign_mismatch")
     as_of = proposal.moment.sequence
@@ -59,6 +63,8 @@ def plan(proposal: EffectProposal, index: GraphIndex) -> tuple[Step, ...]:
     for number, op in enumerate(proposal.operations):
         if op.agent is not None and op.agent not in index.instances:  # never a namesake, never a future instance
             raise EffectError("missing_agent", (str(number),))
+        if number in landed:
+            continue
         entries = candidates(index, op)
         if op.kind == "end":
             walkable = [e for e in entries if e.traversable and e.relation.holds_at(as_of)]
