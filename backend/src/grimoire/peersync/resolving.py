@@ -12,9 +12,9 @@ archives, pending markers) and a failure at any point leaves what a crash at tha
 local resolve leaves (docs/DEVICE_SYNC.md).
 
 The serving device does not take the requester's word for any of it (``ResolveRequest``): it
-admits only a choice of a version it already holds or keeps beside the path, checks its own
-expected etag when the request arrives and before every step, and accepts at the path only the
-chosen bytes, with its own version held. While a resolve of its own library is in flight it
+admits only a choice of a version it already holds, keeps beside the path or agreed on, checks
+its own expected etag when the request arrives and before every step, accepts at the path only
+the chosen bytes, with its own version held, and never replaces a definition revision for a peer. While a resolve of its own library is in flight it
 refuses what could wait on that resolve (``busy``), so two devices resolving against each other
 never wait on each other's library until the connection times out.
 """
@@ -35,6 +35,7 @@ from grimoire.store.engine import MAX_CONFLICT_ATTEMPTS
 from grimoire.store.jsonfmt import is_etag
 from grimoire.store.layout import conflict_parts
 from grimoire.sync import ResolveRefused, SyncError, SyncInterrupted, device_of, resolve, syncable
+from grimoire.sync.documents import archive_name, parse_archive
 
 from .errors import MirrorMismatch, PeerRefused, TransportError
 from .replay import Op, kept_target, send_ops
@@ -76,6 +77,13 @@ def resolve_conflict(store: LibraryStore, authority, peer: str, address: tuple[s
     why = _unusable(local, peer, path, keep, expected)
     if why is not None:
         return ResolveReport(peer, path, "refused", f"ResolveRefused: {why}")
+    if syncable(path) == "definition" and expected[peer] is not None and keep != expected[peer]:
+        # The peer would be the receiver of a revision replace. A serving device never lets a peer
+        # replace an immutable revision (nothing it holds could prove the chosen bytes were ever
+        # agreed: a plain sync step can put any bytes under its .conflicts), so the device holding
+        # the conflicted revision starts the resolve and replaces it as the owner itself.
+        return ResolveReport(peer, path, "refused", f"ResolveRefused: {path} is a definition revision {peer} "
+                                                    f"would replace; start this resolve on {peer}")
     with _outgoing(store):  # this library's own server now refuses what could wait on this resolve
         try:
             connection = dial(address, timeout)
@@ -200,11 +208,12 @@ class _RelayedTransaction(Transaction):
 
     def put_exact(self, path: str, data: bytes, expected: str | None, *, replace_unreferenced: bool = False,
                   regenerable: bool = False, allowed_manifests: frozenset[str] = frozenset()) -> str:
+        if replace_unreferenced:  # resolve_conflict refuses this before connecting; never relayed
+            raise ResolveRefused(f"{path} is a definition revision the serving device would replace; "
+                                 "start this resolve on that device")
         key = super().put_exact(path, data, expected, replace_unreferenced=replace_unreferenced,
                                 regenerable=regenerable, allowed_manifests=allowed_manifests)
         header: dict[str, object] = {"op": "put", "path": path, "expected": expected}
-        if replace_unreferenced:
-            header.update({"replace": True, "allowed": sorted(allowed_manifests)})
         body = bytes(data)
         self._ops.append(("put", lambda: (header, body, path, etag(body))))
         return key
@@ -317,6 +326,8 @@ class ResolveRequest:
     keep: str
     expected: str | None
     theirs: str | None
+    device: str
+    peer: str
 
     @classmethod
     def parse(cls, header: Mapping[str, object], device: str, peer: str) -> ResolveRequest:
@@ -328,16 +339,19 @@ class ResolveRequest:
         if not isinstance(expected, dict) or set(expected) != {device, peer} or not all(
                 value is None or is_etag(value) for value in expected.values()):
             raise PeerRefused("invalid", "a resolve request gives the expected etag of both devices")
-        return cls(path, keep, expected[device], expected[peer])  # type: ignore[arg-type]
+        return cls(path, keep, expected[device], expected[peer], device, peer)  # type: ignore[arg-type]
 
     def admit(self, store: LibraryStore) -> None:
         """Refuse a request this device cannot honour, before anything is sent.
 
         A peer is not an owner, so a resolve may write here only a version this device already
-        has: its own current one (it is the winner, and only bookkeeping is written here), or one
-        it keeps under ``.conflicts`` beside the path, which the keep-both transfer that reported
-        the conflict left (or a blob, whose name is its content). Anything else would let a
-        paired device write chosen bytes over a record, even an immutable revision.
+        has or had: its own current one (it is the winner, and only bookkeeping is written here),
+        one it keeps under ``.conflicts`` beside the path, which the keep-both transfer that
+        reported the conflict left, the version this pair's archive records both devices agreed
+        on (a conflict where one side changed a record the other still holds as agreed keeps
+        nothing), or a blob, whose name is its content. When this device receives, the chosen
+        version must also be the requester's own current one: it is the version resolve copies.
+        Anything else would let a paired device write chosen bytes over a record.
         """
         found = _current(store, self.path)
         if found != self.expected:
@@ -346,13 +360,24 @@ class ResolveRequest:
             if self.theirs == found:
                 raise PeerRefused("no_conflict", f"{self.path} is identical on both devices")
             return
+        if self.keep != self.theirs:
+            raise PeerRefused("unknown_version", f"the chosen version of {self.path} is neither device's current one")
         if syncable(self.path) == "blob":
             if found is None and self.keep == "sha256:" + Path(self.path).stem:
                 return  # content-addressed: the bytes are checked against the name as they land
-        elif _kept(store, self.path, self.keep):
+        elif _kept(store, self.path, self.keep) or self._agreed(store):
             return
         raise PeerRefused("unknown_version", f"the chosen version of {self.path} is not one this device holds "
                                              "or keeps beside it")
+
+    def _agreed(self, store: LibraryStore) -> bool:
+        """Whether this pair's archive here records ``keep`` as the version both devices agreed on."""
+        try:
+            data = store.read_sync_state(archive_name(self.peer))
+        except (StoreError, OSError, ValueError):
+            return False  # unreadable is never an agreement
+        archive = parse_archive(data, tuple(sorted((self.device, self.peer))))  # type: ignore[arg-type]
+        return archive.state == "valid" and archive.entries.get(self.path) == ("agreed", self.keep)
 
     def check_step(self, store: LibraryStore, writes: list[tuple[dict, bytes | Path]]) -> None:  # type: ignore[type-arg]
         """Refuse a step of this resolve that does not do what the request said.

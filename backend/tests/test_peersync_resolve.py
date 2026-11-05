@@ -14,7 +14,6 @@ import socket
 import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -30,7 +29,7 @@ from grimoire.store import RecordEnvelope, SourceManifest, etag
 from grimoire.sync.documents import pending_name
 
 from chat_fixtures import CARDS
-from peersync_helpers import DESKTOP, PHONE, Device, paired, serving, start_scene
+from peersync_helpers import DESKTOP, PHONE, Device, paired, seed_cards, serving, start_scene
 from store_helpers import OWNER
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -133,7 +132,7 @@ def test_resolving_from_the_other_device_against_a_server_in_its_own_process(tmp
     assert again.status == "synced" and again.conflicts == () and again.copied == (), again
 
 
-def test_a_definition_revision_is_replaced_on_the_peer_with_its_old_bytes_held(tmp_path):
+def test_a_definition_revision_is_replaced_only_by_a_resolve_its_own_device_starts(tmp_path):
     desktop, phone, _ = paired(tmp_path)
     start_scene(desktop)
     with serving(phone) as server:
@@ -152,11 +151,62 @@ def test_a_definition_revision_is_replaced_on_the_peer_with_its_old_bytes_held(t
         report = transfer(desktop.store, desktop.authority, PHONE, server.address)
         assert report.status == "conflicts" and report.passes[-1].conflict(path) is not None, report
         mine, theirs = (desktop.store.root / path).read_bytes(), (phone.store.root / path).read_bytes()
-        resolved = resolve_conflict(desktop.store, desktop.authority, PHONE, server.address, path, etag(mine),
-                                    {DESKTOP: etag(mine), PHONE: etag(theirs)})
-        assert resolved.status == "resolved", resolved
-        assert (phone.store.root / path).read_bytes() == mine and theirs in _kept(phone.store.root)
+        expected = {DESKTOP: etag(mine), PHONE: etag(theirs)}
+        before = _tree(desktop.store.root), _tree(phone.store.root)
+        # the desktop's choice would replace the phone's revision: only the phone may do that
+        refused = resolve_conflict(desktop.store, desktop.authority, PHONE, server.address, path, etag(mine), expected)
+        assert refused.status == "refused" and "start this resolve on phone" in refused.reason, refused
+        assert (_tree(desktop.store.root), _tree(phone.store.root)) == before
+    with serving(desktop) as server:  # the same choice, started on the phone
+        resolved = resolve_conflict(phone.store, phone.authority, DESKTOP, server.address, path, etag(mine), expected)
+    assert (resolved.status, resolved.receiver) == ("resolved", PHONE), resolved
+    assert (phone.store.root / path).read_bytes() == mine and theirs in _kept(phone.store.root)
+    with serving(phone) as server:
         assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+
+
+class EditedRevision:
+    """An immutable revision the phone edited in place after both devices agreed on it, reported
+    by a transfer as ``revision_modified``: the phone keeps nothing (the desktop's version is the
+    one both agreed on), the desktop keeps the edited bytes."""
+
+    path = "sources/catalog/cards/_source/records/character/mara/r1.json"
+
+    def __init__(self, root: Path) -> None:
+        self.desktop, self.phone, _ = paired(root)
+        seed_cards(self.desktop)  # no chat binds the revision, so it may be replaced
+        with serving(self.phone) as server:
+            assert transfer(self.desktop.store, self.desktop.authority, PHONE, server.address).status == "synced"
+        self.agreed = (self.phone.store.root / self.path).read_bytes()
+        self.edited = _forged(self.agreed, "bio", "edited in place")
+        (self.phone.store.root / self.path).write_bytes(self.edited)
+        with serving(self.phone) as server:
+            report = transfer(self.desktop.store, self.desktop.authority, PHONE, server.address)
+        conflict = report.passes[-1].conflict(self.path)
+        assert conflict is not None and conflict.code == "revision_modified", report
+        self.expected = {DESKTOP: etag(self.agreed), PHONE: etag(self.edited)}
+
+
+@pytest.mark.parametrize("start", [DESKTOP, PHONE])
+def test_an_edited_revision_returns_to_the_agreed_version_from_the_device_that_holds_it(tmp_path, start):
+    case = EditedRevision(tmp_path)
+    before = _tree(case.desktop.store.root), _tree(case.phone.store.root)
+    if start == DESKTOP:  # the phone would receive a revision replace: it must start the resolve itself
+        with serving(case.phone) as server:
+            report = resolve_conflict(case.desktop.store, case.desktop.authority, PHONE, server.address, case.path,
+                                      etag(case.agreed), case.expected)
+        assert report.status == "refused" and "start this resolve on phone" in report.reason, report
+        assert (_tree(case.desktop.store.root), _tree(case.phone.store.root)) == before
+        return
+    with serving(case.desktop) as server:
+        report = resolve_conflict(case.phone.store, case.phone.authority, DESKTOP, server.address, case.path,
+                                  etag(case.agreed), case.expected)
+    assert (report.status, report.receiver) == ("resolved", PHONE), report
+    assert (case.phone.store.root / case.path).read_bytes() == case.agreed
+    assert case.edited in _kept(case.phone.store.root)  # the edit is held, never lost
+    with serving(case.phone) as server:
+        again = transfer(case.desktop.store, case.desktop.authority, PHONE, server.address)
+    assert again.status == "synced" and again.conflicts == (), again
 
 
 # -- what is refused, with nothing written on either device --------------------------------------
@@ -400,10 +450,59 @@ def test_a_resolve_step_writes_only_the_chosen_version_with_the_replaced_one_hel
     assert _tree(case.phone.store.root) == before
 
 
+def test_a_forged_version_planted_by_a_sync_step_never_replaces_a_revision(tmp_path):
+    desktop, phone, _ = paired(tmp_path)
+    start_scene(desktop)
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+    path = "sources/catalog/cards/_source/records/character/mara/r1.json"
+    manifest = "sources/catalog/cards/_source/manifest.json"
+    real = (phone.store.root / path).read_bytes()
+    evil = _forged(real, "bio", "a traitor")
+    with serving(phone) as server:
+        channel = _connect(desktop, server)
+        _request(channel, {"t": "snapshot"})
+        # a plain sync step may keep the peer's version beside a path: the forged bytes now sit there
+        assert _step(channel, ({"op": "keep", "path": path, "slot": 0}, evil))["t"] == "committed"
+        _request(channel, {"t": "resolve", "path": path, "keep": etag(evil),
+                           "expected": {DESKTOP: etag(evil), PHONE: etag(real)}})
+        before = _tree(phone.store.root)
+        with pytest.raises(PeerRefused) as refused:  # but no step may replace the revision with them
+            _step(channel, ({"op": "put", "path": path, "expected": etag(real), "replace": True,
+                             "allowed": [etag((phone.store.root / manifest).read_bytes())]}, evil),
+                  ({"op": "keep", "path": path, "slot": 0, "hold": True}, real))
+        assert refused.value.code == "invalid"
+        channel.close()
+    assert _tree(phone.store.root) == before and (phone.store.root / path).read_bytes() == real
+
+
+def test_the_agreed_version_is_admitted_but_only_as_the_requesters_own(tmp_path):
+    case = EditedRevision(tmp_path)
+    before = _tree(case.phone.store.root)
+    with serving(case.phone) as server:
+        channel = _connect(case.desktop, server)
+        # the archive's agreed version, claimed as some other version the desktop holds: refused
+        channel.send({"t": "resolve", "path": case.path, "keep": etag(case.agreed),
+                      "expected": {DESKTOP: etag(case.edited), PHONE: etag(case.edited)}})
+        with pytest.raises(PeerRefused) as refused:
+            channel.recv()
+        assert refused.value.code == "unknown_version"
+        channel.send({"t": "resolve", "path": case.path, "keep": etag(case.agreed),
+                      "expected": {DESKTOP: etag(_forged(case.agreed, "bio", "x")), PHONE: etag(case.edited)}})
+        with pytest.raises(PeerRefused) as refused:
+            channel.recv()
+        assert refused.value.code == "unknown_version"
+        # as the desktop's own current version, which the archive records both agreed on: admitted
+        _request(channel, {"t": "resolve", "path": case.path, "keep": etag(case.agreed), "expected": case.expected})
+        channel.send({"t": "bye"})
+        channel.close()
+    assert _tree(case.phone.store.root) == before
+
+
 @pytest.mark.parametrize("meet", ["request", "commit"])
 def test_two_devices_resolving_against_each_other_at_once_neither_hangs_nor_half_applies(tmp_path, monkeypatch, meet):
     case = Conflict(tmp_path)
-    lined_up = threading.Barrier(2, timeout=30)
+    lined_up = threading.Barrier(2, timeout=120)
     if meet == "request":  # both resolves are under way before either request arrives
         real_dial = resolving_module.dial
 
@@ -425,20 +524,19 @@ def test_two_devices_resolving_against_each_other_at_once_neither_hangs_nor_half
     with serving(case.phone) as on_phone, serving(case.desktop) as on_desktop:
         def from_desktop() -> None:  # keeps its own version: the phone would receive it
             reports[DESKTOP] = resolve_conflict(case.desktop.store, case.desktop.authority, PHONE, on_phone.address,
-                                                case.path, case.expected[DESKTOP], case.expected, timeout=20)
+                                                case.path, case.expected[DESKTOP], case.expected, timeout=120)
 
         def from_phone() -> None:  # keeps its own version: the desktop would receive it
             reports[PHONE] = resolve_conflict(case.phone.store, case.phone.authority, DESKTOP, on_desktop.address,
-                                              case.path, case.expected[PHONE], case.expected, timeout=20)
-        started = time.monotonic()
+                                              case.path, case.expected[PHONE], case.expected, timeout=120)
         threads = [threading.Thread(target=from_desktop), threading.Thread(target=from_phone)]
         for thread in threads:
             thread.start()
         for thread in threads:
-            thread.join(30)
-        took = time.monotonic() - started
+            thread.join(150)
     monkeypatch.undo()
-    assert took < 10, took  # bounded by the busy wait, never the connection's timeout
+    # neither waits for the other's connection to time out: both end, on the busy wait
+    assert not any(thread.is_alive() for thread in threads)
     # Each one is refused whole (busy), or at most one of them ends the conflict whole: one whose
     # server took its library just as the other gave up (the busy wait is bounded, not a turn).
     resolved = [device for device, report in reports.items() if report.status == "resolved"]

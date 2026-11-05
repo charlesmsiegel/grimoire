@@ -103,10 +103,11 @@ class StepBuffer:
     memory; record bodies (each at most 010's 8 MiB file cap, 1 GiB in all) stay in memory until the commit.
 
     ``resolving`` is the one path a resolve request named, while the session is resolving it.
-    Only then may a write carry resolve's two powers, and only for that path: replacing an
-    unreferenced definition revision (``replace``) and keeping the replaced version as a *hold*,
-    which an aborted commit preserves (``hold``). A sync step never needs either: what it keeps
-    is the other device's version, which that device still holds.
+    Only then may a write carry resolve's power, and only for that path: keeping the replaced
+    version as a *hold*, which an aborted commit preserves (``hold``). A sync step never needs it:
+    what it keeps is the other device's version, which that device still holds. A peer never
+    replaces a definition revision here (``replace``): a revision is immutable, and only the
+    device that holds the conflicted one replaces it, by starting the resolve itself.
     """
 
     def __init__(self, peer: str) -> None:
@@ -186,9 +187,10 @@ class StepBuffer:
                     targets.append((path, path, _reader(store, path)))
                     records = True
                 elif op == "put" and type(path) is str and _etag_or_none(header.get("expected")):
-                    manifests = self._replacing(header, path)
-                    txn.put_exact(path, body, header.get("expected"), regenerable=True,
-                                  replace_unreferenced=manifests is not None, allowed_manifests=manifests or frozenset())
+                    if header.get("replace", False) is not False:
+                        raise PeerRefused("invalid", "a peer never replaces a definition revision here: "
+                                                     "start the resolve on this device")
+                    txn.put_exact(path, body, header.get("expected"), regenerable=True)
                     targets.append((path, path, _reader(store, path)))
                     records = True
                 elif op == "keep" and type(path) is str and type(header.get("slot")) is int:
@@ -224,27 +226,14 @@ class StepBuffer:
         return found
 
     def _resolve_power(self, header: dict, name: str, path: str) -> bool:  # type: ignore[type-arg]
-        """Whether this write uses one of resolve's powers (``replace``, ``hold``); refused unless it is
-        for the path the session's resolve request named."""
+        """Whether this write uses resolve's power ``name`` (``hold``); refused unless it is for the
+        path the session's resolve request named."""
         value = header.get(name, False)
         if value is False:
             return False
         if value is not True or self.resolving is None or path != self.resolving:
             raise PeerRefused("invalid", f"{name!r} is only for the path a resolve request named")
         return True
-
-    def _replacing(self, header: dict, path: str) -> frozenset[str] | None:  # type: ignore[type-arg]
-        """The manifests whose references a revision replace may ignore, or ``None`` for an ordinary put.
-
-        These are the receiver's manifests byte-identical to the winner's (019's identical-manifest
-        exemption): taken on the peer's word, as a local resolve takes its caller's (docs/SYNC.md).
-        """
-        if not self._resolve_power(header, "replace", path):
-            return None
-        allowed = header.get("allowed", [])
-        if not isinstance(allowed, list) or len(allowed) > 1 or not all(type(tag) is str for tag in allowed):
-            raise PeerRefused("invalid", "a revision replace names at most one identical manifest")
-        return frozenset(allowed)
 
     def at(self, path: str) -> list[tuple[dict, bytes | Path]]:  # type: ignore[type-arg]
         """The step's writes of the record at ``path`` and of its kept versions, with their bodies."""
