@@ -5,7 +5,7 @@
 
 **Outcome:** Retrieve exactly the useful setting, actors and history for a turn within predictable model-context budgets.
 
-**Unscheduled prerequisite, awaiting a decision:** [020](durable-event-evidence.md)'s persistence of 017's claim shapes with their propositions is not on any wave yet; this sprint depends on it.
+**Prerequisite met:** [020](durable-event-evidence.md) stores 017's claim shapes with their propositions. Read an actor's claims with `EvidenceLibrary.claims_about` (or `player_claims_about`), never from the director's `ClaimSet` ([EVIDENCE](../../EVIDENCE.md#claim-shapes-017)).
 
 ## Scope
 - Retrieve relevant world records, recent history, memories, optional mechanics and inventory.

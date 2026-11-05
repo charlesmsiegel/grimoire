@@ -131,7 +131,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 - **107:** world-less play scopes, chat records, source bindings and a rebuildable navigation index ([CHATS](../CHATS.md)).
 - **017:** persisted typed relations, a director-only bounded traversal and per-node actor claims ([GRAPH](../GRAPH.md)).
 - **018:** content-addressed image blobs, image objects and per-entity and per-campaign placements ([IMAGES](../IMAGES.md)).
-- **020:** durable events and evidence with read-time quarantine ([EVIDENCE](../EVIDENCE.md)). Persisting 017's claim shapes is its unscheduled next step.
+- **020:** durable events and evidence with read-time quarantine ([EVIDENCE](../EVIDENCE.md)), and 017's claim shapes stored with their propositions ([EVIDENCE](../EVIDENCE.md#claim-shapes-017)). Running `check_subjects` on write is still open.
 - **021:** two-key acceptance of turn effects, committed once with their relation changes, latest-first revocation and scene wrap-ups ([EFFECTS](../EFFECTS.md)). Holdings operations and ability costs are its unscheduled next slice.
 - **022:** pinned derived-portrayal composition with inherit/replace/clear provenance, and frozen chat and selection snapshots ([EFFECTIVE_VIEWS](../EFFECTIVE_VIEWS.md)).
 - **023:** counted holdings per holder instance with idempotent operation ids ([HOLDINGS](../HOLDINGS.md)).
@@ -141,7 +141,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 - **019 first slice:** `grimoire.sync`, a headless, transport-free revision and conflict core for two locally open libraries ([SYNC.md](../SYNC.md)). It proves keep-both conflicts and crash convergence under the 006 harness. It is not phone sync: transport and pairing belong to 028.
 - 019 synchronizes 107's play-scope and chat records too; derived navigation indexes are never synced.
 - 019 also synchronizes 018's image objects, placements and blobs. 021 accepted events and wrap-ups and 023 holdings stay held back (reported as `held` conflicts) until [028](sprints/app-managed-device-sync.md#inherited-from-019), which inherits their merge rules.
-- **Unscheduled prerequisites, awaiting a decision:** 021's next slice (holdings operations, ability costs, `attempt_id` charged once), needed by 029 and 030, and 020's claim-shape persistence, needed by 031, are not on any wave yet.
+- **Unscheduled prerequisite, awaiting a decision:** 021's next slice (holdings operations, ability costs, `attempt_id` charged once), needed by 029 and 030, is not on any wave yet. 020's claim-shape persistence, needed by 031, is implemented.
 
 <a id="wave-4"></a>
 

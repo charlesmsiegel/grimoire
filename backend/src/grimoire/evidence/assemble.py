@@ -20,7 +20,9 @@ from grimoire.core.knowledge import (
     Belief, Disclosure, Event, Knowledge, KnowledgeError, Perception, Proposition, Report, Ruling,
 )
 
-from .codec import Batch, ChainKey, EvidenceCodecError, Record, chain_key, decode, decode_batch
+from grimoire.graph import ClaimShape
+
+from .codec import Batch, ChainKey, EvidenceCodecError, Record, chain_key, decode_batch, decode_claimed
 
 #: families whose chains can resurface an older value if only part of them is lost
 CHAIN_FAMILIES = ("ruling", "belief", "disclosure")
@@ -54,17 +56,20 @@ class Assembly:
     log_intact: bool = True
     #: the kept records by name, for a writer that extends the ledger
     records: Mapping[str, Record] = field(default_factory=lambda: MappingProxyType({}), repr=False)
+    #: each kept proposition's 017 claim shape, by proposition id; a quarantined one has none
+    claims: Mapping[str, ClaimShape] = field(default_factory=lambda: MappingProxyType({}), repr=False)
 
     @property
     def clean(self) -> bool:
         return not self.quarantined and not self.problems
 
 
-def _decoded(ref: KnowledgeRef, scanned: ScannedFile) -> tuple[tuple[Record, ChatRef | None] | None, str | None]:
+def _decoded(ref: KnowledgeRef, scanned: ScannedFile
+             ) -> tuple[tuple[Record, ChatRef | None, ClaimShape | None] | None, str | None]:
     if scanned.damage is not None:
         return None, scanned.damage
     try:
-        return decode(ref, scanned.schema, scanned.payload), None
+        return decode_claimed(ref, scanned.schema, scanned.payload), None
     except EvidenceCodecError as error:
         reason = error.reason
     return None, reason
@@ -123,7 +128,7 @@ def assemble(campaign_id: str, files: Mapping[KnowledgeRef, ScannedFile]) -> Ass
 
     records = {ref: scanned for ref, scanned in files.items()
                if ref.family != "batch" and ref.campaign_id == campaign_id}
-    decoded: dict[str, tuple[Record, ChatRef | None]] = {}
+    decoded: dict[str, tuple[Record, ChatRef | None, ClaimShape | None]] = {}
     failures: dict[str, str] = {}
     for ref, scanned in records.items():
         value, reason = _decoded(ref, scanned)
@@ -233,10 +238,11 @@ def assemble(campaign_id: str, files: Mapping[KnowledgeRef, ScannedFile]) -> Ass
 
     kept = {name: candidates[name] for name in sorted(candidates)}
     origins = {name: decoded[name][1] for name in kept if decoded[name][1] is not None}
+    claims = {shape.proposition_id: shape for name in kept if (shape := decoded[name][2]) is not None}
     high_water = max((record.moment.sequence for record in kept.values()), default=0)
     return Assembly(knowledge, tuple(sorted(Quarantine(name, reason) for name, reason in quarantined.items())),
                     tuple(sorted(set(problems))), MappingProxyType(origins), high_water, head,
-                    log_intact=not broken, records=MappingProxyType(kept))
+                    log_intact=not broken, records=MappingProxyType(kept), claims=MappingProxyType(claims))
 
 
 def _dangling(candidates: Mapping[str, Record]) -> dict[str, str]:

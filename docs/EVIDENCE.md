@@ -15,7 +15,8 @@ It persists [012's records](KNOWLEDGE.md) exactly, and their meaning does not ch
 - **rulings** (canon's standing);
 - **perceptions and reports** (one actor's evidence);
 - **beliefs** (one actor's conclusions);
-- **disclosures** (what the table may read).
+- **disclosures** (what the table may read);
+- and each proposition's [017 claim shape](GRAPH.md#claims-what-an-actor-thinks-is-connected), when it has one, in the proposition's own file (see [claim shapes](#claim-shapes-017)).
 
 Behaviour:
 - **Reopening reproduces every projection exactly.** Each actor knows what it knew before, and nothing more:
@@ -50,6 +51,7 @@ The envelope is `grimoire.knowledge-record/1` ([STORAGE](STORAGE.md#events-and-e
 |---|---|
 | `grimoire.event/1` | `Event` |
 | `grimoire.proposition/1` | `Proposition` |
+| `grimoire.proposition/2` | `Proposition` with its 017 `ClaimShape` (family `proposition`; see [claim shapes](#claim-shapes-017)) |
 | `grimoire.ruling/1` | `Ruling` |
 | `grimoire.perception/1`, `grimoire.report/1` | `Perception`, `Report` (family `evidence`) |
 | `grimoire.belief/1` | `Belief` |
@@ -77,6 +79,20 @@ The envelope is `grimoire.knowledge-record/1` ([STORAGE](STORAGE.md#events-and-e
 | 012 reasons | for example `invalid_record`, `ungrounded_ruling` and `invalid_sent_at`, from constructing the record |
 
 Encoding refuses text or a label over the limit with `too_long`.
+
+### Claim shapes (017)
+
+<a id="claim-shapes-017"></a>A proposition may carry one [017 `ClaimShape`](GRAPH.md#claims-what-an-actor-thinks-is-connected): its typed, positive, present-tense reading, such as `member_of(duke, guild)`. The shape is **part of the proposition**: stored in the same file, written once with it, and lost with it.
+
+- **On disk.** A shaped proposition is written under `grimoire.proposition/2`: 012's proposition fields plus one key, `claim: {"predicate", "subject", "object"}`, with the endpoints as exact `InstanceRef` text. The address owns the campaign and the proposition id. An unshaped proposition is still `grimoire.proposition/1`, byte-identical to before.
+- **Codec.** `encode(record, chat=None, claim=None)` writes it. `decode_claimed(ref, schema, payload)` returns `(record, chat, claim)`, with `claim` `None` for anything but a `/2` proposition. Plain `decode` refuses a `/2` file with `claimed_proposition`, so no caller can read a shaped proposition without its shape.
+- **Strict.**
+  - `/1` with a `claim` key is `unknown_field`, and `/2` without one is `missing_field`.
+  - A `claim` that is not an object with exactly those three keys, or whose values are not text and refs, is `invalid_field`.
+  - 017's rules give their own reasons: `unknown_predicate`, `self_relation`, `campaign_mismatch` (an endpoint of another campaign), and `not_overt` (an endpoint that is not an instance subject in the proposition's `about`).
+  - `encode` refuses a shape for another proposition, or on a record that is not a proposition, with `invalid_claim`.
+- **Read.** A bad shape fails its proposition's decode, so the proposition is quarantined with its reason, and 020's cascade removes the rulings, reports and beliefs that cite it. A proposition is never read without the shape it was written with. `Assembly.claims` maps each kept proposition id to its shape. A quarantined proposition has none.
+- **The batch log is unchanged.** An entry's etag covers the whole file, so an edited claim is `edited`.
 
 ### The knowledge log
 
@@ -130,6 +146,7 @@ These are tested against the undamaged ledger U, for every actor, the player and
 - **Monotone fail-closed.** Every bucket of every actor and player projection is a subset of U's, `inherited` included, and so are `table_events`.
 - **Never promotes.** A standing is U's, or `reported`/`unasserted`. An older ruling never resurfaces. A proposition that is itself quarantined has no standing: `standing` raises 012's `unknown_proposition`, exactly as for an id the ledger never held.
 - **No resurfacing.** No current belief is ever an older belief of its chain, and a disclosure's moment never moves.
+- **Claims only shrink.** Every kept shape is U's own. For every actor, node and moment, each `claims_about` item has U's proposition, predicate, position and text. Its `heard` and `sent` are subsets of U's, and its `stance` and `inherited_stance` are each U's or `None`. That last rule covers a lost belief chain whose report survives. The same holds for each actor of the player's view.
 - **Nothing silently dropped.**
   - Every record on disk is in the ledger or in `quarantined`.
   - With an intact log, every listed record that is absent is `missing`.
@@ -151,20 +168,24 @@ These are tested against the undamaged ledger U, for every actor, the player and
 
 | Method | Returns |
 |---|---|
-| `read(campaign, *, requested_by)` | `CampaignKnowledge(knowledge, quarantined, problems, origins)`; `requested_by` must be `DIRECTOR`, else `AuthorityError`. A campaign with no real state reports `campaigns/<id>:absent`, so a typo'd id is not mistaken for "nothing known" |
+| `read(campaign, *, requested_by)` | `CampaignKnowledge(knowledge, quarantined, problems, origins, claims)`; `requested_by` must be `DIRECTOR`, else `AuthorityError`. A campaign with no real state reports `campaigns/<id>:absent`, so a typo'd id is not mistaken for "nothing known" |
 | `actor_knowledge(campaign, actor, *, as_of)` | 012's projection over the assembled ledger |
 | `knowledge_about(…)` | 012's projection over the assembled ledger |
 | `player_knowledge(…)` | 012's projection over the assembled ledger |
 | `standing(…)` | 012's projection over the assembled ledger |
+| `claims_about(campaign, actor, node, *, as_of)` | 017's `claims_about` over `actor_knowledge` and the stored shapes, from one assembly. This is an actor (NPC) read, so `inherited_stance` is always `None` |
+| `player_claims_about(campaign, player_id, controls, node, *, as_of)` | the same for each actor of `player_knowledge`, in its order, so NPC-era beliefs stay `inherited` |
+
+`claims` is a 017 `ClaimSet` over the assembled ledger. It names every shaped proposition's endpoints, held or not, so it is the director's: never hand it to an actor-facing caller, which reads `claims_about` instead.
 
 There is no widening flag. Every read scans the campaign's knowledge files and assembles them. That is linear in the number of files; log verification walks only the batch files present, so a stray huge sequence number costs one file. A cascade from missing references is removed in linear passes. Only records that fail other 012 rules are removed one validation at a time, which is quadratic in their number. Nothing is cached or persisted.
 
 ### `append`
 
-`append(campaign, records, *, controls=(), contributions=None, chat=None)` returns a `KnowledgeChange`. Its checks run in order. Every refusal writes nothing and carries no record text.
+`append(campaign, records, *, claims=(), controls=(), contributions=None, chat=None)` returns a `KnowledgeChange`. Its checks run in order. Every refusal writes nothing and carries no record text.
 
 1. **Read-only.** A read-only store, or no handle → `read_only`.
-2. **Shape.** 1–500 012 records of this campaign (`empty`, `too_many`, `invalid_record`, `campaign_mismatch`).
+2. **Shape.** 1–500 012 records of this campaign (`empty`, `too_many`, `invalid_record`, `campaign_mismatch`). `claims` must be an iterable of exactly `ClaimShape`s, never a bare string (`invalid_claim`).
 3. **Existence.** The campaign (a play scope or an instance file; an empty leftover folder is not one), the chat (of this campaign) and every actor named must already exist as files (`unknown_campaign`, `unknown_chat`, `unknown_actor`). That covers holder, sender, `attributed_to`, participants and instance subjects. There is no name lookup, and a typo never creates a campaign. An actor whose id another kind of the campaign also uses is no one actor (`instance_id_conflict`; see [STORAGE](STORAGE.md#instance-ids-are-never-reused)).
 4. **Integrity.** Only an intact ledger is extended. Any quarantine or problem → `ledger_damaged`, naming the quarantined records and the problem paths. A write validated against a partial ledger could change meaning once a human repairs it.
 5. **Fresh IDs.** An ID already on disk → `duplicate_id`. (A damaged or look-alike file has already been refused at step 4.)
@@ -174,6 +195,12 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
    - **Single exception:** a delayed letter. An addressed report's `sent_at` may be earlier than H; its proposition must already be stored, otherwise `before_proposition`. Only that exception changes projections at `as_of < H`: the sender's `sent` bucket and the director view.
    - Campaign-wide sequence allocation belongs to 021/035.
 7. **012's ledger rules.** `KnowledgeError` propagates unchanged.
+   - **Claim shapes (017).** Each shape must shape a proposition **of this append**: the writer that writes the proposition writes its shape. These refusals name only `proposition:<id>`:
+     - `campaign_mismatch`: a shape of another campaign.
+     - `stored_proposition`: the proposition is already stored, shaped or not. No re-shaping exists, as no proposition edit does. To shape a stored proposition, write a new shaped one.
+     - 017's `ClaimSet` rules against the combined ledger: `unknown_proposition`, `not_overt`, `duplicate_claim`.
+
+     Each endpoint is an instance subject of the proposition, so step 3 has already checked that it exists, and the commit re-checks it.
 8. **Sovereignty.** Each new belief goes through `admit_belief`; `BeliefAuthorityError` propagates.
 9. **Symmetry.** Each record must read back exactly, at an address every platform can hold (`too_long`, `invalid_field` for text UTF-8 cannot hold, `unstorable_id`), in a file the store accepts (`too_large`: over 8 MiB rendered).
 10. **The write.** The records and their batch are staged. The assembled post-state must quarantine nothing.
@@ -196,6 +223,7 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 - **Rulings, events and disclosures** must reach the service only from director or adjudication paths (021/035).
 - **`controls` and contributions come from the caller,** because Wave 1 control is not persisted. 035 must take them from the authenticated session; a caller that names the director as a persona's controller can author its beliefs. After reopen, a PC belief's authorship cannot be re-verified. `player_knowledge`'s `inherited` bucket surfaces any belief the current controller did not author.
 - **`Transaction.put` of a `KnowledgeRecord` is not a supported writer.** A put without its batch entry reads as `unlisted`, is quarantined, and blocks appends (tested). A put together with a correctly chained forged batch is the undetectable case under Limits, as is editing a `KnowledgeChange`'s staged records before `commit`: trusted code only.
+- **Claim shapes** come with their proposition from the same writer: director, adjudication (029/035) or transmission (032). Never shape a negative ("is not a member"), past ("was a member") or conditional proposition. The text is not checked for this, as in 012.
 - **Graph, index and retrieval builders** (017, 031, 065) must not derive anything from these files or from `store.campaign_knowledge`. They consume actor projections or the explicit director read only. Connectivity never grants knowledge. (021's director-only `continuity` reads the raw event files solely to check accepted-event bridges.)
 
 ## Correction and repair
@@ -210,6 +238,7 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 - If a middle batch cannot be decoded, only restoring its bytes works.
 - Remove an `unlisted` file by hand.
 - To an older build, a newer `knowledge-batch/2` looks like a broken log. It quarantines all rulings, beliefs and disclosures and refuses appends.
+- To a build from before claim shapes, a `grimoire.proposition/2` file is `unsupported_schema`. It quarantines that proposition and what cites it, not the whole log, and that build refuses appends (`ledger_damaged`). Sync (019) moves knowledge files without decoding them, so once one device writes a shaped proposition, every older device refuses appends to that campaign until it is upgraded.
 
 ## Deferrals
 
@@ -226,4 +255,5 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 | Graph traversal | 017 |
 | Persisted control assignments | 009/035 |
 | Persisting an `AbilityRuling` ([025](ABILITIES.md)) and its attempt; 020 stores only what 029 decides to record | 029 |
-| 017's claim shapes stored with their propositions; `check_subjects` before persisting propositions and rulings; definition-subject and future-instance validity | 020, next step ([obligations from 017](roadmap/sprints/durable-event-evidence.md#obligations-from-017)) |
+| `check_subjects` before persisting propositions and rulings; definition-subject and future-instance validity (claim shapes are now stored, [above](#claim-shapes-017)) | 020, next step ([obligations from 017](roadmap/sprints/durable-event-evidence.md#obligations-from-017)) |
+| Shaping a proposition stored before shapes existed: its reports and beliefs stay on the unshaped id, so 031 sees no claim for it | not planned; a writer that needs one stores a new shaped proposition |

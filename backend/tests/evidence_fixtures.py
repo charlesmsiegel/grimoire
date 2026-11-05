@@ -7,7 +7,8 @@ U exercises every chain the quarantine rules protect:
   so ``inherited`` and ``inherited_history`` are non-empty;
 - a delayed, addressed letter from the duke to Ines (``sent_at`` before the high-water mark);
 - an unconfirmed off-stage line overheard by Orrin;
-- two disclosures of one event.
+- two disclosures of one event;
+- a shaped proposition (017 claim: the duke is a member of the guild), reported to Wren only.
 
 ``tavi`` is a bystander, and ``guild`` (a group) and the duke are participants of the private event.
 The private event's summary contains ``SUMMARY-TOKEN``, and Mara's percept contains ``PERCEPT-TOKEN``.
@@ -23,6 +24,7 @@ from grimoire.core import (
     Proposition, Report, Ruling, Subject,
 )
 from grimoire.evidence import ScannedFile, batch_entry, encode, encode_batch
+from grimoire.graph import ClaimShape
 
 C = "c1"
 PLAYER = "player-1"
@@ -32,14 +34,19 @@ def actor(name: str, kind: str = "character") -> InstanceRef:
     return InstanceRef(C, kind, name)
 
 
-MARA, INES, DUKE, ORRIN, SAM, TAVI = (actor(n) for n in ("mara", "ines", "duke", "orrin", "sam", "tavi"))
+MARA, INES, DUKE, ORRIN, SAM, TAVI, WREN = (actor(n) for n in ("mara", "ines", "duke", "orrin", "sam", "tavi",
+                                                                 "wren"))
 GUILD = actor("guild", "group")
-ACTORS = (MARA, INES, DUKE, ORRIN, SAM, TAVI, GUILD)
+ACTORS = (MARA, INES, DUKE, ORRIN, SAM, TAVI, GUILD, WREN)
 SUMMARY = "SUMMARY-TOKEN the duke sold the guild's charter"
 PERCEPT = "PERCEPT-TOKEN a sealed charter changing hands in the chapel"
 LIE_TEXT = "the duke was framed by the guild"
 RAIN_TEXT = "it rained on the docks"
 E1, E2 = Subject("event", "e1"), Subject("event", "e2")
+MEMBER_TEXT = "the duke is a sworn member of the guild"
+#: 017 claim shapes stored with their propositions, by proposition id
+CLAIMS = {"p-member": ClaimShape(C, "p-member", "member_of", InstanceRef(C, "character", "duke"),
+                                 InstanceRef(C, "group", "guild"))}
 
 
 def m(sequence: int, scene: str | None = None, turn: str | None = None) -> Moment:
@@ -64,6 +71,8 @@ def batches() -> list[list]:
             Proposition(C, "p-lie", LIE_TEXT, m(1), "director", about=(Subject("instance", str(DUKE)),)),
             Proposition(C, "p-rain", RAIN_TEXT, m(1), "director", about=(E2,)),
             Proposition(C, "p-rumor", "the storm was summoned", m(1), "director", about=(E2,)),
+            Proposition(C, "p-member", MEMBER_TEXT, m(1), "director",
+                        about=(Subject("instance", str(DUKE)), Subject("instance", str(GUILD)))),
             Perception(C, "v-mara", MARA, "e1", "witnessed", PERCEPT, m(1), "director", confirmed=True),
             Perception(C, "v-sam", SAM, "e2", "felt", "cold rain on the face", m(1), "director", confirmed=True),
             Belief(C, "b-mara-1", MARA, "p-mis", "believed", m(1), DIRECTOR, ("v-mara",)),
@@ -79,6 +88,8 @@ def batches() -> list[list]:
             Report(C, "v-ines", INES, "p-lie", "written", m(5), "director", confirmed=True, sender=DUKE,
                    attributed_to=DUKE, addressed=True, sent_at=m(3)),
             Report(C, "v-orrin", ORRIN, "p-lie", "overheard", m(5), "director", confirmed=False),
+            Report(C, "v-wren-member", WREN, "p-member", "told", m(5), "director", confirmed=True,
+                   attributed_to=DUKE),
             Disclosure(C, "d1", "e1", m(5), "director"),
         ],
         [  # 4: the lie is refuted; Ines believes it anyway; a second disclosure of e1
@@ -103,6 +114,11 @@ def controls_for(batch_number: int):
     return PC_CONTROLS if batch_number == 6 else NPC_CONTROLS
 
 
+def claims_for(batch: list) -> list:
+    """The claim shapes of ``batch``'s propositions, to append with it."""
+    return [CLAIMS[r.proposition_id] for r in batch if isinstance(r, Proposition) and r.proposition_id in CLAIMS]
+
+
 def all_records() -> list:
     return [record for batch in batches() for record in batch]
 
@@ -119,7 +135,8 @@ def in_memory_files(record_batches=None) -> dict:
     for seq, batch in enumerate(record_batches or batches(), start=1):
         entries = {}
         for record in batch:
-            ref, schema, payload = encode(record)
+            ref, schema, payload = encode(record, None, CLAIMS.get(getattr(record, "proposition_id", None))
+                                          if isinstance(record, Proposition) else None)
             tag = fake_etag(ref, schema, payload)
             files[ref] = ScannedFile(tag, schema, payload)
             entries[ref.name] = batch_entry(record, tag)

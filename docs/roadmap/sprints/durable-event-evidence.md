@@ -30,7 +30,9 @@ A 107 lightweight chat has a stable campaign namespace even without an authored 
 
 Persist 017's claim shapes (see [GRAPH](../../GRAPH.md#claims-what-an-actor-thinks-is-connected)) with the propositions they shape. Run `check_subjects` before persisting propositions and rulings. Own definition-subject and future-instance validity, which 017's check does not cover.
 
-**Status:** not yet met by 020's first slice, which was specified before 017 landed. That slice checks only that instance subjects exist at write time. These obligations are the next 020 step and need their own spec.
+**Status:** partly met.
+- **Claim shapes are persisted** ([EVIDENCE](../../EVIDENCE.md#claim-shapes-017)). A shape is stored in its proposition's file and written in the same append. It reads back into the director's `ClaimSet`, and an actor reads it through `claims_about`.
+- **Still open:** running `check_subjects` on write, and definition-subject and future-instance validity. Writes check only that instance subjects exist. A claim shape's endpoints are instance subjects, so they are covered. Doing more needs a director graph read under the append's lock, a relation snapshot in the commit's staleness check, and a decision on whether graph damage may block knowledge appends. That is its own spec.
 
 ## Obligations from 025
 

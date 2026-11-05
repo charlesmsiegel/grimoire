@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
 from grimoire.core.identity import AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, ScopeRef, paired_instances
-from grimoire.core.knowledge import Belief, Event, Knowledge, Subject
+from grimoire.core.knowledge import Belief, Event, Knowledge, Proposition, Subject
 from grimoire.core.model import ControlAssignment
 from grimoire.core.perspective import (
     ActorKnowledge, PlayerKnowledge, actor_knowledge, admit_belief, knowledge_about, player_knowledge, standing,
@@ -27,8 +27,9 @@ from grimoire.core.perspective import (
 from grimoire.effects import EffectCodecError, accepted_from_payload, as_knowledge_event
 from grimoire.evidence import (
     BATCH_LIMIT, FAMILIES, SCHEMAS, Assembly, EvidenceCodecError, Quarantine, ScannedFile, assemble, batch_entry,
-    build_ledger, decode, encode, encode_batch,
+    build_ledger, decode_claimed, encode, encode_batch,
 )
+from grimoire.graph import ClaimSet, ClaimShape, GraphError, NodeClaims, claims_about
 from grimoire.store import (
     CommitIncomplete, InvalidEnvelope, KnowledgeRecord, KnowledgeScan, LibraryStore, RecordNotFound, StaleWrite, StoreError,
     TakenIdsUnlisted, UnstorableIdentifier, WriteConflict, etag,
@@ -94,12 +95,17 @@ def _instance_ids(value: object, campaign_id: str, into: set[str]) -> None:
 
 @dataclass(frozen=True)
 class CampaignKnowledge:
-    """The director's view of a campaign's stored knowledge: the ledger and what was left out."""
+    """The director's view of a campaign's stored knowledge: the ledger and what was left out.
+
+    ``claims`` holds the 017 claim shapes stored with the ledger's propositions. It names every
+    shaped proposition's endpoints, so it is the director's too; an actor reads ``claims_about``.
+    """
 
     knowledge: Knowledge
     quarantined: tuple[Quarantine, ...]
     problems: tuple[str, ...]
     origins: Mapping[str, ChatRef]
+    claims: ClaimSet
 
 
 def _files(scan: KnowledgeScan) -> dict[KnowledgeRef, ScannedFile]:
@@ -231,7 +237,8 @@ class EvidenceLibrary:
         problems = _problems(assembly, scan)
         if not self._campaign_exists(campaign_id):  # a typo'd id is not the same as "nothing known"
             problems = tuple(sorted({*problems, f"campaigns/{campaign_id}:absent"}))
-        return CampaignKnowledge(assembly.knowledge, assembly.quarantined, problems, assembly.origins)
+        return CampaignKnowledge(assembly.knowledge, assembly.quarantined, problems, assembly.origins,
+                                 _claim_set(assembly))
 
     def actor_knowledge(self, campaign_id: str, actor: InstanceRef, *, as_of: int) -> ActorKnowledge:
         return actor_knowledge(self._assembly(campaign_id)[0].knowledge, actor, as_of=as_of)
@@ -246,6 +253,24 @@ class EvidenceLibrary:
 
     def standing(self, campaign_id: str, proposition_id: str, *, as_of: int) -> str:
         return standing(self._assembly(campaign_id)[0].knowledge, proposition_id, as_of=as_of)
+
+    def claims_about(self, campaign_id: str, actor: InstanceRef, node: InstanceRef, *, as_of: int) -> NodeClaims:
+        """017's ``claims_about`` over one assembly and ``actor_knowledge``: the held claims naming ``node``.
+
+        This is an actor (NPC) read: ``inherited_stance`` is always ``None``. For a player's actors use
+        ``player_claims_about``, which keeps NPC-era beliefs apart as ``player_knowledge`` does.
+        """
+        assembly = self._assembly(campaign_id)[0]
+        view = actor_knowledge(assembly.knowledge, actor, as_of=as_of)
+        return claims_about(view, _claim_set(assembly), node)
+
+    def player_claims_about(self, campaign_id: str, player_id: str, controls: Iterable[ControlAssignment],
+                            node: InstanceRef, *, as_of: int) -> tuple[NodeClaims, ...]:
+        """017's ``claims_about`` for each actor of ``player_knowledge`` (its order), over one assembly."""
+        assembly = self._assembly(campaign_id)[0]
+        known = player_knowledge(assembly.knowledge, player_id, controls, as_of=as_of)
+        claims = _claim_set(assembly)
+        return tuple(claims_about(view, claims, node) for view in known.actors)
 
     def _campaign_exists(self, campaign_id: str) -> bool:
         """Real campaign state: a play scope or an instance file. An empty leftover folder is not one."""
@@ -273,10 +298,15 @@ class EvidenceLibrary:
     # -- writing ------------------------------------------------------------------------------
 
     def append(self, campaign_id: str, records: Iterable[object], *,
+               claims: Iterable[ClaimShape] = (),
                controls: Iterable[ControlAssignment] = (),
                contributions: Mapping[str, PlayerContribution] | None = None,
                chat: ChatRef | None = None) -> KnowledgeChange:
-        """Validate and stage new records plus one log batch; nothing is written until ``commit``."""
+        """Validate and stage new records plus one log batch; nothing is written until ``commit``.
+
+        ``claims`` are 017 claim shapes for propositions in this same append; each is stored in its
+        proposition's file (``grimoire.proposition/2``).
+        """
         if not self.store.writable or self.handle is None:
             raise EvidenceWriteError("read_only")
         if isinstance(records, (str, bytes)) or not isinstance(records, Iterable):
@@ -288,6 +318,11 @@ class EvidenceLibrary:
             raise EvidenceWriteError("too_many")
         if not all(type(record) in SCHEMAS for record in new):
             raise EvidenceWriteError("invalid_record")
+        if isinstance(claims, (str, bytes)) or not isinstance(claims, Iterable):
+            raise EvidenceWriteError("invalid_claim")
+        shapes = tuple(claims)
+        if not all(type(shape) is ClaimShape for shape in shapes):
+            raise EvidenceWriteError("invalid_claim")
         foreign = [_name(r) for r in new if r.campaign_id != campaign_id]  # type: ignore[attr-defined]
         if foreign:
             raise EvidenceWriteError("campaign_mismatch", foreign)
@@ -331,6 +366,8 @@ class EvidenceLibrary:
             raise EvidenceWriteError("sequence_jump", jump)
         # 7-8: 012's ledger rules, then sovereignty for every new belief.
         combined = build_ledger(campaign_id, (*assembly.records.values(), *new))
+        # 7b: 017's claim rules; a shape is stored with its proposition, so only with a new one.
+        shaped = _shapes(campaign_id, combined, shapes, {r.proposition_id for r in new if isinstance(r, Proposition)})
         contributions = dict(contributions or {})
         controls = tuple(controls)
         for record in new:
@@ -339,7 +376,8 @@ class EvidenceLibrary:
         # 9: store only what reads back exactly, at an address every platform can hold.
         stored = []
         for record in new:
-            outcome = _encoded(record, chat)
+            outcome = _encoded(record, chat, shaped.get(getattr(record, "proposition_id", None))
+                               if isinstance(record, Proposition) else None)
             if isinstance(outcome, str):
                 raise EvidenceWriteError(outcome, (_name(record),))
             stored.append(outcome)
@@ -362,7 +400,8 @@ class EvidenceLibrary:
         after.update({ref: ScannedFile(tags[ref], schema, payload) for ref, schema, payload in stored})
         after[batch_ref] = ScannedFile(batch_tag, batch_schema, batch_payload)
         check = assemble(campaign_id, after)
-        if not check.clean or check.knowledge != combined:
+        if not check.clean or check.knowledge != combined or dict(check.claims) != {
+                **assembly.claims, **shaped}:
             raise AssertionError("an append would not read back as an intact ledger")
         return KnowledgeChange(self, campaign_id, (*puts, batch), (scan.entries, scan.problems), chat,
                                actors, batch_ref, events)
@@ -415,11 +454,40 @@ def _staged(transaction, puts) -> str | None:  # type: ignore[no-untyped-def]
     return None
 
 
-def _encoded(record: object, chat: ChatRef | None) -> tuple[KnowledgeRef, str, dict[str, object]] | str:
+def _claim_set(assembly: Assembly) -> ClaimSet:
+    """The assembly's stored shapes, validated against its ledger (they were checked on read)."""
+    return ClaimSet(assembly.knowledge, assembly.claims.values())
+
+
+def _shapes(campaign_id: str, combined: Knowledge, shapes: tuple[ClaimShape, ...],
+            new_propositions: set[str]) -> dict[str, ClaimShape]:
+    """``shapes`` by proposition id, or an ``EvidenceWriteError`` with 017's reason (never text)."""
+    if not shapes:
+        return {}
+    foreign = sorted({f"proposition:{s.proposition_id}" for s in shapes if s.campaign_id != campaign_id})
+    if foreign:
+        raise EvidenceWriteError("campaign_mismatch", foreign)
+    held = {proposition.proposition_id for proposition in combined.propositions}
+    stored = sorted({f"proposition:{s.proposition_id}" for s in shapes
+                     if s.proposition_id not in new_propositions and s.proposition_id in held})
+    if stored:
+        raise EvidenceWriteError("stored_proposition", stored)
+    refusal = None
+    try:
+        ClaimSet(combined, shapes)
+    except GraphError as error:
+        refusal = (error.reason, error.records)
+    if refusal is not None:  # raised outside the handler, so nothing of the shape travels with it
+        raise EvidenceWriteError(*refusal)
+    return {shape.proposition_id: shape for shape in shapes}
+
+
+def _encoded(record: object, chat: ChatRef | None,
+             claim: ClaimShape | None = None) -> tuple[KnowledgeRef, str, dict[str, object]] | str:
     """The stored form, or the reason it cannot be stored (raised by the caller, outside any handler)."""
     try:
-        ref, schema, payload = encode(record, chat)  # type: ignore[arg-type]
-        same = decode(ref, schema, payload) == (record, chat)
+        ref, schema, payload = encode(record, chat, claim)  # type: ignore[arg-type]
+        same = decode_claimed(ref, schema, payload) == (record, chat, claim)
         logical(address_parts(ref))
     except EvidenceCodecError as error:
         return error.reason

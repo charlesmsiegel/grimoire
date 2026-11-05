@@ -132,6 +132,7 @@ def test_real_damage_never_teaches_anyone_anything(tmp_path):
             assembly = assemble(C, files)
             assert assembly.knowledge == stored.knowledge
             check_guarantees(assembly, files)  # nothing dropped silently; absent listed records are missing
+            assert dict(stored.claims.shapes) == dict(assembly.claims)
             # spot checks through the service's own projection methods
             assert evidence.actor_knowledge(C, INES, as_of=9) == actor_knowledge(stored.knowledge, INES, as_of=9)
             kept = {p.proposition_id for p in stored.knowledge.propositions}

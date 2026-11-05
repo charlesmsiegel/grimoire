@@ -19,6 +19,7 @@ from grimoire.core.identity import ChatRef, InstanceRef, KnowledgeRef, validate_
 from grimoire.core.knowledge import (
     Belief, Disclosure, Event, KnowledgeError, Moment, Perception, Proposition, Report, Ruling, Subject,
 )
+from grimoire.graph import ClaimShape, GraphError
 
 TEXT_LIMIT = 20_000
 LABEL_LIMIT = 200
@@ -36,7 +37,11 @@ FAMILIES: Mapping[type, str] = MappingProxyType({
     Event: "event", Proposition: "proposition", Ruling: "ruling", Perception: "evidence", Report: "evidence",
     Belief: "belief", Disclosure: "disclosure",
 })
+#: a proposition written with its 017 claim shape (an extra ``claim`` key); unshaped ones stay ``/1``
+CLAIMED_PROPOSITION_SCHEMA = "grimoire.proposition/2"
 _CLASS_OF_SCHEMA = {schema: cls for cls, schema in SCHEMAS.items()}
+_CLASS_OF_SCHEMA[CLAIMED_PROPOSITION_SCHEMA] = Proposition
+_CLAIM_KEYS = frozenset({"predicate", "subject", "object"})
 _ID_FIELD = {Event: "event_id", Proposition: "proposition_id", Ruling: "ruling_id", Perception: "evidence_id",
              Report: "evidence_id", Belief: "belief_id", Disclosure: "disclosure_id"}
 _ETAG = re.compile(r"sha256:[0-9a-f]{64}")
@@ -126,13 +131,31 @@ def _encode_value(kind: str, value: object) -> object:
     return value
 
 
-def _encode_payload(record: Record, chat: ChatRef | None) -> dict[str, object]:
+def _check_claim(record: Record, claim: object) -> ClaimShape:
+    """``claim`` as the shape of ``record``: same campaign and proposition, endpoints overt (017)."""
+    if type(claim) is not ClaimShape or not isinstance(record, Proposition):
+        raise _Refused("invalid_claim")
+    if claim.campaign_id != record.campaign_id:
+        raise _Refused("campaign_mismatch")
+    if claim.proposition_id != record.proposition_id:
+        raise _Refused("invalid_claim")
+    overt = set(record.about)
+    if not all(Subject("instance", str(end)) in overt for end in (claim.subject, claim.object)):
+        raise _Refused("not_overt")
+    return claim
+
+
+def _encode_payload(record: Record, chat: ChatRef | None, claim: ClaimShape | None = None) -> dict[str, object]:
     payload: dict[str, object] = {}
     for attribute, kind, required in _SPEC[type(record)]:
         value = getattr(record, attribute)
         if not required and value in _EMPTY:
             continue
         payload[attribute] = _encode_value(kind, value)
+    if claim is not None:
+        _check_claim(record, claim)
+        payload["claim"] = {"predicate": claim.predicate, "subject": _storable(str(claim.subject)),
+                            "object": _storable(str(claim.object))}
     if chat is not None:
         if not isinstance(chat, ChatRef):
             raise _Refused("invalid_field")
@@ -148,7 +171,7 @@ def _attempt(work: Callable[[], object]) -> tuple[bool, object]:
         return True, work()
     except _Refused as refused:
         reason = refused.reason
-    except KnowledgeError as error:
+    except (KnowledgeError, GraphError) as error:
         reason = error.reason
     except (ValueError, TypeError, KeyError, AttributeError):
         reason = "invalid_field"
@@ -159,15 +182,20 @@ def record_ref(record: Record) -> KnowledgeRef:
     return KnowledgeRef(record.campaign_id, FAMILIES[type(record)], getattr(record, _ID_FIELD[type(record)]))
 
 
-def encode(record: Record, chat: ChatRef | None = None) -> tuple[KnowledgeRef, str, dict[str, object]]:
-    """The address, schema id and canonical payload of one 012 record."""
+def encode(record: Record, chat: ChatRef | None = None,
+           claim: ClaimShape | None = None) -> tuple[KnowledgeRef, str, dict[str, object]]:
+    """The address, schema id and canonical payload of one 012 record.
+
+    ``claim`` is a proposition's 017 shape, stored with it under ``grimoire.proposition/2``.
+    """
     if type(record) not in SCHEMAS:
         raise EvidenceCodecError("invalid_record")
     ref = record_ref(record)
-    ok, outcome = _attempt(lambda: _encode_payload(record, chat))
+    ok, outcome = _attempt(lambda: _encode_payload(record, chat, claim))
     if not ok:
         raise EvidenceCodecError(outcome, ref.name)  # type: ignore[arg-type]
-    return ref, SCHEMAS[type(record)], outcome  # type: ignore[return-value]
+    schema = CLAIMED_PROPOSITION_SCHEMA if claim is not None else SCHEMAS[type(record)]
+    return ref, schema, outcome  # type: ignore[return-value]
 
 
 # -- decoding ---------------------------------------------------------------------------------
@@ -237,7 +265,16 @@ def _same(left: object, right: object) -> bool:
     return type(left) is type(right) and left == right
 
 
-def _decode(ref: KnowledgeRef, schema: object, payload: object) -> tuple[Record, ChatRef | None]:
+def _decode_claim(ref: KnowledgeRef, value: object) -> ClaimShape:
+    if not isinstance(value, Mapping) or set(value) != _CLAIM_KEYS:
+        raise _Refused("invalid_field")
+    predicate = _text(value["predicate"], LABEL_LIMIT)
+    subject, object_ = (InstanceRef.parse(_text(value[end], LABEL_LIMIT * 4)) for end in ("subject", "object"))
+    return ClaimShape(ref.campaign_id, ref.record_id, predicate, subject, object_)
+
+
+def _decode(ref: KnowledgeRef, schema: object,
+            payload: object) -> tuple[Record, ChatRef | None, ClaimShape | None]:
     if not isinstance(schema, str) or schema not in _CLASS_OF_SCHEMA:
         raise _Refused("unsupported_schema")
     cls = _CLASS_OF_SCHEMA[schema]
@@ -246,11 +283,14 @@ def _decode(ref: KnowledgeRef, schema: object, payload: object) -> tuple[Record,
     if not isinstance(payload, Mapping):
         raise _Refused("invalid_field")
     spec = _SPEC[cls]
-    known = {attribute for attribute, _, _ in spec} | {"chat"}
+    claimed = schema == CLAIMED_PROPOSITION_SCHEMA
+    known = {attribute for attribute, _, _ in spec} | {"chat"} | ({"claim"} if claimed else set())
     if "campaign_id" in payload or _ID_FIELD[cls] in payload:  # no spec lists its own record's id
         raise _Refused("identity_in_payload")
     if not set(payload) <= known:
         raise _Refused("unknown_field")
+    if claimed and "claim" not in payload:
+        raise _Refused("missing_field")
     fields: dict[str, object] = {}
     for attribute, kind, required in spec:
         if attribute not in payload:
@@ -265,9 +305,10 @@ def _decode(ref: KnowledgeRef, schema: object, payload: object) -> tuple[Record,
             raise _Refused("campaign_mismatch")
     values = (("campaign_id", ref.campaign_id), (_ID_FIELD[cls], ref.record_id))
     record = _construct(cls, dict(values), fields)
-    if not _same(_plain(payload), _encode_payload(record, chat)):
+    claim = _check_claim(record, _decode_claim(ref, payload["claim"])) if claimed else None
+    if not _same(_plain(payload), _encode_payload(record, chat, claim)):
         raise _Refused("non_canonical")
-    return record, chat
+    return record, chat, claim
 
 
 def _construct(cls: type, identity: dict[str, object], fields: dict[str, object]) -> Record:
@@ -277,14 +318,27 @@ def _construct(cls: type, identity: dict[str, object], fields: dict[str, object]
         raise _Refused("invalid_field") from None
 
 
-def decode(ref: KnowledgeRef, schema: object, payload: object) -> tuple[Record, ChatRef | None]:
-    """The 012 record and its ``chat`` provenance, or ``EvidenceCodecError``."""
+def decode_claimed(ref: KnowledgeRef, schema: object,
+                   payload: object) -> tuple[Record, ChatRef | None, ClaimShape | None]:
+    """The 012 record, its ``chat`` provenance and (for a ``/2`` proposition) its claim shape."""
     if not isinstance(ref, KnowledgeRef) or ref.family == "batch":
         raise EvidenceCodecError("invalid_record")
     ok, outcome = _attempt(lambda: _decode(ref, schema, payload))
     if not ok:
         raise EvidenceCodecError(outcome, ref.name)  # type: ignore[arg-type]
     return outcome  # type: ignore[return-value]
+
+
+def decode(ref: KnowledgeRef, schema: object, payload: object) -> tuple[Record, ChatRef | None]:
+    """The 012 record and its ``chat`` provenance, or ``EvidenceCodecError``.
+
+    A shaped proposition (``grimoire.proposition/2``) is refused with ``claimed_proposition``, so no
+    caller can read a proposition without the shape it was written with; use ``decode_claimed``.
+    """
+    record, chat, claim = decode_claimed(ref, schema, payload)
+    if claim is not None:
+        raise EvidenceCodecError("claimed_proposition", ref.name)
+    return record, chat
 
 
 # -- chain keys and the batch log ---------------------------------------------------------------

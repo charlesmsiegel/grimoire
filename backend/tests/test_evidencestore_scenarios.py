@@ -29,7 +29,7 @@ from grimoire.testing.fileops import snapshot
 from chat_fixtures import ANYA, MARA as MARA_CARD, WORLD, chat_library, seed_sources
 from evidence_fixtures import (
     ACTORS, C, DUKE, E1, GUILD, INES, LIE_TEXT, MARA, NPC_CONTROLS, ORRIN, PC_CONTROLS, PERCEPT, PLAYER,
-    SAM, SAM_CONTRIBUTION, SUMMARY, TAVI, all_records, batches, controls_for, m,
+    SAM, SAM_CONTRIBUTION, SUMMARY, TAVI, all_records, batches, claims_for, controls_for, m,
 )
 from store_helpers import OWNER, owner_handle
 from test_evidence_assemble import U
@@ -47,7 +47,8 @@ def seed_actors(store: LibraryStore, campaign: str = C, actors=ACTORS) -> None:
 def append_u(evidence: EvidenceLibrary, upto: int = 6) -> None:
     for number, batch in enumerate(batches()[:upto], start=1):
         contributions = {"b-sam-2": SAM_CONTRIBUTION} if number == 6 else None
-        evidence.append(C, batch, controls=controls_for(number), contributions=contributions).commit()
+        evidence.append(C, batch, claims=claims_for(batch), controls=controls_for(number),
+                        contributions=contributions).commit()
 
 
 @pytest.fixture
