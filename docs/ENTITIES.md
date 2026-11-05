@@ -163,7 +163,7 @@ Interoperability is proven against a test-only neutral envelope that imports no 
 
 ### Registered payload keys
 
-`sections` and `derivation` are top-level `grimoire.entity/0` payload keys owned by [Effective World Snapshots](EFFECTIVE_VIEWS.md) (022). The 009 codec keeps them in `extras` like any unknown field; only 022 composition interprets them.
+`sections` and `derivation` are top-level `grimoire.entity/0` payload keys owned by [Effective World Snapshots](EFFECTIVE_VIEWS.md) (022). The 009 codec keeps them in `extras` like any unknown field; only 022 composition interprets them. `possession` is likewise owned by [Unique possessions](POSSESSIONS.md) (034): it marks an instance as a unique item and holds its owner, holder and worn slot.
 
 ## Not in this slice
 

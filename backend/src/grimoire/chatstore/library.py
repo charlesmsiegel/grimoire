@@ -36,6 +36,7 @@ from grimoire.holdingstore import holdings_holder_ids, holdings_peer_ids
 from grimoire.imagestore import placement_subject_ids
 from grimoire.ledgers import security_campaign_ids, security_instance_ids, sovereignty_actor_ids
 from grimoire.library import LibraryPathError
+from grimoire.possessions import POSSESSION_KEY, party_ids
 from grimoire.security import payload_digest
 from grimoire.store import (
     CampaignRecords, LibraryStore, LibraryView, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
@@ -57,6 +58,7 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     knowledge log (020), a holder file's log (023's move peers), the sovereignty ledger (010b's bare
     ``actor_id``s) or a security-ledger grant or approval scoped to one individual (its instance,
     holder or placement address), each scanned raw so an undecodable record still protects its ids;
+    every owner, holder and wearer a unique item's possession record names (034, scanned raw);
     every holder with a holdings file (023) and every subject with a campaign placement folder (018),
     from file names.
     Look-alike holder and placement names count as the ids they fold to.
@@ -83,6 +85,7 @@ def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool,
     taken |= evidence_instance_ids(store, campaign_id)
     taken |= placement_subject_ids(store, campaign_id)
     taken |= sovereignty_actor_ids(store, campaign_id)
+    taken |= possession_party_ids(store, campaign_id)
     if security:  # skipped only by _fresh_campaign_taken_ids
         taken |= security_instance_ids(store, campaign_id, spent=spent)
     return frozenset(taken)
@@ -95,6 +98,29 @@ def _fresh_campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozense
     and the security ledger (a whole-library audit that can be large) is not read a second time. Only
     a new scope's allocation and its commit re-check may use this."""
     return _taken_ids(store, campaign_id, security=False)
+
+
+def possession_party_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+    """Instance ids named by the campaign's unique items (034): owners, holders and wearers, current and
+    logged, in each instance file's ``possession`` record, scanned raw. An instance file the store cannot
+    read could be an item, so it raises ``TakenIdsUnlisted``. Reads every instance file of the campaign."""
+    taken: set[str] = set()
+    unread: list[str] = []
+    for ref in store.campaign_instances(campaign_id):
+        try:
+            stored = store.read(ref)
+        except RecordNotFound:
+            continue
+        except (StoreError, LibraryPathError):
+            unread.append("/".join(address_parts(ref)))
+            continue
+        payload = stored.envelope.payload  # type: ignore[union-attr]
+        if isinstance(payload, Mapping) and POSSESSION_KEY in payload:
+            taken |= party_ids(payload[POSSESSION_KEY])
+    if unread:
+        raise TakenIdsUnlisted(f"instance files of {campaign_id} cannot all be read ({', '.join(unread)}), so the "
+                               "instance ids a unique item names cannot be reserved", tuple(unread))
+    return frozenset(taken)
 
 
 def _named_ids(found: CampaignRecords, campaign_id: str, family: str) -> set[str]:
