@@ -53,6 +53,21 @@ def _candidate(source: str | None, kind: str, entity_id: str) -> SourceRef | Non
         return None
 
 
+def world_source(wid: str) -> str | None:
+    """The source 011 proposes for V1 world ``wid`` (``None`` when the V2 grammar refuses ``world:<wid>``)."""
+    return _source(wid)
+
+
+def definition_candidate(source: str, base: str, record: str, version: str | None) -> SourceRef | None:
+    """011's rule for the unpinned identity a V1 world record (or portrayal ``version``) has in ``source``.
+
+    The importer applies the same rule when a reviewer maps a world whose own id has no V2 spelling
+    to a source of their choosing, so the two never disagree about an entity id."""
+    if base not in KIND or not (_text.safe_id(record) and (version is None or _text.safe_id(version))):
+        return None
+    return _candidate(source, KIND[base], record if version is None else f"{record}.{version}")
+
+
 def identity_section(ctx: Context, lib: Library, campaigns: dict[str, Campaign],
                      legacy: LegacyIds) -> dict:
     rows: list[dict] = []
@@ -130,7 +145,8 @@ def _definition_row(ctx, lib, campaigns, legacy, scope, scope_id, base, rid, pat
         row["status"] = "no_id_candidate"
         ctx.finding("no_id_candidate", path, detail="not a V1-listed id")
         return row
-    candidate = _candidate(_source(scope_id), KIND[base], entity_id)
+    source = _source(scope_id)
+    candidate = None if source is None else definition_candidate(source, base, rid, vid)
     if candidate is None:
         row["status"] = "no_id_candidate"
         ctx.finding("no_id_candidate", path, detail="outside the V2 identifier grammar")

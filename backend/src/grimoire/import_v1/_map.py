@@ -2,7 +2,10 @@
 
 Pure mapping: it reads the verified manifest rows and the verified bytes the caller hands it,
 and decides nothing about the destination library. Every candidate it maps is the scanner's own
-proposal (``identity_candidates``), never a match by display name. Whatever has no V2 form in
+proposal (``identity_candidates``), never a match by display name. The one exception is a world whose
+own V1 id has no V2 spelling (``Old_Coast``), so 011 proposed nothing in it: once the reviewer maps it
+to a source, its ids are derived by 011's own rule under that source (``definition_candidate``), exactly
+what 011 would have proposed had the world been spellable. Whatever has no V2 form in
 this slice is reported, never guessed: ``unresolved`` rows name a reason, ``not_imported`` rows
 name a family this slice does not carry yet.
 """
@@ -21,7 +24,7 @@ from grimoire.core.identity import (
     ChatRef, ImageRef, InstanceRef, LegacyId, PlacementRef, ScopeRef, SourceRef, validate_segment, validate_source_id,
 )
 from grimoire.images import Expression, Focus, ImageModelError, Placement, slot_role, validate_placement
-from grimoire.migrate_v1 import parse_frontmatter
+from grimoire.migrate_v1 import definition_candidate, parse_frontmatter, world_source
 from grimoire.store.errors import UnstorableIdentifier
 from grimoire.store.layout import address_parts, manifest_parts
 
@@ -234,10 +237,15 @@ class _Mapper:
         self.out = Desired()
         #: (world, base, record, version) -> pinned definition ref
         self.portrayals: dict[tuple[str, str, str, str], SourceRef] = {}
-        #: candidate text (unpinned, scanner's) -> pinned definition ref
+        #: candidate text (unpinned, scanner's, or a derived key) -> pinned definition ref
         self.candidates: dict[str, SourceRef] = {}
-        #: candidate texts of the portrayals the selection declines, and the (campaign, appearance) built on them
-        self.declined: set[str] = set()
+        #: legacy id -> candidate derived for a selected world 011 could not spell (see ``derive``)
+        self.derived: dict[str, dict] = {}
+        #: legacy id -> entity id two records of one source would share (withheld from both, by 011 or by ``derive``)
+        self.collisions: dict[str, str] = {}
+        #: (world, base, record, version) of the portrayals the selection declines, and the (campaign,
+        #: appearance) built on them
+        self.declined: set[tuple[str, str, str, str]] = set()
         self.declined_appearances: set[tuple[str, str]] = set()
         self.metadata_reported: set[str] = set()
         #: V1 path -> legacy id of every text imported verbatim (a portrayal or a campaign's own copy)
@@ -312,9 +320,10 @@ class _Mapper:
             ids.add(campaign_id)
         rows = {(kind, row["id"]): row for kind, family in (("world", "worlds"), ("campaign", "campaigns"))
                 for row in self.m[family]}
+        mapped = {("world", v1_id) for v1_id in self.sel.worlds} | {("campaign", v1_id) for v1_id in self.sel.campaigns}
         for key in self.sel.unproposed:
             row = rows.get(tuple(key))
-            if row is not None:
+            if row is not None and tuple(key) not in mapped:  # the reviewer has mapped it since
                 self.guarded(lambda row=row, v1_id=key[1]: self.unresolved(self.legacy(row["path"]),
                                                                           "no_id_candidate", v1_id))
 
@@ -336,6 +345,47 @@ class _Mapper:
         self.out.sources[source] = {"title": _display(row.get("name"), row["id"]), "legacy_id": legacy,
                                     "world": row["id"], "links": []}
 
+    def derive(self) -> None:
+        """Candidates for each selected world whose V1 id has no V2 spelling, by 011's own rule.
+
+        011 proposes ``world:<id>/<kind>/<entity>`` only when ``world:<id>`` is a valid source, so a world
+        like ``Old_Coast`` gets no candidate for anything in it. Once the reviewer has mapped it, each of
+        its records gets the identity 011 would have given it under that source, and two records that would
+        share an entity id both lose it, as in 011. The ids depend only on the reviewed source, the V1
+        record and version ids, so a re-run derives the same ones. Keys are ``world:<V1 id>/...`` texts,
+        which no 011 candidate can equal (the V1 id is outside the grammar).
+        """
+        unspelled = {wid: source for wid, source in self.sel.worlds.items()
+                     if world_source(wid) is None and source in self.out.sources}
+        claims: dict[tuple[str, str], list[tuple[str, dict]]] = {}
+        for row in self.m["identity_candidates"]["definitions"]:
+            v1 = row.get("v1") or {}
+            wid, legacy = v1.get("world"), row.get("legacy_id")
+            if (wid not in unspelled or row.get("family") == "world" or row.get("status") != "no_id_candidate"
+                    or not isinstance(legacy, str)):
+                continue
+            ref = definition_candidate(unspelled[wid], row["family"], v1.get("record"), v1.get("version"))
+            if ref is None:
+                continue  # the record or version id itself has no V2 spelling: still no candidate
+            candidate = {"text": f"world:{wid}/{ref.kind}/{ref.entity_id}", "source": ref.source,
+                         "kind": ref.kind, "entity_id": ref.entity_id}
+            claims.setdefault((wid, ref.entity_id), []).append((legacy, candidate))
+        for (wid, entity_id), claimants in sorted(claims.items()):
+            if len(claimants) > 1:  # entity ids are unique within a source across kinds
+                for legacy, _ in claimants:
+                    self.collisions[legacy] = entity_id
+                continue
+            legacy, candidate = claimants[0]
+            self.derived[legacy] = candidate
+        for wid, source in sorted(unspelled.items()):
+            self.out.flags.append({"code": "ids_derived", "world": wid, "source": source})
+
+    def derived_key(self, wid: object, entity_id: str) -> str | None:
+        """The key a portrayal derived for selected, unspelled world ``wid`` has in ``candidates``."""
+        if not isinstance(wid, str) or world_source(wid) is not None or wid not in self.sel.worlds:
+            return None
+        return f"world:{wid}/character/{entity_id}"
+
     def portrayal_rows(self) -> None:
         by_legacy = {row["legacy_id"]: row for row in self.m["identity_candidates"]["definitions"]}
         for actor in self.m["actors"]:
@@ -349,10 +399,15 @@ class _Mapper:
 
     def version_row(self, by_legacy: Mapping, source: str, actor: Mapping, version: Mapping) -> None:
         legacy = self.legacy(version["path"])
-        candidate = (by_legacy.get(legacy) or {}).get("candidate")
-        if self.skipped(legacy):
-            if isinstance(candidate, Mapping) and isinstance(candidate.get("text"), str):
-                self.declined.add(candidate["text"])
+        scanned = by_legacy.get(legacy) or {}
+        candidate = scanned.get("candidate") or self.derived.get(legacy)
+        if scanned.get("status") == "collision" and isinstance(scanned.get("withheld"), str):
+            self.collisions.setdefault(legacy, scanned["withheld"].rsplit("/", 1)[-1])
+        if self.skipped(legacy):  # declined by the portrayal itself, whatever id it had (or had none)
+            self.declined.add((actor["scope_id"], actor["base"], actor["id"], version["id"]))
+            return
+        if legacy in self.collisions and not version.get("malformed"):
+            self.unresolved(legacy, "id_candidate_collision", self.collisions[legacy])
             return
         if version.get("malformed") or not isinstance(candidate, Mapping):
             self.unresolved(legacy, "malformed_portrayal" if version.get("malformed") else "no_candidate")
@@ -394,7 +449,7 @@ class _Mapper:
         self.imported_texts[version["path"]] = legacy
 
     def links(self) -> None:
-        for link in self.m["identity_candidates"].get("proposed_links", ()):
+        for link in [*self.m["identity_candidates"].get("proposed_links", ()), *self.derived_links()]:
             subject, obj = self.candidates.get(link["subject"]), self.candidates.get(link["object"])
             if subject is None or obj is None:
                 continue  # one side was not imported; the other side's report says why
@@ -402,6 +457,16 @@ class _Mapper:
                 self.out.flags.append({"code": "link_not_carried", "subject": str(subject), "object": str(obj)})
                 continue
             self.out.sources[subject.source]["links"].append((str(subject), link["relation"], str(obj)))
+
+    def derived_links(self) -> list[dict]:
+        """011's ``alternate_portrayal`` links between the derived portrayals of one V1 record."""
+        links = []
+        for group in self.m["identity_candidates"].get("portrayal_groups", ()):
+            members = [self.derived[m]["text"] for m in group.get("members", ()) if m in self.derived]
+            for i, subject in enumerate(members):
+                links.extend({"relation": "alternate_portrayal", "subject": subject, "object": obj}
+                             for obj in members[i + 1:])
+        return sorted(links, key=lambda link: (link["subject"], link["object"]))
 
     def not_imported(self) -> None:
         for row in self.m["identity_candidates"]["definitions"]:
@@ -448,11 +513,27 @@ class _Mapper:
         if not appearance.get("valid") or candidate is None or candidate.get("status") != "proposed":
             self.unresolved(legacy, "appearance_unmapped", appearance["ref"])
             return
-        base = self.candidates.get(candidate.get("derives_from") or "")
-        if base is None:
-            if candidate.get("derives_from") in self.declined:  # the user's choice: its scenes go on without it
-                self.declined_appearances.add((campaign.v1_id, appearance["ref"]))
+        derives_from = candidate.get("derives_from")
+        if derives_from is None and candidate.get("derives_from_unresolved"):
+            # 011 found the world portrayal it was locked to but could not spell its world's id
+            derives_from = self.derived_key(row.get("world"),
+                                            f"{appearance['ref'].partition('/')[2]}.{appearance.get('version')}")
+        base = self.candidates.get(derives_from or "")
+        # the appearance's own portrayal: its world, family, record and version
+        own = (row.get("world"), appearance.get("base_kind"), appearance["ref"].partition("/")[2],
+               appearance.get("version"))
+        from_world = candidate.get("derives_from") is not None or bool(candidate.get("derives_from_unresolved"))
+        if from_world and own in self.declined:  # the user's choice: its scenes go on without it
+            self.declined_appearances.add((campaign.v1_id, appearance["ref"]))
             self.unresolved(legacy, "appearance_base_not_imported", appearance["ref"])
+            return
+        if base is None:
+            self.unresolved(legacy, "appearance_base_not_imported", appearance["ref"])
+            return
+        if self.portrayals.get(own) != base:
+            # 011 names the base by record and version only: another record's or family's portrayal (a PC's
+            # persona for an NPC, say) is never an appearance's base
+            self.unresolved(legacy, "appearance_base_mismatch", appearance["ref"])
             return
         try:
             ref = InstanceRef.parse(candidate["candidate"])
@@ -742,6 +823,7 @@ def desired_state(manifest: Mapping, selection: Selection, read: Callable[[str],
     mapper = _Mapper(manifest, selection, read, owner)
     mapper.check_selection()
     mapper.worlds()
+    mapper.derive()
     mapper.portrayal_rows()
     mapper.links()
     mapper.not_imported()

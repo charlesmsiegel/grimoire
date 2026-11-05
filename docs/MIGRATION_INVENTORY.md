@@ -101,7 +101,7 @@ Candidates are **proposals**, never a mapping, and they are unpinned: the import
 
 - A world's records propose `world:<world>/<kind>/<id>` (`location`, `lore`, `item`, `group`, `creature`, `greeting`). The `world:<world>` source is local to this archive; reconciling two archives belongs to the importer.
 - Each character **or PC** version is a separate portrayal entity, `world:<world>/character/<actor>.<version>`, with proposed `alternate_portrayal` links among one actor's portrayals. PC and NPC are not kinds.
-- Two records that would claim one identity (for example `characters/x` and `pcs/x` in one world) **both** lose their candidate (`id_candidate_collision`). A V1 id outside the V2 grammar gets `no_id_candidate`.
+- Two records that would claim one identity (for example `characters/x` and `pcs/x` in one world) **both** lose their candidate (`id_candidate_collision`). A V1 id outside the V2 grammar gets `no_id_candidate`. When only the world's id is outside it (`Old_Coast`), every record in that world gets `no_id_candidate`; the importer derives their ids by the same rule (`definition_candidate`) once a reviewer maps the world to a source ([IMPORT_V1](IMPORT_V1.md#worlds-with-no-v2-spelling)).
 - Campaign actors propose `campaign:<campaign>/character/<actor>` instances, with `control` (`player` or `director`) from the V1 role and `derives_from` naming the portrayal they were locked to. If that portrayal has no proposed candidate (for example it was withheld as a collision), `derives_from` stays null with `derives_from_unresolved` set and an `unresolved` item. Instance collisions are withheld the same way.
 - Same-named records in different worlds are listed as review groups with `relation: none`.
 
