@@ -38,7 +38,8 @@ A brief is a sealed value: only its builder makes one.
 
 **`npc_brief(view, voice, *, heard=(), secrets, sections=(), names=None, ...)`** builds one NPC's brief from its own `ActorView` (`actor_view` or `snapshot_actor_view`):
 
-- It refuses `view.knowledge is None` (`no_knowledge`), and knowledge that is not this actor's own `ActorKnowledge` (`foreign_knowledge`), such as director knowledge or another actor's projection. A voice for another actor is `voice_mismatch`.
+- It refuses `view.knowledge is None` (`no_knowledge`), and knowledge that is not this actor's own `ActorKnowledge` (`foreign_knowledge`), such as director knowledge or another actor's projection. The actor's typed ref (a character, or a speaking item) comes from its own projection. A voice for another actor, or resolved for another selected revision than `view.resolved_source`, is `voice_mismatch`.
+- Superseded beliefs keep their stance ("Earlier, you doubted: ...").
 - **Known propositions** are the ids the actor holds: reports it received or sent, and its beliefs. A secret (`SecretFact`, keyed by proposition id) not among them is **hidden** from this actor.
 - The voice fragment is 014's `speaker_fragment(voice, secrets=, known=)`, so an example revealing a hidden secret is screened out.
 - Knowledge is rendered **without ids**, newest first within `knowledge_chars`, shown oldest first; one item too big for the budget alone is skipped, not the rest. The actor's effective description and composed sections (`snapshot.effective(...).sections`) are added as context, whole parts only, within `context_chars`.

@@ -35,6 +35,8 @@ MAX_NAME_CHARS = 200
 _SPACE = re.compile(r"\s+")
 _SEAL = object()
 _STANCE = {"believed": "You believe", "suspected": "You suspect", "rejected": "You doubt"}
+_EARLIER = {"believed": "Earlier, you believed", "suspected": "Earlier, you suspected",
+            "rejected": "Earlier, you doubted"}
 
 
 def _one_line(text: str) -> str:
@@ -148,15 +150,18 @@ class DirectorBrief:
 def _check_view(view: object) -> tuple[InstanceRef, ActorKnowledge]:
     if not isinstance(view, ActorView):
         raise GenerationError("bad_view", "npc_brief needs an ActorView")
-    actor = InstanceRef(view.campaign_id, "character", view.actor_id)
+    who = f"{view.campaign_id}/{view.actor_id}"
     knowledge = view.knowledge
     if knowledge is None:
         # None means no projection was supplied, never "knows everything".
-        raise GenerationError("no_knowledge", f"{actor} has no perspective projection")
+        raise GenerationError("no_knowledge", f"{who} has no perspective projection")
     if type(knowledge) is not ActorKnowledge:
-        raise GenerationError("foreign_knowledge", f"{actor} knowledge must be its own ActorKnowledge")
-    if knowledge.actor != actor:
-        raise GenerationError("foreign_knowledge", f"{actor} was given another actor's knowledge")
+        raise GenerationError("foreign_knowledge", f"{who} knowledge must be its own ActorKnowledge")
+    # The view names the actor by campaign and id only; its typed ref (a character, or a speaking
+    # item such as a sentient sword) comes from its own projection.
+    actor = knowledge.actor
+    if (actor.campaign_id, actor.instance_id) != (view.campaign_id, view.actor_id):
+        raise GenerationError("foreign_knowledge", f"{who} was given another actor's knowledge")
     return actor, knowledge
 
 
@@ -211,7 +216,7 @@ def _knowledge_items(knowledge: ActorKnowledge, names: Mapping[InstanceRef, str]
                       f"{_STANCE.get(belief.stance, 'You believe')}: {_one_line(belief.text)}"))
     for belief in knowledge.history:
         items.append(((belief.moment.sequence, 2, belief.belief_id),
-                      f"Earlier, you thought: {_one_line(belief.text)}"))
+                      f"{_EARLIER.get(belief.stance, 'Earlier, you thought')}: {_one_line(belief.text)}"))
     return sorted(items)
 
 
@@ -292,6 +297,10 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
         raise GenerationError("bad_voice", "npc_brief needs a ResolvedVoice")
     if voice.actor != actor:
         raise GenerationError("voice_mismatch", f"the voice belongs to {voice.actor}, not {actor}")
+    if view.resolved_source is not None and voice.actor_revision != view.resolved_source:
+        # A voice resolved for another selected revision would mix that portrayal into this card.
+        raise GenerationError("voice_mismatch", f"the voice was resolved for {voice.actor_revision}, "
+                              f"not {view.resolved_source}")
     secrets = _secrets(secrets)
     heard = heard_lines(heard)
     sections = tuple(entry for entry in _sections(sections) if entry[0] != VOICE_SECTION)
@@ -340,7 +349,8 @@ def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
     """The scene-level reply's sealed brief: authored scenario text and table-visible lines only.
 
     The player characters are derived here from ``controls``, never passed in: every ``present``
-    actor whose controller is a human. A present actor with no controller is ``unassigned_actor``. ``names`` must name each of them (``bad_players``), and the
+    actor whose controller is a human. A present actor with no controller is ``unassigned_actor``.
+    ``names`` must name each of them (``bad_players``), and the
     brief forbids writing their words, thoughts, feelings or decisions. ``run_turn`` checks the
     same set against the plan and controls before any call. The reply is an unreviewed proposal:
     035's ``review_narration`` reviews it before it is kept.

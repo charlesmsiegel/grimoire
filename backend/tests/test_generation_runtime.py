@@ -240,7 +240,8 @@ def test_a_hand_built_plan_cannot_voice_a_player_character():
     controls, voices = world()
     harness = Harness([])
     _plan, meter, briefs = two_speakers(harness, controls, voices)
-    seized = tuple(c for c in controls if c.actor_id != "npc-oda") + (ControlAssignment(CAMPAIGN, "npc-oda", "human:bob"),)
+    seized = tuple(c for c in controls if c.actor_id != "npc-oda")
+    seized += (ControlAssignment(CAMPAIGN, "npc-oda", "human:bob"),)
     with pytest.raises(GenerationError) as caught:
         harness.runtime.run_turn(meter, briefs, controls=seized)
     assert caught.value.reason == "player_speaker"

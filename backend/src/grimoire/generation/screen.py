@@ -17,8 +17,9 @@ def screen_reply(brief: NpcBrief | DirectorBrief, text: str, *, spoken: Sequence
                  voices: Iterable[ResolvedVoice] = ()) -> str | None:
     """The rejection reason for ``text`` from the call ``brief`` describes, or ``None`` to keep it.
 
-    ``silent_reply``: blank or punctuation only. ``too_long``: over ``MAX_LINE_CHARS``. ``copied_example``: it reproduces an authored example
-    of any voice in the scene (``voices``). ``unlearned_secret``: it states a marker of a secret the
+    ``silent_reply``: blank or punctuation only. ``too_long``: over ``MAX_LINE_CHARS``.
+    ``copied_example``: it reproduces an authored example of a voice in ``voices`` (this turn's
+    speakers, as the runtime passes them). ``unlearned_secret``: it states a marker of a secret the
     speaker has not learned and that nothing it held or heard (its brief, ``spoken`` this turn)
     exposed. A director brief holds every secret as hidden, so only its own inputs expose one.
     """

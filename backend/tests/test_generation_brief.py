@@ -13,7 +13,9 @@ from grimoire.core import (
 )
 from grimoire.core.knowledge import Proposition, Report
 from grimoire.core.perspective import ActorKnowledge, KnownBelief
-from grimoire.voice import SecretFact
+from grimoire.core.identity import SourceRef
+from grimoire.core.model import ActorView
+from grimoire.voice import ResolvedVoice, SecretFact, VoiceAnchor
 from grimoire.generation import (
     DirectorBrief, GenerationError, HeardLine, NpcBrief, director_brief, director_messages, known_ids, npc_brief,
     npc_messages, screen_reply,
@@ -255,3 +257,33 @@ def test_an_item_too_big_for_the_budget_is_skipped_not_everything():
     bellamy = npc_brief(replace(view(BELLAMY, "Bellamy"), knowledge=actor_knowledge(ledger, BELLAMY, as_of=2)),
                         voices["npc-bellamy"], secrets=SECRETS)
     assert PRIVATE in bellamy.system and "know nothing" not in bellamy.system
+
+
+def test_a_speaking_item_keeps_its_own_kind():
+    sword = InstanceRef(CAMPAIGN, "item", "talking-sword")
+    revision = SourceRef("world:explore", "item", "talking-sword", "r1")
+    voice = ResolvedVoice(sword, "The Sword", revision, revision,
+                          (VoiceAnchor("a1", "cadence", "Rings when it speaks."),), (), {"a1": "source"})
+    sword_view = ActorView(CAMPAIGN, "talking-sword", "The Sword", "",
+                           knowledge=actor_knowledge(LEDGER, sword, as_of=1))
+    blade = npc_brief(sword_view, voice, secrets=SECRETS)
+    assert blade.actor == sword and "Rings when it speaks." in blade.system
+
+
+def test_a_voice_resolved_for_another_selected_revision_is_refused():
+    _controls, voices = world()
+    oda = voices["npc-oda"]
+    npc_brief(replace(view(ODA, "Oda"), resolved_source=oda.actor_revision), oda, secrets=SECRETS)
+    with pytest.raises(GenerationError) as caught:
+        npc_brief(replace(view(ODA, "Oda"), resolved_source=SourceRef("world:other", "character", "oda", "r9")),
+                  oda, secrets=SECRETS)
+    assert caught.value.reason == "voice_mismatch"
+
+
+def test_an_earlier_belief_keeps_its_stance():
+    earlier = KnownBelief("b1", "spy", "The steward is a spy", "rejected", Moment(1), (), None)
+    now = KnownBelief("b2", "spy", "The steward is a spy", "suspected", Moment(2), (), None)
+    knowledge = ActorKnowledge(ODA, 2, (), (), (now,), (earlier,))
+    oda = npc_brief(replace(view(ODA, "Oda"), knowledge=knowledge), world()[1]["npc-oda"], secrets=SECRETS)
+    assert "Earlier, you doubted: The steward is a spy" in oda.system
+    assert "You suspect: The steward is a spy" in oda.system
