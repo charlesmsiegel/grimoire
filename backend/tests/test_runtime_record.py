@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import gc
 import json
+import pickle
 from dataclasses import replace
 
 import pytest
@@ -304,3 +305,16 @@ def test_keeping_an_outcome_never_blocks_regenerating_its_turn():
     second = harness.runtime.run_turn(meter, briefs, controls=controls)
     assert (first.status, second.status) == ("complete", "complete")
     assert recorded_turn(1, meter, second).ledger is meter.ledger
+
+
+def test_an_outcome_pickles_and_still_names_its_meter():
+    controls, voices = world()
+    plan = Harness([]).plan(controls, present=PRESENT, speakers=("npc-oda", "npc-bellamy"))
+    meter, outcome = run_swipe(controls, voices, plan, [ODA_LINE, BELLAMY_LINE])
+    restored = pickle.loads(pickle.dumps(outcome))
+    assert restored == outcome
+    assert recorded_turn(1, meter, restored).lines == recorded_turn(1, meter, outcome).lines
+    other, _ = run_swipe(controls, voices, plan, [ODA_LINE, BELLAMY_LINE])
+    with pytest.raises(GenerationError) as caught:  # another swipe's meter, same call ids
+        recorded_turn(1, other, restored)
+    assert caught.value.reason == "outcome_mismatch"

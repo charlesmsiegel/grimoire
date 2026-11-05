@@ -10,6 +10,7 @@ queued.
 from __future__ import annotations
 
 import threading
+import uuid
 from contextlib import contextmanager
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -70,12 +71,19 @@ class TurnMeter:
         self._busy = threading.Lock()
         self._pending_digest: str | None = None
         self._fail_booking = _fail_booking  # tests only: force a booking stage to fail
+        # Two meters on one plan have the same call ids; this tells their bills apart.
+        self._token = uuid.uuid4().hex
 
     # -- public view --------------------------------------------------------
 
     @property
     def ledger(self) -> TurnUsageLedger:
         return self._ledger
+
+    @property
+    def token(self) -> str:
+        """An opaque id unique to this meter, for results that must name the meter they billed."""
+        return self._token
 
     def summary(self) -> TurnUsageSummary:
         return self._ledger.summary()

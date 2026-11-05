@@ -87,7 +87,8 @@ _SENTENCE_END = re.compile(r"""[.!?\u2026]+["'\u00bb\u300d\u300f)\]]*(?=\s|$)"""
 _QUOTATION = re.compile(
     r"""".+?"|\u00ab.+?\u00bb|\u300c.+?\u300d|\u300e.+?\u300f|(?<!\w)'(?=\w).*?(?<=\S)'(?!\w)""")
 #: Words, keeping an inner apostrophe or hyphen: ``oda's``, ``doesn't``, ``npc-oda`` are one token.
-_TOKEN = re.compile(r"\w+(?:['-]\w+)*")
+#: A semicolon is a token too, because it ends a clause.
+_TOKEN = re.compile(r"\w+(?:['-]\w+)*|;")
 #: Verb forms that report speech when they follow a named speaker, every form spelled out so the
 #: verdict never depends on a stemmer. Heuristic and deliberately narrow: forms as often used as
 #: nouns or for non-speech (``talk``, ``answer``, ``reply``, ``tell``, ``call``, ``cry``, ``sing``,
@@ -121,24 +122,56 @@ SPEECH_PHRASES = frozenset({("lets", "slip"), ("let", "slip"), ("letting", "slip
 NEGATIONS = frozenset({"not", "never", "nothing", "cannot"})
 
 
+def quotation_spans(text: str) -> list[tuple[int, int]]:
+    """``(start, end)`` of each quotation in ``text`` (already normalised)."""
+    return [match.span() for match in _QUOTATION.finditer(text)]
+
+
 def sentences(text: str) -> list[str]:
-    """``text`` normalised and cut into sentences (a quoted sentence ends with its quote)."""
+    """``text`` normalised and cut into sentences.
+
+    A sentence ends at ``.``, ``!``, ``?`` or ``…`` before a space, never inside a quotation, so a
+    quoted speech of several sentences stays in one. A quotation's own closing punctuation does
+    not end the sentence when what follows is a speech verb or a word and a speech verb
+    (``"…!" Oda hisses``, ``"…?" asks Wren``): the attribution belongs to the quotation.
+    """
     normalized = normalize(text)
+    spans = quotation_spans(normalized)
     parts, start = [], 0
     for end in _SENTENCE_END.finditer(normalized):
-        parts.append(normalized[start:end.end()].strip())
-        start = end.end()
+        cut = end.end()
+        if any(left < end.start() and cut < right for left, right in spans):
+            continue  # inside a quotation
+        if any(right == cut for _left, right in spans):
+            after = _TOKEN.findall(normalized[cut:])[:3]
+            if after and (speech_verb_at(after, 0) or (len(after) > 1 and speech_verb_at(after, 1))):
+                continue
+        parts.append(normalized[start:cut].strip())
+        start = cut
     parts.append(normalized[start:].strip())
     return [part for part in parts if part]
 
 
 def tokens(text: str) -> list[str]:
-    """The normalised words of ``text``."""
+    """The normalised words (and semicolons) of ``text``."""
     return _TOKEN.findall(normalize(text))
 
 
 def has_quotation(text: str) -> bool:
     return _QUOTATION.search(normalize(text)) is not None
+
+
+def split_quotations(text: str) -> tuple[str, str]:
+    """``text`` (normalised) before its first quotation, and all of it outside quotations."""
+    normalized = normalize(text)
+    spans = quotation_spans(normalized)
+    before = normalized[:spans[0][0]] if spans else normalized
+    outside, last = [], 0
+    for left, right in spans:
+        outside.append(normalized[last:left])
+        last = right
+    outside.append(normalized[last:])
+    return before, " ".join(outside)
 
 
 def is_negation(token: str) -> bool:

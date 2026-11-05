@@ -183,21 +183,31 @@ Hard invariants (the candidate fails on any; a baseline that has one is `baselin
 | `voice_sample_copy` | any model line (NPC or narration) shares 24+ contiguous normalised characters with a voice sample |
 
 **Attribution rule** (`/3` director lines; `checks._voiced`). The line is normalised and cut into
-sentences at `.`, `!`, `?` or `…` (with any closing quotes) before a space, and each sentence into
-word tokens (an inner apostrophe or hyphen stays in the token). An NPC's name tokens are each
-word of its scenario name (except filler such as `the` or `of`) and its id; a possessive
-(`Oda's`) is not its name. A sentence gives NPC *X* speech when:
+sentences at `.`, `!`, `?` or `…` before a space, never inside a quotation (a matched pair of
+double quotes, guillemets or corner brackets, or single quotes opening and closing a word, so
+`duke's` and `'til` are not quotations); a quotation's closing punctuation does not end the
+sentence when a speech verb, or a word and a speech verb, follows (`"…!" Oda hisses`). Each
+sentence is cut into word tokens (an inner apostrophe or hyphen stays in the token; a semicolon
+is a token). An NPC's name tokens are each word of its scenario name (except filler such as `the`
+or `of`) and its id. A name token right after a determiner (`her quill`, `the quill`) is a common
+noun, not a name; one right after a preposition (`to`, `toward`, `at`, `with`, `near`, …) is an
+object, which neither speaks nor takes the verb from the subject; a possessive (`Oda's`) is not a
+name. A sentence gives NPC *X* speech when:
 
-- a name token of *X* is followed within 6 tokens by a speech verb from the closed list
-  `grimoire.evals.text.SPEECH_VERBS` (or `lets slip`), with no other actor's name and no
-  negation (`not`, `never`, `nothing`, `cannot`, a word ending in `n't`) before it, the verb not
-  right after a determiner (`a shout`, `the answer` are nouns) and not right before a negation
-  (`says nothing`); or
-- the sentence has a quotation (a matched pair of double quotes, guillemets or corner brackets, or
-  single quotes opening and closing a word, so `duke's` and `'til` are not quotations) and either
-  a speech verb stands right before *X*'s name (`"…," mutters Oda`), or the sentence names no
-  actor but *X* and the sentence just before has *X* as its subject (*X* named within its first
-  4 tokens, before any other actor).
+- a subject name token of *X* is followed within 6 tokens by a speech verb from the closed list
+  `grimoire.evals.text.SPEECH_VERBS` (or `lets slip`), with no other subject name (except one
+  joined by `and`: `Oda and Hask whisper`), no clause break (`as`, `while`, `when`, `who`, `;`
+  and the like) and no negation (`not`, `never`, `nothing`, `cannot`, a word ending in `n't`)
+  before it, the verb not right after a determiner (`a shout`, `the answer` are nouns) and not
+  right before a negation (`says nothing`); or
+- the sentence has a quotation and one of:
+  - a speech verb stands right before *X*'s name (`"…," mutters Oda`);
+  - *X* is the only subject named in the text before the quotation, within its first 4 tokens,
+    and that text is the name alone or ends in `:`, `,` or a dash (`Oda: "…"`,
+    `Oda leans in - "…"`);
+  - the sentence just before has *X* as its only subject, within its first 4 tokens, and the
+    text outside this quotation names no other subject and is empty or has a speech verb or the
+    word `voice` (`Oda leans in. "…"`; `Oda leans in. "…," comes a low voice.`).
 
 Player characters are never given speech by this rule: restating a PC's action is narration's
 job, and PC authorship is checked by its markers and by 035's narration review.
@@ -219,11 +229,16 @@ distinguishability below baseline minus tolerance), `cost_regression` and opt-in
 ## Limitations
 
 Marker matching catches stated phrases, not paraphrase. The `/3` attribution rule is a
-deterministic heuristic, not a parse: it misses speech given to an NPC by a pronoun ("She
-mutters …"), by an epithet ("the old innkeeper mutters …"), by an unnamed speaker ("a low voice
-says …"), or in a quotation more than one sentence from the NPC that is its subject (or before
-it); and its verb list is heuristic both ways: verbs left out because they are as often nouns or
-non-speech (`sings`, `cries`, `calls`, `talks`, `answers`, `tells`) let speech through, and listed
-ones can flag non-speech ("Oda adds a coin"). Outcome labels are recorded inputs, used
+deterministic heuristic, not a parse. It misses speech given to an NPC by a pronoun ("She
+mutters …"), by an epithet ("the old innkeeper mutters …") or by an unnamed speaker ("a low voice
+says …"); a speech verb more than 6 tokens after the name ("Oda wipes the long counter clean,
+then slowly mutters …" is a cliff, not a judgement); and a quotation that is neither in the NPC's
+own sentence nor in the sentence right after one with the NPC as subject (or that comes before
+the NPC's sentence). It can also flag non-speech: a bare quotation right after a sentence with
+the NPC as subject (`Oda points at the board. "No credit."`) or introduced by a colon
+(`Oda taps the sign: "No credit."`) is credited to the NPC. Its verb list is heuristic both
+ways: verbs left out because they are as often nouns or non-speech (`sings`, `cries`, `calls`,
+`talks`, `answers`, `tells`) let speech through, and listed ones can flag non-speech ("Oda adds
+a coin"). Outcome labels are recorded inputs, used
 only next to marker evidence. Within-turn ordering of *learning* is not modelled; `known_from` is
 per turn.

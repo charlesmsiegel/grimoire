@@ -366,6 +366,62 @@ def test_a_silent_npc_voiced_in_narration_fails():
     assert found(report) == {("narration_voices_actor", 3, "npc-hask", "speech_verb")}
 
 
+def voices(*npcs: str, how: str = "speech_verb") -> set[tuple]:
+    return {("narration_voices_actor", 3, npc, how) for npc in npcs}
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    # an addressee after a preposition neither speaks nor takes the verb from the subject
+    ("Oda leans toward Wren and whispers that the duke sold the guild.", {LEAK} | voices("npc-oda")),
+    ("Oda turns to Wren and says the duke sold the guild.", {LEAK} | voices("npc-oda")),
+    ("Oda turns to Wren, and whispers that the duke sold the guild.", {LEAK} | voices("npc-oda")),
+    ("Oda glances at Hask and mutters that the duke sold the guild.", {LEAK} | voices("npc-oda")),
+    ("Bellamy winks at Wren and murmurs that the river barons own every brick.", voices("npc-bellamy")),
+    # a common noun is not a name ("her quill"), and joined subjects both speak
+    ("Oda sets down her quill and says the duke sold the guild.", {LEAK} | voices("npc-oda")),
+    ("Oda and Hask whisper that the duke sold the guild.", {LEAK} | voices("npc-oda", "npc-hask")),
+    ("Oda \u2014 eyes on the door \u2014 mutters that the duke sold the guild.", {LEAK} | voices("npc-oda")),
+    # a quotation the sentence's own subject introduces
+    ('Oda leans over the counter: "The duke sold the guild."', {LEAK} | voices("npc-oda", how="quotation")),
+    ('Oda: "The duke sold the guild."', {LEAK} | voices("npc-oda", how="quotation")),
+    ('Oda leans in - "the duke sold the guild."', {LEAK} | voices("npc-oda", how="quotation")),
+    # a quotation of several sentences stays one, and keeps the attribution after it
+    ('Oda leans in. "Listen. The duke sold the guild."', {LEAK} | voices("npc-oda", how="quotation")),
+    ('Oda leans in. "The duke sold the guild. Tell no one."', {LEAK} | voices("npc-oda", how="quotation")),
+    ('"Quiet now. The duke sold the guild," mutters Oda.', {LEAK} | voices("npc-oda", how="quotation")),
+    ('"The duke sold the guild!" Oda hisses.', {LEAK} | voices("npc-oda")),
+    ("'Listen,' Oda says. 'The duke sold the guild.'",
+     {LEAK} | voices("npc-oda") | voices("npc-oda", how="quotation")),
+])
+def test_attribution_evasions_fail(text, expected):
+    assert found(gate_narration(3, text)) == expected
+
+
+@pytest.mark.parametrize(("turn", "text"), [
+    (1, "Wren picks up the quill and says she will sign the ledger."),
+    (1, "Wren asks Oda for a room, and Oda hands over the guest ledger."),
+    (2, "Wren whispers that Oda keeps the ledger closed."),
+    (2, "Oda listens while Wren explains the plan."),
+    (2, "Oda hears Wren ask about the vault."),
+    (2, 'Oda looks up. "Room for the night?" Wren asks.'),
+    (2, 'Oda looks up. "Room for the night?" asks Wren.'),
+    (2, 'Oda nods at the door. "Thank you," says Wren.'),
+    (1, "The quill scratches in the guest ledger; Bellamy hums."),
+    (2, "Oda watches as Wren whispers to the guard."),
+    (2, "Near Oda the crowd murmurs."),
+    (2, "Hask ignores whatever Wren says."),
+    (2, "Bellamy plays on while Wren asks for wine."),
+    (2, "Oda listens as the crowd murmurs."),
+    (2, "Oda wipes the counter while the guests whisper."),
+    (2, "Hask watches the door; behind him the guards mutter."),
+    (1, 'Oda slides the guest ledger over. "Sign here," it reads in faded ink.'),
+    (2, 'Bellamy strums. "The Ballad of the Broken Crown" fills the hall.'),
+])
+def test_honest_narration_around_quotations_and_addressees_passes(turn, text):
+    report = gate_narration(turn, text)
+    assert report.passed, report.findings
+
+
 @pytest.mark.parametrize("verb", [
     "mutters", "confides", "blurts", "admits", "reveals", "adds", "breathes", "croons", "lets slip",
     "begs", "jokes", "boasts", "pleads", "threatens", "promises", "says",

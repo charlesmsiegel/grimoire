@@ -25,7 +25,7 @@ A green test suite here does not mean an app exists.
 | `RouteChoice(provider_id, model)` | What a caller chooses: primary first, then fallbacks. |
 | `Credentials` | Trusted code that knows the keys. Keys are wrapped in a `Secret` (printable ASCII, redacted `repr`). `EnvironmentCredentials` stands in for keys under the reserved `secrets/` root until the native file store (010) exists. |
 | `ModelRequest` | Opaque messages plus a **required** `max_output_tokens`, so every call is bounded. |
-| `TurnMeter` | One per turn and the **only booking path**. An adapter refuses a second live meter for the same campaign and turn; this guard is in-process only, and cross-process fencing belongs to 027 and 030. It holds the current ledger value and, for each call, its reports, status, delivery flag and fixed request digest. It is single-threaded: concurrent or re-entrant use is refused (`busy`). |
+| `TurnMeter` | One per turn and the **only booking path**. An adapter refuses a second live meter for the same campaign and turn; this guard is in-process only, and cross-process fencing belongs to 027 and 030. It holds the current ledger value and, for each call, its reports, status, delivery flag and fixed request digest. It is single-threaded: concurrent or re-entrant use is refused (`busy`). Its `token` is an opaque id unique to the meter, so a result can name the meter that billed it without holding it. |
 | `ProviderAdapter.execute(meter, call, request, routes, handle, …)` | Runs one planned call and returns a `CallResult`. |
 | `HttpTransport` | `http.client` over TLS (or loopback HTTP). It has no proxy support and no injection seams. |
 | `grimoire.testing.providers` | Test-only: `ScriptedTransport`, `ScriptedClock` and `explore_provider_faults`. |
