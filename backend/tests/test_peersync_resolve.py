@@ -8,11 +8,13 @@ listens on loopback, one of them in its own process.
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -181,7 +183,9 @@ def test_choosing_a_deletion_is_refused(tmp_path):
         expected = {DESKTOP: None, PHONE: case.expected[PHONE]}
         for keep in (None, etag(b"")):  # the absent version, or an etag no device holds
             refused = case.resolve(server, keep, expected=expected)  # type: ignore[arg-type]
-            assert refused.status == "refused" and "ResolveRefused" in refused.reason, refused
+            # refused by 019's own rule, or first by the phone, which holds no such version
+            assert refused.status == "refused" and ("ResolveRefused" in refused.reason
+                                                    or refused.reason.startswith("unknown_version")), refused
         assert (_tree(case.desktop.store.root), _tree(case.phone.store.root)) == before
         # keeping the version that still exists restores it
         assert case.resolve(server, PHONE, expected=expected).status == "resolved"
@@ -307,15 +311,17 @@ def test_the_serving_device_refuses_resolve_writes_beyond_the_path_and_the_grant
     with serving(case.phone) as server:
         channel = _connect(case.desktop, server)
         _request(channel, request)
-        honest = ({"op": "put", "path": case.path, "expected": etag(theirs)}, ours)  # the write it may make
+        # the writes it may make: the chosen version, with the phone's own one held beside it
+        honest = (({"op": "put", "path": case.path, "expected": etag(theirs)}, ours),
+                  ({"op": "keep", "path": case.path, "slot": 0, "hold": True}, theirs))
         for op in attempts:
             with pytest.raises(PeerRefused) as refused:
-                _step(channel, honest, op)
+                _step(channel, *honest, op)
             assert refused.value.code in ("invalid", "refused", "denied"), op
         # resolve's powers belong to a resolve request: a sync snapshot ends them
         _request(channel, {"t": "snapshot"})
         with pytest.raises(PeerRefused) as refused:
-            _step(channel, honest, ({"op": "keep", "path": case.path, "slot": 0, "hold": True}, theirs))
+            _step(channel, *honest)
         assert refused.value.code == "invalid"
         # and an honest resolve write still needs the grant: withdrawn, it is denied
         for grant in case.phone.authority.active_grants():
@@ -323,11 +329,134 @@ def test_the_serving_device_refuses_resolve_writes_beyond_the_path_and_the_grant
                 case.phone.authority.revoke_grant(grant.grant_id)
         _request(channel, request)
         with pytest.raises(PeerRefused) as refused:
-            _step(channel, honest)
+            _step(channel, *honest)
         assert refused.value.code == "denied"
         channel.send({"t": "bye"})
         channel.close()
     assert _tree(case.phone.store.root) == before
+
+
+def _forged(data: bytes, field: str, value: str) -> bytes:
+    """The same record with one string field changed: still a valid record at the same address."""
+    def swap(found):  # type: ignore[no-untyped-def]
+        if isinstance(found, dict):
+            return {key: (value if key == field else swap(item)) for key, item in found.items()}
+        return found
+    forged = json.dumps(swap(json.loads(data)), sort_keys=True, separators=(",", ":")).encode()
+    return forged + b"\n" if data.endswith(b"\n") else forged
+
+
+def test_a_peer_cannot_use_resolve_to_rewrite_a_record_in_no_conflict(tmp_path):
+    desktop, phone, _ = paired(tmp_path)
+    start_scene(desktop)
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+    path = "sources/catalog/cards/_source/records/character/mara/r1.json"  # an immutable revision
+    manifest = "sources/catalog/cards/_source/manifest.json"
+    real = (phone.store.root / path).read_bytes()
+    evil = _forged(real, "bio", "a traitor")
+    before = _tree(phone.store.root)
+    with serving(phone) as server:
+        channel = _connect(desktop, server)
+        for keep, mine, code in ((real, real, "no_conflict"),     # identical on both devices: nothing to resolve
+                                 (evil, evil, "unknown_version")):  # bytes the phone neither holds nor keeps
+            channel.send({"t": "resolve", "path": path, "keep": etag(keep),
+                          "expected": {DESKTOP: etag(mine), PHONE: etag(real)}})
+            with pytest.raises(PeerRefused) as refused:
+                channel.recv()
+            assert refused.value.code == code
+        # and the forged revision replace a refused request would have carried is not resolve's
+        with pytest.raises(PeerRefused) as refused:
+            _step(channel, ({"op": "put", "path": path, "expected": etag(real), "replace": True,
+                             "allowed": [etag((phone.store.root / manifest).read_bytes())]}, evil),
+                  ({"op": "keep", "path": path, "slot": 0, "hold": True}, real))
+        assert refused.value.code == "invalid"
+        channel.close()
+    assert _tree(phone.store.root) == before
+
+
+def test_a_resolve_step_writes_only_the_chosen_version_with_the_replaced_one_held(tmp_path):
+    case = Conflict(tmp_path)
+    ours, theirs = case.versions[DESKTOP], case.versions[PHONE]
+    forged = _forged(ours, "label", "Forged label")
+    before = _tree(case.phone.store.root)
+    with serving(case.phone) as server:
+        channel = _connect(case.desktop, server)
+        # a version no device holds is not one to keep, though the request is otherwise sound
+        channel.send({"t": "resolve", "path": case.path, "keep": etag(forged), "expected": case.expected})
+        with pytest.raises(PeerRefused) as refused:
+            channel.recv()
+        assert refused.value.code == "unknown_version"
+        _request(channel, {"t": "resolve", "path": case.path, "keep": etag(ours), "expected": case.expected})
+        put = {"op": "put", "path": case.path, "expected": etag(theirs)}
+        hold = {"op": "keep", "path": case.path, "slot": 0, "hold": True}
+        for step in (((put, forged), (hold, theirs)),   # other bytes than the chosen version
+                     ((put, ours),),                    # the phone's own version not held
+                     ((put, ours), (hold, forged))):    # something else held in its place
+            with pytest.raises(PeerRefused) as refused:
+                _step(channel, *step)
+            assert refused.value.code == "invalid", step
+        channel.close()
+    assert _tree(case.phone.store.root) == before
+
+
+@pytest.mark.parametrize("meet", ["request", "commit"])
+def test_two_devices_resolving_against_each_other_at_once_neither_hangs_nor_half_applies(tmp_path, monkeypatch, meet):
+    case = Conflict(tmp_path)
+    lined_up = threading.Barrier(2, timeout=30)
+    if meet == "request":  # both resolves are under way before either request arrives
+        real_dial = resolving_module.dial
+
+        def dial_together(*args, **kwargs):  # type: ignore[no-untyped-def]
+            lined_up.wait()
+            return real_dial(*args, **kwargs)
+        monkeypatch.setattr(resolving_module, "dial", dial_together)
+    else:  # both requests were accepted, and each device's data step waits on the other's library
+        monkeypatch.setattr(server_module, "resolving_out", lambda store: False)
+        real_relay = resolving_module._Relay.__call__
+
+        def relay_together(self, ops):  # type: ignore[no-untyped-def]
+            if any(kind != "state" for kind, _ in ops):
+                lined_up.wait()
+            return real_relay(self, ops)
+        monkeypatch.setattr(resolving_module._Relay, "__call__", relay_together)
+    before = _tree(case.desktop.store.root), _tree(case.phone.store.root)
+    reports = {}
+    with serving(case.phone) as on_phone, serving(case.desktop) as on_desktop:
+        def from_desktop() -> None:  # keeps its own version: the phone would receive it
+            reports[DESKTOP] = resolve_conflict(case.desktop.store, case.desktop.authority, PHONE, on_phone.address,
+                                                case.path, case.expected[DESKTOP], case.expected, timeout=20)
+
+        def from_phone() -> None:  # keeps its own version: the desktop would receive it
+            reports[PHONE] = resolve_conflict(case.phone.store, case.phone.authority, DESKTOP, on_desktop.address,
+                                              case.path, case.expected[PHONE], case.expected, timeout=20)
+        started = time.monotonic()
+        threads = [threading.Thread(target=from_desktop), threading.Thread(target=from_phone)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+        took = time.monotonic() - started
+    monkeypatch.undo()
+    assert took < 10, took  # bounded by the busy wait, never the connection's timeout
+    # Each one is refused whole (busy), or at most one of them ends the conflict whole: one whose
+    # server took its library just as the other gave up (the busy wait is bounded, not a turn).
+    resolved = [device for device, report in reports.items() if report.status == "resolved"]
+    assert len(reports) == 2 and len(resolved) <= 1, reports
+    for device, report in reports.items():
+        if device not in resolved:
+            assert report.status == "refused" and report.reason.startswith("busy"), report
+    if not resolved:
+        assert (_tree(case.desktop.store.root), _tree(case.phone.store.root)) == before
+        assert case.sync_again().status == "conflicts"  # still the one conflict, on both devices
+        with serving(case.phone) as server:  # and one resolve on its own then ends it
+            assert case.resolve(server, DESKTOP).status == "resolved"
+        resolved = [DESKTOP]
+    chosen = DESKTOP_LABEL if resolved == [DESKTOP] else PHONE_LABEL
+    assert case.labels() == (chosen, chosen)  # never swapped into a fresh conflict
+    again = case.sync_again()
+    assert again.status == "synced" and again.conflicts == (), again
+    assert case.labels() == (chosen, chosen)
 
 
 @pytest.mark.parametrize("change", [

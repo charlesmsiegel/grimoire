@@ -11,21 +11,29 @@ under the client's peer principal, re-read and confirmed. So the real devices ar
 archives, pending markers) and a failure at any point leaves what a crash at that point of a
 local resolve leaves (docs/DEVICE_SYNC.md).
 
-The serving device checks the user's expected etag of its own copy too: when the request
-arrives, and again before every step it commits (the step that writes the path expects that
-etag, every later one the chosen etag).
+The serving device does not take the requester's word for any of it (``ResolveRequest``): it
+admits only a choice of a version it already holds or keeps beside the path, checks its own
+expected etag when the request arrives and before every step, and accepts at the path only the
+chosen bytes, with its own version held. While a resolve of its own library is in flight it
+refuses what could wait on that resolve (``busy``), so two devices resolving against each other
+never wait on each other's library until the connection times out.
 """
 
 from __future__ import annotations
 
+import contextlib
+import os
 import tempfile
-from collections.abc import Callable, Mapping
+import threading
+import time
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from grimoire.store import LibraryStore, RecordNotFound, StoreError, Transaction, etag
 from grimoire.store.engine import MAX_CONFLICT_ATTEMPTS
 from grimoire.store.jsonfmt import is_etag
+from grimoire.store.layout import conflict_parts
 from grimoire.sync import ResolveRefused, SyncError, SyncInterrupted, device_of, resolve, syncable
 
 from .errors import MirrorMismatch, PeerRefused, TransportError
@@ -33,6 +41,7 @@ from .replay import Op, kept_target, send_ops
 from .session import _check_paired, dial, hang_up, pairing_for
 from .snapshot import Limits, MirrorStore, receive_mirror
 from .wire import Channel, client_handshake
+
 
 @dataclass(frozen=True)
 class ResolveReport:
@@ -67,18 +76,19 @@ def resolve_conflict(store: LibraryStore, authority, peer: str, address: tuple[s
     why = _unusable(local, peer, path, keep, expected)
     if why is not None:
         return ResolveReport(peer, path, "refused", f"ResolveRefused: {why}")
-    try:
-        connection = dial(address, timeout)
-    except OSError as error:
-        return ResolveReport(peer, path, "incomplete", f"unreachable: {error}")
-    channel: Channel | None = None
-    try:
-        channel = client_handshake(connection, local, peer, pairing.key)
-        return _resolve(store, channel, local, local_handle, pairing.key, path, keep, expected, workdir, limits)
-    except TransportError as error:  # whatever landed is whole, as after a crash between two commits
-        return ResolveReport(peer, path, "incomplete", f"disconnected: {error}")
-    finally:
-        hang_up(channel, connection)
+    with _outgoing(store):  # this library's own server now refuses what could wait on this resolve
+        try:
+            connection = dial(address, timeout)
+        except OSError as error:
+            return ResolveReport(peer, path, "incomplete", f"unreachable: {error}")
+        channel: Channel | None = None
+        try:
+            channel = client_handshake(connection, local, peer, pairing.key)
+            return _resolve(store, channel, local, local_handle, pairing.key, path, keep, expected, workdir, limits)
+        except TransportError as error:  # whatever landed is whole, as after a crash between two commits
+            return ResolveReport(peer, path, "incomplete", f"disconnected: {error}")
+        finally:
+            hang_up(channel, connection)
 
 
 def _unusable(local: str, peer: str, path: object, keep: object, expected: object) -> str | None:
@@ -242,13 +252,71 @@ class _RelayedTransaction(Transaction):
 
 # -- serving side -----------------------------------------------------------------------------
 
+#: How long a serving device waits for its own library before refusing a step as ``busy``, once one
+#: of its own resolves is in flight. That resolve holds the library while it waits for its peer's
+#: answer (019 commits the receiver's data with both libraries held), so two devices resolving
+#: against each other would each wait on the other until the connection timed out, freezing
+#: every local write meanwhile.
+BUSY_WAIT = 1.0
+
+_OUTGOING: dict[str, int] = {}
+_OUTGOING_LOCK = threading.Lock()
+
+
+def _key(store: LibraryStore) -> str:
+    return os.path.realpath(store.root)
+
+
+@contextlib.contextmanager
+def _outgoing(store: LibraryStore) -> Iterator[None]:
+    """Mark ``store`` as resolving against a peer for the block (this process only: a library is
+    open for writing in one process at a time)."""
+    key = _key(store)
+    with _OUTGOING_LOCK:
+        _OUTGOING[key] = _OUTGOING.get(key, 0) + 1
+    try:
+        yield
+    finally:
+        with _OUTGOING_LOCK:
+            _OUTGOING[key] -= 1
+            if not _OUTGOING[key]:
+                del _OUTGOING[key]
+
+
+def resolving_out(store: LibraryStore) -> bool:
+    """Whether this process is resolving a conflict of ``store`` against a peer right now."""
+    with _OUTGOING_LOCK:
+        return _key(store) in _OUTGOING
+
+
+@contextlib.contextmanager
+def committing(store: LibraryStore) -> Iterator[None]:
+    """Hold ``store`` for one served commit, or refuse ``busy`` with nothing written.
+
+    Without a resolve of this library in flight the wait is unbounded, as before: whoever holds
+    the library is a local commit that will finish. With one, the holder may be that resolve,
+    waiting on its peer, whose server may in turn be waiting here: after ``BUSY_WAIT`` the step
+    is refused, so the cycle ends at once and no local write waits for a connection to time out.
+    """
+    started = time.monotonic()
+    while not store.lock.acquire(timeout=0.05):
+        if resolving_out(store) and time.monotonic() - started >= BUSY_WAIT:
+            raise PeerRefused("busy", "this library is busy resolving a conflict of its own; try again")
+    try:
+        yield
+    finally:
+        store.lock.release()
+
+
 @dataclass(frozen=True)
 class ResolveRequest:
-    """A resolve request as the serving device accepts it: the path, the chosen etag and its own expected one."""
+    """A resolve request as the serving device accepts it: the path, the chosen etag, and the
+    etags expected here and on the requesting device."""
 
     path: str
     keep: str
     expected: str | None
+    theirs: str | None
 
     @classmethod
     def parse(cls, header: Mapping[str, object], device: str, peer: str) -> ResolveRequest:
@@ -260,20 +328,71 @@ class ResolveRequest:
         if not isinstance(expected, dict) or set(expected) != {device, peer} or not all(
                 value is None or is_etag(value) for value in expected.values()):
             raise PeerRefused("invalid", "a resolve request gives the expected etag of both devices")
-        return cls(path, keep, expected[device])  # type: ignore[arg-type]
+        return cls(path, keep, expected[device], expected[peer])  # type: ignore[arg-type]
 
-    def check(self, store: LibraryStore, *, writes: bool) -> None:
-        """Refuse (``stale``) unless this library's copy of the path is what the resolve expects here.
+    def admit(self, store: LibraryStore) -> None:
+        """Refuse a request this device cannot honour, before anything is sent.
 
-        Before the step that writes the path (and when the request arrives), that is the etag
-        the user saw; before every later step, the chosen one. A local edit since makes the
-        resolve stale here exactly as a local ``resolve`` refuses a device that changed, and an
-        archive never records an agreement this device no longer holds.
+        A peer is not an owner, so a resolve may write here only a version this device already
+        has: its own current one (it is the winner, and only bookkeeping is written here), or one
+        it keeps under ``.conflicts`` beside the path, which the keep-both transfer that reported
+        the conflict left (or a blob, whose name is its content). Anything else would let a
+        paired device write chosen bytes over a record, even an immutable revision.
         """
-        want = self.expected if writes else self.keep
         found = _current(store, self.path)
-        if found != want:
+        if found != self.expected:
             raise PeerRefused("stale", f"{self.path} changed on this device since the conflict was reported")
+        if self.keep == found:
+            if self.theirs == found:
+                raise PeerRefused("no_conflict", f"{self.path} is identical on both devices")
+            return
+        if syncable(self.path) == "blob":
+            if found is None and self.keep == "sha256:" + Path(self.path).stem:
+                return  # content-addressed: the bytes are checked against the name as they land
+        elif _kept(store, self.path, self.keep):
+            return
+        raise PeerRefused("unknown_version", f"the chosen version of {self.path} is not one this device holds "
+                                             "or keeps beside it")
+
+    def check_step(self, store: LibraryStore, writes: list[tuple[dict, bytes | Path]]) -> None:  # type: ignore[type-arg]
+        """Refuse a step of this resolve that does not do what the request said.
+
+        ``writes`` are the step's writes at the path and of its kept versions. The step that
+        writes the path finds the etag the user saw here, writes exactly the chosen version
+        there, and holds this device's own version beside it; every later step finds the chosen
+        version, so an archive never records an agreement this device no longer holds.
+        """
+        found = _current(store, self.path)
+        held = [body for header, body in writes if header.get("op") == "keep" and header.get("hold") is True]
+        if any(found is None or type(body) is not bytes or etag(body) != found for body in held):
+            raise PeerRefused("invalid", f"a resolve holds only this device's own version of {self.path}")
+        record = [(header, body) for header, body in writes if header.get("op") in ("put", "blob")]
+        if not record:
+            if found != self.keep:
+                raise PeerRefused("stale", f"{self.path} changed on this device during the resolve")
+            return
+        if found != self.expected:
+            raise PeerRefused("stale", f"{self.path} changed on this device since the conflict was reported")
+        if any(header.get("op") == "put" and (type(body) is not bytes or etag(body) != self.keep)
+               for header, body in record):
+            raise PeerRefused("invalid", f"the bytes written to {self.path} are not the chosen version")
+        if found is not None and not held:
+            raise PeerRefused("invalid", f"replacing {self.path} must hold this device's own version beside it")
+
+
+def _kept(store: LibraryStore, path: str, tag: str) -> bool:
+    """Whether ``.conflicts`` holds a kept version of ``path`` whose bytes have etag ``tag``."""
+    parts = tuple(path.split("/"))
+    for attempt in range(MAX_CONFLICT_ATTEMPTS):  # later slots hold other bytes sharing a name prefix
+        try:
+            data = store.read_exact("/".join(conflict_parts(parts, tag, attempt)))
+        except (StoreError, ValueError):
+            return False
+        if data is None:
+            return False
+        if etag(data) == tag:
+            return True
+    return False
 
 
 def _current(store: LibraryStore, path: str) -> str | None:

@@ -22,7 +22,7 @@ from grimoire.sync.documents import check_device_id
 from .errors import AuthenticationFailed, PeerRefused, TransportError
 from .pairing import peer_principal, read_pairing
 from .replay import StepBuffer, confirmation
-from .resolving import ResolveRequest
+from .resolving import ResolveRequest, committing, resolving_out
 from .snapshot import send_snapshot
 from .wire import Channel, is_loopback, no_delay, server_handshake
 
@@ -120,7 +120,20 @@ class PeerServer:
             try:
                 if kind == "bye":
                     return
-                if kind in ("snapshot", "resolve", "commit") and not self._still_paired(peer, channel_key):
+                if kind == "commit":
+                    # Held from the pairing check to the last write; while a resolve of this
+                    # library's own is in flight, the wait for it is bounded (``committing``).
+                    with committing(self.store):
+                        if not self._still_paired(peer, channel_key):
+                            buffer.reset()
+                            channel.refuse("not_paired", "this device is no longer paired with yours")
+                            return
+                        if resolving is not None and buffer.poisoned is None:
+                            resolving.check_step(self.store, buffer.at(resolving.path))
+                        etags = buffer.commit(self.store, handle)
+                    channel.send({"t": "committed", "count": len(etags), "digest": confirmation(etags)})
+                    continue
+                if kind in ("snapshot", "resolve") and not self._still_paired(peer, channel_key):
                     buffer.reset()
                     channel.refuse("not_paired", "this device is no longer paired with yours")
                     return
@@ -131,17 +144,14 @@ class PeerServer:
                 elif kind == "resolve":  # a snapshot to resolve one path from, then that resolve's steps
                     buffer.reset()
                     buffer.resolving = resolving = None
+                    if resolving_out(self.store):  # its steps could wait on that resolve, and it on them
+                        raise PeerRefused("busy", "this library is resolving a conflict of its own; try again")
                     request = ResolveRequest.parse(header, self.device, peer)
-                    request.check(self.store, writes=True)  # the user's expected etag, before anything is sent
+                    request.admit(self.store)  # before anything is sent
                     buffer.resolving, resolving = request.path, request
                     send_snapshot(channel, self.store, self.authority, peer)
                 elif kind == "op":
                     buffer.add(header, body)  # a refusal here is held and answered at "commit"
-                elif kind == "commit":
-                    if resolving is not None and buffer.poisoned is None:
-                        resolving.check(self.store, writes=buffer.names(resolving.path))
-                    etags = buffer.commit(self.store, handle)
-                    channel.send({"t": "committed", "count": len(etags), "digest": confirmation(etags)})
                 else:  # a client this confused cannot be kept in step: refuse and end the session
                     channel.refuse("protocol", f"unexpected request {kind!r}")
                     return

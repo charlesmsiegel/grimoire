@@ -246,9 +246,9 @@ class StepBuffer:
             raise PeerRefused("invalid", "a revision replace names at most one identical manifest")
         return frozenset(allowed)
 
-    def names(self, path: str) -> bool:
-        """Whether the step under way writes the record at ``path`` itself (not a kept version of it)."""
-        return any(header.get("op") in ("put", "blob") and header.get("path") == path for header, _ in self.ops)
+    def at(self, path: str) -> list[tuple[dict, bytes | Path]]:  # type: ignore[type-arg]
+        """The step's writes of the record at ``path`` and of its kept versions, with their bodies."""
+        return [(header, body) for header, body in self.ops if header.get("path") == path]
 
 
     def _state_expected(self, store: LibraryStore, name: str, body: bytes, expected: str | None,
