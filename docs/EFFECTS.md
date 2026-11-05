@@ -301,6 +301,7 @@ How it is read and written:
 | Not here | Owner |
 |---|---|
 | Holdings operations from accepted effects (the [023 obligation](roadmap/sprints/turn-effects-and-wrap-up.md#obligation-holdings-operations-023)) | 021's next slice (023 has merged) |
+| **Committing ability costs ([025](ABILITIES.md)).** An effect with no operations is refused (`no_operations`), so a pure cost cannot be accepted, and an effect carries no `attempt_id`, so a charge cannot be made exactly once. 029 charges `charges` and 030 needs exactly-once consumption of a counted resource; both need this. Not on any wave yet | 021's next slice, with 029 / 030 |
 | Persisting the 012 `Event`, witnesses, evidence and beliefs of an accepted event | 020 / 032 |
 | Extracting and labelling narration into proposals; mislabel review | 035 / Narration Continuity Referee |
 | When director acceptance needs human review | 035 |

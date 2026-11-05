@@ -56,7 +56,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
 
   These follow the [architecture layout](ARCHITECTURE.md#storage-root-and-provisional-organization) and are a deliberate deviation from an earlier draft that reserved root-level `events`/`evidence`. No root entry is a [V1 marker name](ARCHITECTURE.md#library-location-and-v1-isolation-implemented-grimoirelibrary).
 - **Ignored silently:** OS and editor droppings (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `*~`, `*.swp`, `*.swo`, `.#*`) and directories with no file below them. Empty directories are not state: a failed commit can leave some behind, and nothing can remove them through the file seam. Per-target `.conflicts/<hash16>/` folders accumulate in the same way.
-- **Device-local:** `.txn/`, `.conflicts/` and `.sync/` are never transferred by sync (019/028); `load` ignores them.
+- **Device-local:** `.txn/`, `.conflicts/` and `.sync/` are never transferred by sync (019); `load` ignores them.
 - **Root entries the store does not own** (for example the `worlds/` or `catalogs/` of the [architecture's example tree](ARCHITECTURE.md#storage-root-and-provisional-organization), including a `worlds` link into V1) are reported by `load` and never written, because no store address maps to them.
 
 ## File formats

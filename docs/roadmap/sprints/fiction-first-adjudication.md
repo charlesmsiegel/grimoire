@@ -31,7 +31,7 @@ The first slice of 025 ([fictional abilities](../../ABILITIES.md)) produces a de
 - gate "the power works" on `assessment.permitted` only, never on `approval == "not_needed"`;
 - treat a `combination` as approvable only case by case, by an explicit director ruling naming the assessment's exact `terms` (the limits and prerequisites it sets aside); charge `charges`; proper combination rules remain milestone 3;
 - authenticate who issues an `AbilityRuling` (adjudication channel only, never narration), and for a player-controlled actor take the attempt from that player's own contribution (`attempt_id` is its `contribution_id`);
-- decide supersede/revoke for rulings and whether a ruling pins the entity's `resolved_source`; `AbilityRuling` is provisional and may be replaced here.
+- persist rulings and their attempts (this sprint owns `AbilityRuling` persistence; 020 stores what it records), decide supersede/revoke for rulings and whether a ruling pins the entity's `resolved_source`; `AbilityRuling` is provisional and may be replaced here.
 
 ## Open questions
 - What standard of evidence distinguishes obvious success from uncertain success?
