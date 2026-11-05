@@ -84,6 +84,7 @@ batch.commit(approvals)                                    # one guarded store t
   - bytes already stored, or added twice in one batch, are put once;
   - a blob that appears on disk between `preview` and `commit` with identical bytes is simply dropped.
 - **Preview binding.** If what `commit` would write differs from the last `preview()` in any other way, it raises `StaleWrite`, and a new preview is needed.
+- **Pairs formed since.** If a placed instance's id was taken by another kind after its op was added (W11), `preview` and `commit` raise `StaleWrite` naming that instance's file (`instance_id_conflict`) and write nothing. The batch is unchanged, so it can be committed once the pair is undone.
 - **Convenience.** `images.add_image(...)`, `images.place(...)` and `images.repair_blob(...)` return one-op batches.
 - `put` accepts only `RecordEnvelope` and `SourceManifest`. Scope and chat records stay with [`ChatLibrary`](CHATS.md).
 
@@ -102,6 +103,7 @@ A refused rule writes nothing. Reasons are machine-readable: `InvalidImage.reaso
 | W8 | The mode, role, slot and field rules above | `invalid_field`, `mode_not_allowed`, `role_slot_mismatch` |
 | W9 | An `adjust` needs a shown inherited picture in that slot, and it must name that picture | `nothing_to_adjust`, `stale_adjust` |
 | W10 | Compare-and-swap on a placement's expected etag (`None` for a new one) | store `StaleWrite` |
+| W11 | A `set` or `adjust` may not name an instance whose id another kind of its campaign also uses: `load()` leaves both members of such a [pair](IDENTITY.md) out, so the id is no one individual. Only instances on disk count, since the store refuses a `put` that would form a pair. A `hide` stays allowed as the repair that takes art placed before the pair formed off the slot. Adding an image never names a subject, so a campaign image is unaffected. | `instance_id_conflict`; store `StaleWrite` at `preview`/`commit` for a pair formed since |
 
 ### Blob repair
 

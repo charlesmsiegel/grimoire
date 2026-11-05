@@ -7,6 +7,11 @@ validated when added, against disk plus the batch's earlier ops; ``commit`` re-v
 whole batch under the store lock before building the transaction, so nothing decided on stale
 facts is written.
 
+A placement may not name an instance whose id another kind of its campaign also uses (a pair,
+IDENTITY.md): ``load()`` leaves both members out, so the id is no one individual to picture. Only a
+``hide`` may still be written there, the one way to take art off a slot, so a human can undo what was
+placed before the pair formed.
+
 Reads fail closed: a source that ``load()`` would exclude, a dropped entity or a broken
 reference shows nothing, never another picture. No model call and no network fetch happen here.
 """
@@ -16,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef
+from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef, paired_instances
 from grimoire.images import (
     IMAGE_SCHEMA, PLACEMENT_SCHEMA, BlobFact, BlobInfo, Facts, ImageEntry, ImageModelError, ImageObject, Placement,
     PlacementEntry, Problem, Resolution, Shown, image_from_payload, image_to_payload, inherited,
@@ -135,6 +140,12 @@ class _Disk:
 
     def campaign_exists(self, campaign: str) -> bool:
         return self._memo(("campaign", campaign), lambda: self.store.campaign_exists(campaign))
+
+    def paired(self, campaign: str) -> frozenset[InstanceRef]:
+        """The campaign's instances on disk whose id another kind also uses (``paired_instances``, the
+        one definition). Only disk counts: the store itself refuses a batch ``put`` that would form a
+        pair (``InstanceIdConflict``), so a batch can never commit one of its own."""
+        return self._memo(("paired", campaign), lambda: paired_instances(self.store.campaign_instances(campaign)))
 
     def instance(self, ref: InstanceRef) -> StoredRecord | str:
         def compute() -> StoredRecord | str:
@@ -357,8 +368,17 @@ class ImageBatch:
 
     # -- committing --------------------------------------------------------------------------
     def _build(self) -> tuple[list[tuple[object, str | None]], _State, _Disk]:
-        """Re-validate every op against fresh disk facts and list the store puts (lock held)."""
+        """Re-validate every op against fresh disk facts and list the store puts (lock held).
+
+        A pair formed since a placement was added (another kind took its subject's id, by a hand
+        edit or a sync) is ``StaleWrite``, checked before the ops are replayed so it is never
+        mistaken for a refusal of the batch as built: the batch was valid, the library moved on.
+        """
         disk, state = _Disk(self.library.store), _State()
+        paired = sorted({"/".join(address_parts(op[1])) for op in self._ops
+                         if op[0] == "place" and _names_paired(disk, op[1], op[3])})
+        if paired:
+            raise StaleWrite([(path, "instance_id_conflict") for path in paired])
         for op in self._ops:
             _apply(self.library, state, disk, op)
         for ref, placed in state.placements.items():  # against the finished batch, not just earlier ops
@@ -423,7 +443,7 @@ def _check_preview(previewed: Mapping[str, bytes], rendered: Mapping[str, bytes]
         raise StaleWrite([(path, "changed since preview") for path in sorted(stale)])
 
 
-# -- validation (W1-W10) -----------------------------------------------------------------------
+# -- validation (W1-W11) -----------------------------------------------------------------------
 
 def _admitted(state: _State, disk: _Disk, source_id: str) -> bool:
     status = disk.source(source_id)
@@ -576,6 +596,8 @@ def _place(library: ImageLibrary, state: _State, disk: _Disk, subject: SourceRef
         raise InvalidPlacement(problem[1], problem[0])
     if ref in state.placements:
         raise InvalidPlacement(f"{ref} is placed twice in one batch", "invalid_field")
+    if _names_paired(disk, subject, placement):  # W11
+        raise InvalidPlacement(f"{subject}'s id is also used by another kind in its campaign", "instance_id_conflict")
     _check_placement(state, disk, ref, placement)
     owner, extra = library.owner, {}
     if expected is not None:  # carry what this version does not know forward (F13)
@@ -585,6 +607,18 @@ def _place(library: ImageLibrary, state: _State, disk: _Disk, subject: SourceRef
             extra = dict(current.record.extra)
     state.placements[ref] = _Placed(placement, expected, owner, extra)
     return ref
+
+
+def _names_paired(disk: _Disk, subject: SourceRef | InstanceRef, placement: Placement) -> bool:
+    """Whether this placement would picture a paired instance (W11), which ``load()`` leaves out.
+
+    A ``hide`` is exempt: it shows nothing, grants nothing, and is the only way 018 takes art off a
+    slot (no op deletes a placement), so it is the repair a human needs to undo a ``set`` or
+    ``adjust`` written before the pair formed, exactly as 017's ``end`` and 021's revocation stay
+    allowed on a pair. A definition subject is never in a pair: pairs are campaign instances only.
+    """
+    return (isinstance(subject, InstanceRef) and placement.mode != "hide"
+            and subject in disk.paired(subject.campaign_id))
 
 
 def _check_placement(state: _State, disk: _Disk, ref: PlacementRef, placement: Placement) -> None:
