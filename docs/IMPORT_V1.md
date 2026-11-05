@@ -20,7 +20,7 @@ plan.apply(approvals)  # one store transaction, re-checked under the store lock
 
 ## Selection
 
-`Selection(worlds, campaigns={}, skip=frozenset())` maps V1 world ids to source ids and V1 campaign ids to campaign ids; `skip` lists `LegacyId` texts of portrayals to leave out. The default proposes every readable world as `world:<id>` and every campaign under its own id; a V1 id with no valid V2 spelling (`Old_Coast`) is left out and reported (`no_id_candidate`) for the reviewer to map. A selection is refused (`ImportRefused`, nothing written) when it names a world or campaign the manifest does not hold, an invalid id, the reserved `import:` source family, or two worlds onto one source.
+`Selection(worlds, campaigns={}, skip=frozenset())` maps V1 world ids to source ids and V1 campaign ids to campaign ids; `skip` lists `LegacyId` texts of portrayals to leave out. The default proposes every readable world as `world:<id>` and every campaign under its own id; a V1 id with no valid V2 spelling (`Old_Coast`) is left out and reported (`no_id_candidate`) for the reviewer to map; mapping such a world imports only its source for now (see [Known limits](#known-limits)). A selection is refused (`ImportRefused`, nothing written) when it names a world or campaign the manifest does not hold, an invalid id, the reserved `import:` source family, or two worlds onto one source.
 
 ## Mapping
 
