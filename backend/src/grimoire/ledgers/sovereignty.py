@@ -111,7 +111,7 @@ def sovereignty_actor_ids(store: LibraryStore, campaign_id: str) -> frozenset[st
     every ``actor_id`` text in an object whose ``campaign_id`` is this campaign. A ledger folder or batch
     that cannot be listed or read (a link, a look-alike, malformed) raises ``TakenIdsUnlisted``.
     """
-    documents, unread = store.campaign_ledger_documents(campaign_id)
+    documents, unread = store.ledger_documents(f"campaigns/{campaign_id}")
     if unread:
         raise TakenIdsUnlisted(f"the sovereignty ledger of {campaign_id} cannot all be read ({', '.join(unread)}), "
                                "so the actor ids it names cannot be reserved", unread)

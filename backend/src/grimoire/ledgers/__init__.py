@@ -9,10 +9,11 @@ docs/TOOL_AUTHORITY.md and docs/PLAYER_SOVEREIGNTY.md.
 from grimoire.store.errors import AuthorityUnavailable, LedgerBroken, LedgerInvalid
 
 from .codec import ControlChange
-from .security import DurableAuthority
+from .security import DurableAuthority, security_campaign_ids, security_instance_ids
 from .sovereignty import ControlEvent, SovereigntyLedger, SovereigntyState, sovereignty_actor_ids
 
 __all__ = [
     "AuthorityUnavailable", "ControlChange", "ControlEvent", "DurableAuthority", "LedgerBroken",
-    "LedgerInvalid", "SovereigntyLedger", "SovereigntyState", "sovereignty_actor_ids",
+    "LedgerInvalid", "SovereigntyLedger", "SovereigntyState", "security_campaign_ids", "security_instance_ids",
+    "sovereignty_actor_ids",
 ]

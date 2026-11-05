@@ -34,7 +34,7 @@ from grimoire.evidencestore import evidence_instance_ids
 from grimoire.graphstore import relation_endpoint_ids
 from grimoire.holdingstore import holdings_holder_ids, holdings_peer_ids
 from grimoire.imagestore import placement_subject_ids
-from grimoire.ledgers import sovereignty_actor_ids
+from grimoire.ledgers import security_campaign_ids, security_instance_ids, sovereignty_actor_ids
 from grimoire.library import LibraryPathError
 from grimoire.store import (
     CampaignRecords, LibraryStore, LibraryView, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
@@ -53,9 +53,11 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     A hand-deleted individual's id must never go to a different one, who would silently inherit its
     past. Reserved: every instance file of any kind (a pair two kinds share keeps both); every id
     named by a relation (017), a chat roster (107), an accepted event (021), the events, evidence and
-    knowledge log (020), a holder file's log (023's move peers) or the sovereignty ledger (010b's bare
-    ``actor_id``s), each scanned raw so an undecodable record still protects its ids; every holder with
-    a holdings file (023) and every subject with a campaign placement folder (018), from file names.
+    knowledge log (020), a holder file's log (023's move peers), the sovereignty ledger (010b's bare
+    ``actor_id``s) or a security-ledger grant or approval scoped to one individual (its instance,
+    holder or placement address), each scanned raw so an undecodable record still protects its ids;
+    every holder with a holdings file (023) and every subject with a campaign placement folder (018),
+    from file names.
     Look-alike holder and placement names count as the ids they fold to.
 
     A file or folder that could name ids but cannot be read or listed raises ``TakenIdsUnlisted``
@@ -63,7 +65,7 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     allocator (107 here; 024, 026, 037 later) must use this at plan time and again under the store
     lock at commit, and any later record family that names instance ids must extend it. Its cost
     grows with play history: it reads every relation, chat, accepted-event, knowledge and holder file
-    and every sovereignty batch of the campaign.
+    and every sovereignty batch of the campaign, and every security batch of the library.
     """
     taken = {found.instance_id for found in store.campaign_instances(campaign_id)}
     taken |= _named_ids(store.campaign_relations(campaign_id), campaign_id, "relation")
@@ -75,6 +77,7 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     taken |= evidence_instance_ids(store, campaign_id)
     taken |= placement_subject_ids(store, campaign_id)
     taken |= sovereignty_actor_ids(store, campaign_id)
+    taken |= security_instance_ids(store, campaign_id)
     return frozenset(taken)
 
 
@@ -177,6 +180,8 @@ class ChatChange:
                     raise StaleWrite([(f"campaigns/{campaign}", "exists")])
                 if store.campaign_authority_presence(campaign) != "absent":
                     raise StaleWrite([(f"authority/campaigns/{campaign}", "exists")])
+                if campaign in security_campaign_ids(store):
+                    raise StaleWrite([("authority/security", f"a grant or approval names campaigns/{campaign}")])
             if self.new_actors:
                 taken = campaign_taken_ids(store, campaign)
                 clash = [actor for actor in self.new_actors if actor.instance_id in taken]
@@ -361,13 +366,21 @@ class ChatLibrary:
         return ChatChange(self, puts, scope, chat, tuple(actors), new_scope, tuple(reused), reused)
 
     def _allocate_scope(self) -> ScopeRef:
-        """A campaign id with no ``campaigns/<id>`` folder and no sovereignty ledger: a ledger outlives a
-        hand-deleted campaign folder, and a new campaign given its id would inherit its controls."""
+        """A campaign id with no ``campaigns/<id>`` folder, no sovereignty ledger and no security-ledger
+        grant or approval naming it. Both ledgers outlive a hand-deleted campaign folder: a new campaign
+        given its id would inherit its controls, or hand an old grant's worker the new campaign.
+
+        The security ledger is read once, and only once a drawn id is otherwise free, so a start that
+        never gets that far pays nothing for it; an unreadable one raises ``TakenIdsUnlisted``."""
+        granted: frozenset[str] | None = None
         for _ in range(_ALLOCATION_ATTEMPTS):
             campaign = self._id("q")
             if (self.store.campaign_presence(campaign) == "absent"  # a look-alike folder counts as taken
                     and self.store.campaign_authority_presence(campaign) == "absent"):
-                return ScopeRef(campaign)
+                if granted is None:
+                    granted = security_campaign_ids(self.store)
+                if campaign not in granted:
+                    return ScopeRef(campaign)
         raise StoreError("could not allocate an unused campaign id")
 
     # -- chat edits -----------------------------------------------------------------------------

@@ -217,7 +217,7 @@ All of these take the store lock, require a consistent library, and read listing
 
 - `read(ScopeRef | ChatRef)` returns a `StoredScopeRecord` (and since 017/021/023, `read(RelationRef | AcceptedRef | WrapUpRef | HoldingsRef)` too).
 - `campaign_presence(id)` returns `absent`, `present`, or `mismatch` when only a look-alike folder exists.
-- `campaign_authority_presence(id)` returns the same for the campaign's authority ledger folder (`authority/campaigns/<id>`), which a campaign id allocator must also find `absent`.
+- `campaign_authority_presence(id)` returns the same for the campaign's authority ledger folder (`authority/campaigns/<id>`), which a campaign id allocator must also find `absent`. It must also find the id outside `grimoire.ledgers.security_campaign_ids(store)`: every campaign a security-ledger grant or approval names.
 - `campaign_instances(id)` returns canonically named instance files across kinds. It reads names only and refuses links. Both members of a [cross-kind pair](#instance-ids-are-never-reused) are listed.
 - `campaign_chats(id)` returns one campaign's chat records as `CampaignRecords(records, problems)`, contained as `load()` contains them, reading only that campaign's `chats/`.
 - `campaign_placement_subjects(id)` returns `(refs, complete)`: the instance subjects of one campaign's placements, from **listings only** (every `<id>` entry under `placements/<kind>/`). Look-alikes count under the names they fold to, as for `campaign_holding_names`, and `complete=False` when a folder that could hold a subject is a link or cannot be listed, or the campaign folder exists only as a look-alike.
@@ -284,8 +284,8 @@ A distinct format, rather than an extension of `scope-record/1`, keeps a parser 
 An instance id is unique within a campaign across kinds and never goes to a different individual ([IDENTITY](IDENTITY.md)):
 
 - the commit refuses a cross-kind pair (`InstanceIdConflict`, step 5) and `load()` leaves an existing pair out (both members);
-- a campaign id stays taken while its sovereignty ledger (`authority/campaigns/<id>`) exists, even after `campaigns/<id>` is deleted by hand (`campaign_authority_presence`, [CHATS](CHATS.md#methods));
-- every instance allocator takes its new id outside `grimoire.chatstore.campaign_taken_ids(store, campaign_id)`, at plan time and again under the store lock at commit ([CHATS](CHATS.md#taken-instance-ids)). It reserves every id an instance file, relation, chat roster, accepted event, holdings file (its name and the move peers in its log), 020 knowledge file, campaign placement folder or campaign sovereignty ledger (`actor_id`s) names. Anything that could name ids but cannot be read or listed raises `TakenIdsUnlisted` (fail closed);
+- a campaign id stays taken while its sovereignty ledger (`authority/campaigns/<id>`) exists or a grant or approval in the security ledger (`authority/security`) names `campaigns/<id>` or anything under it, even after `campaigns/<id>` is deleted by hand (`campaign_authority_presence`, `security_campaign_ids`, [CHATS](CHATS.md#methods));
+- every instance allocator takes its new id outside `grimoire.chatstore.campaign_taken_ids(store, campaign_id)`, at plan time and again under the store lock at commit ([CHATS](CHATS.md#taken-instance-ids)). It reserves every id an instance file, relation, chat roster, accepted event, holdings file (its name and the move peers in its log), 020 knowledge file, campaign placement folder, campaign sovereignty ledger (`actor_id`s) or security-ledger grant or approval scoped to one individual (its instance, holder or placement address) names. Anything that could name ids but cannot be read or listed raises `TakenIdsUnlisted` (fail closed);
 - **any later record family that names instance ids must extend `campaign_taken_ids`**, so an allocator never has to know the families.
 
 ## Writing
@@ -469,7 +469,7 @@ authority/campaigns/<campaign_id>/<seq:010d>.json
 
 Any break raises `LedgerBroken(name, seq, reason)`; a ledger is never read partially. Other files beside the batches (for example a sync tool's "conflicted copy") are reported in `Ledger.ignored` and never replayed. For 019, that means another device's fork is dropped and only reported.
 
-`store.campaign_ledger_documents(campaign_id)` is the one raw read, for reserving ids (`grimoire.ledgers.sovereignty_actor_ids`, part of [`campaign_taken_ids`](#instance-ids-are-never-reused)). It returns `(documents, unread)`: the strict JSON of every canonically named batch of `authority/campaigns/<id>/`, with no chain, format or entry check, and the paths that could hold batches but cannot be read (a look-alike, linked or unlistable folder; a linked, unreadable, oversized or non-JSON batch, or a look-alike batch name). Replay never uses it.
+`store.ledger_documents(name)` is the one raw read, for reserving ids (`grimoire.ledgers.sovereignty_actor_ids` on `campaigns/<id>`, and `security_campaign_ids` and `security_instance_ids` on `security`; see [`campaign_taken_ids`](#instance-ids-are-never-reused)). It returns `(documents, unread)`: the strict JSON of every canonically named batch of `authority/<name>/`, with no chain, format or entry check, and the paths that could hold batches but cannot be read (a look-alike, linked or unlistable folder; a linked, unreadable, oversized or non-JSON batch, or a look-alike batch name). Replay never uses it.
 
 **Limit (pinned by a test):** with local file access, the chain cannot detect changes at the tail. Appending a valid batch (even one with consistent forged provenance), editing or truncating the tail, or restoring an older copy all keep a valid chain. Interior edits, deletions and reordering are detected.
 
