@@ -298,9 +298,10 @@ def stage(state: PartyState, scene_id: str, present: Iterable[InstanceRef], *,
 
 
 def _signature(state: PartyState, instance: InstanceRef) -> tuple:
-    """What a member's standing rests on: each membership relation of its chain, and whether the walk was cut."""
+    """What a member's standing rests on: each membership of its chain, endpoints included (a hand edit can keep a
+    relation's id and predicate and change its anchor), and whether the walk was cut."""
     chain, unknown = state.chain(instance)
-    return (tuple((m.relation, m.status) for m in chain), unknown)
+    return (tuple((m.relation, m.member, m.party, m.status, m.since) for m in chain), unknown)
 
 
 def presence(state: PartyState, cast: SceneCast, instance: InstanceRef) -> str:

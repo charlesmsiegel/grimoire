@@ -81,6 +81,18 @@ def test_a_cross_kind_pair_is_no_one_individual(store):
     assert refused(lambda: party.join(SNIK, MARA, at=Moment(1), provenance="d")).reason == "instance_id_conflict"
 
 
+def test_an_end_only_move_is_stale_when_the_member_id_becomes_a_pair(store):
+    party = party_library(store)
+    party.join(MARA, SNIK, at=Moment(1), provenance="d").commit()
+    change = party.release(SNIK, at=Moment(2), provenance="d")  # ends a relation, rewrites no endpoint
+    hand_pair(store, SNIK, kind="character")
+    assert (str(SNIK), "instance_id_conflict") in change.stale()
+    before = snapshot(store.root)
+    with pytest.raises(StaleWrite):
+        change.commit()
+    assert snapshot(store.root) == before
+
+
 def test_a_cycle_cannot_be_recorded_at_an_earlier_sequence(store):
     party = party_library(store)
     party.join(SNIK, MARA, at=Moment(7), provenance="d").commit()  # Mara travels with Snik from 7

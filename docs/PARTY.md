@@ -54,7 +54,7 @@ Membership is a 017 relation from the member to its **party anchor**:
 
 A **scene cast** (`SceneCast(campaign_id, scene_id, as_of, present)`) is exactly who is present in one scene.
 - **Only `stage` builds a cast.** Constructing one directly, or copying one with `dataclasses.replace`, is refused (`invalid_field`), so a cast is never made with a member `stage` would refuse.
-- **A cast is judged against current membership.** Membership can change at the cast's own sequence after staging, for example a member boxed during the scene. The cast keeps each member's membership chain as staged (`basis`). `cast.may_speak(x, state)` is true only for a cast member whose chain in `state` is still the staged one; otherwise it refuses with `stale_cast`, and the scene is staged again.
+- **A cast is judged against current membership.** Membership can change at the cast's own sequence after staging, for example a member boxed during the scene. The cast keeps each member's membership chain as staged (`basis`): every relation in it with its endpoints, status and `since`, so a hand edit that keeps a relation's id but changes its anchor also makes the cast stale. `cast.may_speak(x, state)` is true only for a cast member whose chain in `state` is still the staged one; otherwise it refuses with `stale_cast`, and the scene is staged again.
 
 `stage(state, scene_id, present, instances=…)` builds one. It refuses, with `PartyRefused.reason` and the offending `members`:
 
@@ -122,6 +122,7 @@ Each takes `at` (a 012 `Moment`) and `provenance` (attribution text, not authori
 **At commit**, under the store lock, the move is refused with `StaleWrite` (nothing written) when:
 - any membership relation file of the campaign was added, changed or removed since the plan;
 - a relation file has become unreadable;
+- the member, or an anchor the move ends or adds, now shares its id with another kind (checked for every move, since ending a relation rewrites no endpoint);
 - or a folded 017 change's own check fails: a replaced or vanished endpoint file, an id pair, or a duplicate.
 
 `stale()` reports the same reasons without committing, plus `exists` when the relation id the add allocated has since been taken (the store's own check at commit). Pinning every membership file of the campaign is deliberately coarse: a concurrent move of another member also makes the change stale, and the caller plans again.

@@ -176,6 +176,15 @@ def test_a_recorded_cycle_is_uncertain_and_never_staged():
     assert presence(looped, cast, SNIK) == "uncertain"
 
 
+def test_a_cast_is_stale_when_a_membership_keeps_its_id_but_changes_its_anchor():
+    """A hand edit can rewrite a relation file's object and keep its id and predicate."""
+    before = PartyState.build(C, [rel(1, "in_party", SNIK, MARA, 1)], as_of=2, unreadable=False)
+    cast = stage(before, "s", [SNIK], instances=EVERYONE)
+    edited = PartyState.build(C, [rel(1, "in_party", SNIK, TOMA, 1)], as_of=2, unreadable=False)
+    assert cast.may_speak(SNIK, before)
+    assert refused(lambda: cast.may_speak(SNIK, edited)).reason == "stale_cast"
+
+
 def test_refusals_pickle():
     error = PartyRefused("m", "in_reserve", (GRUB,))
     copy = pickle.loads(pickle.dumps(error))

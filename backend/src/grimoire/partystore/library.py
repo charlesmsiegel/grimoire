@@ -110,8 +110,9 @@ class PartyChange:
         """Why this move can no longer be committed as previewed; empty when it still can.
 
         Any membership relation file of the campaign added, changed or removed since the plan, a relation
-        file that has become unreadable, and each folded 017 change's own check (its endpoint files, CAS and
-        duplicates).
+        file that has become unreadable, the member or an anchor of the move whose id another kind now also uses
+        (checked here for every move, since an end-only change rewrites no endpoint), and each folded 017
+        change's own check (its endpoint files, CAS and duplicates).
         """
         store = self.library.store
         with store.lock:
@@ -121,6 +122,11 @@ class PartyChange:
                 stale.append((f"campaigns/{self.campaign_id}/relations", "a relation file cannot be read"))
             if dict(files.pins) != dict(self.pins):
                 stale.append((f"campaigns/{self.campaign_id}/relations", "memberships changed"))
+            paired = paired_instances(store.campaign_instances(self.campaign_id))
+            involved = (self.member, *(side[0] for side in (self.before, self.after) if side is not None))
+            for ref in dict.fromkeys(involved):
+                if ref in paired:
+                    stale.append((str(ref), "instance_id_conflict"))
             for change in self.relation_changes:
                 stale += change.stale(files.relations)
                 for record, expected in change.puts:  # a new file's id taken since the plan (commit says so too)
