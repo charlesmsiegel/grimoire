@@ -720,8 +720,8 @@ def _plan_keeps(plan: SyncPlan, device: str) -> None:
         base = plan.bases[path]
         if base.kind == "agreed" and side.etag == base.etag and mine.state == "present":
             continue  # the other device holds the version this device already moved on from
-        token = kept_record.base_token(archive_candidate(path, *plan.archives.values()))
-        if plan.kept_records[device].dismissed(path, side.etag, token):  # 028: dismissed here in this conflict
+        candidate = archive_candidate(path, *plan.archives.values())  # a marker that moved it: another conflict
+        if base == candidate and plan.kept_records[device].dismissed(path, side.etag, kept_record.base_token(candidate)):
             plan.conflicts[path] = replace(plan.conflicts[path], dismissed=(*plan.conflicts[path].dismissed, device))
             continue
         data = plan.scans[other].files[path]  # type: ignore[attr-defined]
@@ -1171,13 +1171,13 @@ def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object],
     if bookkeeping.root_name("pending", peer) in current or desired:
         files, _ = bookkeeping.render_files("pending", peer, plan.devices, desired, ARCHIVE_LIMIT)
         states = bookkeeping.changes(plan.stores[device], files, current)
-    # a keep verified here (written now, or already in its slot) is the peer's version as delivered; the
-    # base is the one the next sync reads from the archives just written
+    # only a keep this sync wrote is the peer's version as delivered (a slot found standing may be a hold
+    # of this device's own version); the base is the one the next sync reads from the archives just written
     a, b = plan.devices
-    opened = {path: (kept_record.archived_token(archived[a].get(path), archived[b].get(path)),
-                     plan.sides[path][peer].etag if conflict.kept.get(device) else None)
-              for path, conflict in plan.conflicts.items()}
-    record = kept_record.next_keeps(plan.kept_records[device], peer, plan.devices, opened)
+    bases = {path: kept_record.archived_token(archived[a].get(path), archived[b].get(path)) for path in plan.conflicts}
+    delivered = {keep.path: etag(keep.data) for keep in applied.kept.get(device, [])}
+    record = kept_record.next_keeps(plan.kept_records[device], peer, plan.devices, bases, delivered,
+                                    lambda path, tag: bool(kept_record.kept_slots(plan.stores[device], path, tag)))
     if record is not None:
         states.append(record)
     if not states:

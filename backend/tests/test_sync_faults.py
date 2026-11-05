@@ -47,8 +47,8 @@ from grimoire.core.identity import InstanceRef
 
 from store_helpers import EXHAUSTIVE_RECOVERY, WREN_R1, drop_empty_dirs, instance, owner_handle
 from sync_helpers import (
-    DESKTOP, PATHS, PHONE, WREN_A, WREN_B, chat_record, edit_instance, handle, handles, make_pair, new_revision,
-    put,
+    DESKTOP, PATHS, PHONE, WREN_A, WREN_B, chat_record, converged, edit_instance, handle, handles, make_pair,
+    new_revision, put,
 )
 
 DEVICES = (DESKTOP, PHONE)
@@ -121,11 +121,7 @@ def _canonical(tree, device):
 
 def _converges(outcome):
     """S9: after any crash, a restart and one sync reach exactly what an uninterrupted sync reaches."""
-    if outcome.recovered == outcome.completed:
-        return None
-    keys = sorted(key for key in set(outcome.recovered) | set(outcome.completed)
-                  if outcome.recovered.get(key, "absent") != outcome.completed.get(key, "absent"))
-    return f"differs from the uninterrupted sync at {keys[:4]}"
+    return converged(outcome.recovered, outcome.completed)
 
 
 def _keeps_both(outcome):

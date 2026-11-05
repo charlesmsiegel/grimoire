@@ -15,7 +15,7 @@ from grimoire.peersync import PeerRefused, read_pairing, transfer
 from grimoire.peersync.wire import client_handshake
 from grimoire.store import RecordEnvelope, etag
 from grimoire.store.jsonfmt import render
-from grimoire.sync import bookkeeping, dismiss
+from grimoire.sync import DismissRefused, bookkeeping, dismiss, resolve
 from grimoire.sync import session as sync_session
 from grimoire.sync.documents import KeptEntry, parse_keeps, render_keeps
 
@@ -102,6 +102,78 @@ def _raw_step(desktop, server, *ops: tuple[str, bytes]) -> None:  # type: ignore
         channel.recv()
     assert refused.value.code == "invalid"
     channel.close()
+
+
+def _steps(desktop, server, *steps):  # type: ignore[no-untyped-def]
+    """Send steps of raw ops (``(header, body)``) as an authenticated desktop would, on one connection;
+    returns each step's reply, ``PeerRefused`` for a refused one."""
+    pairing = read_pairing(desktop.store, PHONE)
+    channel = client_handshake(socket.create_connection(server.address, timeout=10), DESKTOP, PHONE, pairing.key)
+    replies = []
+    for kind, ops in steps:
+        for header, body in ops:
+            channel.send({"t": "op", **header}, body)
+        channel.send({"t": "commit", "step": kind})
+        try:
+            replies.append(channel.recv()[0])
+        except PeerRefused as refused:
+            replies.append(refused)
+    channel.close()
+    return replies
+
+
+@pytest.mark.parametrize("forged", ["relabelled", "delivered again"])
+def test_a_peer_may_never_label_a_version_resolve_held_here_as_delivered(tmp_path, forged):
+    """The person picked the desktop's version, so the phone holds its own: perhaps the only copy. A
+    hostile desktop may not record it as a version it delivered (so dismissable), neither by relabelling
+    the hold nor by first writing the same bytes to a second slot of its own."""
+    desktop, phone = _conflict(tmp_path)
+    mine, theirs = (desktop.store.root / WREN_PATH).read_bytes(), (phone.store.root / WREN_PATH).read_bytes()
+    resolve(desktop.store, phone.store, WREN_PATH, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)},
+            {DESKTOP: desktop.handle, PHONE: phone.handle})
+    name = f"peers/{DESKTOP}/keeps.json"
+    record = phone.store.root / ".sync" / name
+    before = record.read_bytes()
+    assert parse_keeps(before, PAIR).entries[WREN_PATH].held == {etag(theirs)}
+    base = "{}:{}".format(*bookkeeping.read_document(phone.store, "archive", DESKTOP, PAIR).entries[WREN_PATH])
+    claim = render_keeps(PAIR, {WREN_PATH: KeptEntry(base, frozenset({etag(theirs)}))})
+    steps = [("pending", [({"op": "state", "name": name, "expected": etag(before)}, claim)])]
+    if forged == "delivered again":
+        steps.insert(0, ("data", [({"op": "keep", "path": WREN_PATH, "slot": 1}, theirs)]))
+    with serving(phone) as server:
+        replies = _steps(desktop, server, *steps)
+    assert isinstance(replies[-1], PeerRefused) and replies[-1].code == "invalid"
+    assert record.read_bytes() == before
+    with pytest.raises(DismissRefused):
+        dismiss(phone.store, DESKTOP, WREN_PATH, etag(theirs), phone.handle)
+    assert theirs in _kept(phone)
+
+
+@pytest.mark.parametrize("document", ["junk shards", "a listed shard missing"])
+def test_a_peer_may_not_write_an_archive_that_is_not_valid(tmp_path, monkeypatch, document):
+    """Every shard is one its root lists, yet the whole is no valid archive of this pair: refused before
+    anything is staged, so no later plan ever reads (in full) a document it would then ignore."""
+    desktop, phone, _ = paired(tmp_path)
+    root = f"peers/{DESKTOP}/archive.json"
+    if document == "junk shards":
+        junk = render({"x": "a" * 1024})
+        files = {f"peers/{DESKTOP}/archive.{prefix:x}.json": junk for prefix in range(16)}
+        files[root] = render({"format": "grimoire.sync.archive/2", "devices": list(PAIR),
+                              "shards": {f"{prefix:x}": etag(junk) for prefix in range(16)}})
+    else:
+        entries = {f"campaigns/c9/instances/character/extra-{number:03d}.json": ("agreed", etag(b"%d" % number))
+                   for number in range(120)}
+        files, width = bookkeeping.render_files("archive", DESKTOP, PAIR, entries, LIMIT)
+        assert width > 0
+        del files[max(name for name in files if name != root)]
+    def on_phone() -> dict[str, bytes | None]:
+        return {name: phone.store.read_sync_state(name) for name in files}
+    before = on_phone()
+    with serving(phone) as server:
+        reply, = _steps(desktop, server, ("archive", [({"op": "state", "name": name, "expected": None}, body)
+                                                       for name, body in files.items()]))
+    assert isinstance(reply, PeerRefused) and reply.code == "invalid"
+    assert on_phone() == before
 
 
 @pytest.mark.parametrize("claim", ["a dismissal", "a kept version it lacks"])

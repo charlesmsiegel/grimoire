@@ -151,6 +151,12 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             raise ResolveRefused(f"campaign {campaign}, which {done} belongs to, is missing on {receiver}; sync it first")
     if mine is not None:
         txn.keep_version(path, mine)
+        # 028: the hold is recorded in the same commit, so neither a peer's sync nor ``dismiss`` can ever
+        # take this device's own version (perhaps its only copy) for the peer's delivered one
+        held = kept_record.with_held(kept_record.read_keeps(stores[receiver], other[receiver], pair),
+                                     other[receiver], pair, path, etag(mine))
+        if held is not None:
+            bookkeeping.stage(txn, [held])
     # Like a sync's copy, the resolve's copy is marked in the same commit: if the archives are not
     # written after it (a crash, a held file), the next sync still knows the peer held these bytes,
     # and a revert on either device is a conflict rather than an "unchanged" side.

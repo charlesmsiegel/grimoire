@@ -272,13 +272,17 @@ def render_pending(devices: tuple[str, str], entries: Mapping[str, Mapping[str, 
 
 @dataclass(frozen=True)
 class KeptEntry:
-    """One open conflict's kept versions on this device. ``base`` is the archive base both devices'
-    archives held for the path when they were delivered (``none``, ``agreed:<etag>`` or
-    ``deleted:<etag>``): the same bytes under another base belong to another conflict."""
+    """One path's kept versions on this device. ``base`` is the archive base both devices' archives
+    held for the path when the peer's versions were delivered (``none``, ``agreed:<etag>`` or
+    ``deleted:<etag>``): the same bytes under another base belong to another conflict. It is
+    ``None`` exactly when nothing is delivered, and only ``held`` is recorded."""
 
-    base: str
-    delivered: frozenset[str]  # the peer's versions a completed sync kept here
+    base: str | None
+    delivered: frozenset[str]  # the peer's versions a completed sync wrote here as kept versions
     dismissed: frozenset[str] = frozenset()  # of those, the ones this device never wants delivered again
+    #: this device's own versions ``resolve`` held here (perhaps their only copy anywhere): never
+    #: delivered, never dismissable, and recorded until their slot is gone, whatever the conflict does
+    held: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -293,7 +297,8 @@ class KeepsView:
 
     def dismissed(self, path: str, tag: str | None, base: str | None) -> bool:
         entry = self.entries.get(path) if self.state == "valid" else None
-        return entry is not None and base is not None and entry.base == base and tag in entry.dismissed
+        return (entry is not None and base is not None and entry.base == base and tag in entry.dismissed
+                and tag not in entry.held)
 
 
 def is_base_token(value: object) -> bool:
@@ -318,17 +323,23 @@ def parse_keeps(data: bytes | None, devices: tuple[str, str]) -> KeepsView:
         return KeepsView("ignored", MappingProxyType({}), reason, data)
     parsed: dict[str, KeptEntry] = {}
     for path, entry in entries.items():
-        if (not _syncable(path) or not isinstance(entry, Mapping)
-                or set(entry) != {"base", "delivered", "dismissed"} or not is_base_token(entry["base"])
-                or not _etag_list(entry["delivered"]) or not entry["delivered"] or not _etag_list(entry["dismissed"])
-                or not set(entry["dismissed"]) <= set(entry["delivered"])):
+        valid = (_syncable(path) and isinstance(entry, Mapping)
+                 and set(entry) == {"base", "delivered", "dismissed", "held"}
+                 and all(_etag_list(entry[key]) for key in ("delivered", "dismissed", "held")))
+        if valid:  # one spelling: a base exactly when something is delivered, and never an empty entry
+            delivered, dismissed, held = (set(entry[key]) for key in ("delivered", "dismissed", "held"))  # type: ignore[index]
+            valid = ((is_base_token(entry["base"]) if delivered else entry["base"] is None)  # type: ignore[index]
+                     and dismissed <= delivered and not held & delivered and bool(delivered or held))
+        if not valid:
             return KeepsView("ignored", MappingProxyType({}), f"bad entry for {path!r}", data)
-        parsed[path] = KeptEntry(entry["base"], frozenset(entry["delivered"]), frozenset(entry["dismissed"]))
+        parsed[path] = KeptEntry(entry["base"], frozenset(entry["delivered"]), frozenset(entry["dismissed"]),  # type: ignore[index]
+                                 frozenset(entry["held"]))  # type: ignore[index]
     return KeepsView("valid", MappingProxyType(parsed), None, data)
 
 
 def render_keeps(devices: tuple[str, str], entries: Mapping[str, KeptEntry]) -> bytes:
-    body = {path: {"base": entry.base, "delivered": sorted(entry.delivered), "dismissed": sorted(entry.dismissed)}
-            for path, entry in sorted(entries.items()) if entry.delivered}
+    body = {path: {"base": entry.base if entry.delivered else None, "delivered": sorted(entry.delivered),
+                   "dismissed": sorted(entry.dismissed & entry.delivered), "held": sorted(entry.held)}
+            for path, entry in sorted(entries.items()) if entry.delivered or entry.held}
     return render({"format": KEEPS_FORMAT, "devices": list(devices), "entries": body,
                    "check": _digest(devices, body)})

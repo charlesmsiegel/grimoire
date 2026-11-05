@@ -29,7 +29,9 @@ from grimoire.testing.fileops import snapshot
 
 from image_fixtures import PNG, WREN_A as ART_SUBJECT, seed as seed_art
 from store_helpers import OWNER, WREN_R1, drop_empty_dirs, instance, owner_handle
-from sync_helpers import DESKTOP, PATHS, PHONE, WREN_A, canonical, edit_instance, handle, handles, make_pair, put
+from sync_helpers import (
+    DESKTOP, PATHS, PHONE, WREN_A, canonical, converged, edit_instance, handle, handles, make_pair, put,
+)
 
 LIMIT = 12_000  # one file holds about 30 paths at this cap; the libraries below sync hundreds
 PAIR = (DESKTOP, PHONE)
@@ -318,11 +320,7 @@ def _fault_scenario():
             desktop.close()
 
     def converges(outcome):
-        if outcome.recovered == outcome.completed:
-            return None
-        keys = sorted(key for key in set(outcome.recovered) | set(outcome.completed)
-                      if outcome.recovered.get(key, "absent") != outcome.completed.get(key, "absent"))
-        return f"differs from the uninterrupted sync at {keys[:4]}"
+        return converged(outcome.recovered, outcome.completed)
     return CrashScenario("sync-sharded", setup, once, once,
                          (Invariant("converges", converges), idempotent_recovery(), RESIDUE),
                          normalize=drop_empty_dirs)

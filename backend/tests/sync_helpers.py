@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import functools
+import json
 import shutil
 import tempfile
 from collections.abc import Iterable
@@ -12,6 +13,7 @@ from pathlib import Path
 from grimoire.core.identity import InstanceRef
 from grimoire.store import LibraryStore, RecordEnvelope, RecordNotFound
 from grimoire.sync import identify, sync
+from grimoire.testing.fileops import Tree
 
 from store_helpers import HARBOR, OWNER, WREN_R1, harbor_manifest, instance, owner_handle, seed, wren
 
@@ -116,3 +118,31 @@ __all__ = [
     "CHAT", "DESKTOP", "OWNER", "PATHS", "PHONE", "WREN_A", "WREN_B", "canonical", "chat_record",
     "edit_instance", "handle", "handles", "kept", "make_pair", "new_revision", "put",
 ]
+
+
+def _delivered(tree: Tree, key: str) -> dict[str, set[str]]:
+    data = tree.get(key)
+    entries = json.loads(data)["entries"] if data is not None else {}
+    return {path: set(entry["delivered"]) for path, entry in entries.items()}
+
+
+def _held(data: bytes | None) -> bytes | None:
+    entries = json.loads(data)["entries"] if data is not None else {}
+    held = {path: entry["held"] for path, entry in entries.items() if entry["held"]}
+    return json.dumps(held, sort_keys=True).encode() if held else None
+
+
+def converged(recovered: Tree, completed: Tree) -> str | None:
+    """S9's convergence (a restart and one sync reach exactly what an uninterrupted sync reaches),
+    except that a kept-version record may list fewer delivered versions (028): a keep a crash left
+    unrecorded is found standing by the next sync, which is no delivery (a standing slot may be a
+    hold), so it only stays undismissable. Every held version is recorded exactly the same."""
+    records = {key for key in {*recovered, *completed} if key.endswith("/keeps.json")}
+    for key in sorted(records):
+        before, after = _delivered(recovered, key), _delivered(completed, key)
+        if any(not tags <= after.get(path, set()) for path, tags in before.items()):
+            return f"{key} records a delivered version the uninterrupted sync does not"
+    keys = sorted(key for key in {*recovered, *completed}
+                  if (_held(recovered.get(key)) != _held(completed.get(key)) if key in records
+                      else recovered.get(key, "absent") != completed.get(key, "absent")))
+    return f"differs from the uninterrupted sync at {keys[:4]}" if keys else None

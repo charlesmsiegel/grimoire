@@ -120,7 +120,7 @@ class PeerServer:
                     channel.refuse("not_paired", "this device is no longer paired with yours")
                     return
                 if kind == "snapshot":
-                    buffer.reset()
+                    buffer.new_sync()
                     send_snapshot(channel, self.store, self.authority, peer)
                 elif kind == "op":
                     buffer.add(header, body)  # a refusal here is held and answered at "commit"

@@ -5,9 +5,10 @@ again whenever its slot is empty, so deleting a kept file by hand never sticks. 
 the decision instead, in the pair's kept-version record (``keeps``). Like every 019 decision it is
 made from bytes, never from timestamps:
 
-- only a version a **completed sync delivered here from the peer** for a conflict still open can be
-  dismissed: the record lists those etags, so this device's own version, and any version
-  ``resolve`` held (perhaps its only copy anywhere), is refused;
+- only a version a **completed sync wrote here from the peer** for a conflict still open can be
+  dismissed: the record lists those etags. This device's own version is refused, and so is any
+  version ``resolve`` held here (perhaps its only copy anywhere), which every pair's record lists
+  apart as held: a slot a sync merely found standing is never recorded as delivered;
 - a sync never keeps a dismissed version for that device again while the conflict stands on the
   same archive base, and reports it in ``Conflict.dismissed``; a **different** version from the
   peer (other bytes) is kept as usual;
@@ -22,7 +23,8 @@ version's own address (``kept/<hash16>/<digest12>/<name>``), so a handle that ma
 kept version may not dismiss one either, and an approval policy applies as it does to any write.
 It is journaled as ``.sync`` state, so a crash leaves it either written or not. The kept files
 themselves are not deleted (010 commits never delete); ``Dismissal.slots`` lists the ones holding
-those bytes: the peer's version as delivered, so deleting them loses nothing the peer did not hold.
+those bytes: bytes a peer's sync delivered, held by no ``resolve`` here, so deleting them loses
+nothing the peer did not send.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from grimoire.store.layout import kept_address
 
 from .documents import KeptEntry, check_device_id, keeps_name, render_keeps, syncable
 from .errors import DismissRefused, SyncInterrupted
-from .keeps import kept_slots, read_keeps
+from .keeps import held_anywhere, kept_slots, read_keeps
 from .identity import device_of
 
 
@@ -44,7 +46,7 @@ from .identity import device_of
 class Dismissal:
     """What ``dismiss`` recorded: ``wrote`` is false when it was already dismissed. ``slots`` are the
     kept-version files on this device that hold the dismissed bytes: the peer's version as a sync
-    delivered it, so the app may delete them, and no sync writes them again."""
+    wrote it, never a hold, so the app may delete them, and no sync writes them again."""
 
     peer: str
     path: str
@@ -60,9 +62,10 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
     Refused (``DismissRefused``, nothing written): a ``peer`` that is not another device, a path
     that is not a synchronized record that can have kept versions (a blob never has one), an etag
     that is not one, this device's own current version of ``path``, any version a completed sync did
-    not keep here from ``peer`` for a conflict still open (a version ``resolve`` held included), a
-    record that would exceed 010's file cap, or a write the handle may not make. A record that is
-    unreadable stops it (``SyncInterrupted``).
+    not write here from ``peer`` for a conflict still open, any version ``resolve`` held here (by
+    any pair's record, or possibly: one this device cannot read as valid), a record that would
+    exceed 010's file cap, or a write the handle may not make. A record that is unreadable stops it
+    (``SyncInterrupted``).
     """
     device = device_of(store)
     try:
@@ -89,10 +92,13 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
     if entry is None or kept not in entry.delivered:
         raise DismissRefused(f"{kept} is not a version of {path} that a completed sync kept here from {peer} "
                              "for a conflict still open")
+    if held_anywhere(store, device, path, kept):  # another pair's resolve held the same bytes here
+        raise DismissRefused(f"{kept} is (or may be) a version of {path} that resolve held on this device, "
+                             "perhaps its only copy; it is never dismissed")
     slots = kept_slots(store, path, kept)
     if kept in entry.dismissed:
         return Dismissal(peer, path, kept, slots, False)
-    entries = {**view.entries, path: KeptEntry(entry.base, entry.delivered, entry.dismissed | {kept})}
+    entries = {**view.entries, path: KeptEntry(entry.base, entry.delivered, entry.dismissed | {kept}, entry.held)}
     try:
         data = render_keeps(devices, entries)
     except StoreError as error:  # larger than any reader accepts
