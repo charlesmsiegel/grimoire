@@ -32,21 +32,22 @@ Membership is a 017 relation from the member to its **party anchor**:
 
 - **The anchor** is any existing instance of the campaign. For one player character's party it is that character (or trainer). For a party spanning several player characters it is a group instance, and the player characters are members too.
 - **Why relations.** A relation already has what membership needs: exact endpoints, a `since` and an `ending` in campaign sequence, editorial retraction, preview and approval, [taken instance ids](CHATS.md#taken-instance-ids), [sync](SYNC.md) and [accepted effects](EFFECTS.md) (021).
-- **Accepted effects (021)** can begin and end these predicates like any other. 021 does not apply this slice's move rules (one membership at a time, no cycles, appended history). What it records is read by the same rules as a hand edit: two memberships at once are reported and fail closed, never guessed. A play-time move that enforces the move rules is a later slice.
+- **Accepted effects (021)** can begin and end these predicates like any other. 021 does not apply this slice's move rules (one membership at a time, no cycles, appended history). What it records is read by the same rules as a hand edit: two memberships at once, or a cycle, are reported and fail closed, never guessed. A play-time move that enforces the move rules is a later slice.
 - **History is the relation files.** Nothing is deleted. Leaving or releasing ends a relation; `PartyLibrary.history(member)` lists every membership relation of a member, oldest first.
 - **Older builds.** A build without these predicates decodes such a file as an `UnsupportedRelation`: listed, never walked and never rewritten (017's rule).
 
 ### State (`grimoire.party.PartyState`)
 
-`PartyState.build(campaign_id, relations, as_of=…, unreadable=False)` is a pure function of the campaign's decoded relations at one sequence.
+`PartyState.build(campaign_id, relations, as_of=…, unreadable=…)` is a pure function of the campaign's decoded relations at one sequence. `unreadable` is required: the caller says whether every relation file was read.
 
 - `membership(member)` returns a `Membership(member, party, status, relation, since)` or `None`.
 - `party(anchor)` returns the anchor's active members and its reserve, each sorted by reference text.
 - `chain(x)` walks upward: `x`'s membership, then its anchor's, and so on (a group travelling in a larger party). `anchors_above(x)` lists those anchors.
 - **Reserve is transitive.** `reserved(x)` is true when `x` is stored, or travels in a party whose anchor (or an anchor above it) is stored: a boxed group's members are boxed with it.
-- `uncertain(x)` is true when `x`'s membership, or an anchor's above it, is ambiguous.
+- `uncertain(x)` is true when `x`'s membership, or an anchor's above it, is ambiguous, or when its chain loops back on itself.
 - A retracted membership never counts. An ended one counts before its `until`.
 - **Ambiguity is reported, never guessed.** A member holding two membership relations at once (a hand edit, two devices, or two accepted effects) is in `conflicted`, appears in no party, and is reported as `conflicting_membership`. `membership()` refuses it, and so does every `PartyLibrary` move of that member. **Repair** is editorial, through 017's `RelationLibrary`: end or retract the relation that is wrong (the problem lists both relation ids), and the member is moveable again.
+- **A recorded cycle is reported, never walked.** `PartyLibrary` refuses a move that would make one, but a hand edit or accepted effects can record one. It is reported once as a `party_cycle` problem listing the relation ids, and every member of the loop, and everyone travelling with them, is `uncertain`: none can be staged. Repair is the same as for a conflict.
 - **Unreadable files fail closed.** When a relation file or the folder cannot be read, `complete` is false and the state reports `relations_unreadable`: a reserve membership might be hiding in the unreadable file.
 
 ## Scene casts and presence

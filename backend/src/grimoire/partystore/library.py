@@ -264,40 +264,45 @@ class PartyLibrary:
             current = holding[0] if holding else None
             before = None if current is None else (current.object, MEMBERSHIP[current.predicate])
             self._check_source(member, before, source, any_source)
-            if target is not None and target[0] is None:
-                assert before is not None  # _check_source required a membership
-                target = (before[0], target[1])
+            resolved: tuple[InstanceRef, str] | None = None
             if target is not None:
-                if target[0] not in instances:
-                    raise _refuse("missing_party", f"{target[0]} has no instance file", target[0])
-                if target[0] in paired_instances(instances):
+                if target[0] is None:
+                    assert before is not None  # _check_source required a membership
+                    resolved = (before[0], target[1])
+                else:
+                    resolved = (target[0], target[1])
+            if resolved is not None:
+                anchor, status = resolved
+                if anchor not in instances:
+                    raise _refuse("missing_party", f"{anchor} has no instance file", anchor)
+                if anchor in paired_instances(instances):
                     raise _refuse("instance_id_conflict", "an id also used by another kind is no one individual",
-                                  target[0])
-            if target is not None and before == target:
-                raise _refuse("already_there", f"{member} is already there", member)
+                                  anchor)
+                if before == resolved:
+                    raise _refuse("already_there", f"{member} is already there", member)
             if current is not None and current.since.sequence >= at.sequence:
                 raise _refuse("same_moment", f"{member}'s current membership began at sequence {at.sequence}; "
                                              "record the move at a later sequence", member)
-            if target is not None:
-                state = PartyState.build(campaign, files.relations, as_of=at.sequence)
-                if state.uncertain(target[0]):
-                    raise _refuse("conflicting_membership", f"{target[0]}'s membership is ambiguous", target[0])
-                if member in state.anchors_above(target[0]):
-                    raise _refuse("party_cycle", f"{target[0]} is itself in {member}'s party", member, target[0])
-                if target[1] == "party" and state.reserved(target[0]):
-                    raise _refuse("party_in_reserve", f"{target[0]} is stored, so its party cannot travel",
-                                  target[0])
+            if resolved is not None:
+                anchor, status = resolved
+                state = PartyState.build(campaign, files.relations, as_of=at.sequence, unreadable=False)
+                if state.uncertain(anchor):
+                    raise _refuse("conflicting_membership", f"{anchor}'s membership is ambiguous", anchor)
+                if member in state.anchors_above(anchor):
+                    raise _refuse("party_cycle", f"{anchor} is itself in {member}'s party", member, anchor)
+                if status == "party" and state.reserved(anchor):
+                    raise _refuse("party_in_reserve", f"{anchor} is stored, so its party cannot travel", anchor)
             changes: list[RelationChange] = []
             try:
                 if current is not None:
                     etag = store.read(current.ref).etag
                     changes.append(self.relations.end(current.ref, until=at, provenance=provenance, expected=etag))
-                if target is not None:
-                    changes.append(self.relations.add(campaign, PREDICATE_FOR[target[1]], member, target[0],
+                if resolved is not None:
+                    changes.append(self.relations.add(campaign, PREDICATE_FOR[resolved[1]], member, resolved[0],
                                                       since=at, provenance=provenance, relations=files.relations))
             except InvalidRelation as error:
                 raise _refuse(error.reason, str(error), member) from None
-        return PartyChange(self, campaign, member, before, target, at, tuple(changes), files.pins)  # type: ignore[arg-type]
+        return PartyChange(self, campaign, member, before, resolved, at, tuple(changes), files.pins)
 
     @staticmethod
     def _check_source(member: InstanceRef, before: tuple[InstanceRef, str] | None, source: str | None,

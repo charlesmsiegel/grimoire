@@ -119,7 +119,7 @@ class PartyState:
 
     @classmethod
     def build(cls, campaign_id: str, relations: Iterable[object], *, as_of: int,
-              unreadable: bool = False) -> PartyState:
+              unreadable: bool) -> PartyState:
         """``relations`` are the campaign's decoded relations (others are ignored); ``unreadable`` says some
         relation file or the folder could not be read."""
         _segment(campaign_id, "campaign_id")
@@ -145,9 +145,17 @@ class PartyState:
             (relation,) = found
             memberships[member] = Membership(member, relation.object, MEMBERSHIP[relation.predicate],
                                              relation.ref, relation.since)
+        for member in sorted(memberships, key=str):  # a cycle among unambiguous memberships, reported once
+            seen, current = [member], memberships[member].party
+            while current in memberships and current not in seen:
+                seen.append(current)
+                current = memberships[current].party
+            if current == member and member == min(seen, key=str):
+                problems.append(PartyProblem("party_cycle", member,
+                                             tuple(sorted(memberships[m].relation.relation_id for m in seen))))
         if unreadable:
             problems.append(PartyProblem("relations_unreadable"))
-        conflicted = frozenset(p.member for p in problems if p.member is not None)
+        conflicted = frozenset(p.member for p in problems if p.code == "conflicting_membership")
         by_party: dict[InstanceRef, list[Membership]] = {}
         for membership in memberships.values():
             by_party.setdefault(membership.party, []).append(membership)
@@ -184,8 +192,8 @@ class PartyState:
             if membership is None:
                 return tuple(found), False
             found.append(membership)
-            if membership.party in seen:
-                return tuple(found), False
+            if membership.party in seen:  # a recorded cycle: who travels with whom is unknown
+                return tuple(found), True
             seen.add(membership.party)
             current = membership.party
 
@@ -219,7 +227,7 @@ class SceneCast:
     as_of: int
     present: tuple[InstanceRef, ...]
     _token: object = field(default=None, repr=False, compare=False)
-    basis: Mapping[InstanceRef, tuple] = field(default_factory=dict, repr=False, compare=False)
+    basis: tuple = field(default=(), repr=False)  # ((member, signature), ...) sorted by member, as staged
 
     def __post_init__(self) -> None:
         if self._token is not _STAGED:
@@ -263,7 +271,7 @@ def stage(state: PartyState, scene_id: str, present: Iterable[InstanceRef], *,
     chosen = tuple(present)
     if any(type(ref) is not InstanceRef for ref in chosen):
         raise _refuse("invalid_field", "a cast is selected by InstanceRef")
-    if not state.complete:
+    if not state.complete or any(p.code == "relations_unreadable" for p in state.problems):
         raise _refuse("relations_unreadable", "a relation file cannot be read, so reserve membership is unknown")
     foreign = [ref for ref in chosen if ref.campaign_id != state.campaign_id]
     if foreign:
@@ -285,7 +293,7 @@ def stage(state: PartyState, scene_id: str, present: Iterable[InstanceRef], *,
     conflicted = sorted((ref for ref in chosen if state.uncertain(ref)), key=str)
     if conflicted:
         raise _refuse("conflicting_membership", "membership is ambiguous", *conflicted)
-    basis = MappingProxyType({ref: _signature(state, ref) for ref in chosen})
+    basis = tuple((ref, _signature(state, ref)) for ref in sorted(chosen, key=str))
     return SceneCast(state.campaign_id, scene_id, state.as_of, chosen, _STAGED, basis)
 
 
@@ -308,12 +316,12 @@ def presence(state: PartyState, cast: SceneCast, instance: InstanceRef) -> str:
     """
     if not isinstance(state, PartyState) or not isinstance(cast, SceneCast) or type(instance) is not InstanceRef:
         raise _refuse("invalid_field", "presence needs a PartyState, a SceneCast and an InstanceRef")
-    if not state.complete:
+    if not state.complete or any(p.code == "relations_unreadable" for p in state.problems):
         raise _refuse("relations_unreadable", "a relation file cannot be read, so reserve membership is unknown")
     if cast.campaign_id != state.campaign_id or cast.as_of != state.as_of:
         raise _refuse("stale_cast", "the cast and the state must be of the same campaign and sequence")
     if instance in cast.present:
-        if cast.basis.get(instance) != _signature(state, instance):
+        if dict(cast.basis).get(instance) != _signature(state, instance):
             raise _refuse("stale_cast", f"{instance}'s membership changed since the scene was staged; stage it again",
                           instance)
         return "present"
