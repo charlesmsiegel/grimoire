@@ -301,6 +301,24 @@ def test_a_connection_lost_mid_transfer_is_incomplete_and_the_next_transfer_fini
     assert phone.chats.navigation().all_chats() == desktop.chats.navigation().all_chats()
 
 
+def test_a_connection_lost_after_a_pass_keeps_that_pass_in_the_report(tmp_path, monkeypatch):
+    desktop, phone, _ = paired(tmp_path)
+    start_scene(desktop)
+    real, snapshots = server_module.send_snapshot, []
+
+    def dropping(*args, **kwargs):  # type: ignore[no-untyped-def]
+        snapshots.append(1)
+        if len(snapshots) == 2:  # the first pass wrote to the phone; the second snapshot never comes
+            raise server_module.TransportError("the cable came out")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(server_module, "send_snapshot", dropping)
+    with serving(phone) as server:
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert report.status == "incomplete" and report.reason.startswith("disconnected"), report
+    assert len(report.passes) == 1 and report.copied, report  # what landed is still reported
+
+
 def test_a_peer_that_changes_during_a_pass_is_planned_again_and_converges(tmp_path, monkeypatch):
     desktop, phone, _ = paired(tmp_path)
     start_scene(desktop)

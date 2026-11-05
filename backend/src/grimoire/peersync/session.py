@@ -98,6 +98,8 @@ def _passes(store: LibraryStore, channel: Channel, local: str, local_handle: obj
     for _ in range(attempts):
         try:
             report = _one_pass(store, channel, local, local_handle, key, workdir, limits)
+        except TransportError as error:  # the connection is gone: keep what earlier passes did
+            return TransferReport(peer, "incomplete", f"disconnected: {error}", tuple(reports))
         except PeerRefused as error:
             reason = f"{type(error).__name__}: {error}"
             if error.code in _SESSION_ENDING:
