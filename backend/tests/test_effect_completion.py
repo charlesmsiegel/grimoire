@@ -598,3 +598,53 @@ def test_a_retry_of_complete_after_a_later_event_is_still_a_no_op(world):
     assert retry.duplicate_of == EVENT and retry.preview() == {}
     retry.commit()
     _completed(store, handles)
+
+
+# -- Codex review on PR 595 ------------------------------------------------------------------------
+
+def _evict_through(store, seq: int) -> None:  # type: ignore[no-untyped-def]
+    """Drop Tam's log entries up to ``seq``, exactly as 023's eviction leaves the file (``evicted_through``)."""
+    import json
+    path = store.root / TAM_FILE
+    document = json.loads(path.read_bytes())
+    payload = document.get("payload", document)
+    payload["ops"] = [entry for entry in payload["ops"] if entry["seq"] > seq]
+    payload["evicted_through"] = seq
+    path.write_text(json.dumps(document, sort_keys=True, indent=2) + "\n")
+
+
+def test_complete_refuses_a_hand_refund_whose_spend_entry_was_since_evicted(world):
+    """The holder moved past the receipted seq; that its log no longer holds the entry changes nothing."""
+    store, handles = world
+    publish(store, planned(store, handles), event=True, holders=True)
+    holdings = holdings_library(store)
+    holdings.apply(Operation("refund-throw", (Line.add(TAM, BALL, 1),), "refund", "hand repair")).commit()
+    op_id = effects_library(store, handles).read(EVENT, requested_by=DIRECTOR)[0].holdings.op_id
+    spent = holdings.read(TAM).lookup(op_id).seq
+    _evict_through(store, spent)  # as a thousand later changes would: the spend is out of the log
+    assert holdings.read(TAM).lookup(op_id) is None and balls(store) == 3
+    _refused(lambda: recovery(store, handles).complete(EVENT, expected=_etag(store, handles)), "not_completable")
+    assert balls(store) == 3 and allies(store) == []
+
+
+def test_complete_pins_an_ability_users_instance_file(tmp_path):
+    from grimoire.effects import Op as Operation_
+    from parts_fixtures import KNIFE, ORIN, hop, seed_holdings
+    from graph_fixtures import seed_campaign
+    store = LibraryStore.create(tmp_path / "lib", locker=ProcessLocker())
+    handles = Handles()
+    from effects_fixtures import seed
+    seed(store, handles)
+    seed_campaign(store, (ORIN, KNIFE))
+    seed_holdings(store, holdings_library(store))
+    proposal = hop(ops=(Operation_("begin", "has_met", TAM, INES),))  # Orin uses the pack; no endpoint, no agent
+    publish(store, effects_library(store, handles).accept(proposal, controls=CONTROLS), event=True, holders=True)
+    change = recovery(store, handles).complete(EVENT, expected=_etag(store, handles))
+    [orin] = [path for path in store.root.rglob("orin.json") if "holdings" not in path.parts]
+    orin.write_bytes(orin.read_bytes().replace(b"synthetic", b"replaced", 1) if b"synthetic" in orin.read_bytes()
+                     else orin.read_bytes() + b"\n")
+    with pytest.raises(StaleWrite):
+        change.commit()
+    orin.unlink()
+    _refused(lambda: recovery(store, handles).complete(EVENT, expected=_etag(store, handles)), "missing_agent")
+    store.close()

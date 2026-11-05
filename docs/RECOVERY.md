@@ -51,11 +51,12 @@ so the receipts then verify. The event file is never rewritten.
    contradict what finishing an earlier one would write, and holdings' exact seqs cannot protect relations.
 4. Any `effect:revoked/<id>` token for the event in a campaign relation or holder file refuses
    (`not_completable`): a revocation of it partly landed, and completing would redo what it undid.
-5. **A human repair is never doubled.** A holder that logs the event's holdings entry and logged anything after
-   it, or a relation one of the event's `begin`s wrote that has been ended since, refuses (`not_completable`,
-   naming `holdings` or the operation); so does a verified `begin` whose endpoint's instance file is gone
-   (`missing_endpoint`), and an agent with no instance file (`missing_agent`, as `accept`): finishing would write the rest of an effect someone already undid or
-   finished by hand by other means (a hand refund of a synced spend would leave the effect in force uncharged).
+5. **A human repair is never doubled.** A holder past the seq the holdings receipt names for it (it logged anything
+   after the event's entry, even once that entry was evicted from its log), or a relation one of the event's
+   `begin`s wrote that has been ended since, refuses (`not_completable`, naming `holdings` or the operation); so
+   does a verified `begin` whose endpoint's instance file is gone (`missing_endpoint`), and an agent with no
+   instance file (`missing_agent`, as `accept`): finishing would write the rest of an effect someone already undid
+   or finished by hand by other means (a hand refund of a synced spend would leave the effect in force uncharged).
 6. Each failing relation receipt must be plainly **unpublished**:
    - a `begin` whose receipted relation file does not exist is re-added **under the receipted relation id**,
      `since` the event's moment, provenance `effect:accepted/<id>` (017's `add(relation_id=...)`, below). 017's
@@ -73,10 +74,10 @@ so the receipts then verify. The event file is never rewritten.
 8. Ability charges need no write: they are recorded on the event.
 9. The commit re-checks: accepted events unchanged, each relation change's own `stale()`, every relation file
    readable, every receipted relation that verified pinned as read (`relation changed`), each written holder's
-   instance file (023's `recheck`), every other receipted holder file pinned as read (`holder file changed`),
-   the agents' and verified `begin`s' endpoints' instance files (`agent missing or changed`), no actor id paired with another kind, and that the
-   relation and holder files naming the event in a 021 token are still exactly those read: a revocation landing
-   in between is `StaleWrite`, not completed over.
+   instance file (023's `recheck`), every other receipted holder file pinned as read (`holder file changed`), the
+   agents', ability users' and verified `begin`s' endpoints' instance files (`agent missing or changed`), no actor
+   id paired with another kind, and that the relation and holder files naming the event in a 021 token are still
+   exactly those read: a revocation landing in between is `StaleWrite`, not completed over.
 
 ### `adopt(proposal, *, controls, contributions=(), endorsements=())`: finish shape B
 

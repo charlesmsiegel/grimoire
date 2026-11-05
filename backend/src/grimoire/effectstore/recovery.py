@@ -117,12 +117,12 @@ class EffectRecovery:
 
     def _refuse_touched_since(self, event: AcceptedEvent, failing: list[int], index) -> None:  # type: ignore[no-untyped-def]
         """Finishing an event a human has since repaired by hand would double the repair: refuse when a holder
-        that logs this event's entry changed after it, or a receipted relation this event began was ended."""
+        is past this event's receipted seq (logged anything after its entry, evicted or not), or a receipted relation this event began was ended."""
         accepted = event.holdings
         if accepted is not None:
             held = parts.read_holders(self.library._holdings(), tuple(accepted.seqs))
-            moved = sorted(str(holder) for holder, value in held.items() if isinstance(value, Holdings)
-                           and (entry := value.entry(accepted.op_id)) is not None and value.seq != entry.seq)
+            moved = sorted(str(holder) for holder, value in held.items()  # by the receipt: an evicted entry too
+                           if isinstance(value, Holdings) and value.seq > accepted.seqs[holder])
             if moved:
                 raise InvalidEffect(f"{', '.join(moved)} changed after logging this event's holdings change",
                                     "not_completable", ("holdings",))
@@ -394,10 +394,12 @@ def _landed_relations(proposal: EffectProposal, index, recorded: set[str]  # typ
 
 
 def _acting(lib: TurnEffectsLibrary, event: AcceptedEvent) -> tuple[dict, frozenset]:
-    """An accepted event's agents' instance files as read now, and every actor it names."""
+    """An accepted event's agents' and ability users' instance files as read now, and every actor it names (as
+    ``accept`` pins them through ``parts.acting_agents`` and ``parts.holdings_actors``)."""
     ops = [item.op for item in event.operations]
-    acting = {op.agent for op in ops if op.agent is not None}
-    actors = {ref for op in ops for ref in (op.subject, op.object, op.agent) if ref is not None}
+    users = {attempt.actor for attempt in event.ability_attempts}
+    acting = {op.agent for op in ops if op.agent is not None} | users
+    actors = {ref for op in ops for ref in (op.subject, op.object, op.agent) if ref is not None} | users
     if event.holdings is not None:
         acting |= event.holdings.holdings.agents()
         actors |= event.holdings.holdings.actors()
