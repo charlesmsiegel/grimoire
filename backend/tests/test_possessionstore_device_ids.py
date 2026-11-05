@@ -102,10 +102,11 @@ def test_items_made_before_pairing_keep_their_ids_and_new_ones_are_tagged(store)
     assert (again.outcome, again.item) == ("already_applied", old)
 
 
-def test_a_creation_planned_before_pairing_is_stale_once_the_library_is_paired(store):
+@pytest.mark.parametrize("source", [LONGSWORD, STARFALL], ids=["template", "individual"])
+def test_a_creation_planned_before_pairing_is_stale_once_the_library_is_paired(store, source):
     library = possession_library(store)
-    change = library.create(make("make-1", name="Longsword", source=LONGSWORD))
-    assert change.item.instance_id == "longsword-1"
+    change = library.create(make("make-1", name="Blade", source=source))
+    assert change.item.instance_id == f"{source.entity_id}-1"
     identify(store, "desktop")
     before = instance_files(store)
     with pytest.raises(StaleWrite):
@@ -120,7 +121,7 @@ def test_a_damaged_device_identity_refuses_new_items_rather_than_plain_numbers(s
     (store.root / ".sync" / "device.json").write_bytes(damage)
     before = instance_files(store)
     with pytest.raises(PossessionRefused) as refused:
-        possession_library(store).create(make("make-1", name="Longsword", source=source))
+        possession_library(store).create(make("make-1", name="Blade", source=source))
     assert refused.value.reason == "device_identity"
     assert instance_files(store) == before
 

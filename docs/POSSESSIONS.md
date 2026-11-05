@@ -112,6 +112,7 @@ After `StaleWrite`, `WriteConflict` or `CommitIncomplete`, or after reopening a 
 - The party pin is byte identity, with the same limit as [holdings](HOLDINGS.md#service-grimoireholdingstoreholdingslibrary). A party that is itself a unique item (a chest) is pinned by everything except its possession state (its entity, envelope and origin), with its origin in canonical form, so a chest that moved or was worn since the plan, or whose origin was hand-edited into an equivalent form, is replanned rather than taken for a different individual; its custody and slots are checked again by the replan.
 - Not yet synchronized: 019 treats an instance file as any other, so two devices that change one item merge as a conflict on that file.
 - Two devices that each made the same item before either was identified both minted the same plain id (`longsword-1`); 019 reports that file as a keep-both conflict. Only items made on an identified library carry the device tag.
+- An `individual`'s id is the same on every device only while its first number is free on each: an id one device alone still reserves (a hand-deleted copy some record still names) moves that device to `-2`, and two copies then sync without a conflict. Whether a definition is `individual` is read from the revision a creation names, so two revisions that disagree on its nature can tag one artifact two ways.
 
 ## Boundaries and deferrals
 
