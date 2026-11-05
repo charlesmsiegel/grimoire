@@ -377,3 +377,15 @@ def test_a_selected_campaigns_own_lore_is_listed_as_not_imported(env):
     env.rescan()
     review = env.plan(WITH_CAMPAIGN).review()
     assert {"legacy_id": f"v1:{ARCHIVE}:{CAMPAIGN}/lore/the-new-vow.md", "family": "lore"} in review["not_imported"]
+
+
+def test_an_actors_voice_anchor_and_tagline_are_reported_never_dropped_in_silence(env):
+    """011 lists an actor's sidecars per actor, not as definition rows; 026 has no V2 home for them yet,
+    so each is named under ``not_imported`` (Wave 4 audit). Only a selected world's actors count."""
+    write(env.v1, f"{MARA}/voice_anchor.md", "Clipped sentences, never a question.\n")
+    write(env.v1, f"{MARA}/tagline.md", "A smuggler who keeps her word.\n")
+    write(env.v1, "worlds/realm/characters/mara/voice_anchor.md", "Another world's voice.\n")
+    env.rescan()
+    review = env.plan(WORLD_ONLY).review()
+    sidecars = sorted(row["legacy_id"] for row in review["not_imported"] if row["family"] == "actor_sidecar")
+    assert sidecars == [f"v1:{ARCHIVE}:{MARA}/tagline.md", f"v1:{ARCHIVE}:{MARA}/voice_anchor.md"]

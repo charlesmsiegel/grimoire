@@ -96,6 +96,6 @@ Packing is greedy and deterministic: lanes in order, each lane in rank order, fi
 - **Director packs, recursion and other actors' appearance:** an actor sees no description of anyone else; perception of appearance is a later milestone.
 - **World records:** a world's locations and other definitions are read only when bound, and 022 selects only bound sources. Selecting world records by relevance waits for 022's world selection.
 - **Recent history:** transcript windows belong to 027 and 035; this slice takes `scene_text` from the caller.
-- **Holdings, mechanics and inventory**, **superseded beliefs**, **embeddings**, **real tokenizers** and **card-section audience** (a card section is its own actor's; per-section secrecy waits for 037/027).
+- **Holdings, mechanics and inventory** (an actor's own counted holdings and unique items in its pack: 031's next slice, unscheduled), **superseded beliefs**, **embeddings**, **real tokenizers** and **card-section audience** (a card section is its own actor's; per-section secrecy waits for 037/027).
 - **Binding time vs `as_of`:** the snapshot is the chat's bindings now; a source attached after `as_of` still contributes.
 - **CJK segmentation** (see Triggering).

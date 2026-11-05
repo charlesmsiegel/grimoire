@@ -136,6 +136,22 @@ def test_a_taken_instance_id_is_never_given_to_an_imported_actor(env):
     authority.close()
 
 
+def test_a_campaign_whose_taken_ids_cannot_be_listed_imports_no_actor_into_it(env, tmp_path):
+    """A placements folder that is a link hides which instance ids are taken, so no id is guessed: the
+    review names the gap and plans no actor write into that campaign (Wave 4 audit)."""
+    env.plan(WITHOUT_SERAPHINE).apply()
+    folder = env.store.root / CAMPAIGN_DIR / "placements"
+    elsewhere = tmp_path / "elsewhere"
+    shutil.move(folder, elsewhere)
+    try:
+        folder.symlink_to(elsewhere, target_is_directory=True)
+    except OSError:
+        pytest.skip("this filesystem cannot hold a link")
+    review = env.plan(WITH_CAMPAIGN).review()
+    assert "taken_ids_unlisted" in {row["reason"] for row in review["unresolved"]}
+    assert not [path for path in review["writes"] if path.startswith(f"{CAMPAIGN_DIR}instances/")]
+
+
 def test_an_instance_id_taken_after_the_plan_refuses_the_apply(env):
     env.plan(WITHOUT_SERAPHINE).apply()
     authority = _reserve(env, "nobody")  # the ledger first, so the plan already runs under its authority

@@ -139,6 +139,10 @@ def test_s4_deletions_are_never_propagated_or_silently_resurrected(pair):
     assert report.conflict(PATHS["wren_b"]).code == "deleted"
     assert (phone.root / PATHS["wren_b"]).read_bytes() == original and not (desktop.root / PATHS["wren_b"]).exists()
     assert kept(desktop) == [original]  # the deleting device still holds the other version
+    expected = {DESKTOP: None, PHONE: etag(original)}
+    with pytest.raises(ResolveRefused, match="deletions cannot be chosen"):  # was a KeyError (Wave 4 audit)
+        resolve(desktop, phone, PATHS["wren_b"], None, expected, handles())
+    assert (phone.root / PATHS["wren_b"]).read_bytes() == original
     (phone.root / PATHS["wren_b"]).unlink()
     assert sync(desktop, phone, handles()).conflicts == ()
     archive = json.loads(desktop.read_sync_state(f"peers/{PHONE}/archive.json"))

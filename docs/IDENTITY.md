@@ -105,7 +105,7 @@ Known review hazards for the migration sprints, none of them resolved automatica
 
 ## Not yet covered
 
-- Fork, import and export round trips. Those subsystems do not exist in V2 yet; this slice proves the text-form round trip they rely on.
+- Fork and export round trips. Those subsystems do not exist in V2 yet; this slice proves the text-form round trip they rely on. V1 import exists ([IMPORT_V1](IMPORT_V1.md)) and keeps legacy ids in its receipt.
 - ~~Persisted manifests for sources, links and heads.~~ Persisted by the [native store](STORAGE.md); a link's `declared_by` is its manifest's source.
 - Catalog include/exclude.
 - Owner semantics beyond a label.

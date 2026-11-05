@@ -21,7 +21,8 @@ from grimoire.security import Authorizer, Grant, Permission, ResourcePath
 from grimoire.store import LibraryStore, ProcessLocker, RecordEnvelope, TakenIdsUnlisted
 from grimoire.store.ledger import render_batches
 
-from ability_fixtures import effective, light_bending
+import adjudication_fixtures
+from ability_fixtures import effective, light_bending, person, thruster_pack
 from adjudication_fixtures import (
     ACROBAT, ANA, BOB, CHAT, COLLAPSE, FALL, GAP, IRIS, MARA, Q, SATCHEL, SOLA, SOLA_DEF, Table, ability, bridge, build_library,
     moment, power_frame, vault,
@@ -415,3 +416,44 @@ def test_an_adjudication_ledger_keeps_a_campaign_id_taken(tmp_path):
     assert store.campaign_authority_presence("q-7") == "present"
     table.close()
     store.close()
+
+
+PACKED_SOLA = person("sola", "Sola", light_bending(), thruster_pack())
+
+
+@pytest.fixture
+def packed_table(tmp_path, monkeypatch):
+    """The table with Sola also wearing a thruster pack, so flight by light and force is a combination."""
+    monkeypatch.setattr(adjudication_fixtures, "SOLA_DEF", PACKED_SOLA)
+    locker = ProcessLocker()
+    store = LibraryStore.create(tmp_path / "lib", locker=locker)
+    build_library(store)
+    seated = Table(store).seat()
+    seated.locker = locker
+    yield seated
+    seated.close()
+    seated.store.close()
+
+
+def test_a_combination_is_approved_only_by_a_ruling_naming_its_exact_terms_then_charged_once(packed_table):
+    """CMS's Wave 3 call (025/029): a combination is approvable case by case by a recorded director ruling
+    naming the assessment's exact ``terms``; the approved attempt is decided and charged on both powers."""
+    library = packed_table.library()
+    lift = ability(SOLA, ("light", "force", "flight"), attempt_id="director:combo-1", effect_id=None,
+                   conditions=("ambient_light", "thruster_pack/fuel"))
+    library.frame(power_frame(lift, intent="Rise on light and thrust."))
+    assessed = library.assess(Q, lift.attempt_id)
+    assert (assessed.classification, assessed.ability.classification, assessed.ability.approval) == \
+        ("clarify", "combination", "pending")
+    terms = assess_attempt(lift, effective(PACKED_SOLA, Q)).terms
+    assert terms == ("light_bending/no_force", "thruster_pack/lift")
+    wrong = AbilityRuling("r1", lift, "combination", "approved", "director", terms=frozenset({"light_bending/no_force"}))
+    assert _reason(library.rule, wrong) == "terms_mismatch"
+    library.rule(AbilityRuling("r1", lift, "combination", "approved", "director", terms=frozenset(terms)))
+    assert library.assess(Q, lift.attempt_id).classification == "uncertain"
+    library.decide(Q, lift.attempt_id, Decision("success", "adjudicated", {"#ability"}))
+    used = library.ability_use(Q, lift.attempt_id)
+    assert [(ability_id, cost.id) for ability_id, cost in used.charges] == [
+        ("light_bending", "eye_strain"), ("light_bending", "migraine"),
+        ("thruster_pack", "cooldown"), ("thruster_pack", "fuel_burn")]
+    assert _reopen(packed_table).library().ability_use(Q, lift.attempt_id) == used

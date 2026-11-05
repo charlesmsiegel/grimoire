@@ -13,8 +13,8 @@ A partly published acceptance (021) is finished or aborted exactly once ([RECOVE
 `EffectRecovery.complete` writes the changes an event's receipts name that never landed, `adopt` records changes
 that landed without their event, and `revoke(partial=True)` aborts. 023 gained `complete` (finish an operation at
 its receipt's exact seqs) and 017 `add(relation_id=...)`. The proving scenario runs with the real journal: the
-store publishes relations before the event and holder files, so a crash leaves the companion registered and the
-ball not yet spent (the reverse comes only from sync or a restore, and is tested too). Left for later slices: a
+store publishes relations before the event and holder files, so a crash whose remaining staging is then removed
+(a crash alone recovers whole from the journal) leaves the companion registered and the ball not yet spent (the reverse comes only from sync or a restore, and is tested too). Left for later slices: a
 partly published revocation; recording a human repair of a skipped holdings undo; recognition beyond the bounded
 holder log; persisting the proposal before commit so restart can adopt (with 035); the 007 decision audit; the
 multi-transaction operation record (milestone 2).

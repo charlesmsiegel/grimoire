@@ -1,5 +1,7 @@
 # Unique Items, Equipment and Ownership
 
+**Status:** first slice implemented ([POSSESSIONS](../../POSSESSIONS.md)): milestones 1 and 2, with device-tagged item ids on paired libraries. Milestone 3 (ruleset effects, item-granted abilities) and milestone 4 (authored artifacts) are not started.
+
 **Outcome:** Represent one distinct sword or artifact separately from a fungible stack, with correct ownership and equipped state.
 
 ## Scope

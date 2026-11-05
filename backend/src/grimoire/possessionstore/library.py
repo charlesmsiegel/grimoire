@@ -84,7 +84,8 @@ class ItemProblem:
     ``unsupported_format``, ``address_mismatch`` or ``unreadable``), ``undecodable`` (the possession
     record: the codec's reason, ``unsupported_schema`` meaning "upgrade the app"), ``missing_party``
     (a current owner or holder has no instance file), ``instance_id_conflict`` (another kind uses
-    the item's id), ``slot_conflict`` (two items worn in one slot by one holder) and ``custody_cycle``.
+    the item's id), ``slot_conflict`` (two items worn in one slot by one holder), ``custody_cycle`` and
+    ``duplicate_individual`` (two items of one particular artifact; ``reason`` names them all).
     """
 
     path: str
@@ -289,6 +290,7 @@ class PossessionLibrary:
                     problems.append(ItemProblem(path, ref, "missing_party", str(party)))
             if ref in custody_chain(record.holder, possessions):
                 problems.append(ItemProblem(path, ref, "custody_cycle"))
+        problems += self._duplicate_individuals(views)
         worn: dict[tuple[InstanceRef, str], list[InstanceRef]] = {}
         for ref, view in views.items():
             if view.possession.equipped is not None:
@@ -299,6 +301,47 @@ class PossessionLibrary:
                              for ref in refs]
         return CampaignItems(dict(sorted(views.items(), key=lambda pair: str(pair[0]))),
                              tuple(sorted(problems, key=lambda p: (p.path, p.code, p.reason or ""))), instances)
+
+    def _duplicate_individuals(self, views: Mapping[InstanceRef, ItemView]) -> list[ItemProblem]:
+        """``duplicate_individual`` for every item of an ``individual`` definition that has a twin.
+
+        ``create`` refuses a second copy of one particular artifact, but two copies can still meet:
+        one made before a library had a device identity (``starfall-1``) and one made on an
+        identified device (``starfall-0f8a3e79-1``) are different files, so 019 copies both without
+        a conflict (Wave 4 audit). Reported, never repaired, like ``slot_conflict``: which copy is
+        the artifact is a human's call. Only sources shared by two or more items are read.
+        """
+        shared: dict[str, list[ItemView]] = {}
+        for view in views.values():
+            source = view.possession.origin.source
+            if source is not None:
+                shared.setdefault(source.entity_key, []).append(view)
+        problems: list[ItemProblem] = []
+        for twins in shared.values():
+            if len(twins) < 2 or not any(self._is_individual(view.possession.origin.source) for view in twins):
+                continue
+            names = ", ".join(sorted(str(view.item) for view in twins))
+            problems += [ItemProblem("/".join(address_parts(view.item)), view.item, "duplicate_individual", names)
+                         for view in twins]
+        return problems
+
+    def _is_individual(self, source: SourceRef | None) -> bool:
+        """Whether the definition revision an item names is one particular artifact; one that no longer
+        resolves or decodes says nothing (its item reports elsewhere, if at all). A hand-edited source the
+        store cannot even address (``aux/item/x@r1``: a reserved device name) says nothing either, so one
+        bad record never stops the whole listing, nor the ``create`` and ``apply`` that read it."""
+        if source is None:
+            return False
+        try:
+            stored = self.store.check_definition(source)
+        except (StoreError, LibraryPathError):
+            return False
+        if isinstance(stored, str):
+            return False
+        try:
+            return entity_decoder(stored).nature == "individual"
+        except PortrayalError:
+            return False
 
     def read(self, item: InstanceRef) -> ItemView:
         """One item's record. ``missing_item`` without an instance file, ``not_an_item`` without a record;
