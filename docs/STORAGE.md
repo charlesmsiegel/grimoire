@@ -242,6 +242,7 @@ All of these take the store lock, require a consistent library, and read listing
   - `check_definition` returns the definition `load()` would resolve, or a reason: `missing_source`, `excluded_source`, `entity_dropped`, `missing_entity` or `missing_revision`.
   - Parity with `load()` is tested across bad and implicit heads, kind reuse, ownership, unreadable revisions and missing manifests.
   - A cross-source `identity_conflict` is caught through `excluded_sources()` (tested with a simulated conflict, since today's loader drops bad links before the index sees them).
+- `source_entities(source_id)` (added for 037's card import) lists every `(kind, entity_id)` with a revision file in one source, headed or not and readable or not, with its revision names: what a commit's id-reuse and head checks see. It reads only and judges nothing.
 
 ### Knowledge record (`grimoire.knowledge-record/1`) — events and evidence (020)
 
