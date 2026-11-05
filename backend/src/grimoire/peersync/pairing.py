@@ -5,7 +5,7 @@ A pairing is a 32-byte key both devices hold, recorded under the reserved ``secr
 principal, ``app:peer:<device>``, ``APPLY`` over the synchronized roots of this library. That
 principal is never an owner and can issue no grant or approval (both need a human); this
 library's own sync engine applies the peer's verified writes under it, so the owner sees them in
-the audit and can end them by revoking its grants (``unpair``). See docs/DEVICE_SYNC.md.
+the audit and can end them with ``unpair``, which erases the key and revokes the grants. See docs/DEVICE_SYNC.md.
 """
 
 from __future__ import annotations
@@ -137,19 +137,23 @@ def pair(store: LibraryStore, authority, peer: str, key: bytes, *, granted_by: s
 
 
 def unpair(store: LibraryStore, authority, peer: str) -> None:  # type: ignore[no-untyped-def]
-    """End the pairing with ``peer``: its grants are revoked first, then its key is erased."""
+    """End the pairing with ``peer``: its key is erased first, then its grants are revoked.
+
+    In that order an interrupted unpair leaves grants that no connection can use (no key
+    authenticates it, and a server also refuses a session whose pairing holds no grant), never
+    a working key. An open session ends at its next request (``PeerServer`` checks again).
+    """
     check_device_id(peer)
     name = _secret_name(peer)
     old = store.read_secret(name)
     current = _parse(peer, old)
     principal = peer_principal(peer)
+    if old is not None:
+        txn = store.transaction()
+        txn.put_secret(name, render({"format": PAIRING_FORMAT, "peer": peer, "revoked": True}), etag(old))
+        txn.commit(None)
     _revoke(authority, {grant.grant_id for grant in authority.active_grants() if grant.principal == principal}
             | (set(current.grants) if current is not None else set()))
-    if old is None:
-        return
-    txn = store.transaction()
-    txn.put_secret(name, render({"format": PAIRING_FORMAT, "peer": peer, "revoked": True}), etag(old))
-    txn.commit(None)
 
 
 def _revoke(authority, grant_ids: set[str]) -> None:  # type: ignore[no-untyped-def]

@@ -21,6 +21,7 @@ import json
 import secrets
 import socket
 import struct
+import time
 
 from .errors import AuthenticationFailed, PeerRefused, TransportError
 
@@ -51,10 +52,18 @@ def _mac(key: bytes, label: bytes, data: bytes) -> bytes:
     return hmac.new(key, label + b"|" + data, hashlib.sha256).digest()
 
 
-def _read_exact(sock: socket.socket, size: int) -> bytes:
+def _read_exact(sock: socket.socket, size: int, deadline: float | None = None) -> bytes:
+    """``size`` bytes, or ``TransportError``. With a ``deadline`` (``time.monotonic``), the whole
+    read must finish by then: a per-``recv`` timeout alone lets a peer that drips one byte just
+    inside it hold the connection forever."""
     chunks, remaining = [], size
     while remaining:
         try:
+            if deadline is not None:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise TransportError("the other end did not finish the handshake in time")
+                sock.settimeout(left)
             chunk = sock.recv(min(remaining, 1 << 20))
         except OSError as error:  # a timeout too
             raise TransportError(f"the connection failed: {error}") from error
@@ -72,11 +81,11 @@ def _send_raw(sock: socket.socket, payload: bytes) -> None:
         raise TransportError(f"the connection failed: {error}") from error
 
 
-def _recv_raw(sock: socket.socket) -> bytes:
-    (size,) = _LENGTH.unpack(_read_exact(sock, _LENGTH.size))
-    if size > MAX_FRAME:
-        raise TransportError(f"a frame of {size} bytes is over the {MAX_FRAME}-byte limit")
-    return _read_exact(sock, size)
+def _recv_raw(sock: socket.socket, deadline: float | None = None, limit: int = MAX_FRAME) -> bytes:
+    (size,) = _LENGTH.unpack(_read_exact(sock, _LENGTH.size, deadline))
+    if size > limit:
+        raise TransportError(f"a frame of {size} bytes is over the {limit}-byte limit")
+    return _read_exact(sock, size, deadline)
 
 
 def _encode(header: dict, body: bytes) -> bytes:  # type: ignore[type-arg]
@@ -94,6 +103,8 @@ def _decode(payload: bytes) -> tuple[dict, bytes]:  # type: ignore[type-arg]
         raise TransportError("a frame header is malformed")
     try:
         header = json.loads(payload[_LENGTH.size:_LENGTH.size + size])
+    except RecursionError:  # "[[[[..." nested past the interpreter's limit: never a valid header
+        raise TransportError("a frame header is nested too deeply") from None
     except (UnicodeDecodeError, ValueError) as error:
         raise TransportError(f"a frame header is not JSON: {error}") from None
     if not isinstance(header, dict) or type(header.get("t")) is not str:
@@ -105,8 +116,13 @@ def _plain(sock: socket.socket, header: dict) -> None:  # type: ignore[type-arg]
     _send_raw(sock, _encode(header, b""))
 
 
-def _plain_recv(sock: socket.socket) -> dict:  # type: ignore[type-arg]
-    header, body = _decode(_recv_raw(sock))
+#: The largest handshake frame: a few ids and hex strings. Nothing bigger is read from a peer
+#: that has not yet proved it holds the key.
+_HANDSHAKE_FRAME = 4096
+
+
+def _plain_recv(sock: socket.socket, deadline: float | None = None) -> dict:  # type: ignore[type-arg]
+    header, body = _decode(_recv_raw(sock, deadline, _HANDSHAKE_FRAME))
     if body:
         raise TransportError("a handshake frame carries no body")
     if header["t"] == "error":
@@ -198,13 +214,16 @@ def client_handshake(sock: socket.socket, device: str, peer: str, key: bytes) ->
     return channel
 
 
-def server_handshake(sock: socket.socket, device: str, keys) -> Channel:  # type: ignore[no-untyped-def]
+def server_handshake(sock: socket.socket, device: str, keys, *, within: float = 10.0) -> Channel:  # type: ignore[no-untyped-def]
     """Authenticate a client to this ``device``. ``keys(peer)`` is the pairing key, or ``None``.
 
     A client that names another device, is not paired, or cannot prove the key is refused with a
     named error frame, and ``AuthenticationFailed`` is raised here; nothing else is read from it.
+    The client has ``within`` seconds in all to finish, and no handshake frame may exceed 4 KiB, so
+    an unauthenticated local process can neither hold the server's one slot nor make it buffer.
     """
-    hello = _plain_recv(sock)
+    deadline = time.monotonic() + within
+    hello = _plain_recv(sock, deadline)
     client = hello.get("from")
     if hello.get("t") != "hello" or hello.get("proto") != PROTOCOL or type(client) is not str:
         _plain(sock, {"t": "error", "code": "protocol", "message": f"expected a {PROTOCOL} hello"})
@@ -221,7 +240,7 @@ def server_handshake(sock: socket.socket, device: str, keys) -> Channel:  # type
     transcript = _transcript(client, device, client_nonce, server_nonce)
     _plain(sock, {"t": "challenge", "proto": PROTOCOL, "from": device, "nonce": server_nonce.hex(),
                   "proof": _mac(key, b"server-proof", transcript).hex()})
-    proof = _plain_recv(sock)
+    proof = _plain_recv(sock, deadline)
     recv_key, send_key = _keys(key, transcript)
     channel = Channel(sock, client, send_key, recv_key)
     if proof.get("t") != "proof" or not hmac.compare_digest(_hex(proof, "proof", _TAG),

@@ -10,14 +10,16 @@ failure at any point leaves exactly the state a crash at that point of a local s
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Callable
+from pathlib import Path
 
 from grimoire.store import LibraryStore, StaleWrite, StoreError, WriteConflict, WriteDenied, etag
 from grimoire.store.layout import conflict_parts
 from grimoire.sync import Step
 from grimoire.sync.documents import archive_name, pending_name
 
-from .errors import PeerRefused, TransportError
+from .errors import MirrorMismatch, PeerRefused
 from .wire import Channel
 
 #: The most writes one step may carry: 019 commits a step as one transaction, never in pieces.
@@ -32,7 +34,7 @@ def send_step(channel: Channel, step: Step, blob_reader: Callable[[str, int], by
         if copy.data is None:  # a blob: the stand-in now holds the verified bytes
             data = blob_reader(copy.path, copy.size)  # type: ignore[arg-type]
             if data is None:
-                raise TransportError(f"the blob {copy.path} vanished before it could be sent")
+                raise MirrorMismatch(f"the blob {copy.path} vanished from the mirror before it could be sent")
             channel.send({"t": "op", "op": "blob", "path": copy.path, "size": copy.size}, data)
         else:
             channel.send({"t": "op", "op": "put", "path": copy.path, "expected": copy.expected}, copy.data)
@@ -50,22 +52,69 @@ def send_step(channel: Channel, step: Step, blob_reader: Callable[[str, int], by
 
 
 class StepBuffer:
-    """The serving side: collects one step's writes, then commits and verifies them together."""
+    """The serving side: collects one step's writes, then commits and verifies them together.
+
+    Exactly one reply goes back per step, at its ``commit``. The client streams a step's ``op``
+    frames without waiting, so a write refused while they arrive (the step grew too large, a blob
+    could not be staged) *poisons* the buffer: every later op of that step is dropped unread and
+    the ``commit`` is answered with the refusal. Refusing at once instead would leave the step's
+    remaining ops to be committed on their own as if they were a step, and the client would read
+    that reply as the answer to its next request.
+
+    Blob bodies are spooled to a private temporary folder as they arrive and read back one at a
+    time when the commit stages them, so a first sync of many pictures never holds them all in
+    memory; record bodies (each at most 010's 8 MiB file cap) stay in memory until the commit.
+    """
 
     def __init__(self, peer: str) -> None:
         self.peer = peer
-        self.ops: list[tuple[dict, bytes]] = []  # type: ignore[type-arg]
+        self.ops: list[tuple[dict, bytes | Path]] = []  # type: ignore[type-arg]
         self.size = 0
+        self.poisoned: PeerRefused | None = None
+        self._spool: tempfile.TemporaryDirectory[str] | None = None
+
+    def reset(self) -> None:
+        """Drop the step under way, its spooled blobs included."""
+        self.ops, self.size, self.poisoned = [], 0, None
+        if self._spool is not None:
+            self._spool.cleanup()
+            self._spool = None
 
     def add(self, header: dict, body: bytes) -> None:  # type: ignore[type-arg]
-        self.ops.append((header, body))
+        if self.poisoned is not None:
+            return
         self.size += len(body)
-        if len(self.ops) > MAX_STEP_OPS or self.size > MAX_STEP_BYTES:
-            raise PeerRefused("too_large", "one step carries more than this device accepts")
+        if len(self.ops) >= MAX_STEP_OPS or self.size > MAX_STEP_BYTES:
+            self._poison(PeerRefused("too_large", "one step carries more than this device accepts"))
+            return
+        if header.get("op") == "blob":
+            try:
+                if self._spool is None:
+                    self._spool = tempfile.TemporaryDirectory(prefix="grimoire-peer-step-")
+                spooled = Path(self._spool.name) / str(len(self.ops))
+                spooled.write_bytes(body)
+            except OSError as error:
+                self._poison(PeerRefused("unavailable", f"cannot stage a blob here: {error}"))
+                return
+            self.ops.append((header, spooled))
+        else:
+            self.ops.append((header, body))
+
+    def _poison(self, refusal: PeerRefused) -> None:
+        self.reset()
+        self.poisoned = refusal
 
     def commit(self, store: LibraryStore, handle: object) -> dict[str, str]:
         """Commit every write as one transaction; return each written file's etag as re-read."""
-        ops, self.ops, self.size = self.ops, [], 0
+        try:
+            if self.poisoned is not None:
+                raise self.poisoned
+            return self._commit(store, handle)
+        finally:
+            self.reset()
+
+    def _commit(self, store: LibraryStore, handle: object) -> dict[str, str]:
+        ops = self.ops
         if not ops:
             raise PeerRefused("empty", "a step with no writes")
         txn = store.transaction()
@@ -75,13 +124,14 @@ class StepBuffer:
         try:
             for header, body in ops:
                 op, path = header.get("op"), header.get("path")
-                if op == "put" and type(path) is str and _etag_or_none(header.get("expected")):
-                    txn.put_exact(path, body, header.get("expected"), regenerable=True)
+                if isinstance(body, Path):  # a spooled blob: read back only when staged
+                    if op != "blob" or type(path) is not str or type(header.get("size")) is not int:
+                        raise PeerRefused("invalid", f"a write this device does not accept: {op!r}")
+                    txn.put_blob_exact(path, _spooled(body), size=header["size"])
                     targets.append((path, path, _reader(store, path)))
                     records = True
-                elif op == "blob" and type(path) is str and type(header.get("size")) is int:
-                    data = body
-                    txn.put_blob_exact(path, lambda data=data: data, size=header["size"])
+                elif op == "put" and type(path) is str and _etag_or_none(header.get("expected")):
+                    txn.put_exact(path, body, header.get("expected"), regenerable=True)
                     targets.append((path, path, _reader(store, path)))
                     records = True
                 elif op == "keep" and type(path) is str and type(header.get("slot")) is int:
@@ -111,6 +161,15 @@ class StepBuffer:
                 raise PeerRefused("verification", f"{key} is missing after the commit")
             found[key] = etag(data)
         return found
+
+
+def _spooled(path: Path) -> Callable[[], bytes | None]:
+    def read() -> bytes | None:
+        try:
+            return path.read_bytes()
+        except OSError:
+            return None  # the store then refuses the step as stale
+    return read
 
 
 def _etag_or_none(value: object) -> bool:

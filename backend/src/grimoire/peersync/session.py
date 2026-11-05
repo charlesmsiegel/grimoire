@@ -46,9 +46,12 @@ class TransferReport:
 
 
 def transfer(store: LibraryStore, authority, peer: str, address: tuple[str, int], *,  # type: ignore[no-untyped-def]
-             attempts: int = 4, timeout: float = 30.0, workdir: str | Path | None = None,
+             attempts: int = 4, timeout: float = 600.0, workdir: str | Path | None = None,
              limits: Limits = Limits()) -> TransferReport:
     """Sync ``store`` with the paired device ``peer`` listening at ``address`` (a loopback address).
+
+    ``timeout`` is how long either end may go quiet: the peer scanning its library for a
+    snapshot or committing a large step of pictures takes a while (the server allows as long).
 
     Raises ``NotPaired`` or ``AuthenticationFailed`` before anything is exchanged; every later
     failure is an ``incomplete`` report, never a half-applied step (docs/DEVICE_SYNC.md).
@@ -59,9 +62,11 @@ def transfer(store: LibraryStore, authority, peer: str, address: tuple[str, int]
     local = device_of(store)
     local_handle = authority.handle_for(peer_principal(peer), trusted=True)
     try:
-        connection = socket.create_connection(address, timeout=timeout)
+        connection = socket.create_connection(address, timeout=min(timeout, 10.0))
     except OSError as error:
         return TransferReport(peer, "incomplete", f"unreachable: {error}")
+    # Then wait as long as the peer may take to scan its library or commit a large step.
+    connection.settimeout(timeout)
     no_delay(connection)
     channel: Channel | None = None
     try:

@@ -38,6 +38,10 @@ _MAX_DEPTH = 64
 #: A stand-in owner for the mirror's in-memory authority (never written anywhere).
 _MIRROR_OWNER = "human:mirror"
 _BLOCKED_TARGET = ".grimoire-blocked-entry"  # what a mirror link points at: nothing
+_REPARSE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+#: The scan summary travels in pieces of at most this size (one frame holds 36 MiB of body).
+_SUMMARY_CHUNK = 16 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -50,11 +54,22 @@ class Limits:
 
 # -- serving side -----------------------------------------------------------------------------
 
+def _in_roots(path: str) -> bool:
+    return path.split("/", 1)[0] in ROOTS
+
+
 def scan_summary(store: LibraryStore) -> dict[str, object]:
-    """What 019 plans from, as comparable data: record etags, blocked paths, blob sizes, id pairs."""
+    """What 019 plans from, as comparable data: record etags, blocked paths, blob sizes, id pairs.
+
+    Only entries under the snapshot's roots count. 019 reports a blocked entry anywhere in the
+    library (a dangling link beside ``sources``, say), but plans nothing from one outside its
+    synchronized roots, and a snapshot never carries it: comparing it would refuse every transfer
+    of a library that syncs fine locally.
+    """
     found = store.scan()
-    return {"files": {path: etag(data) for path, data in sorted(found.files.items())},
-            "blocked": sorted(found.blocked), "blobs": dict(sorted(found.blobs.items())),
+    return {"files": {path: etag(data) for path, data in sorted(found.files.items()) if _in_roots(path)},
+            "blocked": sorted(path for path in found.blocked if _in_roots(path)),
+            "blobs": dict(sorted((path, size) for path, size in found.blobs.items() if _in_roots(path))),
             "pairs": sorted(found.pairs)}
 
 
@@ -83,15 +98,22 @@ def _walk(root: Path, parts: tuple[str, ...], depth: int) -> Iterator[tuple[str,
     except OSError:
         yield "blocked", relative, b""
         return
-    if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+    if (stat.S_ISLNK(info.st_mode) or _REPARSE & (getattr(info, "st_file_attributes", 0) or 0)
+            or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode))):
+        # A Windows junction lstats as a folder; only its reparse attribute says it leads
+        # elsewhere (the store's own ``is_link`` test). Walking it would send files from outside
+        # the library to the peer before any check could refuse the snapshot.
         yield "blocked", relative, b""
         return
     if stat.S_ISREG(info.st_mode):
         if info.st_size > _cap(parts):
             yield "blocked", relative, b""
             return
-        try:
-            with open(path, "rb") as handle:
+        try:  # never through a link put in its place since the lstat (O_NOFOLLOW where it exists)
+            descriptor = os.open(path, os.O_RDONLY | _NOFOLLOW | getattr(os, "O_BINARY", 0))
+            with os.fdopen(descriptor, "rb") as handle:
+                if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                    raise OSError("not a regular file")
                 data = handle.read(_cap(parts) + 1)
         except OSError:
             yield "blocked", relative, b""
@@ -126,7 +148,9 @@ def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -
     for kind, path, data in walk(store.root):
         channel.send({"t": kind, "path": path}, data)
         count += 1
-    channel.send({"t": "scan"}, json.dumps(summary, sort_keys=True).encode())
+    encoded = json.dumps(summary, sort_keys=True).encode()  # a large library's runs past one frame
+    for start in range(0, len(encoded), _SUMMARY_CHUNK):
+        channel.send({"t": "scan"}, encoded[start:start + _SUMMARY_CHUNK])
     channel.send({"t": "end", "entries": count})
 
 
@@ -187,7 +211,7 @@ def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Li
     LibraryStore.create(root).close()
     states: dict[str, bytes] = {}
     grants: object = None
-    summary: object = None
+    summary_parts: list[bytes] = []
     entries = total = 0
     while True:
         header, body = channel.recv()
@@ -206,10 +230,7 @@ def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Li
                 raise TransportError(f"the snapshot carries an unexpected sync file {name!r}")
             states[name] = body  # type: ignore[index]
         elif kind == "scan":
-            try:
-                summary = json.loads(body)
-            except ValueError as error:
-                raise TransportError(f"the peer's scan is not JSON: {error}") from None
+            summary_parts.append(body)
         elif kind in ("dir", "file", "blocked"):
             parts = _parts(header.get("path"))
             target = _target(root, parts)
@@ -229,6 +250,10 @@ def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Li
                 raise MirrorMismatch(f"cannot reproduce {'/'.join(parts)} here: {error}") from error
         else:
             raise TransportError(f"unexpected snapshot message {kind!r}")
+    try:
+        summary = json.loads(b"".join(summary_parts)) if summary_parts else None
+    except (ValueError, RecursionError) as error:
+        raise TransportError(f"the peer's scan is not usable JSON: {error}") from None
     if parse_device(states.get(DEVICE_FILE)) != peer:
         raise MirrorMismatch("the peer's snapshot does not carry its own device identity")
     sync_root = root / ".sync"

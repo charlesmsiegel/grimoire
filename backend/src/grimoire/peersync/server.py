@@ -8,11 +8,12 @@ on loopback only: frames are authenticated but not encrypted (docs/DEVICE_SYNC.m
 
 from __future__ import annotations
 
+import hmac
 import ipaddress
 import socket
 import threading
 
-from grimoire.store import LibraryStore
+from grimoire.store import LibraryStore, StoreError
 from grimoire.sync import device_of
 from grimoire.sync.documents import check_device_id
 
@@ -34,10 +35,15 @@ class PeerServer:
     """Serve ``store`` to paired devices, one connection at a time, on a loopback address."""
 
     def __init__(self, store: LibraryStore, authority, *, host: str = "127.0.0.1", port: int = 0,  # type: ignore[no-untyped-def]
-                 timeout: float = 30.0) -> None:
+                 timeout: float = 600.0, handshake_timeout: float = 10.0) -> None:
+        """``timeout`` is how long an authenticated client may go quiet: long, because between its
+        snapshot and its first step the client rebuilds the mirror, plans and commits its own side
+        and the mirror's (minutes for a first sync of many pictures). ``handshake_timeout`` bounds
+        the whole handshake, so a local process that never authenticates frees the slot quickly."""
         if not _loopback(host):
             raise ValueError("this slice serves loopback addresses only: its frames are not encrypted")
-        self.store, self.authority, self.timeout = store, authority, timeout
+        self.store, self.authority = store, authority
+        self.timeout, self.handshake_timeout = timeout, handshake_timeout
         self.device = device_of(store)
         self._socket = socket.create_server((host, port))
         self._socket.settimeout(0.2)
@@ -58,9 +64,11 @@ class PeerServer:
             except OSError:
                 return False
             with connection:
-                connection.settimeout(self.timeout)
                 no_delay(connection)
-                self._session(connection)
+                try:
+                    self._session(connection)
+                except Exception:  # noqa: BLE001 - one connection, whatever it sent, never stops the server
+                    pass
             return True
         return False
 
@@ -81,15 +89,30 @@ class PeerServer:
 
     def _session(self, connection: socket.socket) -> None:
         try:
-            channel = server_handshake(connection, self.device, self._key)
+            channel = server_handshake(connection, self.device, self._key, within=self.handshake_timeout)
         except (AuthenticationFailed, TransportError, PeerRefused):
             return  # refused (or gone) before it was authenticated: nothing was read or written
+        connection.settimeout(self.timeout)
         try:
-            self._serve(channel)
+            self._serve(channel, channel_key=self._key(channel.peer))
         except TransportError:
             return  # the client went away; every commit already made is whole
 
-    def _serve(self, channel: Channel) -> None:
+    def _still_paired(self, peer: str, key: bytes | None) -> bool:
+        """Whether this session's key is still the pairing's, and the peer still holds a grant.
+
+        Checked before every snapshot and every commit, not only at the handshake: ``unpair`` (or
+        pairing again with a new key) ends an open session at its next request, so neither the
+        library's contents nor this pair's ``.sync`` state (which needs no grant to write) stays
+        reachable through a connection that was authenticated earlier.
+        """
+        current = self._key(peer)
+        if key is None or current is None or not hmac.compare_digest(current, key):
+            return False
+        principal = peer_principal(peer)
+        return any(grant.principal == principal for grant in self.authority.active_grants())
+
+    def _serve(self, channel: Channel, *, channel_key: bytes | None) -> None:
         peer = channel.peer
         handle = self.authority.handle_for(peer_principal(peer), trusted=True)
         buffer = StepBuffer(peer)
@@ -99,17 +122,27 @@ class PeerServer:
             try:
                 if kind == "bye":
                     return
+                if kind in ("snapshot", "commit") and not self._still_paired(peer, channel_key):
+                    buffer.reset()
+                    channel.refuse("not_paired", "this device is no longer paired with yours")
+                    return
                 if kind == "snapshot":
+                    buffer.reset()
                     send_snapshot(channel, self.store, self.authority, peer)
                 elif kind == "op":
-                    buffer.add(header, body)
+                    buffer.add(header, body)  # a refusal here is held and answered at "commit"
                 elif kind == "commit":
                     channel.send({"t": "committed", "etags": buffer.commit(self.store, handle)})
-                else:
-                    raise PeerRefused("protocol", f"unexpected request {kind!r}")
+                else:  # a client this confused cannot be kept in step: refuse and end the session
+                    channel.refuse("protocol", f"unexpected request {kind!r}")
+                    return
             except PeerRefused as refusal:
-                buffer.ops, buffer.size = [], 0
+                buffer.reset()
                 channel.refuse(refusal.code, str(refusal))
-            except (OSError, ValueError) as error:  # an unreadable .sync file, say: refused, never half-sent
-                buffer.ops, buffer.size = [], 0
+            except (OSError, ValueError, StoreError) as error:  # an unreadable .sync file, say
+                # Refused as a whole: the client reads one reply per request, so a refusal is
+                # sent only for a request that expects one (a snapshot or a commit). A snapshot
+                # half-sent when the error came is ended by the refusal, which the client's
+                # mirror builder reads as PeerRefused and discards the mirror.
+                buffer.reset()
                 channel.refuse("unavailable", f"{type(error).__name__}: {error}")
