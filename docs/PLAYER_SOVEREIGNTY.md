@@ -11,7 +11,7 @@ The policy judges **labelled narration claims**: atomic `NarrationClaim` values 
 Trust boundary:
 
 - **Player-input channel only:** `PlayerContribution`, `Delegation`, `Revocation` and `Correction`. Model output must never be converted into these. Every review re-checks them against current `ControlAssignment`s, so a value naming the wrong submitter or grantor grants nothing.
-- **Rule, effect and adjudication writers only:** `ImposedCondition` and `Resolution`, never narration.
+- **Rule, effect and adjudication writers only:** `ImposedCondition` and `Resolution`, never narration. [Adjudication](ADJUDICATION.md) (029) produces a `Resolution` from each recorded decision, so every narration retry must agree with it.
 - **Reserved id:** `DIRECTOR` (`"director"`). It controls NPCs and can never submit a contribution or grant a delegation. Unknown or ambiguous control fails closed.
 
 The scenarios are synthetic fixtures; V2 has no freeform scene runner yet. Player trust, useful challenge and non-patronizing refusals are encoded as deterministic policy tests, not evaluated with people or models. None of this is app-integrated.
