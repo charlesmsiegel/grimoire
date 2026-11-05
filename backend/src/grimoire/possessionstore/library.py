@@ -30,7 +30,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
-from grimoire.chatstore import campaign_taken_ids
+from grimoire.chatstore import DeviceIdentityUnusable, campaign_taken_ids, device_tag
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import ENTITY_SCHEMA, instance_to_payload
 from grimoire.core.facets import FacetBundle, Physical, Portable
@@ -343,6 +343,13 @@ class PossessionLibrary:
         A sourced item is an instance of that definition; an ``individual`` definition (one particular
         artifact) may be a unique item only once per campaign (``duplicate_individual``). ``parties`` is a
         retry's pin, as for ``apply``.
+
+        The id is ``<base>-<n>``, the first free number for the definition's entity id (or the kind). On a
+        library with a device identity (028) the base carries a tag: the device's ``device_tag``, so two
+        devices making the same template offline never mint one id; for an ``individual``, a digest of the
+        definition's unpinned source ref instead, so every device draws the same id for that one artifact
+        (and only for it) and two devices that each made it offline collide on one file, which 019 keeps
+        both of as a conflict. A damaged or unreadable identity refuses (``device_identity``).
         """
         if type(creation) is not Creation:
             raise TypeError("create takes a Creation")
@@ -374,10 +381,18 @@ class PossessionLibrary:
             etags = self._party_etags(parties, found.instances)
             _check_pins(pins, etags)
             source_fields: dict[str, object] = {}
+            individual = False
             if creation.source is not None:
-                source_fields = self._source(creation.source, kind, found)
+                source_fields, individual = self._source(creation.source, kind, found)
             taken = campaign_taken_ids(self.store, campaign)
             base = (creation.source.entity_id if creation.source is not None else kind)[:100]
+            try:
+                tag = device_tag(self.store)
+            except DeviceIdentityUnusable as error:
+                raise PossessionRefused("device_identity", str(error)) from error
+            if tag and individual and creation.source is not None:  # one artifact: one id on every device
+                tag = "-" + hashlib.sha256(str(creation.source.unpinned()).encode()).hexdigest()[:8]
+            base += tag
             item = next((InstanceRef(campaign, kind, f"{base}-{n}") for n in range(1, _MAX_ID_TRIES)
                          if f"{base}-{n}" not in taken), None)
             if item is None:
@@ -395,8 +410,9 @@ class PossessionLibrary:
         return ItemChange(self, "applied", item, None, after, None, ((envelope, None),), etags,
                           lambda: self._plan_create(creation, kind, at, pins))
 
-    def _source(self, source: SourceRef, kind: str, found: CampaignItems) -> dict[str, object]:
-        """The definition a sourced item is an instance of, checked; the envelope's lineage fields."""
+    def _source(self, source: SourceRef, kind: str, found: CampaignItems) -> tuple[dict[str, object], bool]:
+        """The definition a sourced item is an instance of, checked: the envelope's lineage fields, and
+        whether it is an ``individual`` (one particular artifact)."""
         stored = self.store.check_definition(source)
         if isinstance(stored, str):
             raise PossessionRefused("missing_definition", f"{source} does not resolve: {stored}")
@@ -414,7 +430,8 @@ class PossessionLibrary:
             if twins:
                 raise PossessionRefused("duplicate_individual", f"{source.unpinned()} is one particular thing, "
                                         f"already the unique item {', '.join(twins)}")
-        return {"derived_from": str(source), "base": str(stored.ref), "base_etag": stored.etag}
+        return ({"derived_from": str(source), "base": str(stored.ref), "base_etag": stored.etag},
+                definition.nature == "individual")
 
     # -- changing --------------------------------------------------------------------------------
 

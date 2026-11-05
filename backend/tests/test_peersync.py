@@ -262,6 +262,22 @@ def test_a_damaged_device_identity_stops_actor_creation_rather_than_reusing_plai
     assert refused.value.reason == "device_identity"
 
 
+def test_a_linked_device_identity_stops_actor_creation_too(tmp_path):
+    device = Device(tmp_path, DESKTOP)
+    seed_cards(device)
+    identity = device.store.root / ".sync" / "device.json"
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_bytes(identity.read_bytes())
+    identity.unlink()
+    try:
+        identity.symlink_to(elsewhere)
+    except OSError:
+        pytest.skip("this filesystem cannot hold a link")
+    with pytest.raises(InvalidBinding) as refused:
+        device.chats.start_chat(Launch("character", ANYA)).commit()
+    assert refused.value.reason == "device_identity"
+
+
 # -- incomplete transfers ----------------------------------------------------------------------
 
 def test_an_unreachable_peer_is_incomplete_and_nothing_changes(tmp_path):

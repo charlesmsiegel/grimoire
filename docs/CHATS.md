@@ -155,7 +155,7 @@ No mutating method calls `load()` (tested). A changed source is scanned again; a
 
 ### Actor ids
 
-Actor ids are `<entity_id>-<n>` (`<entity_id>-<tag>-<n>` in a library with a device identity, so two devices never draw the same one offline: [DEVICE_SYNC](DEVICE_SYNC.md#per-device-actor-ids)), the smallest number not in `campaign_taken_ids(store, campaign_id)` (below) and not in this chat's roster. So an id stays taken when an actor's file has vanished, whichever chat's roster or record names it. A look-alike instance file (`Mara-1.json`) is invisible to the instance listing, so the commit fails with `NameCollision` rather than reallocating. An actor to reuse whose id another kind also uses is refused (`instance_id_conflict`): `load()` leaves both out.
+Actor ids are `<entity_id>-<n>` (`<entity_id>-<tag>-<n>` in a library with a device identity, so two devices never draw the same one offline: [DEVICE_SYNC](DEVICE_SYNC.md#per-device-ids)), the smallest number not in `campaign_taken_ids(store, campaign_id)` (below) and not in this chat's roster. So an id stays taken when an actor's file has vanished, whichever chat's roster or record names it. A look-alike instance file (`Mara-1.json`) is invisible to the instance listing, so the commit fails with `NameCollision` rather than reallocating. An actor to reuse whose id another kind also uses is refused (`instance_id_conflict`): `load()` leaves both out.
 
 ### Taken instance ids
 

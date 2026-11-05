@@ -30,7 +30,7 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 - **Merging 020 knowledge logs** when both devices appended to one campaign offline (today a keep-both `missing_ancestor` conflict on the batch; a log moves only whole).
 - **Dismissing kept versions** (today the next sync delivers a deleted one again).
 - **Deletion propagation**, and resolving toward a deletion.
-- **Per-device actor id allocation:** done in the first slice; an identified library numbers actors `<entity>-<tag>-<n>` ([DEVICE_SYNC](../../DEVICE_SYNC.md#per-device-actor-ids)).
+- **Per-device actor id allocation:** done in the first slice; an identified library numbers actors `<entity>-<tag>-<n>`, and 034's unique items the same way ([DEVICE_SYNC](../../DEVICE_SYNC.md#per-device-ids)).
 - **Archive compaction.** One archive and one pending marker per pair must fit 010's 8 MiB file cap: about 23,000 synced paths today, after which the whole sync is refused (`ArchiveTooLarge`). 018 art adds about three paths per picture.
 
 ## Wave 2 handoff: revision-safe transfers
