@@ -250,6 +250,12 @@ class HoldingsLibrary:
             raise HoldingsRefused("missing_holder", f"no instance file for {holder}")
         return self._view(holder)
 
+    def view(self, holder: InstanceRef) -> HoldingsView:
+        """The holder's holdings as filed (empty without a file), with **no** instance check: 021 checks the
+        receipts of holders whose individual may be gone. An undecodable file raises ``HoldingsCodecError``;
+        a store error (a link, an I/O error) propagates."""
+        return self._view(holder)
+
     def _instance_etag(self, holder: InstanceRef) -> str | None:
         try:
             return self.store.read(holder).etag

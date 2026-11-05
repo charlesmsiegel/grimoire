@@ -88,7 +88,7 @@ def test_accepted_decoding_is_strict(mutate, expected):
 
 def test_unknown_schema_and_identity():
     payload = accepted_to_payload(event())
-    assert decode_reason(payload, schema="grimoire.accepted-event/1") == "unsupported_schema"
+    assert decode_reason(payload, schema="grimoire.accepted-event/2") == "unsupported_schema"
     with pytest.raises(EffectCodecError) as caught:
         accepted_to_payload(event(extras=JsonObject({"receipts": 1})))
     assert caught.value.reason == "invalid_field"

@@ -21,55 +21,43 @@ from dataclasses import dataclass, field, replace
 
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
 from grimoire.core.identity import (
-    AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, WrapUpRef, paired_instances, validate_segment,
+    AcceptedRef, ChatRef, HoldingsRef, InstanceRef, KnowledgeRef, WrapUpRef, paired_instances, validate_segment,
 )
 from grimoire.core.knowledge import Event, Moment
 from grimoire.core.model import ControlAssignment
 from grimoire.effects import (
-    ACCEPTED_SCHEMA, WRAPUP_SCHEMA, AcceptedEvent, AcceptedOperation, EffectCodecError, EffectError, EffectProblem,
-    EffectProposal, EndorsementRecord, EndStep, Op, Receipt, Revocation, SceneWrapUp, Skipped, accepted_from_payload,
-    accepted_to_payload, accepted_token, authorize, bridge_problems, check_citations, ledger_problems, orphans,
-    parse_token, plan,
-    edited_effects, partial_revocations, receipt_failure, revocation_fingerprint, revoked_token, verify_receipts,
-    wrapup_from_payload,
-    wrapup_id, wrapup_problems,
-    wrapup_to_payload,
+    WRAPUP_SCHEMA, AcceptedEvent, AcceptedOperation, EffectCodecError, EffectError, EffectProblem, EffectProposal,
+    EndorsementRecord, EndStep, Op, Receipt, Revocation, SceneWrapUp, Skipped, accepted_from_payload, accepted_schema,
+    accepted_to_payload, accepted_token, authorize, bridge_problems, check_citations, edited_effects, holdings_orphans,
+    holdings_partials, holdings_problems, ledger_problems, orphans, parse_token, partial_revocations, plan,
+    receipt_failure, revocation_fingerprint, revoked_token, verify_receipts, wrapup_from_payload, wrapup_id,
+    wrapup_problems, wrapup_to_payload,
 )
 from grimoire.evidence import EvidenceCodecError, decode
 from grimoire.graph import Relation
 from grimoire.graph.codec import RelationCodecError, relation_from_payload
 from grimoire.graph.index import check_as_of, require_director
 from grimoire.graphstore import CampaignGraph, InvalidRelation, RelationChange, RelationLibrary
+from grimoire.holdingstore import HoldingsChange, HoldingsLibrary
 from grimoire.library import LibraryPathError
 from grimoire.security.policy import is_human
 from grimoire.store import (
-    KnowledgeScan, LibraryStore, LinkRefused, LoadProblem, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
+    KnowledgeScan, LibraryStore, LinkRefused, LoadProblem, MalformedRecord, RecordNotFound, ScopeRecord, StaleWrite,
+    StoreError,
     StoredScopeRecord, TakenIdsUnlisted,
 )
 from grimoire.store.layout import address_parts
 
+from . import parts
+from .errors import InvalidEffect
+from .errors import refused as _refused
+
 _ALLOCATION_ATTEMPTS = 16
-
-
-class InvalidEffect(ValueError):
-    """An effect change that cannot be made; nothing was written. ``reason`` is machine-readable."""
-
-    def __init__(self, message: str, reason: str, records: Iterable[str] = ()) -> None:
-        super().__init__(message)
-        self.reason = reason
-        self.records = tuple(records)
-
-    def __reduce__(self) -> tuple[object, ...]:
-        return (type(self), (str(self), self.reason, self.records))
 
 
 def _actors(op: Op) -> frozenset[InstanceRef]:
     """The individuals an operation names: its endpoints and its agent."""
     return frozenset(ref for ref in (op.subject, op.object, op.agent) if ref is not None)
-
-
-def _refused(error: EffectError) -> InvalidEffect:
-    return InvalidEffect(f"the effect change is refused: {error}", error.reason, error.records)
 
 
 @dataclass(frozen=True)
@@ -148,6 +136,10 @@ class EffectChange:
     agent_etags: Mapping = field(default_factory=dict)  # an acceptance: each agent's instance file as checked
     actors: frozenset = frozenset()  # an acceptance: every endpoint and agent, re-checked for an id pair
     rechecks_readability: bool = False  # a revocation: every relation file must still be readable at commit
+    holdings_changes: tuple[HoldingsChange, ...] = ()  # the holder files, folded into this transaction
+    #: each holder file read to decide this change but not written by it, as read: an adopted or skipped undo's,
+    #: and those an acceptance's attempt check read to free a revoked event's attempt
+    holder_pins: Mapping = field(default_factory=dict)
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -157,6 +149,9 @@ class EffectChange:
                 transaction.put(record, expected)
         for record, expected in self.puts:
             transaction.put(record, expected)
+        for holdings in self.holdings_changes:
+            for record, expected in holdings.puts:
+                transaction.put(record, expected)
         return transaction
 
     def preview(self) -> dict[str, bytes]:
@@ -177,6 +172,9 @@ class EffectChange:
             found.append(("/".join(address_parts(self.chat)), "chat missing"))
         if (self.checks_relations or self.rechecks_readability) and unreadable:
             found.append((f"campaigns/{self.campaign_id}/relations", "a relation file cannot be read"))
+        for holder, pin in self.holder_pins.items():  # the adoption or skip was decided on exactly these files
+            if self.library._holder_pin(holder) != pin:
+                found.append(("/".join(address_parts(HoldingsRef.of(holder))), "holder file changed"))
         for agent, etag in self.agent_etags.items():  # a replaced file may be a different individual
             if self.library._etag(agent) != etag:
                 found.append(("/".join(address_parts(agent)), "agent missing or changed"))
@@ -201,6 +199,9 @@ class EffectChange:
                     raise StaleWrite(stale)
                 self._committed = True
                 return EffectCommit({}, self.duplicate_of)
+            # Each holder still the individual it was planned against: first, so a holder replaced since the plan
+            # is HolderReplaced (never retried through) even when it is also a pinned agent.
+            parts.recheck(self.holdings_changes)
             stale = self.stale()
             if stale:
                 raise StaleWrite(stale)
@@ -264,9 +265,10 @@ class TurnEffectsLibrary:
         require_director(requested_by)
         as_of = check_as_of(as_of)
         self._require_campaign(campaign_id)  # a mistyped campaign is an error, never an empty "all clear"
-        with self.store.lock:  # the bridges are read with the same snapshot
+        with self.store.lock:  # the bridges and holder files are read with the same snapshot
             snap = self._snapshot(campaign_id)
             bridges = _stored_events(self.store.campaign_knowledge(campaign_id))
+            held, decoded, damaged = parts.campaign_holders(self._holdings(), campaign_id, snap.events.values())
         events = list(snap.events.values())
         problems = list(snap.undecodable) + list(snap.wrapup_problems) + list(ledger_problems(events))
         problems += bridge_problems(events, bridges)
@@ -275,6 +277,9 @@ class TurnEffectsLibrary:
         problems += orphans(events, snap.relations())
         problems += edited_effects(events, snap.graph.index)
         problems += partial_revocations(events, snap.graph.index)
+        problems += damaged + list(holdings_problems(events, held))
+        problems += holdings_orphans(events, decoded)
+        problems += holdings_partials(events)
         problems += wrapup_problems(snap.wrapups.values(), events)
         active = sorted((e for e in events if e.active and e.moment.sequence <= as_of),
                         key=lambda e: (e.moment.sequence, e.ordinal, e.event_id))
@@ -315,13 +320,18 @@ class TurnEffectsLibrary:
                                                 "checked", "undecodable_relation")
                         raise InvalidEffect(f"{event.ref} is accepted but its receipts do not match the relations",
                                             "receipt_mismatch", (event.event_id,))
+                    if parts.duplicate_holdings(event, self._holdings()) is not None:
+                        raise InvalidEffect(f"{event.ref} is accepted but its holdings do not match the holders",
+                                            "receipt_mismatch", (event.event_id,))
                     return EffectChange(self, event.ref, campaign_id=campaign, state=snap.state,
                                         duplicate_of=event.ref)
+            parts.check_permitted(proposal)  # after the duplicate check: a retry of a charged use stays a no-op
             if unreadable:  # a new effect's preconditions could be hidden by any damaged relation file
                 raise InvalidEffect("a relation file cannot be read, so preconditions cannot be checked",
                                     "undecodable_relation")
             paired = paired_instances(self.store.campaign_instances(campaign))  # load() leaves both members out
             clash = [str(number) for number, op in enumerate(proposal.operations) if _actors(op) & paired]
+            clash += sorted(str(actor) for actor in parts.holdings_actors(proposal) & paired)
             if clash:
                 raise InvalidEffect("an operation names an actor whose id another kind also uses",
                                     "instance_id_conflict", clash)
@@ -340,11 +350,17 @@ class TurnEffectsLibrary:
             if proposal.moment.sequence < floor:
                 raise InvalidEffect(f"sequence {proposal.moment.sequence} is behind an accepted event at {floor}",
                                     "stale_sequence")
+            consulted = parts.check_attempts(proposal, snap.events.values(), self._holdings())
+            pins = {holder: self._holder_pin(holder) for holder in sorted(consulted, key=str)}
             try:
                 steps = plan(proposal, snap.graph.index)
             except EffectError as error:
                 raise _refused(error) from None
-            ref = self._allocate(campaign, _token_ids(self.store, campaign))
+            held_tokens, held_unread = parts.holder_tokens(self.store, campaign)
+            if held_unread and proposal.holdings is not None:  # it could name an id, or hide a precondition
+                raise InvalidEffect("a holder file cannot be read, so the holdings cannot be checked",
+                                    "undecodable_holdings")
+            ref = self._allocate(campaign, _token_ids(self.store, campaign) | held_tokens)
             token = accepted_token(ref.event_id)
             relations = self._relations()
             known = snap.relations()  # decoded once, under this lock; no per-operation re-read
@@ -363,6 +379,9 @@ class TurnEffectsLibrary:
                                         (str(step.op),)) from None
                 changes.append(change)
                 receipts.append(Receipt(step.op, change.relation))
+            planned = parts.plan_holdings(self._holdings(), proposal, snap.events.values(), ref.event_id,
+                                          authorization.holdings_domains)
+            charged = parts.charges(proposal, authorization.ability_domains)
             ordinal = 1 + max((e.ordinal for e in snap.events.values()), default=0)
             try:
                 event = AcceptedEvent(
@@ -370,14 +389,17 @@ class TurnEffectsLibrary:
                     tuple(AcceptedOperation(op, domain) for op, domain in zip(proposal.operations,
                                                                                authorization.domains)),
                     authorization.contributions, records, authorization.controls, str(self.handle.principal),  # type: ignore[attr-defined]
-                    self._clock(), ordinal, tuple(receipts))
+                    self._clock(), ordinal, tuple(receipts), attempt_id=proposal.attempt_id,
+                    holdings=None if planned is None else planned[1], abilities=charged)
             except EffectError as error:
                 raise _refused(error) from None
-            record = ScopeRecord(ref, ACCEPTED_SCHEMA, accepted_to_payload(event), owner=self._owner)
-            agents = {op.agent: self._etag(op.agent) for op in proposal.operations if op.agent is not None}
+            record = ScopeRecord(ref, accepted_schema(event), accepted_to_payload(event), owner=self._owner)
+            acting = {op.agent for op in proposal.operations if op.agent is not None} | parts.acting_agents(proposal)
+            agents = {agent: self._etag(agent) for agent in sorted(acting, key=str)}
+            actors = frozenset().union(*(_actors(op) for op in proposal.operations)) | parts.holdings_actors(proposal)
             return EffectChange(self, ref, ((record, None),), tuple(changes), campaign, snap.state, proposal.chat,
-                                checks_relations=True, agent_etags=agents,
-                                actors=frozenset().union(*(_actors(op) for op in proposal.operations)))
+                                checks_relations=True, agent_etags=agents, actors=actors,
+                                holdings_changes=() if planned is None else (planned[0],), holder_pins=pins)
 
     # -- revoking -----------------------------------------------------------------------------
 
@@ -445,17 +467,21 @@ class TurnEffectsLibrary:
                     skipped.append(Skipped(number, why))  # type: ignore[arg-type]
                     continue
                 changes.append(change)
+            undo, undo_seqs, holdings_skipped = parts.plan_undo(self._holdings(), event, partial)
+            pins = {} if undo is not None or event.holdings is None else {
+                holder: self._holder_pin(holder) for holder in event.holdings.holdings.holders}
             try:
                 revocation = Revocation(reason, self._clock(), str(self.handle.principal), records,  # type: ignore[attr-defined]
-                                        tuple(skipped))
+                                        tuple(skipped), holdings_skipped, undo_seqs)
                 revoked = replace(event, revocation=revocation)
             except EffectError as error:
                 raise _refused(error) from None
             stored = snap.stored[ref].record
-            record = ScopeRecord(ref, ACCEPTED_SCHEMA, accepted_to_payload(revoked), owner=stored.owner,
+            record = ScopeRecord(ref, accepted_schema(revoked), accepted_to_payload(revoked), owner=stored.owner,
                                  extra=stored.extra)
             return EffectChange(self, ref, ((record, expected),), tuple(changes), campaign, snap.state,
-                                rechecks_readability=True)
+                                rechecks_readability=True, holdings_changes=() if undo is None else (undo,),
+                                holder_pins=pins)
 
     # -- wrapping up --------------------------------------------------------------------------
 
@@ -503,6 +529,9 @@ class TurnEffectsLibrary:
 
     # -- helpers -------------------------------------------------------------------------------
 
+    def _holdings(self) -> HoldingsLibrary:
+        return HoldingsLibrary(self.store, self.handle, clock=self._clock, owner=self._owner)
+
     def _relations(self) -> RelationLibrary:
         return RelationLibrary(self.store, self.handle, clock=self._clock, new_id=_UniqueIds(self._new_id),
                                owner=self._owner)
@@ -549,7 +578,7 @@ class TurnEffectsLibrary:
         return tuple(records)
 
     def _allocate(self, campaign_id: str, tokened: frozenset[str] = frozenset()) -> AcceptedRef:
-        """An unused event id: no accepted-event file, no 020 event file, and no relation token naming it."""
+        """An unused event id: no accepted-event file, no 020 event file, no relation or holder token naming it."""
         for _ in range(_ALLOCATION_ATTEMPTS):
             value = self._new_id("e")
             validate_segment(value, "generated id")
@@ -560,6 +589,17 @@ class TurnEffectsLibrary:
                 continue  # a hand-deleted event's orphaned relation changes must never be adopted by a new event
             return ref
         raise StoreError("could not allocate an unused accepted-event id")
+
+    def _holder_pin(self, holder: InstanceRef) -> str | None:
+        """A holder file's exact bytes as an etag: ``None`` when it has none, ``"unreadable"`` without bytes."""
+        try:
+            return self.store.read(HoldingsRef.of(holder)).etag
+        except RecordNotFound:
+            return None
+        except MalformedRecord as error:
+            return error.etag
+        except (StoreError, LibraryPathError, ValueError):
+            return "unreadable"
 
     def _etag(self, ref) -> str | None:  # type: ignore[no-untyped-def]
         try:
@@ -594,6 +634,11 @@ class TurnEffectsLibrary:
         event = snap.events.get(change.duplicate_of)  # type: ignore[arg-type]
         if event is None or not event.active or verify_receipts(event, snap.graph.index):
             return [(path, "no longer accepted as it was")]
+        try:
+            if parts.duplicate_holdings(event, self._holdings()) is not None:
+                return [(path, "its holdings no longer match")]
+        except InvalidEffect:
+            return [(path, "a holder file cannot be read")]
         return []
 
     def _graph(self, campaign_id: str) -> CampaignGraph:

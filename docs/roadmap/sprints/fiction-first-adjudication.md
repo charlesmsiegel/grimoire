@@ -2,7 +2,7 @@
 
 **Outcome:** Mechanics-free actions produce credible, consistent successes, failures and costs without relying on narratorial whim or assuming every action succeeds.
 
-**Unscheduled prerequisite, awaiting a decision:** [021's next slice](turn-effects-and-wrap-up.md) (holdings operations from accepted effects, committing ability costs, charging each `attempt_id` once) is not on any wave yet; this sprint depends on it.
+**Prerequisite met:** [021's next slice](turn-effects-and-wrap-up.md#next-slice-holdings-and-ability-charges-delivered) (holdings operations from accepted effects, committing ability costs, charging each `attempt_id` once) is done ([EFFECTS](../../EFFECTS.md#holdings-and-ability-uses)). 021 checks `permitted` and records `charges`, but the `AbilityAssessment` it charges is the caller's: this sprint must compute and authenticate it.
 
 ## Scope and ownership
 - Represent a proposed action, known constraints, capabilities, stakes, uncertainty and accepted outcome without manufacturing dice rolls.
@@ -29,7 +29,7 @@ Requires the [Player Sovereignty](player-sovereignty.md) intent/authority contra
 The first slice of 025 ([fictional abilities](../../ABILITIES.md)) produces a deterministic `AbilityAssessment` that this sprint consumes. 029 must:
 - produce the attempt's labels with a labeller that is **not the narrator**, and put every intended outcome *and* the mechanism it uses into `needs` (the classification follows the labels; under-labelling is undetectable);
 - gate "the power works" on `assessment.permitted` only, never on `approval == "not_needed"`;
-- treat a `combination` as approvable only case by case, by an explicit director ruling naming the assessment's exact `terms` (the limits and prerequisites it sets aside); charge `charges`; proper combination rules remain milestone 3;
+- treat a `combination` as approvable only case by case, by an explicit director ruling naming the assessment's exact `terms` (the limits and prerequisites it sets aside); hand the assessment to an accepted effect, where 021 charges `charges` once; proper combination rules remain milestone 3;
 - authenticate who issues an `AbilityRuling` (adjudication channel only, never narration), and for a player-controlled actor take the attempt from that player's own contribution (`attempt_id` is its `contribution_id`);
 - persist rulings and their attempts (this sprint owns `AbilityRuling` persistence; 020 stores what it records), decide supersede/revoke for rulings and whether a ruling pins the entity's `resolved_source`; `AbilityRuling` is provisional and may be replaced here.
 

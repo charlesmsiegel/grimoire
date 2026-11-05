@@ -78,4 +78,10 @@ def plan(proposal: EffectProposal, index: GraphIndex) -> tuple[Step, ...]:
         if any(entry.relation.overlaps(probe) for entry in entries):
             raise EffectError("precondition_failed", (str(number),))
         steps.append(BeginStep(number))
+    # Every other act needs its agent's instance file too: a holdings line's agent and an ability user.
+    if proposal.holdings is not None and not proposal.holdings.agents() <= index.instances:
+        raise EffectError("missing_agent", ("holdings",))
+    for attempt in proposal.ability_attempts:
+        if attempt.actor not in index.instances:
+            raise EffectError("missing_agent", (attempt.ability_id,))
     return tuple(steps)

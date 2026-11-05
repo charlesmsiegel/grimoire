@@ -109,7 +109,8 @@ PURE_PACKAGES = (
     PurePackage("grimoire.evidence", ("grimoire.evidence", "grimoire.graph", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
     # Accepted turn effects (021): values, codecs, authority, planning and checks; the service is an adapter.
-    PurePackage("grimoire.effects", ("grimoire.effects", "grimoire.graph", "grimoire.core"),
+    # Its holdings part is a 023 operation's pure lines, so it may use the pure holdings package.
+    PurePackage("grimoire.effects", ("grimoire.effects", "grimoire.graph", "grimoire.holdings", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
     # Image identity and placements (018): values, codec and resolver; storage is an adapter.
     PurePackage("grimoire.images", ("grimoire.images", "grimoire.core"), never_import=("grimoire.core.inference",)),

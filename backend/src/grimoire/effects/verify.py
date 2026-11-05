@@ -6,6 +6,11 @@ token that no event records; ``ledger_problems`` checks the event stack itself (
 sequences); ``wrapup_problems`` and ``check_citations`` hold wrap-ups to the accepted events of
 their scene. ``as_knowledge_event`` bridges an accepted event to a 012 ``Event`` for 020, and
 ``bridge_problems`` checks what 020 stored under accepted ids.
+
+Holdings (023) are checked the same way: ``holdings_failures`` holds an event's holdings receipt (each
+holder's logged seq) to the holders' logs, ``holdings_orphans`` finds holder-log entries whose exact
+021 cause names an event that does not record them, and ``holdings_partials`` reports a revocation that
+left its holdings undo to a human.
 """
 
 from __future__ import annotations
@@ -14,11 +19,13 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from grimoire.core.authority import DIRECTOR
-from grimoire.core.identity import ChatRef, RelationRef
+from grimoire.core.identity import ChatRef, InstanceRef, RelationRef
 from grimoire.core.knowledge import Event, Moment
 from grimoire.graph import GraphError, GraphIndex, Relation
+from grimoire.holdings import Holdings, Operation
 
-from .model import AcceptedEvent, EffectError, SceneWrapUp, accepted_token, parse_token, revoked_token
+from .model import NEVER_APPLIED, AcceptedEvent, EffectError, SceneWrapUp, accepted_token, parse_token, revoked_token
+from .parts import inverse_op_id
 from .plan import records_fact
 
 
@@ -231,6 +238,133 @@ def wrapup_problems(wrapups: Iterable[SceneWrapUp], events: Iterable[AcceptedEve
     return tuple(sorted(found, key=EffectProblem.sort_key))
 
 
+# -- holdings ---------------------------------------------------------------------------------------
+
+def holdings_receipt(event: AcceptedEvent) -> tuple[Operation, dict[InstanceRef, int]] | None:
+    """The 023 operation an event's holdings receipt names, and each holder's seq of it.
+
+    An active event: the forward operation at ``seqs``. A revoked one whose undo was applied: the inverse
+    at ``holdings_seqs``. ``None`` with no holdings, or a revocation that skipped the undo.
+    """
+    if event.holdings is None:
+        return None
+    part, op_id = event.holdings.holdings, event.holdings.op_id
+    if event.revocation is None:
+        return part.operation(op_id, accepted_token(event.event_id)), dict(event.holdings.seqs)
+    if event.revocation.holdings_skipped is not None:
+        return None
+    return part.inverse(op_id, revoked_token(event.event_id)), dict(event.revocation.holdings_seqs)
+
+
+def entry_failure(holdings: Holdings, seq: int, op: Operation, *, strict: bool = False) -> str | None:
+    """Why ``holdings`` does not log ``op`` at ``seq``, or ``None`` when it does.
+
+    The log is bounded: an entry evicted at or before ``seq`` cannot contradict the receipt, so it counts
+    (``strict=False``, for duplicates and ``continuity``). Undoing needs the entry itself (``strict``), since
+    the entry evicted at that seq may be another operation's.
+    """
+    for entry in holdings.log:
+        if entry.seq == seq:
+            return None if entry.operation == op else "different operation"
+    if holdings.seq < seq:
+        return "holder restored"
+    if holdings.evicted_through >= seq:
+        return "evicted" if strict else None
+    return "not logged"
+
+
+def holdings_failures(event: AcceptedEvent, holders: Mapping[InstanceRef, Holdings | str], *,
+                      strict: bool = False, undoing: bool = False) -> tuple[tuple[InstanceRef, str, bool], ...]:
+    """``(holder, why, unreadable)`` for every holder whose log disagrees with the event's holdings receipt.
+
+    ``holders`` maps each holder to its decoded holdings, or to why its file cannot be read (``unreadable``
+    is then true: damage is named, never called a mismatch). A holder left out of ``holders`` is unreadable.
+    An active event fails ``undone`` where a holder logs its inverse (a revocation that landed on the holders but
+    not on the event file), except while ``undoing``, when that inverse is the one to adopt. A revocation that
+    skipped the undo as ``never applied`` fails ``applied since`` where a holder logs the forward change after all
+    (a holder file restored from after the effect): it is in force, so it is a mismatch and holds the attempt.
+    """
+    if never_applied(event):
+        assert event.holdings is not None
+        return tuple((holder, held, True) if isinstance(held, str) else (holder, "applied since", False)
+                     for holder in sorted(event.holdings.holdings.holders, key=str)
+                     for held in (holders.get(holder, "not read"),)
+                     if isinstance(held, str) or any(entry.op == event.holdings.op_id for entry in held.log))
+    found = holdings_receipt(event)
+    if found is None:
+        return ()
+    op, seqs = found
+    failures = []
+    for holder in sorted(seqs, key=str):
+        held = holders.get(holder, "not read")
+        if isinstance(held, str):
+            failures.append((holder, held, True))
+            continue
+        why = entry_failure(held, seqs[holder], op, strict=strict)
+        if why is None and event.active and not undoing and _undone(held, event.holdings.op_id):  # type: ignore[union-attr]
+            why = "undone"  # its revocation's inverse landed without the event file: never "in force"
+        if why is not None:
+            failures.append((holder, why, False))
+    return tuple(failures)
+
+
+def never_applied(event: AcceptedEvent) -> bool:
+    """A revoked event with holdings whose undo was skipped because no holder logged the forward change."""
+    skipped = None if event.revocation is None else event.revocation.holdings_skipped
+    return event.holdings is not None and skipped is not None and skipped.startswith(NEVER_APPLIED)
+
+
+def _undone(holdings: Holdings, op_id: str) -> bool:
+    inverse = inverse_op_id(op_id)
+    return any(entry.op == inverse for entry in holdings.log)
+
+
+def holdings_problems(events: Iterable[AcceptedEvent], holders: Mapping[InstanceRef, Holdings | str]
+                      ) -> tuple[EffectProblem, ...]:
+    """``receipt_mismatch`` (``op=None``, ``detail="holdings: <holder>: <why>"``) or ``undecodable_holdings``."""
+    found = []
+    for event in events:
+        for holder, why, unreadable in holdings_failures(event, holders):
+            found.append(EffectProblem("undecodable_holdings" if unreadable else "receipt_mismatch",
+                                       event.event_id, detail=f"holdings: {holder}: {why}"))
+    return tuple(found)
+
+
+def holdings_orphans(events: Iterable[AcceptedEvent], holders: Mapping[InstanceRef, Holdings]
+                     ) -> tuple[EffectProblem, ...]:
+    """Holder-log entries whose exact 021 cause names an event that does not record that operation.
+
+    The event must touch that holder. ``effect:accepted/<id>``: it must hold holdings under that op id;
+    ``effect:revoked/<id>``: it must be revoked and the entry be its inverse. Free-text causes are never interpreted.
+    """
+    by_id = {event.event_id: event for event in events}
+    found = []
+    for holder in sorted(holders, key=str):
+        for entry in holders[holder].log:
+            parsed = parse_token(entry.cause)
+            if parsed is None:
+                continue
+            state, event_id = parsed
+            event = by_id.get(event_id)
+            recorded = event is not None and event.holdings is not None and (
+                holder in event.holdings.holdings.holders) and (
+                entry.op == event.holdings.op_id if state == "accepted"
+                else not event.active and entry.op == inverse_op_id(event.holdings.op_id))
+            if not recorded:
+                found.append(EffectProblem("orphan_effect", event_id, detail=f"holdings {holder}"))
+    return tuple(sorted(set(found), key=EffectProblem.sort_key))
+
+
+def holdings_partials(events: Iterable[AcceptedEvent]) -> tuple[EffectProblem, ...]:
+    """``partial_revocation`` (``op=None``) for a revocation that left its holdings undo to a human.
+
+    021 cannot tell a human repair (a fresh 023 operation) from none, so it is reported until 030 can record it.
+    """
+    return tuple(EffectProblem("partial_revocation", event.event_id,
+                               detail=f"holdings: {event.revocation.holdings_skipped}")
+                 for event in events if event.revocation is not None and event.revocation.holdings_left)
+
+
 def as_knowledge_event(event: AcceptedEvent) -> Event:
     """The 012 ``Event`` an accepted event corresponds to, for 020 to persist. Participants are description only.
 
@@ -239,6 +373,9 @@ def as_knowledge_event(event: AcceptedEvent) -> Event:
         raise EffectError("revoked_event", (event.event_id,))
     people = {item.op.subject for item in event.operations} | {item.op.object for item in event.operations}
     people |= {item.op.agent for item in event.operations if item.op.agent is not None}
+    if event.holdings is not None:  # holders and their agents, and every ability user, take part too
+        people |= event.holdings.holdings.actors()
+    people |= {attempt.actor for attempt in event.ability_attempts}
     return Event(event.ref.campaign_id, event.event_id, event.summary, event.moment, accepted_token(event.event_id),
                  tuple(sorted(people, key=str)))
 
