@@ -390,6 +390,8 @@ def _granted_addresses(store: LibraryStore) -> tuple[tuple[str, ...], ...]:
     while stack:
         value = stack.pop()
         if isinstance(value, Mapping):
+            if value.get("kind") == "decision":  # most of the ledger, and never collected: not walked
+                continue
             address = value.get("resource") if "payload_digest" in value else value.get("scope")
             if isinstance(address, str):
                 found.append(tuple(name_key(part) for part in address.split("/")))

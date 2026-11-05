@@ -382,3 +382,23 @@ def test_an_unreadable_security_ledger_fails_both_allocations_closed(tmp_path, m
         with pytest.raises(TakenIdsUnlisted):
             chats.start_chat(Launch("character", MARA))  # a new scope
         assert _files(store) == before
+
+
+def test_a_new_scope_reads_the_security_ledger_once_to_plan_and_once_to_commit(tmp_path, monkeypatch):
+    """The security ledger is the whole library's audit and is read under the store lock: a new scope
+    pays one read to allocate (its individuals cannot be named once its campaign id is not) and one
+    at commit, not one more for each reservation set."""
+    with LibraryStore.create(tmp_path / "lib") as store:
+        seed_sources(store)
+        reads: list[str] = []
+        real = store.ledger_documents
+
+        def counting(name):
+            reads.append(name)
+            return real(name)
+
+        monkeypatch.setattr(store, "ledger_documents", counting)
+        change = chat_library(store).start_chat(Launch("character", MARA))
+        assert reads.count("security") == 1
+        change.commit()
+        assert reads.count("security") == 2

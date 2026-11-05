@@ -84,7 +84,7 @@ These rules reject traversal, absolute paths, separators, whitespace, control/fo
 
 Replay validates each entry with the kernel, including `replay_decision`'s strict checks, and fails closed (`LedgerInvalid`).
 
-**A grant outlives what it names.** A grant is scoped to an address, so deleting `campaigns/<id>`, or one individual's files, by hand leaves it in force over whatever is later written there. Allocators therefore never reuse an id the ledger names: a new campaign's id is outside `security_campaign_ids`, and a new actor's outside `security_instance_ids`, part of [`campaign_taken_ids`](CHATS.md#taken-instance-ids). Both scan the batches raw (grant scopes and approval resources, revoked or not), and fail closed when a batch cannot be read.
+**A grant outlives what it names.** A grant is scoped to an address, so deleting `campaigns/<id>`, or one individual's files, by hand leaves it in force over whatever is later written there. The campaign and actor id allocators therefore never reuse an id the ledger names (chat, relation and event ids rely on `new_id` being unique, and a grant on one of those survives too): a new campaign's id is outside `security_campaign_ids`, and a new actor's outside `security_instance_ids`, part of [`campaign_taken_ids`](CHATS.md#taken-instance-ids). Both scan the batches raw (grant scopes and approval resources, revoked or not), and fail closed when a batch cannot be read.
 
 **Kernel hooks (pure).**
 - `attach_sink(sink)`: every decision passes through the sink before it joins the audit and before an approval is consumed. If the sink raises, the request is denied `internal_error` and nothing is consumed.

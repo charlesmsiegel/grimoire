@@ -67,6 +67,10 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     grows with play history: it reads every relation, chat, accepted-event, knowledge and holder file
     and every sovereignty batch of the campaign, and every security batch of the library.
     """
+    return _taken_ids(store, campaign_id, security=True)
+
+
+def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool) -> frozenset[str]:
     taken = {found.instance_id for found in store.campaign_instances(campaign_id)}
     taken |= _named_ids(store.campaign_relations(campaign_id), campaign_id, "relation")
     taken |= relation_endpoint_ids(store, campaign_id)
@@ -77,8 +81,17 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     taken |= evidence_instance_ids(store, campaign_id)
     taken |= placement_subject_ids(store, campaign_id)
     taken |= sovereignty_actor_ids(store, campaign_id)
-    taken |= security_instance_ids(store, campaign_id)
+    if security:  # skipped only by _fresh_campaign_taken_ids
+        taken |= security_instance_ids(store, campaign_id)
     return frozenset(taken)
+
+
+def _fresh_campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+    """``campaign_taken_ids`` for a campaign id just found outside ``security_campaign_ids`` under the
+    same store lock: no grant or approval names ``campaigns/<id>`` or anything under it, so none can
+    name one of its individuals and the security ledger (a whole-library audit that can be large) is
+    not read a second time. Only a new scope's allocation and its commit re-check may use this."""
+    return _taken_ids(store, campaign_id, security=False)
 
 
 def _named_ids(found: CampaignRecords, campaign_id: str, family: str) -> set[str]:
@@ -182,8 +195,8 @@ class ChatChange:
                     raise StaleWrite([(f"authority/campaigns/{campaign}", "exists")])
                 if campaign in security_campaign_ids(store):
                     raise StaleWrite([("authority/security", f"a grant or approval names campaigns/{campaign}")])
-            if self.new_actors:
-                taken = campaign_taken_ids(store, campaign)
+            if self.new_actors:  # a new scope's id was just proven ungranted above, under this lock
+                taken = (_fresh_campaign_taken_ids if self.new_scope else campaign_taken_ids)(store, campaign)
                 clash = [actor for actor in self.new_actors if actor.instance_id in taken]
                 if clash:
                     raise StaleWrite([("/".join(address_parts(actor)), "id taken") for actor in clash])
@@ -335,7 +348,7 @@ class ChatLibrary:
             scope, new_scope = self._allocate_scope(), True
             scope_puts.append((self._scope_record(PlayScope(scope, at)), None))
             fresh = scope.campaign_id  # nothing should name it yet; the commit re-checks with the same set
-            taken: set[str] | _LazyTaken = _LazyTaken(lambda: campaign_taken_ids(self.store, fresh))
+            taken: set[str] | _LazyTaken = _LazyTaken(lambda: _fresh_campaign_taken_ids(self.store, fresh))
         else:
             new_scope = False
             if self.store.campaign_presence(scope.campaign_id) != "present":
