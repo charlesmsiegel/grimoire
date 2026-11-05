@@ -327,10 +327,15 @@ class PossessionLibrary:
 
     def _is_individual(self, source: SourceRef | None) -> bool:
         """Whether the definition revision an item names is one particular artifact; one that no longer
-        resolves or decodes says nothing (its item reports elsewhere, if at all)."""
+        resolves or decodes says nothing (its item reports elsewhere, if at all). A hand-edited source the
+        store cannot even address (``aux/item/x@r1``: a reserved device name) says nothing either, so one
+        bad record never stops the whole listing, nor the ``create`` and ``apply`` that read it."""
         if source is None:
             return False
-        stored = self.store.check_definition(source)
+        try:
+            stored = self.store.check_definition(source)
+        except (StoreError, LibraryPathError):
+            return False
         if isinstance(stored, str):
             return False
         try:

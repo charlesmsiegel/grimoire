@@ -219,6 +219,18 @@ def test_hand_edits_are_reported_never_repaired(store, library):
     assert ("undecodable", "unsupported_schema") in {(p.code, p.reason) for p in problems}
 
 
+def test_two_items_naming_a_source_the_store_cannot_address_still_list(store, library):
+    """A hand edit naming ``aux`` (a reserved device name) as the source must not abort the listing."""
+    first = created(library, make("make-1", name="Longsword", source=LONGSWORD))
+    second = created(library, make("make-2", name="Longsword", source=LONGSWORD))
+    for item in (first, second):
+        edit(store, item, lambda d: d["payload"][POSSESSION_KEY]["origin"].update(source="aux/item/broken@r1"))
+    found = library.campaign_items("c1")
+    assert {first, second} <= set(found.views)
+    assert "duplicate_individual" not in {p.code for p in found.problems}
+    assert created(library, make("make-3", name="Lantern")).instance_id == "item-1"
+
+
 def test_reading_what_is_not_an_item(store, library):
     assert refused(library.read, MARA) == "not_an_item"
     assert refused(library.read, InstanceRef("c1", "item", "nothing-1")) == "missing_item"
