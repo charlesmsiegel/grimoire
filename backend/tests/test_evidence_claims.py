@@ -82,7 +82,7 @@ def test_an_unshaped_proposition_keeps_its_pinned_form():
                                      "campaign:c1/character/duke/", "campaign:c1//character/duke",
                                      "CAMPAIGN:c1/character/duke", "campaign:c1/character/DUKE"])
 def test_a_claim_endpoint_in_any_other_spelling_is_refused(variant):
-    assert _refused(*_claim(subject=variant)) in ("invalid_field", "non_canonical", "not_overt")
+    assert _refused(*_claim(subject=variant)) == "invalid_field"
 
 
 def test_plain_decode_never_reads_a_proposition_without_its_shape():
@@ -167,6 +167,7 @@ def test_a_newer_builds_proposition_schema_is_quarantined_without_a_shape():
     files[target] = ScannedFile(files[target].etag, "grimoire.proposition/3", files[target].payload)
     assembly = assemble(C, files)
     assert reasons(assembly)["proposition:p-member"] == "unsupported_schema" and "p-member" not in assembly.claims
+    assert reasons(assembly)["evidence:v-wren-member"] == "unknown_proposition"
 
 
 def test_an_older_build_quarantines_a_shaped_proposition(monkeypatch):
@@ -176,6 +177,19 @@ def test_an_older_build_quarantines_a_shaped_proposition(monkeypatch):
     assembly = assemble(C, in_memory_files())
     assert reasons(assembly)["proposition:p-member"] == "unsupported_schema"
     assert reasons(assembly)["evidence:v-wren-member"] == "unknown_proposition" and not assembly.claims
+
+
+def test_a_listed_but_invalid_shape_is_damage_and_takes_its_dependents(monkeypatch):
+    """A shape the batch lists exactly is still checked on read: an endpoint the text does not name quarantines it."""
+    import evidence_fixtures
+    import grimoire.evidence.codec as codec
+    with monkeypatch.context() as patch:  # a buggy writer that skipped 017's checks
+        patch.setattr(codec, "_check_claim", lambda record, claim: None)
+        patch.setitem(evidence_fixtures.CLAIMS, "p-member", ClaimShape(C, "p-member", "member_of", DUKE, TAVI))
+        files = in_memory_files()
+    assembly = assemble(C, files)
+    assert reasons(assembly)["proposition:p-member"] == "not_overt" and not assembly.claims
+    assert reasons(assembly)["evidence:v-wren-member"] == "unknown_proposition"
 
 
 def test_an_unlisted_shaped_proposition_gives_no_shape():

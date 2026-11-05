@@ -187,7 +187,7 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 `append(campaign, records, *, claims=(), controls=(), contributions=None, chat=None)` returns a `KnowledgeChange`. Its checks run in order. Every refusal writes nothing and carries no record text.
 
 1. **Read-only.** A read-only store, or no handle → `read_only`.
-2. **Shape.** 1–500 012 records of this campaign (`empty`, `too_many`, `invalid_record`, `campaign_mismatch`). `claims` must be an iterable of exactly `ClaimShape`s, never a bare string (`invalid_claim`).
+2. **Shape.** 1–500 012 records (`empty`, `too_many`, `invalid_record`). `claims` must be an iterable of exactly `ClaimShape`s, never a bare string (`invalid_claim`). Then every record must be of this campaign (`campaign_mismatch`).
 3. **Existence.** The campaign (a play scope or an instance file; an empty leftover folder is not one), the chat (of this campaign) and every actor named must already exist as files (`unknown_campaign`, `unknown_chat`, `unknown_actor`). That covers holder, sender, `attributed_to`, participants and instance subjects. There is no name lookup, and a typo never creates a campaign. An actor whose id another kind of the campaign also uses is no one actor (`instance_id_conflict`; see [STORAGE](STORAGE.md#instance-ids-are-never-reused)).
 4. **Integrity.** Only an intact ledger is extended. Any quarantine or problem → `ledger_damaged`, naming the quarantined records and the problem paths. A write validated against a partial ledger could change meaning once a human repairs it.
 5. **Fresh IDs.** An ID already on disk → `duplicate_id`. (A damaged or look-alike file has already been refused at step 4.)
@@ -241,6 +241,7 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 - Remove an `unlisted` file by hand.
 - To an older build, a newer `knowledge-batch/2` looks like a broken log. It quarantines all rulings, beliefs and disclosures and refuses appends.
 - To a build from before claim shapes, a `grimoire.proposition/2` file is `unsupported_schema`. It quarantines that proposition and what cites it, not the whole log, and that build refuses appends (`ledger_damaged`). Sync (019) moves knowledge files without decoding them, so once one device writes a shaped proposition, every older device refuses appends to that campaign until it is upgraded.
+- A claim's predicate is read against this build's 017 `PREDICATES`. A build that does not know a predicate quarantines that proposition (`unknown_predicate`) and its dependents, and refuses appends, exactly as above. So adding a predicate to `PREDICATES` must also bump the shaped schema to `grimoire.proposition/3`, so that older builds report `unsupported_schema` rather than what reads as damage.
 
 ## Deferrals
 
