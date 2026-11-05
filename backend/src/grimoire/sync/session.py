@@ -16,26 +16,22 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef
-from grimoire.images import (
-    IMAGE_SCHEMA, PLACEMENT_SCHEMA, ImageModelError, image_from_payload, placement_from_payload, validate_placement,
-)
+from grimoire.core.identity import ImageRef, InstanceRef, SourceRef
 from grimoire.security import Permission
 from grimoire.store import (
     BlobCorrupt, CrossDevice, ImmutableImage, ImmutableRevision, InstanceIdConflict, InvalidEnvelope, InvalidSourceState,
     LibraryStore, LinkRefused, NameCollision, RevisionReferenced, StaleWrite, StoreError, UnstorableIdentifier,
     WriteConflict, WriteDenied, etag,
 )
-from grimoire.store.jsonfmt import MAX_FILE_BYTES, JsonError, parse_strict
+from grimoire.store.jsonfmt import MAX_FILE_BYTES
 from grimoire.store.layout import (
-    chat_parts, classify, conflict_parts, definition_parts, image_parts, instance_parts, kept_address, logical,
-    manifest_parts, placement_parts,
+    chat_parts, classify, conflict_parts, definition_parts, instance_parts, kept_address, logical, manifest_parts,
 )
 from grimoire.store.replica import (
-    SHADOWED, CanonicalScan, chats_named, image_blob, instance_derivation_of, instances_named, parse_exact, pinned_by,
-    placement_target, previous_of,
+    SHADOWED, CanonicalScan, chats_named, instances_named, parse_exact, pinned_by, previous_of,
 )
 
+from .art import art_needs, art_unmet
 from .decide import archive_candidate, decide, derive_base
 from .documents import (
     DEVICE_FILE, ArchiveView, PendingView, syncable, archive_name, check_device_id, parse_archive, parse_device,
@@ -198,6 +194,8 @@ class SyncPlan:
     skipped: dict[str, tuple[str, ...]] = field(default_factory=dict)  # per device: reported, never touched
     held: set[str] = field(default_factory=set)  # held-back paths still tracked: no decision, no archive change
     ungranted: dict[str, list[Copy]] = field(default_factory=dict)  # blob copies the receiver may not write
+    #: per device, the sources its ``load()`` excludes, read once per plan and only if art is copied
+    exclusions: dict[str, frozenset[str]] = field(default_factory=dict)
 
     def other(self, device: str) -> str:
         return self.devices[1] if device == self.devices[0] else self.devices[0]
@@ -491,7 +489,8 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
       the same commit;
     - a 020 knowledge record's campaign exists on ``dest`` (a scope or an instance, 020's own test)
       whenever it exists on the origin;
-    - 018 art (``_art_needs``) has every file it needs identical, or present, on ``dest``: sync never
+    - 018 art (``art_needs``) has every file it needs identical, or present, on ``dest``, and every
+      source it belongs to or shows a picture of admitted by ``load()`` on both devices: sync never
       creates a state the 018 batch would refuse.
     A path blocked on either side is never read as present or absent: the dependency is unmet.
     Holding one copy can unmeet another's dependency, so this repeats until nothing changes.
@@ -519,9 +518,11 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
                 return (origin_scan.blocked_reason(path) is not None or dest_scan.blocked_reason(path) is not None
                         or any(side.state == "blocked" for side in plan.sides.get(path, {}).values()))
             if syncable(copy.path) in ASSET_KINDS:
-                needs = _art_needs(copy.path, copy.data, origin_files, origin_scan.blobs)  # type: ignore[attr-defined]
-                why = _art_unmet(needs, blocked, final_etag,
-                                 lambda path, origin=copy.origin: _etag_on(plan, origin, path), here, dest)
+                needs = art_needs(copy.path, copy.data, origin_files, origin_scan.blobs,  # type: ignore[attr-defined]
+                                  frozenset() if copy.data is None else _excluded(plan, copy.origin))
+                why = art_unmet(needs, blocked, final_etag,
+                                lambda path, origin=copy.origin: _etag_on(plan, origin, path), here, dest,
+                                _excluded(plan, dest) if needs.admitted else frozenset())
                 if why:
                     newly[copy.path] = why
                 continue
@@ -561,6 +562,27 @@ def _campaigns_with_state(paths) -> set[str]:  # type: ignore[no-untyped-def]
     return {path.split("/")[1] for path in paths if syncable(path) in ("scope", "instance")}
 
 
+def _excluded(plan: SyncPlan, device: str) -> frozenset[str]:
+    """The sources ``device``'s ``load()`` excludes (018's ``excluded_source``), as art admission reads them.
+
+    Taken from the store's shared, cached ``excluded_sources`` rather than rebuilt from the scan:
+    it is ``load()``'s own algorithm (a cross-source ``identity_conflict`` included), and on an
+    unchanged library it costs one ``stat`` per manifest and revision entry and reads no file. It
+    is read lazily: the origin's the first time an image or placement copy is checked (a blob needs
+    nothing), the receiver's the first time one needs a source admitted there (a campaign picture or
+    a ``hide`` reads no source), so a sync that copies no such art never pays for it. It is then
+    kept on the plan: every later fixpoint round, and the dependency checks ``apply_sync`` reruns
+    after a denial, judge against the same answer the plan was made with. Every image or placement
+    copy is first checked while planning, which holds both libraries' locks, as it does for the
+    scan, so the read happens there. An edit another program makes between the scan and this read
+    can make the two disagree for one sync; that is the same window every plan has (the commit's
+    compare-and-swap still guards the bytes), and the next sync decides again from fresh reads."""
+    found = plan.exclusions.get(device)
+    if found is None:
+        found = plan.exclusions[device] = plan.stores[device].excluded_sources()
+    return found
+
+
 def _etag_on(plan: SyncPlan, device: str, path: str) -> str | None:
     """What ``device`` holds at ``path`` (a blob as verified or trusted by ``_verify_blobs``)."""
     side = plan.sides.get(path, {}).get(device)
@@ -568,190 +590,6 @@ def _etag_on(plan: SyncPlan, device: str, path: str) -> str | None:
         return side.etag if side.state == "present" else None
     data = plan.scans[device].files.get(path)  # type: ignore[attr-defined]
     return None if data is None else etag(data)
-
-
-@dataclass(frozen=True)
-class _Needs:
-    """What one 018 art file needs on the receiving device (the 018 batch's W5-W9, structurally)."""
-
-    identical: frozenset[str] = frozenset()  # the receiver must hold exactly the origin's bytes
-    present: frozenset[str] = frozenset()  # the receiver must hold some version
-    campaign: str | None = None  # this campaign must have state (a scope or an instance) there
-    hold: str | None = None  # the origin itself is in a state the batch refuses: never copied
-
-
-def _art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes], blobs: Mapping[str, int]) -> _Needs:
-    """The files a blob, image object or placement needs (docs/SYNC.md, "Art"), read from the
-    origin's bytes and its scan's blob sizes (``blobs``: listed, never read). Everything the resolver
-    reads for it must be identical, so it resolves the same on both devices; art the 018 batch would
-    refuse there (W6 an image it cannot show, W7 scope, unreadable payload, W8's
-    ``validate_placement``, an adjust with nothing inherited) is held."""
-    kind = syncable(path)
-    if kind == "blob" or data is None:
-        return _Needs()  # content-addressed: needs nothing
-    found = classify(tuple(path.split("/")))
-    assert found is not None
-    identical: set[str] = set()
-    present: set[str] = set()
-
-    def art(image: ImageRef) -> str | None:  # W6: the image object and its blob, as the origin holds them
-        try:
-            image_path = "/".join(image_parts(image))
-        except (ValueError, UnstorableIdentifier):
-            return f"{image} cannot be stored"
-        image_data = origin.get(image_path)
-        blob = None if image_data is None else image_blob(image_data)
-        if blob is None:
-            return f"{image} or its blob is not readable on the origin"
-        refused = _image_refusal(image_data, "/".join(blob), blobs)  # type: ignore[arg-type]
-        if refused is not None:
-            return f"{image} cannot be shown: {refused}"
-        identical.update((image_path, "/".join(blob)))
-        return None
-
-    def done(hold: str | None = None, campaign: str | None = None) -> _Needs:
-        return _Needs(frozenset(identical), frozenset(present), campaign, hold)
-    if kind == "image":
-        ref = found[1]
-        assert isinstance(ref, ImageRef)
-        blob = image_blob(data)
-        if blob is None:
-            return done("it names no storable blob")
-        # create-only: copied broken, a repair on the origin could never follow it, so it waits there
-        refused = _image_refusal(data, "/".join(blob), blobs)
-        if refused is not None:
-            return done(refused)
-        identical.add("/".join(blob))
-        if ref.campaign_id is not None:
-            return done(campaign=ref.campaign_id)
-        present.add("/".join(manifest_parts(ref.scope)))
-        return done()
-    ref = found[1]
-    assert isinstance(ref, PlacementRef)
-    mode, image, readable = placement_target(data)
-    if not readable:
-        return done("its mode or image cannot be read")
-    refused = _placement_refusal(ref, data)
-    if refused is not None:
-        return done(refused)
-    subject = ref.subject
-    if isinstance(subject, SourceRef):  # W5 (source admitted, entity exists), W7, W6
-        present.add("/".join(manifest_parts(subject.source)))
-        head = _entity_head(origin, subject)
-        if head is None:
-            return done(f"{subject} has no head revision on the origin")
-        identical.add(head)
-        if image is not None:
-            if image.scope != subject.source:
-                return done(f"{image} is not in scope for {subject}")
-            return done(art(image))
-        return done()
-    assert isinstance(subject, InstanceRef)
-    instance = "/".join(instance_parts(subject))
-    present.add(instance)  # W5; a pair-blocked instance is unknown, so the placement is held (A2)
-    if mode != "adjust" and (image is None or image.scope == f"campaign:{subject.campaign_id}"):
-        return done(None if image is None else art(image))
-    # inherited source art (W7 through the instance's derivation) or an adjust of it (W9): the
-    # derivation, the entity and (for adjust) the source placement must mean the same on both sides
-    instance_data = origin.get(instance)
-    if instance_data is None:
-        return done(f"{subject} is not readable on the origin")
-    entity, problem = instance_derivation_of(instance_data)
-    if entity is None or image is None or image.scope != entity.source:
-        return done(f"{image} is not in scope for {subject} ({problem or 'not its derivation source'})")
-    try:  # the derivation is the instance's own text: it may name an entity no library can store
-        head = _entity_head(origin, entity)
-        manifest = "/".join(manifest_parts(entity.source))
-        inherited = "/".join(placement_parts(PlacementRef(entity, ref.slot)))
-    except (ValueError, UnstorableIdentifier):
-        return done(f"{subject} derives from {entity}, which names no storable entity")
-    if head is None:
-        return done(f"{entity} has no head revision on the origin")
-    identical.update((instance, manifest, head))
-    hold = art(image)
-    if hold is None and mode == "adjust":
-        inherited_data = origin.get(inherited)
-        _, base_image, ok = placement_target(inherited_data) if inherited_data is not None else (None, None, False)
-        if not ok or base_image is None:
-            return done(f"{entity} has no picture in {ref.slot!r} to adjust on the origin")
-        refused = _placement_refusal(PlacementRef(entity, ref.slot), inherited_data)  # type: ignore[arg-type]
-        if refused is not None:  # W9 reads it through 018 (``nothing_to_adjust``; ``invalid_placement``)
-            return done(f"{entity}'s placement in {ref.slot!r} cannot be adjusted: {refused}")
-        if base_image != image:  # W9 ``stale_adjust``: the batch refuses an adjust of another picture
-            return done(f"{entity} shows {base_image} in {ref.slot!r}, not the adjusted {image}")
-        identical.add(inherited)
-        hold = art(base_image)
-    return done(hold)
-
-
-def _image_refusal(data: bytes, blob: str, blobs: Mapping[str, int]) -> str | None:
-    """Why 018 cannot show this image object (W6, as the batch's ``_check_placement`` and the resolver
-    read it: ``invalid_image``, ``missing_blob``, ``blob_size_mismatch``), else ``None``: another schema,
-    a payload its codec refuses, or a ``blob`` the origin lists at another size than the object
-    declares. ``blobs`` is the origin scan's listing (sizes, never bytes); a blob it does not list is
-    an unmet ``identical`` need instead."""
-    try:
-        document = parse_strict(data)
-        schema = document.get("schema") if isinstance(document, Mapping) else None
-        if schema != IMAGE_SCHEMA:
-            return f"its schema is {schema!r}, not {IMAGE_SCHEMA!r} (invalid_image)"
-        image = image_from_payload(document.get("payload"))  # type: ignore[union-attr]
-    except (JsonError, ImageModelError) as error:
-        return f"its payload cannot be read ({error}) (invalid_image)"
-    size = blobs.get(blob)
-    if size is not None and size != image.blob.size:
-        return f"it declares a {image.blob.size}-byte blob, but {blob} is {size} bytes (blob_size_mismatch)"
-    return None
-
-
-def _placement_refusal(ref: PlacementRef, data: bytes) -> str | None:
-    """Why 018 refuses this placement where it sits (its schema and codec, then W8's
-    ``validate_placement``, which the batch and the resolver both apply: a source placement may only
-    ``set``), else ``None``. The resolver reads a placement under another schema as ``invalid_placement``."""
-    try:
-        document = parse_strict(data)
-        schema = document.get("schema") if isinstance(document, Mapping) else None
-        if schema != PLACEMENT_SCHEMA:
-            return f"its schema is {schema!r}, not {PLACEMENT_SCHEMA!r} (invalid_placement)"
-        placement = placement_from_payload(document.get("payload"))  # type: ignore[union-attr]
-    except (JsonError, ImageModelError) as error:
-        return f"its payload cannot be read ({error})"
-    problem = validate_placement(ref.subject, ref.slot, placement)
-    return None if problem is None else f"{problem[0]}: {problem[1]}"
-
-
-def _entity_head(origin: Mapping[str, bytes], entity: SourceRef) -> str | None:
-    """The revision file the origin's manifest names as ``entity``'s head, or its sole revision."""
-    manifest = origin.get("/".join(manifest_parts(entity.source)))
-    if manifest is not None:
-        try:
-            heads = parse_exact(manifest_parts(entity.source), manifest).head_refs()  # type: ignore[union-attr]
-        except (StoreError, ValueError):
-            return None
-        revision = heads.get(entity.unpinned())
-        if revision is not None:
-            try:
-                return "/".join(definition_parts(entity.at(revision)))
-            except (ValueError, UnstorableIdentifier):
-                return None
-    prefix = "/".join(definition_parts(entity.at("x"))[:-1]) + "/"
-    revisions = [path for path in origin if path.startswith(prefix) and syncable(path) == "definition"]
-    return revisions[0] if len(revisions) == 1 else None
-
-
-def _art_unmet(needs: _Needs, blocked, final, origin, here: set[str], dest: str) -> str:  # type: ignore[no-untyped-def]
-    """Why ``needs`` do not hold on ``dest`` ("" when they do). ``final(path)``: the etag ``dest`` will
-    hold; ``origin(path)``: the etag the origin holds; ``blocked(path)``: unknown on either side."""
-    if needs.hold is not None:
-        return f"018 art the batch would refuse: {needs.hold}"
-    unequal = sorted(path for path in needs.identical
-                     if blocked(path) or origin(path) is None or final(path) != origin(path))
-    absent = sorted(path for path in needs.present if blocked(path) or final(path) is None)
-    if needs.campaign is not None and needs.campaign not in here:
-        absent.append(f"campaigns/{needs.campaign} (no scope or instance)")
-    what = (["art it shows not identical on " + dest + ": " + ", ".join(unequal)] if unequal else [])
-    what += (["owner or subject missing on " + dest + ": " + ", ".join(absent)] if absent else [])
-    return "; ".join(what)
 
 
 def _admit(plan: SyncPlan, dest: str) -> None:
@@ -1570,10 +1408,13 @@ def _verified(store: LibraryStore, path: str, device: str) -> str:
 
 def _resolve_art(stores: Mapping[str, LibraryStore], scans: Mapping[str, CanonicalScan], winner: str, receiver: str,
                  path: str, data: bytes) -> None:
-    """``resolve`` delivers an image object or placement only where sync would copy it (``_art_needs``):
+    """``resolve`` delivers an image object or placement only where sync would copy it (``art_needs``):
     every file it needs identical on both devices and blocked on neither (blobs hashed on the
-    receiver), every owner or subject it needs present on the receiver."""
-    needs = _art_needs(path, data, scans[winner].files, scans[winner].blobs)  # type: ignore[attr-defined]
+    receiver), every owner or subject it needs present on the receiver, and every source it belongs
+    to or shows a picture of admitted by ``load()`` on both devices (each store's cached
+    ``excluded_sources``, read now, as a sync's plan reads it)."""
+    needs = art_needs(path, data, scans[winner].files, scans[winner].blobs,  # type: ignore[attr-defined]
+                      stores[winner].excluded_sources())
 
     def held(where: str) -> bool:
         return any(scans[device].blocked_reason(where) is not None for device in scans)
@@ -1584,7 +1425,8 @@ def _resolve_art(stores: Mapping[str, LibraryStore], scans: Mapping[str, Canonic
         found = scans[device].files.get(where)
         return None if found is None else etag(found)
     here = _campaigns_with_state(scans[receiver].files)
-    why = _art_unmet(needs, held, lambda where: tag(receiver, where), lambda where: tag(winner, where), here, receiver)
+    why = art_unmet(needs, held, lambda where: tag(receiver, where), lambda where: tag(winner, where), here, receiver,
+                    stores[receiver].excluded_sources())
     if why:
         raise ResolveRefused(f"{path} cannot be resolved on {receiver} yet: {why}; sync or resolve those first")
 

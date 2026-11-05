@@ -14,15 +14,16 @@ import threading
 
 import pytest
 
-from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef
+from grimoire.core.identity import IdentityConflict, ImageRef, InstanceRef, PlacementRef, SourceRef
+from grimoire.core.index import DefinitionIndex
 from grimoire.images import Crop, Hidden, Placement, Shown
 from grimoire.imagestore import ImageLibrary
 from grimoire.security import Grant, Permission, ResourcePath
-from grimoire.store import LibraryStore, RecordEnvelope, WriteDenied, etag
+from grimoire.store import LibraryStore, RecordEnvelope, SourceManifest, WriteDenied, etag, loader
 from grimoire.store.layout import address_parts, blob_parts
 from grimoire.sync import ResolveRefused, SyncInterrupted, apply_sync, identify, plan_sync, resolve, sync, sync_until_quiet
 
-from image_fixtures import HARBOR, PNG, PNG_2, SAILOR, WREN_A, WREN_B, handle, seed
+from image_fixtures import HARBOR, MIRA, PNG, PNG_2, SAILOR, WREN_A, WREN_B, handle, seed
 from ledger_helpers import open_authority
 from store_helpers import OWNER
 from sync_helpers import DESKTOP, PHONE
@@ -701,3 +702,132 @@ def test_an_adjust_of_an_inherited_placement_018_cannot_read_never_replaces_a_wo
     with pytest.raises(ResolveRefused, match="schema"):
         resolve(desktop, phone, _path(adjust), etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, H)
     assert (phone.root / _path(adjust)).read_bytes() == theirs
+
+
+# -- W5: art of a source load() excludes ------------------------------------------------------------
+#: Where a hand copy of card:mira's revision lands inside harbor's records (see ``_exclude_harbor``).
+STRAY = SourceRef(HARBOR, "character", "mira").at("r1")
+RIVAL = "catalog:rival"
+
+
+def _exclude_harbor(store: LibraryStore):  # type: ignore[no-untyped-def]
+    """A hand copy of card:mira's revision dropped into harbor's records. The file claims another
+    source, so ``load()`` excludes all of harbor (``ownership``) though its manifest still reads, and
+    sync blocks that one file (``address_mismatch``). Returns the stray file, to repair by deleting it."""
+    stray = store.root / _path(STRAY)
+    stray.parent.mkdir(parents=True)
+    stray.write_bytes((store.root / _path(MIRA.at("r1"))).read_bytes())
+    assert HARBOR in store.excluded_sources()
+    return stray
+
+
+def _harbor_avatar(store: LibraryStore, subjects=(SAILOR, WREN_B)) -> ImageRef:  # type: ignore[no-untyped-def]
+    """A harbor picture, set through the 018 batch (while harbor is admitted) as the avatar of the
+    sailor portrayal and of campaign instances that inherit from it."""
+    batch = _images(store).change()
+    ref = batch.add_image(HARBOR, "harbor-avatar", PNG_2)
+    for subject in subjects:
+        batch.place(subject, "avatar", Placement("set", "avatar", ref), None)
+    batch.commit()
+    return ref
+
+
+def _harbor_art_paths(ref: ImageRef) -> set[str]:
+    """The art that belongs to harbor or shows its picture: the image, the source placement and the
+    campaign placement that inherits the picture through wren-b's derivation."""
+    return {_path(ref), _path(PlacementRef(SAILOR, "avatar")), _path(PlacementRef(WREN_B, "avatar"))}
+
+
+def test_art_of_a_source_the_origin_excludes_is_held_until_the_origin_repairs_it(pair):
+    """W5 ``excluded_source``: while the origin's ``load()`` excludes harbor, the origin resolves its art
+    to nothing, so a receiver that admits harbor would show pictures the origin does not; the image
+    object is create-only, so that copy could never be taken back. Every harbor art file (the image,
+    the source placement, the campaign placement inheriting the picture) is held, naming the
+    exclusion; campaign art that reads no source, and the blobs, still land. Once the origin is
+    repaired, the next sync copies the art and both devices show the same pictures."""
+    desktop, phone = pair
+    ref = _harbor_avatar(desktop)
+    wren = _campaign_art(desktop, subject=WREN_A)
+    stray = _exclude_harbor(desktop)
+    report = sync_until_quiet(desktop, phone, H)
+    held = _harbor_art_paths(ref)
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == {
+        **dict.fromkeys(held, "head_dependency"), _path(STRAY): "blocked"}
+    assert all("excluded on the origin" in report.conflict(path).detail for path in held)
+    assert {(_path(wren), PHONE), (_blob(PNG), PHONE), (_blob(PNG_2), PHONE)} <= set(report.copied)
+    assert not any((phone.root / path).exists() for path in held)
+    assert _slot(phone, SAILOR) is None and isinstance(_slot(phone, WREN_A), Shown)
+    mine = (desktop.root / _path(ref)).read_bytes()  # resolve applies the same rule: refused
+    with pytest.raises(ResolveRefused, match="excluded on the origin"):
+        resolve(desktop, phone, _path(ref), etag(mine), {DESKTOP: etag(mine), PHONE: None}, H)
+    assert not (phone.root / _path(ref)).exists()
+    stray.unlink()  # repaired on the origin: harbor is admitted again, and the held art is still new
+    stray.parent.rmdir()
+    assert sync_until_quiet(desktop, phone, H).conflicts == ()
+    for subject in (SAILOR, WREN_B):
+        assert isinstance(_slot(phone, subject), Shown) and _slot(phone, subject) == _slot(desktop, subject)
+        assert _slot(phone, subject).image == ref
+
+
+class _RivalIndex(DefinitionIndex):
+    """Simulates a whole-library ``identity_conflict`` (today's loader drops the links that could cause
+    one before the index sees them; see test_store_exclusions.py): while a source ``catalog:rival``
+    exists, harbor is excluded, though neither source's own files are damaged."""
+
+    def __init__(self, sources, definitions, heads=None, links=()):  # type: ignore[no-untyped-def]
+        sources = list(sources)
+        if {HARBOR, RIVAL} <= {source.source_id for source in sources}:
+            raise IdentityConflict(f"{HARBOR} conflicts with {RIVAL}", (HARBOR,))
+        super().__init__(sources, definitions, heads, links)
+
+
+@pytest.mark.parametrize("excluding", [DESKTOP, PHONE])
+def test_art_of_a_source_excluded_only_across_sources_is_held(pair, monkeypatch, excluding):
+    """A cross-source exclusion is invisible to one source's own files: neither the origin's manifest
+    nor the receiver store's art-only check (which reads one source's scan) sees it. Sync reads both
+    devices' ``excluded_sources`` (``load()``'s own verdict), so harbor's art is held whichever device
+    excludes harbor: on the origin it shows nothing; on the receiver its own batch would refuse it."""
+    desktop, phone = pair
+    monkeypatch.setattr(loader, "DefinitionIndex", _RivalIndex)
+    for store in pair:
+        store._scans, store._exclusions = {}, None  # the algorithm changed under the cache (tests only)
+    ref = _harbor_avatar(desktop)
+    rival = {DESKTOP: desktop, PHONE: phone}[excluding]
+    txn = rival.transaction()
+    txn.put(SourceManifest(RIVAL, OWNER), None)
+    txn.commit(H[excluding])
+    assert {store.root.name for store in pair if HARBOR in store.excluded_sources()} == {excluding}
+    report = sync(desktop, phone, H)
+    held = _harbor_art_paths(ref)
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == dict.fromkeys(held, "head_dependency")
+    why = "excluded on the origin" if excluding == DESKTOP else f"excluded on {PHONE}"
+    assert all(why in report.conflict(path).detail for path in held)
+    assert not any((phone.root / path).exists() for path in held)
+    assert (_blob(PNG_2), PHONE) in report.copied
+
+
+def test_inherited_art_is_held_while_the_receiver_excludes_its_source(pair):
+    """The receiver's store refuses source art written into a source its own files exclude, but it
+    checks a campaign placement against its campaign only. So a new campaign placement that inherits
+    a harbor picture both devices already hold would land on a phone that excludes harbor, in a state
+    the phone's own batch refuses (``excluded_source``). It is held, naming the phone's exclusion,
+    and lands once the phone is repaired."""
+    desktop, phone = pair
+    ref = _harbor_avatar(desktop, subjects=(SAILOR,))
+    assert sync_until_quiet(desktop, phone, H).conflicts == ()
+    stray = _exclude_harbor(phone)
+    _images(desktop).place(WREN_B, "avatar", Placement("set", "avatar", ref, Crop(0, 0, 5000, 5000)), None).commit()
+    report = sync(desktop, phone, H)
+    placement = _path(PlacementRef(WREN_B, "avatar"))
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == {
+        placement: "head_dependency", _path(STRAY): "blocked"}
+    assert f"excluded on {PHONE}" in report.conflict(placement).detail
+    assert not (phone.root / placement).exists()
+    mine = (desktop.root / placement).read_bytes()  # resolve applies the same rule: refused
+    with pytest.raises(ResolveRefused, match=f"excluded on {PHONE}"):
+        resolve(desktop, phone, placement, etag(mine), {DESKTOP: etag(mine), PHONE: None}, H)
+    assert not (phone.root / placement).exists()
+    stray.unlink()  # repaired on the phone: the held placement lands and resolves as on the desktop
+    stray.parent.rmdir()
+    assert sync_until_quiet(desktop, phone, H).conflicts == ()
+    assert isinstance(_slot(phone, WREN_B), Shown) and _slot(phone, WREN_B) == _slot(desktop, WREN_B)
