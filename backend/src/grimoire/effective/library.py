@@ -52,9 +52,10 @@ def explainer(view: LibraryView) -> Explain:
     when its file exists but could not be read (fix the file, do not restore it).
 
     The most specific reason wins. An excluded source is fixed at its manifest, so it comes first.
-    An unreadable base file comes before ``entity_dropped``: the loader drops an entity with no
-    readable revision, or whose head is unreadable, so when the base itself is that file, the
-    drop is only a consequence and repairing the file is the fix.
+    An unreadable base file comes before ``entity_dropped`` only when the drop is that file's own
+    consequence (``_drop_is_unreadable_base``): then repairing the file is the whole fix. When the
+    loader dropped the entity for another reason as well (``kind_reuse``, ``missing_head``, a head
+    naming another revision), repairing the file would leave it dropped, so ``entity_dropped`` wins.
     """
     excluded, dropped = set(view.excluded), {ref.entity_key for ref in view.dropped}
     unreadable = _unreadable(view)
@@ -62,10 +63,38 @@ def explainer(view: LibraryView) -> Explain:
     def explain(ref: SourceRef) -> str | None:
         if ref.source in excluded:
             return "excluded_source"
-        if ref in unreadable:
+        if ref in unreadable and (ref.entity_key not in dropped or _drop_is_unreadable_base(view, ref)):
             return "unreadable_revision"
         return "entity_dropped" if ref.entity_key in dropped else None
     return explain
+
+
+def _drop_is_unreadable_base(view: LibraryView, ref: SourceRef) -> bool:
+    """Whether the loader dropped ``ref``'s entity only because ``ref``'s own file is unreadable.
+
+    This mirrors the store loader's ``evaluate``, which drops an entity for exactly four causes:
+    ``kind_reuse`` (its id under two kinds), ``bad_head`` (its declared head names a missing or
+    unreadable revision), ``missing_head`` (several revisions, no head) and, silently, no readable
+    revision at all. The drop is the base's own consequence when no ``kind_reuse`` is involved and
+    either the declared head *is* this unreadable revision, or no head is declared and the source
+    reports no ``missing_head`` (so this was the entity's only revision: with a second one the
+    loader would have reported ``missing_head``). A ``missing_head`` for another entity of the same
+    source cannot be told apart from one for this entity without parsing its prose, so it is read
+    conservatively as ``entity_dropped``, which is still true, only less specific.
+    """
+    if any(other.source == ref.source and other.entity_id == ref.entity_id and other.kind != ref.kind
+           for other in view.dropped):  # kind_reuse drops every kind sharing the id
+        return False
+    stored = view.sources.get(ref.source)
+    if stored is None:
+        return False
+    try:
+        head = stored.manifest.head_refs().get(ref.unpinned())
+    except ValueError:  # a manifest with a bad head key: the loader's own reading decides, not ours
+        return False
+    if head is not None:
+        return head == ref.revision
+    return not any(problem.code == "missing_head" and problem.source == ref.source for problem in view.problems)
 
 
 def selection_snapshot(view: LibraryView, selection: SourceSelection) -> EffectiveSnapshot:

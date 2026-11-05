@@ -372,3 +372,51 @@ def test_a_bases_only_revision_unreadable_is_unreadable_not_dropped(store):
     assert BASE.unpinned() in [ref.unpinned() for ref in view.dropped]  # the loader did drop the entity
     error = reason(lambda: selection_snapshot(view, selected((MODERN_MARA, "character"))).effective(MODERN_MARA))
     assert (error.reason, error.detail) == ("missing_base", "unreadable_revision")
+
+
+MARA_FILES = ("sources", "catalog", "elderfen-cast", "_source", "records", "character", "mara")
+
+
+def add_base_r2(store, heads):
+    """A second revision of the base entity, with ``heads`` as the manifest's declared heads."""
+    put(store, envelope(EntityDefinition(BASE.at("r2"), "Mara", "individual", FacetSet([Agent()]))),
+        manifest(CAST, heads=heads), expected={CAST: store.read_source(CAST).etag})
+
+
+def base_explanation(store):
+    view = store.load()
+    error = reason(lambda: selection_snapshot(view, selected((MODERN_MARA, "character"))).effective(MODERN_MARA))
+    assert error.reason == "missing_base"
+    return error.detail
+
+
+def test_an_unreadable_declared_head_base_is_unreadable_not_dropped(store):
+    """The base is the declared head and unreadable: the loader's bad_head is only its consequence."""
+    add_base_r2(store, {"character/mara": "r1"})
+    store.root.joinpath(*MARA_FILES, "r1.json").write_text("{not json")
+    assert base_explanation(store) == "unreadable_revision"
+
+
+def test_an_unreadable_base_under_a_head_naming_another_revision_is_dropped(store):
+    """Repairing the base alone would not bring it back (the head names a deleted r2), so the drop wins."""
+    add_base_r2(store, {"character/mara": "r2"})
+    r1 = store.root.joinpath(*MARA_FILES, "r1.json")
+    good = r1.read_text()
+    store.root.joinpath(*MARA_FILES, "r2.json").unlink()
+    r1.write_text("{not json")
+    assert base_explanation(store) == "entity_dropped"
+    r1.write_text(good)  # the file is fine again; the entity is still dropped for its head
+    assert base_explanation(store) == "entity_dropped"
+
+
+def test_an_unreadable_base_beside_another_revision_and_no_head_is_dropped(store):
+    """Two revision files and no head is the loader's missing_head, whatever state r1 is in."""
+    add_base_r2(store, {"character/mara": "r2"})
+    path = store.root.joinpath("sources", "catalog", "elderfen-cast", "_source", "manifest.json")
+    document = json.loads(path.read_text())
+    document["heads"] = {}
+    path.write_text(json.dumps(document))
+    store.root.joinpath(*MARA_FILES, "r1.json").write_text("{not json")
+    view = store.load()
+    assert "missing_head" in [problem.code for problem in view.problems]
+    assert base_explanation(store) == "entity_dropped"
