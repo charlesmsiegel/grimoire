@@ -103,7 +103,7 @@ Examples: "Wren pays Tam 2 coins while Tam hands Wren a knife" is two `move` lin
 **Charges.** Each permitted use is recorded as an `AbilityCharge(attempt, classification, ruling_id, charges, domain)`. `charges` are the assessment's `charges` as sorted, unique `(ability_id, cost_id)` pairs: cost text is prose, so the record keeps ids. `ruling_id` is the approving ruling of an extrapolation, new ability or combination, and `None` for a declared use. A charge is a record of the price paid; a counted resource is consumed by the same effect's holdings part.
 
 **Known limits** of these parts:
-- The ability assessment is the caller's, like `controls`; 029 computes and authenticates it.
+- The ability assessment is the caller's, like `controls`. 029 computes and authenticates it: a caller gets it from `AdjudicationLibrary.ability_use`, and `check_effect` verifies a proposal's ([ADJUDICATION](ADJUDICATION.md#the-store-service)). 021 itself does not call 029.
 - Still one accepted effect per turn: several actors' acts are lines and uses of that one effect.
 - Orphan detection and duplicate recognition are bounded by the holders' logs, and so is step 10's check that an applied undo landed on every holder: an undo whose event file landed but not one holder's file, followed by more than `MAX_LOG` (1000) operations on that holder, reads as confirmed and frees the attempt. Beyond them is 030's; completing a partial publication is 030's `EffectRecovery` ([RECOVERY](RECOVERY.md)); a restored holder file forgets its operations ([HOLDINGS](HOLDINGS.md#known-limits)).
 - A skipped holdings undo is reported until 030 can record a human repair.
@@ -404,8 +404,8 @@ How it is read and written:
 
 | Not here | Owner |
 |---|---|
-| **Computing and authenticating the ability assessment.** Today it is the caller's, as `controls` is: 021 checks `permitted` and records `charges`, nothing more | 029 |
-| Assessing attempts and persisting or authenticating rulings; which counted resource a cost consumes (today the caller puts it in the same effect's holdings part) | 029 / 034 |
+| **Computing and authenticating the ability assessment.** 021 checks `permitted` and records `charges`, nothing more. [029](ADJUDICATION.md) computes it (`ability_use`) and verifies a proposal (`check_effect`); requiring that check on every accept belongs to the runner | 029 (done) / 035 |
+| Which counted resource a cost consumes (today the caller puts it in the same effect's holdings part). Assessing attempts and persisting rulings are done by [029](ADJUDICATION.md) | 034 |
 | Completing a partial publication automatically (delivered for acceptances: [RECOVERY](RECOVERY.md); a partly published revocation is left); recording a human repair of a skipped holdings undo (`partial_revocation` until then); orphan detection and duplicate recognition beyond the holder log | 030 |
 | Persisting the 012 `Event`, witnesses, evidence and beliefs of an accepted event | 020 / 032 |
 | Extracting and labelling narration into proposals; mislabel review | 035 / Narration Continuity Referee |

@@ -201,16 +201,20 @@ def address_parts(address: Address) -> Parts:
     return definition_parts(address)
 
 
+#: Per-campaign authority ledgers: ``campaigns/`` (003 sovereignty) and ``adjudication/`` (029).
+CAMPAIGN_LEDGERS = ("campaigns/", "adjudication/")
+
+
 def ledger_name(name: object) -> str:
-    """A ledger name: ``security`` or ``campaigns/<campaign_id>``; anything else is refused."""
+    """A ledger name: ``security``, or a campaign ledger such as ``campaigns/<campaign_id>``; anything else is refused."""
     if name == "security":
         return name
-    if isinstance(name, str) and name.startswith("campaigns/"):
-        try:
-            validate_segment(name[len("campaigns/"):], "campaign_id")
-        except ValueError:
-            pass
-        else:
+    for prefix in CAMPAIGN_LEDGERS:
+        if isinstance(name, str) and name.startswith(prefix):
+            try:
+                validate_segment(name[len(prefix):], "campaign_id")
+            except ValueError:
+                break
             return name
     raise ValueError(f"not a ledger name: {name!r}")
 

@@ -257,6 +257,6 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 | Export redaction | the export owner |
 | Graph traversal | 017 |
 | Persisted control assignments | 009/035 |
-| Persisting an `AbilityRuling` ([025](ABILITIES.md)) and its attempt; 020 stores only what 029 decides to record | 029 |
+| Persisting an `AbilityRuling` ([025](ABILITIES.md)) and its attempt: done in 029's own ledger ([ADJUDICATION](ADJUDICATION.md#persistence)), not in 020 | 029 (done) |
 | `check_subjects` before persisting propositions and rulings; definition-subject and future-instance validity (claim shapes are now stored, [above](#claim-shapes-017)) | 020, next step ([obligations from 017](roadmap/sprints/durable-event-evidence.md#obligations-from-017)) |
 | Shaping a proposition stored before shapes existed: its reports and beliefs stay on the unshaped id, so 031 sees no claim for it | not planned; a writer that needs one stores a new shaped proposition |

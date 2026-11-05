@@ -162,6 +162,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 
 #### Wave 4 status
 
+- **029:** fiction-first adjudication of a mechanics-free action: frames with causes and stakes on record before the result, deterministic classification, decisions that cite only those, 025 rulings and assessments persisted in an authority ledger, and the hand-off to 021 ([ADJUDICATION](../ADJUDICATION.md)). Graded consequences and contests (milestone 3) and verifying factor sources are still open.
 - **033:** party and reserve membership as two 017 relation predicates (`in_party`, `in_reserve`), moved in one transaction, and scene casts in which a reserved member is never present or a speaker; any instance kind, a creature included, is cast under its own reference ([PARTY](../PARTY.md)). A creature in a chat's roster is its next slice.
 - **030 first slice:** a partly published acceptance is finished (`complete`, `adopt`) or aborted (`revoke(partial=True)`) exactly once, proven on a crash with removed staging ([RECOVERY](../RECOVERY.md)). A partly published revocation and multi-transaction actions are left.
 
