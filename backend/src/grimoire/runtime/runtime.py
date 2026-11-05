@@ -27,6 +27,7 @@ from grimoire.providers.config import RouteChoice
 from grimoire.providers.meter import TurnMeter
 from grimoire.providers.request import ChatMessage, ModelRequest
 from grimoire.security import WorkerHandle
+from grimoire.voice import ResolvedVoice
 
 from .fence import FenceToken, cancel_when_stale
 
@@ -169,7 +170,7 @@ class GenerationRuntime:
 
     def run_turn(self, meter: TurnMeter, briefs: Iterable[NpcBrief], *, controls: Iterable[ControlAssignment],
                  director: DirectorBrief | None = None, token: FenceToken | None = None,
-                 cancel: CancelToken | None = None) -> TurnOutcome:
+                 cancel: CancelToken | None = None, scene_voices: Iterable[ResolvedVoice] = ()) -> TurnOutcome:
         """Issue every planned call in order; see the module docstring and docs/GENERATION.md.
 
         Refused before any call: a plan with any other stage, a call without its brief or a brief
@@ -177,6 +178,8 @@ class GenerationRuntime:
         that already ran on ``meter``, and any brief actor that is not director-controlled now.
         ``token`` (from ``RunFence.claim``) makes the run stale when a newer run claims the same key:
         a stale run returns no lines. ``cancel`` cancels the in-flight call; nothing runs after it.
+        ``scene_voices`` are the other voices present (silent NPCs): a line reproducing one of their
+        authored examples is rejected as ``copied_example`` too, as 014 asks for every scene voice.
         """
         if not isinstance(meter, TurnMeter):
             raise GenerationError("bad_meter", "run_turn needs the turn's TurnMeter")
@@ -188,7 +191,10 @@ class GenerationRuntime:
             raise GenerationError("bad_cancel", "cancel must be a CancelToken")
         briefs = _briefs(briefs)
         pairs = _assign(meter, briefs, director, checked_controls(controls))
-        voices = tuple(brief.voice for brief in briefs)
+        scene_voices = tuple(scene_voices)
+        if not all(isinstance(voice, ResolvedVoice) for voice in scene_voices):
+            raise GenerationError("bad_voice", "scene_voices must be ResolvedVoice values")
+        voices = tuple(brief.voice for brief in briefs) + scene_voices
         cancel = cancel if cancel is not None else CancelToken()
         unwatch = cancel_when_stale(token, cancel)
         outcomes: list[CallOutcome] = []

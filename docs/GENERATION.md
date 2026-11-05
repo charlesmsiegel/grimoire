@@ -85,7 +85,7 @@ The pack is already within its own token budget, so `sections`, `context_chars` 
 |---|---|
 | `silent_reply` | Blank or punctuation only. |
 | `too_long` | Longer than a heard line may be (`MAX_LINE_CHARS`, 2000 characters). |
-| `copied_example` | Reproduces an authored example of any speaker's voice in this turn (014's `example_copies`). A silent present NPC's examples are not checked. |
+| `copied_example` | Reproduces an authored example of any speaker's voice in this turn, or of a voice the caller passes as `run_turn(..., scene_voices=...)` (silent present NPCs; 014's `example_copies`). The caller owes those: a voice it leaves out is not checked. |
 | `unlearned_secret` | States a marker of a secret hidden from the speaker that nothing it held or heard exposed: its projection, its card, its heard lines, or a line spoken earlier this turn. |
 
 Every present actor hears every spoken line in this slice (no whispering), so a secret one NPC says aloud may be repeated by the next. A director reply is screened the same way against its own inputs.
@@ -94,7 +94,7 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 
 `GenerationRuntime(adapter, routes, handle, *, approvals=None, max_output_tokens=400)` holds fixed routing. The handle and approvals pass through to `ProviderAdapter.execute` unchanged; tests cover a trusted app handle and an untrusted one approved per attempt (which of the two the app uses is still the requester's open question).
 
-`run_turn(meter, briefs, *, controls, director=None, token=None, cancel=None) -> TurnOutcome`:
+`run_turn(meter, briefs, *, controls, director=None, token=None, cancel=None, scene_voices=()) -> TurnOutcome`:
 
 - **Checked before any call** (`GenerationError`): every planned call is `npc_generation` or `director_generation` (`unsupported_stage`), each `npc_generation` call has exactly one brief (`missing_brief`, `extra_brief`, `duplicate_brief`), a director brief is given exactly when a director reply is planned (`director_mismatch`), no planned call already ran on `meter` (`call_already_run`), every brief's actor is director-controlled **now**, so a hand-built plan cannot voice a player character, and the director brief names the same player characters that the plan and control give now (`director_mismatch`; an unassigned present actor is `unassigned_actor`).
 - **Calls run in plan order**, one `execute` each. Each later call hears the lines accepted before it; a planned director reply runs after the speakers, and a speaker planned after it (a later phase added on the meter) is refused before any call (`director_not_last`).

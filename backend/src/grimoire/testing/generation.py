@@ -1,8 +1,8 @@
 """Exhaustive fault exploration of a two-speaker generation turn (sprint 027).
 
-Test infrastructure only. Every point runs one planned turn (Ash speaks, then Brin) through the
-real ``ProviderAdapter`` and ``GenerationRuntime`` over a scripted transport, with one fault on one
-of the two calls: every provider fault, a reply the screen must reject, a cancel and a newer run
+Test infrastructure only. Every point runs one planned turn (Ash speaks, then Brin, then on the
+director points the scene-level director reply) through the real ``ProviderAdapter`` and
+``GenerationRuntime`` over a scripted transport, with one fault on one of the calls: every provider fault, a reply the screen must reject, a cancel and a newer run
 superseding this one, at each byte position that matters, with and without a retry. No real model
 is called and nothing is billed. Each point runs twice; the traces must match.
 """
@@ -25,7 +25,7 @@ GENERATION_INVARIANTS = (
 CAMPAIGN, KEY = "c-explore", "chat-1"
 SECRET_MARKER = "the duke sold the guild"
 ASH_EXAMPLE = "Ledger's shut until the tally is done at dawn."
-GOOD = {"ash": "Coin first, talk after.", "brin": "Mind the gate, friend."}
+GOOD = {"ash": "Coin first, talk after.", "brin": "Mind the gate, friend.", "director": "Rain drums on the roof."}
 #: Faults whose reply the screen must reject, whichever speaker says it.
 _SCREENED = ("silent", "copy", "too_long")
 _REPLY_LINES = len(REFERENCE_REPLY.lines())
@@ -56,11 +56,12 @@ def _faults() -> dict[str, Step]:
 @dataclass(frozen=True)
 class _Point:
     name: str
-    call: int  # which planned call (0: Ash, 1: Brin) meets the fault
+    call: int  # which planned call (0: Ash, 1: Brin, 2: the director reply) meets the fault
     fault: Step
     attempts: int
     approve: bool = False  # an untrusted handle approved per attempt, instead of a trusted one
     clean: bool = False  # no fault at all
+    director: bool = False  # the turn also plans a director reply, after both speakers
 
 
 def _points() -> list[_Point]:
@@ -71,6 +72,11 @@ def _points() -> list[_Point]:
                 points.append(_Point(f"{name}/call{call}/x{attempts}", call, fault, attempts))
     for name in ("status_503", "supersede@0"):
         points.append(_Point(f"{name}/call0/x2/approved", 0, _faults()[name], 2, approve=True))
+    # The director reply is a third call with its own brief and screen; every fault meets it too.
+    for name, fault in _faults().items():
+        for attempts in (1, 2):
+            points.append(_Point(f"{name}/director/x{attempts}", 2, fault, attempts, director=True))
+    points.append(_Point("clean/director/x1", 0, _say(GOOD["ash"]), 1, clean=True, director=True))
     points.append(_Point("clean/x1", 0, _say(GOOD["ash"]), 1, clean=True))
     points.append(_Point("clean/x1/approved", 0, _say(GOOD["ash"]), 1, approve=True, clean=True))
     return points
@@ -124,16 +130,16 @@ def _cast():
 
 def _script(point: _Point) -> list[Step]:
     """The fault on its call, a good reply for its retry and for every other call, and spares."""
-    good = [_say(GOOD["ash"]), _say(GOOD["brin"])]
+    good = [_say(GOOD["ash"]), _say(GOOD["brin"])] + ([_say(GOOD["director"])] if point.director else [])
     if point.clean:
         return good + [_say(GOOD["brin"])] * 2
-    steps: list[Step] = [good[0]] if point.call == 1 else []
+    steps: list[Step] = good[:point.call]
     return steps + [point.fault] + good[point.call:] + [_say(GOOD["brin"])] * 2
 
 
 def _world(point: _Point, runtime_factory=None):
     from grimoire.core.inference import InferencePolicy, TurnUsageLedger
-    from grimoire.generation import npc_brief, plan_generation_turn
+    from grimoire.generation import director_brief, npc_brief, plan_generation_turn
     from grimoire.providers import ProviderEndpoint, ProviderRegistry, RouteChoice, StaticCredentials
     from grimoire.providers.adapter import ProviderAdapter
     from grimoire.providers.meter import TurnMeter
@@ -164,15 +170,21 @@ def _world(point: _Point, runtime_factory=None):
     registry = ProviderRegistry([ProviderEndpoint("primary", "https://primary.example/v1")])
     adapter = ProviderAdapter(registry, StaticCredentials({"primary": "sk-explorer"}), authz, transport,
                               clock=clock, wait=clock.wait)
+    caps = {"director_generation": 1} if point.director else {}
     plan = plan_generation_turn(CAMPAIGN, "t1", present=("ash", "brin", "wren"), speakers=("ash", "brin"),
-                                controls=controls, policy=InferencePolicy(max_attempts_per_call=point.attempts))
+                                controls=controls, director_reply=point.director,
+                                policy=InferencePolicy(caps, max_attempts_per_call=point.attempts))
     meter = TurnMeter(TurnUsageLedger(plan))
     briefs = [npc_brief(views[actor], voices[actor], secrets=secrets) for actor in ("ash", "brin")]
     runtime = (runtime_factory or GenerationRuntime)(adapter, (RouteChoice("primary", "model-a"),), handle,
                                 approvals=approvals if point.approve else None, max_output_tokens=16)
 
+    director = (director_brief("A counting-house at dusk.", campaign_id=CAMPAIGN, present=("ash", "brin", "wren"),
+                               controls=controls, names={"wren": "Wren"}, secrets=secrets)
+                if point.director else None)
+
     def run():
-        return runtime.run_turn(meter, briefs, controls=controls, token=token)
+        return runtime.run_turn(meter, briefs, controls=controls, director=director, token=token)
     return run, transport, meter, token, plan
 
 
@@ -209,8 +221,8 @@ def _run_point(point: _Point, max_sends: int, runtime_factory=None):
             fail("no rejected line", f"{line.speaker} line the screen must reject")
         if statuses.get(line.call_id) != "accepted" or line.text not in accepted_texts:
             fail("no unaccepted line", f"{line.speaker} line from a call that is {statuses.get(line.call_id)}")
-        if SECRET_MARKER in line.text.lower() and line.speaker == "Ash":
-            fail("no leaked line", "Ash stated a secret it never learned")
+        if SECRET_MARKER in line.text.lower() and line.speaker != "Brin":  # only Brin learned it
+            fail("no leaked line", f"{line.speaker} stated a secret it never learned")
     if len({line.call_id for line in outcome.lines}) != len(outcome.lines):
         fail("one line per call", "a call produced two lines")
     if token.stale and (outcome.lines or outcome.status != "stale"):
