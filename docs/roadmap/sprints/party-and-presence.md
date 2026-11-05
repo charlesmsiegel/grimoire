@@ -18,6 +18,8 @@ A boxed monster is available in the campaign but never speaks as present in an u
 ## Independence and interfaces
 Can use generic actor links and existing scene cast today; does not depend on network multiplayer or mechanics.
 
+**Owned here: non-character actors in a cast.** An individualized creature keeps its own kind (for example `campaign:c1/creature/goblin-1`, see [Creature Individualization](creature-individualization.md)), but today only `character` instances can be reused as chat actors (CHATS.md, the 107 reuse check) and a chat's roles admit only character, scenario and lorebook sources. Before milestone 2, 033 must let a creature (or another non-character instance) join a chat or scene cast as an actor without a re-key, keep the one-id rule (`campaign_taken_ids`, IDENTITY.md), and prove the boxed monster above with a creature instance.
+
 ## Open questions
 - Which membership relations need persistence?
 - Who may command an autonomous companion?

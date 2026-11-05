@@ -25,7 +25,7 @@ from types import MappingProxyType
 from grimoire.core.identity import (
     AcceptedRef, ChatRef, HoldingsRef, IdentityConflict, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef,
     WrapUpRef,
-    validate_segment,
+    paired_instances, validate_segment,
 )
 from grimoire.core.index import DIRECTED_RELATIONS, DefinitionIndex, DefinitionLink, SourceDescriptor
 
@@ -148,10 +148,10 @@ class LibraryView:
 
 @dataclass(frozen=True)
 class CampaignRecords:
-    """One campaign's records of one family (relations, accepted events or wrap-ups) and the problems
-    ``load()`` would report under that family's folder."""
+    """One campaign's records of one family (relations, accepted events, wrap-ups or chats) and the
+    problems ``load()`` would report under that family's folder."""
 
-    records: Mapping[RelationRef | AcceptedRef | WrapUpRef, StoredScopeRecord]
+    records: Mapping[RelationRef | AcceptedRef | WrapUpRef | ChatRef, StoredScopeRecord]
     problems: tuple[LoadProblem, ...]
 
 
@@ -699,7 +699,8 @@ def _discover_chats(access: Access, base: Parts, found: _Campaigns, problems: li
 
 
 #: campaign-scoped record families stored one file per record: folder -> (classified kind, ``_Campaigns`` field)
-_FAMILIES = {RELATIONS: ("relation", "relations"), ACCEPTED: ("accepted", "accepted"), WRAPUPS: ("wrapup", "wrapups")}
+_FAMILIES = {RELATIONS: ("relation", "relations"), ACCEPTED: ("accepted", "accepted"), WRAPUPS: ("wrapup", "wrapups"),
+             CHATS: ("chat", "chats")}  # ``load()`` reads chats itself (``_discover_chats``); listed for ``campaign_family``
 #: families that grow with every played turn (021): like 020's events/evidence, ``load()`` skips them
 _HISTORY = frozenset({ACCEPTED, WRAPUPS})
 
@@ -837,6 +838,76 @@ def campaign_holding_names(access: Access, campaign: str) -> tuple[tuple[Holding
     return tuple(sorted(found, key=str)), complete
 
 
+def campaign_placement_subjects(access: Access, campaign: str) -> tuple[tuple[InstanceRef, ...], bool]:
+    """The instance subjects of one campaign's placements (018): every ``<id>`` entry under
+    ``placements/<kind>/``, from listings only (no file is read, no subject folder entered), and
+    whether the listing was complete.
+
+    As for ``campaign_holding_names``, a look-alike (``Placements/``, ``Character/``, ``Mara-1/``)
+    counts under the name it folds to, and a name no kind or id folds from is ignored. ``False`` when
+    the campaign folder exists only as a look-alike, or it, a placements folder or a kind folder is a
+    link or cannot be inspected or listed.
+    """
+    base = (CAMPAIGNS, campaign)
+    try:
+        presence = access.presence(base)
+        if presence == "mismatch":
+            return (), False
+        if presence != "present":
+            return (), True
+        if is_link(access.path(base)):
+            return (), False
+        if not _is_dir(access, base):
+            return (), True
+        tops = [name for name in access.list_dir(base) if name_key(name) == PLACEMENTS]
+    except (OSError, LinkRefused):
+        return (), False
+    found: set[InstanceRef] = set()
+    complete = True
+    for top in tops:
+        kinds = _folder_names(access, base + (top,))
+        if kinds is None:
+            complete = False
+            continue
+        for kind in kinds:
+            if not _valid_segment(name_key(kind)):
+                continue
+            names = _folder_names(access, base + (top, kind))
+            if names is None:
+                complete = False
+                continue
+            for name in names:
+                try:
+                    found.add(InstanceRef(campaign, name_key(kind), name_key(name)))
+                except ValueError:
+                    continue  # a name no instance id folds from names no subject
+    return tuple(sorted(found, key=str)), complete
+
+
+def instance_kinds(access: Access, campaign: str) -> dict[str, set[str]]:
+    """Each instance id of one campaign (folded) -> the kinds holding a file of that name, from listings
+    only; a look-alike file or kind folder counts under the name it folds to. A linked ``instances`` or
+    kind folder raises ``LinkRefused`` and an unlistable one ``OSError``: a kind could hide there, so
+    the caller (the commit check) fails rather than guess."""
+    base = (CAMPAIGNS, campaign, INSTANCES)
+    if access.presence((CAMPAIGNS, campaign)) != "present" or lstat_or_none(access.path(base)) is None:
+        return {}  # a look-alike campaign folder fails the commit by its own name check
+    access.guard.check_read(base)
+    if not _is_dir(access, base):
+        return {}
+    found: dict[str, set[str]] = {}
+    for kind in access.list_dir(base):
+        folder = base + (kind,)
+        access.guard.check_read(folder)
+        if not _is_dir(access, folder):
+            continue
+        for name in access.list_dir(folder):
+            folded = name_key(name)
+            if folded.endswith(SUFFIX):
+                found.setdefault(folded[:-len(SUFFIX)], set()).add(name_key(kind))
+    return found
+
+
 def _folder_names(access: Access, parts: Parts) -> list[str] | None:
     """A folder's entries by one lstat and one listing: ``[]`` for a file or a vanished entry, ``None``
     when it is a link (never followed) or cannot be inspected or listed, so ids could hide in it."""
@@ -870,6 +941,7 @@ def _discover_holdings(access: Access, base: Parts, found: _Campaigns, problems:
 
 def _discover_campaign(access: Access, campaign: str, into: _Campaigns, problems: list[LoadProblem]) -> None:
     instances = into.instances
+    named: list[InstanceRef] = []  # every canonically named instance file, readable or not
     base = (CAMPAIGNS, campaign)
     if not _is_dir(access, base) or not _valid_segment(campaign):
         _unrecognized(access, base, problems, None)
@@ -908,10 +980,23 @@ def _discover_campaign(access: Access, campaign: str, into: _Campaigns, problems
                 if found is None or found[0] != "instance":
                     _unrecognized(access, parts, problems, None)
                     continue
+                named.append(found[1])  # type: ignore[arg-type]
                 try:
                     instances[found[1]] = read_record(access, parts)  # type: ignore[index]
                 except (StoreError, ValueError, OSError) as error:
                     problems.append(LoadProblem(_text(parts), _code(error), str(error)))
+    _exclude_kind_pairs(named, instances, problems)
+
+
+def _exclude_kind_pairs(named: list[InstanceRef], instances: dict[InstanceRef, StoredRecord],
+                        problems: list[LoadProblem]) -> None:
+    """One campaign's instance files that share an id across kinds (hand-made, or formed across
+    devices): each is reported ``instance_id_conflict`` and **both** are left out, never one picked,
+    so a roster never sees an ambiguous ``actor_id``. The store refuses to create such a pair."""
+    for ref in sorted(paired_instances(named), key=str):
+        instances.pop(ref, None)
+        problems.append(LoadProblem(_text(address_parts_of(ref)), "instance_id_conflict",
+                                    "this instance id is also used by another kind in this campaign"))
 
 
 @dataclass

@@ -12,16 +12,18 @@ import pytest
 from entity_fixtures import EMBER, goblin, goblin_r2, grakka, index_of, plain_sword, ref
 
 from grimoire.core import (
-    DIRECTOR, AuthorityError, CampaignRoster, ControlAssignment, Event, InstanceRef, Knowledge,
+    DIRECTOR, AuthorityError, CampaignRoster, ControlAssignment, DefinitionLink, Event, InstanceRef, Knowledge,
     MissingDefinition, Moment, Perception, SourceRef, UnknownInstance,
 )
 from grimoire.core.entity import (
-    EntityError, EntityInstance, Individuality, effective_entity, integrity, propose_damage,
+    EntityDefinition, EntityError, EntityInstance, Individuality, effective_entity, integrity, propose_damage,
 )
-from grimoire.core.facets import Communicative
+from grimoire.core.facets import Agent, Biological, Communicative, FacetBundle, FacetSet
 from grimoire.core.individual import (
     IndividualizationDecision, Individualization, individualize, is_generic,
 )
+from grimoire.core.portrayal import PortrayalError
+from grimoire.core.snapshot import EffectiveSnapshot, SelectedSource, SourceSelection
 
 C = "c1"
 GOBLIN = ref("species", "goblin").unpinned()
@@ -405,3 +407,118 @@ def test_a_legacy_definition_source_is_not_an_entity_definition():
     index = index_of(legacy)
     assert reason(lambda: individualize(roster, decide(target), index, ())) == "not_entity_definition"
     assert not is_generic(roster.instance(target), index)
+
+
+# --- a derived species template (022): promotion through its effective definition ---------------
+
+VWORLD = "world:elderfen-vampire"
+VGOBLIN = SourceRef(VWORLD, "species", "goblin", "r1")
+GRUNT = InstanceRef(C, "creature", "goblin-7")
+
+
+def vampire_goblin(revision="r1", base_ref=None, nature="template"):
+    """A Vampire-world goblin: inherits the goblin template, clears mortal biology, adds habits."""
+    base_ref = base_ref or ref("species", "goblin")
+    return EntityDefinition(VGOBLIN.at(revision), "Goblin", nature, FacetSet([]), "",
+                            {"derivation": {"base": str(base_ref), "clear_facets": ["biological"]},
+                             "sections": {"habits": "Drinks blood at dusk."}})
+
+
+def vampire_index(*derivatives, bases=None):
+    derivatives = derivatives or (vampire_goblin(),)
+    bases = (goblin(),) if bases is None else bases
+    stated = (SourceRef.parse(d.extras["derivation"]["base"]) for d in derivatives)
+    # a link always pins its base; only a hand-made payload can state an unpinned one
+    links = [DefinitionLink(d.ref, "derived_variant", base if base.pinned else base.at("r1"), VWORLD)
+             for d, base in zip(derivatives, stated)]
+    heads = {VGOBLIN.unpinned(): max(d.ref.revision for d in derivatives)}
+    return index_of(*bases, *derivatives, links=links, heads=heads)
+
+
+def vampire_snapshot(instance, index=None, selected=VGOBLIN):
+    selection = SourceSelection(None, (SelectedSource(selected, "character", actor=instance.ref),))
+    return EffectiveSnapshot(index or vampire_index(), selection, instances=[(instance, None)])
+
+
+def test_a_derived_template_instance_is_generic_and_promoted_through_its_effective_definition():
+    """The audit repro (w3c_022), inverted: is_generic and individualize agree."""
+    grunt = EntityInstance(GRUNT, VGOBLIN)
+    effective = vampire_snapshot(grunt).effective(VGOBLIN)
+    assert is_generic(grunt, effective)
+    roster = CampaignRoster(C, (grunt, generic(G2)))
+    result = individualize(roster, decide(GRUNT, "Snag", "d-snag"), effective, ())
+    snag = result.instance
+    assert result.applied and snag.ref == GRUNT and snag.source == VGOBLIN and snag.local_name == "Snag"
+    assert snag.individuality.template == VGOBLIN  # the leaf pinned revision, never the base
+    assert result.roster.instance(G2) == generic(G2)
+    assert not is_generic(snag, effective)
+    entity = vampire_snapshot(snag).entity(GRUNT)  # the individual composes through the snapshot
+    assert entity.name == "Snag" and entity.resolved_source == VGOBLIN
+    assert "biological" not in entity.facets and entity.facets.has(Agent)
+    # the index-only call keeps refusing the delta; it never reads it as a complete card
+    assert reason(lambda: individualize(roster, decide(GRUNT, "Snag", "d-snag"), vampire_index(), ())) \
+        == "derived_definition"
+
+
+def test_an_unpinned_derived_template_instance_records_the_composed_leaf():
+    grunt = EntityInstance(GRUNT, VGOBLIN.unpinned())
+    effective = vampire_snapshot(grunt, selected=VGOBLIN.unpinned()).effective(VGOBLIN.unpinned())
+    snag = individualize(CampaignRoster(C, (grunt,)), decide(GRUNT, "Snag", "d-snag"), effective, ()).instance
+    assert snag.individuality.template == VGOBLIN and snag.source == VGOBLIN.unpinned()
+
+
+def test_an_effective_definition_of_another_entity_or_revision_is_a_source_mismatch():
+    pinned = EntityInstance(GRUNT, VGOBLIN)
+    roster = CampaignRoster(C, (pinned,))
+    index = vampire_index(vampire_goblin(), vampire_goblin("r2"))
+    plain = vampire_snapshot(EntityInstance(GRUNT, goblin().ref), index, goblin().ref).effective(goblin().ref)
+    newer = vampire_snapshot(EntityInstance(GRUNT, VGOBLIN.at("r2")), index, VGOBLIN.at("r2")).effective(
+        VGOBLIN.at("r2"))
+    for wrong in (plain, newer):  # another entity's base, or a revision the instance's pin does not name
+        assert reason(lambda wrong=wrong: is_generic(pinned, wrong)) == "source_mismatch"
+        assert reason(lambda wrong=wrong: individualize(roster, decide(GRUNT), wrong, ())) == "source_mismatch"
+
+
+def test_a_derived_individual_is_not_a_template():
+    chief = EntityInstance(GRUNT, VGOBLIN)
+    index = vampire_index(vampire_goblin(nature="individual"), bases=(goblin(nature="individual"),))
+    effective = vampire_snapshot(chief, index).effective(VGOBLIN)
+    assert not is_generic(chief, effective)
+    assert reason(lambda: individualize(CampaignRoster(C, (chief,)), decide(GRUNT), effective, ())) == "not_template"
+
+
+@pytest.mark.parametrize("derivative, bases, expected", [
+    (vampire_goblin(base_ref=ref("species", "goblin").unpinned()), (goblin(),), "invalid_derivation"),
+    (vampire_goblin(base_ref=ref("species", "goblin", "r9")), (goblin(),), "missing_base"),
+    (vampire_goblin(), (), "missing_base"),
+])
+def test_an_unpinned_or_missing_base_still_refuses_with_022_reasons(derivative, bases, expected):
+    grunt = EntityInstance(GRUNT, VGOBLIN)
+    index = vampire_index(derivative, bases=bases)
+    with pytest.raises(PortrayalError) as caught:  # so there is no effective definition to promote through
+        vampire_snapshot(grunt, index).effective(VGOBLIN)
+    assert caught.value.reason == expected
+    assert reason(lambda: individualize(CampaignRoster(C, (grunt,)), decide(GRUNT), index, ())) \
+        == "derived_definition"
+
+
+def test_promotion_through_an_effective_definition_keeps_authority_and_validation():
+    grunt = EntityInstance(GRUNT, VGOBLIN)
+    effective = vampire_snapshot(grunt).effective(VGOBLIN)
+    controls = [ControlAssignment(C, GRUNT.instance_id, "p1")]
+    with pytest.raises(AuthorityError):
+        individualize(CampaignRoster(C, (grunt,)), decide(GRUNT), effective, controls)
+    promoted = individualize(CampaignRoster(C, (grunt,)), decide(GRUNT, decided_by="p1"), effective, controls)
+    assert promoted.instance.individuality.decided_by == "p1"
+    mortal = EntityInstance(GRUNT, VGOBLIN, replaced=FacetBundle([Biological()]))  # the portrayal cleared it
+    assert reason(lambda: individualize(CampaignRoster(C, (mortal,)), decide(GRUNT), effective, ())) \
+        == "replaced_without_trait"
+
+
+def test_a_snapshot_is_not_an_effective_definition():
+    grunt = EntityInstance(GRUNT, VGOBLIN)
+    snapshot = vampire_snapshot(grunt)
+    with pytest.raises(TypeError):
+        individualize(CampaignRoster(C, (grunt,)), decide(GRUNT), snapshot, ())
+    with pytest.raises(TypeError):
+        is_generic(grunt, snapshot)

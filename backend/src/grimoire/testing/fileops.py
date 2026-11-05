@@ -21,7 +21,7 @@ PathArg = Union[str, "os.PathLike[str]"]
 Tree = dict[str, Union[bytes, None]]
 """Root-relative POSIX path -> file bytes, or ``None`` for a directory."""
 
-MUTATING_KINDS = frozenset({"write_bytes", "make_temp", "replace", "remove", "make_dirs"})
+MUTATING_KINDS = frozenset({"write_bytes", "make_temp", "replace", "remove", "make_dirs", "remove_dir"})
 READ_KINDS = frozenset({"read_bytes", "exists", "list_dir"})
 OP_KINDS = MUTATING_KINDS | READ_KINDS
 
@@ -39,6 +39,7 @@ class FileOps(Protocol):
     def replace(self, src: PathArg, dst: PathArg) -> None: ...
     def remove(self, path: PathArg) -> None: ...
     def make_dirs(self, path: PathArg) -> None: ...
+    def remove_dir(self, path: PathArg) -> None: ...
 
 
 class OsFileOps:
@@ -73,6 +74,9 @@ class OsFileOps:
 
     def make_dirs(self, path: PathArg) -> None:
         os.makedirs(path, exist_ok=True)
+
+    def remove_dir(self, path: PathArg) -> None:
+        os.rmdir(path)
 
 
 def is_link(path: PathArg) -> bool:

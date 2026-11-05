@@ -64,3 +64,12 @@ class ImageBlob:
     @property
     def etag(self) -> str:
         return "sha256:" + self.sha256
+
+
+@dataclass(frozen=True)
+class BlobCopy:
+    """Marks a lazily loaded blob copy (``Transaction.put_blob_exact``): its name and size, no bytes."""
+
+    sha256: str
+    ext: str
+    size: int

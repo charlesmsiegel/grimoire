@@ -1,8 +1,9 @@
-"""107's actor allocator never reuses an instance id that has a holdings file (Sprint 023).
+"""107's actor allocator never reuses an instance id that has a holdings file or is named in one (Sprint 023).
 
 A hand-deleted holder's id must not go to a different individual, who would silently inherit its
-holdings (as 017 established for relation endpoints). Both allocation paths are covered, and the
-commit-time recheck too. The id ``mara-2`` belongs to no roster of the chat being extended.
+holdings (as 017 established for relation endpoints), nor a move's counterparty id recorded in another
+holder's log. Both allocation paths are covered, and the commit-time recheck too. The id ``mara-2``
+belongs to no roster of the chat being extended.
 """
 
 from __future__ import annotations
@@ -11,10 +12,11 @@ import pytest
 
 from grimoire.chats import Launch
 from grimoire.core import InstanceRef
-from grimoire.core.identity import ChatRef, ScopeRef
+from grimoire.core.identity import ChatRef, HoldingsRef, ScopeRef
 from grimoire.holdings import Line, Operation
-from grimoire.holdingstore import holdings_holder_ids
-from grimoire.store import LibraryStore, RecordEnvelope, StaleWrite
+from grimoire.chatstore import campaign_taken_ids
+from grimoire.holdingstore import holdings_holder_ids, holdings_peer_ids
+from grimoire.store import LibraryStore, RecordEnvelope, ScopeRecord, StaleWrite, TakenIdsUnlisted
 
 from chat_fixtures import ANYA, MARA, chat_library, seed_sources
 from holdings_fixtures import holdings_library
@@ -35,8 +37,6 @@ def _setup(store: LibraryStore, holdings: str | None) -> ChatRef:
     txn.commit(owner_handle())
     if holdings is not None:
         holdings_library(store).apply(Operation("g1", (Line.add(MARA_2, "gold-coin", 500),))).commit()
-        if holdings == "undecodable":
-            store.root.joinpath(*HOLDINGS).write_bytes(b"{not json")
     store.root.joinpath("campaigns", Q, "instances", "character", "mara-2.json").unlink()  # a hand deletion
     return chats.start_chat(Launch("character", ANYA), scope=ScopeRef(Q)).commit().chat
 
@@ -44,7 +44,6 @@ def _setup(store: LibraryStore, holdings: str | None) -> ChatRef:
 @pytest.mark.parametrize("holdings, expected", [
     (None, "mara-2"),  # control: with no holdings file, the freed id is reused (the test can fail)
     ("decodable", "mara-3"),
-    ("undecodable", "mara-3"),  # a holder file the codec or the store cannot read still claims its id
 ])
 def test_attach_source_never_reuses_a_holder_id(tmp_path, holdings, expected):
     with LibraryStore.create(tmp_path / "lib") as store:
@@ -54,6 +53,53 @@ def test_attach_source_never_reuses_a_holder_id(tmp_path, holdings, expected):
         _, etag = chats.read_chat(second)
         change = chats.attach_source(second, MARA, "character", expected=etag)
         assert [actor.instance_id for actor in change.new_actors] == [expected]
+
+
+def test_a_holder_file_the_store_cannot_read_fails_allocation_closed(tmp_path):
+    """Its own id is taken by name, but the move peers its log names cannot be read."""
+    with LibraryStore.create(tmp_path / "lib") as store:
+        second = _setup(store, "decodable")
+        store.root.joinpath(*HOLDINGS).write_bytes(b"{not json")
+        assert holdings_holder_ids(store, Q) == {"mara-2"}
+        chats = chat_library(store)
+        chats._new_id.counts.update({"q": 1, "t": 2})
+        _, etag = chats.read_chat(second)
+        with pytest.raises(TakenIdsUnlisted) as caught:
+            chats.attach_source(second, MARA, "character", expected=etag)
+        assert caught.value.paths == ("campaigns/q-1/holdings/character/mara-2.json",)
+
+
+def _moved(store: LibraryStore) -> None:
+    """mara-1 gives toma-1 two balls; then mara-1's instance and holdings files are deleted by hand."""
+    from holdings_fixtures import MARA as HOLDER, ORDINARY, TOMA, seed_holders
+    seed_holders(store)
+    lib = holdings_library(store)
+    lib.apply(Operation("a1", (Line.add(HOLDER, ORDINARY, 5),))).commit()
+    lib.apply(Operation("m1", (Line.move(HOLDER, TOMA, ORDINARY, 2),))).commit()
+    (store.root / "campaigns/c1/instances/character/mara-1.json").unlink()
+    (store.root / "campaigns/c1/holdings/character/mara-1.json").unlink()
+
+
+def test_a_move_peer_id_stays_taken(tmp_path):
+    """toma-1's log names mara-1 as the move's counterparty, so a new individual never takes that id."""
+    with LibraryStore.create(tmp_path / "lib") as store:
+        _moved(store)
+        assert "mara-1" not in holdings_holder_ids(store, "c1")
+        assert "mara-1" in holdings_peer_ids(store, "c1")
+        assert "mara-1" in campaign_taken_ids(store, "c1")
+
+
+def test_a_peer_named_by_an_undecodable_holdings_payload_stays_taken(tmp_path):
+    """The payload is scanned raw: a log the codec refuses still protects the ids it names."""
+    import json
+    with LibraryStore.create(tmp_path / "lib") as store:
+        _moved(store)
+        path = store.root / "campaigns/c1/holdings/character/toma-1.json"
+        document = json.loads(path.read_text())
+        document["payload"]["stacks"] = "not a list"  # the 023 codec refuses this file
+        path.write_text(json.dumps(document))
+        assert store.campaign_holdings("c1").problems == ()  # the store still reads the envelope
+        assert "mara-1" in campaign_taken_ids(store, "c1")
 
 
 @pytest.mark.parametrize("holdings, expected", [(None, "mara-2"), ("decodable", "mara-3")])
@@ -76,14 +122,16 @@ def test_a_chat_commit_rechecks_holder_ids(tmp_path):
         change = chats.attach_source(second, MARA, "character", expected=etag)
         assert [actor.instance_id for actor in change.new_actors] == ["mara-2"]
         store.root.joinpath(*HOLDINGS).parent.mkdir(parents=True, exist_ok=True)
-        store.root.joinpath(*HOLDINGS).write_bytes(b"{}")  # any holder file claims the id
+        txn = store.transaction()  # any readable holder file claims the id, whatever its payload
+        txn.put(ScopeRecord(HoldingsRef.of(MARA_2), "grimoire.holdings/1", {}), None)
+        store.root.joinpath(*HOLDINGS).write_bytes(next(iter(txn.preview().values())))
         assert "mara-2" in holdings_holder_ids(store, Q)
         with pytest.raises(StaleWrite):
             change.commit()
 
 
 def test_holder_ids_come_from_file_names_alone(tmp_path, monkeypatch):
-    """No holder file is opened: the cost of reserving ids never grows with holdings history."""
+    """``holdings_holder_ids`` opens no holder file (``holdings_peer_ids`` reads them for move peers)."""
     import grimoire.store.loader as loader
     with LibraryStore.create(tmp_path / "lib") as store:
         _setup(store, "decodable")
@@ -97,10 +145,6 @@ def test_holder_ids_come_from_file_names_alone(tmp_path, monkeypatch):
 
         monkeypatch.setattr(loader, "read_scope_record", no_holder_reads)
         assert holdings_holder_ids(store, Q) == frozenset({"mara-2"})
-        chats = chat_library(store)
-        chats._new_id.counts.update({"q": 1, "t": 2})
-        change = chats.start_chat(Launch("character", MARA), scope=ScopeRef(Q))
-        assert [actor.instance_id for actor in change.new_actors] == ["mara-3"]
 
 
 def _damage(store, tmp_path, monkeypatch, damage):

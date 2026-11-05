@@ -27,7 +27,7 @@ from grimoire.store.ledger import MAX_BATCH_ENTRIES, Head, Ledger, entry_cost
 from grimoire.store.library import LedgerWriter
 
 from .codec import (
-    MAX_ID, check_size, decode_approval, decode_decision, decode_grant, encode_approval, encode_decision,
+    decode_approval, decode_decision, decode_grant, encode_approval, encode_decision,
     encode_grant, envelope, exact,
 )
 
@@ -113,6 +113,12 @@ class DurableAuthority:
     @property
     def poisoned(self) -> bool:
         return self._poisoned is not None
+
+    @property
+    def usable(self) -> bool:
+        """Whether decisions can be made and recorded: neither closed nor poisoned. A read: decides,
+        records and raises nothing (what ``handle_for`` and the sink require)."""
+        return not self._closed and self._poisoned is None
 
     # -- the sink and flushing -------------------------------------------------------------
     def _depth(self) -> int:

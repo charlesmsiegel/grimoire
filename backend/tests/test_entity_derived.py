@@ -31,7 +31,8 @@ def test_compose_instance_refuses_a_raw_derived_definition():
 
 
 def test_roster_control_of_a_derived_actor_is_a_named_limitation():
-    """Owned by 035: control and perspective of derived-portrayal actors need a snapshot path."""
+    """Owned by 035: control of derived-portrayal actors needs a snapshot path; the index-only actor_view
+    keeps refusing (``snapshot_actor_view`` is the perspective path)."""
     index = index_of(DERIVED)
     roster = CampaignRoster("c1", [ACTOR])
     assert reason(lambda: roster.assign_control(ACTOR.ref, "human:p", index)) == "derived_definition"

@@ -160,6 +160,8 @@ class Relation:
             raise _invalid(rid)  # unknown authored fields arrive as a JsonObject (the codec builds it)
         if type(self.reopenings) is not tuple:
             raise _invalid(rid)
+        if self.reopenings and "reopenings" in self.extras:  # an older file's own key: never overwritten (021)
+            raise GraphError("reserved_key", (rid,))
         for reopening in self.reopenings:
             if type(reopening) is not Reopening:
                 raise _invalid(rid)

@@ -32,7 +32,7 @@ from grimoire.core.identity import InstanceRef
 from ledger_helpers import (
     ADDRESS, IMPORTER, OWNER, RECORD, approve, fixed_clock, grant_importer, open_authority, record_bytes,
 )
-from store_helpers import drop_empty_dirs, make_dir_link
+from store_helpers import FAIL_RECOVERY, drop_empty_dirs, explore_mode, make_dir_link
 
 LIB = "lib"
 
@@ -208,13 +208,12 @@ def _pending_after_replay(tree) -> set[str]:
     return {approval.approval_id for approval in kernel.pending_approvals()}
 
 
-@pytest.mark.parametrize("mode", ["errors", "recovery-crashes"])
+@pytest.mark.parametrize("mode", ["errors", "recovery-crashes", FAIL_RECOVERY])
 def test_a_published_record_always_has_its_decision_on_disk(tmp_path, mode):
-    report = explore_crashes(_s2_scenario(), tmp_path, errors=mode == "errors",
-                             recovery_crashes=mode == "recovery-crashes")
+    report = explore_crashes(_s2_scenario(), tmp_path, **explore_mode(mode))
     report.assert_ok()
     assert report.points_explored > 10
-    if mode == "recovery-crashes":
+    if mode != "errors":
         assert any(run.recover_trace for run in report.runs[1:])
 
 
@@ -298,6 +297,23 @@ def test_a_save_through_a_poisoned_authority_writes_nothing(library):
     with pytest.raises(WriteDenied, match="unavailable"):
         txn.commit(handle, {ADDRESS: "a1"})
     assert not (store.root / ADDRESS).exists()
+
+
+def test_usable_is_false_once_poisoned_or_closed_and_reading_it_changes_nothing(library):
+    store, authority, locker = library
+    grant_importer(authority)
+    assert authority.usable
+    authority.close()  # closed, not poisoned
+    assert not authority.usable and not authority.poisoned
+    store, authority = _reopen(store, authority, locker)
+    try:
+        audit, pending = authority.audit(), list(authority._pending)
+        authority._poison(RuntimeError("earlier failure"))
+        assert not authority.usable and authority.poisoned
+        assert authority.audit() == audit and authority._pending == pending  # a read: no decision, no entry
+    finally:
+        authority.close()
+        store.close()
 
 
 # -- S5 tampering, owners, repair ---------------------------------------------------------------

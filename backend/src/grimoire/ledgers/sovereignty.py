@@ -18,7 +18,8 @@ from grimoire.core.authority import AuthorityError, Correction, Delegation, Revo
 from grimoire.core.identity import validate_segment
 from grimoire.core.model import ControlAssignment
 from grimoire.security import is_human
-from grimoire.store.errors import LedgerInvalid
+from grimoire.store import LibraryStore
+from grimoire.store.errors import LedgerInvalid, TakenIdsUnlisted
 from grimoire.store.ledger import Head
 
 from .codec import SOVEREIGNTY_KEYS, ControlChange, decode_sovereignty, encode_sovereignty, envelope, exact
@@ -99,6 +100,33 @@ class _Builder:
             tuple(ControlAssignment(self.campaign_id, actor, controller)
                   for actor, controller in sorted(self.controllers.items())),
             tuple(self.history), tuple(self.delegations), tuple(self.revocations), tuple(self.corrections))
+
+
+def sovereignty_actor_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+    """Every actor id this campaign's sovereignty ledger names (control changes, delegations).
+
+    Part of the one reservation set (``grimoire.chatstore.campaign_taken_ids``): control is stored by
+    bare ``actor_id``, so a new individual given a hand-deleted PC's id would become that player's PC.
+    Batches are scanned raw, with no replay or chain check, so a broken ledger still protects its ids:
+    every ``actor_id`` text in an object whose ``campaign_id`` is this campaign. A ledger folder or batch
+    that cannot be listed or read (a link, a look-alike, malformed) raises ``TakenIdsUnlisted``.
+    """
+    documents, unread = store.campaign_ledger_documents(campaign_id)
+    if unread:
+        raise TakenIdsUnlisted(f"the sovereignty ledger of {campaign_id} cannot all be read ({', '.join(unread)}), "
+                               "so the actor ids it names cannot be reserved", unread)
+    taken: set[str] = set()
+    stack: list[object] = list(documents)
+    while stack:
+        value = stack.pop()
+        if isinstance(value, Mapping):
+            actor = value.get("actor_id")
+            if isinstance(actor, str) and value.get("campaign_id") == campaign_id:
+                taken.add(actor)
+            stack.extend(value.values())
+        elif isinstance(value, (list, tuple)):
+            stack.extend(value)
+    return frozenset(taken)
 
 
 def _ledger(campaign_id: str) -> str:

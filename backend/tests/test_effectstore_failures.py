@@ -672,7 +672,7 @@ def test_an_agent_that_does_not_exist_is_refused(world):
 
 
 def test_ids_named_by_accepted_events_stay_taken_for_new_actors(world):
-    from grimoire.chatstore import ChatLibrary
+    from grimoire.chatstore import campaign_taken_ids
     from grimoire.effectstore import accepted_instance_ids
     store, handles, library = world
     pact = EffectProposal(C, CHAT, moment(), "Ines makes Wren and the guild allies.",
@@ -680,8 +680,7 @@ def test_ids_named_by_accepted_events_stay_taken_for_new_actors(world):
     library.accept(pact, controls=CONTROLS).commit()
     (store.root / "campaigns/c/instances/character/ines.json").unlink()  # ines is named only as an agent now
     assert "ines" in accepted_instance_ids(store, C)
-    chats = ChatLibrary(store, handles.app, clock=Clock(), new_id=Ids(), owner=OWNER)
-    assert "ines" in chats._campaign_taken(C)
+    assert "ines" in campaign_taken_ids(store, C)
 
 
 def test_a_wrap_up_through_another_scene_is_refused(world):
@@ -857,3 +856,35 @@ def test_a_revoked_event_is_never_bridged_as_objective_fact(world):
     event, _ = library.read(done.ref, requested_by=DIRECTOR)
     with pytest.raises(EffectError, match="revoked_event"):
         as_knowledge_event(event)
+
+
+# -- instance-id pairs (IDENTITY.md): an id two kinds share is no one actor ------------------------
+
+@pytest.mark.parametrize(("paired", "ops"), [(WREN, ("0", "1")),  # the agent of both operations
+                                             (TAM, ("1",)),  # an endpoint only
+                                             (KEY1, ("0", "1"))])
+def test_an_acceptance_naming_a_paired_actor_is_refused(world, paired, ops):
+    from graph_fixtures import hand_pair
+    store, handles, library = world
+    hand_pair(store, paired)
+    before = snapshot(store.root)
+    with pytest.raises(InvalidEffect) as caught:
+        accept(library, handles)
+    assert (caught.value.reason, caught.value.records) == ("instance_id_conflict", ops)
+    assert snapshot(store.root) == before
+
+
+@pytest.mark.parametrize("paired", [WREN, TAM])
+def test_an_acceptance_rechecks_for_a_pair_formed_since_the_preview(world, paired):
+    from graph_fixtures import hand_pair
+    store, handles, library = world
+    change = accept(library, handles)
+    hand_pair(store, paired)
+    path = f"campaigns/c/instances/character/{paired.instance_id}.json"
+    with store.lock:
+        assert change.stale() == [(path, "instance_id_conflict")]
+    before = snapshot(store.root)
+    with pytest.raises(StaleWrite) as caught:
+        change.commit()
+    assert caught.value.stale == ((path, "instance_id_conflict"),)
+    assert snapshot(store.root) == before

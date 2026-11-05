@@ -149,7 +149,7 @@ from .ability_use import (
 from .json_value import JsonObject
 from .roster import CampaignRoster, ControlProblem, UnknownInstance
 from .individual import Individualization, IndividualizationDecision, individualize, is_generic
-from .resolve import MissingDefinition, actor_view
+from .resolve import MissingDefinition, actor_view, snapshot_actor_view
 
 __all__ = [
     "ActorView", "CampaignActor", "CharacterDefinition", "ControlAssignment", "SourceRef",
@@ -157,7 +157,7 @@ __all__ = [
     "ScopeRef", "parse_ref",
     "BrokenReference", "DefinitionIndex", "DefinitionLink", "LegacyIdMap",
     "SourceDescriptor", "UnmappedLegacyId",
-    "MissingDefinition", "actor_view",
+    "MissingDefinition", "actor_view", "snapshot_actor_view",
     "ADJUDICATED_DOMAINS", "ALL_DOMAINS", "CONDITIONAL_DOMAINS", "DIRECTOR",
     "OPEN_DOMAINS", "PROTECTED_DOMAINS", "AcceptedClaim", "AuthorityError",
     "Correction", "CorrectionRefusal", "Delegation", "ImposedCondition",

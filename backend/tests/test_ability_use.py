@@ -856,6 +856,26 @@ def test_a_qualified_condition_only_counts_for_an_ability_drawn_on():
     assert (result.classification, result.stale_references) == ("relabel", ("prerequisite:thruster_pack/fuel",))
 
 
+def test_the_named_abilitys_prerequisite_may_be_met_in_the_qualified_form_terms_use():
+    """``terms`` spells the named ability's prerequisites ``<ability>/<id>``; following that spelling meets them."""
+    entity = effective(person("iris", "Iris", light_bending(), thruster_pack()))
+    needs = ("light", "thrust", "flight")
+    unmet = assess_attempt(attempt(needs=needs, conditions=()), entity)
+    assert unmet.classification == "combination" and "light_bending/ambient_light" in unmet.terms
+    met = [term for term in unmet.terms if term.endswith(("/ambient_light", "/fuel"))]
+    qualified = assess_attempt(attempt(needs=needs, conditions=met), entity)
+    plain = assess_attempt(attempt(needs=needs, conditions=["ambient_light", "thruster_pack/fuel"]), entity)
+    assert qualified.stale_references == plain.stale_references == ()
+    assert (qualified.classification, qualified.terms) == (plain.classification, plain.terms)
+    assert not any(term.endswith(("/ambient_light", "/fuel")) for term in qualified.terms)
+
+
+def test_a_qualified_condition_naming_a_missing_prerequisite_of_the_named_ability_is_stale():
+    entity = effective(person("iris", "Iris", light_bending(), thruster_pack()))
+    stray = attempt(effect_id="veil", conditions=("light_bending/nothing",))
+    assert assess_attempt(stray, entity).stale_references == ("prerequisite:light_bending/nothing",)
+
+
 def test_extras_on_a_drawn_ability_fail_closed_for_a_combination():
     odd = Ability("sunlance", "Sunlance", [Effect("lance", "t", {"light", "heat"})], extras={"x": 1})
     entity = effective(person("iris", "Iris", light_bending(force_limit=False), odd))

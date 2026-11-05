@@ -165,9 +165,10 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 
 1. **Read-only.** A read-only store, or no handle → `read_only`.
 2. **Shape.** 1–500 012 records of this campaign (`empty`, `too_many`, `invalid_record`, `campaign_mismatch`).
-3. **Existence.** The campaign (a play scope or an instance file; an empty leftover folder is not one), the chat (of this campaign) and every actor named must already exist as files (`unknown_campaign`, `unknown_chat`, `unknown_actor`). That covers holder, sender, `attributed_to`, participants and instance subjects. There is no name lookup, and a typo never creates a campaign.
+3. **Existence.** The campaign (a play scope or an instance file; an empty leftover folder is not one), the chat (of this campaign) and every actor named must already exist as files (`unknown_campaign`, `unknown_chat`, `unknown_actor`). That covers holder, sender, `attributed_to`, participants and instance subjects. There is no name lookup, and a typo never creates a campaign. An actor whose id another kind of the campaign also uses is no one actor (`instance_id_conflict`; see [STORAGE](STORAGE.md#instance-ids-are-never-reused)).
 4. **Integrity.** Only an intact ledger is extended. Any quarantine or problem → `ledger_damaged`, naming the quarantined records and the problem paths. A write validated against a partial ledger could change meaning once a human repairs it.
 5. **Fresh IDs.** An ID already on disk → `duplicate_id`. (A damaged or look-alike file has already been refused at step 4.)
+   - **Accepted (021) ids.** An event id that is an accepted event's id in this campaign is reserved for that event's bridge, `as_knowledge_event(accepted)` ([EFFECTS](EFFECTS.md#continuity-the-next-response)): any other event there → `accepted_id`; the bridge of a revoked event → `revoked` (an undone turn is never stored as objective fact). Fail closed: while any accepted-event file, link or folder of the campaign cannot be read, or the one under a new event's id cannot be decoded, an append holding an event → `accepted_unreadable`. Appends without events are unaffected. The accepted files are read through the store and decoded with 021's pure codec.
 6. **No backdating.**
    - Every new `moment.sequence` must be at least the ledger's high-water mark H (`backdated`), and at most H + 1 000 000 (`sequence_jump`).
    - **Single exception:** a delayed letter. An addressed report's `sent_at` may be earlier than H; its proposition must already be stored, otherwise `before_proposition`. Only that exception changes projections at `as_of < H`: the sender's `sent` bucket and the director view.
@@ -180,17 +181,22 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 `KnowledgeChange.preview()` gives the exact bytes per logical path. **Previews are director-facing:** they hold raw records. Do not show a player a batch that holds director-only records; batch a player-approved belief alone.
 
 `commit(approvals=None)` runs under the store lock:
-- It re-checks the campaign, the chat, the actors and the full snapshot of both knowledge trees (every file and link, and every problem; OS noise and empty folders are not state). Any difference → `StaleWrite`.
+- It re-checks the campaign, the chat, the actors (each still present and still not one of an [instance-id pair](STORAGE.md#instance-ids-are-never-reused), else `instance_id_conflict`) and the full snapshot of both knowledge trees (every file and link, and every problem; OS noise and empty folders are not state). Any difference → `StaleWrite`.
+- For an append holding events, it also re-checks the accepted-id rule, so an acceptance that took one of its ids after the preview → `StaleWrite` (a fresh `append` then names the reason). 021's commit makes the mirror check (no 020 event under its new id), and 021's `continuity` reports what sync or a hand edit can still deliver (`bridge_mismatch`, `revoked_but_bridged`).
 - It then commits one transaction. The batch's create-only CAS also stops a concurrent append.
 - A refusal before the commit point (`StaleWrite`, `WriteDenied`, `UnstorableIdentifier` — a Windows `MAX_PATH` overflow is only caught here — `NameCollision`, or an `OSError` while staging, which may leave empty folders that are not state) writes nothing. After `WriteDenied`, register fresh approvals for any it consumed and commit again. After `StaleWrite`, build a fresh `append`: the change's snapshot no longer matches. A change commits at most once.
 - After a `WriteConflict` partial publish, the next read reports `unlisted`/`missing` and appends refuse until the damage is repaired. The `.conflicts/` copies hold director-private evidence and stay on the device.
+
+### Instance ids stay taken
+
+`evidence_instance_ids(store, campaign_id)` returns every instance id of the campaign named anywhere in its events, evidence and knowledge-log files. The raw payloads are scanned without decoding (every string, key or value, that parses as an `InstanceRef` of this campaign), so a quarantined record still protects its ids. 020 persists no bare control ids. It is part of the one reservation set, [`campaign_taken_ids`](CHATS.md#taken-instance-ids), so a hand-deleted actor's id never goes to a new individual who would read the old one's private perceptions and beliefs. Because this is private knowledge, any damaged file or problem in either tree (malformed, a link, a look-alike, a stray) raises `TakenIdsUnlisted`: allocation fails closed, as an append does at step 4.
 
 ### Trust boundaries (documented, not checked here)
 
 - **Rulings, events and disclosures** must reach the service only from director or adjudication paths (021/035).
 - **`controls` and contributions come from the caller,** because Wave 1 control is not persisted. 035 must take them from the authenticated session; a caller that names the director as a persona's controller can author its beliefs. After reopen, a PC belief's authorship cannot be re-verified. `player_knowledge`'s `inherited` bucket surfaces any belief the current controller did not author.
 - **`Transaction.put` of a `KnowledgeRecord` is not a supported writer.** A put without its batch entry reads as `unlisted`, is quarantined, and blocks appends (tested). A put together with a correctly chained forged batch is the undetectable case under Limits, as is editing a `KnowledgeChange`'s staged records before `commit`: trusted code only.
-- **Graph, index and retrieval builders** (017, 031, 065) must not derive anything from these files or from `store.campaign_knowledge`. They consume actor projections or the explicit director read only. Connectivity never grants knowledge.
+- **Graph, index and retrieval builders** (017, 031, 065) must not derive anything from these files or from `store.campaign_knowledge`. They consume actor projections or the explicit director read only. Connectivity never grants knowledge. (021's director-only `continuity` reads the raw event files solely to check accepted-event bridges.)
 
 ## Correction and repair
 
@@ -215,8 +221,9 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 | Which narration becomes an accepted event | 021 ([EFFECTS](EFFECTS.md); its `as_knowledge_event` bridge yields the 012 `Event` to store here) |
 | Transmission semantics | 032 |
 | Prompts from actor projections | 027 |
-| Cross-device merge of logs | 019/028 |
+| Cross-device merge of logs | [028](roadmap/sprints/app-managed-device-sync.md) |
 | Export redaction | the export owner |
 | Graph traversal | 017 |
 | Persisted control assignments | 009/035 |
+| Persisting an `AbilityRuling` ([025](ABILITIES.md)) and its attempt; 020 stores only what 029 decides to record | 029 |
 | 017's claim shapes stored with their propositions; `check_subjects` before persisting propositions and rulings; definition-subject and future-instance validity | 020, next step ([obligations from 017](roadmap/sprints/durable-event-evidence.md#obligations-from-017)) |

@@ -27,7 +27,9 @@ from grimoire.testing.fileops import snapshot
 from grimoire.store import RecordEnvelope, SourceManifest
 
 from chat_fixtures import ANYA, CARDS, LORE, MARA, Clock, Ids
-from store_helpers import OWNER, drop_empty_dirs, owner_handle
+from store_helpers import (
+    EXHAUSTIVE_RECOVERY, FAIL_RECOVERY, OWNER, drop_empty_dirs, explore_mode, owner_handle,
+)
 
 LIB = "lib"
 JOURNAL = Target("replace", target="lib/.txn/journal.json")
@@ -93,11 +95,12 @@ def scenario(action):
 # table as the three-record start, whose errors and crashes are explored separately.
 @pytest.mark.parametrize("action, mode", [
     (start_chat, "errors"), (attach_character, "errors"), (attach_character, "recovery-crashes"),
-], ids=["start-errors", "attach-errors", "attach-recovery-crashes"])
+    *(pytest.param(action, FAIL_RECOVERY, marks=EXHAUSTIVE_RECOVERY) for action in (start_chat, attach_character)),
+], ids=["start-errors", "attach-errors", "attach-recovery-crashes", "start-fail-recovery-crashes",
+        "attach-fail-recovery-crashes"])
 def test_chat_writes_survive_every_crash_error_and_recovery_crash(tmp_path, action, mode):
-    report = explore_crashes(scenario(action), tmp_path, errors=mode == "errors",
-                             recovery_crashes=mode == "recovery-crashes")
+    report = explore_crashes(scenario(action), tmp_path, **explore_mode(mode))
     report.assert_ok()
     assert report.points_explored > 20
-    if mode == "recovery-crashes":
+    if mode in ("recovery-crashes", FAIL_RECOVERY):
         assert any(run.recover_trace for run in report.runs[1:])

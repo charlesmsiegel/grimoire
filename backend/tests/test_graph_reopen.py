@@ -83,7 +83,7 @@ def test_a_pre_021_build_reads_a_reopened_file_as_holding():
 
 
 @pytest.mark.parametrize("value", [
-    {}, "x", [{"ending": {"until": {"sequence": 7}, "provenance": "p", "at": "t"}, "provenance": "p"}],
+    ["x"], [{}], [{"ending": {"until": {"sequence": 7}, "provenance": "p", "at": "t"}, "provenance": "p"}],
     [{"ending": {"until": {"sequence": 7}, "provenance": "p", "at": "t"}, "provenance": "p", "at": "t", "x": 1}],
     [{"ending": {"until": {"sequence": 1}, "provenance": "p", "at": "t"}, "provenance": "p", "at": "t"}],
 ])
@@ -109,6 +109,25 @@ def test_a_cleared_reopenings_key_means_never_reopened(value):
     payload = {**relation_to_payload(relation(ending=END7)), "reopenings": value}
     decoded = relation_from_payload(REF, RELATION_SCHEMA, payload)
     assert decoded == relation(ending=END7) and "reopenings" not in relation_to_payload(decoded)
+
+
+@pytest.mark.parametrize("value", ["x", {}, {"note": ["kept", 1]}, 3, True])
+def test_a_hand_authored_reopenings_key_that_is_not_a_list_stays_an_unknown_key(value):
+    """017 preserved any unknown top-level key, so a file may already hold its own ``reopenings``. Only a
+    list is 021's form; anything else is that older key, kept verbatim, and the relation still decodes."""
+    payload = {**relation_to_payload(relation(ending=END7)), "reopenings": value}
+    decoded = relation_from_payload(REF, RELATION_SCHEMA, payload)
+    assert decoded.reopenings == () and decoded.ending == END7 and decoded.extras["reopenings"] == value
+    assert relation_to_payload(decoded) == payload  # a rewrite keeps it verbatim
+    with pytest.raises(GraphError) as caught:  # a reopen would have to overwrite it: refused, never lost
+        decoded.reopened(Reopening(END7, "p", "t"))
+    assert caught.value.reason == "reserved_key"
+
+
+def test_a_hand_authored_reopenings_key_survives_an_end_rewrite():
+    payload = {**relation_to_payload(relation()), "reopenings": "see the margin notes"}
+    ended = relation_to_payload(relation_from_payload(REF, RELATION_SCHEMA, payload).ended(END7))
+    assert ended["reopenings"] == "see the margin notes" and ended["ending"]["until"] == {"sequence": 7}
 
 
 def test_index_flags_and_exposes_reopenings():

@@ -32,6 +32,7 @@ class FileOps(Protocol):
     def replace(self, src: PathArg, dst: PathArg) -> None: ...
     def remove(self, path: PathArg) -> None: ...
     def make_dirs(self, path: PathArg) -> None: ...
+    def remove_dir(self, path: PathArg) -> None: ...
 
 
 def _sync_directory(path: PathArg) -> None:
@@ -93,6 +94,10 @@ class DiskOps:
         os.makedirs(path, exist_ok=True)
         for created in reversed(missing):  # make each new entry durable in its parent
             _sync_directory(os.path.dirname(created))
+
+    def remove_dir(self, path: PathArg) -> None:
+        """Remove an *empty* directory (``rmdir``): a directory with anything in it is an OSError."""
+        os.rmdir(path)
 
 
 def is_link(path: PathArg) -> bool:

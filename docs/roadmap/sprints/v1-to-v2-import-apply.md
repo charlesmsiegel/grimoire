@@ -36,6 +36,8 @@ Consume **107's** durable play scope for each imported campaign/chat and **022's
 
 For Elderfen variants, **do not** coalesce multiple Mara Vale cards by display name. An importer may *propose* that common stable characterization belongs to a standalone shared definition and that Regency/Modern/Mecha/Vampire settings have explicitly derived versions, but only verified/reviewed authored links become canon. A world-local source can remain standalone until such a refactoring is accepted.
 
+**Instance id obligation:** every new instance id is allocated outside `grimoire.chatstore.campaign_taken_ids` at plan time and re-checked under the store lock at commit ([STORAGE](../../STORAGE.md#instance-ids-are-never-reused)); `TakenIdsUnlisted` is a refusal, never a reason to guess.
+
 Do not confuse V0.2.1 **world/campaign import (026)** with **direct SillyTavern-style character/scenario/lorebook import (037, moved to Wave 4)**. The latter is a separate adapter over the same source/store identities and does not wait for a complete V1 world migration; 036 later imports historical ST chat swipes. The source V1 library is never modified. [Chat lifecycle](../CHAT_MODEL.md).
 
 ## Open questions

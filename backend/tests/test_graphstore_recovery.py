@@ -26,7 +26,7 @@ from grimoire.testing.fileops import snapshot
 
 from chat_fixtures import Clock, Ids
 from graph_fixtures import C, GUILD, INES, WREN, seed_campaign
-from store_helpers import OWNER, drop_empty_dirs, owner_handle
+from store_helpers import FAIL_RECOVERY, OWNER, drop_empty_dirs, explore_mode, owner_handle
 
 LIB = "lib"
 JOURNAL = Target("replace", target="lib/.txn/journal.json")
@@ -84,12 +84,13 @@ def scenario(action):
         normalize=drop_empty_dirs)
 
 
-@pytest.mark.parametrize("action, mode", [(add, "errors"), (end, "errors"), (end, "recovery-crashes")],
-                         ids=["add-errors", "end-errors", "end-recovery-crashes"])
+@pytest.mark.parametrize("action, mode", [(add, "errors"), (end, "errors"), (end, "recovery-crashes"),
+                                          (add, FAIL_RECOVERY), (end, FAIL_RECOVERY)],
+                         ids=["add-errors", "end-errors", "end-recovery-crashes", "add-fail-recovery-crashes",
+                              "end-fail-recovery-crashes"])
 def test_relation_writes_survive_every_crash_error_and_recovery_crash(tmp_path, action, mode):
-    report = explore_crashes(scenario(action), tmp_path, errors=mode == "errors",
-                             recovery_crashes=mode == "recovery-crashes")
+    report = explore_crashes(scenario(action), tmp_path, **explore_mode(mode))
     report.assert_ok()
     assert report.points_explored > 10
-    if mode == "recovery-crashes":
+    if mode in ("recovery-crashes", FAIL_RECOVERY):
         assert any(run.recover_trace for run in report.runs[1:])

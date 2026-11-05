@@ -339,3 +339,57 @@ def test_an_endpoint_replaced_between_preview_and_commit_is_stale(store, library
         change.commit()
     assert not (store.root / "campaigns/c/relations").exists() or not any(
         (store.root / "campaigns/c/relations").iterdir())
+
+
+def _replace_guild(store) -> None:
+    target = store.root / "campaigns/c/instances/organization/ashen-guild.json"
+    document = json.loads(target.read_bytes())
+    target.unlink()
+    document["payload"]["local_name"] = "A different guild"  # a new individual under the same id
+    target.write_text(json.dumps(document))
+
+
+def test_an_end_previewed_against_an_endpoint_is_stale_once_that_file_is_replaced(store, library):
+    """The preview showed the end of *this* guild's membership; a replaced file may be a different one."""
+    done = add(library).commit()
+    _, etag = library.read(done.relation)
+    change = library.end(done.relation, until=Moment(9), provenance="director", expected=etag)
+    assert change.stale() == []
+    _replace_guild(store)
+    assert change.stale() == [("campaigns/c/instances/organization/ashen-guild.json", "endpoint changed")]
+    before = snapshot(store.root)
+    with pytest.raises(StaleWrite):
+        change.commit()
+    assert snapshot(store.root) == before
+
+
+def test_an_end_of_a_relation_with_a_missing_endpoint_still_commits(store, library):
+    done = add(library).commit()
+    _, etag = library.read(done.relation)
+    (store.root / "campaigns/c/instances/organization/ashen-guild.json").unlink()
+    change = library.end(done.relation, until=Moment(9), provenance="director: repair", expected=etag)
+    change.commit()  # the repair path: pinned as missing, still missing
+    assert library.read(done.relation)[0].ending.until == Moment(9)
+
+
+# -- instance-id pairs (IDENTITY.md): an id two kinds share is no one endpoint ---------------------
+
+def test_an_add_naming_a_paired_endpoint_is_refused(store, library):
+    from graph_fixtures import hand_pair
+    hand_pair(store, WREN)
+    before = snapshot(store.root)
+    assert reason(lambda: add(library)) == "instance_id_conflict"
+    assert snapshot(store.root) == before
+
+
+def test_an_add_rechecks_for_a_pair_formed_since_the_preview(store, library):
+    from graph_fixtures import hand_pair
+    change = add(library)
+    hand_pair(store, GUILD, "place")
+    stale = [("campaigns/c/instances/organization/ashen-guild.json", "instance_id_conflict")]
+    assert change.stale() == stale
+    before = snapshot(store.root)
+    with pytest.raises(StaleWrite) as caught:
+        change.commit()
+    assert list(caught.value.stale) == stale
+    assert snapshot(store.root) == before

@@ -52,7 +52,7 @@ def _setup(store: LibraryStore, relation: str | None) -> ChatRef:
     (None, "mara-2"),  # control: with nothing naming it, the freed id is reused (the test can fail)
     ("decodable", "mara-3"),
     ("unsupported", "mara-3"),
-    ("undecodable", "mara-2"),  # pinned limit: an id named only by an undecodable file is not protected
+    ("undecodable", "mara-3"),  # campaign_taken_ids scans relation payloads raw: an undecodable file protects too
 ])
 def test_attach_source_never_reuses_a_relation_endpoint_id(tmp_path, relation, expected):
     with LibraryStore.create(tmp_path / "lib") as store:

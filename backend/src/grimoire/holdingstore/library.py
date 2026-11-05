@@ -21,14 +21,15 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
-from grimoire.core.identity import HoldingsRef, InstanceRef
+from grimoire.core.identity import HoldingsRef, InstanceRef, paired_instances
 from grimoire.holdings import (
     HOLDINGS_SCHEMA, AlreadyApplied, Holdings, HoldingsCodecError, HoldingsRefused, LogEntry, Operation,
     SummaryRow, entry_to_payload, holdings_from_payload, holdings_to_payload, plan,
 )
 from grimoire.library import LibraryPathError
 from grimoire.store import (
-    LibraryStore, MalformedRecord, RecordNotFound, ScopeRecord, StaleWrite, StoreError, UnstorableIdentifier,
+    LibraryStore, MalformedRecord, RecordNotFound, ScopeRecord, StaleWrite, StoreError, TakenIdsUnlisted,
+    UnstorableIdentifier,
 )
 from grimoire.store.envelope import scope_record_document
 from grimoire.store.layout import address_parts, classify
@@ -109,24 +110,27 @@ class HoldingsChange:
 
     def recheck(self) -> None:
         """Every holder still has the very instance file it was planned against (same bytes): a file
-        replaced since then may hold a different individual under the same id. The caller holds
+        replaced since then may hold a different individual under the same id. No holder's id may have
+        been taken by another kind since (``instance_id_conflict``: no one individual). The caller holds
         ``store.lock`` through the commit."""
         store = self.library.store
         with store.lock:
-            gone, changed = [], []
+            gone, changed, paired = [], [], []
             for envelope, _ in self.puts:
                 holder = envelope.address.holder  # type: ignore[union-attr]
                 path = "/".join(address_parts(holder))
-                etag = (self.library._instance_etag(holder)
-                        if holder in store.campaign_instances(holder.campaign_id) else None)
+                instances = store.campaign_instances(holder.campaign_id)
+                etag = self.library._instance_etag(holder) if holder in instances else None
                 if etag is None:  # vanished, or no longer readable (a link, an I/O error): no holder to pin
                     gone.append((path, "holder gone"))
                 elif etag != self.holder_etags.get(holder):
                     changed.append((path, "holder changed"))
+                elif holder in paired_instances(instances):
+                    paired.append((path, "instance_id_conflict"))
             if changed:
-                raise HolderReplaced(changed + gone)
-            if gone:
-                raise StaleWrite(gone)
+                raise HolderReplaced(changed + gone + paired)
+            if gone or paired:
+                raise StaleWrite(gone + paired)
 
     def commit(self, approvals: Mapping[str, str] | None = None) -> dict[str, str]:
         store = self.library.store
@@ -147,10 +151,10 @@ class HolderReplaced(StaleWrite):
     now has the id. Never retried automatically (``apply(..., holders=)`` refuses it as ``holder_replaced``)."""
 
 
-class HoldingsUnlisted(StoreError):
+class HoldingsUnlisted(TakenIdsUnlisted):
     """A folder that could hold the campaign's holder files is a link or cannot be listed (or the
     campaign folder exists only as a look-alike), so the holder ids it may contain cannot be reserved:
-    allocation fails closed rather than guess."""
+    allocation fails closed rather than guess. One case of the store's ``TakenIdsUnlisted``."""
 
 
 def holdings_holder_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
@@ -164,8 +168,47 @@ def holdings_holder_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]
     refs, complete = store.campaign_holding_names(campaign_id)
     if not complete:
         raise HoldingsUnlisted(f"campaigns/{campaign_id}/holdings cannot be fully listed (a linked or unlistable "
-                               "folder, or a look-alike campaign folder), so holder ids cannot be reserved")
+                               "folder, or a look-alike campaign folder), so holder ids cannot be reserved",
+                               (f"campaigns/{campaign_id}/holdings",))
     return frozenset(ref.instance_id for ref in refs)
+
+
+#: problems that name no holder file the store could read: a look-alike (whose own id
+#: ``holdings_holder_ids`` keeps taken) or an entry that can never be a holder file
+_UNREAD_BY_DESIGN = frozenset({"name_mismatch", "unrecognized"})
+
+
+def holdings_peer_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+    """Instance ids named inside the campaign's holder files: a move's holder, target and ``peers``.
+
+    A hand-deleted holder's id can live on in another holder's log as a move's counterparty; a new
+    individual given it would read as that move's party. The payloads are scanned raw (every
+    ``<kind>/<id>`` text, key or value), so a log the codec refuses still protects its ids. A holder
+    file the store cannot read (malformed, a link, a newer format) raises ``TakenIdsUnlisted``. A
+    look-alike is not read; its own id stays taken by ``holdings_holder_ids``. Reads every holder file.
+    """
+    found = store.campaign_holdings(campaign_id)
+    unread = tuple(sorted({problem.path for problem in found.problems if problem.code not in _UNREAD_BY_DESIGN}))
+    if unread:
+        raise TakenIdsUnlisted(f"holder files of {campaign_id} cannot all be read ({', '.join(unread)}), so the "
+                               "instance ids their logs name cannot be reserved", unread)
+    taken: set[str] = set()
+    stack: list[object] = [stored.record.payload for stored in found.records.values()]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str):
+            kind, _, instance_id = value.partition("/")
+            try:
+                InstanceRef(campaign_id, kind, instance_id)
+            except ValueError:
+                continue
+            taken.add(instance_id)
+        elif isinstance(value, Mapping):
+            stack.extend(value.keys())
+            stack.extend(value.values())
+        elif isinstance(value, (list, tuple)):
+            stack.extend(value)
+    return frozenset(taken)
 
 
 class _StoreSizer:
@@ -243,6 +286,7 @@ class HoldingsLibrary:
                             if (etag := self._instance_etag(holder)) is not None}  # unreadable: no holder
         replaced = sorted(str(holder) for holder, pinned in pins.items()
                           if holder in holder_etags and holder_etags[holder] != pinned)
+        paired = sorted(str(holder) for holder in set(op.holders) & paired_instances(instances))
         envelopes = {}
         for holder, view in views.items():
             if view.envelope is None:
@@ -253,13 +297,15 @@ class HoldingsLibrary:
             result = plan(op, {holder: view.holdings if view.etag else None for holder, view in views.items()},
                           self._clock(), exists=holder_etags.__contains__, size=_StoreSizer(envelopes), basis=basis)
         except HoldingsRefused:
-            if not replaced:
+            if not (replaced or paired):
                 raise
             result = None
         if isinstance(result, AlreadyApplied):
             return HoldingsChange(self, result.outcome, entries=result.entries)
         if replaced:
             raise HoldingsRefused("holder_replaced", f"instance files changed since first planned: {replaced}")
+        if paired:  # load() leaves both members of a pair out: the id is no one holder (IDENTITY.md)
+            raise HoldingsRefused("instance_id_conflict", f"another kind also uses these holders' ids: {paired}")
         assert result is not None
         puts = []
         for holder in sorted(result.values, key=str):  # a pinned order: the files publish in this order

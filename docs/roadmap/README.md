@@ -17,7 +17,7 @@
 
 **A world is optional, not a prerequisite for roleplay.** Sprint **107** adds a minimal persistent chat/play scope and source-qualified associations as a **post-010 Wave 3** change, without reopening completed storage work. A lightweight chat still has an internal campaign namespace for independent actor/history IDs, but does not require a **user-visible campaign setup**, world, mechanics or map. Chats can be found via Characters, Scenarios, Campaigns, Worlds or Recent Chats using rebuildable indexes over **one canonical chat record**.
 
-Sprint **022** must resolve a reusable base character into explicitly derived period/modern/spacefaring/supernatural portrayals with documented inherit/replace/**clear** semantics, before first playable prompts rely on them. Sprint **037** is **moved from Wave 5 into Wave 4**, independently importing standalone character/scenario/lorebook cards without requiring 026's world importer; **035** requires both launch paths and retains Wave 5's first-playable milestone. Sprint **036** owns loss-aware SillyTavern chat-history/swipe import; **052** moves to Wave 6 for one-click onboarding, and **065** later delivers the richer unified chat library/navigation workspace. View the [**chat architecture and navigation contract**](CHAT_MODEL.md) and [Sprint 107](sprints/world-optional-chat-scopes.md). Sprint 107's **headless first slice is implemented**: durable world-less scopes and chats, source bindings, and a rebuildable navigation index. It is documented in [CHATS](../CHATS.md). Sprint 017's **headless first slice is implemented** too: persisted typed relations, a director-only bounded traversal and per-node actor claims ([GRAPH](../GRAPH.md)). Sprint 020's **headless first slice is also implemented**: durable events and evidence with read-time quarantine, documented in [EVIDENCE](../EVIDENCE.md). Sprint 018's **headless first slice is implemented** as well: shared image blobs with per-entity and per-campaign placements, documented in [IMAGES](../IMAGES.md). Sprint 022's **headless first slice is implemented**: pinned derived-portrayal composition with inherit/replace/clear provenance, and frozen world-optional chat/selection snapshots, documented in [EFFECTIVE_VIEWS](../EFFECTIVE_VIEWS.md). So is Sprint 021's: two-key acceptance of turn effects committed once with their relation changes, latest-first revocation and scene wrap-ups ([EFFECTS](../EFFECTS.md)). Sprint 025's headless first slice (fictional abilities: authored limits/costs and a deterministic attempt assessment) is documented in [ABILITIES](../ABILITIES.md). The other items are **planned**, not already shipped.
+Sprint **022** must resolve a reusable base character into explicitly derived period/modern/spacefaring/supernatural portrayals with documented inherit/replace/**clear** semantics, before first playable prompts rely on them. Sprint **037** is **moved from Wave 5 into Wave 4**, independently importing standalone character/scenario/lorebook cards without requiring 026's world importer; **035** requires both launch paths and retains Wave 5's first-playable milestone. Sprint **036** owns loss-aware SillyTavern chat-history/swipe import; **052** moves to Wave 6 for one-click onboarding, and **065** later delivers the richer unified chat library/navigation workspace. View the [**chat architecture and navigation contract**](CHAT_MODEL.md) and [Sprint 107](sprints/world-optional-chat-scopes.md). Sprint 107's **headless first slice is implemented**: durable world-less scopes and chats, source bindings, and a rebuildable navigation index. It is documented in [CHATS](../CHATS.md). Sprint 017's **headless first slice is implemented** too: persisted typed relations, a director-only bounded traversal and per-node actor claims ([GRAPH](../GRAPH.md)). Sprint 020's **headless first slice is also implemented**: durable events and evidence with read-time quarantine, documented in [EVIDENCE](../EVIDENCE.md). Sprint 018's **headless first slice is implemented** as well: shared image blobs with per-entity and per-campaign placements, documented in [IMAGES](../IMAGES.md). Sprint 022's **headless first slice is implemented**: pinned derived-portrayal composition with inherit/replace/clear provenance, and frozen world-optional chat/selection snapshots, documented in [EFFECTIVE_VIEWS](../EFFECTIVE_VIEWS.md). So is Sprint 021's: two-key acceptance of turn effects committed once with their relation changes, latest-first revocation and scene wrap-ups ([EFFECTS](../EFFECTS.md)). Sprint 025's headless first slice (fictional abilities: authored limits/costs and a deterministic attempt assessment) is documented in [ABILITIES](../ABILITIES.md). Sprint 023's headless first slice persists counted holdings with idempotent operation ids ([HOLDINGS](../HOLDINGS.md)), Sprint 024's promotes one generic creature instance in place to a named individual ([ENTITIES](../ENTITIES.md#individualizing-a-template-instance)), and Sprint 019's is a transport-free sync revision and conflict core ([SYNC](../SYNC.md)). The other items are **planned**, not already shipped.
 
 ## How order and parallelism work
 
@@ -57,6 +57,8 @@ These are **functional gates**, not dates. Import and phone play cannot be descr
 
 The **wave and order of rows** determine pickup priority; the # column is a stable sprint ID. New Sprint 107 is placed first in Wave 3 rather than renumbering the other 106 identifiers and breaking existing documentation links. A same-wave group is deliberately parallel: **prerequisites** refer only to first-slice contracts in earlier waves.
 
+<a id="wave-1"></a>
+
 ### Wave 1 — Foundational contracts, isolation and cost baselines
 
 | # | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
@@ -90,6 +92,8 @@ The **Wave 1 repair** (PR #565) delivered the eight headless first-slice contrac
 
 We still target the first **playable migrated desktop text campaign in Wave 5** and phone+desktop synchronization in Wave 6; these are capability gates, not calendar dates.
 
+<a id="wave-2"></a>
+
 ### Wave 2 — Native contracts, provider economics and executable V1 inventory
 
 | # | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
@@ -102,6 +106,8 @@ We still target the first **playable migrated desktop text campaign in Wave 5** 
 | 014 | [Characterization And Dialogue](sprints/characterization-and-dialogue.md) | **P0** | [Story Quality Benchmarks](sprints/story-quality-benchmarks.md), [Player Sovereignty](sprints/player-sovereignty.md) | generation / voice anchors | Test portrayal-scoped voice anchors and distinctive separately addressed NPC prompt inputs without a provider dependency |
 | 015 | [V1 Cost And Voice Regression](sprints/v1-cost-and-voice-regression.md) | **P0** | [Story Quality Benchmarks](sprints/story-quality-benchmarks.md), [Turn Costs And Feature Flags](sprints/turn-costs-and-feature-flags.md) | evals / cost parity | Capture provider-reported 0.2.1 per-NPC voice/cost baseline (opt-in) and reconcile story-quality/2 with inference ledger |
 | 016 | [Session Zero Boundaries](sprints/session-zero-boundaries.md) | **P0** | [Player Sovereignty](sprints/player-sovereignty.md) | campaign / creative boundaries | Define typed in-memory session-zero preferences and pause/skip/redirect intents; actual play execution belongs to 035 |
+
+<a id="wave-3"></a>
 
 ### Wave 3 — World-optional chat scopes, graph, artwork, events and sync revisions
 
@@ -120,8 +126,24 @@ We still target the first **playable migrated desktop text campaign in Wave 5** 
 
 #### Wave 3 status
 
+All ten first slices are merged as **headless libraries with synthetic tests**; none is an app-integrated feature, and the first playable milestone is still Wave 5.
+
+- **107:** world-less play scopes, chat records, source bindings and a rebuildable navigation index ([CHATS](../CHATS.md)).
+- **017:** persisted typed relations, a director-only bounded traversal and per-node actor claims ([GRAPH](../GRAPH.md)).
+- **018:** content-addressed image blobs, image objects and per-entity and per-campaign placements ([IMAGES](../IMAGES.md)).
+- **020:** durable events and evidence with read-time quarantine ([EVIDENCE](../EVIDENCE.md)). Persisting 017's claim shapes is its unscheduled next step.
+- **021:** two-key acceptance of turn effects, committed once with their relation changes, latest-first revocation and scene wrap-ups ([EFFECTS](../EFFECTS.md)). Holdings operations and ability costs are its unscheduled next slice.
+- **022:** pinned derived-portrayal composition with inherit/replace/clear provenance, and frozen chat and selection snapshots ([EFFECTIVE_VIEWS](../EFFECTIVE_VIEWS.md)).
+- **023:** counted holdings per holder instance with idempotent operation ids ([HOLDINGS](../HOLDINGS.md)).
+- **024:** in-place individualization of a template instance, including one of a derived species portrayal ([ENTITIES](../ENTITIES.md#individualizing-a-template-instance)).
+- **025:** authored ability limits and costs with a deterministic attempt assessment ([ABILITIES](../ABILITIES.md)).
+- **One reservation set for instance ids:** every allocator uses `campaign_taken_ids` ([CHATS](../CHATS.md#taken-instance-ids)).
 - **019 first slice:** `grimoire.sync`, a headless, transport-free revision and conflict core for two locally open libraries ([SYNC.md](../SYNC.md)). It proves keep-both conflicts and crash convergence under the 006 harness. It is not phone sync: transport and pairing belong to 028.
 - 019 synchronizes 107's play-scope and chat records too; derived navigation indexes are never synced.
+- 019 also synchronizes 018's image objects, placements and blobs. 021 accepted events and wrap-ups and 023 holdings stay held back (reported as `held` conflicts) until [028](sprints/app-managed-device-sync.md#inherited-from-019), which inherits their merge rules.
+- **Unscheduled prerequisites, awaiting a decision:** 021's next slice (holdings operations, ability costs, `attempt_id` charged once), needed by 029 and 030, and 020's claim-shape persistence, needed by 031, are not on any wave yet.
+
+<a id="wave-4"></a>
 
 ### Wave 4 — Card/scenario import, V1 migration, independent NPC generation and peer transfer
 
@@ -135,8 +157,10 @@ We still target the first **playable migrated desktop text campaign in Wave 5** 
 | 031 | [Context Retrieval](sprints/context-retrieval.md) | **P0** | [Typed Relationship Graph](sprints/typed-relationship-graph.md), [Knowledge And Perspective](sprints/knowledge-and-perspective.md), [Turn Costs And Feature Flags](sprints/turn-costs-and-feature-flags.md), [Effective World Snapshots](sprints/effective-world-snapshots.md), [World Optional Chat Scopes](sprints/world-optional-chat-scopes.md) | inference / actor context packing | Pack bounded, evidence-safe context from attached sources/lorebooks in both world-based and world-less chats |
 | 037 | [Character Card Ingestion](sprints/character-card-ingestion.md) | **P0** | [Native File Store And Revisions](sprints/native-file-store-and-revisions.md), [Entity Facets And Instance Model](sprints/entity-facets-and-instance-model.md), [World Optional Chat Scopes](sprints/world-optional-chat-scopes.md), [Image Identity And Placements](sprints/image-identity-and-placements.md), [Effective World Snapshots](sprints/effective-world-snapshots.md), [Safe Tool Execution](sprints/safe-tool-execution.md), [Knowledge And Perspective](sprints/knowledge-and-perspective.md) | interop / card formats | Import a standalone character+ lorebook or scenario card, approved and world-less, with greeting and picture provenance |
 | 032 | [Diegetic Communication](sprints/diegetic-communication.md) | **P1** | [Knowledge And Perspective](sprints/knowledge-and-perspective.md), [Durable Event Evidence](sprints/durable-event-evidence.md) | fiction / private communication | Deliver a private message only to its valid recipients |
-| 033 | [Party And Presence](sprints/party-and-presence.md) | **P1** | [Creature Individualization](sprints/creature-individualization.md) | actors / party state | Separate present cast, controlled actors and reserves |
+| 033 | [Party And Presence](sprints/party-and-presence.md) | **P1** | [Creature Individualization](sprints/creature-individualization.md) | actors / party state | Separate present cast, controlled actors and reserves; owns non-character actors (an individualized creature) in chat and scene casts |
 | 034 | [Unique Equipment](sprints/unique-equipment.md) | **P1** | [Counted Inventory](sprints/counted-inventory.md) | inventory / unique possessions | Keep two similar artifacts distinct by owner and revision |
+
+<a id="wave-5"></a>
 
 ### Wave 5 — First playable world-less chat and imported-world campaign
 
@@ -151,6 +175,8 @@ We still target the first **playable migrated desktop text campaign in Wave 5** 
 | 042 | [Source Rebase And Semantic Merge](sprints/source-rebase-and-semantic-merge.md) | **P1** | [Typed Relationship Graph](sprints/typed-relationship-graph.md), [Native File Store And Revisions](sprints/native-file-store-and-revisions.md), [Effective World Snapshots](sprints/effective-world-snapshots.md), [World Optional Chat Scopes](sprints/world-optional-chat-scopes.md) | sources / reviewed rebase | Review a root-change rebase and propose selected chat-authored canon for a new reusable world without history rewrites |
 | 043 | [World Change Sets](sprints/world-change-sets.md) | **P1** | [Native File Store And Revisions](sprints/native-file-store-and-revisions.md), [Typed Relationship Graph](sprints/typed-relationship-graph.md), [Safe Tool Execution](sprints/safe-tool-execution.md) | world / reviewed batch changes | Preview an atomic two-record world change |
 
+<a id="wave-6"></a>
+
 ### Wave 6 — Phone play, synchronization and early UX
 
 | # | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
@@ -161,6 +187,8 @@ We still target the first **playable migrated desktop text campaign in Wave 5** 
 | 046 | [Live Inheritance And Overrides](sprints/live-inheritance-and-overrides.md) | **P1** | [Source Rebase And Semantic Merge](sprints/source-rebase-and-semantic-merge.md), [Effective World Snapshots](sprints/effective-world-snapshots.md), [Image Identity And Placements](sprints/image-identity-and-placements.md), [World Optional Chat Scopes](sprints/world-optional-chat-scopes.md) | world / field inheritance | Show field/art inheritance and cleared/overridden Mara traits across alternative portrayals |
 | 047 | [Narration Continuity Referee](sprints/narration-continuity-referee.md) | **P1** | [Scene Physical Continuity](sprints/scene-physical-continuity.md), [Knowledge And Perspective](sprints/knowledge-and-perspective.md), [Fiction First Adjudication](sprints/fiction-first-adjudication.md) | generation / contradiction review | Check five continuity errors plus a separately labelled PC-authorship claim before a narration can become canonical |
 | 048 | [Performance And Tracing](sprints/performance-and-tracing.md) | **P1** | [Minimal Text Scene Runner](sprints/minimal-text-scene-runner.md), [Turn Costs And Feature Flags](sprints/turn-costs-and-feature-flags.md) | runtime / tracing | Measure cold and warm end-to-end cost and latency |
+
+<a id="wave-7"></a>
 
 ### Wave 7 — Reliable long-term use and independent enhancements
 
@@ -190,6 +218,8 @@ We still target the first **playable migrated desktop text campaign in Wave 5** 
 | 071 | [Theory Driven Simplification](sprints/theory-driven-simplification.md) | **P2** | V2 baseline only | engineering / isolated modules | Simplify one bounded V2 module without altering shared contracts |
 | 072 | [VN Staging And Cues](sprints/vn-staging-and-cues.md) | **P2** | [Expression And Art Lineage](sprints/expression-and-art-lineage.md) | frontend / VN stage | Render authored stage cues without changing transcript |
 
+<a id="wave-8"></a>
+
 ### Wave 8 — Advanced mechanics, authoring and audio foundations
 
 | # | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
@@ -210,6 +240,8 @@ We still target the first **playable migrated desktop text campaign in Wave 5** 
 | 086 | [Mechanics Module Authoring](sprints/mechanics-module-authoring.md) | **P2** | [Ruleset Action Contracts](sprints/ruleset-action-contracts.md) | mechanics / module editor | Author an isolated validated mechanics sheet |
 | 087 | [World Authoring Assistant](sprints/world-authoring-assistant.md) | **P2** | [World Change Sets](sprints/world-change-sets.md), [Catalog Composition](sprints/catalog-composition.md) | authoring / world proposals | Review three linked towns and accept two |
 
+<a id="wave-9"></a>
+
 ### Wave 9 — Richer interaction, simulation and presentation
 
 | # | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
@@ -227,6 +259,8 @@ We still target the first **playable migrated desktop text campaign in Wave 5** 
 | 098 | [Publishing And Anonymization](sprints/publishing-and-anonymization.md) | **P2** | [Scenes Forks And Retcons](sprints/scenes-forks-and-retcons.md), [Memory Consolidation](sprints/memory-consolidation.md) | export / story publication | Produce a non-mutating anonymized EPUB |
 | 099 | [Soundscapes And Audio Cues](sprints/soundscapes-and-audio-cues.md) | **P2** | [V2 Mobile Client](sprints/v2-mobile-client.md) | audio / ambience | Optional non-authoritative ambient audio in phone client |
 
+<a id="wave-10"></a>
+
 ### Wave 10 — Complex content, governance and publishing
 
 | # | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
@@ -236,6 +270,8 @@ We still target the first **playable migrated desktop text campaign in Wave 5** 
 | 102 | [Collaborative Multiplayer](sprints/collaborative-multiplayer.md) | **P2** | [Local Multi PC](sprints/local-multi-pc.md), [Durable Action Recovery](sprints/durable-action-recovery.md), [Safe Tool Execution](sprints/safe-tool-execution.md) | network / co-play | Coordinate two controllers without unauthorized state changes |
 | 103 | [Content Publication](sprints/content-publication.md) | **P2** | [Catalog Composition](sprints/catalog-composition.md), [Source Upgrades And Dependencies](sprints/source-upgrades-and-dependencies.md), [Character Card Ingestion](sprints/character-card-ingestion.md) | sharing / content manifests | Round-trip one versioned world/catalog package |
 | 104 | [Multi Speaker Table Audio](sprints/multi-speaker-table-audio.md) | **P2** | [Local Multi PC](sprints/local-multi-pc.md), [Conversation Turn Taking](sprints/conversation-turn-taking.md) | voice / multiuser capture | Attribute two known audio channels to separate PCs |
+
+<a id="wave-11"></a>
 
 ### Wave 11 — Voice-native and long-horizon research
 

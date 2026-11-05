@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 SEGMENT_MAX = 128
@@ -154,6 +155,19 @@ class InstanceRef:
         if match is None:
             raise ValueError(f"not a campaign instance reference: {text!r}")
         return cls(**match.groupdict())
+
+
+def paired_instances(refs: Iterable[InstanceRef]) -> frozenset[InstanceRef]:
+    """The refs whose instance id another kind of the same campaign also uses: none of them is one actor.
+
+    The one definition of an instance-id pair (IDENTITY.md), used by ``load()`` and by every service
+    that re-checks an actor. Ids are validated lowercase segments, which the store's look-alike fold
+    leaves unchanged, so comparing them exactly is that fold.
+    """
+    kinds: dict[tuple[str, str], set[InstanceRef]] = {}
+    for ref in refs:
+        kinds.setdefault((ref.campaign_id, ref.instance_id), set()).add(ref)
+    return frozenset(ref for group in kinds.values() if len({ref.kind for ref in group}) > 1 for ref in group)
 
 
 @dataclass(frozen=True, slots=True)

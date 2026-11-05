@@ -104,7 +104,7 @@ Every projection names its perspective and takes a keyword `as_of` (a non-negati
 - **`director_knowledge(knowledge, *, as_of, requested_by)`** is the separate truth projection, holding raw records ordered by `(sequence, id)`: events, propositions with standing and governing ruling, rulings, all evidence (unconfirmed items included and flagged; a sent report appears from its `sent_at`), beliefs and disclosures. `requested_by` must be `DIRECTOR`. This makes call sites explicit and auditable; it does not authorize the caller, which is the executor's job (035, 104).
 - **`standing(knowledge, proposition_id, *, as_of)`** returns the standing defined above.
 
-`actor_view(actor, definitions, knowledge=None)` accepts only an `ActorKnowledge` (exactly that type, else `not_actor_knowledge`) for this actor (else `actor_mismatch`). `ActorKnowledge` is a public value type. The guarantee is that projections never put director data in it and that `actor_view` refuses anything else.
+`actor_view(actor, definitions, knowledge=None)` accepts only an `ActorKnowledge` (exactly that type, else `not_actor_knowledge`) for this actor (else `actor_mismatch`). `ActorKnowledge` is a public value type. The guarantee is that projections never put director data in it and that `actor_view` refuses anything else. `snapshot_actor_view(instance, snapshot, knowledge=None)`, the same view for a snapshot-captured actor such as a derived portrayal ([EFFECTIVE_VIEWS](EFFECTIVE_VIEWS.md#instances)), applies the same rules.
 
 ## Belief authorship (player sovereignty)
 

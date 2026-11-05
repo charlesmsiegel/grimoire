@@ -61,7 +61,8 @@ ALLOWED = {
     "roster": {"authority", "entity", "identity", "index", "model"},
     "entity_codec": {"abilities", "entity", "facets", "identity", "json_value"},
     "ability_use": {"abilities", "entity", "facets", "identity"},
-    "individual": {"authority", "entity", "identity", "index", "model", "roster"},
+    # portrayal: 024 promotes a derived template instance through its 022 EffectiveDefinition
+    "individual": {"authority", "entity", "identity", "index", "model", "portrayal", "roster"},
 }
 
 

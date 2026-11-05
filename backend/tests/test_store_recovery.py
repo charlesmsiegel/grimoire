@@ -25,9 +25,11 @@ from grimoire.testing import (
 from grimoire.testing.fileops import snapshot
 
 from store_helpers import (
-    HARBOR, OWNER, WREN, WREN_R1, drop_empty_dirs, harbor_manifest, instance, make_dir_link, owner_handle,
-    seed, wren,
+    EXHAUSTIVE_RECOVERY, FAIL_RECOVERY, HARBOR, OWNER, WREN, WREN_R1, drop_empty_dirs, explore_mode,
+    harbor_manifest, instance, make_dir_link, owner_handle, seed, wren,
 )
+
+EXHAUSTIVE = bool(os.environ.get("GRIMOIRE_EXHAUSTIVE_RECOVERY"))
 
 LIB = "lib"
 JOURNAL = Target("replace", target="lib/.txn/journal.json")
@@ -105,19 +107,20 @@ def scenario(action, *, invariants=None, meddle=None, name="native store commit"
 
 
 # Exploration is split so no single test nears the 120 s faulthandler watchdog on Windows
-# runners (about 7x slower here). Injected I/O errors never spawn recovery crashes, so an
-# errors-only run plus a recovery-crash run covers exactly what one combined run would.
+# runners (about 7x slower here): errors, recovery crashes after a crash, and recovery crashes
+# after an injected error (FAIL_RECOVERY) together cover what one combined run would.
 # Directory creation only differs in the action: its recovery takes the same table that
 # head-move and the meddle scenario explore to depth 2.
 @pytest.mark.parametrize("action, mode", [
     (head_move, "errors"), (head_move, "recovery-crashes"), (new_directories, "errors"),
-], ids=["head-move-errors", "head-move-recovery-crashes", "new-directories-errors"])
+    (head_move, FAIL_RECOVERY), pytest.param(new_directories, FAIL_RECOVERY, marks=EXHAUSTIVE_RECOVERY),
+], ids=["head-move-errors", "head-move-recovery-crashes", "new-directories-errors",
+        "head-move-fail-recovery-crashes", "new-directories-fail-recovery-crashes"])
 def test_commit_survives_every_crash_error_and_recovery_crash(tmp_path, action, mode):
-    report = explore_crashes(scenario(action), tmp_path, errors=mode == "errors",
-                             recovery_crashes=mode == "recovery-crashes")
+    report = explore_crashes(scenario(action), tmp_path, **explore_mode(mode))
     report.assert_ok()
     assert report.points_explored > 20
-    if mode == "recovery-crashes":
+    if mode in ("recovery-crashes", FAIL_RECOVERY):
         assert any(run.recover_trace for run in report.runs[1:])  # recovery work was actually explored
 
 
@@ -184,11 +187,12 @@ def _edit_manifest_if_pending(ops, root):
         ops.write_bytes(root / MANIFEST, HUMAN)
 
 
-@pytest.mark.parametrize("mode", ["errors", "recovery-crashes"])
+@pytest.mark.parametrize("mode", ["errors", "recovery-crashes",
+                                  pytest.param(FAIL_RECOVERY, marks=EXHAUSTIVE_RECOVERY)])
 def test_an_edit_made_while_down_is_kept_and_never_half_published(tmp_path, mode):
     sc = scenario(head_move, meddle=_edit_manifest_if_pending, invariants=(
         preserves_meddle(), idempotent_recovery(), Invariant("all_or_nothing", _all_or_nothing)))
-    report = explore_crashes(sc, tmp_path, errors=mode == "errors", recovery_crashes=mode == "recovery-crashes")
+    report = explore_crashes(sc, tmp_path, **explore_mode(mode))
     report.assert_ok()
     assert any(run.meddled_paths for run in report.runs)
 
@@ -694,3 +698,44 @@ def test_discard_survives_every_crash_and_never_publishes(tmp_path):
          no_residue("lib/.txn/*.new", "lib/.txn/journal.json", "lib/.txn/discard.json")),
         normalize=drop_empty_dirs)
     explore_crashes(sc, tmp_path, errors=True).assert_ok()
+    if EXHAUSTIVE:  # and every crash of the re-run discard after an injected error (minutes on Windows)
+        explore_crashes(sc, tmp_path / "fail", **explore_mode(FAIL_RECOVERY)).assert_ok()
+
+
+def test_a_staging_folder_swapped_after_authorization_names_consumed_approvals(tmp_path, monkeypatch):
+    """Staging's own first recheck refuses a .txn replaced by a link after authorization: the error
+    still names the approval that authorization consumed."""
+    from grimoire.store import library as library_mod
+
+    locker = ProcessLocker()
+    root = tmp_path / "root"
+    root.mkdir()
+    _setup(locker)(RootedFileOps(root, record=False), root)
+    authority = Authorizer([OWNER])
+    authority.add_grant(Grant("g", "app:importer", frozenset({Permission.APPLY}),
+                              ResourcePath.parse("campaigns"), OWNER))
+    store = LibraryStore.open(root / LIB, locker=locker)
+    try:
+        txn = store.transaction()
+        address = txn.put(RecordEnvelope(InstanceRef("c9", "character", "new"), {"n": 1}), None)
+        authority.register_approval(Approval("a1", "app:importer", Permission.APPLY,
+                                             ResourcePath.parse(address),
+                                             payload_digest(txn.preview()[address]), OWNER))
+        original = library_mod._Commit._authorize
+
+        def authorize_then_swap(self):
+            denied = original(self)
+            os.rename(root / LIB / ".txn", root / "moved-txn")
+            os.symlink(root / "moved-txn", root / LIB / ".txn")
+            return denied
+
+        monkeypatch.setattr(library_mod._Commit, "_authorize", authorize_then_swap)
+        with pytest.raises(Exception) as refused:
+            txn.commit(authority.handle_for("app:importer"), {address: "a1"})
+        assert authority.pending_approvals() == ()
+        assert getattr(refused.value, "consumed_approvals", ()) == ("a1",)
+    finally:
+        monkeypatch.undo()
+        os.unlink(root / LIB / ".txn")
+        os.rename(root / "moved-txn", root / LIB / ".txn")
+        store.close()

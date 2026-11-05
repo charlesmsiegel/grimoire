@@ -116,19 +116,21 @@ Narration holds neither key. A player alone can never make their character's act
    - a duplicate ordinal, or active events whose ordinal order contradicts their sequence order (`inconsistent_ledger`).
 4. **Duplicate.** Look for an active event with the same fingerprint:
    - **its receipts verify:** a no-op. `duplicate_of` is set, `preview()` is `{}`, and `commit()` writes nothing and returns that event. This is the path for a reroll, an alternate response or a retry after a crash. It runs **before** authorization: a no-op writes nothing and needs no keys, so a retry after control changed hands, or with a stale endorsement, is told that the effect is in force rather than refused for authority;
-   - **they do not:** refused `receipt_mismatch`. The way out is `revoke(..., partial=True)`.
+   - **they do not:** refused `receipt_mismatch`. The way out is `revoke(..., partial=True)`. If a relation file is damaged at the same time (step 5), the refusal is `undecodable_relation` instead, so damage is named, never reported as a mismatch.
 
-   A receipt mismatch on any *other* event does not block an unrelated acceptance. It stays reported by `continuity` until it is repaired: revoke back to that event with `partial=True`, or hand-repair the relation file. One editorial edit therefore never freezes a campaign's play.
-5. **Authorize** (two keys, above).
-   - Also fail closed on a relation file of the campaign that cannot be decoded, or any store problem under its `relations/` (a link, a look-alike `Relations/`), with code `undecodable_relation`, because it could hide the fact a precondition must see. Unlike 017's own writes, which an undecodable file never blocks, an acceptance fails closed. The commit re-checks it too.
+   Receipts name exact relation files, so a damaged *unrelated* relation file does not refuse a duplicate. A receipt mismatch on any *other* event does not block an unrelated acceptance. It stays reported by `continuity` until it is repaired: revoke back to that event with `partial=True`, or hand-repair the relation file. One editorial edit therefore never freezes a campaign's play.
+5. **Fail closed on the relations.** A relation file of the campaign that cannot be decoded, or any store problem under its `relations/` (a link, a look-alike `Relations/`), refuses a new effect with `undecodable_relation`, because it could hide the fact a precondition must see. Unlike 017's own writes, which an undecodable file never blocks, an acceptance fails closed. The commit re-checks it too.
 
    `revoke` fails closed the same way (`undecodable_relation`, also with `partial=True`), so a damaged receipt or a hidden overlap is never skipped silently. **Limit:** 017's own `reopen`, called directly, does not block on undecodable files.
 
    The repair for any of these is to fix the file or move it out of the library by hand.
-6. **One accepted effect per turn.** An active event for the same chat, scene and turn with a *different* fingerprint refuses the acceptance (`turn_already_accepted`). Another swipe's effect needs the accepted one revoked first, and several things that happen in one turn are one proposal (up to 32 operations). This also stops a turn retried at a newly allocated sequence after a later event restored the state, which the preconditions alone would let through.
-7. **Sequence floor.** The sequence must be at least the highest sequence of any active event (`stale_sequence`); equal sequences are allowed (different turns or chats at one moment). Sequences are campaign-wide. **Obligation on 035:** allocate one non-decreasing sequence across all chats of a scope.
-8. **Ordinal.** The new event gets `ordinal = 1 + max` over every event file, active or revoked. This is the order of the undo stack.
-9. **Plan** against the graph at `as_of = sequence`:
+
+   **No paired actor.** Then, before authority, no operation's endpoint or agent may share its id with an instance of another kind in the campaign (`instance_id_conflict`, naming the operations): `load()` leaves both members of such a [pair](IDENTITY.md) out, so the id is no one actor. A duplicate (step 4) writes nothing and is still reported as in force. Revocation does not check it, so a pair formed after an acceptance never blocks its undo.
+6. **Authorize** (two keys, above).
+7. **One accepted effect per turn.** An active event for the same chat, scene and turn with a *different* fingerprint refuses the acceptance (`turn_already_accepted`). Another swipe's effect needs the accepted one revoked first, and several things that happen in one turn are one proposal (up to 32 operations). This also stops a turn retried at a newly allocated sequence after a later event restored the state, which the preconditions alone would let through.
+8. **Sequence floor.** The sequence must be at least the highest sequence of any active event (`stale_sequence`); equal sequences are allowed (different turns or chats at one moment). Sequences are campaign-wide. **Obligation on 035:** allocate one non-decreasing sequence across all chats of a scope.
+9. **Ordinal.** The new event gets `ordinal = 1 + max` over every event file, active or revoked. This is the order of the undo stack.
+10. **Plan** against the graph at `as_of = sequence`:
    - **`end`:** needs exactly one walkable relation recording the fact, with no ending and `since < as_of`.
      - None, a bounded stint or a same-sequence start → `precondition_failed`.
      - Two → `ambiguous_relation`.
@@ -136,16 +138,17 @@ Narration holds neither key. A player alone can never make their character's act
    - **any operation:** an `agent` must have an instance file (`missing_agent`).
 
    **Nothing is ever matched by name**: key-2 is never "the key".
-10. **Commit.** One transaction writes:
+11. **Commit.** One transaction writes:
    - the new `accepted/<event_id>.json`, create-only;
    - each 017 end rewrite, under CAS on the etag read;
    - each 017 add, create-only.
 
-   Event and relation ids are allocated by exact presence. A generator that repeats a value within one change is retried. `commit(approvals)` re-checks under the store lock:
-   - 017's own `RelationChange.stale()` for each relation change;
+   Event and relation ids are allocated by exact presence. A new event id is also never a 020 event's id, nor one that a 021 token (`effect:accepted/<id>`, `effect:revoked/<id>`) in any of the campaign's relation files names, so the relation changes of a hand-deleted event stay reported as orphans and are never adopted by a new one. A generator that repeats a value within one change is retried. A linked or unreadable `events/` or `accepted/` folder cannot say whether an id is free, so it raises `TakenIdsUnlisted`. `commit(approvals)` re-checks under the store lock:
+   - 017's own `RelationChange.stale()` for each relation change (an `end` also pins both endpoint files, see [GRAPH](GRAPH.md#the-service-grimoiregraphstore));
    - that the set and etags of the accepted-event files are unchanged;
    - that the chat still exists;
    - that each agent's instance file still has the bytes it was checked against (a replaced file may be a different individual);
+   - that no endpoint or agent has since become one of an instance-id pair (`instance_id_conflict`; an endpoint of a `begin` is reported once, though 017's check finds it too);
    - that no 020 event has taken the new event's id meanwhile (`events/<event_id>.json` is still absent).
 
    If anything changed, it raises `StaleWrite`, writes nothing and reallocates nothing. Committing a **duplicate** re-checks the same way: the accepted-event files must be unchanged, and the event must still be active with receipts that verify against a fresh graph. A retry is therefore never told that a since-revoked or hand-undone event is in force.
@@ -158,6 +161,8 @@ Store step 11 can publish part of a transaction when an external edit races it (
 
 Exactly-once recovery across files belongs to 030.
 
+**Limit: a late retry after a revocation is a new acceptance.** The duplicate check looks only at active events. A retry of a director-only effect (no endorsement needed) that arrives after its event was revoked is accepted again as a new event, if its preconditions hold. A player-backed one needs the endorsement again, which a caller that kept it could replay (see Two keys). Telling a late retry apart from a deliberate re-acceptance needs per-attempt idempotency keys: owner 030.
+
 ## Continuity: the next response
 
 `continuity(campaign_id, *, as_of, requested_by)` is **director-only** (`requested_by` must be `DIRECTOR`). A campaign that does not exist is `missing_campaign`, never an empty, problem-free answer. It returns `Continuity`:
@@ -165,7 +170,7 @@ Exactly-once recovery across files belongs to 030.
 | Field | Contents |
 |---|---|
 | `events` | active events with `sequence <= as_of`, ordered by `(sequence, ordinal)` |
-| `revoked` | revoked events |
+| `revoked` | revoked events with `sequence <= as_of`, ordered by ordinal |
 | `wrapups` | the campaign's wrap-ups with `through <= as_of`, so nothing from after `as_of` is narrated |
 | `graph` | the 017 `CampaignGraph`, to be queried at `as_of` |
 | `problems` | the codes below |
@@ -179,7 +184,11 @@ Problem codes (reported, never repaired):
 - `partial_revocation`: a revoked event's skipped operation whose change is **still in force**: a relation it began that is still unretracted, or an ending it made that is still there. The event is then only partly undone (half a transfer may remain, an item held twice). It is reported until a human undoes that change by hand (retracts the relation, reopens the ending); a skipped operation that holds nothing is not reported;
 - `edited_since`: a relation an active event began was ended by something other than a later active accepted event (a direct 017 edit). The receipt itself still matches, but undoing that event will be refused (`has_dependents`) until the edit is resolved;
 - `stale_wrapup`: it cites a revoked or vanished event;
-- `incomplete_wrapup`: an active event of that chat and scene, within its range, that it does not cite.
+- `incomplete_wrapup`: an active event of that chat and scene, within its range, that it does not cite;
+- `bridge_mismatch`: a 020 event file under an active event's id that is not that event's bridge (`as_knowledge_event`): a different event, or one that cannot be read (`detail` says which);
+- `revoked_but_bridged`: a revoked event whose bridge is still stored in 020 (see `as_knowledge_event`, below).
+
+The last two check 020's raw `events/` files, read through the store and decoded with 020's pure codec (`grimoire.evidence`); 021 never loads 020's service. 020's `append` refuses both states, so they arise only from sync or a hand edit; an `events/` folder the store cannot list is reported by 020's own reads, not here.
 
 Headlessly, "the next reply knows the key is gone" means this: the director context for the next turn reads the graph at the new sequence, together with the accepted event.
 
@@ -202,6 +211,8 @@ A revoked event is checked by these permanent marks only. Revoking an earlier ev
 - the same id, summary and moment;
 - provenance `effect:accepted/<id>`;
 - participants: the operations' endpoints and agents. Participants are description only.
+
+It is the only 020 `Event` that may be stored under an accepted event's id. 020's `append` refuses anything else there (`accepted_id`), the bridge of a revoked event (`revoked`), and any event while the accepted events cannot be read (`accepted_unreadable`); it re-checks at commit (see [EVIDENCE](EVIDENCE.md#append)). `revoke` is never refused because a bridge exists, so latest-first undo keeps working: **the bridge outlives the revocation** as objective 020 fact, reported as `revoked_but_bridged`, until corrections are owned by 030/054 (020 has no retcons).
 
 ## Revoking: the undo of a revised turn
 
@@ -286,13 +297,14 @@ How it is read and written:
 - **A pre-021 build** reports those two campaign entries as `unrecognized` load problems, and its allocators do not protect the instance ids accepted events name. It cannot recover a journal that names them; use a 021+ build or `discard_journal` (tested).
 - **A pre-021 build reading a reopened relation** keeps `reopenings` as a preserved unknown key and sees no ending, so it answers `holds_at` correctly. This is tested with the verbatim 017 codec.
 - **After trying a newer build** that wrote a newer accepted-event schema, an older build stops accepting until that file is removed or the newer build is used again.
-- All fixtures are synthetic. Neither package imports a provider or network module (tested), and `grimoire.effects` is on the purity allowlist. The store's import set is unchanged.
+- All fixtures are synthetic. Neither package imports a provider or network module (tested), and `grimoire.effects` is on the purity allowlist. The store's import set is unchanged. `grimoire.effectstore` reads 020 event files only through the store and 020's pure codec, and never loads `grimoire.evidencestore` (tested); 020's service in turn uses only 021's pure `grimoire.effects`.
 
 ## Boundaries and obligations
 
 | Not here | Owner |
 |---|---|
 | Holdings operations from accepted effects (the [023 obligation](roadmap/sprints/turn-effects-and-wrap-up.md#obligation-holdings-operations-023)) | 021's next slice (023 has merged) |
+| **Committing ability costs ([025](ABILITIES.md)).** An effect with no operations is refused (`no_operations`), so a pure cost cannot be accepted, and an effect carries no `attempt_id`, so a charge cannot be made exactly once. 029 charges `charges` and 030 needs exactly-once consumption of a counted resource; both need this. Not on any wave yet | 021's next slice, with 029 / 030 |
 | Persisting the 012 `Event`, witnesses, evidence and beliefs of an accepted event | 020 / 032 |
 | Extracting and labelling narration into proposals; mislabel review | 035 / Narration Continuity Referee |
 | When director acceptance needs human review | 035 |
@@ -305,7 +317,8 @@ How it is read and written:
 | Summary-only accepted events (with no operations) | 020 (012 `Event`) |
 | Actor memory; long-form consolidation over wrap-ups | [Memory Consolidation](roadmap/sprints/memory-consolidation.md) (053), deriving actor memory from 020 evidence |
 | Mechanics legality | 029 / mechanics modules |
-| **Instance ids named by accepted events stay taken.** `accepted_instance_ids(store, campaign_id)` is part of 107's allocator; every future allocator (024, 026, 037) must use it too, as with 017's `relation_endpoint_ids`. It scans the raw payloads (every instance reference of the campaign and every `actor_id`) without decoding them, so an event that fails validation still protects its ids; only a file the store cannot read at all does not. It reads every accepted-event file, so an allocation's cost grows with play history (as 017's does with relations) | 024 / 026 / 037 |
-| Persisting the 012 bridge for an accepted event. 021's allocator already skips every 020 `events/` id (so `as_knowledge_event` can later be stored under the accepted id without 020's `duplicate_id`); a 020 writer must in turn store an accepted event's bridge, never a different event under an accepted id | 020 / 035 |
-| **One linear writer per campaign.** Ordinals are `1 + max` on one replica. Two devices that each accept an event offline and are then merged produce a duplicate ordinal: acceptance and revocation then refuse (`inconsistent_ledger`) until it is resolved. A merge rule for accepted events (rebasing one device's events on the other's, with review) is needed before sync carries `accepted/` | 019 / 028 |
+| **Instance ids named by accepted events stay taken.** `accepted_instance_ids(store, campaign_id)` is part of the one reservation set, [`campaign_taken_ids`](CHATS.md#taken-instance-ids), which every allocator (024, 026, 037) must use. It scans the raw payloads (every instance reference of the campaign and every `actor_id`) without decoding them, so an event that fails validation still protects its ids. A file or folder the store cannot read at all raises `TakenIdsUnlisted`: allocation fails closed. It reads every accepted-event file, so an allocation's cost grows with play history | 024 / 026 / 037 |
+| Deciding when to persist the 012 bridge for an accepted event. 021's allocator skips every 020 `events/` id, and 020's `append` stores only the bridge under an accepted id (above), so the two id spaces stay consistent on one device | 035 |
+| Correcting or retiring a bridge that outlived its revocation (`revoked_but_bridged`) | 030 / 054 |
+| **One linear writer per campaign.** Ordinals are `1 + max` on one replica. Two devices that each accept an event offline and are then merged produce a duplicate ordinal: acceptance and revocation then refuse (`inconsistent_ledger`) until it is resolved. A merge rule for accepted events (rebasing one device's events on the other's, with review) is needed before sync carries `accepted/`; until then sync reports a divergence as a `held` conflict | [028](roadmap/sprints/app-managed-device-sync.md) |
 | Performance at scale: each accept, and each commit, reads the campaign's accepted events and relation files once (not once per operation). Cost still grows linearly with campaign history, and nothing is cached | later 021 / 022 |

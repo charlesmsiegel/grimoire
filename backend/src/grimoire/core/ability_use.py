@@ -363,15 +363,21 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
     drawn_abilities = {each.id: each for each in facet.abilities if each.id in drawn_scope} if facet else {}
 
     # References. A plain condition names a prerequisite of the named ability; ``<ability>/<id>``
-    # names one of an ability the attempt draws on (meaningful only for a combination).
+    # names one of an ability the attempt draws on (meaningful only for a combination). The named
+    # ability's own prerequisite may be spelled either way, because ``terms`` spells every
+    # participating ability's prerequisites qualified: following that spelling must meet it.
     stale: list[str] = []
     if attempt.effect_id is not None and effect is None:
         stale.append(f"effect:{attempt.effect_id}")
         reasons.append(Reason("stale_effect", f"{attempt.ability_id!r} has no effect "
                                               f"{attempt.effect_id!r}; it is treated as not named"))
+    own_met = {name for owner, _, name in (c.rpartition("/") for c in attempt.conditions_met)
+               if owner in ("", attempt.ability_id)}
     for condition in sorted(attempt.conditions_met):
         owner, _, name = condition.rpartition("/")
-        if owner:
+        if owner == attempt.ability_id:
+            valid = ability is not None and ability.prerequisite(name) is not None
+        elif owner:
             valid = owner in drawn_abilities and drawn_abilities[owner].prerequisite(name) is not None
         else:
             valid = ability is not None and ability.prerequisite(condition) is not None
@@ -393,7 +399,7 @@ def assess_attempt(attempt: AbilityAttempt, entity: EffectiveEntity,
                                                         f"excludes {_tags(hit)}{unread}"))
         for prerequisite in ability.prerequisites:
             applies = not prerequisite.applies_to or bool(prerequisite.applies_to & scope)
-            if applies and prerequisite.id not in attempt.conditions_met:
+            if applies and prerequisite.id not in own_met:
                 unmet.append(prerequisite.id)
                 reasons.append(Reason("prerequisite_unmet", f"prerequisite {prerequisite.id!r} of "
                                                             f"{ability.id!r} is not met"))

@@ -27,53 +27,60 @@ Planned, authorized, fully booked OpenAI-compatible model calls. Endpoints are t
 
 A derived portrayal names its pinned base in its own payload and composes over it with explicit inherit/replace/clear and field provenance. A chat or selection is frozen for one operation from one loaded library, with or without a world. See [EFFECTIVE_VIEWS.md](EFFECTIVE_VIEWS.md).
 
+### Device sync (first slice implemented: `grimoire.sync`)
+
+Two libraries exchange records directly, three-way against the last state both agreed on, and every overlapping edit becomes a named conflict kept on both devices rather than a silent overwrite. Families whose merge rules are not written yet are held back and reported. See [SYNC.md](SYNC.md).
+
 ### Library location and V1 isolation (implemented: `grimoire.library`)
 
 `resolve_library()` returns the V2 library and what selected it (`default` or `env`); `python -m grimoire.library` prints the same. Resolution is **read-only**: it creates nothing and never opens or lists a V1 directory.
 
 - `GRIMOIRE_V2_HOME` must be absolute; `~` and `~/…` (also `~\…` on Windows) expand against the home directory, `~user`, relative paths and surrounding whitespace are rejected. An empty value means unset. Symlinks are followed; a loop or unreadable component fails closed. A name the OS cannot store is refused the same way everywhere: on POSIX it must encode with `surrogateescape` (an undecodable filename byte is a real name), and on Windows it may contain no surrogate at all.
-- **Guarded V1 roots**, used only to *refuse*, never to resolve: `~/.grimoire`; `GRIMOIRE_HOME` (both as V1 read it, relative to the cwd with `link/..` left to the OS, and `~`-expanded); and the `data_dir` named by V1's bootstrap pointer `~/.grimoire.json`. The pointer is the one V1 file V2 reads, solely so a relocated V1 library is refused; if it exists but cannot be used (including a link whose target is missing), V2 refuses rather than guess.
+- **Guarded V1 roots**, used only to *refuse*, never to resolve: `~/.grimoire`; `GRIMOIRE_HOME` (both as V1 read it, relative to the cwd with `link/..` left to the OS, and `~`-expanded); and the `data_dir` named by V1's bootstrap pointer `~/.grimoire.json`. The pointer is the one V1 file V2 reads, solely so a relocated V1 library is refused; if it exists but cannot be used (including a link whose target is missing), V2 refuses rather than guess. The pointer itself is guarded too: no V2 library, report or other written path may be it or sit inside it (by the same name, alias and identity rules), whether or not it exists yet.
 - A V2 path that **is, sits inside or contains** a guarded root is refused (`V1IsolationError`). The comparison is made three ways:
   - **By name.** Path components are NFC-normalized and casefolded on every OS. On Windows, its aliases are folded as well: trailing dots and spaces, `:stream` suffixes, names made only of dots, and `\\?\` or `\\.\` prefixes. On POSIX these are distinct names.
   - **Through Linux bind mounts.** Every name a path has is read from `/proc/self/mountinfo`; on Linux and Android a missing mount table refuses.
   - **By device/inode identity.** This is taken at the nearest *existing* ancestor, so a V1 root that does not exist yet is still seen through an aliased directory (a macOS firmlink, a hard link or a junction).
 
   `GRIMOIRE_HOME`'s `..` is resolved the way that OS does: POSIX follows the link first, while Win32 collapses `..` lexically. A path beneath an existing regular file is unusable.
-- A directory with a `worlds` or `campaigns` directory **and** any V1-only root entry (`V1_ROOT_MARKERS`: `llm_connections`, `sampler_presets`, `response_presets`, `.world-staging`, `.module-staging`, `.char_macros_baked`, `prompt_layout.json`, `regex.json`, `chores.json`) is treated as a V1 library, as is anything inside it. **These names are reserved: a V2 library root must never create them.**
+- A directory with a `worlds` or `campaigns` directory **and** any V1-only root entry (`V1_ROOT_MARKERS`: `llm_connections`, `sampler_presets`, `response_presets`, `.world-staging`, `.module-staging`, `.char_macros_baked`, `prompt_layout.json`, `regex.json`, `chores.json`) is treated as a V1 library, as is anything inside it. **These names are reserved: a V2 library root must never create them.** Below an opened V2 library the store skips this fingerprint for a directory that is strictly below the library root under every name the mount table gives it, so the library's own ids (a campaign `worlds` beside one `llm_connections`) never make it look like V1; the root itself, everything above it and a directory a bind mount also names from outside the root keep it (`check_write_destination(path, library_root=root)`).
 - `check_write_destination(path)` applies the same rules to any directory V2 will write. `check_migration_paths(source, destination)` additionally requires an explicit source and a destination that does not overlap it; the source's kind, format and the approval flow belong to the migration sprints.
-- `check_report_destination(path, protected=...)` is for a single file a read-only tool writes, such as an inventory report. It refuses the file when it is, or sits inside, a guarded V1 library, a V1-looking directory or a `protected` root such as a migration's source and destination. Unlike a library destination, a parent that merely *contains* one of those is allowed.
+- `check_report_destination(path, protected=...)` is for a single file a read-only tool writes, such as an inventory report. It refuses the file when it is, or sits inside, a guarded V1 library, a V1-looking directory or a `protected` root such as a migration's source and destination. It also refuses `~/.grimoire.json`. Unlike a library destination, a parent that merely *contains* one of those is allowed.
 - **Writer obligations.** The checks are point-in-time. A writer calls `check_write_destination` immediately before creating a library, creates only the final component (its parent must already exist), re-checks after creating, and records the root's device/inode, re-verifying it at the start of each write session.
 - Known limits:
   - A V1 library nested somewhere *below* a candidate is refused only if it is a guarded root; candidates are not scanned.
-  - A not-yet-existing V1 root spelled through a UNC admin share (`\\localhost\c$\…`), a volume GUID path (`\\?\Volume{…}`) or `\\?\GLOBALROOT` is not recognized by name.
+  - Inside an opened V2 library, a V1 library that was *moved* (not mounted or linked) below the root is not fingerprinted: by then its folders are indistinguishable from the library's own. Links inside a library are refused anyway.
+  - A V1 root spelled through a UNC admin share (`\\localhost\c$\…`, `\\127.0.0.1\c$\…`), a volume GUID path (`\\?\Volume{…}`) or `\\?\GLOBALROOT\Device\…` is not recognized by name. An existing one relies on `realpath` and the device/inode check to meet the guarded root; that reliance is unverified on Windows (no Windows test exercises these spellings).
   - Casefolding approximates, but is not, NTFS's upcase table.
 
   The writer's post-creation re-check is the backstop for these.
 
 ```text
-~/.grimoire-v2/                        # target example; not implemented yet
-  catalogs/                           # optional shared, reusable definitions
-  worlds/<world>/                     # self-contained setting and authored content
+~/.grimoire-v2/                       # the default library root (implemented; exact layout in STORAGE.md)
+  grimoire-library.json               # library marker and format
+  sources/<segments>/_source/         # one source: manifest, definition revisions, its image objects and placements (018)
   campaigns/<campaign>/
-    instances/                        # individual entities and overrides
     scope.json                        # the play scope; world optional (107, see CHATS.md)
     chats/                            # one record per chat thread (107)
-    holdings/<kind>/                  # counted stacks per holder instance (023, see HOLDINGS.md)
-    scenes/                           # accepted authored contributions, exact text
-    events/                           # committed happenings and consequences
-    evidence/                         # observations, reports, beliefs and provenance
-    relations/                        # scoped typed relationship records
+    instances/<kind>/                 # individual entities and overrides
+    relations/                        # scoped typed relationship records (017)
+    events/                           # objective 012 events (020)
+    evidence/                         # observations, reports, beliefs, rulings and the knowledge log (020)
     accepted/                         # accepted fictional events and their receipts (021)
     wrapups/                          # retrospective scene summaries; never actor memory (021)
-  assets/                             # content-addressed image blobs (018; objects and placements live with their owner)
-  .cache/                             # disposable derived graph, search, embeddings
+    holdings/<kind>/                  # counted stacks per holder instance (023, see HOLDINGS.md)
+    images/, placements/              # the campaign's own image objects and placements (018)
+  assets/blobs/                       # content-addressed image bytes (018)
+  .txn/, .conflicts/, .sync/          # writer journal, preserved conflict versions, device-local sync state
 ```
+
+Not implemented yet: optional shared `catalogs/` and `worlds/` folders as named here (today every source, a world included, lives under `sources/`), `campaigns/<campaign>/scenes/` for accepted authored contributions, and a disposable `.cache/` for derived graph, search and embeddings.
 
 Image objects and placements (018) deliberately live under their owning source's `_source/` or their campaign, not in `assets/`; only content-addressed blobs are library-global. See [IMAGES](IMAGES.md). The native store's accepted first-slice layout (`sources/<segments>/_source/…`, `campaigns/<id>/instances/…`) and its revision, recovery and isolation contract are in [STORAGE.md](STORAGE.md); the first-slice relation schema (`campaigns/<id>/relations/`) and graph semantics are in [GRAPH.md](GRAPH.md); accepted turn effects (`accepted/`, `wrapups/`) are in [EFFECTS.md](EFFECTS.md). `accepted/` is not `events/`: an accepted event is an authority record with operations and receipts, while `events/` holds 020's objective 012 `Event`s, bridged by `as_knowledge_event`. Data files must remain usable by humans and external agents. Derived indexes, embeddings and cached actor views are disposable and may not become a second canonical store.
 
-## Wave 2 independent domain and storage contracts (planned)
+## Wave 2 independent domain and storage contracts
 
-The authoritative first-slice ownership and acceptance rules are in [Wave 2 handoffs](roadmap/WAVE2_HANDOFFS.md). This section is a design decision, **not** an assertion that the V2 headless runtime already implements it.
+The authoritative first-slice ownership and acceptance rules are in [Wave 2 handoffs](roadmap/WAVE2_HANDOFFS.md). Each first slice below is implemented as a headless library with synthetic tests (015's live baseline capture is still pending); none of it is a playable runtime yet.
 
 - **Entity type versus persistence:** `009` owns native typed, compositional entity definitions/instances and the mapping from actor control roles to `InstanceRef`; the low-level store `010` reads/writes **generic source-qualified record envelopes** with revision preconditions and opaque authored payloads. It is intentionally not a `CharacterCardRecord`, a special `PC` writer or a universal graph database. Both sprints independently consume Wave 1 identity and can develop concurrently; 022 joins their interfaces in Wave 3.
 - **Read-only legacy inspection:** `011` must be a **runnable V0.2.1 inventory scanner** with a deterministic, source-faithful manifest separating legacy picture objects, bytes and occurrence-specific art placements. It does not write canonical V2 records and does not wait for 009/010. First slice implemented as `grimoire.migrate_v1` ([contract](MIGRATION_INVENTORY.md)); a report may be written only where `grimoire.library.check_report_destination` allows (never in, or under, a source, destination or V1 library). 026 owns the first reviewed apply.
@@ -83,7 +90,7 @@ The authoritative first-slice ownership and acceptance rules are in [Wave 2 hand
 
 Wave 2's independent exit proofs are both **native revisioned storage with typed definitions/instances** and a **working, read-only V0.2.1 asset inventory**. Model/provider and narrative contracts have additional first-slice tests; none makes V2 playable before Wave 5.
 
-## World-optional chats and reusable characters (planned after 010)
+## World-optional chats and reusable characters
 
 A reusable authored character may exist in a standalone catalog **outside any world**. Elderfen's Regency, Modern, Mecha and Vampire character portrayals can declare **explicit pinned derivation links** to an optional shared Mara concept, retaining distinct authored occupations, species, biographies, relationships and sources. **Same name does not mean same individual or derivation.** The 009 entity implementation composes definition-to-instance facets, but it does *not* compose one definition from another; that first proof belongs to **022** (first slice implemented: [EFFECTIVE_VIEWS](EFFECTIVE_VIEWS.md)), with explicit inherit/replace/clear and source-revision provenance. Art, voice, source merge and relation remapping remain separately owned.
 

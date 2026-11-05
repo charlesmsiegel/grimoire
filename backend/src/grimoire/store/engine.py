@@ -43,7 +43,7 @@ from .errors import LinkRefused, NameCollision, RecoveryFailed, StoreError, Unst
 from .guard import Guard
 from .journal import REGENERABLE_KINDS, Entry, Journal, is_staging_name, parse
 from .jsonfmt import MAX_FILE_BYTES, etag
-from .layout import DISCARD_MARKER, JOURNAL, REPAIR_MARKER, TXN, Parts, conflict_parts, name_key
+from .layout import DISCARD_MARKER, JOURNAL, REPAIR_MARKER, TXN, Parts, classify, conflict_parts, name_key
 
 Presence = Literal["absent", "present", "mismatch"]
 #: Distinct versions kept beside one conflict name before giving up (a backstop, never reached).
@@ -182,9 +182,30 @@ class Access:
         self.check_staging()
         return self.ops.exists(self.path((TXN, DISCARD_MARKER)))
 
-    def make_parent(self, parts: Parts) -> None:
-        if self.presence(parts[:-1]) != "present":
-            self.ops.make_dirs(self.path(parts[:-1]))
+    def make_parent(self, parts: Parts) -> list[Parts]:
+        """Create ``parts``'s missing directories; returns the ones created, outermost first."""
+        folder = parts[:-1]
+        if self.presence(folder) == "present":
+            return []
+        first = next(index for index in range(1, len(folder) + 1) if self.presence(folder[:index]) != "present")
+        self.ops.make_dirs(self.path(folder))
+        return [folder[:index] for index in range(first, len(folder) + 1)]
+
+    def remove_empty(self, created: list[Parts]) -> None:
+        """Undo `make_parent` for a commit refused before its commit point: remove, innermost
+        first, each directory it created that is still an empty real directory. Anything that
+        appeared in one since (another writer's file) keeps it and every directory above it."""
+        for folder in sorted(set(created), key=len, reverse=True):
+            path = self.path(folder)
+            try:
+                self.guard.check_read(folder)  # never through a link (or a swapped root) into elsewhere
+                info = lstat_or_none(path)
+                if info is None or not stat.S_ISDIR(info.st_mode) or is_link(path):
+                    continue
+                if not self.ops.list_dir(path):
+                    self.ops.remove_dir(path)
+            except (OSError, StoreError, ValueError):  # LibraryPathError is a ValueError
+                continue  # left behind, harmless: an empty directory holds no record
 
 
 @dataclass
@@ -193,7 +214,8 @@ class Settlement:
 
     published: list[tuple[str, str]] = field(default_factory=list)  # (target, etag)
     preserved: list[str] = field(default_factory=list)  # conflict paths
-    incomplete: list[str] = field(default_factory=list)  # targets whose staging vanished
+    incomplete: list[str] = field(default_factory=list)  # targets not written (vanished or held back)
+    vanished: bool = False  # some staged file was gone (not only kept aside)
     dropped: list[str] = field(default_factory=list)  # keep/state targets set aside unpublished
     aborted: bool = False
 
@@ -323,27 +345,63 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
                 journal = journal.aborted()
                 _replace_journal(access, journal)
                 break
-    if journal.state == "commit" and any(entry.kind == "hold" for entry in journal.entries):
-        # A revision replace publishes only with the hold of the bytes it replaces (019). Live, a
-        # vanished staged file means nothing is published yet; in recovery, a hold that vanished
-        # unpublished while another entry is still staged proves the same. Either way the pair is
-        # abandoned whole, so the replaced bytes are never lost.
-        vanished = [entry for entry in journal.entries
-                    if entry.temp not in staged and access.etag_of(entry.target) != entry.new]
-        if vanished and (live or (any(entry.kind == "hold" for entry in vanished)
-                                  and any(entry.temp in staged for entry in journal.entries))):
-            journal = journal.aborted()
+    vanish_abort = False
+    if journal.state == "commit" and not all(entry.temp in staged for entry in journal.entries):
+        # A staged file is gone (another program removed it). An entry counts as published only when
+        # its target already holds its new bytes; a missing one whose target does not is unwritable.
+        # While nothing is published -- always true live, right after the commit point -- the whole
+        # journal is abandoned, so a head move never lands without its revision. A revision replace
+        # is abandoned with its hold the same way (019): in recovery, a hold that vanished
+        # unpublished while another entry is still staged proves nothing was published either.
+        current = {entry.target: access.etag_of(entry.target) for entry in journal.entries}
+        missing = [entry for entry in journal.entries
+                   if entry.temp not in staged and current[entry.target] != entry.new]
+        published = any(entry.temp not in staged and current[entry.target] == entry.new
+                        for entry in journal.entries)
+        held = (any(entry.kind == "hold" for entry in missing)
+                and any(entry.temp in staged for entry in journal.entries))
+        if missing and (live or not published or held):
+            journal, vanish_abort = journal.aborted(), True
             _replace_journal(access, journal)
+    unwritten = set()  # targets of entries that will never be published
+    pending_manifests = {_manifest_source(entry.target) for entry in journal.entries
+                         if entry.temp in staged} - {None}
     for entry in journal.entries:
         if entry.temp not in staged:
-            current = access.etag_of(entry.target)
-            vanished = current != entry.new if live else (entry.old != entry.new and current == entry.old)
-            if journal.state == "commit" and vanished:
+            current_etag = access.etag_of(entry.target)
+            vanished = current_etag != entry.new if live else (entry.old != entry.new and current_etag == entry.old)
+            if (not live and journal.state == "commit" and current_etag != entry.new
+                    and _source_of_revision(entry.target) in pending_manifests):
+                # A revision an earlier recovery kept aside (its slot held other bytes) still holds
+                # back its head move: that decision lived only in memory and the recovery crashed.
+                vanished = True
+            if (journal.state == "commit" or vanish_abort) and vanished:
                 settlement.incomplete.append(_text(entry.target))
+                settlement.vanished = True
+                unwritten.add(entry.target)
+    held_sources = {_source_of_revision(entry.target) for entry in journal.entries
+                    if entry.target in unwritten} - {None}
+    def hold_back(entry: Entry, digest: str | None) -> None:
+        _preserve(access, entry, settlement, digest)
+        source = _source_of_revision(entry.target)
+        if journal.state == "commit" and source is not None:
+            # A revision record that will not be written holds back its source's manifest.
+            held_sources.add(source)
+            settlement.incomplete.append(_text(entry.target))
+
+    # Manifests last, whatever order the journal lists them in, so every revision is decided first.
+    for entry in sorted(journal.entries, key=lambda entry: _manifest_source(entry.target) is not None):
+        if entry.temp not in staged:
             continue
         digest = temp_digest(entry)
         if journal.state == "abort" or digest != entry.new:
+            hold_back(entry, digest)
+            continue
+        if _manifest_source(entry.target) in held_sources:
+            # Some entries were published already, so the rest finish -- but never a head move whose
+            # revision record will not be: its staged bytes are kept under .conflicts, not lost.
             _preserve(access, entry, settlement, digest)
+            settlement.incomplete.append(_text(entry.target))
             continue
         _prepare(access, entry)
         current = access.etag_of(entry.target)  # per-entry guard, immediately before acting
@@ -352,11 +410,21 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
         elif current == entry.new:
             access.ops.remove(access.path((TXN, entry.temp)))
         else:
-            _preserve(access, entry, settlement, digest)
+            hold_back(entry, digest)
     settlement.aborted = journal.state == "abort"
     access.ops.remove(access.journal)
     clean_staging(access)
     return settlement
+
+
+def _source_of_revision(target: Parts) -> str | None:
+    found = classify(target)
+    return found[1].source if found is not None and found[0] == "definition" else None  # type: ignore[union-attr]
+
+
+def _manifest_source(target: Parts) -> str | None:
+    found = classify(target)
+    return found[1] if found is not None and found[0] == "manifest" else None  # type: ignore[return-value]
 
 
 def clean_staging(access: Access) -> None:

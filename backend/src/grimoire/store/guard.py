@@ -129,7 +129,8 @@ class Guard:
             elif not final:
                 raise UnstorableIdentifier(f"{path} exists but is not a directory")
         if deepest not in self._isolated:  # sees bind mounts that give a V1 directory a name here
-            check_write_destination(deepest)
+            # Below the root, what the library's own ids spell is never read as V1's layout.
+            check_write_destination(deepest, library_root=self.root)
             self._isolated.add(deepest)
         if staging_device is not None and _stat(deepest).st_dev != staging_device:  # type: ignore[union-attr]
             raise CrossDevice(f"{path} is on a different filesystem from the staging directory")

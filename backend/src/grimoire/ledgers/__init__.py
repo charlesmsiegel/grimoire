@@ -10,9 +10,9 @@ from grimoire.store.errors import AuthorityUnavailable, LedgerBroken, LedgerInva
 
 from .codec import ControlChange
 from .security import DurableAuthority
-from .sovereignty import ControlEvent, SovereigntyLedger, SovereigntyState
+from .sovereignty import ControlEvent, SovereigntyLedger, SovereigntyState, sovereignty_actor_ids
 
 __all__ = [
     "AuthorityUnavailable", "ControlChange", "ControlEvent", "DurableAuthority", "LedgerBroken",
-    "LedgerInvalid", "SovereigntyLedger", "SovereigntyState",
+    "LedgerInvalid", "SovereigntyLedger", "SovereigntyState", "sovereignty_actor_ids",
 ]

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import hashlib
 import os
 import re
 import stat
@@ -40,26 +41,27 @@ from .envelope import (
     source_document,
 )
 from .errors import (
-    BlobCorrupt, CommitIncomplete, ImmutableBlob, ImmutableImage, ImmutableRevision, InvalidEnvelope,
-    InvalidSourceState, LinkRefused, NameCollision, NotALibrary, LedgerBusy, PendingRecovery, RecordNotFound,
+    BlobCorrupt, CommitIncomplete, ImmutableBlob, ImmutableImage, ImmutableRevision, ImpreciseNumber, InstanceIdConflict,
+    InvalidBlob, InvalidEnvelope, InvalidSourceState, LinkRefused, NameCollision, NotALibrary, LedgerBusy, PendingRecovery,
+    RecordNotFound,
     RecoveryBlocked, RecoveryFailed, StaleWrite, StoreError, UnstorableIdentifier, WriteConflict, WriteDenied,
 )
 from .replica import CanonicalScan
 from .guard import Guard, Limits, RootIdentity
 from .journal import Entry, Journal, is_staging_name
-from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, render
+from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, reemitted_imprecise, render
 from .layout import (
-    ACCEPTED, CAMPAIGNS, CONFLICTS, DISCARD_MARKER, IMAGES, INSTANCES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
+    ACCEPTED, CAMPAIGNS, CHATS, CONFLICTS, DISCARD_MARKER, IMAGES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
     PLACEMENTS, REPAIR_MARKER, SYNC, SYNC_PEERS, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify, conflict_parts,
-    definition_parts, image_parts, instance_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
-    ledger_parts, ledger_seq, logical, manifest_parts, name_key, sync_state_parts,
+    definition_parts, image_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
+    SUFFIX, ledger_parts, ledger_seq, logical, manifest_parts, name_key, sync_state_parts,
 )
-from .ledger import Head, Ledger, read_ledger, render_batches
+from .ledger import Head, Ledger, read_ledger, render_batches, scan_ledger
 from .loader import (
     CampaignHoldingRecords, CampaignRecords, CampaignRelations, KnowledgeScan, LibraryView, LoadProblem,
     StoredAssetRecord, StoredDefinition, StoredKnowledgeRecord, StoredRecord, StoredScopeRecord, StoredSource,
 )
-from .media import MAX_BLOB_BYTES, ImageBlob
+from .media import MAX_BLOB_BYTES, BlobCopy, ImageBlob, sniff
 from .lock import Locker, OsLocker
 
 #: Authorization outcomes that concern one path; a partial commit drops those puts (019).
@@ -564,6 +566,54 @@ class LibraryStore:
             raise BlobCorrupt(sha256, etag(data))
         return data
 
+    @staticmethod
+    def _blob_key(path: str) -> tuple[str, str]:
+        found = classify(tuple(path.split("/"))) if type(path) is str else None
+        if found is None or found[0] != "blob":
+            raise ValueError(f"{path!r} is not a canonical blob path")
+        return found[1]  # type: ignore[return-value]
+
+    def verify_blob(self, path: str) -> str:
+        """The etag of the blob at canonical ``path`` after reading it once (sync, 019/C2).
+
+        ``BlobCorrupt`` unless its bytes are non-empty, at most ``MAX_BLOB_BYTES``, hash to its name
+        and sniff to its extension; ``RecordNotFound`` if absent; a look-alike spelling raises
+        ``NameCollision``, a link ``LinkRefused`` and a non-regular file ``UnstorableIdentifier``.
+        """
+        sha256, ext = self._blob_key(path)
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                parts, presence, info = self._blob_info(sha256, ext)
+            if presence == "lookalike":
+                raise NameCollision(f"{path} collides with a differently spelled existing entry")
+            if info is None:
+                raise RecordNotFound(path)
+            if not 0 < info.st_size <= MAX_BLOB_BYTES:
+                raise BlobCorrupt(sha256, None)
+            data = self._access.read(parts)
+        if data is None:
+            raise RecordNotFound(path)
+        tag = etag(data)
+        if not 0 < len(data) <= MAX_BLOB_BYTES or tag != "sha256:" + sha256 or sniff(data) != ext:
+            raise BlobCorrupt(sha256, tag)
+        return tag
+
+    def read_blob_exact(self, path: str, size: int) -> bytes | None:
+        """The bytes of the regular blob file at canonical ``path`` if it is exactly ``size`` bytes,
+        else ``None``; unverified (``put_blob_exact`` verifies each load). Never through a link."""
+        sha256, ext = self._blob_key(path)
+        with self.lock:
+            self._require_consistent()
+            try:
+                parts, _, info = self._blob_info(sha256, ext)
+            except (LinkRefused, UnstorableIdentifier):
+                return None
+            if info is None or info.st_size != size:
+                return None
+            data = self._access.read(parts)
+        return data if data is not None and len(data) == size else None
+
     def list_images(self, scope: str) -> tuple[tuple[ImageRef, ...], tuple[LoadProblem, ...]]:
         """Canonical image files of one source or ``campaign:<id>``, plus problems; contents are not read."""
         folder = image_parts(ImageRef(scope, "x"))[:-1]
@@ -626,6 +676,16 @@ class LibraryStore:
             with self._access.cached_listings():
                 return self._access.presence((CAMPAIGNS, campaign_id))
 
+    def campaign_authority_presence(self, campaign_id: str) -> str:
+        """``absent``, ``present`` or ``mismatch`` for the campaign's authority ledger folder
+        (``authority/campaigns/<id>``, 010b's sovereignty ledger), which outlives ``campaigns/<id>``
+        when that folder is deleted by hand. Decided from listings, as ``campaign_presence``."""
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return self._access.presence(ledger_folder(f"{CAMPAIGNS}/{campaign_id}"))
+
     def campaign_instances(self, campaign_id: str) -> tuple[InstanceRef, ...]:
         """Every canonically named instance file of one campaign, across kinds; reads no content."""
         validate_segment(campaign_id, "campaign_id")
@@ -678,6 +738,20 @@ class LibraryStore:
             with self._access.cached_listings():
                 return loader.campaign_holding_names(self._access, campaign_id)
 
+    def campaign_chats(self, campaign_id: str) -> CampaignRecords:
+        """One campaign's chat records (107) and their problems, as ``load()`` reports them, reading only
+        that campaign's ``chats/`` folder (so an allocator never loads the whole library)."""
+        return self._campaign_family(campaign_id, CHATS)
+
+    def campaign_placement_subjects(self, campaign_id: str) -> tuple[tuple[InstanceRef, ...], bool]:
+        """The instance subjects of one campaign's placements (018), from listings only, and whether
+        the listing was complete (``False`` if a folder that could hold one is a link or unreadable)."""
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return loader.campaign_placement_subjects(self._access, campaign_id)
+
     def campaign_holdings(self, campaign_id: str) -> CampaignHoldingRecords:
         """One campaign's holdings records (023) and their problems, contained per file as ``load()``
         contains the other families (``load()`` itself skips ``holdings/``).
@@ -689,6 +763,16 @@ class LibraryStore:
             self._require_consistent()
             with self._access.cached_listings():
                 return loader.campaign_holdings(self._access, campaign_id)
+
+    def campaign_ledger_documents(self, campaign_id: str) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        """The campaign's authority ledger batches (``authority/campaigns/<id>``) as raw parsed JSON,
+        with no chain or entry check, and the paths that could hold batches but cannot be read.
+        For reserving the ids they name; replay still goes through ``read_ledger``."""
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return scan_ledger(self._access, f"campaigns/{campaign_id}")
 
     def source_facts(self) -> SourceFacts:
         """One verified answer to "which sources would ``load()`` exclude?", reusable by a caller.
@@ -986,7 +1070,7 @@ def _scan_verdict(scan: loader.SourceScan) -> str | None:
 class _Put:
     parts: Parts
     address: ResourcePath | None  # what is authorized; None for trusted ledger batches and sync state
-    data: bytes
+    data: bytes | None  # None only for a lazily loaded blob copy (``reader``)
     expected: str | None
     #: records only; None for ledger batches, kept versions and sync state
     envelope: RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord | AssetRecord | ImageBlob | None
@@ -996,6 +1080,27 @@ class _Put:
     regenerable: bool = False  # exact bytes another library still holds: dropped, never preserved
     allowed: frozenset[str] = frozenset()  # manifest etags whose references a replace may ignore
     record: Parts = ()  # a kept version: the record it keeps a version of
+    #: bytes this store re-encoded from a parsed document (``put``, sync state), never another
+    #: library's exact bytes: only these can round a stored number (``imprecise_number``)
+    rendered: bool = False
+    #: ``put_blob_exact``: loads the bytes on demand (one blob at a time), checked against ``tag``
+    reader: Callable[[], bytes] | None = None
+    tag: str = ""  # the etag of a lazy put's bytes (its blob name); otherwise computed from ``data``
+
+    def payload(self) -> bytes:
+        """The bytes to authorize and stage: ``data``, or a fresh load of a lazy blob copy."""
+        if self.reader is not None:
+            return self.reader()
+        assert self.data is not None
+        return self.data
+
+    @property
+    def digest(self) -> str:
+        """The etag of what this put writes, without loading a lazy blob."""
+        if self.reader is not None:
+            return self.tag
+        assert self.data is not None
+        return etag(self.data)
 
     @property
     def ledger(self) -> bool:
@@ -1114,7 +1219,8 @@ class Transaction:
             raise InvalidEnvelope(f"{'/'.join(parts)} is written twice in one transaction")
         address = logical(parts)
         data = envelope.data if isinstance(envelope, ImageBlob) else render(document)  # type: ignore[arg-type]
-        self._add(_Put(parts, address, data, expected, envelope, "record", str(address)))
+        self._add(_Put(parts, address, data, expected, envelope, "record", str(address),
+                       rendered=not isinstance(envelope, ImageBlob)))
         return str(address)
 
     def _add(self, put: _Put) -> None:
@@ -1158,10 +1264,46 @@ class Transaction:
                 raise ImmutableRevision(f"{envelope.address} exists; add a new revision and move the head")
         elif replace_unreferenced:
             raise InvalidEnvelope("only a definition revision is replaced as unreferenced")
+        if isinstance(envelope, AssetRecord) and envelope.is_image and expected is not None:
+            raise ImmutableImage(f"{envelope.address} exists; a different picture is a new image object")
         address = logical(parts)
         self._add(_Put(parts, address, bytes(data), expected, envelope, "record", str(address),
                        replace_unreferenced, regenerable=regenerable,
                        allowed=frozenset(allowed_manifests) if replace_unreferenced else frozenset()))
+        return str(address)
+
+    def put_blob_exact(self, path: str, read: Callable[[], bytes | None], *, size: int) -> str:
+        """Stage another library's blob at canonical ``path`` (sync, 019/C2): create-only, loaded on demand.
+
+        ``read`` is called only when the commit needs the bytes (authorization, staging, ``preview``),
+        one blob at a time, and never by ``check``. Every load must be exactly ``size`` bytes that
+        hash to the blob's name and sniff to its extension, else ``StaleWrite`` (the origin changed
+        since it was planned). The bytes still exist in the other library, so an aborted commit drops
+        them (journal kind ``replica``); sync never repairs a blob, so the target must be absent.
+        """
+        if type(path) is not str:
+            raise InvalidEnvelope("path must be text")
+        parts = tuple(path.split("/"))
+        found = classify(parts)
+        if found is None or found[0] != "blob":
+            error = InvalidEnvelope(f"{path} is not a canonical blob path")
+            error.code = "not_canonical"  # type: ignore[attr-defined]
+            raise error
+        if type(size) is not int or size < 1:
+            raise InvalidBlob("blob data is empty", "empty")
+        if size > MAX_BLOB_BYTES:
+            raise InvalidBlob(f"blob data is larger than {MAX_BLOB_BYTES} bytes", "too_large")
+        sha256, ext = found[1]  # type: ignore[misc]
+
+        def load() -> bytes:
+            data = read()
+            if (type(data) is not bytes or len(data) != size or sniff(data) != ext
+                    or hashlib.sha256(data).hexdigest() != sha256):
+                raise StaleWrite([(path, "changed")])
+            return data
+        address = logical(parts)
+        self._add(_Put(parts, address, None, None, BlobCopy(sha256, ext, size), "record", str(address),
+                       regenerable=True, reader=load, tag="sha256:" + sha256))
         return str(address)
 
     def keep_version(self, path: str, data: bytes, slot: int | None = None, *, regenerable: bool = False) -> str:
@@ -1219,13 +1361,18 @@ class Transaction:
         parts = sync_state_parts(name)
         _check_state_bytes(data)
         key = "/".join(parts)
-        self._add(_Put(parts, None, bytes(data), expected, None, "state", key))
+        self._add(_Put(parts, None, bytes(data), expected, None, "state", key, rendered=True))
         return key
 
     def preview(self) -> dict[str, bytes]:
         """The exact bytes each target will hold, keyed by what is approved: a record's logical
-        address, a kept version's ``kept/...`` address, or a ``.sync/...`` path (not authorized)."""
-        return {put.key: put.data for put in self._puts.values()}
+        address, a kept version's ``kept/...`` address, or a ``.sync/...`` path (not authorized).
+        A lazy blob copy (``put_blob_exact``) is loaded here, one at a time."""
+        return {put.key: put.payload() for put in self._puts.values()}
+
+    def staged(self) -> tuple[str, ...]:
+        """The keys ``preview`` would return, without loading any bytes."""
+        return tuple(put.key for put in self._puts.values())
 
     def check(self) -> None:
         """Run commit steps 1-6 read-only; raises what ``commit`` would raise before authorizing.
@@ -1317,6 +1464,7 @@ class _Commit:
         self.consumed: list[str] = []
         self.denied: frozenset[str] = frozenset()
         self.dropped: frozenset[str] = frozenset()
+        self._created: list[Parts] = []  # directories staging made, undone if the commit is refused
 
     def preflight(self) -> int:
         """Steps 1-6 (and 6b): everything decidable before authorization; reads only."""
@@ -1326,6 +1474,7 @@ class _Commit:
             self._check_local_roots()
             self._check_revisions()                       # 4. compare-and-swap
             self._check_names()                           # 5. collisions
+            self._check_instance_kinds()                  # 5b. one instance id per campaign, across kinds
             if not any(put.ledger for put in self.puts):
                 self._check_sources()                     # 6. loader-consistent sources
         return staging
@@ -1377,21 +1526,28 @@ class _Commit:
         self.store._staging = True                        # nested ledger commits are refused from here
         entries = self._stage(staging)                    # 8. directories and temps
         journal = Journal("commit", entries)
-        self._recheck(staging)                            # still ours, just before the commit point
+        try:
+            self._recheck(staging)                        # still ours, just before the commit point
+        except Exception as error:                        # refused: nothing committed, undo step 8
+            if self._still_verifiable():  # never clean up through a root or .txn that failed the check
+                self._unstage([self.access.path((TXN, entry.temp)) for entry in entries])
+            self._note(error)
+            raise
         self._commit_point(journal)                       # 9. journal replace
         try:
             settlement = engine.settle(self.access, journal, live=True)  # 10-12
         except (OSError, StoreError, ValueError) as error:
             raise CommitIncomplete(f"failed after the commit point; recovery will finish it: {error}") from error
+        if settlement.vanished:  # checked first: a vanished staged file abandons the whole commit
+            kept = f"; preserved: {', '.join(settlement.preserved)}" if settlement.preserved else ""
+            raise CommitIncomplete("staged files vanished before publication (removed by another program?); "
+                                   f"not written: {', '.join(settlement.incomplete)}{kept}")
         if settlement.preserved or settlement.dropped or settlement.aborted:
             raise WriteConflict(settlement.preserved, settlement.published, settlement.dropped)
-        if settlement.incomplete:
-            raise CommitIncomplete("staged files vanished before publication (removed by another program?); "
-                                   f"not written: {', '.join(settlement.incomplete)}")
         return self._result()
 
     def _result(self) -> CommitResult:
-        return CommitResult(MappingProxyType({put.key: etag(put.data) for put in self.puts}),
+        return CommitResult(MappingProxyType({put.key: put.digest for put in self.puts}),
                             self.denied, tuple(self.consumed), self.dropped)
 
     def _prune(self, denied: list[int]) -> None:
@@ -1440,11 +1596,11 @@ class _Commit:
         for put in self.puts:
             guard.check_write(put.parts, staging_device=staging.st_dev)
             if put.journal_kind == "publish":  # replicas, keeps and state are dropped; a hold takes its own slots
-                guard.check_write(conflict_parts(put.parts, etag(put.data)), staging_device=staging.st_dev)
+                guard.check_write(conflict_parts(put.parts, put.digest), staging_device=staging.st_dev)
         return staging.st_dev
 
     def _check_revisions(self) -> None:
-        stale = []
+        stale, imprecise = [], {}
         for put in self.puts:
             data = self.access.read(put.parts)
             current = None if data is None else etag(data)
@@ -1453,15 +1609,72 @@ class _Commit:
                               "absent" if current is None else "changed"))
             elif data is not None and put.kind == "record" and _unsupported(data, put.envelope):
                 stale.append(("/".join(put.parts), "unsupported_format"))
+            elif data is not None and put.rendered and (where := reemitted_imprecise(data, put.data)):
+                # The document was read as floats; writing it back would silently change these numbers.
+                imprecise["/".join(put.parts)] = where
+            elif (data is None and put.rendered and (head := self._head_revision_bytes(put.parts)) is not None
+                  and (where := reemitted_imprecise(head, put.data))):
+                # A definition is edited by writing a new revision: compare it with the head it replaces.
+                imprecise["/".join(put.parts)] = where
         if stale:
             raise StaleWrite(stale)
+        if imprecise:
+            raise ImpreciseNumber(imprecise)
+
+    def _head_revision_bytes(self, parts: Parts) -> bytes | None:
+        """For a new definition revision, the bytes of its entity's head on disk now (the revision an
+        edit was read from): the declared head, or the one other revision when none is declared."""
+        found = classify(parts)
+        if found is None or found[0] != "definition":
+            return None
+        ref = found[1]
+        assert isinstance(ref, SourceRef)
+        try:
+            manifest = self.access.read(manifest_parts(ref.source))
+            heads = parse_strict(manifest).get("heads") if manifest is not None else None
+            head = heads.get(f"{ref.kind}/{ref.entity_id}") if isinstance(heads, Mapping) else None
+            if head is None:  # no declared head: the entity's one other revision is its head
+                folder = definition_parts(ref)[:-1]
+                others = [name[:-len(SUFFIX)] for name in self.access.list_dir(folder)
+                          if name.endswith(SUFFIX) and name != ref.revision + SUFFIX]
+                head = others[0] if len(others) == 1 else None
+            if type(head) is not str or head == ref.revision:
+                return None
+            return self.access.read(definition_parts(ref.unpinned().at(head)))
+        except (JsonError, StoreError, ValueError, OSError):
+            return None  # an unreadable head is the loader's to report; there is nothing to compare
 
     def _check_names(self) -> None:
         for put in self.puts:
             if self.access.presence(put.parts) == "mismatch":
                 raise NameCollision(f"{'/'.join(put.parts)} collides with a differently spelled existing entry")
             if put.journal_kind == "publish":  # a hold is preserved into its own folder's next slot
-                self.access.check_conflict_folder(conflict_parts(put.parts, etag(put.data)))
+                self.access.check_conflict_folder(conflict_parts(put.parts, put.digest))
+
+    def _check_instance_kinds(self) -> None:
+        """A new instance file never shares its id with an instance of another kind in its campaign,
+        on disk or created in this transaction (IDENTITY.md). Refused per path (``InstanceIdConflict``);
+        an edit of an existing pair's member is allowed, so a human can repair the pair. Ids are
+        compared folded, so a look-alike file or kind folder counts."""
+        created: dict[tuple[str, str], list[InstanceRef]] = {}
+        for put in self.puts:
+            if put.kind != "record" or put.expected is not None:
+                continue
+            hit = classify(put.parts)
+            if hit is not None and hit[0] == "instance":
+                ref = hit[1]
+                assert isinstance(ref, InstanceRef)
+                created.setdefault((ref.campaign_id, name_key(ref.instance_id)), []).append(ref)
+        refused, listed = [], {}
+        for (campaign, folded), refs in created.items():
+            if campaign not in listed:  # one listing per campaign, however many instances a sync copies
+                listed[campaign] = loader.instance_kinds(self.access, campaign)
+            on_disk = listed[campaign].get(folded, set())
+            for ref in refs:
+                if (on_disk - {ref.kind}) or any(other.kind != ref.kind for other in refs):
+                    refused.append("/".join(address_parts(ref)))
+        if refused:
+            raise InstanceIdConflict(sorted(refused))
 
     def _check_sources(self) -> None:
         touched: dict[str, tuple[SourceManifest | None, list[SourceRef]]] = {}
@@ -1526,8 +1739,14 @@ class _Commit:
             if put.address is None:  # sync state: trusted bookkeeping, like the journal
                 continue
             text = str(put.address)
-            decision = self.handle.authorize(Permission.APPLY, text, payload=put.data,  # type: ignore[attr-defined]
+            try:
+                payload = put.payload()  # a lazy blob is loaded here, one at a time, and dropped
+            except BaseException as error:  # the origin changed: report approvals already spent
+                self._note(error)
+                raise
+            decision = self.handle.authorize(Permission.APPLY, text, payload=payload,  # type: ignore[attr-defined]
                                              approval_id=self.approvals.get(text))
+            del payload
             decisions.append(decision)
             if getattr(decision, "approval_id", None) is not None:
                 self.consumed.append(decision.approval_id)
@@ -1558,22 +1777,42 @@ class _Commit:
             self.access.guard.check_write(put.parts, staging_device=staging)
 
     def _stage(self, staging: int) -> tuple[Entry, ...]:
-        self._recheck(staging)
         access, temps = self.access, []
         try:
+            self._recheck(staging)
             entries = []
-            for put in self.puts:
-                access.make_parent(put.parts)
+            # Manifests are staged, and so published, after everything else: a manifest that has
+            # landed then proves the revisions its heads name landed first (or were kept aside).
+            for put in sorted(self.puts, key=lambda put: _is_manifest(put.parts)):
+                self._created.extend(access.make_parent(put.parts))
                 temp = access.ops.make_temp(access.path((TXN,)), prefix="rec", suffix=".new")
                 temps.append(temp)
-                access.ops.write_bytes(temp, put.data)
-                entries.append(Entry(put.parts, os.path.basename(temp), put.expected, etag(put.data),
+                access.ops.write_bytes(temp, put.payload())
+                entries.append(Entry(put.parts, os.path.basename(temp), put.expected, put.digest,
                                      put.journal_kind))  # type: ignore[arg-type]
             return tuple(entries)
-        except OSError as error:
-            self._discard(temps)
+        except Exception as error:  # including a lazy reader's own refusal (a blob's origin store)
+            if self._still_verifiable():
+                self._unstage(temps)
             self._note(error)
             raise
+
+    def _still_verifiable(self) -> bool:
+        """Whether the root and ``.txn`` still pass their checks, so paths under them may be removed.
+        When they do not (a ``.txn`` swapped for a link, a replaced root), the temps and directories
+        are left for the next recovery's staging cleanup rather than removed through elsewhere."""
+        try:
+            self.access.guard.check_root()
+            self.access.check_staging()
+        except (OSError, StoreError, ValueError):  # LibraryPathError is a ValueError
+            return False
+        return True
+
+    def _unstage(self, temps: list[str]) -> None:
+        """A commit refused before its commit point leaves no temp and no directory it created
+        that is still empty (one another writer has put something in since is kept)."""
+        self._discard(temps)
+        self.access.remove_empty(self._created)
 
     def _discard(self, temps: list[str]) -> None:
         for temp in temps:
@@ -1595,15 +1834,20 @@ class _Commit:
                 committed = True  # unknown: let recovery decide
             if committed:
                 raise CommitIncomplete(f"the commit point may have been reached: {error}") from error
-            self._discard([*(access.path((TXN, entry.temp)) for entry in journal.entries),
+            self._unstage([*(access.path((TXN, entry.temp)) for entry in journal.entries),
                            *([temp] if temp else [])])
             self._note(error)
             raise
 
 
+def _is_manifest(parts: Parts) -> bool:
+    found = classify(parts)
+    return found is not None and found[0] == "manifest"
+
+
 def _unsupported(data: bytes, envelope: object) -> bool:
     """Whether the current file is a format this store must not overwrite (a newer version)."""
-    if isinstance(envelope, ImageBlob):
+    if isinstance(envelope, (ImageBlob, BlobCopy)):
         return False  # bytes, never parsed
     parse = (parse_source if isinstance(envelope, SourceManifest) else
              parse_scope_record if isinstance(envelope, ScopeRecord) else

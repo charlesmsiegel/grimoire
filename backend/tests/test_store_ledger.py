@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 
 import pytest
 
@@ -19,7 +20,7 @@ from grimoire.testing import (
 )
 from grimoire.testing.fileops import snapshot
 
-from store_helpers import WREN, drop_empty_dirs, instance, owner_handle, seed
+from store_helpers import FAIL_RECOVERY, WREN, drop_empty_dirs, explore_mode, instance, owner_handle, seed
 
 LIB = "lib"
 
@@ -241,6 +242,7 @@ def test_ledger_appends_survive_every_crash(tmp_path):
     report = explore_crashes(sc, tmp_path, errors=True)
     report.assert_ok()
     assert report.points_explored > 10
+    explore_crashes(sc, tmp_path / "fail", **explore_mode(FAIL_RECOVERY)).assert_ok()
 
 
 def test_repair_moves_a_broken_suffix_aside_and_survives_every_crash(tmp_path):
@@ -278,6 +280,8 @@ def test_repair_moves_a_broken_suffix_aside_and_survives_every_crash(tmp_path):
     report = explore_crashes(sc, tmp_path, errors=True)
     report.assert_ok()
     assert report.points_explored > 5
+    if os.environ.get("GRIMOIRE_EXHAUSTIVE_RECOVERY"):  # every crash of the recovery after each error
+        explore_crashes(sc, tmp_path / "fail", **explore_mode(FAIL_RECOVERY)).assert_ok()
 
 
 def test_an_unfinished_repair_blocks_reads_and_recovery_until_finished(tmp_path):

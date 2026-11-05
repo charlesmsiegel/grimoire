@@ -8,7 +8,7 @@ nothing was published.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from grimoire.library import LibraryPathError
 
@@ -103,6 +103,24 @@ class WriteConflict(StoreError):
                          f"published: {published_text}{dropped_text}")
 
 
+class ImpreciseNumber(StoreError):
+    """A rewrite would replace a stored number with its rounded float; nothing was written.
+
+    ``reason`` is ``imprecise_number``; ``where`` maps each file to the JSON pointers of its numbers
+    whose text a ``float`` cannot hold exactly (excess digits, underflow to zero, a huge value).
+    The file still reads (rounded); fix the number by hand, or write the value it should hold."""
+
+    reason = "imprecise_number"
+
+    def __init__(self, where: Mapping[str, Sequence[str]]) -> None:
+        self.where = {path: tuple(pointers) for path, pointers in where.items()}
+        super().__init__("imprecise_number: rewriting would round "
+                         + "; ".join(f"{path} at {', '.join(pointers)}" for path, pointers in self.where.items()))
+
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self), (self.where,))
+
+
 class CommitIncomplete(StoreError):
     """Failed after the commit point; the next recovery finishes or preserves it."""
 
@@ -183,3 +201,36 @@ class AuthorityUnavailable(StoreError):
 
 class RevisionReferenced(StoreError):
     """A definition revision cannot be replaced: something on this library may pin it."""
+
+
+class InstanceIdConflict(StoreError):
+    """A new instance file would share its id with an instance of another kind in the same campaign.
+
+    ``reason`` is ``instance_id_conflict``; ``paths`` are the refused new files. An instance id is
+    unique within a campaign across kinds (IDENTITY.md), so the commit is refused per path and
+    nothing is written. Edits of an existing pair's members stay allowed so a human can repair it.
+    """
+
+    reason = "instance_id_conflict"
+
+    def __init__(self, paths: Sequence[str]) -> None:
+        self.paths = tuple(paths)
+        super().__init__(f"instance id already used by another kind in its campaign: {', '.join(self.paths)}")
+
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self), (self.paths,))
+
+
+class TakenIdsUnlisted(StoreError):
+    """A file or folder that could name a campaign's instance ids cannot be listed or read, so those
+    ids cannot be reserved: allocating a new instance id fails closed rather than guess.
+
+    ``paths`` names what could not be read (store paths, never file content).
+    """
+
+    def __init__(self, message: str, paths: Sequence[str] = ()) -> None:
+        super().__init__(message)
+        self.paths = tuple(paths)
+
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self), (str(self), self.paths))

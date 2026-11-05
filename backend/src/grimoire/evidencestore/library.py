@@ -18,19 +18,20 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
-from grimoire.core.identity import ChatRef, InstanceRef, KnowledgeRef, ScopeRef
-from grimoire.core.knowledge import Belief, Knowledge, Subject
+from grimoire.core.identity import AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, ScopeRef, paired_instances
+from grimoire.core.knowledge import Belief, Event, Knowledge, Subject
 from grimoire.core.model import ControlAssignment
 from grimoire.core.perspective import (
     ActorKnowledge, PlayerKnowledge, actor_knowledge, admit_belief, knowledge_about, player_knowledge, standing,
 )
+from grimoire.effects import EffectCodecError, accepted_from_payload, as_knowledge_event
 from grimoire.evidence import (
     BATCH_LIMIT, FAMILIES, SCHEMAS, Assembly, EvidenceCodecError, Quarantine, ScannedFile, assemble, batch_entry,
     build_ledger, decode, encode, encode_batch,
 )
 from grimoire.store import (
     CommitIncomplete, InvalidEnvelope, KnowledgeRecord, KnowledgeScan, LibraryStore, RecordNotFound, StaleWrite, StoreError,
-    UnstorableIdentifier, WriteConflict, etag,
+    TakenIdsUnlisted, UnstorableIdentifier, WriteConflict, etag,
 )
 from grimoire.store.layout import address_parts, logical
 
@@ -48,6 +49,47 @@ class EvidenceWriteError(ValueError):
 
     def __reduce__(self) -> tuple[object, ...]:
         return (type(self), (self.reason, self.records))
+
+
+def evidence_instance_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+    """Every instance id of this campaign named anywhere in its events, evidence and knowledge-log files.
+
+    Part of the one reservation set (``grimoire.chatstore.campaign_taken_ids``): a hand-deleted
+    actor's id must never go to a different individual, who would read the old one's private
+    perceptions and beliefs. The raw payloads are scanned without decoding (every string, key or
+    value, that parses as an ``InstanceRef`` of this campaign), so a record that fails validation
+    still protects its ids; 020 persists no bare control ids. A file or folder the store cannot read
+    at all (malformed, a link, a look-alike, a stray) may hold private knowledge, so it raises
+    ``TakenIdsUnlisted``: allocation fails closed. It reads every knowledge file of the campaign, as
+    every evidence read does.
+    """
+    scan = store.campaign_knowledge(campaign_id)
+    if scan.damaged or scan.problems:
+        paths = tuple(sorted({"/".join(address_parts(ref)) for ref in scan.damaged}
+                             | {problem.path for problem in scan.problems}))
+        raise TakenIdsUnlisted(f"knowledge files of {campaign_id} cannot all be read ({', '.join(paths)}), so the "
+                               "instance ids they name cannot be reserved", paths)
+    taken: set[str] = set()
+    for stored in scan.records.values():
+        _instance_ids(stored.record.payload, campaign_id, taken)
+    return frozenset(taken)
+
+
+def _instance_ids(value: object, campaign_id: str, into: set[str]) -> None:
+    if isinstance(value, str):
+        try:
+            ref = InstanceRef.parse(value)
+        except ValueError:
+            return
+        if ref.campaign_id == campaign_id:
+            into.add(ref.instance_id)
+    elif isinstance(value, Mapping):
+        for key, item in value.items():
+            _instance_ids(key, campaign_id, into)
+            _instance_ids(item, campaign_id, into)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _instance_ids(item, campaign_id, into)
 
 
 @dataclass(frozen=True)
@@ -111,6 +153,7 @@ class KnowledgeChange:
     chat: ChatRef | None
     actors: frozenset[InstanceRef]
     batch: KnowledgeRef
+    events: tuple[Event, ...] = ()  # re-checked against the accepted (021) events at commit
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -151,9 +194,15 @@ class KnowledgeChange:
         missing = sorted(str(actor) for actor in self.actors - present)
         if missing:
             return [(text, "absent") for text in missing]
+        paired = sorted(str(actor) for actor in self.actors & paired_instances(present))  # formed since append
+        if paired:
+            return [(text, "instance_id_conflict") for text in paired]
         scan = store.campaign_knowledge(campaign)
         if (scan.entries, scan.problems) != self.snapshot:
             return [(f"{base}/evidence", "changed")]
+        refused = _accepted_refusal(store, campaign, self.events)  # an acceptance may have landed meanwhile
+        if refused is not None:
+            return [(f"{base}/accepted", refused[0])]
         return []
 
 
@@ -254,6 +303,9 @@ class EvidenceLibrary:
         unknown = sorted(_name(r) for r in new if _actors(r) - present)
         if unknown:
             raise EvidenceWriteError("unknown_actor", unknown)
+        paired = actors & paired_instances(present)  # an id two kinds share is no one actor
+        if paired:
+            raise EvidenceWriteError("instance_id_conflict", sorted(_name(r) for r in new if _actors(r) & paired))
         # 4: only an intact ledger is extended.
         assembly, scan, files = self._assembly(campaign_id)
         if not assembly.clean or scan.problems:
@@ -264,6 +316,11 @@ class EvidenceLibrary:
         taken = sorted(set(names) & on_disk)
         if taken:
             raise EvidenceWriteError("duplicate_id", taken)
+        # 5b: under an accepted (021) event's id, only that event's own bridge (EFFECTS.md).
+        events = tuple(record for record in new if isinstance(record, Event))
+        refused = _accepted_refusal(self.store, campaign_id, events)
+        if refused is not None:
+            raise EvidenceWriteError(*refused)
         # 6: no backdating; a delayed letter's sent_at is the single exception.
         high = assembly.high_water
         late = sorted(_name(r) for r in new if r.moment.sequence < high)  # type: ignore[attr-defined]
@@ -308,7 +365,44 @@ class EvidenceLibrary:
         if not check.clean or check.knowledge != combined:
             raise AssertionError("an append would not read back as an intact ledger")
         return KnowledgeChange(self, campaign_id, (*puts, batch), (scan.entries, scan.problems), chat,
-                               actors, batch_ref)
+                               actors, batch_ref, events)
+
+
+def _accepted_refusal(store: LibraryStore, campaign_id: str, events: tuple[Event, ...]
+                      ) -> tuple[str, list[str]] | None:
+    """Why new 012 ``Event``s may not be stored next to the campaign's accepted (021) events, or ``None``.
+
+    An accepted event's id is reserved for its bridge, ``as_knowledge_event(accepted)``: a different event
+    there is ``accepted_id``, and a revoked event's bridge is ``revoked`` (an undone turn is never stored
+    as objective fact). Fail closed: if the accepted events cannot all be listed, or the one under a new
+    event's id cannot be decoded, nothing can be compared (``accepted_unreadable``). Revoking is never
+    blocked by a stored bridge; 021's ``continuity`` reports one that survives (``revoked_but_bridged``).
+    """
+    if not events:
+        return None
+    found = store.campaign_accepted(campaign_id)
+    if found.problems:  # an unreadable file, link or look-alike folder could hold any of these ids
+        return "accepted_unreadable", sorted(_name(event) for event in events)
+    refused: dict[str, list[str]] = {}
+    for event in events:
+        ref = AcceptedRef(campaign_id, event.event_id)
+        stored = found.records.get(ref)
+        if stored is None:
+            continue
+        try:
+            accepted = accepted_from_payload(ref, stored.record.schema,  # type: ignore[union-attr]
+                                             stored.record.payload)
+        except EffectCodecError:
+            refused.setdefault("accepted_unreadable", []).append(_name(event))
+            continue
+        if not accepted.active:
+            refused.setdefault("revoked", []).append(_name(event))
+        elif event != as_knowledge_event(accepted):
+            refused.setdefault("accepted_id", []).append(_name(event))
+    for reason in ("accepted_unreadable", "revoked", "accepted_id"):
+        if reason in refused:
+            return reason, sorted(refused[reason])
+    return None
 
 
 def _staged(transaction, puts) -> str | None:  # type: ignore[no-untyped-def]

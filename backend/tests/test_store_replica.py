@@ -23,8 +23,8 @@ from grimoire.testing import (
 from grimoire.testing.fileops import snapshot
 
 from store_helpers import (
-    HARBOR, OWNER, WREN, WREN_A, WREN_R1, drop_empty_dirs, harbor_manifest, instance, make_dir_link,
-    owner_handle, seed, wren,
+    FAIL_RECOVERY, HARBOR, OWNER, WREN, WREN_A, WREN_R1, drop_empty_dirs, explore_mode, harbor_manifest, instance,
+    make_dir_link, owner_handle, seed, wren,
 )
 
 ALL = ("sources", "campaigns", "kept")
@@ -522,6 +522,8 @@ def test_a_mixed_commit_survives_every_crash_and_error(tmp_path, regenerable):
          completes_after(Target("replace", target="lib/.txn/journal.json"))),
         normalize=drop_empty_dirs)
     explore_crashes(scenario, tmp_path / "errors", errors=True).assert_ok()
+    if os.environ.get("GRIMOIRE_EXHAUSTIVE_RECOVERY"):  # every crash of the recovery after each error
+        explore_crashes(scenario, tmp_path / "fail", **explore_mode(FAIL_RECOVERY)).assert_ok()
     if not regenerable:
         return  # publish/hold recovery is the store's ordinary table, crash-explored in test_store_recovery
     report = explore_crashes(scenario, tmp_path / "recovery", recovery_crashes=True,
@@ -746,18 +748,27 @@ def test_a_kept_slot_must_be_a_small_non_negative_int(pair):
             phone.transaction().keep_version(WREN_A_PATH, data, slot=slot)
 
 
-def test_exact_kinds_cover_every_synced_kind_and_nothing_of_018():
+def test_exact_kinds_cover_every_synced_kind_but_blobs():
+    """C2: 018 art is synced; image objects and placements are exact JSON kinds, blobs are binary."""
     from grimoire.store.replica import EXACT_KINDS
     from grimoire.sync.model import SYNCED_KINDS
-    assert SYNCED_KINDS <= EXACT_KINDS
-    assert not EXACT_KINDS & {"blob", "image", "placement", "ledger"}
+    assert SYNCED_KINDS - {"blob"} <= EXACT_KINDS
+    assert {"image", "placement"} <= EXACT_KINDS
+    assert not EXACT_KINDS & {"blob", "ledger"}
 
 
 @pytest.mark.parametrize("path", ["campaigns/c1/images/portrait.json",
                                   "sources/world/harbor/_source/placements/character/wren/portrait.json"])
-def test_put_exact_refuses_018_paths(pair, path):
+def test_put_exact_validates_018_records(pair, path):
+    """C2: 018 art is synced, so image and placement paths are accepted, and validated like any record."""
     with pytest.raises(InvalidEnvelope) as caught:
         pair[0].transaction().put_exact(path, b"{}", None)
+    assert caught.value.code == "malformed"
+
+
+def test_put_exact_refuses_blob_paths(pair):
+    with pytest.raises(InvalidEnvelope) as caught:
+        pair[0].transaction().put_exact("assets/blobs/ab/" + "ab" * 32 + ".png", b"{}", None)
     assert caught.value.code == "not_canonical"
 
 
@@ -837,10 +848,12 @@ def test_a_linked_018_folder_under_a_source_never_blocks_a_revision_replace(pair
 
 
 def test_a_kept_version_is_only_for_records_recovery_accepts(pair):
-    """Recovery accepts only ``.json`` kept paths, so keep_version refuses blobs (and other kinds) up front."""
-    for path in ("assets/blobs/ab/" + "ab" * 32 + ".png", "campaigns/c1/images/portrait.json"):
+    """Recovery accepts only ``.json`` kept paths, so keep_version refuses blobs (and other kinds) up front.
+    C2: 018 art is synced, so an image object (a JSON record) may now have kept versions."""
+    for path in ("assets/blobs/ab/" + "ab" * 32 + ".png", "authority/security/0000000001.json"):
         with pytest.raises(InvalidEnvelope, match="can have kept versions"):
             pair[0].transaction().keep_version(path, b"{}")
+    assert pair[0].transaction().keep_version("campaigns/c1/images/portrait.json", b"{}").startswith(".conflicts/")
 
 
 

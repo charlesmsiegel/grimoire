@@ -25,7 +25,9 @@ from grimoire.testing import (
 from grimoire.testing.fileops import snapshot
 
 from evidence_fixtures import m
-from store_helpers import OWNER, drop_empty_dirs, owner_handle
+from store_helpers import (
+    EXHAUSTIVE_RECOVERY, FAIL_RECOVERY, OWNER, drop_empty_dirs, explore_mode, owner_handle,
+)
 
 LIB = "lib"
 C = "c1"
@@ -89,13 +91,13 @@ def scenario(action):
 
 @pytest.mark.parametrize("action, mode", [
     (three_records, "crashes"), (three_records, "errors"), (one_record, "recovery-crashes"),
-], ids=["three-crashes", "three-errors", "one-recovery-crashes"])
+    pytest.param(three_records, FAIL_RECOVERY, marks=EXHAUSTIVE_RECOVERY),
+], ids=["three-crashes", "three-errors", "one-recovery-crashes", "three-fail-recovery-crashes"])
 def test_appends_survive_every_crash_error_and_recovery_crash(tmp_path, action, mode):
-    report = explore_crashes(scenario(action), tmp_path, errors=mode == "errors",
-                             recovery_crashes=mode == "recovery-crashes")
+    report = explore_crashes(scenario(action), tmp_path, **explore_mode(mode))
     report.assert_ok()
     assert report.points_explored > 20
-    if mode == "recovery-crashes":
+    if mode in ("recovery-crashes", FAIL_RECOVERY):
         assert any(run.recover_trace for run in report.runs[1:])
 
 

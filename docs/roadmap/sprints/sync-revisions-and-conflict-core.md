@@ -1,6 +1,6 @@
 # Synchronization revisions and conflict detection
 
-**Status:** first slice implemented as `grimoire.sync` (transport-free, two locally open libraries); contract in [SYNC.md](../../SYNC.md). Proven under the 006 harness with `Interleave`/`meddle` on two replica roots, with the new `preserves_interleave` built-in. Remaining: the later milestones below, deletion propagation, ledger sync, archive compaction, and more than two devices; merge rules for 021 accepted events and wrap-ups and 023 holdings (held back, with the relations of any campaign holding an accepted event), syncing 018 images and blobs, and merging two devices' 020 knowledge logs; transport is 028's.
+**Status:** first slice implemented as `grimoire.sync` (transport-free, two locally open libraries); contract in [SYNC.md](../../SYNC.md). Proven under the 006 harness with `Interleave`/`meddle` on two replica roots, with the new `preserves_interleave` built-in. 018 image objects, placements and blobs are synced, and held families are reported as `held` conflicts. Remaining here: the later milestones below, ledger sync and more than two devices. [028 inherits](app-managed-device-sync.md#inherited-from-019) the merge rules for 021 accepted events and wrap-ups and 023 holdings, the 020 knowledge-log merge, kept-version dismissal, deletion propagation, per-device actor ids and archive compaction, as well as transport.
 
 **Outcome:** A transport-independent version history makes V2 libraries safe across independently edited devices.
 

@@ -56,7 +56,12 @@ def _ending(ending: Ending) -> dict:
 
 
 def relation_to_payload(relation: Relation) -> dict:
-    clash = sorted(set(relation.extras) & (ADDRESS_KEYS | FIELDS))
+    # A non-list ``reopenings`` in extras is an older file's own key (see decoding); the model refuses it
+    # alongside real reopenings, so it is written back verbatim only while the relation has none.
+    clash = sorted(set(relation.extras) & (ADDRESS_KEYS | (FIELDS - {"reopenings"})))
+    if "reopenings" in relation.extras and (relation.extras["reopenings"] is None
+                                            or isinstance(relation.extras["reopenings"], (list, tuple))):
+        clash.append("reopenings")  # only a non-list, non-null value can be an older file's own key
     if clash:
         reason = "address_in_payload" if set(clash) & ADDRESS_KEYS else "invalid_field"
         raise RelationCodecError(f"extras may not use the keys {clash}", reason)
@@ -140,15 +145,19 @@ def relation_from_payload(ref: RelationRef, schema: str, payload: object) -> Rel
         ending = _decode_ending(payload["ending"], "ending")
     raw = payload.get("reopenings")
     # Absent, null or empty all mean "never reopened", as an absent or null ending means "not ended":
-    # a hand edit that clears the list must not make the relation undecodable.
-    empty = raw is None or (isinstance(raw, (list, tuple)) and not raw)
-    reopenings = () if empty else _decode_reopenings(raw)
+    # a hand edit that clears the list must not make the relation undecodable. Only a list is 021's
+    # form: 017 preserved any unknown top-level key, so a non-list ``reopenings`` is an older file's
+    # own key, kept verbatim in ``extras`` (a reopen then refuses rather than overwrite it).
+    listed = isinstance(raw, (list, tuple))
+    reopenings = _decode_reopenings(raw) if listed and raw else ()
+    hand_key = raw is not None and not listed
     if payload.get("retraction") is not None:
         data = _object(payload["retraction"], "retraction", frozenset({"provenance", "at"}),
                        frozenset({"provenance", "at"}))
         retraction = _build(lambda: Retraction(data["provenance"], data["at"]))
     try:
-        extras = JsonObject({key: value for key, value in payload.items() if key not in FIELDS})
+        extras = JsonObject({key: value for key, value in payload.items()
+                             if key not in FIELDS or (hand_key and key == "reopenings")})
     except JsonValueError:
         raise _invalid("unknown fields are not JSON") from None
     return _build(lambda: Relation(ref, predicate, subject, obj, since, payload["provenance"],

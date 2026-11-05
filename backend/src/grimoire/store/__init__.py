@@ -8,10 +8,11 @@ never interprets their payloads. See docs/STORAGE.md for the contract.
 from .diskops import DiskOps, FileOps
 from .envelope import AssetRecord, KnowledgeRecord, LinkSpec, RecordEnvelope, ScopeRecord, SourceManifest
 from .errors import (
-    BlobCorrupt, CommitIncomplete, CrossDevice, ImmutableBlob, ImmutableImage, ImmutableRevision, InvalidBlob, InvalidEnvelope, InvalidSourceState, LibraryLocked,
+    BlobCorrupt, CommitIncomplete, CrossDevice, ImmutableBlob, ImmutableImage, ImmutableRevision, ImpreciseNumber,
+    InstanceIdConflict, InvalidBlob, InvalidEnvelope, InvalidSourceState, LibraryLocked,
     LinkRefused, LockUnavailable, MalformedRecord, NameCollision, NotALibrary, PendingRecovery,
     RecordNotFound, RecoveryBlocked, RecoveryFailed, RevisionReferenced, StaleWrite, StoreError,
-    UnstorableIdentifier,
+    TakenIdsUnlisted, UnstorableIdentifier,
     UnsupportedFormat, WriteConflict, WriteDenied,
 )
 from .jsonfmt import etag
@@ -31,12 +32,13 @@ __all__ = [
     "BrokenRef", "CampaignHoldingRecords", "CampaignRecords", "CampaignRelations", "CanonicalScan",
     "CommitIncomplete", "CommitResult",
     "CrossDevice", "DiskOps", "FileOps",
-    "ImmutableRevision", "InvalidEnvelope", "InvalidSourceState", "LibraryLocked", "LibraryStore",
+    "ImmutableRevision", "ImpreciseNumber", "InstanceIdConflict", "InvalidEnvelope", "InvalidSourceState", "LibraryLocked",
+    "LibraryStore",
     "KnowledgeRecord", "KnowledgeScan",
     "LibraryView", "LinkRefused", "LinkSpec", "LoadProblem", "LockUnavailable", "Locker",
     "MalformedRecord", "NameCollision", "NotALibrary", "OsLocker", "PendingRecovery", "ProcessLocker",
     "RecordEnvelope", "RecordNotFound", "RecoveryBlocked", "RecoveryFailed", "RecoveryReport",
     "RevisionReferenced", "ScopeRecord", "SourceManifest", "StaleWrite", "StoreError", "StoredDefinition",
     "StoredKnowledgeRecord", "StoredRecord", "StoredScopeRecord", "StoredSource",
-    "Transaction", "UnstorableIdentifier", "UnsupportedFormat", "WriteConflict", "WriteDenied", "etag",
+    "TakenIdsUnlisted", "Transaction", "UnstorableIdentifier", "UnsupportedFormat", "WriteConflict", "WriteDenied", "etag",
 ]
