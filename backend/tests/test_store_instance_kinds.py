@@ -19,10 +19,10 @@ from grimoire.core.entity import EntityInstance
 from grimoire.core.identity import InstanceRef, ScopeRef
 from grimoire.core.roster import CampaignRoster
 from grimoire.evidencestore import EvidenceLibrary, EvidenceWriteError
-from grimoire.store import InstanceIdConflict, LibraryStore, StoreError
+from grimoire.store import InstanceIdConflict, LibraryStore, StaleWrite, StoreError
 from grimoire.testing.fileops import snapshot
 
-from chat_fixtures import MARA, chat_library, seed_sources
+from chat_fixtures import ANYA, MARA, chat_library, seed_sources
 from store_helpers import OWNER, WREN, WREN_A, WREN_R1, instance, new_library, owner_handle, seed
 
 CREATURE_A = InstanceRef("c1", "creature", "wren-a")
@@ -139,3 +139,48 @@ def test_services_refuse_to_act_through_a_paired_id(tmp_path):
                 Perception(mara.campaign_id, "v1", mara, "e1", "witnessed", "a door", Moment(1), "director",
                            confirmed=True)])
         assert caught.value.reason == "instance_id_conflict"
+
+
+def test_a_knowledge_commit_rechecks_for_a_pair_formed_since_append(tmp_path):
+    """020: an append planned for an actor whose id another kind takes before the commit writes nothing."""
+    with new_library(tmp_path / "lib") as store:
+        seed_sources(store)
+        (mara,) = chat_library(store).start_chat(Launch("character", MARA)).commit().actors
+        evidence = EvidenceLibrary(store, owner_handle(), owner=OWNER)
+        change = evidence.append(mara.campaign_id, [
+            Event(mara.campaign_id, "e1", "a door opens", Moment(1), "director"),
+            Perception(mara.campaign_id, "v1", mara, "e1", "witnessed", "a door", Moment(1), "director",
+                       confirmed=True)])
+        _hand_write(store, InstanceRef(mara.campaign_id, "creature", mara.instance_id))
+        before = snapshot(store.root)
+        with pytest.raises(StaleWrite) as caught:
+            change.commit()
+        assert caught.value.stale == ((str(mara), "instance_id_conflict"),)
+        assert snapshot(store.root) == before
+
+
+@pytest.mark.parametrize("how", ["start_chat", "attach_source", "set_persona"])
+def test_a_chat_commit_rechecks_a_reused_actor_for_a_pair(tmp_path, how):
+    """107: reusing an actor whose id another kind takes between plan and commit writes nothing."""
+    with new_library(tmp_path / "lib") as store:
+        seed_sources(store)
+        chats = chat_library(store)
+        started = chats.start_chat(Launch("character", MARA)).commit()
+        (mara,) = started.actors
+        if how == "start_chat":
+            change = chats.start_chat(Launch("character", MARA), scope=ScopeRef(mara.campaign_id),
+                                      reuse_actors={("character", MARA.entity_key): mara})
+        else:
+            second = chats.start_chat(Launch("character", ANYA), scope=ScopeRef(mara.campaign_id)).commit().chat
+            _, etag = chats.read_chat(second)
+            if how == "attach_source":
+                change = chats.attach_source(second, MARA, "character", expected=etag, actor=mara)
+            else:
+                change = chats.set_persona(second, MARA, expected=etag, actor=mara)
+        _hand_write(store, InstanceRef(mara.campaign_id, "creature", mara.instance_id))
+        before = snapshot(store.root)
+        with pytest.raises(StaleWrite) as caught:
+            change.commit()
+        assert caught.value.stale == ((f"campaigns/{mara.campaign_id}/instances/character/{mara.instance_id}.json",
+                                       "instance_id_conflict"),)
+        assert snapshot(store.root) == before

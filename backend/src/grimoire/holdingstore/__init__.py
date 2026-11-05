@@ -2,8 +2,8 @@
 
 from .library import (
     CampaignHoldings, HolderReplaced, HoldingsChange, HoldingsLibrary, HoldingsProblem, HoldingsUnlisted,
-    HoldingsView, holdings_holder_ids,
+    HoldingsView, holdings_holder_ids, holdings_peer_ids,
 )
 
 __all__ = ["CampaignHoldings", "HolderReplaced", "HoldingsChange", "HoldingsLibrary", "HoldingsProblem",
-           "HoldingsUnlisted", "HoldingsView", "holdings_holder_ids"]
+           "HoldingsUnlisted", "HoldingsView", "holdings_holder_ids", "holdings_peer_ids"]

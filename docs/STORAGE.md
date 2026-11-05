@@ -206,7 +206,7 @@ Fields:
 - **`load()` skips `holdings/`**, as it skips 020's `events/` and `evidence/`: a holder's operation log is campaign history (up to 7 MiB per holder), so whole-library loads such as opening a chat never pay for it. There is no `LibraryView.holdings`.
 - `campaign_holdings(id)` returns `CampaignHoldingRecords(records, problems)` for **one** campaign, contained per file in the same way `load()` contains the other families: bad files, links (including a linked look-alike `Holdings`), look-alikes and an unreadable campaign folder are problems, never a crashed read. `read(HoldingsRef)` reads one file. `grimoire.holdingstore` uses only these and never loads the whole library (tested).
 - `campaign_holding_names(id)` returns `(refs, complete)`: the campaign's holder files from **listings only** (no file is read). A look-alike that a case-insensitive filesystem or a case-only rename could turn into a holder file (`Holdings/`, `Character/`, `Mara-2.json`) counts under the name it folds to; a folder whose name can fold to no kind (`New folder`, `@eaDir`) is ignored. `complete=False` only when something that could hold holder files cannot be listed: the campaign folder exists only as a look-alike, or a holdings or kind folder is a link or cannot be listed or inspected.
-- Instance allocators reserve every id with a holdings file (`holdings_holder_ids`, built on `campaign_holding_names`) through [`campaign_taken_ids`](#instance-ids-are-never-reused).
+- Instance allocators reserve every id with a holdings file (`holdings_holder_ids`, built on `campaign_holding_names`) and every id named inside a readable holder file (`holdings_peer_ids`, built on `campaign_holdings`) through [`campaign_taken_ids`](#instance-ids-are-never-reused).
 - **Rollback:**
   - A pre-023 build reports `holdings/` as `unrecognized` and never touches it. Its allocators do not protect holder ids.
   - It **cannot recover a journal naming a holdings path** (`RecoveryFailed`). Recover with a 023+ build, or run `discard_journal` (both tested).
@@ -283,7 +283,7 @@ A distinct format, rather than an extension of `scope-record/1`, keeps a parser 
 An instance id is unique within a campaign across kinds and never goes to a different individual ([IDENTITY](IDENTITY.md)):
 
 - the commit refuses a cross-kind pair (`InstanceIdConflict`, step 5) and `load()` leaves an existing pair out (both members);
-- every instance allocator takes its new id outside `grimoire.chatstore.campaign_taken_ids(store, campaign_id)`, at plan time and again under the store lock at commit ([CHATS](CHATS.md#taken-instance-ids)). It reserves every id an instance file, relation, chat roster, accepted event, holdings file, 020 knowledge file or campaign placement folder names. Anything that could name ids but cannot be read or listed raises `TakenIdsUnlisted` (fail closed);
+- every instance allocator takes its new id outside `grimoire.chatstore.campaign_taken_ids(store, campaign_id)`, at plan time and again under the store lock at commit ([CHATS](CHATS.md#taken-instance-ids)). It reserves every id an instance file, relation, chat roster, accepted event, holdings file (its name and the move peers in its log), 020 knowledge file, campaign placement folder or campaign sovereignty ledger (`actor_id`s) names. Anything that could name ids but cannot be read or listed raises `TakenIdsUnlisted` (fail closed);
 - **any later record family that names instance ids must extend `campaign_taken_ids`**, so an allocator never has to know the families.
 
 ## Writing
@@ -466,6 +466,8 @@ authority/campaigns/<campaign_id>/<seq:010d>.json
 - the format is exact, the JSON is strict, and every batch is a regular file.
 
 Any break raises `LedgerBroken(name, seq, reason)`; a ledger is never read partially. Other files beside the batches (for example a sync tool's "conflicted copy") are reported in `Ledger.ignored` and never replayed. For 019, that means another device's fork is dropped and only reported.
+
+`store.campaign_ledger_documents(campaign_id)` is the one raw read, for reserving ids (`grimoire.ledgers.sovereignty_actor_ids`, part of [`campaign_taken_ids`](#instance-ids-are-never-reused)). It returns `(documents, unread)`: the strict JSON of every canonically named batch of `authority/campaigns/<id>/`, with no chain, format or entry check, and the paths that could hold batches but cannot be read (a look-alike, linked or unlistable folder; a linked, unreadable, oversized or non-JSON batch, or a look-alike batch name). Replay never uses it.
 
 **Limit (pinned by a test):** with local file access, the chain cannot detect changes at the tail. Appending a valid batch (even one with consistent forged provenance), editing or truncating the tail, or restoring an older copy all keep a valid chain. Interior edits, deletions and reordering are detected.
 

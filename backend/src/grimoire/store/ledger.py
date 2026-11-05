@@ -16,9 +16,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from .engine import Access
-from .errors import LedgerBroken, StoreError
+from .errors import LedgerBroken, LinkRefused, StoreError
 from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, parse_strict, render
-from .layout import Parts, is_noise, ledger_folder, ledger_name, ledger_parts, ledger_seq
+from .layout import Parts, is_noise, ledger_folder, ledger_name, ledger_parts, ledger_seq, name_key
 
 LEDGER_FORMAT = "grimoire.ledger/1"
 MAX_BATCH_ENTRIES = 500
@@ -92,6 +92,41 @@ def _read_ledger(access: Access, name: str) -> Ledger:
         batches.append(_parse_batch(name, seq, data, previous))
         previous = batches[-1].etag
     return Ledger(name, tuple(batches), tuple(sorted(ignored)))
+
+
+def scan_ledger(access: Access, name: str) -> tuple[tuple[object, ...], tuple[str, ...]]:
+    """Every batch file's parsed JSON, raw: no chain, format or entry check, so a broken ledger is
+    still read. Also the paths that could hold batches but cannot be read: the folder (a look-alike,
+    a link, unlistable) or a batch (a link, unreadable, too large, not JSON, or a look-alike name).
+    A file that can never be a batch is ignored, as replay ignores it."""
+    folder = ledger_folder(name)
+    where = "/".join(folder)
+    try:
+        presence = access.presence(folder)
+        if presence == "absent":
+            return (), ()
+        if presence == "mismatch":
+            return (), (where,)
+        access.guard.check_read(folder)
+        listed = access.list_dir(folder)
+    except (OSError, StoreError, LinkRefused):
+        return (), (where,)
+    documents: list[object] = []
+    problems: list[str] = []
+    for file_name in sorted(listed):
+        parts = folder + (file_name,)
+        if ledger_seq(file_name) is None:
+            if ledger_seq(name_key(file_name)) is not None:  # a look-alike of a batch: never left unread
+                problems.append("/".join(parts))
+            continue
+        try:
+            data = None if access.too_large(parts) else access.read(parts)
+            if data is None:
+                raise OSError("too large or vanished")
+            documents.append(parse_strict(data))
+        except (OSError, StoreError, LinkRefused, ValueError):  # JsonError is a ValueError
+            problems.append("/".join(parts))
+    return tuple(documents), tuple(problems)
 
 
 def _parse_batch(name: str, seq: int, data: bytes, previous: str | None) -> Batch:

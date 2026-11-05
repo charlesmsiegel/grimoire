@@ -56,7 +56,7 @@ from .layout import (
     definition_parts, image_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
     SUFFIX, ledger_parts, ledger_seq, logical, manifest_parts, name_key, sync_state_parts,
 )
-from .ledger import Head, Ledger, read_ledger, render_batches
+from .ledger import Head, Ledger, read_ledger, render_batches, scan_ledger
 from .loader import (
     CampaignHoldingRecords, CampaignRecords, CampaignRelations, KnowledgeScan, LibraryView, LoadProblem,
     StoredAssetRecord, StoredDefinition, StoredKnowledgeRecord, StoredRecord, StoredScopeRecord, StoredSource,
@@ -753,6 +753,16 @@ class LibraryStore:
             self._require_consistent()
             with self._access.cached_listings():
                 return loader.campaign_holdings(self._access, campaign_id)
+
+    def campaign_ledger_documents(self, campaign_id: str) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        """The campaign's authority ledger batches (``authority/campaigns/<id>``) as raw parsed JSON,
+        with no chain or entry check, and the paths that could hold batches but cannot be read.
+        For reserving the ids they name; replay still goes through ``read_ledger``."""
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return scan_ledger(self._access, f"campaigns/{campaign_id}")
 
     def source_facts(self) -> SourceFacts:
         """One verified answer to "which sources would ``load()`` exclude?", reusable by a caller.

@@ -125,7 +125,7 @@ Every mutating method returns a `ChatChange`:
 1. `preview()` returns the exact bytes per logical path, for a human to approve.
 2. `commit(approvals=None)` performs one store transaction with CAS on every touched record. Under an approval-gated policy, register an approval for each previewed path and pass them in.
 
-`commit` re-checks under the store lock that a newly allocated campaign is still absent and that each new actor id is still outside [`campaign_taken_ids`](#taken-instance-ids). A conflict raises `StaleWrite` and never reallocates, because the approvals pinned those bytes.
+`commit` re-checks under the store lock that a newly allocated campaign is still absent, that each new actor id is still outside [`campaign_taken_ids`](#taken-instance-ids), and that no reused actor's id has since been taken by another kind (`instance_id_conflict`). A conflict raises `StaleWrite` and never reallocates, because the approvals pinned those bytes.
 
 ### Methods
 
@@ -163,9 +163,11 @@ Actor ids are `<entity_id>-<n>`, the smallest number not in `campaign_taken_ids(
 
 - every instance file's id, of any kind;
 - every instance id of the campaign named anywhere in a relation file (017), a chat file's roster or bindings (107), an accepted-event file (021), or an events, evidence or knowledge-log file (020). These are scanned raw, so a record that fails decoding still protects its ids. 020 persists no bare control ids;
-- every holder with a holdings file (023) and every subject with a campaign placement folder (`placements/<kind>/<id>/`, 018), from file names only. A look-alike (`Holdings/`, `Character/`, `Mara-2.json`, `Mara-2/`) keeps the id it folds to taken.
+- every holder with a holdings file (023) and every subject with a campaign placement folder (`placements/<kind>/<id>/`, 018), from file names only. A look-alike (`Holdings/`, `Character/`, `Mara-2.json`, `Mara-2/`) keeps the id it folds to taken;
+- every instance id named inside a holder file (023: a move's holder, target and `peers`), scanned raw, so a counterparty whose own files were deleted keeps its id;
+- every `actor_id` of the campaign in its sovereignty ledger (010b, `authority/campaigns/<id>/`: control changes and delegations), scanned raw with no replay or chain check, so a hand-deleted PC's id never makes a new actor that player's PC.
 
-A file or folder that could name ids but cannot be read or listed (malformed, a link, a look-alike family folder or campaign folder, an unreadable folder) makes the allocation fail closed with `TakenIdsUnlisted` (`grimoire.store`; `.paths` names what could not be read). `HoldingsUnlisted` is one case. Private 020 knowledge is never guessed past. Taken ids are computed only when a new actor id is needed, so binding a scenario or lorebook, or reusing an actor, never lists them. The cost grows with play history: each allocation reads every relation, chat, accepted-event and knowledge file of the campaign.
+A file or folder that could name ids but cannot be read or listed (malformed, a link, a look-alike family folder or campaign folder, an unreadable folder, a ledger batch or ledger folder) makes the allocation fail closed with `TakenIdsUnlisted` (`grimoire.store`; `.paths` names what could not be read). `HoldingsUnlisted` is one case. Private 020 knowledge is never guessed past. One exception: a look-alike holder file is not read, so only its own id is taken, not the ids its log names. Taken ids are computed only when a new actor id is needed, so binding a scenario or lorebook, or reusing an actor, never lists them. The cost grows with play history: each allocation reads every relation, chat, accepted-event, knowledge and holder file and every sovereignty batch of the campaign.
 
 ### Actor instances
 

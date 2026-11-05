@@ -118,6 +118,8 @@ Every entry is flushed before `record` returns. `load(campaign_id)` returns a `S
 
 Delegation ids are unique per campaign. `load` re-checks every entry against the same rules and fails closed (`LedgerInvalid`).
 
+Control and delegations name an actor by bare `actor_id`, so every `actor_id` of the campaign's ledger stays reserved for that actor: `sovereignty_actor_ids` scans the batches raw (no replay) and is part of [`campaign_taken_ids`](CHATS.md#taken-instance-ids). A hand-deleted PC's id never makes a new actor that player's PC; a ledger that cannot be read fails allocation closed.
+
 The replayed state lives on the `DurableAuthority`, so every `SovereigntyLedger` over one authority sees the same state. Each append continues from the head that was replayed. A batch written by anything else makes the append fail and poisons the authority; reopening replays the ledger again and re-checks the foreign batch. Values that cannot be stored are refused with `AuthorityError` and change nothing. That covers an invalid `campaign_id` and an oversized field: ids and controllers over 512 characters, and correction notes over 4096.
 
 **Obligation on the runner (035) and multiplayer (102):** provenance is only as strong as handle minting. Mint a trusted human handle only for the authenticated human, never on behalf of another player.

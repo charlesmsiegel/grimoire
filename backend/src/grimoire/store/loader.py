@@ -25,7 +25,7 @@ from types import MappingProxyType
 from grimoire.core.identity import (
     AcceptedRef, ChatRef, HoldingsRef, IdentityConflict, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef,
     WrapUpRef,
-    validate_segment,
+    paired_instances, validate_segment,
 )
 from grimoire.core.index import DIRECTED_RELATIONS, DefinitionIndex, DefinitionLink, SourceDescriptor
 
@@ -993,16 +993,10 @@ def _exclude_kind_pairs(named: list[InstanceRef], instances: dict[InstanceRef, S
     """One campaign's instance files that share an id across kinds (hand-made, or formed across
     devices): each is reported ``instance_id_conflict`` and **both** are left out, never one picked,
     so a roster never sees an ambiguous ``actor_id``. The store refuses to create such a pair."""
-    kinds: dict[str, list[InstanceRef]] = {}
-    for ref in named:
-        kinds.setdefault(ref.instance_id, []).append(ref)
-    for refs in kinds.values():
-        if len(refs) < 2:
-            continue
-        for ref in sorted(refs, key=str):
-            instances.pop(ref, None)
-            problems.append(LoadProblem(_text(address_parts_of(ref)), "instance_id_conflict",
-                                        "this instance id is also used by another kind in this campaign"))
+    for ref in sorted(paired_instances(named), key=str):
+        instances.pop(ref, None)
+        problems.append(LoadProblem(_text(address_parts_of(ref)), "instance_id_conflict",
+                                    "this instance id is also used by another kind in this campaign"))
 
 
 @dataclass

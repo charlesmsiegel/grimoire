@@ -18,7 +18,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
-from grimoire.core.identity import AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, ScopeRef
+from grimoire.core.identity import AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, ScopeRef, paired_instances
 from grimoire.core.knowledge import Belief, Event, Knowledge, Subject
 from grimoire.core.model import ControlAssignment
 from grimoire.core.perspective import (
@@ -194,6 +194,9 @@ class KnowledgeChange:
         missing = sorted(str(actor) for actor in self.actors - present)
         if missing:
             return [(text, "absent") for text in missing]
+        paired = sorted(str(actor) for actor in self.actors & paired_instances(present))  # formed since append
+        if paired:
+            return [(text, "instance_id_conflict") for text in paired]
         scan = store.campaign_knowledge(campaign)
         if (scan.entries, scan.problems) != self.snapshot:
             return [(f"{base}/evidence", "changed")]
@@ -300,8 +303,7 @@ class EvidenceLibrary:
         unknown = sorted(_name(r) for r in new if _actors(r) - present)
         if unknown:
             raise EvidenceWriteError("unknown_actor", unknown)
-        paired = {ref for ref in actors if any(other.instance_id == ref.instance_id and other != ref
-                                               for other in present)}  # an id two kinds share is no one actor
+        paired = actors & paired_instances(present)  # an id two kinds share is no one actor
         if paired:
             raise EvidenceWriteError("instance_id_conflict", sorted(_name(r) for r in new if _actors(r) & paired))
         # 4: only an intact ledger is extended.

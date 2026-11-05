@@ -170,6 +170,44 @@ def holdings_holder_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]
     return frozenset(ref.instance_id for ref in refs)
 
 
+#: problems that name no holder file the store could read: a look-alike (whose own id
+#: ``holdings_holder_ids`` keeps taken) or an entry that can never be a holder file
+_UNREAD_BY_DESIGN = frozenset({"name_mismatch", "unrecognized"})
+
+
+def holdings_peer_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+    """Instance ids named inside the campaign's holder files: a move's holder, target and ``peers``.
+
+    A hand-deleted holder's id can live on in another holder's log as a move's counterparty; a new
+    individual given it would read as that move's party. The payloads are scanned raw (every
+    ``<kind>/<id>`` text, key or value), so a log the codec refuses still protects its ids. A holder
+    file the store cannot read (malformed, a link, a newer format) raises ``TakenIdsUnlisted``. A
+    look-alike is not read; its own id stays taken by ``holdings_holder_ids``. Reads every holder file.
+    """
+    found = store.campaign_holdings(campaign_id)
+    unread = tuple(sorted({problem.path for problem in found.problems if problem.code not in _UNREAD_BY_DESIGN}))
+    if unread:
+        raise TakenIdsUnlisted(f"holder files of {campaign_id} cannot all be read ({', '.join(unread)}), so the "
+                               "instance ids their logs name cannot be reserved", unread)
+    taken: set[str] = set()
+    stack: list[object] = [stored.record.payload for stored in found.records.values()]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str):
+            kind, _, instance_id = value.partition("/")
+            try:
+                InstanceRef(campaign_id, kind, instance_id)
+            except ValueError:
+                continue
+            taken.add(instance_id)
+        elif isinstance(value, Mapping):
+            stack.extend(value.keys())
+            stack.extend(value.values())
+        elif isinstance(value, (list, tuple)):
+            stack.extend(value)
+    return frozenset(taken)
+
+
 class _StoreSizer:
     """Sizes holder files exactly as the store will render them (without its 8 MiB refusal)."""
 
