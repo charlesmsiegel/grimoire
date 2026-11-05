@@ -16,8 +16,9 @@ human approved are the bytes written, or nothing is.
 Retry contract: after ``StaleWrite``, ``WriteConflict`` or ``CommitIncomplete`` (or reopening a store
 that raised ``PendingRecovery``), call ``apply`` (or ``create``) again with the **same** operation and
 the first change's ``party_etags`` as ``parties=``. An operation that landed is ``already_applied``
-while its entry is in the item's log, and a creation while its item exists; a party whose instance
-file differs from the pin is refused as ``party_replaced``; otherwise the item's revision has moved and
+while its entry is in the item's log, and a creation while its item exists; an item replaced by another
+since (``item_replaced``) or a party whose instance file differs from the pin (``party_replaced``) is
+refused; otherwise the item's revision has moved and
 the retry is refused as ``stale_revision``, never applied twice. ``PartyReplaced`` is never retried
 automatically: a human decides.
 """
@@ -38,7 +39,7 @@ from grimoire.core.portrayal import PortrayalError
 from grimoire.effective import entity_decoder
 from grimoire.library import LibraryPathError
 from grimoire.possessions import (
-    POSSESSION_KEY, AlreadyApplied, Creation, LogEntry, Operation, Possession, PossessionCodecError,
+    POSSESSION_KEY, AlreadyApplied, Creation, LogEntry, Operation, Possession, PossessionCodecError, PossessionError,
     PossessionRefused, State, custody_chain, originate, plan, possession_from_payload, possession_to_payload,
 )
 from grimoire.store import (
@@ -159,8 +160,12 @@ class ItemChange:
                 raise PartyReplaced([(path, f"party changed: {', '.join(changed)}")])
             try:
                 again = self._replan() if self._replan is not None else self
-            except PossessionRefused as error:
+            except StaleWrite:
+                raise
+            except PossessionError as error:  # a refusal, or the item's record became undecodable
                 raise StaleWrite([(path, error.reason)]) from None
+            except (StoreError, LibraryPathError) as error:  # the item's file can no longer be read
+                raise StaleWrite([(path, _unreadable_reason(error))]) from None
             if again.outcome != self.outcome or again.puts != self.puts:
                 raise StaleWrite([(path, "changed")])
 
@@ -403,7 +408,7 @@ class PossessionLibrary:
         """
         if type(item) is not InstanceRef or type(op) is not Operation:
             raise TypeError("apply takes an InstanceRef and an Operation")
-        pins = _pins(parties, {party for step in op.steps for party in step.parties})
+        pins = _pins(parties, {item} | {party for step in op.steps for party in step.parties})
         at = self._clock()
         return self._plan_apply(item, op, expected_rev, at, pins)
 
@@ -429,8 +434,11 @@ class PossessionLibrary:
                     raise PossessionRefused("instance_id_conflict", f"another kind also uses these ids: {paired}")
             parties = sorted({party for step in op.steps for party in step.parties}, key=str)
             etags = self._party_etags(parties, found.instances)
+            pin = _individual_pin(view.envelope)
+            if pin is not None:  # the item itself: a retry never lands on a new item given its id since
+                etags[item] = pin
             if not replay:
-                _check_pins(pins, etags)
+                _check_pins(pins, etags, item)
             others = {ref: other.possession for ref, other in found.views.items() if ref != item}
             result = plan(op, current, expected_rev=expected_rev, at=at, exists=etags.__contains__, others=others)
         if isinstance(result, AlreadyApplied):
@@ -459,7 +467,10 @@ def _pins(parties: Mapping[InstanceRef, str] | None, touched: set[InstanceRef]) 
     return dict(parties)
 
 
-def _check_pins(pins: Mapping[InstanceRef, str], etags: Mapping[InstanceRef, str]) -> None:
+def _check_pins(pins: Mapping[InstanceRef, str], etags: Mapping[InstanceRef, str],
+                item: InstanceRef | None = None) -> None:
     replaced = sorted(str(party) for party, pinned in pins.items() if etags.get(party) != pinned)
+    if item is not None and str(item) in replaced:
+        raise PossessionRefused("item_replaced", f"{item} is not the item first planned: its file was replaced")
     if replaced:
         raise PossessionRefused("party_replaced", f"instance files changed since first planned: {replaced}")

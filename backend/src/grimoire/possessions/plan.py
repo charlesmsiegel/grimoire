@@ -8,7 +8,7 @@ steps), so a retry of an operation that landed is recognized before anything els
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 
 from grimoire.core.identity import InstanceRef, SourceRef
@@ -152,6 +152,8 @@ class Creation:
     cause: str | None = None
 
     def __post_init__(self) -> None:
+        if isinstance(self.fits, Iterable) and not isinstance(self.fits, (str, bytes, tuple)):
+            object.__setattr__(self, "fits", tuple(self.fits))  # once: an iterator is read a single time
         self.origin(_ANY_TIME)  # every field check lives in Origin; the time is supplied at planning
 
     @property

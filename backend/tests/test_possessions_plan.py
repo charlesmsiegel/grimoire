@@ -187,6 +187,8 @@ def test_originate_starts_at_revision_one_with_its_origin():
         assert error.value.reason == "invalid_field"
     with pytest.raises(PossessionRefused):
         make(fits=tuple(f"slot-{n}" for n in range(17)))
+    once = make(fits=iter(["main-hand"]))  # an iterator is read once, not used up by the check
+    assert once.origin(AT).fits == ("main-hand",) and once.same(once.origin(AT))
 
 
 def _logged(**entry):

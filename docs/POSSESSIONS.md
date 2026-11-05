@@ -86,19 +86,19 @@ The record is the value of the `possession` key in the item's `grimoire.entity/0
 - `apply(item, op, *, expected_rev, parties=None)` reads the campaign's items once under the store lock and runs `plan`.
 - Both refuse with `unreadable_items` when an instance file of the campaign cannot be read and the change needs every item to be checked (a creation, a `move`, an `equip`); an `own` or `unequip` still works. Both refuse a party (or the item) whose id another kind also uses with `instance_id_conflict` ([IDENTITY](IDENTITY.md)), after replay.
 - Both return an `ItemChange`: `outcome`, `before`, `after`, `entry`, `party_etags`, `preview()` (the exact bytes, empty when already applied) and `commit(approvals=None)`. A change writes exactly one instance file with CAS on its etag, keeping every other field of it (the entity payload, owner, lineage, unknown fields).
-- **At commit** the change is planned again under the store lock with the same inputs and time. A party whose instance file changed since the plan (perhaps a different individual under the same id) raises `PartyReplaced`, a `StaleWrite` that is never retried automatically: a human decides. Any other difference (another item took the slot, the item moved on, the creation id was used meanwhile) raises `StaleWrite`. The bytes approved are the bytes written, or nothing is.
+- **At commit** the change is planned again under the store lock with the same inputs and time. A party whose instance file changed since the plan (perhaps a different individual under the same id) raises `PartyReplaced`, a `StaleWrite` that is never retried automatically: a human decides. Any other difference (another item took the slot, the item moved on, its record became undecodable or its file unreadable, the creation id was used meanwhile) raises `StaleWrite`. The bytes approved are the bytes written, or nothing is.
 
 ### Retry contract
 
-After `StaleWrite`, `WriteConflict` or `CommitIncomplete`, or after reopening a store that raised `PendingRecovery`, call `apply` (or `create`) again with the **same** operation, the same `expected_rev` and the first change's pin, `parties=change.party_etags`. The result is:
+After `StaleWrite`, `WriteConflict` or `CommitIncomplete`, or after reopening a store that raised `PendingRecovery`, call `apply` (or `create`) again with the **same** operation, the same `expected_rev` and the first change's pin, `parties=change.party_etags` (it pins the item itself too). The result is:
 - `already_applied` while the operation's entry is in the item's log (a creation: while its item exists), whatever its parties became since;
-- `party_replaced` when a pinned party's instance file differs (for a unique-item party, anything but its possession state);
+- `item_replaced` when the item's file now holds a different item (a new item given the deleted one's id, which also starts at revision 1), and `party_replaced` when a pinned party's instance file differs (for a party or item that is a unique item: anything but its possession state);
 - `stale_revision` when the item moved on: never applied twice;
 - or a fresh plan, which has new bytes and needs fresh approvals.
 
 ### Instance ids stay taken
 
-`campaign_taken_ids` also reserves every id a possession record names (owner, holder, wearer, in the current state, the origin and the log), scanned raw so an undecodable record protects its ids too. A hand-deleted owner's id never goes to a different individual, who would read as the item's owner. An instance file the store cannot read as a record (malformed, a newer format) could be an item, so every `<kind>/<id>` in its exact bytes is reserved instead (as a parsed JSON document, or as text when it does not parse). Only a file whose bytes cannot be read at all (a link, an I/O error) makes allocation fail closed (`TakenIdsUnlisted`). So one broken character file does not stop new actors in its campaign. Over-reserving only skips an id.
+`campaign_taken_ids` also reserves every id a possession record names (owner, holder, wearer, in the current state, the origin and the log), scanned raw so an undecodable record protects its ids too. A hand-deleted owner's id never goes to a different individual, who would read as the item's owner. An instance file the store cannot read as a record (malformed, a newer format) could be an item, so every `<kind>/<id>` in its exact bytes is reserved instead: in its text, and in its strings when it parses as JSON (catching an escaped slash). Only a file whose bytes cannot be read at all (a link, an I/O error) makes allocation fail closed (`TakenIdsUnlisted`). So one broken character file does not stop new actors in its campaign. Over-reserving only skips an id.
 
 ## Known limits
 

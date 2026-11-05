@@ -18,6 +18,8 @@ actor is ``not_witnessed``: it saw none of the chat's earlier history. A new act
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 
@@ -36,7 +38,7 @@ from grimoire.holdingstore import holdings_holder_ids, holdings_peer_ids
 from grimoire.imagestore import placement_subject_ids
 from grimoire.ledgers import security_campaign_ids, security_instance_ids, sovereignty_actor_ids
 from grimoire.library import LibraryPathError
-from grimoire.possessions import POSSESSION_KEY, party_ids, party_ids_in_bytes
+from grimoire.possessions import POSSESSION_KEY, party_ids
 from grimoire.security import payload_digest
 from grimoire.store import (
     CampaignRecords, LibraryStore, LibraryView, MalformedRecord, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite,
@@ -64,10 +66,11 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
     Look-alike holder and placement names count as the ids they fold to.
 
     A file or folder that could name ids but cannot be read or listed raises ``TakenIdsUnlisted``
-    (``HoldingsUnlisted`` is one case): allocation fails closed rather than guess. Every instance
+    (``HoldingsUnlisted`` is one case): allocation fails closed rather than guess. An instance file the
+    store cannot read as a record is the exception: every ``<kind>/<id>`` in its bytes is reserved. Every instance
     allocator (107 here; 024, 026, 037 later) must use this at plan time and again under the store
     lock at commit, and any later record family that names instance ids must extend it. Its cost
-    grows with play history: it reads every relation, chat, accepted-event, knowledge and holder file
+    grows with play history: it reads every instance, relation, chat, accepted-event, knowledge and holder file
     and every sovereignty batch of the campaign, and every security batch of the library.
     """
     return _taken_ids(store, campaign_id, security=True)
@@ -121,7 +124,7 @@ def possession_party_ids(store: LibraryStore, campaign_id: str) -> frozenset[str
                 data = None
                 unread.append(path)
             if data is not None:
-                taken |= party_ids_in_bytes(data)
+                taken |= _party_ids_in_bytes(data)
             continue
         except (StoreError, LibraryPathError):
             unread.append(path)
@@ -133,6 +136,33 @@ def possession_party_ids(store: LibraryStore, campaign_id: str) -> frozenset[str
         raise TakenIdsUnlisted(f"instance files of {campaign_id} cannot all be read ({', '.join(unread)}), so the "
                                "instance ids a unique item names cannot be reserved", tuple(unread))
     return frozenset(taken)
+
+
+_PARTY_TEXT = re.compile(r"(?<![a-z0-9._-])([a-z0-9][a-z0-9._-]*)/([a-z0-9][a-z0-9._-]*)")
+
+
+def _party_ids_in_bytes(data: bytes) -> frozenset[str]:
+    """Every instance id an instance file the store cannot read as a record might name as a party.
+
+    Every ``<kind>/<instance_id>`` in its text counts (an escaped ``\\/`` too), and, when the bytes parse
+    as JSON, every string ``party_ids`` finds (a ``\\u`` escape too). Over-reserving only skips an id.
+    """
+    text = data.decode("utf-8", "replace")
+    taken = {instance_id for kind, instance_id in _PARTY_TEXT.findall(text.replace("\\/", "/"))
+             if _is_party(kind, instance_id)}
+    try:
+        document = json.loads(text)
+    except (ValueError, RecursionError, MemoryError):  # not JSON, or nested past the parser: the text scan stands
+        return frozenset(taken)
+    return frozenset(taken | party_ids(document))
+
+
+def _is_party(kind: str, instance_id: str) -> bool:
+    try:
+        InstanceRef("c", kind, instance_id)
+    except ValueError:
+        return False
+    return True
 
 
 def _named_ids(found: CampaignRecords, campaign_id: str, family: str) -> set[str]:

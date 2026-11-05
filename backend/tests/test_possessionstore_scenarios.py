@@ -232,6 +232,9 @@ def test_an_id_named_only_by_a_possession_record_is_never_reallocated(store, lib
 @pytest.mark.parametrize("data", [
     b'{"broken": "character/vex-1"',  # not JSON: every <kind>/<id> in its text
     b'{"format": "grimoire.record/9", "payload": {"possession": {"owner": "character/vex-1"}}}',  # a newer format
+    b'{"format": "grimoire.record/9", "payload": {"note": "lent by character/vex-1"}}',  # inside free text
+    b'{"format": "grimoire.record/9", "payload": {"owner": "character\\u002fvex-1"}}',  # an escaped slash
+    b"[" * 200_000 + b'"character/vex-1"' + b"]" * 200_000,  # nested past the JSON parser
 ])
 def test_an_instance_file_the_store_cannot_read_reserves_what_it_names(store, data):
     """It could be an item, so the parties it may name stay taken; it does not block allocation."""
@@ -275,3 +278,26 @@ def test_a_party_item_whose_identity_changed_is_replaced(store, library):
     edit(store, chest, lambda d: d["payload"].update(local_name="Another chest"))
     with pytest.raises(PartyReplaced):
         planned.commit()
+
+
+def test_a_retry_never_lands_on_a_new_item_given_the_old_id(store, library):
+    old = created(library, make("make-1", name="Old sword"))
+    operation = op("m1", Step.move(TOMA))
+    change = library.apply(old, operation, expected_rev=1)  # its commit never landed
+    instance_file(store, old).unlink()  # deleted by hand, and nothing else names its id
+    new = created(library, make("make-2", name="New sword", holder=HALL, owner=None))
+    assert new == old
+    assert refused(library.apply, new, operation, expected_rev=1, parties=change.party_etags) == "item_replaced"
+    with pytest.raises(PartyReplaced):
+        change.commit()
+
+
+def test_an_item_that_breaks_before_commit_is_stale(store, library):
+    item = created(library, make())
+    change = library.apply(item, op("m1", Step.move(TOMA)), expected_rev=1)
+    edit(store, item, lambda d: d["payload"][POSSESSION_KEY].update(schema="grimoire.possession/9"))
+    with pytest.raises(StaleWrite):
+        change.commit()
+    instance_file(store, item).write_bytes(b"{broken")
+    with pytest.raises(StaleWrite):
+        change.commit()
