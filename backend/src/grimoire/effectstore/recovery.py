@@ -77,14 +77,14 @@ class EffectRecovery:
                 raise InvalidEffect(f"{ref} is revoked", "already_revoked")
             if etag != expected:
                 raise StaleWrite([("/".join(address_parts(ref)), "changed")])
-            later = [e.event_id for e in snap.active() if e.ordinal > event.ordinal]
-            if later:  # a later event's play may contradict what finishing this one would write (sequence floor)
-                raise InvalidEffect(f"{ref} is not the latest accepted event", "not_latest", sorted(later))
             index = snap.graph.index
             failing = [problem.op for problem in verify_receipts(event, index)]
             holdings_why = parts.duplicate_holdings(event, lib._holdings())  # damage refuses here
-            if not failing and holdings_why is None:  # already complete: exactly what a retry finds
+            if not failing and holdings_why is None:  # already complete: exactly what a retry finds, even later
                 return EffectChange(lib, ref, campaign_id=campaign, state=snap.state, duplicate_of=ref)
+            later = [e.event_id for e in snap.active() if e.ordinal > event.ordinal]
+            if later:  # a later event's play may contradict what finishing this one would write (sequence floor)
+                raise InvalidEffect(f"{ref} is not the latest accepted event", "not_latest", sorted(later))
             if _relations_unreadable(snap.graph):
                 raise InvalidEffect("a relation file cannot be read, so the completion cannot be checked",
                                     "undecodable_relation")
@@ -100,6 +100,12 @@ class EffectRecovery:
             elif event.holdings is not None:  # verified as read: the commit re-checks it, like a duplicate
                 landed = tuple(sorted(event.holdings.seqs, key=str))
             agents, actors = _acting(lib, event)
+            gone = sorted(str(agent) for agent, etag in agents.items() if etag is None)
+            if gone:  # accept refuses an act whose agent has no instance file; so does finishing one
+                raise InvalidEffect(f"{', '.join(gone)} has no instance file", "missing_agent", gone)
+            for number, item in enumerate(event.operations):  # what a verified begin rests on, pinned
+                if number not in failing and item.op.kind == "begin":
+                    agents.update({end: lib._etag(end) for end in (item.op.subject, item.op.object)})
             verified = {event.receipts[number].relation for number in range(len(event.operations))} - {
                 event.receipts[number].relation for number in failing}
             return EffectChange(
@@ -123,6 +129,9 @@ class EffectRecovery:
         for number, item in enumerate(event.operations):
             if number in failing or item.op.kind != "begin":
                 continue
+            if not {item.op.subject, item.op.object} <= index.instances:  # removed by hand since: an undo too
+                raise InvalidEffect(f"an endpoint of operation {number} has no instance file", "missing_endpoint",
+                                    (str(number),))
             relation = index.relation(event.receipts[number].relation.relation_id, requested_by=DIRECTOR).relation
             if relation.ending is not None:
                 raise InvalidEffect(f"the relation operation {number} began was ended since", "not_completable",

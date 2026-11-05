@@ -568,3 +568,33 @@ def test_adopt_refuses_a_landed_change_whose_time_cannot_be_read(world, stamp):
     path.write_text(json.dumps(data, sort_keys=True, indent=2) + "\n")
     assert allies(store)[0].recorded_at == stamp
     _refused(lambda: recovery(store, handles).adopt(throw(), controls=CONTROLS), "not_completable")
+
+
+# -- round-3 review ------------------------------------------------------------------------------
+
+def test_complete_refuses_a_verified_begin_whose_endpoint_is_gone(world):
+    store, handles = world
+    publish(store, planned(store, handles), relations=True, event=True)  # the ball was never spent
+    [wisp] = [path for path in store.root.rglob("wisp.json") if "holdings" not in path.parts]
+    wisp.unlink()
+    _refused(lambda: recovery(store, handles).complete(EVENT, expected=_etag(store, handles)), "missing_endpoint")
+    assert balls(store) == 3
+
+
+def test_complete_refuses_an_event_whose_agent_is_gone(world):
+    store, handles = world
+    publish(store, _give_change(store, handles), event=True)
+    [wren] = [path for path in store.root.rglob("wren.json") if "holdings" not in path.parts]
+    wren.unlink()
+    _refused(lambda: recovery(store, handles).complete(EVENT, expected=_etag(store, handles)), "missing_agent")
+
+
+def test_a_retry_of_complete_after_a_later_event_is_still_a_no_op(world):
+    store, handles = world
+    publish(store, planned(store, handles), event=True, holders=True)
+    recovery(store, handles).complete(EVENT, expected=_etag(store, handles)).commit()
+    effects_library(store, handles).accept(Op_meet(), controls=CONTROLS).commit()
+    retry = recovery(store, handles).complete(EVENT, expected=_etag(store, handles))
+    assert retry.duplicate_of == EVENT and retry.preview() == {}
+    retry.commit()
+    _completed(store, handles)

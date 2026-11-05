@@ -42,19 +42,21 @@ failing closed as `accept` and `revoke` do (`undecodable_event`, `inconsistent_l
 Writes exactly the changes the active event's receipts name that never landed, as the original commit wrote them,
 so the receipts then verify. The event file is never rewritten.
 
-1. The event must exist (the store's own error otherwise), be active (`already_revoked`), have etag `expected`
-   (`StaleWrite`) and be the **latest** active event (`not_latest`, as `revoke`): a later event's play may
-   contradict what finishing an earlier one would write, and holdings' exact seqs cannot protect relations.
+1. The event must exist (the store's own error otherwise), be active (`already_revoked`) and have etag
+   `expected` (`StaleWrite`).
 2. Receipts and the holdings receipt (lenient, as the duplicate check reads it) already verify: a **no-op**
    (`duplicate_of=ref`, `preview() == {}`), whose commit re-checks like a duplicate's. This is the exactly-once
-   retry.
-3. Any `effect:revoked/<id>` token for the event in a campaign relation or holder file refuses
+   retry, also once later events exist.
+3. Otherwise it must be the **latest** active event (`not_latest`, as `revoke`): a later event's play may
+   contradict what finishing an earlier one would write, and holdings' exact seqs cannot protect relations.
+4. Any `effect:revoked/<id>` token for the event in a campaign relation or holder file refuses
    (`not_completable`): a revocation of it partly landed, and completing would redo what it undid.
-4. **A human repair is never doubled.** A holder that logs the event's holdings entry and logged anything after
+5. **A human repair is never doubled.** A holder that logs the event's holdings entry and logged anything after
    it, or a relation one of the event's `begin`s wrote that has been ended since, refuses (`not_completable`,
-   naming `holdings` or the operation): finishing would write the rest of an effect someone already undid or
+   naming `holdings` or the operation); so does a verified `begin` whose endpoint's instance file is gone
+   (`missing_endpoint`), and an agent with no instance file (`missing_agent`, as `accept`): finishing would write the rest of an effect someone already undid or
    finished by hand by other means (a hand refund of a synced spend would leave the effect in force uncharged).
-5. Each failing relation receipt must be plainly **unpublished**:
+6. Each failing relation receipt must be plainly **unpublished**:
    - a `begin` whose receipted relation file does not exist is re-added **under the receipted relation id**,
      `since` the event's moment, provenance `effect:accepted/<id>` (017's `add(relation_id=...)`, below). 017's
      checks apply: `missing_endpoint`, `instance_id_conflict`, an overlapping record of the fact is
@@ -64,15 +66,15 @@ so the receipts then verify. The event file is never rewritten.
      017's `end` with CAS;
    - anything else (another fact, a retraction, an ending by something else, the id now held by another file)
      is `not_completable`, naming the operation. Nothing is written.
-6. When the holdings receipt fails, 023's `HoldingsLibrary.complete` finishes it at the receipt's exact seqs
+7. When the holdings receipt fails, 023's `HoldingsLibrary.complete` finishes it at the receipt's exact seqs
    ([below](#023-complete)). A holder that no longer fits the receipt is `not_completable` (`holdings`); other
    023 refusals pass through (`insufficient`, `stale_count`, `missing_holder`, `instance_id_conflict`,
    `too_large`, ...).
-7. Ability charges need no write: they are recorded on the event.
-8. The commit re-checks: accepted events unchanged, each relation change's own `stale()`, every relation file
+8. Ability charges need no write: they are recorded on the event.
+9. The commit re-checks: accepted events unchanged, each relation change's own `stale()`, every relation file
    readable, every receipted relation that verified pinned as read (`relation changed`), each written holder's
    instance file (023's `recheck`), every other receipted holder file pinned as read (`holder file changed`),
-   the agents' instance files (`agent missing or changed`), no actor id paired with another kind, and that the
+   the agents' and verified `begin`s' endpoints' instance files (`agent missing or changed`), no actor id paired with another kind, and that the
    relation and holder files naming the event in a 021 token are still exactly those read: a revocation landing
    in between is `StaleWrite`, not completed over.
 
@@ -185,7 +187,7 @@ its event names.
   coherently: `revoke(partial=True)` reads "different operation" at its seq and skips the undo as possibly in
   force (`partial_revocation`). A multi-holder holdings part that landed on some holders only is the same for
   `revoke(partial=True)`: complete it first, then revoke. Both stay a human repair.
-- **Aborting needs the latest event**, as `revoke` does (`not_latest`); so does `complete`.
+- **Aborting needs the latest event**, as `revoke` does (`not_latest`); so does a `complete` that writes.
 - **Adopting a relation-only orphan trusts the presented proposal's chat and turn.** A relation records its fact,
   moment sequence and token, not the turn, so a different proposal at the same sequence whose operations include
   the orphan's could adopt it. The holdings op id derives from the effect's fingerprint, so a holdings orphan is
