@@ -1,4 +1,4 @@
-# Story-quality gate (Sprint 005 first slice; run format `/2` from Sprint 015)
+# Story-quality gate (Sprint 005 first slice; run format `/2` from Sprint 015, `/3` from Sprint 027)
 
 **Status:** offline, deterministic, automatic pass/fail gate. It scores *recorded* runs; it never
 calls a model. Blinded human comparison, long-horizon evaluation, NPC agency/initiative
@@ -8,9 +8,10 @@ calls a model. Blinded human comparison, long-horizon evaluation, NPC agency/ini
 python -m grimoire.evals.story_quality SCENARIO.json BASELINE.json CANDIDATE.json
 ```
 
-Baseline and candidate must both be `/1` or both `/2` runs (mixing them is exit `2`). For `/2`
-runs, `--evidence-baseline EVIDENCE` / `--evidence-candidate EVIDENCE` supply a capture's
-`evidence.json`; see [Format `/2`](#format-grimoirestory-quality2).
+Baseline and candidate must have the same run format, `/1`, `/2` or `/3` (mixing them is exit
+`2`). For `/2` runs, `--evidence-baseline EVIDENCE` / `--evidence-candidate EVIDENCE` supply a
+capture's `evidence.json`; see [Format `/2`](#format-grimoirestory-quality2). Evidence is refused
+for `/1` and `/3` runs.
 
 Exit status: `0` pass, `1` gate failed, `2` invalid input or usage. The report goes to stdout and
 cites ids and indices only, never contribution or marker text. Options: `--max-cost-increase`
@@ -22,7 +23,9 @@ The shipped benchmark lives in `backend/src/grimoire/evals/benchmarks/guild_betr
 baseline is a **synthetic, hand-authored imitation of V0.2.1's call shape** (one RP call per
 speaking NPC plus narration), not a measurement of V0.2.1. A pass against a synthetic run prints
 "no regression against a synthetic baseline — not a cost/quality certification". The same
-baseline in `/2` (narration removed, since `/2` has no narration stage) is `baseline.v2.json`.
+baseline in `/2` (narration removed, since `/2` has no narration stage) is `baseline.v2.json`,
+and in `/3` (each narration call recorded as that turn's opt-in `director_generation` reply, with
+the same tokens) is `baseline.v3.json`.
 Measured V0.2.1 capture is [V0.2.1 baseline](V021_BASELINE.md) (sprint 015): its status is
 **baseline capture pending**. Ordinary CI never invokes a paid provider, and synthetic fixtures
 can never be relabeled measured.
@@ -31,17 +34,17 @@ can never be relabeled measured.
 
 `grimoire.evals` imports only `grimoire.core.inference` from the domain core (it never imports
 `grimoire.core` itself). Format `/1` keeps these known differences from
-[the inference contract](../INFERENCE.md); format `/2` reconciles them. Both are pinned by
-`backend/tests/test_wave1_integration.py`:
+[the inference contract](../INFERENCE.md); format `/2` reconciles them, and `/3` adds the director
+stage. They are pinned by `backend/tests/test_wave1_integration.py`:
 
 | Item | `/1` | `core.inference` | `/2` |
 |---|---|---|---|
-| narration purpose | `narration` is an unflagged RP purpose; the synthetic baseline spends about a third of its weighted tokens on it | no `narration` stage; a turn must not issue one | no narration call or scene-level contribution; narration prose belongs to the NPC contribution that produced it. **Provisional** in `/2`: 027 has since added an optional, scene-level `director_generation` stage ([INFERENCE](../INFERENCE.md)), which `/2` refuses; recording director calls is a `/3` bump, the next 027 slice |
+| narration purpose | `narration` is an unflagged RP purpose; the synthetic baseline spends about a third of its weighted tokens on it | narration is the optional, scene-level `director_generation` stage (027, [INFERENCE](../INFERENCE.md)) | no narration call or scene-level contribution; narration prose belongs to the NPC contribution that produced it. **Provisional** in `/2`, which refuses `director_generation`; `/3` records it (below) |
 | provenance vocabulary | `synthetic` / `measured` (self-declared; the report says so) | `provider_reported` / `estimated` / `synthetic` per attempt | per-attempt `measurement`; "measured" is derived from the rebuilt ledger plus verified evidence, never declared |
 | token fields | integer `input_tokens`, `cached_input_tokens`, `output_tokens`; an unreported count cannot be recorded | `None` means unreported; cache read/write and reasoning tokens separate | the `TokenUsage` fields, `null` = unreported |
 | optional calls | `actor_id` only on `npc_generation`; free-form `feature_flag` names | every optional stage is an `InferenceStage`, with an optional actor | every call has a `stage` from a frozen copy of `InferenceStage`, planned under the run's `policy` |
 
-`npc_generation` means the same in all three. The shipped `/1` benchmark's other purposes and
+`npc_generation` means the same in all of them. The shipped `/1` benchmark's other purposes and
 flags must be `InferenceStage` values.
 
 ## Format `grimoire.story-quality/1`
@@ -103,9 +106,10 @@ Runs only; scenarios keep format `/1`. A `/2` run is rebuilt turn by turn as a
   whose actor is its speaker, with a `completed` attempt. A planned call with no attempts and no
   contribution is *unmetered*: reported as missing data, never free.
 - **Sources:** `synthetic`; `v0.2.1-capture` (`mode` `dry_run`/`live`, pinned `v1_commit`,
-  `harness`, `evidence_sha256`, `profile`, `llm_retries`, `route`); `v2-runtime` (reserved for
-  013/027). A synthetic or dry-run source may hold only `synthetic` measurements; a live capture
-  only `provider_reported`/`estimated`.
+  `harness`, `evidence_sha256`, `profile`, `llm_retries`, `route`); `v2-runtime` (`harness`,
+  optional `route` and `evidence_sha256`; no verifier yet, so never "measured"). A synthetic or
+  dry-run source may hold only `synthetic` measurements; a live capture only
+  `provider_reported`/`estimated`. The 027 runtime records `v2-runtime` runs in `/3`.
 - **Choice outcomes** may also be `unlabelled` (judged on marker evidence only, and counted).
 
 The gate runs the `/1` hard checks and cast distinguishability on a `/1`-shaped view, then judges
@@ -117,6 +121,39 @@ Usage status is `measured` (complete, provider-reported, and evidence whose dige
 re-conversion verify; the evidence bundle itself is not authenticated),
 `provider-reported (declared by capture, unverified)`, `estimated`, `synthetic` or `incomplete`;
 evidence that is supplied but does not verify is an `evidence_unverified` finding.
+
+## Format `grimoire.story-quality/3`
+
+Runs only; scenarios keep format `/1`. `/3` is `/2` with sprint 027's scene-level director reply,
+so a shipped `/2` file keeps its meaning and is still read as `/2`. A `/2` file is not a `/3` file
+or the reverse (`run.format` is a located error), and the gate refuses to compare one with the
+other. Everything in `/2` holds, and additionally:
+
+- **Stages** are every `InferenceStage`, including `director_generation`. Like any optional stage
+  it must have a cap in the run's `policy`; a director call the policy does not enable is a
+  located error, never an implicit extra. It speaks for the scene (`actor_id` `null`) and at most
+  once per turn, whatever the cap.
+- **Narration:** a model contribution with `speaker_id` `null` must name its turn's completed
+  `director_generation` call, and a director call's contribution has no speaker. An NPC line
+  still names its own `npc_generation` call; no other stage produces a contribution.
+- **Sources** are `synthetic` or `v2-runtime`. A 0.2.1 capture has no director call under its
+  profile and stays `/2`, where its evidence is verified.
+- **Gate:** director lines are narration to the hard checks (`/1` purpose `narration`), so
+  knowledge leaks, PC authorship, continuity, attribution, orphan calls and voice-sample copies are
+  checked on them as on NPC lines. Opting into `director_generation` is judged from the policy, so a
+  candidate that enables it when the baseline did not is `flag_not_allowed` unless allowed. Cast
+  distinguishability needs NPC lines; when neither run has one and both have narration (a
+  scenario-only chat), voice is not compared. A run with no model line at all still fails closed.
+  The report adds a `narration lines` row.
+
+`grimoire.evals.runtime_record.record_runtime_run` writes a `/3` `v2-runtime` run from 027 turns
+(`grimoire.runtime.recorded_turn` takes a turn's `TurnMeter` and `TurnOutcome`). Its calls are the
+turn plan's calls in plan order, each with every booked attempt, so a scenario-only turn records one
+director call and no NPC call, and a two-NPC turn two NPC calls and no director call. A planned
+call that never ran has no attempts (unmetered); a paid call whose reply was screened out or
+withheld has no contribution (an orphan). Latency is recorded as unreported, because the meter
+times attempts and not the whole call. A meter with a failed booking is refused, since its ledger
+may be missing an attempt.
 
 ## Checks
 

@@ -180,6 +180,69 @@ def guild_run_v2() -> tuple[dict, dict]:
     return scenario, v2_from_v1(baseline)
 
 
+# --- grimoire.story-quality/3 ------------------------------------------------------------------
+
+FORMAT_V3_NAME = "grimoire.story-quality/3"
+DIRECTOR_PURPOSE = "director reply"
+
+
+def v3_from_v1(run: dict) -> dict:
+    """A /1 run as /3: each narration call is the turn's opt-in director reply, one attempt each."""
+    calls = []
+    for c in run["calls"]:
+        narration = c["purpose"] == "narration"
+        attempt = attempt_v2(c["input_tokens"], c["output_tokens"], cache_read=c["cached_input_tokens"])
+        attempt["usage"]["cache_write_tokens"] = 0
+        calls.append({
+            "call_id": c["call_id"], "turn": c["turn"],
+            "stage": "director_generation" if narration else c["purpose"],
+            "actor_id": c["actor_id"],
+            "purpose": DIRECTOR_PURPOSE if narration else "speaking NPC contribution",
+            "latency_ms": c["latency_ms"], "attempts": [attempt],
+        })
+    return {
+        "format": FORMAT_V3_NAME,
+        "run_id": run["run_id"].replace("synthetic", "synthetic-v3"),
+        "scenario_id": run["scenario_id"],
+        "label": "Synthetic V0.2.1-shaped baseline in /3: one RP call per speaking NPC plus an "
+                 "opt-in director reply",
+        "source": {"kind": "synthetic"},
+        "conditions": dict(run["conditions"]),
+        "policy": {"per_turn_call_caps": {"director_generation": 1}, "max_attempts_per_call": 1},
+        "turns": [{"turn": t["turn"], "contributions": [
+            {k: v for k, v in entry.items() if not (k == "call_id" and v is None)}
+            for entry in t["contributions"]]} for t in run["turns"]],
+        "calls": calls,
+        "choice_outcomes": dict(run["choice_outcomes"]),
+        "judge_scores": dict(run.get("judge_scores", {})),
+    }
+
+
+def guild_run_v3() -> tuple[dict, dict]:
+    """(scenario, /3 run) for the shipped guild_betrayal benchmark, narration included."""
+    scenario, baseline = load_benchmark()
+    return scenario, v3_from_v1(baseline)
+
+
+def minimal_run_v3() -> dict:
+    """``minimal_run_v2`` as /3, with the director reply enabled but not used."""
+    run = minimal_run_v2()
+    run.update(format=FORMAT_V3_NAME, run_id="r3", label="minimal /3")
+    run["policy"]["per_turn_call_caps"] = {"director_generation": 1}
+    return run
+
+
+def director_call(call_id="n1", turn=1, **overrides) -> dict:
+    entry = {"call_id": call_id, "turn": turn, "stage": "director_generation", "actor_id": None,
+             "purpose": DIRECTOR_PURPOSE, "latency_ms": 40, "attempts": [attempt_v2(60, 8)]}
+    entry.update(overrides)
+    return entry
+
+
+def narration_line(text="The door creaks after the knock.", call_id="n1") -> dict:
+    return {"speaker_id": None, "author": "model", "text": text, "call_id": call_id}
+
+
 # --- 0.2.1 capture evidence --------------------------------------------------------------------
 
 V021_COMMIT = "e4c4ec4abacd0beb87fc9f1cdd06e6787d5a88ce"

@@ -1,9 +1,9 @@
 """Command line: ``python -m grimoire.evals.story_quality SCENARIO BASELINE CANDIDATE``.
 
-Both runs must be ``grimoire.story-quality/1`` or both ``/2``. For ``/2`` capture runs,
-``--evidence-baseline``/``--evidence-candidate`` name the capture's ``evidence.json``; only a
-verified one makes a run "measured". Exit status 0 = pass, 1 = gate failed, 2 = invalid input
-or usage. Writes only to stdout/stderr.
+Both runs must have the same format: ``grimoire.story-quality/1``, ``/2`` or ``/3``. For ``/2``
+capture runs, ``--evidence-baseline``/``--evidence-candidate`` name the capture's
+``evidence.json``; only a verified one makes a run "measured". Exit status 0 = pass, 1 = gate
+failed, 2 = invalid input or usage. Writes only to stdout/stderr.
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ import argparse
 import sys
 from collections.abc import Sequence
 
-from .format import BenchmarkFormatError
-from .format2 import RunV2
+from .format import FORMAT, BenchmarkFormatError, Run
+from .format2 import FORMAT_V2, RunV2
 from .gate import compare
 from .gate2 import compare_v2
 from .loader import load_any_run, load_evidence, load_scenario
@@ -48,6 +48,10 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _format(run: Run | RunV2) -> str:
+    return run.format if isinstance(run, RunV2) else FORMAT
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -58,14 +62,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         scenario = load_scenario(args.scenario)
         baseline = load_any_run(args.baseline, scenario)
         candidate = load_any_run(args.candidate, scenario)
-        if isinstance(baseline, RunV2) != isinstance(candidate, RunV2):
-            raise ValueError("baseline and candidate must have the same run format (/1 or /2)")
+        if _format(baseline) != _format(candidate):
+            raise ValueError("baseline and candidate must have the same run format "
+                             "(/1, /2 or /3)")
         evidence = {}
         for name, path, run in (("baseline", args.evidence_baseline, baseline),
                                 ("candidate", args.evidence_candidate, candidate)):
             if path is None:
                 continue
-            if not isinstance(run, RunV2):
+            if _format(run) != FORMAT_V2:  # only a 0.2.1 capture has evidence to verify
                 raise ValueError(f"--evidence-{name} applies only to a /2 run")
             bundle, digest = load_evidence(path)
             evidence[name] = verify_evidence(run, bundle, digest, scenario)

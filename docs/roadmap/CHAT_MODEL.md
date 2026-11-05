@@ -32,7 +32,7 @@ This is a first-slice composition responsibility of **022** (authored sections/f
 
 A player selects either (a) one character card, (b) a scenario card, (c) a character plus one or more lorebooks, or (d) a simple premise. They choose a persona and optional boundaries only if desired, then press **Start Chat**.
 
-**Scenario-only play must still be genuinely playable.** Without any speaking NPC, a reply may come from a separately authorized, explicitly metered **director/narrator generation stage** instead of a fake `Agent` NPC. The current Wave 1 `TurnInferencePlan` and `story-quality/2` **do not have a narration stage**; 027 must introduce a deliberate planned stage and compatible evaluation version (`/3` if necessary) **before** 035 can claim scenario-only generative play. Adding actual NPCs uses one independent RP generation per speaking NPC. Extra director calls when NPCs already answer are opt-in/visible, not an automatic hidden token tax.
+**Scenario-only play must still be genuinely playable.** Without any speaking NPC, a reply may come from a separately authorized, explicitly metered **director/narrator generation stage** instead of a fake `Agent` NPC. 027 has introduced that planned stage, `director_generation` ([INFERENCE](../INFERENCE.md#the-scene-level-director-reply)), and the evaluation version that records it, `story-quality/3` (`/2` stays without it), which 035 needs before it can claim scenario-only generative play. Adding actual NPCs uses one independent RP generation per speaking NPC. Extra director calls when NPCs already answer are opt-in/visible, not an automatic hidden token tax.
 
 Conceptually the runtime creates:
 

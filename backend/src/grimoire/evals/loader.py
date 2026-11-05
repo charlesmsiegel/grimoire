@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .format import BenchmarkFormatError, Run, Scenario, parse_run, parse_scenario
 from .format2 import FORMAT_V2, RunV2, parse_run_v2
+from .format3 import FORMAT_V3, parse_run_v3
 
 
 def _no_duplicates(pairs: list[tuple[str, object]]) -> dict:
@@ -54,10 +55,15 @@ def load_run(path: str | Path | Traversable, scenario: Scenario) -> Run:
 
 
 def load_any_run(path: str | Path | Traversable, scenario: Scenario) -> Run | RunV2:
-    """A ``/1`` or ``/2`` run, by its ``format``; any other format is the ``/1`` parser's error."""
+    """A ``/1``, ``/2`` or ``/3`` run (``RunV3`` is a ``RunV2``), by its ``format``.
+
+    Any other format is the ``/1`` parser's error.
+    """
     data = load_json(path)
     if isinstance(data, dict) and data.get("format") == FORMAT_V2:
         return parse_run_v2(data, scenario)
+    if isinstance(data, dict) and data.get("format") == FORMAT_V3:
+        return parse_run_v3(data, scenario)
     return parse_run(data, scenario)
 
 
