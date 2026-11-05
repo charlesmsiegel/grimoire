@@ -1,16 +1,20 @@
 """Deterministic lore triggering: whole-word key matching over audience-visible text (031).
 
-Text is NFC-normalized and casefolded, then split into word runs: maximal runs of letters, marks,
+Text is NFKC-normalized and casefolded, then split into word runs: maximal runs of letters, marks,
 digits and connector punctuation (Unicode categories ``L*``, ``M*``, ``N*`` and ``Pc``). A key
 matches a whole word sequence wherever it occurs: ``ash`` does not match ``ashen``, ``Black-Eyed``
 matches ``black eyed``, ``C-3PO`` matches ``c 3po``, and ``Mara's`` contains the word ``mara``.
-Combining marks stay inside their word, so a Devanagari or Arabic word with marks is one word, and
-the dot that casefolding leaves on a Turkish dotted capital I is dropped, so ``İstanbul`` matches
-``istanbul``. No model, no stemming, no embeddings: the same texts and keys always give the same
-answer.
+Combining marks stay inside their word, so a Devanagari or Arabic word with marks is one word;
+compatibility forms fold (fullwidth ``ＦＥＲＲＹ`` is ``ferry``); and the dot that casefolding leaves
+on a Turkish dotted capital I is dropped, so ``İstanbul`` matches ``istanbul``. No model, no
+stemming, no embeddings: the same texts and keys always give the same answer.
 
-**Limit:** scripts written without spaces (Chinese, Japanese, Thai) form one word run per stretch
-of text, so a key there matches only a whole run. Segmenting them is a later milestone.
+**Cost:** a ``SceneWords`` hashes every window of each key length in use once (a rolling hash
+over word ids), so a lookup costs the key's own length, whatever the texts or the other keys hold.
+
+**Limits:** scripts written without spaces (Chinese, Japanese, Thai) form one word run per stretch
+of text, so a key there matches only a whole run; likewise a Korean noun with a particle attached
+(``서울에서``) is one word, which the bare noun does not match. Segmentation is a later milestone.
 """
 
 from __future__ import annotations
@@ -20,9 +24,13 @@ import re
 import unicodedata
 from collections.abc import Callable, Iterable
 
-_DOT_ABOVE = "\u0307"  # what casefold leaves after the i of a dotted capital I
-_PATTERN: re.Pattern[str] | None = None
+_DOT_ABOVE = "̇"  # what casefold leaves after the i of a dotted capital I
 _MAX_CODE_POINT = 0x10FFFF
+_ASCII_WORD = re.compile(r"[a-z0-9_]+")
+_PATTERN: re.Pattern[str] | None = None
+#: the rolling hash: a Mersenne prime modulus and a fixed base, so the answer never depends on a seed
+_MODULUS = (1 << 61) - 1
+_BASE = 1_000_003
 
 
 def _ranges(wanted: Callable[[str], bool]) -> str:
@@ -50,12 +58,14 @@ def _pattern() -> re.Pattern[str]:
 
 def words(text: str) -> tuple[str, ...]:
     """The normalized word sequence of ``text``."""
-    folded = unicodedata.normalize("NFC", text).casefold().replace("i" + _DOT_ABOVE, "i")
-    return tuple(_pattern().findall(unicodedata.normalize("NFC", folded)))
+    if text.isascii():  # the common case: NFKC and casefold are plain lowercasing here
+        return tuple(_ASCII_WORD.findall(text.lower()))
+    folded = unicodedata.normalize("NFKC", text).casefold().replace("i" + _DOT_ABOVE, "i")
+    return tuple(_pattern().findall(unicodedata.normalize("NFKC", folded)))
 
 
 @functools.lru_cache(maxsize=65536)
-def _key_words(key: str) -> tuple[str, ...]:
+def key_words(key: str) -> tuple[str, ...]:
     """``words`` for a lore key, remembered: one lorebook's keys are asked again for every actor."""
     return words(key)
 
@@ -64,47 +74,73 @@ class SceneWords:
     """Several audience-visible texts, indexed once for many key lookups.
 
     Each text is matched on its own, so a two-word key never spans the end of one text and the start
-    of the next. A lookup checks first that every word of the key occurs in a text, then scans only
-    the occurrences of the key's rarest word there, and is remembered for the next entry asking it.
+    of the next. Words become ids; for each key length asked, every window of that length in every
+    text is hashed once, and a lookup confirms its hash against the window it names, so a hash
+    collision can only cost a scan, never a wrong answer.
     """
 
     def __init__(self, texts: Iterable[str]) -> None:
-        self._texts = tuple(words(text) for text in texts)
-        self._positions: list[dict[str, list[int]]] = []
-        for sequence in self._texts:
-            positions: dict[str, list[int]] = {}
-            for position, word in enumerate(sequence):
-                positions.setdefault(word, []).append(position)
-            self._positions.append(positions)
+        self._ids: dict[str, int] = {}
+        self._texts: list[list[int]] = []
+        for text in texts:
+            self._texts.append([self._ids.setdefault(word, len(self._ids) + 1) for word in words(text)])
+        self._windows: dict[int, dict[int, tuple[int, int]]] = {}
         self._seen: dict[tuple[str, ...], bool] = {}
 
-    def _scan(self, wanted: tuple[str, ...]) -> bool:
+    @staticmethod
+    def _hash(ids: list[int] | tuple[int, ...]) -> int:
+        value = 0
+        for item in ids:
+            value = (value * _BASE + item) % _MODULUS
+        return value
+
+    def _table(self, size: int) -> dict[int, tuple[int, int]]:
+        """Every window of ``size`` words: its hash -> where it first occurs (text, start)."""
+        table = self._windows.get(size)
+        if table is None:
+            table = self._windows[size] = {}
+            top = pow(_BASE, size - 1, _MODULUS)
+            for number, sequence in enumerate(self._texts):
+                if len(sequence) < size:
+                    continue
+                value = self._hash(sequence[:size])
+                table.setdefault(value, (number, 0))
+                for start in range(1, len(sequence) - size + 1):
+                    value = ((value - sequence[start - 1] * top) * _BASE + sequence[start + size - 1]) % _MODULUS
+                    table.setdefault(value, (number, start))
+        return table
+
+    def _scan(self, wanted: tuple[int, ...]) -> bool:
+        """The exact search, used only when two different windows share a hash."""
         size = len(wanted)
-        for sequence, positions in zip(self._texts, self._positions):
-            if any(word not in positions for word in wanted):
-                continue
-            anchor = min(range(size), key=lambda k: (len(positions[wanted[k]]), k))
-            for at in positions[wanted[anchor]]:
-                start = at - anchor
-                if start >= 0 and sequence[start:start + size] == wanted:
-                    return True
-        return False
+        return any(tuple(sequence[start:start + size]) == wanted
+                   for sequence in self._texts for start in range(len(sequence) - size + 1))
+
+    def _lookup(self, wanted: tuple[str, ...]) -> bool:
+        if not wanted or any(word not in self._ids for word in wanted):
+            return False
+        ids = tuple(self._ids[word] for word in wanted)
+        place = self._table(len(ids)).get(self._hash(ids))
+        if place is None:
+            return False
+        number, start = place
+        if tuple(self._texts[number][start:start + len(ids)]) == ids:
+            return True
+        return self._scan(ids)
 
     def _has(self, wanted: tuple[str, ...]) -> bool:
-        if not wanted:
-            return False
         found = self._seen.get(wanted)
         if found is None:
-            found = self._seen[wanted] = self._scan(wanted)
+            found = self._seen[wanted] = self._lookup(wanted)
         return found
 
     def contains(self, key: str) -> bool:
         """Whether ``key``'s words occur contiguously in one of the texts."""
-        return self._has(_key_words(key))
+        return self._has(key_words(key))
 
     def hits(self, keys: Iterable[str]) -> int:
         """How many distinct keys occur. Keys that normalize alike (``Ferry``, ``ferry``) count once."""
-        return sum(1 for wanted in dict.fromkeys(_key_words(key) for key in keys) if self._has(wanted))
+        return sum(1 for wanted in dict.fromkeys(key_words(key) for key in keys) if self._has(wanted))
 
 
-__all__ = ["SceneWords", "words"]
+__all__ = ["SceneWords", "key_words", "words"]

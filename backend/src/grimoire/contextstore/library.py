@@ -36,8 +36,10 @@ class ChatContext:
     """A chat actor's pack and what it was built from.
 
     ``chat_etag`` and ``scope_etag`` name the chat and scope records the snapshot read, so a caller
-    can tell a pack built before a binding changed from one built after. ``problems`` are the chat
-    snapshot's own (``orphan_chat``, ``missing_actor:<ref>`` ...), never a failure.
+    can tell a pack built before an attach, detach or pin from one built after. A head-following
+    binding can move without changing either etag; that shows as ``binding_drift`` in the pack's
+    ``problems``. ``problems`` here are the chat snapshot's own (``orphan_chat``,
+    ``missing_actor:<ref>`` ...), never a failure.
     """
 
     pack: ContextPack

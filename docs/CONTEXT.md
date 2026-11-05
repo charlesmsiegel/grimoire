@@ -28,7 +28,7 @@ Audience is decided before any ranking or budget, and only from inputs the actor
 
 1. **Only active bindings.** Every source comes from the snapshot's selection, which for a chat is its active bindings. A world is provenance only: nothing in its catalog is read unless it is bound. A detached source contributes nothing.
 2. **A card is its own actor's.** A `character` or `persona` binding's composed name, description and sections reach only the actor bound to it. A cleared section never appears (022 composes it away). Another actor's card, an absent antagonist's secret section included, never reaches the pack. A card is never read for lore.
-3. **Memory is the actor's own projection.** Confirmed perceptions and held propositions with the current stance, never events, rulings, standing, true senders, unconfirmed evidence or other actors' records. A refuted rumour the actor suspects appears as `You suspect: ...`: it is evidence of a report, not of truth. Lines carry no record ids (012) and name no other actor beyond what the held text itself says.
+3. **Memory is the actor's own projection.** Confirmed perceptions and held propositions with the current stance, never events, rulings, standing, true senders, unconfirmed evidence or other actors' records. A held proposition with a current belief leads with its stance (`You believe:`, `You suspect:` or `You do not believe:`); one only reported leads with how it arrived (`You were told:`, `You heard (overheard):`, or `You told someone:` for one the actor only sent). A refuted rumour the actor suspects appears as `You suspect: ...`: it is evidence of a report, not of truth. Lines carry no record ids (012) and name no other actor beyond what the held text itself says.
 4. **Lore is `common` only.** A `LoreEntry` defaults to `audience="director"`, so an unclassified entry is withheld. Only `constant` entries and entries whose key occurs in **what the actor perceived** are candidates.
 5. **The director's graph is never consulted.** 012's `knowledge_about` and 017's `claims_about` for the actor and the present cast only **rank and annotate** items the actor already holds. A graph connection gives an actor nothing.
 6. **What was withheld is not reported.** `omitted` lists candidates the budget shed; `untriggered` counts `common` entries per source that no key matched; `problems` covers only the actor's own binding and the lore bindings. Director entries, other cards, other actors' bindings and unheld records appear in none of them, because what an actor may not see is the director's. The chat's own problems are on `ChatContext.problems`.
@@ -52,24 +52,24 @@ These cannot be checked here:
 | `SourceProblem.code` | when |
 |---|---|
 | `no_entry_reader` | no reader for the record's schema (`detail`: the schema), or the definition has no record |
-| `unreadable_entries` | the reader raised `ValueError`, `TypeError`, `LookupError` or `AttributeError` (`detail`: the exception's text `reason`, else its class), returned something other than `LoreEntry`s (`not_lore_entry`), returned an id twice (`duplicate_entry`), the payload could not be copied (`too_deep`, `uncopyable`), or `unpack` gave something other than `(schema, mapping)` (`invalid_unpack`) |
+| `unreadable_entries` | the reader raised `ValueError`, `TypeError`, `LookupError` or `AttributeError` (`detail`: the exception's text `reason`, else its class; so one malformed entry blanks its whole source), returned something other than `LoreEntry`s (`not_lore_entry`), returned an id twice (`duplicate_entry`), the payload could not be copied (`too_deep`, `uncopyable`), or `unpack` gave something other than `(schema, mapping)` (`invalid_unpack`) |
 | `too_many_entries` | more than 4096 entries (`detail`: `>4096`; the reader's output is not read past that) |
 | `missing_source` | the binding does not resolve (`detail`: 022's broken reason) |
 | 022 notices | `binding_drift` (`detail`: `r1 -> r2`) and the other resolution notices of a head-following binding, passed through; the pack still builds from the head now in effect |
 
 Any other exception from a reader is a bug and propagates.
 
-`LoreEntry(entry_id, text, keys=(), constant=False, audience="director", order=0)`: `entry_id` follows the identity segment grammar; `text` is safe text of at most 8000 characters; `keys` is a collection of at most 64 distinct single-line keys of at most 100 characters, each with at least one word; `audience` is `common` or `director`; `order` is an int within ±1,000,000.
+`LoreEntry(entry_id, text, keys=(), constant=False, audience="director", order=0)`: `entry_id` follows the identity segment grammar; `text` is safe text of at most 8000 characters (no control, format, surrogate or line/paragraph separator characters except newline, tab, ZWNJ and ZWJ, so invisible bidi and zero-width marks are refused); `keys` is a collection of at most 64 distinct single-line keys of at most 100 characters, each with at least one word; `audience` is `common` or `director`; `order` is an int within ±1,000,000.
 
-**037 handoff:** an importer that registers a reader must classify each entry's audience. An entry left at the default stays director-only.
+**037 handoff:** an importer that registers a reader must classify each entry's audience. An entry left at the default stays director-only. Because one entry that fails `LoreEntry`'s checks blanks its source, a reader should skip or sanitize a bad entry rather than raise.
 
 ## Triggering
 
-Matching is deterministic and model-free (`grimoire.context.trigger`). Text is NFC-normalized, casefolded and split into word runs of letters, marks, digits and connector punctuation (Unicode `L*`, `M*`, `N*`, `Pc`), so a key matches a whole word sequence: `ash` does not match `ashen`, `Black-Eyed` matches `black eyed`. Combining marks stay inside their word (a Devanagari or Arabic word with marks is one word), and `İstanbul` matches `istanbul`. Each perceived text is matched on its own, so a key never spans two texts. Keys that normalize alike count once.
+Matching is deterministic and model-free (`grimoire.context.trigger`). Text is NFKC-normalized (so fullwidth `ＦＥＲＲＹ` is `ferry`), casefolded and split into word runs of letters, marks, digits and connector punctuation (Unicode `L*`, `M*`, `N*`, `Pc`), so a key matches a whole word sequence: `ash` does not match `ashen`, `Black-Eyed` matches `black eyed`. Combining marks stay inside their word (a Devanagari or Arabic word with marks is one word), and `İstanbul` matches `istanbul`. Each perceived text is matched on its own, so a key never spans two texts. Keys that normalize alike count once.
 
-A lookup first checks that every word of the key occurs in a text, then scans only the occurrences of its rarest word; results and key normalization are remembered, so a lorebook at its limits (4096 entries of 64 keys) costs time linear in its keys.
+The perceived texts are indexed once: words become ids, and for each key length in use every window of that length is hashed once. A key's lookup is then one hash of its own words, confirmed against the window it names (a collision only costs an exact scan). Results and key normalization are remembered, so the cost is linear in the texts and the keys: a source at its limits (4096 entries of 64 keys) takes about two seconds, almost all of it normalizing and checking the keys.
 
-**Limit:** scripts written without spaces (Chinese, Japanese, Thai) form one word run per stretch, so a key there matches only a whole run.
+**Limit:** scripts written without spaces (Chinese, Japanese, Thai) form one word run per stretch, so a key there matches only a whole run; likewise a Korean noun with a particle attached is one word, which the bare noun does not match.
 
 ## Ranking and the budget
 
@@ -80,7 +80,7 @@ Packing is greedy and deterministic: lanes in order, each lane in rank order, fi
 | Lane | Rank (first wins) |
 |---|---|
 | portrayal | name, description, then sections in composed order |
-| memory | about the actor or a present actor first, then newest, then perceptions before propositions, then id |
+| memory | propositions about the actor or a present actor first (perceptions are of events, never in focus), then newest, then perceptions before propositions, then id |
 | lore | constant first (by `order`), then more distinct key hits, then `order`, then source and entry id |
 
 `count` is the route's token counter; `measurement` records whether it is `estimated` (the default `estimate_tokens`, UTF-8 bytes / 3 rounded up, an estimate and not a bound for any real tokenizer) or `counted`. With the default estimate and an overhead of at least 1, `estimate_tokens(pack.render())` never exceeds `pack.tokens`.
@@ -89,7 +89,7 @@ Packing is greedy and deterministic: lanes in order, each lane in rank order, fi
 
 ## Refusals
 
-`ContextError` (a `ValueError`) with a machine-readable `reason`: `invalid_audience`, `campaign_mismatch`, `invalid_as_of`, `invalid_budget`, `invalid_present`, `invalid_scene_text`, `invalid_readers`, `invalid_measurement`, `invalid_claims`, `invalid_sections`, `invalid_entry`, `invalid_count`, `invalid_lane`, `unresolved_audience` (the actor has no entity in this snapshot) and `budget_too_small`. A ledger or snapshot of the wrong type raises `TypeError`. `actor_context` lets 022's `RecordNotFound` and `ChatCodecError` propagate.
+`ContextError` (a `ValueError`) with a machine-readable `reason`: `invalid_audience`, `campaign_mismatch`, `invalid_as_of`, `invalid_budget`, `invalid_present`, `invalid_scene_text`, `invalid_readers`, `invalid_measurement`, `invalid_claims`, `invalid_sections`, `invalid_entry`, `invalid_count`, `invalid_unpack`, `invalid_lane`, `unresolved_audience` (the actor has no entity in this snapshot) and `budget_too_small`. A ledger or snapshot of the wrong type raises `TypeError`. `actor_context` lets 022's `RecordNotFound` and `ChatCodecError` propagate.
 
 ## Not in this slice
 

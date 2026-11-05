@@ -397,14 +397,26 @@ def test_marks_stay_inside_their_word(scene, key, hit):
     assert SceneWords([scene]).contains(key) is hit
 
 
-def test_triggering_scales_with_a_lorebook_at_its_limits():
-    import time
-    scene = SceneWords([("the tide " * 5000)])
-    keys = [f"the tide the tide k{n}" for n in range(MAX_ENTRIES // 64)]
-    started = time.perf_counter()
-    for _ in range(64):
-        scene.hits(keys)
-    assert time.perf_counter() - started < 5  # a missing word ends the lookup; repeats are remembered
+def test_triggering_costs_each_key_its_own_length(monkeypatch):
+    """Keys made only of the scene's commonest words: every lookup is one hash, never a scan."""
+    import itertools
+    common = ["the", "of", "and", "a", "to", "in"]
+    scene = SceneWords([" ".join(common[(n * 7) % 6] for n in range(20000))])
+    built: list[int] = []
+    table = SceneWords._table
+    monkeypatch.setattr(SceneWords, "_table", lambda self, size: built.append(size) or table(self, size))
+    monkeypatch.setattr(SceneWords, "_scan", lambda self, wanted: pytest.fail("a hash collision scan"))
+    keys = [" ".join(p) for length in range(4, 8)
+            for p in itertools.islice(itertools.product(common, repeat=length), 64 * 128)]
+    found = sum(scene.hits(keys[n:n + 64]) for n in range(0, len(keys), 64))
+    assert 0 < found < len(keys) and sorted(set(built)) == [4, 5, 6, 7]
+    assert all(scene.contains(key) == scene.contains(key) for key in keys[:100])
+
+
+def test_a_hash_collision_falls_back_to_an_exact_scan(monkeypatch):
+    monkeypatch.setattr(SceneWords, "_hash", staticmethod(lambda ids: 0))  # every window collides
+    scene = SceneWords(["the old ferry waits by the salt pans"])
+    assert scene.contains("salt pans") and scene.contains("old ferry") and not scene.contains("ferry old")
 
 
 class Opaque:
@@ -467,3 +479,68 @@ def test_a_rejected_belief_reads_as_disbelief():
 def test_lane_caps_accept_a_list_of_pairs():
     assert Budget(50, [["lore", 5]]) == Budget(50, {"lore": 5})
     assert reason(lambda: Budget(50, [(1, 5)])) == "invalid_budget"
+
+
+# -- review round 2 ----------------------------------------------------------------------------------
+
+def test_one_pass_focus_agrees_with_knowledge_about_and_claims_about():
+    from grimoire.core import Subject, actor_knowledge, knowledge_about
+    from grimoire.graph import claims_about
+    ledger = knowledge()
+    claims = ClaimSet(ledger, f.claim_shapes())
+    for who in EVERYONE:
+        cast = [actor(n) for n in EVERYONE if n != who]
+        built = build(who, ledger=ledger, claims=claims, present=cast)
+        held = actor_knowledge(ledger, actor(who), as_of=9)
+        nodes = [actor(who), *sorted(cast, key=str)]
+        about = {item.proposition_id for node in nodes
+                 for view in [knowledge_about(ledger, actor(who), Subject("instance", str(node)), as_of=9)]
+                 for item in (*view.evidence, *view.sent, *view.current) if getattr(item, "proposition_id", None)}
+        typed = {(item.proposition_id, item.predicate, item.position, node) for node in nodes
+                 for item in claims_about(held, claims, node).items}
+        memory = build(who, ledger=ledger, claims=claims, present=cast).lane("memory")
+        assert {i.origin.record for i in memory if i.origin.kind == "proposition"} >= about
+        assert {(i.origin.record, c.predicate, c.position, c.node) for i in built.items for c in i.claims} == typed
+
+
+def test_an_unaddressed_overheard_report_keeps_its_channel():
+    ledger = knowledge()
+    heard = replace(ledger.evidence[4], evidence_id="v7", holder=actor("wren"), confirmed=True)
+    louder = Knowledge(ledger.campaign_id, events=ledger.events, propositions=ledger.propositions,
+                       rulings=ledger.rulings, evidence=[*ledger.evidence, heard], beliefs=ledger.beliefs)
+    assert [i.line for i in build("wren", ledger=louder).lane("memory")] == [
+        "You heard (overheard): UNCONFIRMED-TOKEN the bell is cracked"]
+
+
+@pytest.mark.parametrize("text", ["Ferry lore \u202eesrever\u202c", "tag \U000E0049", "fer\u200bry", "\ufeffbom"])
+def test_invisible_format_characters_are_refused(text):
+    assert reason(lambda: LoreEntry("e", text)) == "invalid_entry"
+    assert reason(lambda: LoreEntry("e", "t", (text,))) == "invalid_entry"
+
+
+def test_zero_width_joiners_are_kept():
+    assert LoreEntry("e", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645").text.count("\u200c") == 1
+
+
+@pytest.mark.parametrize("kwargs, code", [
+    ({"measurement": []}, "invalid_measurement"), ({"count": None}, "invalid_count"), ({"unpack": 5}, "invalid_unpack"),
+])
+def test_more_malformed_requests_are_refused(kwargs, code):
+    assert reason(lambda: build("mara", **kwargs)) == code
+
+
+def test_malformed_entries_and_candidates_are_refused():
+    assert reason(lambda: LoreEntry("e", "t", audience=["common"])) == "invalid_entry"
+    assert reason(lambda: pack([Candidate("gossip", (0,), "x", Origin("lore"))], Budget(10), estimate_tokens)
+                  ) == "invalid_lane"
+
+
+def test_entry_order_ranks_before_ids():
+    planted = [entry("a-last", "A-LORE", "ferry", order=2), entry("z-first", "Z-LORE", "ferry", order=1)]
+    built = build("mara", unpack=lambda d: (LORE_SCHEMA, {"entries": planted}),
+                  snap=snapshot(SelectedSource(LORE, "lorebook"), lore=False))
+    assert [i.line for i in built.lane("lore")] == ["Z-LORE", "A-LORE"]
+
+
+def test_compatibility_forms_fold_for_matching():
+    assert SceneWords(["The \uff26\uff25\uff32\uff32\uff39 is late"]).contains("ferry")

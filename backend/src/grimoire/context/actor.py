@@ -37,10 +37,10 @@ from grimoire.core.entity import EntityError
 from grimoire.core.identity import InstanceRef, SourceRef
 from grimoire.core.index import Definition, MissingDefinition
 from grimoire.core.knowledge import Knowledge, Subject
-from grimoire.core.perspective import ActorKnowledge, actor_knowledge, knowledge_about
+from grimoire.core.perspective import ActorKnowledge, actor_knowledge
 from grimoire.core.portrayal import PortrayalError
 from grimoire.core.snapshot import EffectiveSnapshot, Resolution
-from grimoire.graph import ClaimSet, claims_about
+from grimoire.graph import PREDICATES, ClaimSet
 
 from .model import (
     MAX_ENTRIES, MAX_PRESENT, MAX_SCENE_TEXT, Budget, ClaimReading, ContextError, ContextPack, EntryReader,
@@ -91,7 +91,7 @@ def _check(knowledge: object, actor: object, as_of: object, budget: object, pres
         raise _fail("readers must map a record schema to a callable", "invalid_readers")
     if any(schema.startswith(ENTITY_SCHEMA_FAMILY) for schema in readers):
         raise _fail("an entity schema is composed, never read for lore", "invalid_readers")
-    if measurement not in MEASUREMENTS:
+    if type(measurement) is not str or measurement not in MEASUREMENTS:
         raise _fail(f"measurement must be one of {sorted(MEASUREMENTS)}", "invalid_measurement")
     if claims is not None:
         if type(claims) is not ClaimSet:
@@ -141,36 +141,49 @@ def _portrayal(snapshot: EffectiveSnapshot, actor: InstanceRef, excluded: frozen
 
 # -- what the actor holds ------------------------------------------------------------------------------
 
-def _focus(knowledge: Knowledge, held: ActorKnowledge, claims: ClaimSet | None, nodes: tuple[InstanceRef, ...],
-           as_of: int) -> tuple[set[str], dict[str, list[ClaimReading]]]:
-    """The held items about the actor or a present actor, and 017's typed readings of them."""
+def _held_propositions(held: ActorKnowledge) -> list[str]:
+    found = [item.proposition_id for item in held.evidence if item.kind == "report" and item.proposition_id]
+    found += [sent.proposition_id for sent in held.sent] + [belief.proposition_id for belief in held.current]
+    return list(dict.fromkeys(found))
+
+
+def _focus(knowledge: Knowledge, held: ActorKnowledge, claims: ClaimSet | None,
+           nodes: tuple[InstanceRef, ...]) -> tuple[set[str], dict[str, list[ClaimReading]]]:
+    """The held propositions about the actor or a present actor, and 017's typed readings of them.
+
+    The same answer as 012's ``knowledge_about`` and 017's ``claims_about`` asked once per node (a
+    held proposition is about a node when its ``about`` overtly names it; a claim reading is a held
+    proposition's shape naming the node), computed in one pass over what the actor holds.
+    """
+    subjects = {Subject("instance", str(node)) for node in nodes}
     keys: set[str] = set()
     readings: dict[str, list[ClaimReading]] = {}
-    for node in nodes:
-        about = knowledge_about(knowledge, held.actor, Subject("instance", str(node)), as_of=as_of)
-        keys |= {f"e:{item.evidence_id}" for item in about.evidence if item.kind == "perception"}
-        keys |= {f"p:{item.proposition_id}" for item in about.evidence if item.proposition_id is not None}
-        keys |= {f"p:{item.proposition_id}" for item in about.sent}
-        keys |= {f"p:{item.proposition_id}" for item in about.current}
-        if claims is not None:
-            for item in claims_about(held, claims, node).items:
-                keys.add(f"p:{item.proposition_id}")
-                readings.setdefault(item.proposition_id, []).append(ClaimReading(item.predicate, item.position, node))
+    for proposition_id in _held_propositions(held):
+        if subjects.intersection(knowledge.proposition(proposition_id).about):
+            keys.add(f"p:{proposition_id}")
+        shape = claims.shapes.get(proposition_id) if claims is not None else None
+        if shape is None:
+            continue
+        for node in nodes:
+            if shape.names(node):
+                position = ("either" if PREDICATES[shape.predicate].symmetric
+                            else "subject" if shape.subject == node else "object")
+                keys.add(f"p:{proposition_id}")
+                readings.setdefault(proposition_id, []).append(ClaimReading(shape.predicate, position, node))
     return keys, readings
 
 
 def _memory(held: ActorKnowledge, focus: set[str], readings: dict[str, list[ClaimReading]]) -> list[Candidate]:
     found: list[Candidate] = []
     for item in held.evidence:
-        if item.kind == "perception":
-            key = f"e:{item.evidence_id}"
-            found.append(Candidate("memory", (key not in focus, -item.moment.sequence, 0, item.evidence_id),
+        if item.kind == "perception":  # a perception is of an event, never about an instance node
+            found.append(Candidate("memory", (True, -item.moment.sequence, 0, item.evidence_id),
                                    f"You perceived ({item.channel}): {item.content}",
                                    Origin("perception", record=item.evidence_id), sequence=item.moment.sequence))
     texts: dict[str, str] = {}
     sequences: dict[str, int] = {}
     evidence: dict[str, set[str]] = {}
-    heard: set[str] = set()
+    heard: dict[str, str] = {}  # the channel of the latest report of each proposition
 
     def note(proposition_id: str, text: str, sequence: int, evidence_id: str | None) -> None:
         texts.setdefault(proposition_id, text)
@@ -181,19 +194,22 @@ def _memory(held: ActorKnowledge, focus: set[str], readings: dict[str, list[Clai
     for item in held.evidence:
         if item.kind == "report" and item.proposition_id is not None:
             note(item.proposition_id, item.content, item.moment.sequence, item.evidence_id)
-            heard.add(item.proposition_id)
+            heard[item.proposition_id] = item.channel
     for sent in held.sent:
         note(sent.proposition_id, sent.text, sent.sent_at.sequence, sent.evidence_id)
     beliefs = {}
     for belief in held.current:  # one current belief per proposition (012's chain rule)
         note(belief.proposition_id, belief.text, belief.moment.sequence, None)
+        evidence.setdefault(belief.proposition_id, set()).update(belief.evidence_ids)
         beliefs[belief.proposition_id] = belief
     for proposition_id, text in texts.items():
         belief = beliefs.get(proposition_id)
         if belief is not None:
             lead = _STANCE_LEAD[belief.stance]
         else:
-            lead = "You were told" if proposition_id in heard else "You told someone"
+            channel = heard.get(proposition_id)
+            lead = ("You told someone" if channel is None else "You were told" if channel == "told"
+                    else f"You heard ({channel})")
         sequence = sequences[proposition_id]
         origin = Origin("proposition", record=proposition_id, evidence=tuple(sorted(evidence.get(proposition_id, ()))),
                         belief=None if belief is None else belief.belief_id)
@@ -227,9 +243,11 @@ def _entries(reader: EntryReader, payload: Mapping[str, object]
 
     The reader gets a fresh plain copy of the payload (dicts and lists, never the store's read-only
     proxies), so it cannot change the loaded view it came from. A payload the reader cannot interpret
-    is that source's problem, never the turn's: the ordinary exceptions of reading malformed data are
-    caught (``ContextError`` from an invalid ``LoreEntry`` is a ``ValueError``); anything else is a
-    bug in the reader and propagates.
+    is that source's problem, never the turn's: ``ValueError`` (``ContextError`` from an invalid
+    ``LoreEntry`` is one), ``LookupError``, and the ``TypeError`` and ``AttributeError`` that malformed
+    JSON shapes raise are caught, so a reader's own typo is reported the same way, every turn. Any
+    other exception propagates. One bad entry blanks the whole source: a reader should skip, not
+    raise on, an entry it cannot build.
     """
     try:
         copied = _plain(payload)
@@ -346,12 +364,16 @@ def pack_actor_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor:
     if not isinstance(snapshot, EffectiveSnapshot):
         raise TypeError(f"expected an EffectiveSnapshot, not {type(snapshot).__name__}")
     readers = {} if readers is None else readers
+    if not callable(count):
+        raise _fail("count must be a token counter", "invalid_count")
+    if unpack is not None and not callable(unpack):
+        raise _fail("unpack must be callable", "invalid_unpack")
     cast, excluded = _check(knowledge, actor, as_of, budget, present, scene_text, readers, measurement, claims,
                             exclude_sections)
     candidates = _portrayal(snapshot, actor, excluded)
     held = actor_knowledge(knowledge, actor, as_of=as_of)
     nodes = tuple(dict.fromkeys((actor, *sorted(cast, key=str))))
-    focus, readings = _focus(knowledge, held, claims, nodes, as_of)
+    focus, readings = _focus(knowledge, held, claims, nodes)
     candidates += _memory(held, focus, readings)
     lore, untriggered, problems = _lore(snapshot, SceneWords([scene_text, *_perceived(held)]), readers, unpack)
     candidates += lore

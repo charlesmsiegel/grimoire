@@ -8,13 +8,14 @@ never a canonical record. Nothing here reads files, calls a model or knows any f
 from __future__ import annotations
 
 import math
+import re
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
 from grimoire.core.identity import InstanceRef, SourceRef, validate_segment
 
-from .trigger import words
+from .trigger import key_words
 
 #: The provisional name of this in-memory shape; nothing persists it.
 FORMAT = "grimoire.context-pack/0"
@@ -34,8 +35,11 @@ MAX_PRESENT = 256
 MAX_TOKENS = 1_000_000
 MAX_OVERHEAD = 1000
 MAX_ORDER = 1_000_000
-_UNSAFE = frozenset({"Cc", "Cs", "Zl", "Zp"})  # control, surrogate, line/paragraph separators
-_ALLOWED = frozenset("\n\t")
+#: control, invisible format (bidi overrides, tags, zero-width space ...), surrogate, separators
+_UNSAFE = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp"})
+#: tab and newline, and the zero-width (non-)joiners that Persian and Indic text need
+_ALLOWED = frozenset("\n\t\u200c\u200d")
+_ASCII_CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f]")
 
 
 class ContextError(ValueError):
@@ -55,9 +59,13 @@ def _fail(message: str, reason: str, detail: str | None = None) -> ContextError:
 
 
 def safe_text(value: object, limit: int) -> bool:
-    """Nonblank text of at most ``limit`` characters with no control, surrogate or separator but tab/newline."""
-    return (type(value) is str and bool(value.strip()) and len(value) <= limit
-            and not any(char not in _ALLOWED and unicodedata.category(char) in _UNSAFE for char in value))
+    """Nonblank text of at most ``limit`` characters with no control, invisible format, surrogate or
+    separator character but tab, newline and the zero-width (non-)joiners."""
+    if type(value) is not str or not value.strip() or len(value) > limit:
+        return False
+    if value.isascii():  # the only unsafe ASCII characters are controls
+        return _ASCII_CONTROL.search(value) is None
+    return not any(char not in _ALLOWED and unicodedata.category(char) in _UNSAFE for char in value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,14 +99,14 @@ class LoreEntry:
             raise _fail(f"entry {self.entry_id}: keys must be a collection of text", "invalid_entry")
         if len(keys) > MAX_KEYS or len(set(keys)) != len(keys):
             raise _fail(f"entry {self.entry_id}: at most {MAX_KEYS} distinct keys", "invalid_entry")
-        if not all(safe_text(key, MAX_KEY_TEXT) and "\n" not in key and "\t" not in key and words(key)
+        if not all(safe_text(key, MAX_KEY_TEXT) and "\n" not in key and "\t" not in key and key_words(key)
                    for key in keys):
             raise _fail(f"entry {self.entry_id}: a key must be one safe line of at most {MAX_KEY_TEXT} characters "
                         "with at least one word", "invalid_entry")
         object.__setattr__(self, "keys", keys)
         if type(self.constant) is not bool:
             raise _fail(f"entry {self.entry_id}: constant must be a bool", "invalid_entry")
-        if self.audience not in AUDIENCES:
+        if type(self.audience) is not str or self.audience not in AUDIENCES:
             raise _fail(f"entry {self.entry_id}: audience must be one of {sorted(AUDIENCES)}", "invalid_entry")
         if type(self.order) is not int or not -MAX_ORDER <= self.order <= MAX_ORDER:
             raise _fail(f"entry {self.entry_id}: order must be an int within ±{MAX_ORDER}", "invalid_entry")
@@ -177,7 +185,8 @@ class Origin:
     - ``description``: ``source`` (the revision that authored it, or the leaf) and ``actor``;
     - ``section``: ``source`` (the revision that authored the composed text), ``actor`` and ``name``;
     - ``perception``: ``record`` (the evidence id);
-    - ``proposition``: ``record`` (the proposition id) and ``evidence``/``belief`` ids it rests on;
+    - ``proposition``: ``record`` (the proposition id); ``evidence``, the ids of the reports the actor
+      received or sent about it plus the evidence its current belief cites; ``belief``, that belief's id;
     - ``lore``: ``source`` (the pinned binding revision) and ``name`` (the entry id).
     """
 
@@ -247,7 +256,8 @@ class ContextPack:
 
     ``items`` are in lane order, then rank order. ``tokens`` is their total cost, overhead included,
     and never exceeds ``budget.max_tokens``. ``untriggered`` counts, per bound source, the common
-    entries no key in the scene text triggered: listed by count, so a large catalog is never dumped.
+    entries that are not constant and whose keys occur neither in the scene text nor in the actor's
+    held memory: listed by count, so a large catalog is never dumped.
     What audience rules withheld is deliberately not reported here: that is the director's.
     ``notes`` are pack-level facts the trusted caller should see, such as ``knowledge_quarantined``.
     It is a provisional in-memory value (``FORMAT``), not a persisted schema.

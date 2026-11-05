@@ -40,6 +40,8 @@ def pack(candidates: Iterable[Candidate], budget: Budget,
     """Fit ``candidates`` into ``budget``; returns what was included and what was shed, both in order."""
     by_lane: dict[str, list[Candidate]] = {lane: [] for lane in LANES}
     for candidate in candidates:
+        if not isinstance(candidate, Candidate) or type(candidate.lane) is not str or candidate.lane not in by_lane:
+            raise ContextError(f"a candidate needs one of the lanes {LANES}", "invalid_lane")
         by_lane[candidate.lane].append(candidate)
     remaining = budget.max_tokens
     items: list[PackedItem] = []
