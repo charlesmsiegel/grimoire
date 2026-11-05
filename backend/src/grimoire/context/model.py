@@ -280,9 +280,12 @@ class SelectionBasis:
 
     Two chats of one campaign can share an actor (107's ``reuse_actors``) and her card revision yet
     bind different lore, and one chat's lorebook can be detached or re-pinned between turns: the
-    actor, the card and the moment alone cannot tell such packs apart. ``bindings`` are the sorted
-    ``(role, selected ref, resolved ref or None)`` of every ``lorebook`` and ``scenario`` binding and,
-    for an actor's pack, of the actor's own bindings; ``instance_etag`` is the captured actor
+    actor, the card and the moment alone cannot tell such packs apart, and a hand edit of a file in
+    place leaves even the references equal. ``bindings`` are the sorted ``(role, selected ref,
+    resolved ref or None, contents)`` of every ``lorebook`` and ``scenario`` binding and, for an
+    actor's pack, of the actor's own bindings; ``contents`` are the content identities (stored etag,
+    else a digest) of each revision read through the binding: a lore source's selected revision, or
+    every layer of the actor's composed portrayal. ``instance_etag`` is the captured actor
     instance's etag. ``selection_basis`` computes it; two packs read the same inputs when their bases
     are equal.
     """
@@ -290,7 +293,7 @@ class SelectionBasis:
     campaign_id: str
     #: the audience whose own bindings were read; ``None`` for the director's lore
     actor: InstanceRef | None
-    bindings: tuple[tuple[str, SourceRef, SourceRef | None], ...]
+    bindings: tuple[tuple[str, SourceRef, SourceRef | None, tuple[str, ...]], ...]
     instance_etag: str | None = None
 
 

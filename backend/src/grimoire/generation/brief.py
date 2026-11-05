@@ -43,9 +43,11 @@ MAX_LINE_CHARS = 2000
 MAX_NAME_CHARS = 200
 
 _SPACE = re.compile(r"\s+")
-#: Where one sentence of a director lore entry ends: a stop and a space, or a full-width stop, which
-#: scripts written without spaces need no space after.
-_SENTENCE_END = re.compile(r"(?<=[.!?;])\s+|(?<=[\u3002\uff01\uff1f])\s*")
+#: Closing quotes and brackets that may follow a stop: ``"He left." "She stayed."`` is two sentences.
+_CLOSERS = "\"'\u2019\u201d\u00bb\u203a\u300d\u300f\uff09)\\]"
+#: Where one sentence of a director lore entry ends: a stop (an ellipsis is one), any closing quotes,
+#: then a space; or a full-width stop, which scripts written without spaces need no space after.
+_SENTENCE_END = re.compile(rf"(?<=[.!?;\u2026])[{_CLOSERS}]*\s+|(?<=[\u3002\uff01\uff1f])[{_CLOSERS}]*\s*")
 _EDGE = re.compile(r"^\W+|\W+$")
 #: A director lore sentence shorter than this ("It is late.") is ordinary prose, so screening it would
 #: reject innocent narration and halt the turn; it is left unscreened.

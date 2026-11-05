@@ -86,14 +86,14 @@ A `LorePack` is the director's alone. `npc_brief` refuses one (`foreign_context`
 
 ## The selection a pack is built over
 
-Two chats of one campaign can share an actor (107's `reuse_actors`) and her card revision yet bind different lore, and a chat's lorebook can be detached or re-pinned between turns. The actor, the card and the moment cannot tell such packs apart, so every pack records its **`basis`**, a `SelectionBasis`:
+Two chats of one campaign can share an actor (107's `reuse_actors`) and her card revision yet bind different lore, a chat's lorebook can be detached or re-pinned between turns, and a definition file can be edited by hand in place ([STORAGE](STORAGE.md)), changing its content but not its reference. The actor, the card and the moment cannot tell such packs apart, so every pack records its **`basis`**, a `SelectionBasis`:
 
 - `campaign_id`: the actor's campaign, or `director_lore`'s `campaign_id`;
 - `actor`: the audience, `None` for director lore;
-- `bindings`: sorted `(role, selected ref, resolved ref or None)` of every `lorebook` and `scenario` binding and, for an actor, of its own bindings; other actors' bindings are not read, so they do not count;
+- `bindings`: sorted `(role, selected ref, resolved ref or None, contents)` of every `lorebook` and `scenario` binding and, for an actor, of its own bindings; other actors' bindings are not read, so they do not count. `contents` are the content identities of what was read through the binding: a lore source's selected revision, or every layer of the actor's composed portrayal (a hand edit of a base card changes a derived one). Each is the revision's stored etag (`EffectiveSnapshot.etag`), or, for a definition with none (one built in memory), a SHA-256 of its `repr`, which can only refuse equal content, never admit changed content;
 - `instance_etag`: the captured actor instance's etag (`None` for director lore and for pure snapshots with no etags).
 
-`selection_basis(snapshot, campaign_id, actor=None)` computes the same value for any snapshot. 027's briefs compare the two and refuse a pack whose basis differs (`context_mismatch`) or whose campaign differs (`foreign_context` for director lore); see [GENERATION](GENERATION.md#from-031s-packs). A head-following binding whose head moved resolves to another revision, so its basis differs too. `ChatContext`'s etags remain for a caller that wants to tell chat records apart without a snapshot.
+`selection_basis(snapshot, campaign_id, actor=None)` computes the same value for any snapshot. 027's briefs compare the two and refuse a pack whose basis differs (`context_mismatch`) or whose campaign differs (`foreign_context` for director lore); see [GENERATION](GENERATION.md#from-031s-packs). A head-following binding whose head moved resolves to another revision, and a hand-edited revision has another etag, so either basis differs too: a pack built before an edit that made a `common` entry the director's is refused rather than showing it, and counting it as exposed. `ChatContext`'s etags remain for a caller that wants to tell chat records apart without a snapshot.
 
 ## Ranking and the budget
 

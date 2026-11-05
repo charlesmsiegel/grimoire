@@ -253,6 +253,10 @@ class EffectiveSnapshot:
         """
         return self._index.resolve(self._pinned(ref, role))
 
+    def etag(self, ref: SourceRef, role: str | None = None) -> str | None:
+        """The etag of the bytes ``resolve`` reads, if stored: a hand edit at the same reference changes it."""
+        return self._etag_of(self.resolve(ref, role))
+
     def definition(self, ref: SourceRef, role: str | None = None) -> EntityDefinition:
         """``resolve`` decoded: the raw entity definition of a selected revision or a pinned chain member.
 

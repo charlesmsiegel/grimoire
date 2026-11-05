@@ -10,6 +10,7 @@ under ``tmp_path``. No model is called.
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -324,3 +325,31 @@ def test_a_scenario_only_chat_gives_its_director_the_lore_the_table_triggered(st
         director_brief("A flooded quay at night.", campaign_id=other.chat.campaign_id, present=(), controls=(),
                        names={}, secrets=(CROSSING,), lore=lore, snapshot=elsewhere)
     assert caught.value.reason == "foreign_context"
+
+
+def test_a_pack_from_before_a_hand_edit_of_the_bound_lorebook_is_refused(store, chats):
+    # Same chat, same binding, same pinned revision r1: only the file's content changed, so neither the
+    # selection nor a re-pin can tell. The ferry entry becomes the director's.
+    started, cast = start(chats)
+    evidence = record(store, started, cast)
+    before = contexts(store, started.chat, evidence, cast)["mara"]
+    assert "The ferry crosses the marsh at dusk." in before.pack.lines()
+    table = director_lore(chat_snapshot(store.load(), started.chat).snapshot, campaign_id=started.chat.campaign_id,
+                          table_text=SCENE, budget=Budget(400), readers=f.READERS, unpack=stored_record)
+    [path] = (store.root / "sources").rglob("lorebook/saltmarch-lore/r1.json")
+    document = json.loads(path.read_text(encoding="utf-8"))
+    for raw in document["payload"]["entries"]:
+        if raw["id"] == "ferry":
+            raw["audience"] = "director"
+    path.write_text(json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+    with pytest.raises(GenerationError) as caught:
+        mara_brief(store, started, cast, evidence, context_of=before)
+    assert caught.value.reason == "context_mismatch"
+    fresh = mara_brief(store, started, cast, evidence)
+    assert "ferry crosses the marsh" not in fresh.system
+    assert screen_reply(fresh, "The ferry crosses the marsh at dusk.") == "unlearned_secret"
+    edited = chat_snapshot(store.load(), started.chat).snapshot
+    with pytest.raises(GenerationError) as caught:
+        director_brief("A flooded quay at night.", campaign_id=started.chat.campaign_id, present=(), controls=(),
+                       names={}, secrets=(CROSSING,), lore=table, snapshot=edited)
+    assert caught.value.reason == "context_mismatch"  # its ferry entry still reads as common

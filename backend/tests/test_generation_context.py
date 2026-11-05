@@ -177,6 +177,27 @@ def test_a_pack_from_before_a_repin_that_made_an_entry_director_only_is_refused(
     assert screen_reply(brief, "The ferry crosses the marsh at dusk.") == "unlearned_secret"
 
 
+def edited_in_place(*, entries=None, mara_card=None) -> EffectiveSnapshot:
+    """The first chat over an index rebuilt after hand edits: the same references, maybe new content."""
+    definitions = [mara_card if n == "mara" and mara_card is not None else f.definition(n) for n in f.EVERYONE]
+    definitions += [LoreRecord(LORE, "Saltmarch lore", LORE_SCHEMA, {"entries": entries or f.LORE_ENTRIES}),
+                    LoreRecord(f.SCENARIO, "Flood night", LORE_SCHEMA, {"entries": f.SCENARIO_ENTRIES})]
+    index = DefinitionIndex([SourceDescriptor(f.CAST, owner="human:owner")], definitions)
+    return EffectiveSnapshot(index, f.selection(), instances=[(instance(n), None) for n in f.EVERYONE])
+
+
+def test_a_pack_from_before_a_same_reference_edit_is_refused_even_without_stored_etags():
+    stale = pack("mara", snapshot())
+    assert "Mara works the" in mara(stale, snap=edited_in_place()).system  # equal content: still accepted
+    reclassified = [{**e, "audience": "director"} if e["id"] == "ferry" else e for e in f.LORE_ENTRIES]
+    smuggler = replace(f.definition("mara"), description="A Saltmarch smuggler called Mara.")
+    for after in (edited_in_place(entries=reclassified), edited_in_place(mara_card=smuggler)):
+        assert refused(lambda: mara(stale, snap=after)) == "context_mismatch"
+    current = lore(SCENE)
+    assert "- The ferry crosses" in narration(current, snap=edited_in_place()).system
+    assert refused(lambda: narration(current, snap=edited_in_place(entries=reclassified))) == "context_mismatch"
+
+
 def test_a_campaign_originals_stale_pack_is_refused_though_it_has_no_card():
     before = first_chat()
     stale = pack_actor_context(before, knowledge(), PELL, as_of=9, budget=Budget(2000), scene_text=SCENE,
@@ -297,6 +318,20 @@ def test_each_telling_sentence_of_a_director_entry_is_screened_word_for_word():
     assert screen_reply(brief, "He hides it well, they say") == "unlearned_secret"
     assert screen_reply(brief, "The ferryman is a son of the duke.") is None  # a paraphrase is not caught
     assert screen_reply(brief, "Few know.") is None and brief.unscreened == ()
+
+
+@pytest.mark.parametrize("entry_text", [
+    '"The duke sold the ferry to the guild." "The ferryman is secretly his oldest son."',
+    "\u201cThe duke sold the ferry to the guild.\u201d \u2018The ferryman is secretly his oldest son.\u2019",
+    "\u00abThe duke sold the ferry to the guild!\u00bb The ferryman is secretly his oldest son\u2026",
+    "The duke sold the ferry to the guild\u2026 The ferryman is secretly his oldest son.",
+])
+def test_a_sentence_ending_inside_closing_quotes_is_screened_on_its_own(entry_text):
+    brief = directed(entry_text)
+    assert brief.unscreened == ()
+    assert screen_reply(brief, "The duke sold the ferry to the guild.") == "unlearned_secret"
+    assert screen_reply(brief, "Rumour has it the ferryman is secretly his oldest son.") == "unlearned_secret"
+    assert screen_reply(brief, "The duke sold the ferry.") is None  # a part of a sentence is not the sentence
 
 
 def test_a_short_director_sentence_is_ordinary_prose_and_never_halts_narration():
