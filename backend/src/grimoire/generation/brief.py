@@ -1,14 +1,15 @@
 """Sealed per-call briefs: one NPC's own perspective, or the scene's authored material.
 
 An ``NpcBrief`` is built only from one actor's ``ActorView`` (its own ``perspective`` projection,
-its composed card) and its resolved voice, or from 031's ``ContextPack`` built for that same actor.
+its composed card) and its resolved voice, or from 031's ``ContextPack`` built for that same actor
+over the same snapshot.
 It never takes director knowledge, another actor's records or a world truth, so the prompt it
 renders cannot hold them. A ``DirectorBrief`` takes authored scenario text, 031's director lore and
 table-visible lines only: there is no knowledge parameter at all. Pure and deterministic; the
 runtime turns a brief into provider messages.
 
 031's packs are the extension seam 027's own minimal rendering was built to leave open: this module
-imports their value types, never the packer's inputs, so 031 depends on nothing here.
+imports their value types and ``selection_basis``, never the packer, so 031 depends on nothing here.
 """
 
 from __future__ import annotations
@@ -17,11 +18,15 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import InitVar, dataclass
 
-from grimoire.context import ContextPack, LorePack
+from grimoire.context import ContextError, ContextPack, LorePack, selection_basis
 from grimoire.core.authority import DIRECTOR
+from grimoire.core.entity import EntityError
 from grimoire.core.identity import InstanceRef
 from grimoire.core.model import ActorView, ControlAssignment
 from grimoire.core.perspective import ActorKnowledge
+from grimoire.core.portrayal import PortrayalError
+from grimoire.core.resolve import MissingDefinition, snapshot_actor_view
+from grimoire.core.snapshot import EffectiveSnapshot
 from grimoire.evals.text import contains_marker, has_words
 from grimoire.voice import DEFAULT_MAX_CHARS, ResolvedVoice, SecretFact, SpeakerFragment, speaker_fragment
 
@@ -38,6 +43,12 @@ MAX_LINE_CHARS = 2000
 MAX_NAME_CHARS = 200
 
 _SPACE = re.compile(r"\s+")
+#: Where one sentence of a director lore entry ends, and the punctuation trimmed from its edges.
+_SENTENCE_END = re.compile(r"(?<=[.!?;])\s+")
+_EDGE = re.compile(r"^\W+|\W+$")
+_WORDS = re.compile(r"\w+")
+#: A sentence this short ("It is.") is too common to screen alone; the whole entry stands in for it.
+MIN_LORE_MARKER_WORDS = 3
 _SEAL = object()
 _STANCE = {"believed": "You believe", "suspected": "You suspect", "rejected": "You doubt"}
 _EARLIER = {"believed": "Earlier, you believed", "suspected": "Earlier, you suspected",
@@ -143,7 +154,8 @@ class DirectorBrief:
     players: frozenset[str]  # the present player characters' actor ids, derived from control
     system: str
     heard: tuple[HeardLine, ...]
-    hidden: tuple[SecretFact, ...]  # every secret: the director brief has no knowledge to learn one from
+    # every secret (the director brief has no knowledge to learn one from) and its director lore's markers
+    hidden: tuple[SecretFact, ...]
     exposed: tuple[str, ...]  # authored material and table-visible lines
     _seal: InitVar[object] = None
 
@@ -266,13 +278,17 @@ def _sections(sections: object) -> tuple[tuple[str, str], ...]:
 
 
 def _check_context(context: object, actor: InstanceRef, knowledge: ActorKnowledge, view: ActorView,
-                   voice: ResolvedVoice) -> ContextPack:
-    """``context`` if it is a pack built for this actor, at this moment, from this selected revision."""
+                   snapshot: object) -> ContextPack:
+    """``context`` if it is a pack built for this actor, at this moment, over ``snapshot``'s selection,
+    and ``view`` is that snapshot's view of the actor."""
     if isinstance(context, LorePack):
         # The director's lore may hold director-only entries: it is never an actor's.
         raise GenerationError("foreign_context", f"{actor} was given the director's lore pack")
     if not isinstance(context, ContextPack):
         raise GenerationError("bad_context", "context must be a ContextPack from pack_actor_context")
+    if not isinstance(snapshot, EffectiveSnapshot):
+        # Without it nothing says which selection the brief is for, so any chat's pack would pass.
+        raise GenerationError("bad_context", "a context pack needs the EffectiveSnapshot the view came from")
     if context.actor != actor:
         raise GenerationError("foreign_context", f"the context pack was built for {context.actor}, not {actor}")
     identity = context.items[0].origin if context.items else None
@@ -284,11 +300,20 @@ def _check_context(context: object, actor: InstanceRef, knowledge: ActorKnowledg
         # Its memory would be another moment's than the projection that decides what is learned.
         raise GenerationError("context_mismatch", f"the context pack is as of {context.as_of}, "
                               f"the actor's knowledge as of {knowledge.as_of}")
-    revision = view.resolved_source if view.resolved_source is not None else voice.actor_revision
-    if identity.source is not None and revision is not None and identity.source != revision:
-        # Built over another chat's or snapshot's selection: its card is another portrayal's.
-        raise GenerationError("context_mismatch", f"the context pack was built for {identity.source}, "
-                              f"not {revision}")
+    try:
+        # The view must be this snapshot's, so the snapshot names the brief's own selection.
+        own = snapshot_actor_view(snapshot.instance(actor), snapshot, knowledge)
+        basis = selection_basis(snapshot, actor.campaign_id, actor)
+    except (PortrayalError, MissingDefinition, EntityError, ContextError) as error:
+        raise GenerationError("context_mismatch", f"{actor} does not resolve in the snapshot given "
+                              f"({getattr(error, 'reason', type(error).__name__)})") from None
+    if own != view:
+        raise GenerationError("context_mismatch", f"the view of {actor} is not the snapshot's")
+    if context.basis != basis:
+        # Another chat's, or this chat's before an attach, detach or re-pin: its lore and card are
+        # not what this brief's selection binds, and what it shows would count as exposed.
+        raise GenerationError("context_mismatch", f"the context pack for {actor} was built over another "
+                              "selection than the snapshot's")
     return context
 
 
@@ -323,7 +348,7 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
               secrets: Iterable[SecretFact], sections: Iterable[tuple[str, str]] = (),
               names: Mapping[InstanceRef, str] | None = None, knowledge_chars: int = KNOWLEDGE_CHARS,
               context_chars: int = CONTEXT_CHARS, voice_chars: int = DEFAULT_MAX_CHARS,
-              context: ContextPack | None = None) -> NpcBrief:
+              context: ContextPack | None = None, snapshot: EffectiveSnapshot | None = None) -> NpcBrief:
     """Build one NPC's sealed brief from its own view; ``secrets`` has no default on purpose.
 
     ``view`` must carry the actor's own ``ActorKnowledge`` (``no_knowledge``/``foreign_knowledge``
@@ -336,9 +361,13 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
     ``context`` is 031's pack for this same actor (``pack_actor_context``): its portrayal, memory
     and lore lanes replace the card context and knowledge this function renders itself, already
     within the pack's token budget, so ``sections``, ``context_chars`` and ``knowledge_chars`` do not
-    apply. A pack for another actor, the director's lore, or one with director-only lore is
-    ``foreign_context``; one built as of another moment or for another selected revision is
-    ``context_mismatch``. Everything it shows counts as exposed to this actor when screening.
+    apply. It needs ``snapshot``, the frozen view ``view`` and ``voice`` were resolved from
+    (``bad_context`` without one). A pack for another actor, the director's lore, or one with
+    director-only lore is ``foreign_context``. ``context_mismatch`` is a pack built as of another
+    moment than the view's knowledge, a ``view`` that is not ``snapshot``'s view of the actor, or a
+    pack whose ``basis`` is not ``snapshot``'s: built in another chat (one that reuses the actor
+    included), or before a lore or card binding was attached, detached, re-pinned or moved, or before
+    the actor's instance changed. Everything it shows counts as exposed to this actor when screening.
     """
     actor, knowledge = _check_view(view)
     # The voice reaches the prompt only through the screened fragment: the card's raw voice-evidence
@@ -355,7 +384,7 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
     heard = heard_lines(heard)
     sections = _sections(sections)
     if context is not None:
-        context = _check_context(context, actor, knowledge, view, voice)
+        context = _check_context(context, actor, knowledge, view, snapshot)
         if sections:
             raise GenerationError("bad_sections", "a context pack already carries the card's sections")
     sections = tuple(entry for entry in sections if entry[0] != VOICE_SECTION)
@@ -374,8 +403,9 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
     else:
         card, setting, memory = (_packed(context, lane) for lane in ("portrayal", "lore", "memory"))
     # What the actor holds, in full: what its projection and its own card say, whatever the budget
-    # showed, and what its pack gave it (common lore only, checked above, so quoting it back is no
-    # leak and no director-only text becomes exposed). Names come after, screened against this, so
+    # showed, and what its pack gave it. The pack was checked above to be built over this brief's own
+    # snapshot and to hold common lore only, so quoting it back is no leak and no director-only or
+    # other-selection text becomes exposed. Names come after, screened against this, so
     # a label never exposes a secret.
     own = _contents(knowledge) + ((view.description,) if has_words(view.description) else ()) + tuple(
         text for _name, text in sections)
@@ -410,10 +440,36 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
                     own + (name,) + tuple(line.text for line in heard), tuple(names.items()), _SEAL)
 
 
+def _check_lore(lore: object, campaign_id: str, snapshot: object) -> None:
+    if not isinstance(lore, LorePack):
+        raise GenerationError("bad_lore", "lore must be a LorePack from director_lore")
+    if not isinstance(snapshot, EffectiveSnapshot):
+        # Without it nothing says which selection the brief is for, so any chat's lore would pass.
+        raise GenerationError("bad_lore", "director lore needs the EffectiveSnapshot it is rendered for")
+    if lore.basis.campaign_id != campaign_id:
+        raise GenerationError("foreign_context", f"the director lore was built for campaign "
+                              f"{lore.basis.campaign_id}, not {campaign_id}")
+    if lore.basis != selection_basis(snapshot, campaign_id):  # the campaign id is the lore's own, so valid
+        # A stale pack could show an entry the current selection made director-only as common.
+        raise GenerationError("context_mismatch", "the director lore was built over another selection than "
+                              "the snapshot's")
+
+
+def _lore_secret(index: int, line: str) -> SecretFact:
+    """A director lore line as a hidden secret: each sentence long enough to be telling, or the line.
+
+    Screening matches whole phrases, so the sentence is the unit: narration that repeats one sentence
+    of the entry states it, while a sentence of two words would also match ordinary prose.
+    """
+    sentences = (_EDGE.sub("", part) for part in _SENTENCE_END.split(line))
+    markers = [part for part in sentences if len(_WORDS.findall(part)) >= MIN_LORE_MARKER_WORDS]
+    return SecretFact(f"director-lore-{index}", tuple(dict.fromkeys(markers or [_EDGE.sub("", line)])))
+
+
 def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
                    controls: Iterable[ControlAssignment], names: Mapping[str, str], heard: Iterable[HeardLine] = (),
                    secrets: Iterable[SecretFact], scenario_chars: int = SCENARIO_CHARS,
-                   lore: LorePack | None = None) -> DirectorBrief:
+                   lore: LorePack | None = None, snapshot: EffectiveSnapshot | None = None) -> DirectorBrief:
     """The scene-level reply's sealed brief: authored scenario text, lore and table-visible lines only.
 
     The player characters are derived here from ``controls``, never passed in: every ``present``
@@ -424,9 +480,14 @@ def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
     035's ``review_narration`` reviews it before it is kept.
 
     ``lore`` is 031's ``director_lore`` for this scene (an actor's ``ContextPack`` is ``bad_lore``: its
-    memory is one actor's own). Its ``common`` entries are setting the table may hear, so narration
-    quoting one is no leak. Its ``director`` entries guide the narrator but are not exposed: narration
-    stating a hidden secret's marker from one is still ``unlearned_secret``.
+    memory is one actor's own). It needs ``snapshot``, the chat's frozen view this brief is for
+    (``bad_lore`` without one). Lore built for another campaign is ``foreign_context``; lore whose
+    ``basis`` is not ``snapshot``'s (another chat's, or this chat's before a lore binding was attached,
+    detached, re-pinned or moved) is ``context_mismatch``. Its ``common`` entries are setting the
+    table may hear, so narration quoting one is no leak. Its ``director`` entries guide the narrator
+    and are hidden like secrets: narration stating any sentence of one (of at least
+    ``MIN_LORE_MARKER_WORDS`` words, or the whole entry when none is that long), as ``screen_reply``
+    matches markers, is ``unlearned_secret`` unless the scenario, common lore or a heard line says it.
     """
     if not isinstance(scenario, str) or not has_words(scenario):
         raise GenerationError("bad_scenario", "a director reply needs nonblank authored scenario text")
@@ -450,8 +511,8 @@ def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
     labels = [names.get(actor_id) for actor_id in players]
     if not all(isinstance(name, str) and has_words(name) and len(name) <= MAX_NAME_CHARS for name in labels):
         raise GenerationError("bad_players", "every present player character needs a nonblank display name")
-    if lore is not None and not isinstance(lore, LorePack):
-        raise GenerationError("bad_lore", "lore must be a LorePack from director_lore")
+    if lore is not None:
+        _check_lore(lore, campaign_id, snapshot)
     secrets = _secrets(secrets)
     heard = heard_lines(heard)
     parts = ["You are the narrator of a shared story. Describe the scene and what happens next, and voice only "
@@ -469,7 +530,8 @@ def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
         parts.append(_listed("Known only to you, the narrator. Let it shape what happens, but never state it "
                              "outright:", private))
     # The player characters' names are table-visible: naming them in narration is not a leak.
-    return DirectorBrief(campaign_id, frozenset(players), "\n\n".join(parts), heard, secrets,
+    hidden = secrets + tuple(_lore_secret(index, line) for index, line in enumerate(private) if has_words(line))
+    return DirectorBrief(campaign_id, frozenset(players), "\n\n".join(parts), heard, hidden,
                          (scenario, *labels, *common) + tuple(line.text for line in heard), _SEAL)
 
 

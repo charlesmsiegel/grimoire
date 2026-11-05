@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from grimoire.core.snapshot import EffectiveSnapshot
 
 from .actor import MEASUREMENTS
+from .basis import selection_basis
 from .lore import Unpack, check_readers, lore, lore_problems
 from .model import (
     AUDIENCES, MAX_SCENE_TEXT, Budget, ContextError, EntryReader, LorePack, TokenCounter, estimate_tokens,
@@ -22,7 +23,7 @@ from .pack import pack
 from .trigger import SceneWords
 
 
-def director_lore(snapshot: EffectiveSnapshot, *, table_text: str, budget: Budget,
+def director_lore(snapshot: EffectiveSnapshot, *, campaign_id: str, table_text: str, budget: Budget,
                   readers: Mapping[str, EntryReader] | None = None, unpack: Unpack | None = None,
                   count: TokenCounter = estimate_tokens, measurement: str = "estimated") -> LorePack:
     """The director's bounded lore from ``snapshot``'s bound ``lorebook`` and ``scenario`` sources.
@@ -33,6 +34,9 @@ def director_lore(snapshot: EffectiveSnapshot, *, table_text: str, budget: Budge
     a player's interiority, so the director's lore follows only what play has made public.
     Ranking, the budget's ``lore`` lane and what is shed or reported are as in ``pack_actor_context``.
     The result goes only to the director brief: a ``director`` entry is never an actor's.
+    ``campaign_id`` is the campaign whose chat ``snapshot`` is (``invalid_campaign`` unless an id
+    segment); the pack records it and the lore bindings read as its ``basis``, which
+    ``director_brief`` checks against the snapshot it renders for.
     """
     if not isinstance(snapshot, EffectiveSnapshot):
         raise TypeError(f"expected an EffectiveSnapshot, not {type(snapshot).__name__}")
@@ -48,11 +52,12 @@ def director_lore(snapshot: EffectiveSnapshot, *, table_text: str, budget: Budge
         raise ContextError("unpack must be callable", "invalid_unpack")
     if type(measurement) is not str or measurement not in MEASUREMENTS:
         raise ContextError(f"measurement must be one of {sorted(MEASUREMENTS)}", "invalid_measurement")
+    basis = selection_basis(snapshot, campaign_id)
     found, untriggered, problems = lore(snapshot, SceneWords([table_text]), readers, unpack, AUDIENCES)
     items, omitted = pack(found, budget, count)
     problems += lore_problems(snapshot)
     return LorePack(budget, measurement, items, omitted, tuple(sorted(untriggered, key=lambda pair: str(pair[0]))),
-                    tuple(sorted(set(problems), key=lambda p: (str(p.source), p.code, p.detail or ""))))
+                    tuple(sorted(set(problems), key=lambda p: (str(p.source), p.code, p.detail or ""))), basis)
 
 
 __all__ = ["director_lore"]

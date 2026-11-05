@@ -40,6 +40,7 @@ from grimoire.core.portrayal import PortrayalError
 from grimoire.core.snapshot import EffectiveSnapshot, Resolution
 from grimoire.graph import PREDICATES, ClaimSet
 
+from .basis import selection_basis
 from .lore import LORE_ROLES, Unpack, check_readers, lore, lore_problems
 from .model import (
     MAX_PRESENT, MAX_SCENE_TEXT, Budget, ClaimReading, ContextError, ContextPack, EntryReader, Origin,
@@ -291,7 +292,8 @@ def pack_actor_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor:
     problems += _sources(snapshot, actor)
     return ContextPack(actor, as_of, budget, measurement, items, omitted,
                        tuple(sorted(untriggered, key=lambda pair: str(pair[0]))),
-                       tuple(sorted(set(problems), key=lambda p: (str(p.source), p.code, p.detail or ""))))
+                       tuple(sorted(set(problems), key=lambda p: (str(p.source), p.code, p.detail or ""))),
+                       selection_basis(snapshot, actor.campaign_id, actor))
 
 
 __all__ = ["DEFAULT_EXCLUDED_SECTIONS", "MEASUREMENTS", "pack_actor_context"]

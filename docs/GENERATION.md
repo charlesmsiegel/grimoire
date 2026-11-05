@@ -36,7 +36,7 @@ Nothing found is `MissingVoice("no_profile")`. A binding's alternate `portrayal`
 
 A brief is a sealed value: only its builder makes one.
 
-**`npc_brief(view, voice, *, heard=(), secrets, sections=(), names=None, ..., context=None)`** builds one NPC's brief from its own `ActorView` (`actor_view` or `snapshot_actor_view`):
+**`npc_brief(view, voice, *, heard=(), secrets, sections=(), names=None, ..., context=None, snapshot=None)`** builds one NPC's brief from its own `ActorView` (`actor_view` or `snapshot_actor_view`):
 
 - It refuses `view.knowledge is None` (`no_knowledge`), and knowledge that is not this actor's own `ActorKnowledge` (`foreign_knowledge`), such as director knowledge or another actor's projection. The actor's typed ref (a character, or a speaking item) comes from its own projection. A voice for another actor, or resolved for another selected revision than `view.resolved_source`, is `voice_mismatch`.
 - Superseded beliefs keep their stance ("Earlier, you doubted: ...").
@@ -49,7 +49,7 @@ A brief is a sealed value: only its builder makes one.
 
 ### From 031's packs
 
-Without `context`, a brief is exactly 027's own minimal rendering above, byte for byte. With `context`, a `ContextPack` from 031's `pack_actor_context` ([CONTEXT](CONTEXT.md)) for **this same actor**, the pack's lanes replace that rendering:
+Without `context`, a brief is exactly 027's own minimal rendering above, byte for byte (a test pins the whole `system` text). With `context`, a `ContextPack` from 031's `pack_actor_context` ([CONTEXT](CONTEXT.md)) for **this same actor over the same snapshot**, the pack's lanes replace that rendering. `snapshot` is then required: the `EffectiveSnapshot` that `view` and `voice` were resolved from, which names the selection the brief is for:
 
 - `portrayal` becomes "Who you are:" (the pack's description and composed sections, never its `You are Name.` line, which the brief's opening already words, and never a `voice-evidence` section, even from a pack built with `exclude_sections=()`);
 - `lore` becomes "What anyone here may know:" (`common` entries only);
@@ -59,17 +59,27 @@ The pack is already within its own token budget, so `sections`, `context_chars` 
 
 | Refusal | When |
 |---|---|
-| `bad_context` | not a `ContextPack`, or one that does not open with this actor's name line |
+| `bad_context` | not a `ContextPack`, one that does not open with this actor's name line, or no `snapshot` given with it |
 | `foreign_context` | a pack built for another actor (another chat's actor included), the director's `LorePack`, or a pack holding a lore item of any audience but `common` |
-| `context_mismatch` | built as of another moment than `view.knowledge`, or over another selected revision than the view's (else the voice's): another snapshot's portrayal |
+| `context_mismatch` | built as of another moment than `view.knowledge`; `view` is not `snapshot`'s view of the actor (the actor is not captured there, or is captured or bound otherwise); or the pack's `basis` is not `selection_basis(snapshot, ...)` |
 
-**Screening.** Every line the brief shows from the pack counts as exposed to this actor, so a reply quoting common lore it was given is not `unlearned_secret`. Director-only lore is never in an actor's pack (031's audience rule, and the `foreign_context` check above), so it can never be exposed this way. A pack is not sealed: the caller builds it with `pack_actor_context` from the actor's own binding, as it builds `heard` from what the actor heard.
+The `basis` ([CONTEXT](CONTEXT.md#the-selection-a-pack-is-built-over)) is the campaign, the actor's own bindings, every `lorebook` and `scenario` binding (as selected and as resolved) and the captured instance's etag. So a pack from another chat that reuses the same actor and card (107's `reuse_actors`) but binds other lore is refused, and so is a pack from before a lorebook was attached, detached, re-pinned or moved to a new head, or before the actor's instance record changed. A campaign original, which has no card, is checked the same way. What is **not** checked: that `snapshot` is the chat the caller means to play. It is the caller's word for that, as `heard` is its word for what the actor heard.
+
+**Screening.** Every line the brief shows from the pack counts as exposed to this actor, so a reply quoting common lore it was given is not `unlearned_secret`. Director-only lore is never in an actor's pack (031's audience rule, and the `foreign_context` check above), and a pack read over another selection is `context_mismatch`, so lore the brief's own selection does not give the actor as `common` can never be exposed this way. A pack is not sealed: the caller builds it with `pack_actor_context` from the actor's own binding, as it builds `heard` from what the actor heard.
 
 ### The director's brief
 
-**`director_brief(scenario, *, campaign_id, present, controls, names, heard=(), secrets, lore=None)`** takes authored scenario text, 031's director lore and table-visible lines **only**: there is no knowledge parameter at all. The player characters are **derived from control** (every present actor with a human controller), never passed in; `names` must give each a nonblank display name (`bad_players`). The brief names them and forbids writing their words, thoughts, feelings or decisions. A present actor with no controller is `unassigned_actor`. Every secret is hidden from it, but the player characters' names are table-visible, so narration may name them.
+**`director_brief(scenario, *, campaign_id, present, controls, names, heard=(), secrets, lore=None, snapshot=None)`** takes authored scenario text, 031's director lore and table-visible lines **only**: there is no knowledge parameter at all. The player characters are **derived from control** (every present actor with a human controller), never passed in; `names` must give each a nonblank display name (`bad_players`). The brief names them and forbids writing their words, thoughts, feelings or decisions. A present actor with no controller is `unassigned_actor`. Every secret is hidden from it, but the player characters' names are table-visible, so narration may name them.
 
-`lore` is a `LorePack` from 031's `director_lore` ([CONTEXT](CONTEXT.md#director-lore)), so a scenario-only chat's narrator gets the bound lorebook's entries that table-visible text triggered. Its `common` entries are listed as "What anyone here may know:" and count as exposed, so narration may repeat them. Its `director` entries are listed as known only to the narrator, never to be stated outright, and are **not** exposed: narration stating a hidden secret's marker from one is still `unlearned_secret`. An actor's `ContextPack` is `bad_lore`: its memory is one actor's own.
+`lore` is a `LorePack` from 031's `director_lore` ([CONTEXT](CONTEXT.md#director-lore)), so a scenario-only chat's narrator gets the bound lorebook's entries that table-visible text triggered. Its `common` entries are listed as "What anyone here may know:" and count as exposed, so narration may repeat them. Its `director` entries are listed as known only to the narrator, never to be stated outright, and are **hidden like secrets**: each sentence of an entry with at least `MIN_LORE_MARKER_WORDS` (3) words, its edge punctuation trimmed (the whole entry when no sentence is that long), is a marker of a hidden `SecretFact`, matched as every secret marker is (whole phrase, case- and width-insensitive). Narration stating one is `unlearned_secret` unless the scenario, common lore, a player's name or a heard line says it too, whether or not the caller registered a secret for it. A paraphrase is not caught: this screens restatement, not meaning.
+
+With `lore`, `snapshot` is required: the chat's `EffectiveSnapshot` the brief is for.
+
+| Refusal | When |
+|---|---|
+| `bad_lore` | not a `LorePack` (an actor's `ContextPack` included: its memory is one actor's own), or no `snapshot` given with it |
+| `foreign_context` | lore built for another campaign than `campaign_id` |
+| `context_mismatch` | the lore's `basis` is not `selection_basis(snapshot, campaign_id)`: another chat's, or this chat's from before a lore binding was attached, detached, re-pinned or moved, so a stale pack cannot show as `common` an entry the current revision makes the director's |
 
 ### Messages
 

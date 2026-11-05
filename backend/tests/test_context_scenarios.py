@@ -258,7 +258,7 @@ def mara_brief(store, started, cast, evidence, *, context_of=None):
     actor_view = snapshot_actor_view(snap.instance(cast["mara"]), snap,
                                      actor_knowledge(ledger.knowledge, cast["mara"], as_of=9))
     return npc_brief(actor_view, resolve_snapshot_voice(cast["mara"], snap, VOICES), secrets=(CROSSING,),
-                     context=built.pack)
+                     context=built.pack, snapshot=snap)
 
 
 def test_a_world_less_chats_npc_brief_renders_its_own_pack(store, chats):
@@ -287,15 +287,40 @@ def test_a_world_based_chats_derived_npc_renders_its_own_pack_and_refuses_anothe
     assert caught.value.reason == "foreign_context"  # the other chat's Mara is another actor
 
 
+def test_a_continuation_chat_that_reuses_an_actor_refuses_her_pack_from_the_first_chat(store, chats):
+    first, cast = start(chats)
+    evidence = record(store, first, cast)
+    # The campaign goes on in a second chat: the same Mara, the same card, but no lorebook bound.
+    reused = {("character", card("mara").entity_key): cast["mara"]}
+    later = chats.start_chat(Launch("character", card("mara")), scope=first.scope, reuse_actors=reused).commit()
+    assert later.chat != first.chat and later.actors == ()  # Mara is reused, so no actor is new
+    from_first = contexts(store, first.chat, evidence, cast)["mara"]
+    assert "The ferry crosses the marsh at dusk." in from_first.pack.lines()
+    with pytest.raises(GenerationError) as caught:
+        mara_brief(store, later, cast, evidence, context_of=from_first)
+    assert caught.value.reason == "context_mismatch"  # same actor, card and moment; another selection
+    own = mara_brief(store, later, cast, evidence)
+    assert "ferry crosses the marsh" not in own.system
+    assert screen_reply(own, "The ferry crosses the marsh at dusk.") == "unlearned_secret"
+
+
 def test_a_scenario_only_chat_gives_its_director_the_lore_the_table_triggered(store, chats):
     started = chats.start_chat(Launch("scenario", SCENARIO), attach=[(LORE, "lorebook")]).commit()
     assert started.actors == ()
     snap = chat_snapshot(store.load(), started.chat).snapshot
-    lore = director_lore(snap, table_text=SCENE, budget=Budget(60), readers=f.READERS, unpack=stored_record)
+    lore = director_lore(snap, campaign_id=started.chat.campaign_id, table_text=SCENE, budget=Budget(60),
+                         readers=f.READERS, unpack=stored_record)
     assert [(i.origin.name, i.audience) for i in lore.items] == [
         ("tides", "common"), ("opening", "director"), ("ferry", "common")]
     assert lore.tokens <= 60 and [o.origin.name for o in lore.omitted] == ["lighthouse"]
     narration = director_brief("A flooded quay at night.", campaign_id=started.chat.campaign_id, present=(),
-                               controls=(), names={}, secrets=(CROSSING,), lore=lore)
+                               controls=(), names={}, secrets=(CROSSING,), lore=lore, snapshot=snap)
     assert "- The ferry crosses the marsh at dusk." in narration.system and "SCENARIO-TOKEN" in narration.system
     assert screen_reply(narration, "The ferry crosses the marsh at dusk.") is None
+    assert screen_reply(narration, "SCENARIO-TOKEN the flood comes tonight.") == "unlearned_secret"
+    other = chats.start_chat(Launch("scenario", SCENARIO)).commit()  # another campaign, with no lorebook
+    elsewhere = chat_snapshot(store.load(), other.chat).snapshot
+    with pytest.raises(GenerationError) as caught:
+        director_brief("A flooded quay at night.", campaign_id=other.chat.campaign_id, present=(), controls=(),
+                       names={}, secrets=(CROSSING,), lore=lore, snapshot=elsewhere)
+    assert caught.value.reason == "foreign_context"

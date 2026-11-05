@@ -4,7 +4,7 @@
 - `grimoire.context` (pure): one actor's candidates, chosen by audience rules, then packed into a token budget; and, with `director_lore`, the scene-level director reply's lore, triggered by table-visible text ([below](#director-lore));
 - `grimoire.contextstore`: an adapter that joins 022's `chat_snapshot`, 020's director ledger read and the store's envelopes.
 
-027's briefs render both ([GENERATION](GENERATION.md#from-031s-packs)): `npc_brief(..., context=pack)` and `director_brief(..., lore=lore)`. That is the seam: `grimoire.generation` imports these value types, and nothing here imports 027. There is no model call or UI here. Nothing here writes or reads files on its own. The fixtures are synthetic.
+027's briefs render both ([GENERATION](GENERATION.md#from-031s-packs)): `npc_brief(..., context=pack, snapshot=snap)` and `director_brief(..., lore=lore, snapshot=snap)`, each refusing a pack built over another selection ([below](#the-selection-a-pack-is-built-over)). That is the seam: `grimoire.generation` imports these value types and `selection_basis`, and nothing here imports 027. There is no model call or UI here. Nothing here writes or reads files on its own. The fixtures are synthetic.
 
 ## What it does
 
@@ -73,7 +73,7 @@ Each `LoreEntry` normalizes its keys once. The perceived texts become word ids, 
 
 ## Director lore
 
-`director_lore(snapshot, *, table_text, budget, readers=None, unpack=None, count=estimate_tokens, measurement="estimated")` returns a `LorePack` for the scene-level director reply. A scenario-only chat has no speaking NPC, so without it no pack would carry the chat's lorebook to anyone.
+`director_lore(snapshot, *, campaign_id, table_text, budget, readers=None, unpack=None, count=estimate_tokens, measurement="estimated")` returns a `LorePack` for the scene-level director reply. `campaign_id` is the campaign whose chat `snapshot` is (`invalid_campaign` unless an id segment); a snapshot of a chat with no actors cannot say it. A scenario-only chat has no speaking NPC, so without it no pack would carry the chat's lorebook to anyone.
 
 - The director is no actor: there is no portrayal or memory lane, and no card is read.
 - Lore comes from the same bound `lorebook` and `scenario` revisions, readers and `unpack` as an actor's, but **`common` and `director` entries** are both candidates.
@@ -82,6 +82,17 @@ Each `LoreEntry` normalizes its keys once. The perceived texts become word ids, 
 - Every item carries its entry's `audience` (`PackedItem.audience`; `LorePack.audience("common")` selects them). The renderer keeps the two apart: `director_brief` lets the narrator repeat `common` lore but never treats `director` lore as table-visible.
 
 A `LorePack` is the director's alone. `npc_brief` refuses one (`foreign_context`), and refuses an actor pack holding any lore item that is not `common`.
+
+## The selection a pack is built over
+
+Two chats of one campaign can share an actor (107's `reuse_actors`) and her card revision yet bind different lore, and a chat's lorebook can be detached or re-pinned between turns. The actor, the card and the moment cannot tell such packs apart, so every pack records its **`basis`**, a `SelectionBasis`:
+
+- `campaign_id`: the actor's campaign, or `director_lore`'s `campaign_id`;
+- `actor`: the audience, `None` for director lore;
+- `bindings`: sorted `(role, selected ref, resolved ref or None)` of every `lorebook` and `scenario` binding and, for an actor, of its own bindings; other actors' bindings are not read, so they do not count;
+- `instance_etag`: the captured actor instance's etag (`None` for director lore and for pure snapshots with no etags).
+
+`selection_basis(snapshot, campaign_id, actor=None)` computes the same value for any snapshot. 027's briefs compare the two and refuse a pack whose basis differs (`context_mismatch`) or whose campaign differs (`foreign_context` for director lore); see [GENERATION](GENERATION.md#from-031s-packs). A head-following binding whose head moved resolves to another revision, so its basis differs too. `ChatContext`'s etags remain for a caller that wants to tell chat records apart without a snapshot.
 
 ## Ranking and the budget
 
@@ -101,7 +112,7 @@ Packing is greedy and deterministic: lanes in order, each lane in rank order, fi
 
 ## Refusals
 
-`ContextError` (a `ValueError`) with a machine-readable `reason`: `invalid_audience`, `campaign_mismatch`, `invalid_as_of`, `invalid_budget`, `invalid_present`, `invalid_scene_text`, `invalid_readers`, `invalid_measurement`, `invalid_claims`, `invalid_sections`, `invalid_entry`, `invalid_count`, `invalid_unpack`, `invalid_lane`, `unresolved_audience` (the actor has no entity in this snapshot) and `budget_too_small`. A ledger or snapshot of the wrong type raises `TypeError`. `actor_context` lets 022's `RecordNotFound` and `ChatCodecError` propagate.
+`ContextError` (a `ValueError`) with a machine-readable `reason`: `invalid_audience`, `campaign_mismatch`, `invalid_as_of`, `invalid_budget`, `invalid_present`, `invalid_scene_text`, `invalid_readers`, `invalid_measurement`, `invalid_claims`, `invalid_sections`, `invalid_entry`, `invalid_count`, `invalid_unpack`, `invalid_lane`, `invalid_campaign` (`director_lore`'s or `selection_basis`'s `campaign_id` is not an id segment), `unresolved_audience` (the actor has no entity in this snapshot) and `budget_too_small`. A ledger or snapshot of the wrong type raises `TypeError`. `actor_context` lets 022's `RecordNotFound` and `ChatCodecError` propagate.
 
 ## Not in this slice
 

@@ -1,8 +1,10 @@
 """The 027/031 seam: briefs rendered from 031's packs, for an NPC and for the scene-level director.
 
 The Saltmarch cast (``context_fixtures``) shares one world-less chat with a lorebook and a scenario.
-Mara's brief takes her own pack; the director's takes lore triggered by table-visible text. Every
-fixture is synthetic, and the one model call is a scripted fake.
+Mara's brief takes her own pack; the director's takes lore triggered by table-visible text. A pack
+built over another selection (the lorebook detached, or re-pinned to a revision that makes an
+entry director-only) is refused. Every fixture is synthetic, and the one model call is a scripted
+fake.
 """
 
 from __future__ import annotations
@@ -14,15 +16,21 @@ from generation_fixtures import DIRECTOR_POLICY, Harness, say
 from voice_fixtures import CAMPAIGN, PC
 
 import context_fixtures as f
-from context_fixtures import LORE, actor, card, instance, knowledge, snapshot
+from context_fixtures import LORE, LORE_SCHEMA, LoreRecord, actor, card, entry, instance, knowledge, snapshot
 from grimoire.context import Budget, ContextPack, director_lore, pack_actor_context
-from grimoire.core import ControlAssignment, SourceRef, actor_knowledge, snapshot_actor_view
+from grimoire.core import (
+    ControlAssignment, DefinitionIndex, SourceDescriptor, actor_knowledge, snapshot_actor_view,
+)
 from grimoire.core.authority import DIRECTOR
+from grimoire.core.entity import EntityInstance
+from grimoire.core.facets import Agent, FacetBundle, Physical
+from grimoire.core.identity import InstanceRef
+from grimoire.core.snapshot import EffectiveSnapshot, SelectedSource, SourceSelection
 from grimoire.generation import (
-    GenerationError, director_brief, director_messages, npc_brief, npc_messages, resolve_snapshot_voice,
+    GenerationError, HeardLine, director_brief, director_messages, npc_brief, npc_messages, resolve_snapshot_voice,
     screen_reply,
 )
-from grimoire.voice import SecretFact, VoiceAnchor, VoiceCatalog, VoiceExample, VoiceProfile
+from grimoire.voice import SecretFact, VoiceAnchor, VoiceBinding, VoiceCatalog, VoiceExample, VoiceProfile
 
 #: The table's visible transcript and what Mara perceived of it: the ferry and the lighthouse.
 SCENE = "The ferry is late, and the lighthouse is dark again."
@@ -35,6 +43,11 @@ SECRETS = (SecretFact("plot", ("PLOT-TOKEN",)), SecretFact("debt", ("DIRECTOR-TO
            SecretFact("crossing", ("crosses the marsh at dusk",)))
 VOICES = VoiceCatalog([VoiceProfile(card(n), (VoiceAnchor("cadence", "cadence", f"{n.title()} speaks plainly."),),
                                     (VoiceExample("e1", f"Mind the quay, {n} says."),)) for n in f.NPCS])
+#: The lorebook's next revision: the ferry entry is the director's now.
+LORE_R2 = LORE.at("r2")
+#: A campaign original, with no card: its pack's only selected inputs are the lore bindings.
+PELL = InstanceRef(f.C, "character", "pell-1")
+PELL_INSTANCE = EntityInstance(PELL, local_name="Pell", added=FacetBundle((Physical(), Agent(), f.VOICE)))
 
 
 def view(who: str, snap, *, as_of: int = 9):
@@ -48,8 +61,40 @@ def pack(who: str, snap, *, as_of: int = 9, budget=Budget(2000), **kwargs) -> Co
 
 def mara(context=None, *, snap=None, **kwargs):
     snap = snap or snapshot()
+    options = {"context": context, "snapshot": snap, **kwargs}
     return npc_brief(view("mara", snap), resolve_snapshot_voice(actor("mara"), snap, VOICES), secrets=SECRETS,
-                     context=context, **kwargs)
+                     **options)
+
+
+def repinned(*, lore: bool = True, cast=f.EVERYONE) -> EffectiveSnapshot:
+    """The chat after the lorebook is re-pinned to r2, where the ferry is director-only; Pell is captured."""
+    reclassified = [{**e, "audience": "director"} if e["id"] == "ferry" else e for e in f.LORE_ENTRIES]
+    definitions = [f.definition(n) for n in f.EVERYONE] + [
+        LoreRecord(LORE, "Saltmarch lore", LORE_SCHEMA, {"entries": f.LORE_ENTRIES}),
+        LoreRecord(LORE_R2, "Saltmarch lore", LORE_SCHEMA, {"entries": reclassified}),
+        LoreRecord(f.SCENARIO, "Flood night", LORE_SCHEMA, {"entries": f.SCENARIO_ENTRIES})]
+    index = DefinitionIndex([SourceDescriptor(f.CAST, owner="human:owner")], definitions, heads={LORE.unpinned(): "r2"})
+    sources = [SelectedSource(card(n), "character", actor=actor(n)) for n in cast]
+    if lore:
+        sources += [SelectedSource(LORE_R2, "lorebook"), SelectedSource(f.SCENARIO, "scenario")]
+    return EffectiveSnapshot(index, SourceSelection(None, tuple(sources)), instances=with_pell(cast))
+
+
+def with_pell(cast=f.EVERYONE):
+    return [(instance(n), None) for n in cast] + [(PELL_INSTANCE, None)]
+
+
+def first_chat(*, lore: bool = True) -> EffectiveSnapshot:
+    """The chat as first started (lorebook r1), with the campaign original Pell captured too."""
+    return EffectiveSnapshot(f.index(), f.selection(lore=lore), instances=with_pell())
+
+
+def pell(context, snap):
+    binding = VoiceBinding(f.C, PELL.instance_id, anchors=(VoiceAnchor("cadence", "cadence", "Pell drawls."),))
+    known = actor_knowledge(knowledge(), PELL, as_of=9)
+    return npc_brief(snapshot_actor_view(snap.instance(PELL), snap, known),
+                     resolve_snapshot_voice(PELL, snap, VOICES, binding), secrets=SECRETS, context=context,
+                     snapshot=snap)
 
 
 def refused(call) -> str:
@@ -86,17 +131,60 @@ def test_a_pack_built_for_anyone_or_anything_else_is_refused():
     snap = snapshot()
     own = pack("mara", snap)
     assert refused(lambda: mara(pack("anya", snap), snap=snap)) == "foreign_context"
-    assert refused(lambda: mara(director_lore(snap, table_text=SCENE, budget=Budget(400), readers=f.READERS,
-                                              unpack=f.unpack), snap=snap)) == "foreign_context"
+    assert refused(lambda: mara(director_lore(snap, campaign_id=f.C, table_text=SCENE, budget=Budget(400),
+                                              readers=f.READERS, unpack=f.unpack), snap=snap)) == "foreign_context"
     assert refused(lambda: mara(pack("mara", snap, as_of=8), snap=snap)) == "context_mismatch"
-    other = replace(own.items[0].origin, source=SourceRef("world:saltmarch", "character", "mara", "r1"))
-    assert refused(lambda: mara(replace(own, items=(replace(own.items[0], origin=other), *own.items[1:])),
-                                snap=snap)) == "context_mismatch"  # built over another selection's Mara
     secret_lore = replace(own.lane("lore")[0], audience="director")
     assert refused(lambda: mara(replace(own, items=(*own.items, secret_lore)), snap=snap)) == "foreign_context"
     assert refused(lambda: mara(replace(own, items=own.items[1:]), snap=snap)) == "bad_context"
     assert refused(lambda: mara(own.render(), snap=snap)) == "bad_context"
     assert refused(lambda: mara(own, snap=snap, sections=[("age", "Forty.")])) == "bad_sections"
+    assert refused(lambda: mara(own, snap=snap, snapshot=None)) == "bad_context"  # no selection to check against
+    # The view must be the given snapshot's: here Mara is not even captured in it.
+    assert refused(lambda: mara(own, snap=snap, snapshot=snapshot(cast=()))) == "context_mismatch"
+
+
+def test_a_view_from_another_snapshot_than_the_one_given_is_refused():
+    renamed = EntityInstance(actor("mara"), card("mara"), local_name="Captain Mara")
+    others = [(instance(n), None) for n in f.EVERYONE if n != "mara"]
+    elsewhere = EffectiveSnapshot(f.index(), f.selection(), instances=[(renamed, None), *others])
+    snap = snapshot()
+    # The bindings are the same, so only the view tells that the brief is not for ``snap``.
+    captain = snapshot_actor_view(renamed, elsewhere, actor_knowledge(knowledge(), actor("mara"), as_of=9))
+    assert captain.name == "Captain Mara"
+    assert refused(lambda: npc_brief(captain, resolve_snapshot_voice(actor("mara"), elsewhere, VOICES),
+                                     secrets=SECRETS, context=pack("mara", snap), snapshot=snap)) == "context_mismatch"
+
+
+def test_a_pack_from_before_the_lorebook_was_detached_is_refused():
+    before, after = snapshot(), snapshot(lore=False)
+    stale = pack("mara", before)
+    assert refused(lambda: mara(stale, snap=after)) == "context_mismatch"
+    fresh = mara(pack("mara", after), snap=after)
+    assert "ferry crosses the marsh" not in fresh.system
+    assert screen_reply(fresh, "The ferry crosses the marsh at dusk.") == "unlearned_secret"
+
+
+def test_a_pack_from_before_a_repin_that_made_an_entry_director_only_is_refused():
+    before, after = snapshot(), repinned()
+    stale = pack("mara", before)
+    assert [i.origin.name for i in stale.lane("lore")] == ["tides", "ferry", "lighthouse"]
+    assert refused(lambda: mara(stale, snap=after)) == "context_mismatch"
+    fresh = pack("mara", after)
+    assert [i.origin.name for i in fresh.lane("lore")] == ["tides", "lighthouse"]
+    brief = mara(fresh, snap=after)
+    assert "ferry crosses the marsh" not in brief.system
+    assert screen_reply(brief, "The ferry crosses the marsh at dusk.") == "unlearned_secret"
+
+
+def test_a_campaign_originals_stale_pack_is_refused_though_it_has_no_card():
+    before = first_chat()
+    stale = pack_actor_context(before, knowledge(), PELL, as_of=9, budget=Budget(2000), scene_text=SCENE,
+                               readers=f.READERS, unpack=f.unpack)
+    assert stale.items[0].origin.source is None and "ferry crosses" in stale.render()
+    assert "The ferry crosses the marsh at dusk." in pell(stale, before).system
+    for after in (first_chat(lore=False), repinned()):
+        assert refused(lambda: pell(stale, after)) == "context_mismatch"
 
 
 def test_screening_treats_what_the_pack_gave_the_actor_as_exposed():
@@ -108,10 +196,30 @@ def test_screening_treats_what_the_pack_gave_the_actor_as_exposed():
     assert screen_reply(with_pack, "DIRECTOR-TOKEN, they say.") == "unlearned_secret"  # never in her pack
 
 
+#: Mara's brief without a pack, word for word: 027's own rendering of her card, voice and knowledge.
+NO_PACK_SYSTEM = (
+    "You are Mara, a character in a shared story. Write only Mara's next contribution: what Mara says and does, "
+    "in Mara's own voice. Never write for any other character, and never describe what anyone else thinks, feels "
+    "or decides.\n\n"
+    "Voice of Mara. Write only Mara's own words.\n"
+    "- cadence: Mara speaks plainly.\n"
+    "Style examples (reference only; never repeat them verbatim):\n"
+    "> Mind the quay, mara says.\n\n"
+    "Who you are:\n"
+    "A Saltmarch local called Mara.\n\n"
+    "What you know, oldest first:\n"
+    "- Someone told you: Anya and Tavi are cousins\n"
+    "- Someone told you: the duke paid off the harbor watch\n"
+    "- Someone told you: Anya keeps the old charts\n"
+    "- You suspect: the duke paid off the harbor watch"
+)
+
+
 def test_without_a_pack_the_brief_is_unchanged():
     snap = snapshot()
-    assert mara(None, snap=snap) == mara(snap=snap)
-    assert "What anyone here may know" not in mara(snap=snap).system
+    brief = mara(snap=snap)
+    assert brief == mara(None, snap=snap, snapshot=None)
+    assert brief.system == NO_PACK_SYSTEM
 
 
 # -- the director's lore ----------------------------------------------------------------------------
@@ -121,17 +229,19 @@ def scenario_only(**kwargs):
     return snapshot(cast=(), **kwargs)
 
 
-def lore(table_text: str = SCENE, budget=Budget(400), **kwargs):
-    options = {"readers": f.READERS, "unpack": f.unpack, **kwargs}
-    return director_lore(scenario_only(), table_text=table_text, budget=budget, **options)
+def lore(table_text: str = SCENE, budget=Budget(400), *, snap=None, **kwargs):
+    """The director's lore for the scenario-only chat, which is a chat of the harness's campaign."""
+    options = {"readers": f.READERS, "unpack": f.unpack, "campaign_id": CAMPAIGN, **kwargs}
+    return director_lore(snap or scenario_only(), table_text=table_text, budget=budget, **options)
 
 
 CONTROLS = [ControlAssignment(CAMPAIGN, PC, "human:alice")]
 
 
-def narration(packed, **kwargs):
+def narration(packed, *, snap=None, **kwargs):
+    options = {"snapshot": snap or scenario_only(), "secrets": SECRETS, **kwargs}
     return director_brief("A flooded quay at night.", campaign_id=CAMPAIGN, present=(PC,), controls=CONTROLS,
-                          names={PC: "Wren"}, secrets=SECRETS, lore=packed, **kwargs)
+                          names={PC: "Wren"}, lore=packed, **options)
 
 
 def test_a_scenario_only_director_brief_gets_lore_the_table_triggered_within_budget():
@@ -158,19 +268,55 @@ def test_the_director_may_repeat_common_lore_but_never_state_director_lore():
     assert screen_reply(narration(None), "Mist rises; the ferry crosses the marsh at dusk.") == "unlearned_secret"
 
 
+def test_director_lore_is_hidden_like_a_secret_even_when_no_secret_names_it():
+    brief = narration(lore(), secrets=())  # no SecretFact names the scenario's opening
+    for stated in ("SCENARIO-TOKEN the flood comes tonight.", "Hush. Scenario-token the flood comes tonight!"):
+        assert screen_reply(brief, stated) == "unlearned_secret", stated
+    assert screen_reply(brief, "The flood comes, they say.") is None  # a paraphrase is not a marker
+    assert screen_reply(brief, "Tides here turn twice a day.") is None  # common lore is the table's
+    heard = narration(lore(), secrets=(), heard=[HeardLine("Wren", "SCENARIO-TOKEN the flood comes tonight")])
+    assert screen_reply(heard, "SCENARIO-TOKEN the flood comes tonight.") is None  # the table said it first
+
+
+def test_each_telling_sentence_of_a_director_entry_is_screened():
+    entries = [entry("ferryman", "The ferryman is the duke's son. Few know. He hides it well, they say.",
+                     constant=True, audience="director")]
+    definitions = [LoreRecord(LORE, "Saltmarch lore", LORE_SCHEMA, {"entries": entries})]
+    index = DefinitionIndex([SourceDescriptor(f.CAST, owner="human:owner")], definitions)
+    snap = EffectiveSnapshot(index, SourceSelection(None, (SelectedSource(LORE, "lorebook"),)))
+    brief = narration(lore(snap=snap), snap=snap, secrets=())
+    assert screen_reply(brief, "Mist. The ferryman is the duke's son.") == "unlearned_secret"
+    assert screen_reply(brief, "He hides it well, they say") == "unlearned_secret"
+    assert screen_reply(brief, "Few know.") is None  # two words: too common a sentence to screen alone
+
+
+def test_director_lore_for_another_campaign_or_selection_is_refused():
+    current = lore(SCENE)
+    assert refused(lambda: director_brief("A quay.", campaign_id="zz-other", present=(), controls=(), names={},
+                                          secrets=SECRETS, lore=current, snapshot=scenario_only())) == "foreign_context"
+    assert refused(lambda: narration(current, snap=scenario_only(lore=False))) == "context_mismatch"  # detached
+    assert refused(lambda: narration(current, snapshot=None)) == "bad_lore"
+    after = repinned(cast=())
+    assert refused(lambda: narration(current, snap=after)) == "context_mismatch"
+    fresh = narration(lore(SCENE, snap=after), snap=after, secrets=())
+    assert "never state it outright:\n- SCENARIO-TOKEN" in fresh.system and "- The ferry crosses" in fresh.system
+    assert screen_reply(fresh, "The ferry crosses the marsh at dusk.") == "unlearned_secret"  # r2 made it hidden
+
+
 def test_an_actors_pack_is_never_the_directors_lore():
     assert refused(lambda: narration(pack("mara", snapshot()))) == "bad_lore"
 
 
 def test_a_director_lore_request_is_checked():
     for call, reason in [(lambda: lore(budget=400), "invalid_budget"), (lambda: lore(table_text=3), "invalid_scene_text"),
+                         (lambda: lore(campaign_id="Not A Campaign"), "invalid_campaign"),
                          (lambda: lore(measurement="guessed"), "invalid_measurement"),
                          (lambda: lore(count="tokens"), "invalid_count"), (lambda: lore(unpack=3), "invalid_unpack")]:
         with pytest.raises(ValueError) as caught:
             call()
         assert caught.value.reason == reason
     with pytest.raises(TypeError):
-        director_lore("snapshot", table_text="", budget=Budget(10))
+        director_lore("snapshot", campaign_id=CAMPAIGN, table_text="", budget=Budget(10))
 
 
 def test_a_scenario_only_turn_sends_the_triggered_lore_to_the_one_director_call():
