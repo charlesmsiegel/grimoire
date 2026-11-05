@@ -77,11 +77,15 @@ def resolve_conflict(store: LibraryStore, authority, peer: str, address: tuple[s
     why = _unusable(local, peer, path, keep, expected)
     if why is not None:
         return ResolveReport(peer, path, "refused", f"ResolveRefused: {why}")
-    if syncable(path) == "definition" and expected[peer] is not None and keep != expected[peer]:
+    if (syncable(path) == "definition" and keep == expected[local] and expected[peer] is not None
+            and keep != expected[peer]):
         # The peer would be the receiver of a revision replace. A serving device never lets a peer
         # replace an immutable revision (nothing it holds could prove the chosen bytes were ever
         # agreed: a plain sync step can put any bytes under its .conflicts), so the device holding
-        # the conflicted revision starts the resolve and replaces it as the owner itself.
+        # the conflicted revision starts the resolve and replaces it as the owner itself. Only a
+        # choice of this device's own version is redirected; any other (a version neither holds, a
+        # stale etag) goes on to be refused as usual (by the serving device's admission or by 019),
+        # so following the advice never sends the user back here.
         return ResolveReport(peer, path, "refused", f"ResolveRefused: {path} is a definition revision {peer} "
                                                     f"would replace; start this resolve on {peer}")
     with _outgoing(store):  # this library's own server now refuses what could wait on this resolve
@@ -348,8 +352,9 @@ class ResolveRequest:
         has or had: its own current one (it is the winner, and only bookkeeping is written here),
         one it keeps under ``.conflicts`` beside the path, which the keep-both transfer that
         reported the conflict left, the version this pair's archive records both devices agreed
-        on (a conflict where one side changed a record the other still holds as agreed keeps
-        nothing), or a blob, whose name is its content. When this device receives, the chosen
+        on (an edit of a mutable record whose copy to a device still at the agreed version
+        failed, as ``head_dependency``, ``unapplicable`` or ``denied``, keeps nothing on the
+        device that made it), or a blob, whose name is its content. When this device receives, the chosen
         version must also be the requester's own current one: it is the version resolve copies.
         Anything else would let a paired device write chosen bytes over a record.
         """

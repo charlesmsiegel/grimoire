@@ -187,6 +187,18 @@ class EditedRevision:
         self.expected = {DESKTOP: etag(self.agreed), PHONE: etag(self.edited)}
 
 
+def test_a_choice_neither_device_holds_is_not_redirected_to_the_other_device(tmp_path):
+    case = EditedRevision(tmp_path)
+    before = _tree(case.desktop.store.root), _tree(case.phone.store.root)
+    for start, other, peer in ((case.desktop, case.phone, PHONE), (case.phone, case.desktop, DESKTOP)):
+        with serving(other) as server:
+            report = resolve_conflict(start.store, start.authority, peer, server.address, case.path, etag(b"{}"),
+                                      case.expected)
+        assert report.status == "refused" and "start this resolve" not in report.reason, report
+        assert "neither device's current one" in report.reason, report
+    assert (_tree(case.desktop.store.root), _tree(case.phone.store.root)) == before
+
+
 @pytest.mark.parametrize("start", [DESKTOP, PHONE])
 def test_an_edited_revision_returns_to_the_agreed_version_from_the_device_that_holds_it(tmp_path, start):
     case = EditedRevision(tmp_path)
@@ -476,22 +488,58 @@ def test_a_forged_version_planted_by_a_sync_step_never_replaces_a_revision(tmp_p
     assert _tree(phone.store.root) == before and (phone.store.root / path).read_bytes() == real
 
 
-def test_the_agreed_version_is_admitted_but_only_as_the_requesters_own(tmp_path):
-    case = EditedRevision(tmp_path)
+class UncopiedEdit:
+    """A chat both devices agreed on, relabelled on the phone only, whose copy to the desktop the
+    desktop's owner does not authorize: a transfer reports it ``denied``, and keep-both keeps
+    nothing on either device (a denied write is never kept, and the desktop's copy is the agreed
+    version the phone moved on from)."""
+
+    def __init__(self, root: Path) -> None:
+        self.desktop, self.phone, _ = paired(root)
+        started, _ = start_scene(self.desktop)
+        self.chat = started.chat
+        self.path = f"campaigns/{self.chat.campaign_id}/chats/{self.chat.chat_id}.json"
+        with serving(self.phone) as server:
+            assert transfer(self.desktop.store, self.desktop.authority, PHONE, server.address).status == "synced"
+        for grant in self.desktop.authority.active_grants():  # the desktop's owner withdraws campaigns from the phone
+            if grant.principal == peer_principal(PHONE) and str(grant.scope) == "campaigns":
+                self.desktop.authority.revoke_grant(grant.grant_id)
+        self.agreed = (self.desktop.store.root / self.path).read_bytes()
+        _relabel(self.phone, self.chat, PHONE_LABEL)
+        self.edited = (self.phone.store.root / self.path).read_bytes()
+        with serving(self.phone) as server:
+            report = transfer(self.desktop.store, self.desktop.authority, PHONE, server.address)
+        conflict = report.passes[-1].conflict(self.path)
+        assert conflict is not None and conflict.code == "denied", report
+        assert _kept(self.phone.store.root) == []  # the phone holds nothing but its own edit
+        self.expected = {DESKTOP: etag(self.agreed), PHONE: etag(self.edited)}
+
+
+def test_the_agreed_version_ends_a_conflict_that_kept_nothing_on_the_receiver(tmp_path):
+    case = UncopiedEdit(tmp_path)
+    with serving(case.phone) as server:  # the desktop keeps the version both agreed on: the phone receives it
+        report = resolve_conflict(case.desktop.store, case.desktop.authority, PHONE, server.address, case.path,
+                                  etag(case.agreed), case.expected)
+    assert (report.status, report.receiver) == ("resolved", PHONE), report
+    assert (case.phone.store.root / case.path).read_bytes() == case.agreed
+    assert case.edited in _kept(case.phone.store.root)  # the phone's edit is held, never lost
+    with serving(case.phone) as server:
+        again = transfer(case.desktop.store, case.desktop.authority, PHONE, server.address)
+    assert again.status == "synced" and again.conflicts == (), again
+
+
+def test_the_agreed_version_is_admitted_only_as_the_requesters_own(tmp_path):
+    case = UncopiedEdit(tmp_path)
     before = _tree(case.phone.store.root)
     with serving(case.phone) as server:
         channel = _connect(case.desktop, server)
-        # the archive's agreed version, claimed as some other version the desktop holds: refused
-        channel.send({"t": "resolve", "path": case.path, "keep": etag(case.agreed),
-                      "expected": {DESKTOP: etag(case.edited), PHONE: etag(case.edited)}})
-        with pytest.raises(PeerRefused) as refused:
-            channel.recv()
-        assert refused.value.code == "unknown_version"
-        channel.send({"t": "resolve", "path": case.path, "keep": etag(case.agreed),
-                      "expected": {DESKTOP: etag(_forged(case.agreed, "bio", "x")), PHONE: etag(case.edited)}})
-        with pytest.raises(PeerRefused) as refused:
-            channel.recv()
-        assert refused.value.code == "unknown_version"
+        # the archive's agreed version, while the desktop claims to hold another one: refused
+        for claimed in (case.edited, _forged(case.agreed, "label", "Forged label")):
+            channel.send({"t": "resolve", "path": case.path, "keep": etag(case.agreed),
+                          "expected": {DESKTOP: etag(claimed), PHONE: etag(case.edited)}})
+            with pytest.raises(PeerRefused) as refused:
+                channel.recv()
+            assert refused.value.code == "unknown_version"
         # as the desktop's own current version, which the archive records both agreed on: admitted
         _request(channel, {"t": "resolve", "path": case.path, "keep": etag(case.agreed), "expected": case.expected})
         channel.send({"t": "bye"})
