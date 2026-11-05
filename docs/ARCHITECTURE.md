@@ -23,6 +23,10 @@
 
 Planned, authorized, fully booked OpenAI-compatible model calls. Endpoints are trusted configuration, and every attempt is booked on the turn's ledger. See [PROVIDERS.md](PROVIDERS.md).
 
+### Per-NPC generation (first slice implemented: `grimoire.generation`, `grimoire.runtime`)
+
+One metered provider call per speaking NPC, each brief built only from that actor's own perspective and voice, and an optional scene-level director reply. Returns screened, unreviewed proposals; nothing is committed. See [GENERATION.md](GENERATION.md).
+
 ### Effective definitions and snapshots (implemented: `grimoire.core.portrayal`, `grimoire.core.snapshot`, `grimoire.effective`)
 
 A derived portrayal names its pinned base in its own payload and composes over it with explicit inherit/replace/clear and field provenance. A chat or selection is frozen for one operation from one loaded library, with or without a world. See [EFFECTIVE_VIEWS.md](EFFECTIVE_VIEWS.md).

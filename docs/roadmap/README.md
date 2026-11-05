@@ -160,6 +160,10 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 | 033 | [Party And Presence](sprints/party-and-presence.md) | **P1** | [Creature Individualization](sprints/creature-individualization.md) | actors / party state | Separate present cast, controlled actors and reserves; owns non-character actors (an individualized creature) in chat and scene casts |
 | 034 | [Unique Equipment](sprints/unique-equipment.md) | **P1** | [Counted Inventory](sprints/counted-inventory.md) | inventory / unique possessions | Keep two similar artifacts distinct by owner and revision |
 
+#### Wave 4 status
+
+- **027 first slice:** one metered call per speaking NPC, each from its own sealed brief (own projection, own pinned or inherited voice), an optional scene-level `director_generation` reply for scenario-only chats, reply screening, run fencing and cancel, all headless with scripted providers ([GENERATION](../GENERATION.md)). It returns proposals and commits nothing; `story-quality/3` is its next slice.
+
 <a id="wave-5"></a>
 
 ### Wave 5 — First playable world-less chat and imported-world campaign
