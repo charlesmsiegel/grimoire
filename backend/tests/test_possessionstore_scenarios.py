@@ -7,6 +7,7 @@ synthetic (see ``possession_fixtures``) and no model is ever called.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -252,6 +253,25 @@ def test_an_instance_file_with_no_bytes_to_read_fails_allocation_closed(store, m
     monkeypatch.setattr(store, "read_exact", unreadable)
     with pytest.raises(TakenIdsUnlisted):
         campaign_taken_ids(store, "c1")
+
+
+@pytest.mark.parametrize("shape", ["link", "folder"])
+def test_a_link_or_folder_at_an_instance_path_keeps_only_its_own_id(store, tmp_path, shape):
+    """The store never reads either as a record, so it holds no item: allocation goes on (026 relies on it)."""
+    path = instance_file(store, HALL)
+    path.unlink()
+    if shape == "link":
+        target = tmp_path / "elsewhere.json"
+        target.write_text(json.dumps({"payload": {POSSESSION_KEY: {"owner": "character/vex-1"}}}), encoding="utf-8")
+        try:
+            os.symlink(target, path)
+        except (OSError, NotImplementedError):
+            pytest.skip("this platform cannot make a file symlink here")
+    else:
+        path.mkdir()
+    taken = campaign_taken_ids(store, "c1")
+    assert "hall-1" in taken
+    assert "vex-1" not in taken
 
 
 @pytest.mark.parametrize("hand_edit", [None, {"owner": None, "note": None, "fits": ["off-hand", "main-hand"]}])

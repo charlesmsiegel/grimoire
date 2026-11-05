@@ -43,8 +43,8 @@ from grimoire.library import LibraryPathError
 from grimoire.possessions import POSSESSION_KEY, party_ids
 from grimoire.security import payload_digest
 from grimoire.store import (
-    CampaignRecords, LibraryStore, LibraryView, MalformedRecord, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite,
-    StoreError, TakenIdsUnlisted,
+    CampaignRecords, LibraryStore, LibraryView, LinkRefused, MalformedRecord, RecordEnvelope, RecordNotFound, ScopeRecord,
+    StaleWrite, StoreError, TakenIdsUnlisted, UnstorableIdentifier,
 )
 from grimoire.store.layout import address_parts, classify
 from grimoire.sync.documents import DEVICE_FILE, parse_device
@@ -71,7 +71,8 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str, *,
 
     A file or folder that could name ids but cannot be read or listed raises ``TakenIdsUnlisted``
     (``HoldingsUnlisted`` is one case): allocation fails closed rather than guess. An instance file the
-    store cannot read as a record is the exception: every ``<kind>/<id>`` in its bytes is reserved. Every instance
+    store cannot read as a record is the exception: every ``<kind>/<id>`` in its bytes is reserved, and a link or
+    folder at an instance path takes only its own id (the store never reads it as a record). Every instance
     allocator (107 here; 024, 026, 037 later) must use this at plan time and again under the store
     lock at commit, and any later record family that names instance ids must extend it. Its cost
     grows with play history: it reads every instance, relation, chat, accepted-event, knowledge and holder file
@@ -116,19 +117,23 @@ def possession_party_ids(store: LibraryStore, campaign_id: str) -> frozenset[str
     """Instance ids named by the campaign's unique items (034): owners, holders and wearers, current and
     logged, in each instance file's ``possession`` record, scanned raw. An instance file the store cannot
     read as a record (malformed, a newer format) could be an item, so every ``<kind>/<id>`` in its exact
-    bytes is reserved; one whose bytes cannot be read at all (a link, an I/O error) raises
-    ``TakenIdsUnlisted``. Reads every instance file of the campaign."""
+    bytes is reserved. A link or a folder at an instance path is never read as a record, so it holds no
+    item the library can act on: only its own id is taken (from the listing), and the rest of the
+    campaign stays allocatable. One whose bytes cannot be read for any other reason (an I/O error)
+    raises ``TakenIdsUnlisted``. Reads every instance file of the campaign."""
     taken: set[str] = set()
     unread: list[str] = []
     for ref in store.campaign_instances(campaign_id):
         path = "/".join(address_parts(ref))
         try:
             stored = store.read(ref)
-        except RecordNotFound:
+        except (RecordNotFound, LinkRefused):
             continue
         except MalformedRecord:
             try:
                 data = store.read_exact(path)
+            except (LinkRefused, UnstorableIdentifier):
+                continue  # a link or a folder: never an item's record
             except (StoreError, LibraryPathError, ValueError):
                 data = None
                 unread.append(path)
