@@ -253,6 +253,14 @@ class EffectiveSnapshot:
         """
         return self._index.resolve(self._pinned(ref, role))
 
+    def definition(self, ref: SourceRef, role: str | None = None) -> EntityDefinition:
+        """``resolve`` decoded: the raw entity definition of a selected revision or a pinned chain member.
+
+        Raw like ``resolve`` (it still holds what a portrayal cleared and its own ``derivation``), for
+        merge owners that walk the chain (027's voice inheritance). A non-entity definition is refused.
+        """
+        return self._read(self._pinned(ref, role))[0]
+
     def effective(self, ref: SourceRef, role: str | None = None) -> EffectiveDefinition:
         """The effective definition of a **selected** revision; ancestors are reachable only raw."""
         found = self._compose(self._pinned(ref, role, ancestors=False))

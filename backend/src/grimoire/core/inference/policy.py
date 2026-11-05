@@ -24,6 +24,8 @@ class InferenceStage(StrEnum):
     RECALL = "recall"
     GRAPH_LOOKUP = "graph_lookup"
     CRITIQUE = "critique"
+    #: A scene-level director/narrator reply (027): optional, at most one per turn, never an actor.
+    DIRECTOR_GENERATION = "director_generation"
 
     @property
     def is_baseline(self) -> bool:
@@ -32,6 +34,8 @@ class InferenceStage(StrEnum):
 
 BASELINE_STAGES = frozenset({InferenceStage.NPC_GENERATION})
 OPTIONAL_STAGES = frozenset(InferenceStage) - BASELINE_STAGES
+#: Optional stages that speak for the scene, never for an actor, and at most once per turn.
+SCENE_STAGES = frozenset({InferenceStage.DIRECTOR_GENERATION})
 
 
 def coerce_stage(value: InferenceStage | str) -> InferenceStage:

@@ -97,6 +97,23 @@ Each point runs twice, and is bounded by a run count, sends and scripted output 
 | `no resend after poisoning` | A call whose booking failed is never sent again. | `backend/tests/test_providers_meter.py::test_fallback_failure_poisons` |
 | `bounded exploration` | Exploration stays within its run, send and token bounds. | `backend/tests/test_providers_faults.py::test_explorer_detects_each_invariant` |
 
+## Generation fault invariants (`grimoire.testing.generation`)
+
+`explore_generation_faults` runs a two-speaker turn (Ash, then Brin) through the real `ProviderAdapter` and `GenerationRuntime` over `ScriptedTransport`, with one fault on either call, with and without a retry. The points are every provider fault, a reply the screen must reject (silent, a copied example, too long, a secret the speaker never learned), a `CancelAt` at every stream line, and a `Supersede` at every stream line: the transport's `on_supersede` hook claims a newer run of the same chat. Some points use an untrusted handle approved per attempt. Each point runs twice. Each invariant can fail: `backend/tests/test_generation_faults.py`.
+
+| Invariant | Meaning | Proven by |
+|---|---|---|
+| `no unaccepted line` | A line is the whole text of a scripted reply from a call the meter shows `accepted`; never a cut-off prefix. | `backend/tests/test_generation_faults.py::test_no_unaccepted_line_can_fail` |
+| `no rejected line` | No line is a reply the screen must reject (silent, a copied example, too long). | `backend/tests/test_generation_faults.py::test_no_rejected_line_can_fail` |
+| `stale delivers nothing` | Once a newer run claimed the chat, the turn ends `stale` with no lines. | `backend/tests/test_generation_faults.py::test_stale_delivers_nothing_can_fail`, `backend/tests/test_generation_runtime.py::test_a_newer_run_mid_stream_makes_the_whole_turn_deliver_nothing` |
+| `halt after failure` | After the first call without a line, every later call is `not_issued` and unbooked; a `complete` turn has a line for every call. | `backend/tests/test_generation_faults.py::test_halt_after_failure_can_fail` |
+| `every send booked` | Transport connects equal booked attempts, and sends equal sent attempts. | `backend/tests/test_generation_faults.py::test_every_send_booked_and_bounded_calls_can_fail` |
+| `bounded calls` | Connects never exceed planned calls × attempts per call. | `backend/tests/test_generation_faults.py::test_every_send_booked_and_bounded_calls_can_fail` |
+| `one line per call` | A retried call yields at most one line. | `backend/tests/test_generation_faults.py::test_one_line_per_call_can_fail`, `backend/tests/test_generation_runtime.py::test_a_retry_never_duplicates_a_line` |
+| `no leaked line` | No line states a secret its speaker never learned. | `backend/tests/test_generation_faults.py::test_no_leaked_line_can_fail` |
+| `deterministic` | Rerunning a point yields the same trace. | `backend/tests/test_generation_faults.py::test_the_explorer_is_deterministic_and_seeded` |
+| `bounded exploration` | Exploration stays within its run and send bounds. | `backend/tests/test_generation_faults.py::test_bounded_exploration_can_fail` |
+
 ## V2 domain invariants
 
 | Invariant | Status |
