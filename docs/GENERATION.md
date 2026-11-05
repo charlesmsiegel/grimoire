@@ -16,8 +16,8 @@ One independent RP-model call **per speaking NPC contribution**, each prompt bui
 `plan_generation_turn(campaign_id, turn_id, *, present, speakers, controls, director_reply=False, policy=None)` returns 004's `TurnInferencePlan`.
 
 - **Player characters come from control.** `player_controlled_ids` is every present actor whose `ControlAssignment` names a human controller. The caller cannot pass it.
-- **Speakers are director NPCs.** A speaker must be present (`absent_speaker`) and controlled by `DIRECTOR`. A player character is `player_speaker` and an actor nobody controls is `unassigned_speaker`. Two controllers for any present actor is `ambiguous_control`.
-- **Director reply is asked for, never assumed.** `director_reply=True` adds an optional request. With a policy that has no cap for `director_generation` (the default), the request is declined as data (`plan.declined`, reason `disabled`) and nothing is planned.
+- **Speakers are director NPCs.** A speaker must be present (`absent_speaker`) and controlled by `DIRECTOR`. A player character is `player_speaker` and an actor nobody controls is `unassigned_speaker`. Two controllers for any present actor is `ambiguous_control`, and an actor listed twice is `duplicate_present` or `duplicate_speaker`.
+- **Director reply is asked for, never assumed.** `director_reply=True` adds an optional request. It needs every present actor to have a controller (`unassigned_actor`): the director brief must name every player character, so control fails closed. With a policy that has no cap for `director_generation` (the default), the request is declined as data (`plan.declined`, reason `disabled`) and nothing is planned.
 
 Failures raise `GenerationError` with a `reason`.
 
@@ -43,9 +43,10 @@ A brief is a sealed value: only its builder makes one.
 - The voice fragment is 014's `speaker_fragment(voice, secrets=, known=)`, so an example revealing a hidden secret is screened out.
 - Knowledge is rendered **without ids**, newest first within `knowledge_chars`, shown oldest first. The actor's effective description and composed sections (`snapshot.effective(...).sections`) are added as context, whole parts only, within `context_chars`.
 - The card's `voice-evidence` section is **left out**: the voice reaches the prompt only through the screened fragment, so a suppressed binding item or an example revealing a hidden secret cannot return through the card.
-- `heard` is what the actor heard before this turn's calls. A heard line stating a marker of a hidden secret that the actor's own projection and card do not hold is refused as `leaky_cue`: the caller screened the cue too little, and nothing is sent.
+- `heard` is what the actor heard **aloud** before this turn's calls. Its text counts as learned, as a line spoken earlier this turn does, so the caller passes only lines this actor heard (every present actor, in this slice).
+- **Speaker labels are not learned.** A `HeardLine` may carry the speaker's `actor`; each listener labels it by its own `names`, else by `speaker`. A label stating a secret the listener has not learned (a disguised NPC's real name, say) is shown as `Someone`, to NPCs and to the director alike.
 
-**`director_brief(scenario, *, campaign_id, present, controls, names, heard=(), secrets)`** takes authored scenario text and table-visible lines **only**: there is no knowledge parameter at all. The player characters are **derived from control** (every present actor with a human controller), never passed in; `names` must give each a nonblank display name (`bad_players`). The brief names them and forbids writing their words, thoughts, feelings or decisions. Every secret is hidden from it.
+**`director_brief(scenario, *, campaign_id, present, controls, names, heard=(), secrets)`** takes authored scenario text and table-visible lines **only**: there is no knowledge parameter at all. The player characters are **derived from control** (every present actor with a human controller), never passed in; `names` must give each a nonblank display name (`bad_players`). The brief names them and forbids writing their words, thoughts, feelings or decisions. A present actor with no controller is `unassigned_actor`. Every secret is hidden from it.
 
 `npc_messages(brief, spoken)` and `director_messages(brief, spoken)` render a brief and the lines spoken so far this turn as `(role, content)` messages.
 
@@ -59,7 +60,7 @@ A brief is a sealed value: only its builder makes one.
 |---|---|
 | `silent_reply` | Blank or punctuation only. |
 | `too_long` | Longer than a heard line may be (`MAX_LINE_CHARS`, 2000 characters). |
-| `copied_example` | Reproduces an authored example of any voice in the scene (014's `example_copies`). |
+| `copied_example` | Reproduces an authored example of any speaker's voice in this turn (014's `example_copies`). A silent present NPC's examples are not checked. |
 | `unlearned_secret` | States a marker of a secret hidden from the speaker that nothing it held or heard exposed: its projection, its card, its heard lines, or a line spoken earlier this turn. |
 
 Every present actor hears every spoken line in this slice (no whispering), so a secret one NPC says aloud may be repeated by the next. A director reply is screened the same way against its own inputs.
@@ -70,7 +71,7 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 
 `run_turn(meter, briefs, *, controls, director=None, token=None, cancel=None) -> TurnOutcome`:
 
-- **Checked before any call** (`GenerationError`): every planned call is `npc_generation` or `director_generation` (`unsupported_stage`), each `npc_generation` call has exactly one brief (`missing_brief`, `extra_brief`, `duplicate_brief`), a director brief is given exactly when a director reply is planned (`director_mismatch`), no planned call already ran on `meter` (`call_already_run`), every brief's actor is director-controlled **now**, so a hand-built plan cannot voice a player character, and the director brief names the same player characters that control gives now (`director_mismatch`).
+- **Checked before any call** (`GenerationError`): every planned call is `npc_generation` or `director_generation` (`unsupported_stage`), each `npc_generation` call has exactly one brief (`missing_brief`, `extra_brief`, `duplicate_brief`), a director brief is given exactly when a director reply is planned (`director_mismatch`), no planned call already ran on `meter` (`call_already_run`), every brief's actor is director-controlled **now**, so a hand-built plan cannot voice a player character, and the director brief names the same player characters that the plan and control give now (`director_mismatch`; an unassigned present actor is `unassigned_actor`).
 - **Calls run in plan order**, one `execute` each. Each later call hears the lines accepted before it; a planned director reply runs after the speakers.
 - **Only accepted, screened text becomes a line.** A provider status other than `accepted`, or a screen rejection, ends the turn: later calls are `not_issued`. A rejected call is still billed.
 - **Nothing streams to a consumer.** The runtime passes no `on_delta`: nothing is shown before acceptance, and a consumer would stop the adapter retrying a dropped stream. Streaming display is a later milestone.

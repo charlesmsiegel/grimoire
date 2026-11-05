@@ -73,7 +73,13 @@ def plan_generation_turn(campaign_id: str, turn_id: str, *, present: Iterable[st
     speakers = _texts(speakers, "speakers")
     if not isinstance(director_reply, bool):
         raise GenerationError("bad_input", "director_reply must be true or false")
+    for ids, reason in ((present, "duplicate_present"), (speakers, "duplicate_speaker")):
+        if len(set(ids)) != len(ids):
+            raise GenerationError(reason, f"an actor is listed twice in {ids}")
     owners = {actor_id: controller(campaign_id, actor_id, controls) for actor_id in present}
+    if director_reply and None in owners.values():
+        # Fail closed: the director brief must name every player character, so no one may be unassigned.
+        raise GenerationError("unassigned_actor", "every present actor needs a controller for a director reply")
     for speaker in speakers:
         if speaker not in owners:
             raise GenerationError("absent_speaker", f"{speaker} is not present this turn")

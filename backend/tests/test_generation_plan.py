@@ -45,6 +45,23 @@ def test_an_unassigned_speaker_is_refused():
     assert caught.value.reason == "unassigned_speaker"
 
 
+@pytest.mark.parametrize("field, reason", [("present", "duplicate_present"), ("speakers", "duplicate_speaker")])
+def test_an_actor_listed_twice_is_refused(field, reason):
+    controls, _voices = world()
+    with pytest.raises(GenerationError) as caught:
+        plan(controls, **{field: ("npc-oda", "npc-oda", PC) if field == "present" else ("npc-oda", "npc-oda")})
+    assert caught.value.reason == reason
+
+
+def test_a_director_reply_needs_every_present_actor_assigned():
+    controls, _voices = world()
+    plan(controls, speakers=(), present=("npc-oda", PC, "npc-stranger"))  # fine without a director reply
+    with pytest.raises(GenerationError) as caught:
+        plan(controls, speakers=(), present=("npc-oda", PC, "npc-stranger"), director_reply=True,
+             policy=DIRECTOR_POLICY)
+    assert caught.value.reason == "unassigned_actor"
+
+
 def test_ambiguous_control_is_refused_even_for_a_silent_actor():
     controls, _voices = world()
     controls = controls + (ControlAssignment(CAMPAIGN, PC, "human:bob"),)

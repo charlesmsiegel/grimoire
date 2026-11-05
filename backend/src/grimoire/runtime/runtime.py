@@ -105,9 +105,14 @@ def _assign(meter: TurnMeter, briefs: tuple[NpcBrief, ...], director: DirectorBr
         if call.stage is InferenceStage.DIRECTOR_GENERATION:
             if director is None:
                 raise GenerationError("director_mismatch", "a director reply is planned but no director brief")
-            players = frozenset(actor_id for actor_id in plan.present_actor_ids
-                                if controller(plan.campaign_id, actor_id, controls) not in (None, DIRECTOR))
-            if director.campaign_id != plan.campaign_id or director.players != players:
+            owners = {actor_id: controller(plan.campaign_id, actor_id, controls)
+                      for actor_id in plan.present_actor_ids}
+            if None in owners.values():
+                raise GenerationError("unassigned_actor", "every present actor needs a controller for a director reply")
+            players = frozenset(actor_id for actor_id, owner in owners.items() if owner != DIRECTOR)
+            # Both the plan's player characters and control now must agree with the brief.
+            if (director.campaign_id != plan.campaign_id or director.players != players
+                    or director.players != frozenset(plan.player_controlled_ids)):
                 raise GenerationError("director_mismatch",
                                       "the director brief names other player characters than control does now")
             directed = True
@@ -199,7 +204,7 @@ class GenerationRuntime:
                     return ended("stale")
                 if cancel.cancelled:
                     return ended("cancelled")
-                spoken = tuple(HeardLine(line.speaker, line.text) for line in lines)
+                spoken = tuple(HeardLine(line.speaker, line.text, line.actor) for line in lines)
                 if isinstance(brief, NpcBrief):
                     messages = npc_messages(brief, spoken)
                 else:

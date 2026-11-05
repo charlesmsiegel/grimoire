@@ -30,7 +30,7 @@ from grimoire.providers.cancel import CancelToken
 from grimoire.providers.meter import TurnMeter
 from grimoire.runtime import NARRATOR, GenerationRuntime, RunFence
 from grimoire.testing.providers import Reply, Status, Supersede, Truncate
-from grimoire.voice import VoiceAnchor, VoiceBinding, VoiceCatalog, VoiceExample, VoiceProfile
+from grimoire.voice import SecretFact, VoiceAnchor, VoiceBinding, VoiceCatalog, VoiceExample, VoiceProfile
 
 PRESENT = ("npc-oda", "npc-bellamy", "npc-quill", PC)
 ODA_LINE, BELLAMY_LINE = "Coin first. Then talk.", "Oh darling, how splendidly grim!"
@@ -47,7 +47,7 @@ def two_speakers(harness, controls, voices, **kw):
 def test_a_two_npc_exchange_is_two_separately_voiced_calls():
     controls, voices = world()
     harness = Harness([say(ODA_LINE), say(BELLAMY_LINE)])
-    plan, meter, briefs = two_speakers(harness, controls, voices)
+    _plan, meter, briefs = two_speakers(harness, controls, voices)
     outcome = harness.runtime.run_turn(meter, briefs, controls=controls)
 
     assert outcome.status == "complete"
@@ -100,6 +100,19 @@ def test_b_a_secret_spoken_earlier_this_turn_may_be_repeated():
     outcome = harness.runtime.run_turn(harness.meter(plan), [oda, brief(BELLAMY, "Bellamy", voices)],
                                        controls=controls)
     assert outcome.status == "complete" and len(outcome.lines) == 2
+
+
+def test_b_a_hidden_name_never_reaches_a_later_speaker_as_a_label():
+    controls, voices = world()
+    secrets = (*SECRETS, SecretFact("bellamy-identity", ("Bellamy",)))
+    harness = Harness([say(BELLAMY_LINE), say(ODA_LINE)])
+    plan = harness.plan(controls, present=PRESENT, speakers=("npc-bellamy", "npc-oda"))
+    briefs = [brief(BELLAMY, "Bellamy", voices, secrets=secrets), brief(ODA, "Oda", voices, secrets=secrets)]
+    outcome = harness.runtime.run_turn(harness.meter(plan), briefs, controls=controls)
+    assert outcome.status == "complete"
+    bellamy_prompt, oda_prompt = harness.prompts()
+    assert "Bellamy" in bellamy_prompt  # its own name
+    assert "Bellamy" not in oda_prompt and f"Someone: {BELLAMY_LINE}" in oda_prompt
 
 
 # -- C. scenario-only chat ------------------------------------------------------------------------
@@ -248,6 +261,32 @@ def test_a_director_brief_for_other_player_characters_is_refused():
         harness.runtime.run_turn(harness.meter(plan), [], controls=handed, director=narration)
     assert caught.value.reason == "director_mismatch"
     assert harness.transport.sends == []
+
+
+def test_wrong_controls_cannot_drop_the_player_character_from_the_director_brief():
+    controls, _voices = world()
+    harness = Harness([say("Wren draws her blade.")])
+    plan = harness.plan(controls, present=(PC,), speakers=(), director_reply=True, policy=DIRECTOR_POLICY)
+    with pytest.raises(GenerationError) as caught:
+        scene("A hall.", (), names={})
+    assert caught.value.reason == "unassigned_actor"
+    seized = tuple(c for c in controls if c.actor_id != PC) + (ControlAssignment(CAMPAIGN, PC, DIRECTOR),)
+    blind = scene("A hall.", seized)  # names no player character
+    for given, reason in (((), "unassigned_actor"), (seized, "director_mismatch")):
+        with pytest.raises(GenerationError) as caught:
+            harness.runtime.run_turn(harness.meter(plan), [], controls=given, director=blind)
+        assert caught.value.reason == reason  # the plan's player character still counts
+    assert harness.transport.sends == []
+
+
+def test_a_reply_copying_another_speakers_example_is_rejected():
+    controls, voices = world()
+    copied = voices["npc-oda"].examples[0].text
+    harness = Harness([say(ODA_LINE), say(copied)])
+    _plan, meter, briefs = two_speakers(harness, controls, voices)
+    outcome = harness.runtime.run_turn(meter, briefs, controls=controls)
+    assert outcome.status == "halted" and [line.speaker for line in outcome.lines] == ["Oda"]
+    assert (outcome.calls[1].status, outcome.calls[1].reason) == ("rejected", "copied_example")
 
 
 def test_a_meter_whose_calls_already_ran_is_refused():

@@ -19,13 +19,15 @@ from .providers import (
 
 #: The generation fault invariants (catalogued in docs/TESTING.md).
 GENERATION_INVARIANTS = (
-    "no unaccepted line", "stale delivers nothing", "halt after failure", "every send booked",
+    "no unaccepted line", "no rejected line", "stale delivers nothing", "halt after failure", "every send booked",
     "bounded calls", "one line per call", "no leaked line", "deterministic", "bounded exploration",
 )
 CAMPAIGN, KEY = "c-explore", "chat-1"
 SECRET_MARKER = "the duke sold the guild"
 ASH_EXAMPLE = "Ledger's shut until the tally is done at dawn."
 GOOD = {"ash": "Coin first, talk after.", "brin": "Mind the gate, friend."}
+#: Faults whose reply the screen must reject, whichever speaker says it.
+_SCREENED = ("silent", "copy", "too_long")
 _REPLY_LINES = len(REFERENCE_REPLY.lines())
 
 
@@ -200,7 +202,11 @@ def _run_point(point: _Point, max_sends: int, runtime_factory=None):
     # A line is a whole scripted reply, never a prefix of one that was cut off.
     scripted = [step if isinstance(step, Reply) else getattr(step, "reply", None) for step in _script(point)]
     accepted_texts = {"".join(step.deltas).strip() for step in scripted if isinstance(step, Reply)}
+    rejected = {"".join(fault.deltas).strip() for name, fault in _faults().items()
+                if name in _SCREENED and isinstance(fault, Reply)}
     for line in outcome.lines:
+        if line.text in rejected:
+            fail("no rejected line", f"{line.speaker} line the screen must reject")
         if statuses.get(line.call_id) != "accepted" or line.text not in accepted_texts:
             fail("no unaccepted line", f"{line.speaker} line from a call that is {statuses.get(line.call_id)}")
         if SECRET_MARKER in line.text.lower() and line.speaker == "Ash":

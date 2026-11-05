@@ -43,12 +43,20 @@ def _one_line(text: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class HeardLine:
-    """One line spoken aloud at the table, as every present actor heard it."""
+    """One line spoken aloud at the table, as every present actor heard it.
+
+    ``speaker`` is the caller's label for who spoke. ``actor``, when given, lets each listener's
+    brief label the line by its own ``names`` instead. A label stating a secret the listener has not
+    learned is shown as "Someone": hearing a voice does not teach a name.
+    """
 
     speaker: str
     text: str
+    actor: InstanceRef | None = None
 
     def __post_init__(self) -> None:
+        if self.actor is not None and not isinstance(self.actor, InstanceRef):
+            raise GenerationError("bad_heard", "a heard line's actor must be an InstanceRef")
         for value, label in ((self.speaker, "speaker"), (self.text, "text")):
             if not isinstance(value, str) or not has_words(value):
                 raise GenerationError("bad_heard", f"a heard line needs a nonblank {label}")
@@ -110,6 +118,7 @@ class NpcBrief:
     heard: tuple[HeardLine, ...]
     hidden: tuple[SecretFact, ...]  # the secrets this actor has not learned, by id
     exposed: tuple[str, ...]  # what the actor holds or heard: a marker in here is not a leak
+    names: tuple[tuple[InstanceRef, str], ...]  # how this actor labels others
     _seal: InitVar[object] = None
 
     __hash__ = None  # type: ignore[assignment]  # holds a ResolvedVoice
@@ -233,6 +242,14 @@ def _leaks(text: str, hidden: tuple[SecretFact, ...], exposed: Sequence[str]) ->
     return None
 
 
+def _label(line: HeardLine, names: Mapping[InstanceRef, str], hidden: tuple[SecretFact, ...],
+           exposed: Sequence[str]) -> str:
+    """Who spoke, as this listener labels them; "Someone" when the label would state a hidden secret."""
+    label = names.get(line.actor) if line.actor is not None else None
+    label = _one_line(label) if isinstance(label, str) and has_words(label) else _one_line(line.speaker)
+    return "Someone" if _leaks(label, hidden, exposed) is not None else label
+
+
 def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLine] = (),
               secrets: Iterable[SecretFact], sections: Iterable[tuple[str, str]] = (),
               names: Mapping[InstanceRef, str] | None = None, knowledge_chars: int = KNOWLEDGE_CHARS,
@@ -241,9 +258,10 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
 
     ``view`` must carry the actor's own ``ActorKnowledge`` (``no_knowledge``/``foreign_knowledge``
     otherwise). ``sections`` is the actor's composed card (``snapshot.effective(...).sections``), for
-    context. ``heard`` is what the actor heard before this turn's calls; a line stating a secret the
-    actor has not learned (not held by id, and not in its own projection) is ``leaky_cue``: the
-    caller screened the cue too little, and the call is refused rather than sent.
+    context. ``heard`` is what the actor heard aloud before this turn's calls: its text counts as
+    learned, as a line spoken earlier this turn does, so the caller must pass only lines this actor
+    heard. A speaker label is not learned: one that states a hidden secret is shown as "Someone".
+    ``names`` labels other actors in knowledge and in heard lines that carry an ``actor``.
     """
     actor, knowledge = _check_view(view)
     # The voice reaches the prompt only through the screened fragment: the card's raw voice-evidence
@@ -268,11 +286,6 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
     # What the actor holds, in full: the projection and its own card, whatever the budget showed.
     own = tuple(rendered) + ((view.description,) if has_words(view.description) else ()) + tuple(
         text for _name, text in sections)
-    for line in heard:
-        leaked = _leaks(line.text, hidden, own)
-        if leaked is not None:
-            raise GenerationError("leaky_cue", f"a heard line states {leaked}, which {actor} has not learned")
-
     try:
         fragment = speaker_fragment(voice, secrets=secrets, known=known, max_chars=voice_chars)
     except ValueError as error:
@@ -291,8 +304,9 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
         parts.append("Who you are:\n" + "\n".join(context))
     parts.append("What you know, oldest first:\n" + "\n".join(f"- {text}" for text in shown) if shown
                  else "You know nothing yet beyond what you hear now.")
+    names[actor] = name
     return NpcBrief(actor, name, voice, fragment, "\n\n".join(parts), heard, hidden,
-                    own + tuple(line.text for line in heard), _SEAL)
+                    own + (name,) + tuple(line.text for line in heard), tuple(names.items()), _SEAL)
 
 
 def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
@@ -301,7 +315,7 @@ def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
     """The scene-level reply's sealed brief: authored scenario text and table-visible lines only.
 
     The player characters are derived here from ``controls``, never passed in: every ``present``
-    actor whose controller is a human. ``names`` must name each of them (``bad_players``), and the
+    actor whose controller is a human. A present actor with no controller is ``unassigned_actor``. ``names`` must name each of them (``bad_players``), and the
     brief forbids writing their words, thoughts, feelings or decisions. ``run_turn`` checks the
     same set against the plan and controls before any call. The reply is an unreviewed proposal:
     035's ``review_narration`` reviews it before it is kept.
@@ -317,8 +331,14 @@ def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
         raise GenerationError("bad_players", "present must be a collection of ids and names a mapping")
     present = tuple(present)
     controls = checked_controls(controls)
-    players = sorted(actor_id for actor_id in present if isinstance(actor_id, str)
-                     and controller(campaign_id, actor_id, controls) not in (None, DIRECTOR))
+    if not all(isinstance(actor_id, str) and actor_id for actor_id in present):
+        raise GenerationError("bad_players", "present must hold nonblank actor ids")
+    owners = {actor_id: controller(campaign_id, actor_id, controls) for actor_id in present}
+    unassigned = sorted(actor_id for actor_id, owner in owners.items() if owner is None)
+    if unassigned:
+        # Fail closed: an actor nobody controls could be a player character the brief fails to name.
+        raise GenerationError("unassigned_actor", f"no controller for present actors {unassigned}")
+    players = sorted(actor_id for actor_id, owner in owners.items() if owner != DIRECTOR)
     labels = [names.get(actor_id) for actor_id in players]
     if not all(isinstance(name, str) and has_words(name) and len(name) <= MAX_NAME_CHARS for name in labels):
         raise GenerationError("bad_players", "every present player character needs a nonblank display name")
@@ -335,8 +355,10 @@ def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
                          (scenario,) + tuple(line.text for line in heard), _SEAL)
 
 
-def _transcript(lines: Sequence[HeardLine]) -> str:
-    return "\n".join(f"{_one_line(line.speaker)}: {_one_line(line.text)}" for line in lines)
+def _transcript(lines: Sequence[HeardLine], names: Mapping[InstanceRef, str], hidden: tuple[SecretFact, ...],
+                exposed: Sequence[str]) -> str:
+    seen = tuple(exposed) + tuple(line.text for line in lines)
+    return "\n".join(f"{_label(line, names, hidden, seen)}: {_one_line(line.text)}" for line in lines)
 
 
 def npc_messages(brief: NpcBrief, spoken: Sequence[HeardLine] = ()) -> tuple[tuple[str, str], ...]:
@@ -344,7 +366,8 @@ def npc_messages(brief: NpcBrief, spoken: Sequence[HeardLine] = ()) -> tuple[tup
     if not isinstance(brief, NpcBrief):
         raise GenerationError("bad_brief", "npc_messages needs an NpcBrief")
     lines = brief.heard + _spoken(spoken)
-    said = f"What was just said:\n{_transcript(lines)}\n\n" if lines else "Nothing has been said yet.\n\n"
+    said = (f"What was just said:\n{_transcript(lines, dict(brief.names), brief.hidden, brief.exposed)}\n\n"
+            if lines else "Nothing has been said yet.\n\n")
     return (("system", brief.system), ("user", f"{said}Give {brief.name}'s reply only."))
 
 
@@ -353,5 +376,5 @@ def director_messages(brief: DirectorBrief, spoken: Sequence[HeardLine] = ()) ->
     if not isinstance(brief, DirectorBrief):
         raise GenerationError("bad_brief", "director_messages needs a DirectorBrief")
     lines = brief.heard + _spoken(spoken)
-    said = f"What was just said:\n{_transcript(lines)}\n\n" if lines else ""
+    said = f"What was just said:\n{_transcript(lines, {}, brief.hidden, brief.exposed)}\n\n" if lines else ""
     return (("system", brief.system), ("user", f"{said}Narrate what happens next."))

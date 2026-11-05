@@ -12,6 +12,7 @@ from grimoire.core import (
     InstanceRef, Knowledge, Moment, Perception, actor_knowledge, director_knowledge,
 )
 from grimoire.core.perspective import ActorKnowledge, KnownBelief
+from grimoire.voice import SecretFact
 from grimoire.generation import (
     DirectorBrief, GenerationError, HeardLine, NpcBrief, director_brief, director_messages, known_ids, npc_brief,
     npc_messages, screen_reply,
@@ -58,11 +59,27 @@ def test_npc_brief_refuses_another_actors_voice():
     assert caught.value.reason == "voice_mismatch"
 
 
-def test_a_heard_line_with_a_secret_the_actor_never_learned_is_a_leaky_cue():
+def test_a_secret_heard_aloud_before_this_turn_counts_as_learned():
     _controls, voices = world()
-    with pytest.raises(GenerationError) as caught:
-        brief(ODA, "Oda", voices, heard=[HeardLine("Wren", SECRET_LINE)])
-    assert caught.value.reason == "leaky_cue"
+    oda = brief(ODA, "Oda", voices, heard=[HeardLine("Wren", SECRET_LINE)])
+    assert screen_reply(oda, "The duke's betrayal? Tally it.") is None
+    assert screen_reply(brief(ODA, "Oda", voices), "The duke's betrayal? Tally it.") == "unlearned_secret"
+
+
+def test_a_speaker_label_never_teaches_a_hidden_name():
+    _controls, voices = world()
+    identity = SecretFact("bellamy-identity", ("Bellamy",))
+    secrets = (*SECRETS, identity)
+    oda = brief(ODA, "Oda", voices, secrets=secrets, heard=[HeardLine("Bellamy", "Hm.", BELLAMY)])
+    turn = [HeardLine("Bellamy", "Coin, darling.", BELLAMY)]
+    text = text_of(npc_messages(oda, turn))
+    assert "Bellamy" not in text and "Someone: Hm." in text and "Someone: Coin, darling." in text
+    assert screen_reply(oda, "Bellamy, you snake.", spoken=turn) == "unlearned_secret"
+    named = brief(ODA, "Oda", voices, secrets=secrets, names={BELLAMY: "the minstrel"})
+    assert "the minstrel: Coin, darling." in text_of(npc_messages(named, turn))
+    controls, _voices = world()
+    narration = scene("A hall.", controls, secrets=secrets, heard=[HeardLine("Bellamy", "Hm.", BELLAMY)])
+    assert "Bellamy" not in text_of(director_messages(narration, turn))
 
 
 def test_a_heard_secret_the_actor_holds_is_not_a_leak():
@@ -108,7 +125,7 @@ def test_briefs_are_sealed():
     _controls, voices = world()
     real = brief(ODA, "Oda", voices)
     with pytest.raises(GenerationError):
-        NpcBrief(real.actor, real.name, real.voice, real.fragment, real.system, (), (), ())
+        NpcBrief(real.actor, real.name, real.voice, real.fragment, real.system, (), (), (), ())
     with pytest.raises(GenerationError):
         DirectorBrief(CAMPAIGN, frozenset(), "x", (), (), ())
 
