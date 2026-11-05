@@ -182,11 +182,23 @@ class _Builder:
         if revision != len(revisions):
             raise _refused("a decision is on the frame's latest revision", "stale_frame")
         frame = revisions[-1].frame
-        if ability is not None and ability.ruling_id is not None:
-            rulings = {each.ruling.ruling_id: each.ruling for each in self.rulings
-                       if each.ruling.ruling_id not in self.superseded}
-            if rulings.get(ability.ruling_id) is None or rulings[ability.ruling_id].attempt != frame.ability:
-                raise _refused("the decision relies on a ruling that is not live on this attempt", "unknown_ruling")
+        if ability is not None:
+            live = [each.ruling for each in self.rulings if each.ruling.ruling_id not in self.superseded
+                    and each.ruling.attempt == frame.ability]
+            if ability.ruling_id is not None:
+                ruling = next((each for each in live if each.ruling_id == ability.ruling_id), None)
+                if ruling is None:
+                    raise _refused("the decision relies on a ruling that is not live on this attempt",
+                                   "unknown_ruling")
+                if (ruling.decides, ruling.decision) != (ability.classification, ability.approval):
+                    # The finding must say what its ruling decided: a refusal cannot be recorded as approval.
+                    raise _refused(f"ruling {ruling.ruling_id!r} {ruling.decision} a {ruling.decides}, not what "
+                                   "the decision recorded", "ruling_mismatch")
+            elif ability.approval == "pending" and ability.classification != "combination" and any(
+                    each.decides == ability.classification for each in live):
+                # Only a combination's ruling can fail to apply (its terms); any other live ruling decides it.
+                raise _refused("the decision recorded a pending approval that a live ruling had decided",
+                               "ruling_mismatch")
         assessment = assess_action(frame, ability)
         if assessment.classification != classification:
             raise _refused("the recorded classification is not the frame's", "classification_mismatch")

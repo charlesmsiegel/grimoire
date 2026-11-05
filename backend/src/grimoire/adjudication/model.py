@@ -23,7 +23,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from grimoire.core.ability_use import DECLARED, AbilityAssessment, AbilityAttempt, Reason
+from grimoire.core.ability_use import (
+    APPROVABLE, CLASSIFICATIONS, DECLARED, AbilityAssessment, AbilityAttempt, Reason,
+)
 from grimoire.core.authority import Resolution
 from grimoire.core.identity import TEXT_MAX, ChatRef, InstanceRef, validate_segment
 from grimoire.core.knowledge import Moment
@@ -231,6 +233,29 @@ class AbilityFinding:
                    for pair in charges):
             raise _invalid("charges must be (ability id, cost id) pairs")
         object.__setattr__(self, "charges", tuple(sorted(charges)))
+        self._check_consistent()
+
+    def _check_consistent(self) -> None:
+        """The combinations 025's ``assess_attempt`` can produce, so a forged finding cannot claim a power."""
+        classification, approval = self.classification, self.approval
+        if classification not in CLASSIFICATIONS:
+            raise _invalid(f"classification must be one of 025's: {classification!r}")
+        if classification in DECLARED:
+            expected = {"not_needed"}
+        elif classification in APPROVABLE:
+            expected = {"pending", "approved", "refused"}
+        else:
+            expected = {"not_approvable"}
+        if approval not in expected:
+            raise _invalid(f"a {classification} has approval {' or '.join(sorted(expected))}, not {approval!r}")
+        if (self.ruling_id is not None) != (approval in ("approved", "refused")):
+            raise _invalid("a finding names a ruling exactly when a ruling approved or refused it")
+        approved = approval == "approved"
+        if self.uncertain != (classification == "attempted_feat" or (classification in APPROVABLE and approved)):
+            raise _invalid(f"a {classification} with approval {approval!r} has uncertain={not self.uncertain}")
+        charged = classification in DECLARED or (classification in ("extrapolation", "combination") and approved)
+        if self.charges and not charged:
+            raise _invalid(f"a {classification} with approval {approval!r} charges nothing")
 
     @classmethod
     def of(cls, assessment: AbilityAssessment) -> AbilityFinding:

@@ -333,6 +333,21 @@ def test_a_forged_decision_makes_the_ledger_unreadable(table, decision, match):
         _reopen(table).library().state(Q)
 
 
+def test_a_forged_finding_cannot_turn_a_refusal_into_an_approval(table):
+    library = table.library()
+    sail = ability(SOLA, **STRETCH)
+    library.frame(power_frame(sail, intent="Rise on a sail of sunlight."))
+    library.rule(AbilityRuling("r1", sail, "extrapolation", "refused", "director"))
+    _forge(table, "decision", {
+        "attempt_id": "director:a-1", "actor": str(SOLA), "revision": 1, "classification": "uncertain",
+        "result": "success", "basis": "adjudicated", "cites": ["#ability"], "consequences": [],
+        "consented_by": None, "ability": {"ability_id": "light_bending", "classification": "extrapolation",
+                                          "approval": "approved", "ruling_id": "r1", "uncertain": True,
+                                          "charges": []}})
+    with pytest.raises(LedgerInvalid, match="ruling_mismatch"):
+        _reopen(table).library().state(Q)
+
+
 def test_a_second_decision_on_record_is_refused_on_replay(table):
     library = table.library()
     library.frame(bridge(), contribution=vault(), author=table.player())

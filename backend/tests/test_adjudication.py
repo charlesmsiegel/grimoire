@@ -215,6 +215,22 @@ def test_rulings_and_decisions_round_trip():
     assert decision_from_payload(Q, _stored(payload)) == ("c10", MARA, 2, "uncertain", decision, ANA, finding)
 
 
+@pytest.mark.parametrize("fields", [
+    ("extrapolation", "approved", None, True, ()),  # an approval with no ruling
+    ("extrapolation", "pending", "r1", False, ()),  # a ruling that decided nothing
+    ("known_capability", "approved", "r1", False, ()),  # a declared use is never ruled on
+    ("beyond_limits", "approved", "r1", True, ()),  # no ruling lifts a limit
+    ("extrapolation", "approved", "r1", False, ()),  # an approved stretch is uncertain
+    ("new_ability", "approved", "r1", True, (("light_bending", "x"),)),  # a new ability charges nothing
+    ("feat", "not_needed", None, True, ()),
+], ids=["approved-unruled", "pending-ruled", "declared-ruled", "limit-approved", "certain-stretch",
+        "charged-new", "unknown"])
+def test_a_finding_025_could_never_produce_is_refused(fields):
+    with pytest.raises(AdjudicationError) as caught:
+        AbilityFinding("light_bending", *fields)
+    assert caught.value.reason == "invalid_field"
+
+
 @pytest.mark.parametrize("change", [
     lambda p: p.update(extra=1), lambda p: p.update(revision=True), lambda p: p.update(cites=["b", "a"]),
     lambda p: p.update(actor="campaign:q-2/character/mara-1"), lambda p: p.update(result="glory"),
