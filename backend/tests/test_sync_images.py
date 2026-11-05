@@ -15,7 +15,7 @@ from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef
 from grimoire.images import Crop, Hidden, Placement, Shown
 from grimoire.imagestore import ImageLibrary
 from grimoire.security import Grant, Permission, ResourcePath
-from grimoire.store import LibraryStore, RecordEnvelope, etag
+from grimoire.store import LibraryStore, RecordEnvelope, WriteDenied, etag
 from grimoire.store.layout import address_parts, blob_parts
 from grimoire.sync import ResolveRefused, identify, resolve, sync, sync_until_quiet
 
@@ -448,3 +448,50 @@ def test_a_blob_in_a_conflict_that_never_copies_is_not_read(pair, monkeypatch):
     name = "sha256:" + hashlib.sha256(PNG).hexdigest()
     resolve(desktop, phone, _blob(PNG), name, {DESKTOP: name, PHONE: None}, H)
     assert calls == [(DESKTOP, _blob(PNG))] and (phone.root / _blob(PNG)).read_bytes() == PNG
+
+
+@pytest.mark.parametrize("state", ["poisoned", "closed"])
+def test_an_unavailable_authority_propagates_instead_of_denying_the_art(unpaired, state):
+    """SYNC.md "Denied writes": a denial for an unavailable authority propagates. The plan must not
+    pre-deny a blob (holding its image and placement as ``denied``) from grants that an authority which
+    failed to persist, or was closed, still lists in memory: the commit decides, and it raises."""
+    desktop, phone = unpaired
+    authority = open_authority(phone)
+    try:
+        for number, scope in enumerate(("sources", "campaigns", "kept")):  # no assets grant
+            authority.add_grant(Grant(f"g{number}", OWNER, frozenset({Permission.APPLY}),
+                                      ResourcePath.parse(scope), OWNER))
+        handles = {DESKTOP: H[DESKTOP], PHONE: authority.handle_for(OWNER, trusted=True)}
+        assert sync_until_quiet(desktop, phone, handles).conflicts == ()
+        _campaign_art(desktop)
+        if state == "poisoned":
+            authority._poison(OSError(28, "No space left on device"))  # the ledger failed to persist
+        else:
+            authority.close()
+        assert not authority.usable
+        with pytest.raises(WriteDenied, match="unavailable"):
+            sync(desktop, phone, handles)
+        assert not (phone.root / _blob(PNG)).exists()
+    finally:
+        authority.close()
+
+
+def test_the_same_picture_dropped_by_hand_on_both_devices_can_be_imported_again(pair, monkeypatch):
+    """A blob's name is its content hash, so the same bytes returning after a tombstone are never an
+    outdated version: they are copied like a new file (create-only), and the new image and placement
+    that use them arrive with them (a record's tombstone still holds its exact bytes: test_sync_scenarios S4)."""
+    desktop, phone = pair
+    old = _campaign_art(desktop, image_id="old")
+    assert sync_until_quiet(desktop, phone, H).conflicts == ()
+    for store in (desktop, phone):  # IMAGES.md: an unwanted (say, oversize) blob is deleted by hand
+        for path in (_blob(PNG), _path(old), _path(PlacementRef(WREN_A, "avatar"))):
+            (store.root / path).unlink()
+    assert sync_until_quiet(desktop, phone, H).conflicts == ()  # both absent: tombstones archived
+    new = _campaign_art(desktop, image_id="new", subject=WREN_B)
+    calls = _verify_spy(monkeypatch)
+    report = sync_until_quiet(desktop, phone, H)
+    assert report.conflicts == ()
+    assert {_blob(PNG), _path(new), _path(PlacementRef(WREN_B, "avatar"))} <= {path for path, _ in report.copied}
+    assert calls == [(DESKTOP, _blob(PNG))]  # hashed on the origin before the copy, as any new blob
+    assert (phone.root / _blob(PNG)).read_bytes() == PNG and _slot(phone, WREN_B) == _slot(desktop, WREN_B)
+    assert sync(desktop, phone, H).conflicts == ()

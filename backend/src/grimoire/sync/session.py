@@ -376,11 +376,15 @@ def _ungranted(store: LibraryStore, handle: object, path: str) -> bool:
     """Whether the commit on ``store`` would certainly deny ``handle`` writing ``path``: the store's
     durable authority issued the handle and no active grant lets its principal apply there (or the
     path is reserved). Read without asking for a decision (decisions are audited; a plan writes
-    nothing). Anything unknown, an unbound store included, is ``False``: the commit decides."""
+    nothing). Anything unknown, an unbound store included, is ``False``: the commit decides. So is an
+    authority that is not usable (closed, or poisoned by a failed flush): its in-memory grants are no
+    answer, and the commit's denial for it propagates (docs/SYNC.md "Denied writes")."""
     authority = store.authority
     if handle is None or authority is None:
         return False
     try:
+        if authority.usable is not True:  # type: ignore[attr-defined]
+            return False
         if not authority.issued(handle):  # type: ignore[attr-defined]
             return False
         resource = logical(tuple(path.split("/")))

@@ -59,7 +59,9 @@ def decide(kind: str, base: Base, left: Side, right: Side) -> Decision:
     # base.kind == "deleted"
     if one_absent:
         survivor = left if present == "left" else right
-        if survivor.etag == base.etag:                                             # 12
+        # a blob's name is its content hash: the same blob again is never an outdated version, so
+        # it is a create-only copy like any new file (row 13), and its tombstone never blocks it
+        if survivor.etag == base.etag and kind != "blob":                          # 12
             return _conflict("resurrected")
         return _copy(present)                                                      # 13
     return _conflict("concurrent")                                                 # 14

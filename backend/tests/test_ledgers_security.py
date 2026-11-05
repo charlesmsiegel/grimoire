@@ -299,6 +299,23 @@ def test_a_save_through_a_poisoned_authority_writes_nothing(library):
     assert not (store.root / ADDRESS).exists()
 
 
+def test_usable_is_false_once_poisoned_or_closed_and_reading_it_changes_nothing(library):
+    store, authority, locker = library
+    grant_importer(authority)
+    assert authority.usable
+    authority.close()  # closed, not poisoned
+    assert not authority.usable and not authority.poisoned
+    store, authority = _reopen(store, authority, locker)
+    try:
+        audit, pending = authority.audit(), list(authority._pending)
+        authority._poison(RuntimeError("earlier failure"))
+        assert not authority.usable and authority.poisoned
+        assert authority.audit() == audit and authority._pending == pending  # a read: no decision, no entry
+    finally:
+        authority.close()
+        store.close()
+
+
 # -- S5 tampering, owners, repair ---------------------------------------------------------------
 
 def test_interior_tampering_is_refused_and_repair_recovers(library):

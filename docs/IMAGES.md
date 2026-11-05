@@ -160,7 +160,7 @@ The resolver is pure (`grimoire.images.resolve`). It checks a blob's presence an
   - Blobs live at the library-global `assets/blobs/…`. A grant on `sources/<s>` or `campaigns/<c>` never covers them: each new blob needs an approval or an `assets` grant.
   - A deduplicated blob is not re-staged, so no new byte approval happens for it.
   - `preview()` therefore reveals whether identical bytes already exist. That is acceptable only because the service is trusted code.
-- **Self-containment.** A source folder no longer carries its own bytes. Moving or removing it leaves its blobs in `assets/`. Transplanting it to another library by hand resolves `missing_blob` until its blobs are copied. [Device sync](SYNC.md#art) carries blobs with the images and placements that need them, and never delivers a picture without its blob. Garbage collection is deferred.
+- **Self-containment.** A source folder no longer carries its own bytes. Moving or removing it leaves its blobs in `assets/`. Transplanting it to another library by hand resolves `missing_blob` until its blobs are copied. [Device sync](SYNC.md#art) carries blobs with the images and placements that need them, and never delivers a picture without its blob; a blob deleted by hand on both devices and imported again later syncs like a new one. Garbage collection is deferred.
 - **Privacy.** Tests use synthetic byte strings and the existing synthetic V1 fixture only.
 
 ## V0.2.1 mapping (for 026)

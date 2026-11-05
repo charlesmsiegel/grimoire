@@ -87,6 +87,16 @@ def test_a_copy_only_ever_lands_on_an_absent_file_or_the_base_or_a_proven_ancest
     assert copies > 50
 
 
+def test_a_blob_over_its_own_tombstone_is_a_create_only_copy():
+    """Row 12 is about an outdated version coming back; a blob's name is its content hash, so the same
+    blob returning is a new file (row 13's copy). Two present blobs still never copy over each other."""
+    tombstone = Base("deleted", E)
+    assert decide("blob", tombstone, Side.present(E), Side.absent()) == Decision("copy", origin="left")
+    assert decide("blob", tombstone, Side.absent(), Side.present(E)) == Decision("copy", origin="right")
+    assert decide("image", tombstone, Side.present(E), Side.absent()) == Decision("conflict", "resurrected")
+    assert decide("blob", Base("agreed", E), Side.present(E), Side.absent()) == Decision("conflict", "deleted")
+
+
 # -- base derivation --------------------------------------------------------------------
 
 P = "campaigns/c1/instances/character/wren-a.json"

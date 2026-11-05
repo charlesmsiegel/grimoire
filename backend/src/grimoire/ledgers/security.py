@@ -114,6 +114,12 @@ class DurableAuthority:
     def poisoned(self) -> bool:
         return self._poisoned is not None
 
+    @property
+    def usable(self) -> bool:
+        """Whether decisions can be made and recorded: neither closed nor poisoned. A read: decides,
+        records and raises nothing (what ``handle_for`` and the sink require)."""
+        return not self._closed and self._poisoned is None
+
     # -- the sink and flushing -------------------------------------------------------------
     def _depth(self) -> int:
         return getattr(self._local, "depth", 0)
