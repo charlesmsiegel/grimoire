@@ -72,7 +72,7 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
 #: grimoire packages that are adapters or test infrastructure, not pure.
 ADAPTERS = frozenset({"grimoire.capture", "grimoire.chatstore", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
-                      "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1", "grimoire.providers",
+                      "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1", "grimoire.partystore", "grimoire.providers",
                       "grimoire.store", "grimoire.sync", "grimoire.testing"})
 
 
@@ -104,6 +104,9 @@ PURE_PACKAGES = (
     PurePackage("grimoire.chats", ("grimoire.chats", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Typed relationship graph (017): values, codec, derived index and actor claims; the service is an adapter.
     PurePackage("grimoire.graph", ("grimoire.graph", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # Party membership and scene casts (033): pure state over 017 relations; the service is an adapter.
+    PurePackage("grimoire.party", ("grimoire.party", "grimoire.graph", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
     # Stored events and evidence (020): codec and assembly; the store-backed service is an adapter.
     # It reads 017's claim-shape value type, stored with the propositions it shapes.
     PurePackage("grimoire.evidence", ("grimoire.evidence", "grimoire.graph", "grimoire.core"),

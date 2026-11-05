@@ -50,6 +50,8 @@ PREDICATES: Mapping[str, Predicate] = MappingProxyType({p.name: p for p in (
     Predicate("has_met", True),
     Predicate("kin_of", True),
     Predicate("allied_with", True),
+    Predicate("in_party", False),     # subject travels in object's active party (033; object is the party anchor)
+    Predicate("in_reserve", False),   # subject is stored in object's party reserve (033): available, not travelling
 )})
 
 

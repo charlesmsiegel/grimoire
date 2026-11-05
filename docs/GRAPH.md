@@ -39,6 +39,8 @@ A closed registry, `grimoire.graph.PREDICATES`. Every predicate's domain is `wor
 | `has_met` | symmetric | the two have met |
 | `kin_of` | symmetric | the two are family |
 | `allied_with` | symmetric | the two are allied |
+| `in_party` | directed | subject travels in object's active party (object is the party anchor; [PARTY](PARTY.md), 033) |
+| `in_reserve` | directed | subject is stored in object's party reserve: available, not travelling ([PARTY](PARTY.md), 033) |
 
 **Player sovereignty.** Relations are editorial world facts, approved through the store's preview and approval like 107's actor records. There is no player-consent gate in this slice, even when a player character is an endpoint (requester decision). Play-derived changes, such as a PC joining a guild in a scene, go through [accepted turn effects](EFFECTS.md) (021), which add and end relations with the provenance `effect:accepted/<event_id>` under its two-key rule. Emotional and attitudinal relations (`loves`, `trusts`) are interiority, a protected PC domain, and are not predicates here; owner [Relationships and reputation](roadmap/sprints/relationships-and-reputation.md) (078).
 

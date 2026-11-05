@@ -1,5 +1,7 @@
 # Party, Reserve and Scene Presence
 
+**Status:** first slice implemented: membership, moves and scene casts ([PARTY](../../PARTY.md)). Milestone 1 is met; a creature in a chat's roster comes before milestone 2.
+
 **Outcome:** Know which characters are controlled, accompanying, reserved, nearby, present in a scene or merely associated with a trainer.
 
 ## Scope
