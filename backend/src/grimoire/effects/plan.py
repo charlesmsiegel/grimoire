@@ -63,7 +63,9 @@ def plan(proposal: EffectProposal, index: GraphIndex, *, landed: frozenset[int] 
     for number, op in enumerate(proposal.operations):
         if op.agent is not None and op.agent not in index.instances:  # never a namesake, never a future instance
             raise EffectError("missing_agent", (str(number),))
-        if number in landed:
+        if number in landed:  # already written: not re-planned, but a begin still needs both endpoints
+            if op.kind == "begin" and not {op.subject, op.object} <= index.instances:
+                raise EffectError("missing_endpoint", (str(number),))
             continue
         entries = candidates(index, op)
         if op.kind == "end":

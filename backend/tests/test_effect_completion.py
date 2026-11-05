@@ -497,3 +497,74 @@ def test_complete_refuses_a_begin_whose_endpoint_is_gone(world):
     wisp.unlink()
     _refused(lambda: recovery(store, handles).complete(EVENT, expected=_etag(store, handles)), "missing_endpoint")
     assert allies(store) == []
+
+
+# -- round-2 review: complete never doubles a hand repair; adopt checks endpoints and odd times ----------
+
+def test_complete_refuses_after_a_hand_refund_of_a_synced_spend(world):
+    """Shape A from a sync (event and holder file, no companion), then a hand refund: completing would put the
+    effect in force uncharged, and an abort would refund the ball again."""
+    store, handles = world
+    publish(store, planned(store, handles), event=True, holders=True)
+    holdings_library(store).apply(Operation("refund-throw", (Line.add(TAM, BALL, 1),), "refund", "hand repair")
+                                  ).commit()
+    _refused(lambda: recovery(store, handles).complete(EVENT, expected=_etag(store, handles)), "not_completable")
+    assert balls(store) == 3 and allies(store) == []
+
+
+def _end_by_hand(store) -> None:  # type: ignore[no-untyped-def]
+    (relation,) = allies(store)
+    graph = relation_library(store)
+    graph.end(relation.ref, until=moment(8), provenance="editor: not allies after all",
+              expected=graph.read(relation.ref)[1]).commit()
+
+
+def test_complete_refuses_after_the_companion_was_ended_by_hand(world):
+    store, handles = world
+    publish(store, planned(store, handles), relations=True, event=True)  # the ball was never spent
+    _end_by_hand(store)
+    _refused(lambda: recovery(store, handles).complete(EVENT, expected=_etag(store, handles)), "not_completable")
+    assert balls(store) == 3
+
+
+def test_adopt_refuses_after_the_orphan_companion_was_ended_by_hand(world):
+    store, handles = world
+    publish(store, planned(store, handles), relations=True)
+    _end_by_hand(store)
+    _refused(lambda: recovery(store, handles).adopt(throw(), controls=CONTROLS), "not_completable")
+    assert balls(store) == 3
+
+
+def test_adopt_refuses_a_landed_begin_whose_endpoint_is_gone(world):
+    store, handles = world
+    publish(store, planned(store, handles), relations=True)
+    [wisp] = [path for path in store.root.rglob("wisp.json") if "holdings" not in path.parts]
+    wisp.unlink()
+    _refused(lambda: recovery(store, handles).adopt(throw(), controls=CONTROLS), "missing_endpoint")
+    assert balls(store) == 3
+
+
+def test_an_endpoint_removed_between_adopt_and_its_commit_is_stale(world):
+    store, handles = world
+    publish(store, planned(store, handles), relations=True)
+    change = recovery(store, handles).adopt(throw(), controls=CONTROLS)
+    [wisp] = [path for path in store.root.rglob("wisp.json") if "holdings" not in path.parts]
+    wisp.unlink()
+    with pytest.raises(StaleWrite):
+        change.commit()
+    assert balls(store) == 3
+
+
+@pytest.mark.parametrize("stamp", ["synced from tablet", "2026-10-30T10:00:00"])
+def test_adopt_refuses_a_landed_change_whose_time_cannot_be_read(world, stamp):
+    """017 keeps any non-blank ``recorded_at``; one that is not an aware time cannot rule out a later repair."""
+    import json
+    store, handles = world
+    change = planned(store, handles)
+    publish(store, change, relations=True)
+    [path] = list(store.root.rglob(f"{change.relation_changes[0].relation.relation_id}.json"))
+    data = json.loads(path.read_text())
+    (data.get("payload", data))["recorded_at"] = stamp
+    path.write_text(json.dumps(data, sort_keys=True, indent=2) + "\n")
+    assert allies(store)[0].recorded_at == stamp
+    _refused(lambda: recovery(store, handles).adopt(throw(), controls=CONTROLS), "not_completable")

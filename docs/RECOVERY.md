@@ -50,7 +50,11 @@ so the receipts then verify. The event file is never rewritten.
    retry.
 3. Any `effect:revoked/<id>` token for the event in a campaign relation or holder file refuses
    (`not_completable`): a revocation of it partly landed, and completing would redo what it undid.
-4. Each failing relation receipt must be plainly **unpublished**:
+4. **A human repair is never doubled.** A holder that logs the event's holdings entry and logged anything after
+   it, or a relation one of the event's `begin`s wrote that has been ended since, refuses (`not_completable`,
+   naming `holdings` or the operation): finishing would write the rest of an effect someone already undid or
+   finished by hand by other means (a hand refund of a synced spend would leave the effect in force uncharged).
+5. Each failing relation receipt must be plainly **unpublished**:
    - a `begin` whose receipted relation file does not exist is re-added **under the receipted relation id**,
      `since` the event's moment, provenance `effect:accepted/<id>` (017's `add(relation_id=...)`, below). 017's
      checks apply: `missing_endpoint`, `instance_id_conflict`, an overlapping record of the fact is
@@ -60,12 +64,12 @@ so the receipts then verify. The event file is never rewritten.
      017's `end` with CAS;
    - anything else (another fact, a retraction, an ending by something else, the id now held by another file)
      is `not_completable`, naming the operation. Nothing is written.
-5. When the holdings receipt fails, 023's `HoldingsLibrary.complete` finishes it at the receipt's exact seqs
+6. When the holdings receipt fails, 023's `HoldingsLibrary.complete` finishes it at the receipt's exact seqs
    ([below](#023-complete)). A holder that no longer fits the receipt is `not_completable` (`holdings`); other
    023 refusals pass through (`insufficient`, `stale_count`, `missing_holder`, `instance_id_conflict`,
    `too_large`, ...).
-6. Ability charges need no write: they are recorded on the event.
-7. The commit re-checks: accepted events unchanged, each relation change's own `stale()`, every relation file
+7. Ability charges need no write: they are recorded on the event.
+8. The commit re-checks: accepted events unchanged, each relation change's own `stale()`, every relation file
    readable, every receipted relation that verified pinned as read (`relation changed`), each written holder's
    instance file (023's `recheck`), every other receipted holder file pinned as read (`holder file changed`),
    the agents' instance files (`agent missing or changed`), no actor id paired with another kind, and that the
@@ -96,7 +100,9 @@ whichever changes are still missing.
   holder files must be one of these landed changes (`orphan_effect`: X has another history, such as an
   `effect:revoked/<X>` token or a token on an unrelated record).
 - Operations not landed are planned as `accept` plans them; landed ones are not re-planned (017's preconditions
-  would refuse their own record), but each landed receipt must then verify as `continuity` checks it.
+  would refuse their own record), but a landed `begin` still needs both endpoints' instance files
+  (`missing_endpoint`, pinned at commit), must not have been ended since (`not_completable`), and each landed
+  receipt must then verify as `continuity` checks it.
 - Holdings landed on every holder: the entries' seqs are the receipt. On some: the rest are completed at the seqs
   the landed entries' `peers` name, as `complete` does. On none: applied as `accept` applies it, with cause
   `effect:accepted/<X>`. Another unrecorded change on a touched holder still refuses (`orphan_effect`).
@@ -104,7 +110,8 @@ whichever changes are still missing.
   no entry landed but relations did, anything stamped at or after the earliest landed relation change (its
   `recorded_at`, or its ending's `at` for an `end`), refuses (`not_completable`, `holdings`): that change may be
   a hand refund of the stray spend (which a later abort would refund again) or a hand charge (which adopting
-  would charge again).
+  would charge again). A time on either side that is not an aware ISO time (017 and 023 keep hand-edited text)
+  refuses the same way.
 - The event gets `ordinal = 1 + max`, `accepted_at` now and `committed_by` the outcome key, like any acceptance.
   The commit re-checks as `accept`'s does, plus every landed relation and holder file pinned as read, and the
   files naming X in a 021 token still exactly those read (`StaleWrite` when another history arrives).
@@ -125,11 +132,15 @@ No new write path:
 `HoldingsLibrary.complete(op, *, seqs) -> HoldingsChange` reads like `apply` under the store lock.
 
 - `seqs` names exactly the operation's holders, each a positive integer (`invalid_field`).
-- Each holder either logs the operation at `seqs[holder]` with the other holders' seqs as peers and **nothing
-  after it** (it landed), or has no entry for it and is at exactly `seqs[holder] - 1` (it never got it). Logged
-  with other content: `op_id_reused`. Anything else is `seq_moved`: a holder changed since (a later operation may
-  be a hand repair of this very partial, and completing would then give twice), or was restored further back.
-- Every holder landed: `AlreadyApplied`. Missing holders must have an instance file (`missing_holder`).
+- Each holder either logs the operation at `seqs[holder]` with the other holders' seqs as peers (it landed), or
+  has no entry for it and is at exactly `seqs[holder] - 1` (it never got it). Logged with other content:
+  `op_id_reused`; logged at another seq or with other peers: `seq_moved`.
+- Every holder landed: `AlreadyApplied`, whatever they logged since (nothing is written, so nothing can be
+  doubled; `EffectRecovery` makes its own moved-on check before it calls this).
+- Otherwise a landed holder that logged anything after its entry, or a missing one not at exactly
+  `seqs[holder] - 1`, is `seq_moved`: a holder changed since (a later operation may be a hand repair of this very
+  partial, and completing would then give twice), or was restored further back. Missing holders must have an
+  instance file (`missing_holder`).
 - The lines are applied in order to the **missing holders' stacks only**. A line's effect on a holder depends only
   on that holder's counts, so this is exactly what the whole operation did there: `insufficient`, `stale_count`,
   `count_limit`, `stack_limit`. Each missing holder gets the entry the original would have written (same op id,
@@ -164,6 +175,12 @@ its event names.
 - **A deliberate restore cannot be told from a vanished write.** A holder file restored to its pre-effect backup
   looks exactly like one whose entry never landed, so `complete` and `adopt` finish it. The preview names every
   holder file written; a human who restored on purpose aborts instead.
+- **A hand-deleted relation file cannot be told from a vanished one either.** `complete` re-adds a receipted
+  relation whose file is gone, even when a person deleted it to undo the effect by hand; the preview names it.
+- **Repairs by hand refuse; they are not recognised.** The moved-on rules refuse on any later holder change or
+  ending, including an unrelated one (a director grant of another item to the same holder), which then makes it
+  a human repair. Aborting by `revoke` after a hand refund (021's undo applies the inverse lines to the current
+  counts) refunds again: a human who repaired by hand does not also abort.
 - **A holder that never got its entry and was touched since** can neither be completed (`seq_moved`) nor aborted
   coherently: `revoke(partial=True)` reads "different operation" at its seq and skips the undo as possibly in
   force (`partial_revocation`). A multi-holder holdings part that landed on some holders only is the same for

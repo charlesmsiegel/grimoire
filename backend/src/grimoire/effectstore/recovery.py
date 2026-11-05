@@ -92,6 +92,7 @@ class EffectRecovery:
             if any("revoked" in found for found in tokens.values()):
                 raise InvalidEffect(f"a revocation of {ref} was partly published; completing it would undo that",
                                     "not_completable", ("revocation",))
+            self._refuse_touched_since(event, failing, index)
             changes = [self._complete_operation(event, number, snap) for number in failing]
             holdings_change, landed = None, ()
             if holdings_why is not None:
@@ -107,6 +108,25 @@ class EffectRecovery:
                 holder_pins={holder: lib._holder_pin(holder) for holder in landed},
                 relation_pins={relation: snap.graph.etags[relation] for relation in sorted(verified, key=str)},
                 rests_on=_unchanged_tokens(lib, campaign, event.event_id, tokens))
+
+    def _refuse_touched_since(self, event: AcceptedEvent, failing: list[int], index) -> None:  # type: ignore[no-untyped-def]
+        """Finishing an event a human has since repaired by hand would double the repair: refuse when a holder
+        that logs this event's entry changed after it, or a receipted relation this event began was ended."""
+        accepted = event.holdings
+        if accepted is not None:
+            held = parts.read_holders(self.library._holdings(), tuple(accepted.seqs))
+            moved = sorted(str(holder) for holder, value in held.items() if isinstance(value, Holdings)
+                           and (entry := value.entry(accepted.op_id)) is not None and value.seq != entry.seq)
+            if moved:
+                raise InvalidEffect(f"{', '.join(moved)} changed after logging this event's holdings change",
+                                    "not_completable", ("holdings",))
+        for number, item in enumerate(event.operations):
+            if number in failing or item.op.kind != "begin":
+                continue
+            relation = index.relation(event.receipts[number].relation.relation_id, requested_by=DIRECTOR).relation
+            if relation.ending is not None:
+                raise InvalidEffect(f"the relation operation {number} began was ended since", "not_completable",
+                                    (str(number),))
 
     def _complete_operation(self, event: AcceptedEvent, number: int, snap) -> RelationChange:  # type: ignore[no-untyped-def]
         lib, item = self.library, event.operations[number]
@@ -206,6 +226,12 @@ class EffectRecovery:
                                         "orphan_effect", (orphan,))
             record = ScopeRecord(ref, accepted_schema(event), accepted_to_payload(event), owner=lib._owner)
             agents, actors = lib._acting(proposal)
+            for number, (relation, _) in landed.items():
+                if proposal.operations[number].kind == "begin":
+                    if relation.ending is not None:  # ended by hand since: adopting would not be the commit
+                        raise InvalidEffect(f"the landed relation of operation {number} was ended since",
+                                            "not_completable", (str(number),))
+                    agents.update({end: lib._etag(end) for end in (relation.subject, relation.object)})
             pins.update({holder: lib._holder_pin(holder) for holder in sorted(entries.keys() - written, key=str)})
             return EffectChange(
                 lib, ref, ((record, None),), tuple(changes), campaign, snap.state, proposal.chat,
@@ -278,10 +304,15 @@ class EffectRecovery:
             raise InvalidEffect(f"{', '.join(moved)} changed after logging this effect's holdings change",
                                 "not_completable", ("holdings",))
         if not entries and landed:  # nothing logged, but the relations landed: anything logged since may repair it
-            since = min(_instant(_written_at(relation, proposal.operations[number].kind))
-                        for number, (relation, _) in landed.items())
-            later = sorted(str(holder) for holder, held in decoded.items()
-                           if any(_instant(logged.at) >= since for logged in held.log))
+            written_at = [_instant(_written_at(relation, proposal.operations[number].kind))
+                          for number, (relation, _) in landed.items()]
+            logged_at = {holder: [_instant(logged.at) for logged in held.log] for holder, held in decoded.items()}
+            if None in written_at or any(None in times for times in logged_at.values()):
+                raise InvalidEffect("a time on a landed change or a holder log cannot be read, so a hand repair "
+                                    "since cannot be ruled out", "not_completable", ("holdings",))
+            since = min(written_at)  # type: ignore[type-var]
+            later = sorted(str(holder) for holder, times in logged_at.items()
+                           if any(at >= since for at in times))  # type: ignore[operator]
             if later:
                 raise InvalidEffect(f"{', '.join(later)} changed after this effect's relation changes were written",
                                     "not_completable", ("holdings",))
@@ -393,8 +424,13 @@ def _written_at(relation: Relation, kind: str) -> str:
     return relation.ending.at if kind == "end" and relation.ending is not None else relation.recorded_at
 
 
-def _instant(text: str) -> datetime:
-    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+def _instant(text: str) -> datetime | None:
+    """An aware time, or None when the text is not one (a hand edit or sync can leave any text)."""
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return moment if moment.tzinfo is not None else None
 
 
 def _states(value: object, event_id: str) -> list[str]:
