@@ -347,8 +347,9 @@ class LorePack:
     anyone in the setting may know, ``director`` lore is the director's alone and must never be
     stated as table fact. ``omitted``, ``untriggered`` and ``problems`` read as in ``ContextPack``;
     nothing here belongs to an actor, so nothing is withheld unreported. ``basis`` is the campaign
-    and the lore bindings it read (``SelectionBasis``, with no actor). It is a provisional in-memory
-    value, never persisted.
+    and the lore bindings it read (``SelectionBasis``, with no actor). ``table_text`` is the
+    table-visible text its entries were triggered on: the table saw it, so a brief counts it as
+    exposed. It is a provisional in-memory value, never persisted.
     """
 
     budget: Budget
@@ -358,6 +359,7 @@ class LorePack:
     untriggered: tuple[tuple[SourceRef, int], ...]
     problems: tuple[SourceProblem, ...]
     basis: SelectionBasis
+    table_text: str = ""
 
     @property
     def tokens(self) -> int:

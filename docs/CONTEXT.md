@@ -79,6 +79,7 @@ Each `LoreEntry` normalizes its keys once. The perceived texts become word ids, 
 - Lore comes from the same bound `lorebook` and `scenario` revisions, readers and `unpack` as an actor's, but **`common` and `director` entries** are both candidates.
 - Only `constant` entries and entries whose key occurs in **`table_text`** are candidates. **Caller obligation:** `table_text` is what the whole table saw (the visible transcript window), never a whisper, an NPC's private perception or a player's interiority. Lore never triggers lore.
 - Ranking, the budget's `lore` lane, `omitted`, `untriggered` (both audiences counted, since the director may know of them) and `problems` (the lore bindings) are as for an actor. The same refusals apply, with `invalid_scene_text` for `table_text`.
+- `LorePack.table_text` keeps the `table_text` its entries were triggered on. The table saw it, so `director_brief` counts it as exposed.
 - Every item carries its entry's `audience` (`PackedItem.audience`; `LorePack.audience("common")` selects them). The renderer keeps the two apart: `director_brief` lets the narrator repeat `common` lore but never treats `director` lore as table-visible.
 
 A `LorePack` is the director's alone. `npc_brief` refuses one (`foreign_context`), and refuses an actor pack holding any lore item that is not `common`.

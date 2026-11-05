@@ -278,16 +278,56 @@ def test_director_lore_is_hidden_like_a_secret_even_when_no_secret_names_it():
     assert screen_reply(heard, "SCENARIO-TOKEN the flood comes tonight.") is None  # the table said it first
 
 
-def test_each_telling_sentence_of_a_director_entry_is_screened():
-    entries = [entry("ferryman", "The ferryman is the duke's son. Few know. He hides it well, they say.",
-                     constant=True, audience="director")]
-    definitions = [LoreRecord(LORE, "Saltmarch lore", LORE_SCHEMA, {"entries": entries})]
-    index = DefinitionIndex([SourceDescriptor(f.CAST, owner="human:owner")], definitions)
-    snap = EffectiveSnapshot(index, SourceSelection(None, (SelectedSource(LORE, "lorebook"),)))
-    brief = narration(lore(snap=snap), snap=snap, secrets=())
+def director_only(*texts: str, keys=()) -> EffectiveSnapshot:
+    """A chat whose only binding is a lorebook of director entries: constant ones, or keyed by ``keys``."""
+    entries = [entry(f"d{n}", text, *keys, constant=not keys, audience="director") for n, text in enumerate(texts)]
+    index = DefinitionIndex([SourceDescriptor(f.CAST, owner="human:owner")],
+                            [LoreRecord(LORE, "Saltmarch lore", LORE_SCHEMA, {"entries": entries})])
+    return EffectiveSnapshot(index, SourceSelection(None, (SelectedSource(LORE, "lorebook"),)))
+
+
+def directed(*texts: str, table_text: str = SCENE, keys=()):
+    snap = director_only(*texts, keys=keys)
+    return narration(lore(table_text, snap=snap), snap=snap, secrets=())
+
+
+def test_each_telling_sentence_of_a_director_entry_is_screened_word_for_word():
+    brief = directed("The ferryman is the duke's son. Few know. He hides it well, they say.")
     assert screen_reply(brief, "Mist. The ferryman is the duke's son.") == "unlearned_secret"
     assert screen_reply(brief, "He hides it well, they say") == "unlearned_secret"
-    assert screen_reply(brief, "Few know.") is None  # two words: too common a sentence to screen alone
+    assert screen_reply(brief, "The ferryman is a son of the duke.") is None  # a paraphrase is not caught
+    assert screen_reply(brief, "Few know.") is None and brief.unscreened == ()
+
+
+def test_a_short_director_sentence_is_ordinary_prose_and_never_halts_narration():
+    brief = directed("It is late. The duke sold the ferry to the guild.")
+    assert screen_reply(brief, "It is late, and rain drums on the quay.") is None  # four words: not screened
+    assert screen_reply(brief, "Word is the duke sold the ferry to the guild.") == "unlearned_secret"
+
+
+def test_a_director_entry_with_no_telling_sentence_is_unscreened_and_named_to_the_caller():
+    brief = directed("Rain.", "...!!! ok", "The duke sold the ferry to the guild.")
+    assert screen_reply(brief, "Rain lashes the quay.") is None and screen_reply(brief, "ok then") is None
+    assert brief.unscreened == ((LORE, "d0"), (LORE, "d1"))
+    assert "- Rain." in brief.system  # still shown to the narrator, as guidance
+
+
+def test_director_sentences_split_at_full_width_stops_but_not_at_abbreviations():
+    unspaced = directed("公爵はギルドに借金がある。灯台はもう暗い。")
+    assert screen_reply(unspaced, "公爵はギルドに借金がある。") == "unlearned_secret"
+    assert screen_reply(unspaced, "灯台はもう暗い。") is None  # about three words: too short to screen
+    titled = directed("Mr. Vale sold the ferry. Rain. The duke owes the guild a fortune.")
+    assert screen_reply(titled, "Mr. Vale sold the ferry at dawn.") == "unlearned_secret"  # "Mr." ends nothing
+    assert screen_reply(titled, "The duke owes the guild a fortune.") == "unlearned_secret"  # "Rain." hides nothing
+
+
+def test_what_the_table_said_when_it_triggered_director_lore_is_not_hidden():
+    entry_text = "The duke is late again. He sold the ferry to the guild."
+    said = directed(entry_text, table_text="Where is the duke? The duke is late again.", keys=("duke",))
+    assert said.unscreened == () and screen_reply(said, "The duke is late again.") is None
+    assert screen_reply(said, "He sold the ferry to the guild.") == "unlearned_secret"
+    unsaid = directed(entry_text, table_text="Where is the duke?", keys=("duke",))
+    assert screen_reply(unsaid, "The duke is late again.") == "unlearned_secret"
 
 
 def test_director_lore_for_another_campaign_or_selection_is_refused():

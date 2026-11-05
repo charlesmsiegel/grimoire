@@ -11,6 +11,7 @@ from functools import lru_cache
 
 _SPACE = re.compile(r"\s+")
 _WORD = re.compile(r"\w")
+_RUN = re.compile(r"\w+")
 #: Typographic variants NFKC keeps distinct, folded so ``duke’s`` matches ``duke's``.
 _FOLD = str.maketrans({
     "\u2018": "'", "\u2019": "'", "\u201b": "'", "\u02bc": "'", "\u2032": "'",
@@ -37,6 +38,23 @@ def has_words(text: str) -> bool:
 
 def _unspaced(char: str) -> bool:
     return unicodedata.name(char, "").startswith(_UNSPACED_SCRIPTS)
+
+
+#: Characters a word averages in a script written without spaces, for ``count_words``.
+UNSPACED_CHARS_PER_WORD = 2
+
+
+def count_words(text: str) -> int:
+    """About how many words ``text`` has: each spaced run of word characters is one, and a run in a
+    script written without spaces counts one per ``UNSPACED_CHARS_PER_WORD`` characters (rounded up),
+    since such a run is a whole phrase or sentence, not one word."""
+    count = 0
+    for run in _RUN.findall(normalize(text)):
+        if _unspaced(run[0]):
+            count += -(-len(run) // UNSPACED_CHARS_PER_WORD)
+        else:
+            count += 1
+    return count
 
 
 @lru_cache(maxsize=1024)

@@ -21,13 +21,13 @@ from dataclasses import InitVar, dataclass
 from grimoire.context import ContextError, ContextPack, LorePack, selection_basis
 from grimoire.core.authority import DIRECTOR
 from grimoire.core.entity import EntityError
-from grimoire.core.identity import InstanceRef
+from grimoire.core.identity import InstanceRef, SourceRef
 from grimoire.core.model import ActorView, ControlAssignment
 from grimoire.core.perspective import ActorKnowledge
 from grimoire.core.portrayal import PortrayalError
 from grimoire.core.resolve import MissingDefinition, snapshot_actor_view
 from grimoire.core.snapshot import EffectiveSnapshot
-from grimoire.evals.text import contains_marker, has_words
+from grimoire.evals.text import contains_marker, count_words, has_words
 from grimoire.voice import DEFAULT_MAX_CHARS, ResolvedVoice, SecretFact, SpeakerFragment, speaker_fragment
 
 from .errors import GenerationError
@@ -43,12 +43,15 @@ MAX_LINE_CHARS = 2000
 MAX_NAME_CHARS = 200
 
 _SPACE = re.compile(r"\s+")
-#: Where one sentence of a director lore entry ends, and the punctuation trimmed from its edges.
-_SENTENCE_END = re.compile(r"(?<=[.!?;])\s+")
+#: Where one sentence of a director lore entry ends: a stop and a space, or a full-width stop, which
+#: scripts written without spaces need no space after.
+_SENTENCE_END = re.compile(r"(?<=[.!?;])\s+|(?<=[\u3002\uff01\uff1f])\s*")
 _EDGE = re.compile(r"^\W+|\W+$")
-_WORDS = re.compile(r"\w+")
-#: A sentence this short ("It is.") is too common to screen alone; the whole entry stands in for it.
-MIN_LORE_MARKER_WORDS = 3
+#: A director lore sentence shorter than this ("It is late.") is ordinary prose, so screening it would
+#: reject innocent narration and halt the turn; it is left unscreened.
+MIN_LORE_MARKER_WORDS = 5
+#: A fragment shorter than this before a stop is an abbreviation ("Mr.", "Dr."), not a sentence.
+_MIN_SENTENCE_WORDS = 2
 _SEAL = object()
 _STANCE = {"believed": "You believe", "suspected": "You suspect", "rejected": "You doubt"}
 _EARLIER = {"believed": "Earlier, you believed", "suspected": "Earlier, you suspected",
@@ -157,6 +160,9 @@ class DirectorBrief:
     # every secret (the director brief has no knowledge to learn one from) and its director lore's markers
     hidden: tuple[SecretFact, ...]
     exposed: tuple[str, ...]  # authored material and table-visible lines
+    #: director lore entries shown with no sentence long enough to screen, as (source, entry id): the
+    #: trusted caller's to review, since narration stating one is not caught
+    unscreened: tuple[tuple[SourceRef, str], ...] = ()
     _seal: InitVar[object] = None
 
     def __post_init__(self, _seal: object) -> None:
@@ -455,15 +461,31 @@ def _check_lore(lore: object, campaign_id: str, snapshot: object) -> None:
                               "the snapshot's")
 
 
-def _lore_secret(index: int, line: str) -> SecretFact:
-    """A director lore line as a hidden secret: each sentence long enough to be telling, or the line.
+def _sentences(line: str) -> list[str]:
+    """``line``'s sentences, edge punctuation trimmed. A fragment of under ``_MIN_SENTENCE_WORDS`` words
+    before a stop ("Mr.") stays with what follows it; what follows is also given alone, so a one-word
+    sentence ("Rain.") never hides the sentence after it."""
+    found: list[str] = []
+    start, rest = 0, None
+    for stop in (*_SENTENCE_END.finditer(line), None):
+        end, after = (stop.start(), stop.end()) if stop is not None else (len(line), len(line))
+        if stop is not None and count_words(line[rest if rest is not None else start:end]) < _MIN_SENTENCE_WORDS:
+            rest = after  # "Mr." ends no sentence: keep reading from the same start
+            continue
+        found.append(_EDGE.sub("", line[start:end]))
+        if rest is not None:
+            found.append(_EDGE.sub("", line[rest:end]))
+        start, rest = after, None
+    return [sentence for sentence in found if sentence]
 
-    Screening matches whole phrases, so the sentence is the unit: narration that repeats one sentence
-    of the entry states it, while a sentence of two words would also match ordinary prose.
+
+def _lore_markers(line: str) -> tuple[str, ...]:
+    """A director lore line's markers: each of its sentences of at least ``MIN_LORE_MARKER_WORDS`` words.
+
+    Screening matches whole phrases word for word, so a sentence is the unit: narration that repeats
+    one states it. A shorter sentence would also match ordinary prose, so it is not a marker.
     """
-    sentences = (_EDGE.sub("", part) for part in _SENTENCE_END.split(line))
-    markers = [part for part in sentences if len(_WORDS.findall(part)) >= MIN_LORE_MARKER_WORDS]
-    return SecretFact(f"director-lore-{index}", tuple(dict.fromkeys(markers or [_EDGE.sub("", line)])))
+    return tuple(dict.fromkeys(part for part in _sentences(line) if count_words(part) >= MIN_LORE_MARKER_WORDS))
 
 
 def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
@@ -485,9 +507,11 @@ def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
     ``basis`` is not ``snapshot``'s (another chat's, or this chat's before a lore binding was attached,
     detached, re-pinned or moved) is ``context_mismatch``. Its ``common`` entries are setting the
     table may hear, so narration quoting one is no leak. Its ``director`` entries guide the narrator
-    and are hidden like secrets: narration stating any sentence of one (of at least
-    ``MIN_LORE_MARKER_WORDS`` words, or the whole entry when none is that long), as ``screen_reply``
-    matches markers, is ``unlearned_secret`` unless the scenario, common lore or a heard line says it.
+    and are hidden like secrets: narration that repeats, word for word, a whole sentence of one of at
+    least ``MIN_LORE_MARKER_WORDS`` words is ``unlearned_secret``, unless the scenario, common lore, the
+    table text the lore was triggered on or a heard line says it too. Part of a sentence, a paraphrase
+    or a shorter sentence is not caught; an entry with no sentence that long is listed in
+    ``unscreened`` for the trusted caller.
     """
     if not isinstance(scenario, str) or not has_words(scenario):
         raise GenerationError("bad_scenario", "a director reply needs nonblank authored scenario text")
@@ -523,16 +547,26 @@ def director_brief(scenario: str, *, campaign_id: str, present: Iterable[str],
                      "decisions; their players do that.")
     parts.append("Scenario:\n" + scenario.strip())
     common = [_one_line(item.line) for item in lore.audience("common")] if lore is not None else []
-    private = [_one_line(item.line) for item in lore.audience("director")] if lore is not None else []
+    directors = lore.audience("director") if lore is not None else ()
+    private = [_one_line(item.line) for item in directors]
     if common:
         parts.append(_listed("What anyone here may know:", common))
     if private:
         parts.append(_listed("Known only to you, the narrator. Let it shape what happens, but never state it "
                              "outright:", private))
-    # The player characters' names are table-visible: naming them in narration is not a leak.
-    hidden = secrets + tuple(_lore_secret(index, line) for index, line in enumerate(private) if has_words(line))
-    return DirectorBrief(campaign_id, frozenset(players), "\n\n".join(parts), heard, hidden,
-                         (scenario, *labels, *common) + tuple(line.text for line in heard), _SEAL)
+    hidden = list(secrets)
+    unscreened = []
+    for index, (item, line) in enumerate(zip(directors, private)):
+        markers = _lore_markers(line)
+        if markers:
+            hidden.append(SecretFact(f"director-lore-{index}", markers))
+        else:
+            unscreened.append((item.origin.source, item.origin.name))
+    # The player characters' names and what the table saw are table-visible: stating them is no leak.
+    table = (lore.table_text,) if lore is not None and has_words(lore.table_text) else ()
+    return DirectorBrief(campaign_id, frozenset(players), "\n\n".join(parts), heard, tuple(hidden),
+                         (scenario, *labels, *common, *table) + tuple(line.text for line in heard),
+                         tuple(unscreened), _SEAL)
 
 
 def _transcript(lines: Sequence[HeardLine], names: Mapping[InstanceRef, str], hidden: tuple[SecretFact, ...],

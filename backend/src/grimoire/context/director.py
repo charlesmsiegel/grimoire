@@ -57,7 +57,8 @@ def director_lore(snapshot: EffectiveSnapshot, *, campaign_id: str, table_text: 
     items, omitted = pack(found, budget, count)
     problems += lore_problems(snapshot)
     return LorePack(budget, measurement, items, omitted, tuple(sorted(untriggered, key=lambda pair: str(pair[0]))),
-                    tuple(sorted(set(problems), key=lambda p: (str(p.source), p.code, p.detail or ""))), basis)
+                    tuple(sorted(set(problems), key=lambda p: (str(p.source), p.code, p.detail or ""))), basis,
+                    table_text)
 
 
 __all__ = ["director_lore"]
