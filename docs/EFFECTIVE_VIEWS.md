@@ -131,6 +131,7 @@ Each source is a `SelectedSource(ref, role, resolved_revision=None, actor=None)`
 |---|---|
 | `sources()` | each selection with its pinned resolution or `BrokenReference`, plus notices |
 | `resolve(ref, role=None)` | the raw definition of a selected entity, or of a pinned **ancestor** in the chain of a selection (of that `role`, when given). **Raw ancestry is for merge owners** (027 voice, 038 art): it still holds content the portrayal cleared. |
+| `definition(ref, role=None)` | `resolve`, decoded with the snapshot's `decode`: the raw `EntityDefinition`, own `derivation` included. 027's voice walk reads each layer's `clear_sections` through it. |
 | `effective(ref, role=None)` | the `EffectiveDefinition` of a **selected** revision, memoized; `requested` is the ref as asked. Ancestors are reachable only raw, so content a portrayal cleared never reaches prompt assembly through this call. |
 | `entity(instance_ref)` | the captured instance composed over its selection's effective definition |
 | `instance`, `instance_etag` | the captured instance value and its etag |

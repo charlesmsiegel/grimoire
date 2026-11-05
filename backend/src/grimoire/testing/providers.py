@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from grimoire.providers.cancel import CancelToken
@@ -109,7 +109,20 @@ class Interrupt:
     reply: Reply = REFERENCE_REPLY
 
 
-Step = Reply | Status | ConnectFail | WriteFail | ReadFail | Truncate | CancelAt | Garbage | Interrupt
+@dataclass(frozen=True)
+class Supersede:
+    """Call the transport's ``on_supersede`` hook after ``after_lines`` lines; the stream then goes on.
+
+    A newer run claiming the same chat (027's ``RunFence``) mid-stream: the hook is where a test
+    makes that claim, at an exact byte position of the call.
+    """
+
+    after_lines: int
+    reply: Reply = REFERENCE_REPLY
+
+
+Step = (Reply | Status | ConnectFail | WriteFail | ReadFail | Truncate | CancelAt | Garbage | Interrupt
+        | Supersede)
 
 
 @dataclass(frozen=True)
@@ -125,13 +138,15 @@ class Send:
 
 class _Response:
     def __init__(self, status: int, headers: Mapping[str, str], lines: Sequence[bytes],
-                 fault: Step | None, cancel: CancelToken) -> None:
+                 fault: Step | None, cancel: CancelToken,
+                 on_supersede: Callable[[], None] | None = None) -> None:
         self.status = status
         self.headers = dict(headers)
         self._lines = list(lines)
         self._index = 0
         self._fault = fault
         self._cancel = cancel
+        self._on_supersede = on_supersede
 
     def read_line(self, max_bytes: int, timeout: float) -> bytes:
         fault, index = self._fault, self._index
@@ -150,6 +165,12 @@ class _Response:
                 return b"data: {garbage\n"
             if isinstance(fault, Interrupt):
                 raise KeyboardInterrupt
+            if isinstance(fault, Supersede):
+                self._fault = None
+                if self._on_supersede is not None:
+                    self._on_supersede()
+                if self._cancel.cancelled:
+                    return b""
         if index >= len(self._lines):
             return b""
         self._index += 1
@@ -190,7 +211,8 @@ class _Connection:
                              None, self._cancel)
         reply = step if isinstance(step, Reply) else step.reply
         return _Response(200, {"content-type": "text/event-stream"}, reply.lines(),
-                         None if isinstance(step, Reply) else step, self._cancel)
+                         None if isinstance(step, Reply) else step, self._cancel,
+                         self._transport.on_supersede)
 
     def close(self) -> None:
         self.closed = True
@@ -206,6 +228,8 @@ class ScriptedTransport:
         self.connects: list[str] = []
         self.sends: list[Send] = []
         self.closed = 0
+        #: What a ``Supersede`` step calls (a test sets it, e.g. to claim a newer run).
+        self.on_supersede: Callable[[], None] | None = None
 
     def connect(self, url: str, timeouts: Timeouts, cancel: CancelToken) -> _Connection:
         if not self._steps:

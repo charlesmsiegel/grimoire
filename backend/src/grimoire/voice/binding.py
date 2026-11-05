@@ -149,6 +149,20 @@ def _merge(source_anchors: tuple[VoiceAnchor, ...], source_examples: tuple[Voice
     return anchors, examples, provenance
 
 
+def merge_binding(anchors: tuple[VoiceAnchor, ...], examples: tuple[VoiceExample, ...],
+                  binding: VoiceBinding | None) -> tuple[tuple[VoiceAnchor, ...], tuple[VoiceExample, ...],
+                                                         dict[str, str]]:
+    """A source profile's items with a binding's local replace/add/suppress applied, and their provenance.
+
+    The same merge ``resolve_voice`` uses, for a caller that found the source profile another way
+    (027's snapshot path). A binding's ``portrayal`` is not consulted here.
+    """
+    if binding is not None and not isinstance(binding, VoiceBinding):
+        raise InvalidVoice("bad_binding", "binding must be a VoiceBinding")
+    anchors, examples = validate_items(anchors, examples, "source profile")
+    return _merge(anchors, examples, binding)
+
+
 def resolve_voice(actor: CampaignActor, catalog: VoiceCatalog, definitions: DefinitionIndex,
                   binding: VoiceBinding | None = None) -> ResolvedVoice:
     """The voice ``actor`` speaks with, or a typed refusal; never a namesake or another revision."""

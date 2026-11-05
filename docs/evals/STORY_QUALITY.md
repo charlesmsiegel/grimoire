@@ -36,7 +36,7 @@ can never be relabeled measured.
 
 | Item | `/1` | `core.inference` | `/2` |
 |---|---|---|---|
-| narration purpose | `narration` is an unflagged RP purpose; the synthetic baseline spends about a third of its weighted tokens on it | no `narration` stage; a turn must not issue one | no narration call or scene-level contribution; narration prose belongs to the NPC contribution that produced it. **Provisional** until per-npc-generation-runtime (027) decides a stage; a new stage is a `/3` |
+| narration purpose | `narration` is an unflagged RP purpose; the synthetic baseline spends about a third of its weighted tokens on it | no `narration` stage; a turn must not issue one | no narration call or scene-level contribution; narration prose belongs to the NPC contribution that produced it. **Provisional** in `/2`: 027 has since added an optional, scene-level `director_generation` stage ([INFERENCE](../INFERENCE.md)), which `/2` refuses; recording director calls is a `/3` bump, the next 027 slice |
 | provenance vocabulary | `synthetic` / `measured` (self-declared; the report says so) | `provider_reported` / `estimated` / `synthetic` per attempt | per-attempt `measurement`; "measured" is derived from the rebuilt ledger plus verified evidence, never declared |
 | token fields | integer `input_tokens`, `cached_input_tokens`, `output_tokens`; an unreported count cannot be recorded | `None` means unreported; cache read/write and reasoning tokens separate | the `TokenUsage` fields, `null` = unreported |
 | optional calls | `actor_id` only on `npc_generation`; free-form `feature_flag` names | every optional stage is an `InferenceStage`, with an optional actor | every call has a `stage` from a frozen copy of `InferenceStage`, planned under the run's `policy` |
