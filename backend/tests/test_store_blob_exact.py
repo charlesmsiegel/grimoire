@@ -139,3 +139,32 @@ def test_put_exact_keeps_image_objects_create_only(store):
                   regenerable=True)
     txn.commit(H)
     assert ImageLibrary(store, H).read_image_bytes(ImageRef("campaign:c1", "other")) == PNG
+
+
+def test_a_reader_refusing_at_staging_leaves_no_temp_or_directory(tmp_path):
+    """A lazy blob reader may raise its own store's refusal when staging loads it (an origin library
+    awaiting recovery): the refused commit still removes its staged files and new directories."""
+    from grimoire.core.identity import InstanceRef
+    from grimoire.store import PendingRecovery, RecordEnvelope
+
+    store = LibraryStore.create(tmp_path / "lib")
+    seed(store)
+    calls = []
+
+    def read():
+        calls.append(1)
+        if len(calls) >= 2:  # authorization loaded it; staging's load meets the refusal
+            raise PendingRecovery("origin awaits recovery")
+        return PNG
+
+    txn = store.transaction()
+    txn.put(RecordEnvelope(InstanceRef("zz-new", "character", "late"), {"n": 1}), None)
+    txn.put_blob_exact("/".join(blob_parts(hashlib.sha256(PNG).hexdigest(), "png")), read, size=len(PNG))
+    with pytest.raises(PendingRecovery):
+        txn.commit(handle("sources", "campaigns", "assets", "kept"))
+    try:
+        assert len(calls) == 2
+        assert [path.name for path in (store.root / ".txn").iterdir() if path.name.endswith(".new")] == []
+        assert not (store.root / "campaigns" / "zz-new").exists()
+    finally:
+        store.close()

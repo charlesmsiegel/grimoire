@@ -1518,9 +1518,10 @@ class _Commit:
         journal = Journal("commit", entries)
         try:
             self._recheck(staging)                        # still ours, just before the commit point
-        except Exception:                                 # refused: nothing committed, undo step 8
+        except Exception as error:                        # refused: nothing committed, undo step 8
             if self._still_verifiable():  # never clean up through a root or .txn that failed the check
                 self._unstage([self.access.path((TXN, entry.temp)) for entry in entries])
+            self._note(error)
             raise
         self._commit_point(journal)                       # 9. journal replace
         try:
@@ -1780,7 +1781,7 @@ class _Commit:
                 entries.append(Entry(put.parts, os.path.basename(temp), put.expected, put.digest,
                                      put.journal_kind))  # type: ignore[arg-type]
             return tuple(entries)
-        except (OSError, StaleWrite) as error:
+        except Exception as error:  # including a lazy reader's own refusal (a blob's origin store)
             if self._still_verifiable():
                 self._unstage(temps)
             self._note(error)

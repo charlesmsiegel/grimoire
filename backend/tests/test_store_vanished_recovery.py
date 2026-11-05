@@ -153,3 +153,53 @@ def test_a_crash_after_a_manifest_put_first_lands_finds_its_revision_in_place(tm
         view = store.load()
         assert view.problems == ()
         assert view.index.resolve(WREN).envelope.payload["bio"] == "a captain"
+
+
+def _crash_after_other(tmp_path):
+    locker = ProcessLocker()
+    root = _root(tmp_path, locker)
+    other = f"{LIB}/campaigns/other/instances/character/late.json"
+    crash = Crash(Target("replace", target=other), "after")
+    with pytest.raises(BaseException):
+        with LibraryStore.open(root / LIB, ops=RootedFileOps(root, plan=[crash], record=False),
+                               locker=locker) as store:
+            txn, revision = _head_move(store, other=True)
+            txn.commit(owner_handle())
+    return locker, root, revision
+
+
+def _assert_head_held(root, locker, report):
+    assert not report.aborted
+    assert set(report.incomplete) == {R2, MANIFEST}
+    with LibraryStore.open(root / LIB, locker=locker) as store:
+        assert store.read(OTHER).envelope.payload == {"n": 1}
+        assert dict(store.read_source(HARBOR).manifest.heads).get("character/wren") != "r2"
+        assert store.load().problems == ()
+
+
+def test_a_changed_staged_revision_holds_back_its_head_move(tmp_path):
+    """Another program rewrites a staged revision instead of removing it: the revision is kept
+    aside, so its manifest is too, and both are reported incomplete."""
+    locker, root, revision = _crash_after_other(tmp_path)
+    staged = [path for path in (root / LIB / ".txn").iterdir() if path.read_bytes() == revision]
+    assert len(staged) == 1
+    staged[0].write_bytes(revision + b" ")
+    with LibraryStore.open(root / LIB, locker=locker) as store:
+        report = store.last_recovery
+    assert not (root / LIB / R2).exists()
+    _assert_head_held(root, locker, report)
+
+
+def test_a_revision_target_taken_meanwhile_holds_back_its_head_move(tmp_path):
+    """The revision's slot is filled by other bytes before recovery: the staged revision is kept
+    aside at the per-entry guard, and its head move is held back with it."""
+    locker, root, revision = _crash_after_other(tmp_path)
+    taken = revision.replace(b"r2", b"r2", 1) + b"\n"
+    (root / LIB / R2).write_bytes(taken)
+    with LibraryStore.open(root / LIB, locker=locker) as store:
+        report = store.last_recovery
+    assert (root / LIB / R2).read_bytes() == taken
+    assert not report.aborted
+    assert set(report.incomplete) == {R2, MANIFEST}
+    with LibraryStore.open(root / LIB, locker=locker) as store:
+        assert dict(store.read_source(HARBOR).manifest.heads).get("character/wren") != "r2"

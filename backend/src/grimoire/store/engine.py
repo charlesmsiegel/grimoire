@@ -372,12 +372,21 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
                 unwritten.add(entry.target)
     held_sources = {_source_of_revision(entry.target) for entry in journal.entries
                     if entry.target in unwritten} - {None}
-    for entry in journal.entries:
+    def hold_back(entry: Entry, digest: str | None) -> None:
+        _preserve(access, entry, settlement, digest)
+        source = _source_of_revision(entry.target)
+        if journal.state == "commit" and source is not None:
+            # A revision record that will not be written holds back its source's manifest.
+            held_sources.add(source)
+            settlement.incomplete.append(_text(entry.target))
+
+    # Manifests last, whatever order the journal lists them in, so every revision is decided first.
+    for entry in sorted(journal.entries, key=lambda entry: _manifest_source(entry.target) is not None):
         if entry.temp not in staged:
             continue
         digest = temp_digest(entry)
         if journal.state == "abort" or digest != entry.new:
-            _preserve(access, entry, settlement, digest)
+            hold_back(entry, digest)
             continue
         if _manifest_source(entry.target) in held_sources:
             # Some entries were published already, so the rest finish -- but never a head move whose
@@ -392,7 +401,7 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
         elif current == entry.new:
             access.ops.remove(access.path((TXN, entry.temp)))
         else:
-            _preserve(access, entry, settlement, digest)
+            hold_back(entry, digest)
     settlement.aborted = journal.state == "abort"
     access.ops.remove(access.journal)
     clean_staging(access)
