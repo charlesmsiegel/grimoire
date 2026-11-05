@@ -18,7 +18,7 @@ from grimoire.sync.documents import check_device_id
 
 from .errors import AuthenticationFailed, PeerRefused, TransportError
 from .pairing import peer_principal, read_pairing
-from .replay import StepBuffer
+from .replay import StepBuffer, confirmation
 from .snapshot import send_snapshot
 from .wire import Channel, is_loopback, no_delay, server_handshake
 
@@ -125,7 +125,8 @@ class PeerServer:
                 elif kind == "op":
                     buffer.add(header, body)  # a refusal here is held and answered at "commit"
                 elif kind == "commit":
-                    channel.send({"t": "committed", "etags": buffer.commit(self.store, handle)})
+                    etags = buffer.commit(self.store, handle)
+                    channel.send({"t": "committed", "count": len(etags), "digest": confirmation(etags)})
                 else:  # a client this confused cannot be kept in step: refuse and end the session
                     channel.refuse("protocol", f"unexpected request {kind!r}")
                     return

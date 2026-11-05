@@ -10,6 +10,8 @@ failure at any point leaves exactly the state a crash at that point of a local s
 
 from __future__ import annotations
 
+import hashlib
+import json
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -50,8 +52,17 @@ def send_step(channel: Channel, step: Step, blob_reader: Callable[[str, int], by
         expected[f".sync/{name}"] = etag(data)
     channel.send({"t": "commit", "step": step.kind})
     header, _ = channel.recv()
-    if header.get("t") != "committed" or header.get("etags") != expected:
+    if header.get("t") != "committed" or header.get("count") != len(expected) or header.get("digest") != confirmation(expected):
         raise PeerRefused("verification", f"the peer did not confirm the {step.kind} step's planned bytes")
+
+
+def confirmation(etags: dict[str, str]) -> str:
+    """One digest over every ``path -> etag`` a step wrote, as the serving device re-read them.
+
+    The commit reply carries this rather than the etags themselves: a step may hold up to
+    ``MAX_STEP_OPS`` writes, and their etags would not fit one reply's header.
+    """
+    return hashlib.sha256(json.dumps(etags, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 class StepBuffer:

@@ -18,14 +18,17 @@ import os
 import re
 import stat
 from collections.abc import Collection, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from types import MappingProxyType
 
 from grimoire.security import Authorizer, Grant, Permission, ResourcePath
 from grimoire.store import LibraryStore, etag
 from grimoire.store.diskops import is_link
 from grimoire.store.jsonfmt import MAX_FILE_BYTES
+from grimoire.store.layout import name_key
 from grimoire.store.media import MAX_BLOB_BYTES
+from grimoire.store.replica import CanonicalScan
 from grimoire.sync.documents import DEVICE_FILE, archive_name, parse_device, pending_name
 
 from .errors import MirrorMismatch, TransportError
@@ -66,12 +69,14 @@ class Limits:
 def _in_roots(path: str) -> bool:
     """Whether 019 can plan from ``path`` here: under a synchronized root, and spelled with no
     character that never names a record (a Finder ``notes 10:30.txt`` that the scan reports as a
-    look-alike, say). The walk never sends such a name, so neither end may compare it."""
-    return path.split("/", 1)[0] in ROOTS and not any(char in path for char in _UNSAFE)
+    look-alike, say), and no deeper than the walk goes (a record path has at most 32 parts). The
+    walk never sends such a path, so neither end may compare it."""
+    return (path.split("/", 1)[0] in ROOTS and path.count("/") <= _MAX_DEPTH
+            and not any(char in path for char in _UNSAFE))
 
 
 def scan_summary(store: LibraryStore) -> dict[str, object]:
-    """What 019 plans from, as comparable data: record etags, blocked paths, blob sizes, id pairs.
+    """What 019 plans from, as comparable data: record etags, blocked paths and why, blob sizes, id pairs.
 
     Only entries under the snapshot's roots count. 019 reports a blocked entry anywhere in the
     library (a dangling link beside ``sources``, say), but plans nothing from one outside its
@@ -80,7 +85,7 @@ def scan_summary(store: LibraryStore) -> dict[str, object]:
     """
     found = store.scan()
     return {"files": {path: etag(data) for path, data in sorted(found.files.items()) if _in_roots(path)},
-            "blocked": sorted(path for path in found.blocked if _in_roots(path)),
+            "blocked": {path: reason for path, reason in sorted(found.blocked.items()) if _in_roots(path)},
             "blobs": dict(sorted((path, size) for path, size in found.blobs.items() if _in_roots(path))),
             "pairs": sorted(found.pairs)}
 
@@ -121,33 +126,68 @@ def _walk_kept(root: Path) -> Iterator[tuple[str, str, bytes]]:
 
     ``.conflicts`` also holds recovery leftovers: a discarded journal's staged files (which can be
     a pairing record with its key), ledger batches moved aside by a repair. 019 reads none of
-    them; it reads the kept-version slots, to pick the next free one. So only those are sent, and
-    a slot whose file cannot be sent as itself goes as an empty placeholder: its bytes never match
-    a version being kept, so the mirror moves to the next slot exactly as this library will.
+    them; it reads the kept-version slots, to pick the next free one. So only those are sent, with
+    every name the store would take for one (it compares names as a case-insensitive filesystem
+    might, so ``.conflicts/<16 HEX>`` holds the slot ``<16 hex>`` too). What 019's slot reads find
+    is sent as a stand-in that they find the same way: a slot that is not a file it can send goes
+    as an empty file, whose bytes never match a version being kept, and a link or other entry in
+    place of ``.conflicts`` or of a slot folder goes as a blocked entry or an empty file, so the
+    mirror refuses a keep there exactly as this library will.
     """
-    base = root / _KEPT_ROOT
-    if is_link(base) or not base.is_dir():
+    kind = _entry(root / _KEPT_ROOT)
+    if kind != "dir":
+        if kind is not None:
+            yield _stand_in(kind, _KEPT_ROOT)
         return
     try:
-        folders = sorted(os.listdir(base))
+        folders = sorted(os.listdir(root / _KEPT_ROOT))
     except OSError:
         return
     yield "dir", _KEPT_ROOT, b""
     for folder in folders:
-        path = base / folder
-        if not _KEPT_FOLDER.fullmatch(folder) or is_link(path) or not path.is_dir():
+        if not _is_kept(_KEPT_FOLDER, folder):
+            continue
+        relative = f"{_KEPT_ROOT}/{folder}"
+        kind = _entry(root / _KEPT_ROOT / folder)
+        if kind != "dir":
+            if kind is not None:
+                yield _stand_in(kind, relative)
             continue
         try:
-            names = sorted(os.listdir(path))
+            names = sorted(os.listdir(root / _KEPT_ROOT / folder))
         except OSError:
             continue
-        yield "dir", f"{_KEPT_ROOT}/{folder}", b""
+        yield "dir", relative, b""
         for name in names:
-            if not _KEPT_FILE.fullmatch(name) or any(char in name for char in _UNSAFE):
+            if not _is_kept(_KEPT_FILE, name):
                 continue
-            relative = f"{_KEPT_ROOT}/{folder}/{name}"
-            found = list(_walk(root, (_KEPT_ROOT, folder, name), 2, frozenset({relative})))
-            yield found[0] if found and found[0][0] == "file" else ("file", relative, b"")
+            slot = f"{relative}/{name}"
+            kind = _entry(root / _KEPT_ROOT / folder / name)
+            found = list(_walk(root, (_KEPT_ROOT, folder, name), 2, frozenset())) if kind == "file" else []
+            if kind is not None:  # a slot is taken whatever stands in it: an empty file says so
+                yield found[0] if found else ("file", slot, b"")
+
+
+def _is_kept(layout: re.Pattern[str], name: str) -> bool:
+    return bool(layout.fullmatch(name_key(name))) and not any(char in name for char in _UNSAFE)
+
+
+def _entry(path: Path) -> str | None:
+    """``dir``, ``file``, ``link`` (a symlink or junction) or ``other``; ``None`` if nothing is there."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return "other"
+    if stat.S_ISLNK(info.st_mode) or _REPARSE & (getattr(info, "st_file_attributes", 0) or 0):
+        return "link"
+    return "dir" if stat.S_ISDIR(info.st_mode) else "file" if stat.S_ISREG(info.st_mode) else "other"
+
+
+def _stand_in(kind: str, relative: str) -> tuple[str, str, bytes]:
+    """A link (which the store refuses to list through) as a link; anything else as an empty file."""
+    return ("blocked", relative, b"") if kind == "link" else ("file", relative, b"")
 
 
 def _unsendable(relative: str, blocked: Collection[str]) -> Iterator[tuple[str, str, bytes]]:
@@ -232,6 +272,31 @@ def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -
 
 # -- client side ------------------------------------------------------------------------------
 
+class _MirrorStore(LibraryStore):
+    """The mirror library, whose scan gives each blocked entry the serving device's own reason.
+
+    The mirror reproduces every blocked entry as a dangling link, so its own scan says ``link``
+    for an oversized record or a look-alike folder alike, and 019 decides some things by the
+    reason (a look-alike is a name collision; a device's own unreadable file is never kept). Once
+    the mirror's blocked paths are checked to be the server's, each one still blocked as a link
+    reads with the reason the server's scan gave it.
+    """
+
+    peer_reasons: Mapping[str, str] = {}
+
+    def scan(self) -> CanonicalScan:
+        found = super().scan()
+        blocked = {path: self.peer_reasons.get(path, reason) if reason == "link" else reason
+                   for path, reason in found.blocked.items()}
+        return replace(found, blocked=MappingProxyType(blocked))
+
+
+def _comparable(summary: Mapping[str, object]) -> dict[str, object]:
+    """A summary with its blocked reasons left out: the mirror cannot reproduce them on disk."""
+    blocked = summary.get("blocked")
+    return {**summary, "blocked": sorted(blocked) if isinstance(blocked, Mapping) else blocked}
+
+
 @dataclass
 class Mirror:
     """The peer's library rebuilt locally, its scan checked, and a handle that writes as the peer would."""
@@ -249,8 +314,8 @@ def _parts(path: object) -> tuple[str, ...]:
             not part or part in (".", "..") or any(char in part for char in _UNSAFE) for part in parts):
         raise TransportError(f"a snapshot path is outside the synchronized roots: {path!r}")
     if parts[0] == _KEPT_ROOT and not (
-            len(parts) == 1 or (_KEPT_FOLDER.fullmatch(parts[1]) and (len(parts) == 2 or (
-                len(parts) == 3 and _KEPT_FILE.fullmatch(parts[2]))))):
+            len(parts) == 1 or (_is_kept(_KEPT_FOLDER, parts[1]) and (len(parts) == 2 or (
+                len(parts) == 3 and _is_kept(_KEPT_FILE, parts[2]))))):
         raise TransportError(f"a snapshot path is not a kept version: {path!r}")
     if os.name == "nt" and any(part.strip(".") == "" or part[-1] in ". " for part in parts):
         # Windows drops trailing dots and spaces from a name, so "..." or "x." would name another
@@ -374,10 +439,14 @@ def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Li
             target.write_bytes(data)
     except OSError as error:  # a full disk, say: this pass cannot use the mirror
         raise MirrorMismatch(f"cannot write the peer's sync state here: {error}") from error
-    store = LibraryStore.open(root)
+    store = _MirrorStore.open(root)
     try:
-        if not isinstance(summary, Mapping) or scan_summary(store) != dict(summary):
+        if not isinstance(summary, Mapping) or _comparable(scan_summary(store)) != _comparable(summary):
             raise MirrorMismatch("the rebuilt library does not scan as the peer's own scan")
+        reasons = summary["blocked"]
+        if not isinstance(reasons, Mapping) or not all(type(reason) is str for reason in reasons.values()):
+            raise MirrorMismatch("the peer's scan gives no reason for a blocked entry")
+        store.peer_reasons = dict(reasons)
         handle = _grant_handle(grants, peer_principal(local))
     except BaseException:
         store.close()

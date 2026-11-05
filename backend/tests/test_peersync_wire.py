@@ -15,7 +15,10 @@ from grimoire.peersync import PeerRefused, PeerServer, TransportError, read_pair
 from grimoire.peersync import new_pairing_key, pair
 from grimoire.peersync import replay as replay_module
 from grimoire.peersync import server as server_module
+from grimoire.peersync import wire as wire_module
+from grimoire.peersync.replay import confirmation
 from grimoire.peersync.wire import Channel, client_handshake
+from grimoire.core.identity import SourceRef
 from grimoire.store import RecordEnvelope, SourceManifest, etag
 
 from chat_fixtures import ANYA, CARDS, MARA
@@ -160,7 +163,7 @@ def test_a_refused_step_writes_none_of_its_other_records(tmp_path):
                     ({"op": "state", "name": "device.json", "expected": None}, b"{}"))
         # the session goes on after a refusal, and an honest step then commits whole
         reply = _commit(channel, ({"op": "put", "path": manifest[0], "expected": None}, manifest[1]))
-        assert reply["t"] == "committed" and set(reply["etags"]) == {manifest[0]}
+        assert reply == {"t": "committed", "count": 1, "digest": confirmation({manifest[0]: etag(manifest[1])})}
         channel.close()
     assert (phone.store.root / manifest[0]).exists() and not (phone.store.root / card[0]).exists()
 
@@ -191,9 +194,24 @@ def test_a_step_refused_while_its_writes_arrive_gets_one_answer_and_writes_nothi
             _commit(channel, *(({"op": "put", "path": path, "expected": None}, data) for path, data in (manifest, card, anya)))
         assert refused.value.code == "too_large"
         reply = _commit(channel, ({"op": "put", "path": manifest[0], "expected": None}, manifest[1]))
-        assert reply == {"t": "committed", "etags": {manifest[0]: etag(manifest[1])}}  # still in step
+        assert reply == {"t": "committed", "count": 1, "digest": confirmation({manifest[0]: etag(manifest[1])})}  # in step
         channel.close()
     assert not (phone.store.root / card[0]).exists() and not (phone.store.root / anya[0]).exists()
+
+
+def test_a_step_whose_etags_would_not_fit_one_header_still_commits_and_confirms(tmp_path, monkeypatch):
+    desktop, phone, _ = paired(tmp_path)
+    txn = phone.store.transaction()
+    txn.put(SourceManifest(CARDS, OWNER, "Cards"), None)
+    for number in range(40):  # about 130 bytes of reply each, were every etag sent back
+        txn.put(RecordEnvelope(SourceRef(CARDS, "character", f"crew-{number}", "r1"), {"bio": "a deckhand"},
+                               name=f"Crew {number}"), None)
+    txn.commit(phone.handle)
+    monkeypatch.setattr(wire_module, "MAX_HEADER", 2048)  # 40 etags are well past this
+    with serving(phone) as server:
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert report.status == "synced", report.reason
+    assert len([path for path, _ in report.copied if "crew-" in path]) == 40
 
 
 def _framed(header: bytes) -> bytes:
@@ -332,15 +350,20 @@ def test_a_look_alike_name_holding_a_colon_blocks_nothing(tmp_path):
     assert report.status == "synced", report
 
 
-def test_a_look_alike_root_folder_is_a_conflict_not_a_failed_transfer(tmp_path):
+def test_a_look_alike_root_folder_is_a_name_collision_not_a_failed_transfer(tmp_path):
+    if not _can_link(tmp_path):  # the mirror stands a link in for it
+        pytest.skip("this system cannot make links without a privilege")
     desktop, phone, _ = paired(tmp_path)
+    start_scene(desktop)
     look_alike = phone.store.root / "Campaigns" / "q-1"
     look_alike.mkdir(parents=True)
     (look_alike / "scope.json").write_bytes(b"{}")
     with serving(phone) as server:
         report = transfer(desktop.store, desktop.authority, PHONE, server.address)
-    assert report.status != "incomplete", report
-    assert not (desktop.store.root / "campaigns").exists() and not (desktop.store.root / "Campaigns").exists()
+    assert report.status == "conflicts", report
+    # what the phone's own scan says of it (a local 019 sync says the same), not "a link"
+    assert "name_collision" in {conflict.code for conflict in report.conflicts}, report.conflicts
+    assert "campaigns" not in os.listdir(phone.store.root)
 
 
 def test_a_server_can_listen_on_the_ipv6_loopback(tmp_path):

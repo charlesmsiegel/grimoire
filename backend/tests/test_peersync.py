@@ -167,6 +167,64 @@ def test_a_kept_slot_the_server_cannot_send_still_counts_as_taken(tmp_path):
     assert slot.read_bytes() == b"\0" * (9 * 1024 * 1024)
 
 
+def _slot_in_another_spelling(slot: Path) -> None:
+    slot.parent.mkdir(parents=True, exist_ok=True)
+    (slot.parent / slot.name.upper().replace(".JSON", ".json")).write_bytes(b"{}")
+
+
+def _slot_folder_in_another_spelling(slot: Path) -> None:
+    folder = slot.parent.parent / slot.parent.name.upper()
+    folder.mkdir(parents=True)
+    (folder / "note.txt").write_bytes(b"left here")
+
+
+def _slot_folder_is_a_file(slot: Path) -> None:
+    slot.parent.parent.mkdir(parents=True, exist_ok=True)
+    slot.parent.write_bytes(b"left here")
+
+
+@pytest.mark.parametrize("obstruction", [_slot_in_another_spelling, _slot_folder_in_another_spelling,
+                                         _slot_folder_is_a_file])
+def test_whatever_stands_where_a_kept_version_would_go_is_seen_as_the_server_sees_it(tmp_path, obstruction):
+    from grimoire.store import etag
+    from grimoire.store.layout import conflict_parts
+    desktop, phone, _ = paired(tmp_path)
+    started, _ = start_scene(desktop)
+    chat = started.chat
+    path = f"campaigns/{chat.campaign_id}/chats/{chat.chat_id}.json"
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+        _relabel(desktop, chat, "Saltmarch docks")
+        _relabel(phone, chat, "The night crossing")
+        ours = (desktop.store.root / path).read_bytes()
+        slot = phone.store.root.joinpath(*conflict_parts(tuple(path.split("/")), etag(ours), 0))
+        try:
+            obstruction(slot)
+        except FileExistsError:  # a case-insensitive disk: the other spelling is this one
+            pytest.skip("this filesystem cannot hold two spellings of one name")
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    # the phone keeps the desktop's version where its own 019 would, or not at all: never a
+    # refused step on every pass
+    assert report.status == "conflicts", report
+    assert report.passes[-1].conflict(path) is not None, report.conflicts
+
+
+def test_a_record_too_big_to_read_on_the_server_is_never_kept_there(tmp_path):
+    desktop, phone, _ = paired(tmp_path)
+    started, _ = start_scene(desktop)
+    chat = started.chat
+    path = f"campaigns/{chat.campaign_id}/chats/{chat.chat_id}.json"
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+        _relabel(desktop, chat, "Saltmarch docks")
+        (phone.store.root / path).write_bytes(b" " * (9 * 1024 * 1024))
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    conflict = report.passes[-1].conflict(path)
+    # as a local 019 sync decides it: the phone's own copy is unreadable, so nothing is kept
+    assert conflict is not None and conflict.detail == f"unreadable on {PHONE}" and not conflict.kept, conflict
+    assert not [name for name in _files(phone.store.root) if name.startswith(".conflicts/")]
+
+
 def test_offline_scenes_on_both_devices_get_different_actors_in_one_campaign(tmp_path):
     desktop, phone, _ = paired(tmp_path)
     started, _ = start_scene(desktop)
@@ -316,7 +374,7 @@ def _stray_deep_folder(root: Path) -> None:
     for depth in range(70):
         folder = folder / f"d{depth}"
     try:
-        folder.mkdir(parents=True)
+        (folder / "Readme").mkdir(parents=True)  # a spelling the serving scan reports as blocked
     except OSError:  # Windows: past the path length this system allows
         pytest.skip("this filesystem cannot nest folders that deep")
 
