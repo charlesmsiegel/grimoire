@@ -86,7 +86,7 @@ batch.commit(approvals)                                    # one guarded store t
 - **Preview binding.** If what `commit` would write differs from the last `preview()` in any other way, it raises `StaleWrite`, and a new preview is needed.
 - **Pairs formed since.** If a placed instance's id was taken by another kind after its op was added (W11), `preview` and `commit` raise `StaleWrite` naming that instance's file (`instance_id_conflict`) and write nothing. The batch is unchanged, so it can be committed once the pair is undone.
 - **Convenience.** `images.add_image(...)`, `images.place(...)` and `images.repair_blob(...)` return one-op batches.
-- `put` accepts only `RecordEnvelope` and `SourceManifest`. Scope and chat records stay with [`ChatLibrary`](CHATS.md).
+- `put` accepts `RecordEnvelope`, `SourceManifest` and a `ScopeRecord` addressed to a play scope or chat, so an importer (026) can write its chats in the same transaction as their art. Interactive chat writes stay with [`ChatLibrary`](CHATS.md).
 
 ### Rules
 
@@ -167,7 +167,7 @@ The resolver is pure (`grimoire.images.resolve`). It checks a blob's presence an
 
 ## V0.2.1 mapping (for 026)
 
-The [inventory](MIGRATION_INVENTORY.md) rows map as follows. Test-only adapter: `backend/tests/test_imagestore_inventory.py`.
+The [inventory](MIGRATION_INVENTORY.md) rows map as follows. `grimoire.import_v1` implements this table ([IMPORT_V1](IMPORT_V1.md)); `backend/tests/test_imagestore_inventory.py` is the earlier test-only adapter.
 
 | V0.2.1 | V2 |
 |---|---|

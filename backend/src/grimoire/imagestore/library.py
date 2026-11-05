@@ -1,8 +1,8 @@
 """Store-backed pictures (Sprint 018): add images, place them, repair blobs, resolve what shows.
 
 ``ImageLibrary`` is trusted application code and is never handed to a worker. Every write is an
-``ImageBatch``: images, placements, blob repairs and an importer's own definitions/manifests,
-committed as **one** guarded store transaction a human can ``preview`` and approve. Each op is
+``ImageBatch``: images, placements, blob repairs and an importer's own definitions, instances,
+manifests and play-scope or chat records (026), committed as **one** guarded store transaction a human can ``preview`` and approve. Each op is
 validated when added, against disk plus the batch's earlier ops; ``commit`` re-validates the
 whole batch under the store lock before building the transaction, so nothing decided on stale
 facts is written.
@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef, paired_instances
+from grimoire.core.identity import ChatRef, ImageRef, InstanceRef, PlacementRef, ScopeRef, SourceRef, paired_instances
 from grimoire.images import (
     IMAGE_SCHEMA, PLACEMENT_SCHEMA, BlobFact, BlobInfo, Facts, ImageEntry, ImageModelError, ImageObject, Placement,
     PlacementEntry, Problem, Resolution, Shown, image_from_payload, image_to_payload, inherited,
@@ -29,8 +29,8 @@ from grimoire.images import (
 )
 from grimoire.store import (
     AssetRecord, BlobCorrupt, ImageBlob, InvalidBlob, LibraryStore, LinkRefused, MalformedRecord, NameCollision,
-    RecordEnvelope, RecordNotFound, SourceManifest, StaleWrite, StoredAssetRecord, StoredDefinition, StoredRecord,
-    SourceFacts, StoredSource, StoreError, TakenIdsUnlisted, UnstorableIdentifier, UnsupportedFormat,
+    RecordEnvelope, RecordNotFound, ScopeRecord, SourceManifest, StaleWrite, StoredAssetRecord, StoredDefinition,
+    StoredRecord, SourceFacts, StoredSource, StoreError, TakenIdsUnlisted, UnstorableIdentifier, UnsupportedFormat,
 )
 from grimoire.store.layout import address_parts, blob_parts, classify, manifest_parts
 from grimoire.store.replica import instance_derivation
@@ -347,10 +347,15 @@ class ImageBatch:
         self._ops.append(op)
         return result
 
-    def put(self, envelope: RecordEnvelope | SourceManifest, expected: str | None) -> None:
-        """An importer's own definition, instance or manifest, written in the same transaction."""
-        if not isinstance(envelope, (RecordEnvelope, SourceManifest)):
-            raise TypeError("an image batch puts only RecordEnvelopes and SourceManifests")
+    def put(self, envelope: RecordEnvelope | SourceManifest | ScopeRecord, expected: str | None) -> None:
+        """An importer's own definition, instance, manifest, play scope or chat, in the same transaction.
+
+        A play scope or chat record makes its campaign exist for the batch's later ops (W5)."""
+        if isinstance(envelope, ScopeRecord):
+            if not isinstance(envelope.address, (ScopeRef, ChatRef)):
+                raise TypeError("an image batch puts only play-scope and chat scope records")
+        elif not isinstance(envelope, (RecordEnvelope, SourceManifest)):
+            raise TypeError("an image batch puts only RecordEnvelopes, SourceManifests and scope or chat records")
         # an address no portable path can hold raises UnstorableIdentifier now, never at commit
         manifest_parts(envelope.source) if isinstance(envelope, SourceManifest) else address_parts(envelope.address)
         self._add(("put", envelope, expected))
@@ -471,6 +476,8 @@ def _apply(library: ImageLibrary, state: _State, disk: _Disk, op: tuple) -> obje
         state.puts.add(key)
         if isinstance(envelope, SourceManifest):
             state.manifests.add(envelope.source)
+        elif isinstance(envelope, ScopeRecord):
+            state.campaigns.add(envelope.address.campaign_id)
         elif isinstance(envelope.address, SourceRef):
             state.definitions.add(envelope.address.entity_key)
         else:
