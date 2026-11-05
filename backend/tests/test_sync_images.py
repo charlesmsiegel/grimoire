@@ -11,14 +11,16 @@ import hashlib
 
 import pytest
 
-from grimoire.core.identity import ImageRef, PlacementRef
+from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef
 from grimoire.images import Crop, Hidden, Placement, Shown
 from grimoire.imagestore import ImageLibrary
+from grimoire.security import Grant, Permission, ResourcePath
 from grimoire.store import LibraryStore, RecordEnvelope, etag
 from grimoire.store.layout import address_parts, blob_parts
 from grimoire.sync import ResolveRefused, identify, resolve, sync, sync_until_quiet
 
 from image_fixtures import HARBOR, PNG, PNG_2, SAILOR, WREN_A, WREN_B, handle, seed
+from ledger_helpers import open_authority
 from store_helpers import OWNER
 from sync_helpers import DESKTOP, PHONE
 
@@ -291,3 +293,158 @@ def test_a_blob_both_devices_hold_is_hashed_once_on_each_at_first_sight(tmp_path
     finally:
         for store in stores.values():
             store.close()
+
+
+@pytest.fixture
+def unpaired(tmp_path):
+    """A seeded desktop and an empty phone, both identified, never synced (a fresh pairing)."""
+    desktop = LibraryStore.create(tmp_path / DESKTOP)
+    seed(desktop)
+    phone = LibraryStore.create(tmp_path / PHONE)
+    identify(desktop, DESKTOP)
+    identify(phone, PHONE)
+    yield desktop, phone
+    desktop.close()
+    phone.close()
+
+
+def test_a_stale_adjust_is_never_copied(unpaired):
+    """W9 ``stale_adjust``: an adjust names the inherited picture it re-crops. Once the source placement
+    shows another picture, the origin's own batch refuses the adjust, so sync never copies it."""
+    desktop, phone = unpaired
+    batch = _images(desktop).change()
+    first, second = batch.add_image(HARBOR, "first", PNG), batch.add_image(HARBOR, "second", PNG_2)
+    batch.place(SAILOR, "avatar", Placement("set", "avatar", first), None)
+    batch.place(WREN_A, "avatar", Placement("adjust", "avatar", first, Crop(0, 0, 5000, 5000)), None)
+    batch.commit()
+    source = PlacementRef(SAILOR, "avatar")
+    _images(desktop).place(SAILOR, "avatar", Placement("set", "avatar", second),
+                           _images(desktop).read_placement(source)[1]).commit()
+    report = sync_until_quiet(desktop, phone, H)
+    adjust = _path(PlacementRef(WREN_A, "avatar"))
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == {adjust: "head_dependency"}
+    assert "second" in report.conflict(adjust).detail and "first" in report.conflict(adjust).detail
+    assert not (phone.root / adjust).exists()
+    assert (_path(source), PHONE) in report.copied
+    assert _slot(phone, SAILOR) == _slot(desktop, SAILOR) and _slot(phone).image == second  # inherited, unadjusted
+
+
+def _derive_from_unstorable(store: LibraryStore, subject=WREN_A) -> None:  # type: ignore[no-untyped-def]
+    """An ordinary 010 instance write whose ``derived_from`` names an entity no library can store."""
+    current = store.read(subject).etag if (store.root / _path(subject)).exists() else None
+    txn = store.transaction()
+    txn.put(RecordEnvelope(subject, {}, derived_from="world:harbor/character/con"), current)
+    txn.commit(H[DESKTOP])
+
+
+def _harbor_art(store: LibraryStore) -> ImageRef:
+    batch = _images(store).change()
+    ref = batch.add_image(HARBOR, "harbor-pic", PNG)
+    batch.place(WREN_A, "avatar", Placement("set", "avatar", ref), None)  # legal: wren-a derives from harbor
+    batch.commit()
+    return ref
+
+
+def test_an_unstorable_derivation_entity_holds_only_its_placement(unpaired):
+    """A legal placement of a harbor picture, then an ordinary instance edit deriving from
+    ``world:harbor/character/con``: a fresh pairing still syncs; only that placement is held."""
+    desktop, phone = unpaired
+    ref = _harbor_art(desktop)
+    _derive_from_unstorable(desktop)
+    report = sync_until_quiet(desktop, phone, H)
+    placement = _path(PlacementRef(WREN_A, "avatar"))
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == {placement: "head_dependency"}
+    assert "storable" in report.conflict(placement).detail
+    assert {(_path(WREN_A), PHONE), (_path(ref), PHONE), (_blob(PNG), PHONE)} <= set(report.copied)
+    assert not (phone.root / placement).exists()
+    mine = (desktop.root / placement).read_bytes()  # resolve applies the same rule: refused, never a crash
+    with pytest.raises(ResolveRefused, match="storable"):
+        resolve(desktop, phone, placement, etag(mine), {DESKTOP: etag(mine), PHONE: None}, H)
+    assert not (phone.root / placement).exists()
+
+
+def test_a_hand_made_placement_on_an_unstorable_derivation_is_held(unpaired):
+    desktop, phone = unpaired
+    odd = InstanceRef("c1", "character", "odd")
+    _derive_from_unstorable(desktop, odd)
+    _harbor_art(desktop)
+    assert sync_until_quiet(desktop, phone, H).conflicts == ()
+    text = (desktop.root / _path(PlacementRef(WREN_A, "avatar"))).read_text().replace("wren-a", "odd")
+    made = desktop.root / _path(PlacementRef(odd, "avatar"))  # another tool's placement on ``odd``
+    made.parent.mkdir(parents=True)
+    made.write_text(text)
+    report = sync(desktop, phone, H)
+    held = _path(PlacementRef(odd, "avatar"))
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == {held: "head_dependency"}
+    assert not (phone.root / held).exists()
+
+
+def test_a_hide_placement_reaches_a_device_without_assets(pair):
+    """A hide needs no blob: a device without the ``assets`` grant still receives it."""
+    desktop, phone = pair
+    _images(desktop).place(WREN_A, "avatar", Placement("hide", "avatar"), None).commit()
+    report = sync_until_quiet(desktop, phone, NO_ASSETS)
+    assert report.conflicts == () and (_path(PlacementRef(WREN_A, "avatar")), PHONE) in report.copied
+    assert isinstance(_slot(phone), Hidden)
+
+
+def _verify_spy(monkeypatch) -> list[tuple[str, str]]:  # type: ignore[no-untyped-def]
+    calls: list[tuple[str, str]] = []
+    real = LibraryStore.verify_blob
+
+    def spy(self, path):  # type: ignore[no-untyped-def]
+        calls.append((self.root.name, path))
+        return real(self, path)
+    monkeypatch.setattr(LibraryStore, "verify_blob", spy)
+    return calls
+
+
+def test_a_blob_the_receiver_may_not_write_is_never_read(unpaired, monkeypatch):
+    """C2: a phone whose durable authority grants no ``assets`` never receives the blobs, and no sync
+    reads or hashes them. Once the grant is added, each is hashed on the origin before it is copied."""
+    desktop, phone = unpaired
+    authority = open_authority(phone)
+    try:
+        for number, scope in enumerate(("sources", "campaigns", "kept")):
+            authority.add_grant(Grant(f"g{number}", OWNER, frozenset({Permission.APPLY}),
+                                      ResourcePath.parse(scope), OWNER))
+        handles = {DESKTOP: H[DESKTOP], PHONE: authority.handle_for(OWNER, trusted=True)}
+        assert sync_until_quiet(desktop, phone, handles).conflicts == ()
+        batch = _images(desktop).change()
+        pictures = [PNG + bytes([n]) * 100 for n in range(3)]
+        for n, data in enumerate(pictures):
+            ref = batch.add_image("campaign:c1", f"pic-{n}", data)
+        batch.place(WREN_A, "avatar", Placement("set", "avatar", ref, Crop(0, 0, 5000, 5000)), None)
+        batch.commit()
+        calls = _verify_spy(monkeypatch)
+        blobs = {_blob(data) for data in pictures}
+        for _ in range(3):
+            report = sync_until_quiet(desktop, phone, handles)
+            assert calls == []
+            codes = {conflict.path: conflict.code for conflict in report.conflicts}
+            assert set(codes.values()) == {"denied"} and blobs | {_path(PlacementRef(WREN_A, "avatar"))} <= set(codes)
+            assert not any((phone.root / path).exists() for path in codes)
+        authority.add_grant(Grant("g-assets", OWNER, frozenset({Permission.APPLY}), ResourcePath.parse("assets"),
+                                  OWNER))
+        report = sync_until_quiet(desktop, phone, handles)
+        assert report.conflicts == () and blobs <= {path for path, _ in report.copied}
+        assert sorted(calls) == sorted((DESKTOP, path) for path in blobs)  # once, on the origin, before the copy
+        assert _slot(phone) == _slot(desktop)
+    finally:
+        authority.close()
+
+
+def test_a_blob_in_a_conflict_that_never_copies_is_not_read(pair, monkeypatch):
+    """A blob deleted by hand on one device after agreement is a ``deleted`` conflict on every sync; a
+    conflict that copies nothing never reads the blob. Resolving it hashes it first."""
+    desktop, phone = pair
+    _campaign_art(desktop)
+    assert sync_until_quiet(desktop, phone, H).conflicts == ()
+    (phone.root / _blob(PNG)).unlink()
+    calls = _verify_spy(monkeypatch)
+    for _ in range(2):
+        report = sync(desktop, phone, H)
+        assert report.conflict(_blob(PNG)).code == "deleted" and calls == []
+    name = "sha256:" + hashlib.sha256(PNG).hexdigest()
+    resolve(desktop, phone, _blob(PNG), name, {DESKTOP: name, PHONE: None}, H)
+    assert calls == [(DESKTOP, _blob(PNG))] and (phone.root / _blob(PNG)).read_bytes() == PNG

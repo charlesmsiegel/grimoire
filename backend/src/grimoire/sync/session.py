@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef
+from grimoire.security import Permission
 from grimoire.store import (
     BlobCorrupt, CrossDevice, ImmutableImage, ImmutableRevision, InstanceIdConflict, InvalidEnvelope, InvalidSourceState,
     LibraryStore, LinkRefused, NameCollision, RevisionReferenced, StaleWrite, StoreError, UnstorableIdentifier,
@@ -23,8 +24,8 @@ from grimoire.store import (
 )
 from grimoire.store.jsonfmt import MAX_FILE_BYTES
 from grimoire.store.layout import (
-    chat_parts, classify, conflict_parts, definition_parts, image_parts, instance_parts, kept_address, manifest_parts,
-    placement_parts,
+    chat_parts, classify, conflict_parts, definition_parts, image_parts, instance_parts, kept_address, logical,
+    manifest_parts, placement_parts,
 )
 from grimoire.store.replica import (
     SHADOWED, CanonicalScan, chats_named, image_blob, instance_derivation_of, instances_named, parse_exact, pinned_by,
@@ -192,6 +193,7 @@ class SyncPlan:
     fallback: set[str] = field(default_factory=set)  # devices whose copies were admitted unit by unit
     skipped: dict[str, tuple[str, ...]] = field(default_factory=dict)  # per device: reported, never touched
     held: set[str] = field(default_factory=set)  # held-back paths still tracked: no decision, no archive change
+    ungranted: dict[str, list[Copy]] = field(default_factory=dict)  # blob copies the receiver may not write
 
     def other(self, device: str) -> str:
         return self.devices[1] if device == self.devices[0] else self.devices[0]
@@ -222,14 +224,17 @@ def _current(side: Side) -> str | None:
     return side.etag if side.state == "present" else None
 
 
-def plan_sync(left: LibraryStore, right: LibraryStore) -> SyncPlan:
-    """Decide every path; read only. Raises ``SameDevice``/``NoDeviceIdentity`` or ``SyncInterrupted``."""
+def plan_sync(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object] | None = None) -> SyncPlan:
+    """Decide every path; read only. Raises ``SameDevice``/``NoDeviceIdentity`` or ``SyncInterrupted``.
+
+    With the ``handles`` the sync will commit with, a blob copy its receiver's durable authority
+    grants no write for is ``denied`` here, without reading the blob (``_ungranted``)."""
     first, second = sorted((left, right), key=lambda store: os.fspath(store.root))  # one lock order: no deadlock
     with first.cached_reads(), second.cached_reads():
-        return _plan(left, right)
+        return _plan(left, right, handles or {})
 
 
-def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
+def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]) -> SyncPlan:
     ids = device_of(left), device_of(right)
     if ids[0] == ids[1]:
         raise SameDevice(f"both libraries are device {ids[0]!r}; give one a new identity")
@@ -262,9 +267,9 @@ def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
     bases = {path: derive_base(path, (archives[a], archives[b]), (pendings[a], pendings[b]),
                                (_current(sides[path][a]), _current(sides[path][b]))) for path in ordered}
     plan = SyncPlan(pair, stores, scans, archives, pendings, ordered, sides, bases,
-                    copies={a: [], b: []}, keeps={a: [], b: []}, notices=notices, skipped=skipped,
-                    held={path for path in ordered if _held_relation(path, held)})
-    _verify_blobs(plan)
+                    copies={a: [], b: []}, keeps={a: [], b: []}, ungranted={a: [], b: []}, notices=notices,
+                    skipped=skipped, held={path for path in ordered if _held_relation(path, held)})
+    ungranted = _verify_blobs(plan, handles)
     for path in ordered:
         if path in plan.held:  # never decided, copied or archived; an uncertain base stays pending
             if not _identical(sides[path].values()):  # but a divergence is never silent (C1)
@@ -283,8 +288,12 @@ def _plan(left: LibraryStore, right: LibraryStore) -> SyncPlan:
             origin = a if decision.origin == "left" else b
             dest = other[origin]
             if syncable(path) == "blob":  # never in memory: loaded from the origin when the commit needs it
-                plan.copies[dest].append(Copy(path, origin, dest, None, None, size=scans[origin].blobs[path],
-                                              source=stores[origin]))
+                copy = Copy(path, origin, dest, None, None, size=scans[origin].blobs[path], source=stores[origin])
+                if path in ungranted:  # the commit would deny it: never staged, so never loaded (C2)
+                    plan.ungranted[dest].append(copy)
+                    plan.conflicts[path] = Conflict(path, "denied", "not authorized", MappingProxyType({dest: False}))
+                else:
+                    plan.copies[dest].append(copy)
             else:
                 plan.copies[dest].append(Copy(path, origin, dest, scans[origin].files[path],
                                               _current(sides[path][dest])))
@@ -320,15 +329,18 @@ def _identical(sides) -> bool:  # type: ignore[no-untyped-def]
             or (all(side.state == "present" for side in found) and len({side.etag for side in found}) == 1))
 
 
-def _verify_blobs(plan: SyncPlan) -> None:
+def _verify_blobs(plan: SyncPlan, handles: Mapping[str, object]) -> set[str]:
     """Hash a blob at copy or first sight; otherwise trust this pair's agreement (C2).
 
     A device's blob is read and hashed unless both devices list it at one size and the base already
     records that very content as agreed. So a blob about to be copied is always hashed on its origin,
     a blob this pair has not yet verified together is hashed on each side that lists it, and an agreed
     one is read by no later sync. A hash mismatch (or any read failure) blocks that side (``corrupt``).
+    A blob only one device lists is read only if it is to be copied: one in a conflict that copies
+    nothing, or one whose receiver may not write it (returned: its copy is ``denied`` unread), is not.
     """
     a, b = plan.devices
+    ungranted: set[str] = set()
     for path in plan.paths:
         if syncable(path) != "blob":
             continue
@@ -338,6 +350,15 @@ def _verify_blobs(plan: SyncPlan) -> None:
         if (len(listed) == 2 and plan.scans[a].blobs[path] == plan.scans[b].blobs[path]  # type: ignore[attr-defined]
                 and plan.bases[path] == Base("agreed", name)):
             continue  # trusted: verified when it was copied or first seen, and unchanged in size since
+        if len(listed) == 1:
+            if decide("blob", plan.bases[path], sides[a], sides[b]).action != "copy":
+                continue  # deleted, resurrected, missing_ancestor or blocked: never copied, so never read
+            dest = plan.other(listed[0])
+            if plan.stores[dest].collides(path):
+                continue  # a name_collision (``_admit``): never copied
+            if _ungranted(plan.stores[dest], handles.get(dest), path):
+                ungranted.add(path)
+                continue
         changed = False
         for device in listed:
             try:
@@ -348,6 +369,26 @@ def _verify_blobs(plan: SyncPlan) -> None:
         if changed:
             plan.bases[path] = derive_base(path, (plan.archives[a], plan.archives[b]), (plan.pendings[a], plan.pendings[b]),
                                            (_current(sides[a]), _current(sides[b])))
+    return ungranted
+
+
+def _ungranted(store: LibraryStore, handle: object, path: str) -> bool:
+    """Whether the commit on ``store`` would certainly deny ``handle`` writing ``path``: the store's
+    durable authority issued the handle and no active grant lets its principal apply there (or the
+    path is reserved). Read without asking for a decision (decisions are audited; a plan writes
+    nothing). Anything unknown, an unbound store included, is ``False``: the commit decides."""
+    authority = store.authority
+    if handle is None or authority is None:
+        return False
+    try:
+        if not authority.issued(handle):  # type: ignore[attr-defined]
+            return False
+        resource = logical(tuple(path.split("/")))
+        principal = handle.principal  # type: ignore[attr-defined]
+        return resource.reserved or not any(grant.covers(principal, Permission.APPLY, resource)
+                                            for grant in authority.active_grants())  # type: ignore[attr-defined]
+    except (StoreError, AttributeError, TypeError, ValueError):
+        return False
 
 
 def _held_families(plan: SyncPlan) -> None:
@@ -578,17 +619,23 @@ def _art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes]) -> _N
     entity, problem = instance_derivation_of(instance_data)
     if entity is None or image is None or image.scope != entity.source:
         return done(f"{image} is not in scope for {subject} ({problem or 'not its derivation source'})")
-    head = _entity_head(origin, entity)
+    try:  # the derivation is the instance's own text: it may name an entity no library can store
+        head = _entity_head(origin, entity)
+        manifest = "/".join(manifest_parts(entity.source))
+        inherited = "/".join(placement_parts(PlacementRef(entity, ref.slot)))
+    except (ValueError, UnstorableIdentifier):
+        return done(f"{subject} derives from {entity}, which names no storable entity")
     if head is None:
         return done(f"{entity} has no head revision on the origin")
-    identical.update((instance, "/".join(manifest_parts(entity.source)), head))
+    identical.update((instance, manifest, head))
     hold = art(image)
     if hold is None and mode == "adjust":
-        inherited = "/".join(placement_parts(PlacementRef(entity, ref.slot)))
         inherited_data = origin.get(inherited)
         _, base_image, ok = placement_target(inherited_data) if inherited_data is not None else (None, None, False)
         if not ok or base_image is None:
             return done(f"{entity} has no picture in {ref.slot!r} to adjust on the origin")
+        if base_image != image:  # W9 ``stale_adjust``: the batch refuses an adjust of another picture
+            return done(f"{entity} shows {base_image} in {ref.slot!r}, not the adjusted {image}")
         identical.add(inherited)
         hold = art(base_image)
     return done(hold)
@@ -637,9 +684,13 @@ def _admit(plan: SyncPlan, dest: str) -> None:
             plan.conflicts[copy.path] = Conflict(copy.path, "name_collision", "a differently spelled entry exists")
         else:
             copies.append(copy)
+    # what is held only because an ungranted blob stays behind is denied, as after a commit's denial
+    granted = _dependencies(plan, dest, [*copies, *plan.ungranted[dest]])[1] if plan.ungranted[dest] else None
     copies, held = _dependencies(plan, dest, copies)
     for path, why in held.items():
-        plan.conflicts[path] = Conflict(path, "head_dependency", why)
+        plan.conflicts[path] = (Conflict(path, "head_dependency", why) if granted is None or path in granted else
+                                Conflict(path, "denied", f"depends on a write that was not authorized: {why}",
+                                         MappingProxyType({dest: False})))
     everything = store.transaction()
     _stage(everything, copies, [])
     if not copies or _preflight(everything, f"the copies to {dest}") is None:
@@ -799,8 +850,8 @@ def _plan_keeps(plan: SyncPlan, device: str) -> None:
     other, store = plan.other(device), plan.stores[device]
     keeps: list[Keep] = []
     for path, conflict in sorted(plan.conflicts.items()):
-        if conflict.code == "held" or syncable(path) == "blob":
-            continue  # held: nothing is kept until 028 (C1); a blob's name is its content, never kept
+        if conflict.code in ("held", "denied") or syncable(path) == "blob":
+            continue  # held: nothing is kept until 028 (C1); denied: never kept; a blob's name is its content
         side = plan.sides[path][other]
         mine = plan.sides[path][device]
         if side.state != "present" or (mine.state == "blocked" and mine.reason == "unreadable"):
@@ -1221,7 +1272,7 @@ def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object],
 def sync(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object],
          approvals: Mapping[str, Mapping[str, str]] | None = None) -> SyncReport:
     """Plan and apply one sync. ``handles`` (and ``approvals``) are keyed by device ID."""
-    return apply_sync(plan_sync(left, right), handles, approvals)
+    return apply_sync(plan_sync(left, right, handles), handles, approvals)
 
 
 def sync_until_quiet(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object],
