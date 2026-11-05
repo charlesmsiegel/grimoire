@@ -118,6 +118,9 @@ def _assign(meter: TurnMeter, briefs: tuple[NpcBrief, ...], director: DirectorBr
             directed = True
             pairs.append((call, director))
             continue
+        if directed:
+            # Narration answers the speakers; it never runs mid-turn for a later NPC to build on.
+            raise GenerationError("director_not_last", f"{call.call_id} is planned after the director reply")
         brief = by_actor.get(call.actor_id)  # type: ignore[arg-type]
         if brief is None:
             raise GenerationError("missing_brief", f"{call.call_id} has no brief")

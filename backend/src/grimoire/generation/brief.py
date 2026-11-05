@@ -169,23 +169,36 @@ def known_ids(knowledge: ActorKnowledge) -> frozenset[str]:
                      | {belief.proposition_id for belief in beliefs})
 
 
-def _who(ref: InstanceRef | None, names: Mapping[InstanceRef, str]) -> str:
+def _who(ref: InstanceRef | None, names: Mapping[InstanceRef, str], hidden: tuple[SecretFact, ...],
+         exposed: Sequence[str]) -> str:
+    """How the actor names ``ref``: "Someone" when unnamed, or when the name states a hidden secret."""
     name = names.get(ref) if ref is not None else None
-    return _one_line(name) if isinstance(name, str) and has_words(name) else "Someone"
+    if not (isinstance(name, str) and has_words(name)):
+        return "Someone"
+    name = _one_line(name)
+    return "Someone" if _leaks(name, hidden, exposed) is not None else name
 
 
-def _knowledge_items(knowledge: ActorKnowledge, names: Mapping[InstanceRef, str]) -> list[tuple[tuple, str]]:
+def _contents(knowledge: ActorKnowledge) -> tuple[str, ...]:
+    """What the actor's knowledge says, without who said it: a label is never learned."""
+    beliefs = (*knowledge.current, *knowledge.history)
+    return (tuple(item.content for item in knowledge.evidence) + tuple(report.text for report in knowledge.sent)
+            + tuple(belief.text for belief in beliefs))
+
+
+def _knowledge_items(knowledge: ActorKnowledge, names: Mapping[InstanceRef, str], hidden: tuple[SecretFact, ...],
+                     exposed: Sequence[str]) -> list[tuple[tuple, str]]:
     """Each item the actor knows, rendered without ids, with a stable campaign-order key."""
     items: list[tuple[tuple, str]] = []
     for item in knowledge.evidence:
         if item.kind == "report":
-            text = f"{_who(item.attributed_to, names)} told you: {_one_line(item.content)}"
+            text = f"{_who(item.attributed_to, names, hidden, exposed)} told you: {_one_line(item.content)}"
         else:
             text = f"You noticed ({_one_line(item.channel)}): {_one_line(item.content)}"
         items.append(((item.moment.sequence, 0, item.evidence_id), text))
     for report in knowledge.sent:
         items.append(((report.sent_at.sequence, 1, report.evidence_id),
-                      f"You told {_who(report.recipient, names)}: {_one_line(report.text)}"))
+                      f"You told {_who(report.recipient, names, hidden, exposed)}: {_one_line(report.text)}"))
     for belief in knowledge.current:
         items.append(((belief.moment.sequence, 2, belief.belief_id),
                       f"{_STANCE.get(belief.stance, 'You believe')}: {_one_line(belief.text)}"))
@@ -281,11 +294,12 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
 
     known = known_ids(knowledge)
     hidden = tuple(secret for secret in secrets if secret.fact_id not in known)
-    rendered = [text for _key, text in _knowledge_items(knowledge, names)]
     context = _context(view.description, sections, context_chars)
-    # What the actor holds, in full: the projection and its own card, whatever the budget showed.
-    own = tuple(rendered) + ((view.description,) if has_words(view.description) else ()) + tuple(
+    # What the actor holds, in full: what its projection and its own card say, whatever the budget
+    # showed. Names come after, screened against this, so a label never exposes a secret.
+    own = _contents(knowledge) + ((view.description,) if has_words(view.description) else ()) + tuple(
         text for _name, text in sections)
+    rendered = [text for _key, text in _knowledge_items(knowledge, names, hidden, own)]
     try:
         fragment = speaker_fragment(voice, secrets=secrets, known=known, max_chars=voice_chars)
     except ValueError as error:

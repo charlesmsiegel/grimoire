@@ -289,6 +289,21 @@ def test_a_reply_copying_another_speakers_example_is_rejected():
     assert (outcome.calls[1].status, outcome.calls[1].reason) == ("rejected", "copied_example")
 
 
+def test_a_speaker_planned_after_the_director_reply_is_refused():
+    controls, voices = world()
+    harness = Harness([])
+    plan = harness.plan(controls, present=PRESENT, speakers=("npc-oda",), director_reply=True,
+                        policy=DIRECTOR_POLICY)
+    meter = harness.meter(plan)
+    meter.add_phase("second", speaking_npc_ids=("npc-bellamy",))
+    narration = scene("A hall.", controls, present=PRESENT)
+    with pytest.raises(GenerationError) as caught:
+        harness.runtime.run_turn(meter, [brief(ODA, "Oda", voices), brief(BELLAMY, "Bellamy", voices)],
+                                 controls=controls, director=narration)
+    assert caught.value.reason == "director_not_last"
+    assert harness.transport.sends == []
+
+
 def test_a_meter_whose_calls_already_ran_is_refused():
     controls, voices = world()
     harness = Harness([say(ODA_LINE), say(BELLAMY_LINE)])

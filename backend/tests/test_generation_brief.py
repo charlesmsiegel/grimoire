@@ -11,6 +11,7 @@ from voice_fixtures import CAMPAIGN, PC, SECRETS
 from grimoire.core import (
     InstanceRef, Knowledge, Moment, Perception, actor_knowledge, director_knowledge,
 )
+from grimoire.core.knowledge import Proposition, Report
 from grimoire.core.perspective import ActorKnowledge, KnownBelief
 from grimoire.voice import SecretFact
 from grimoire.generation import (
@@ -215,3 +216,23 @@ def test_names_label_who_told_whom_without_ids():
     oda = npc_brief(replace(view(ODA, "Oda"), knowledge=knowledge), voices["npc-oda"], secrets=SECRETS,
                     names={stranger: "The stranger"})
     assert "You believe: the vault is empty" in oda.system and "rumour" not in oda.system
+
+
+def test_a_hidden_name_never_labels_knowledge_or_unlocks_the_screen():
+    _controls, voices = world()
+    secrets = (*SECRETS, SecretFact("bellamy-identity", ("Bellamy",)))
+    ledger = Knowledge(CAMPAIGN, propositions=[Proposition(CAMPAIGN, "rumor", "The wine is watered", Moment(1),
+                                                           "director")],
+                       evidence=[Report(CAMPAIGN, "told-oda", ODA, "rumor", "speech", Moment(1), "director", True,
+                                        sender=BELLAMY, attributed_to=BELLAMY),
+                                 Report(CAMPAIGN, "oda-told", BELLAMY, "rumor", "speech", Moment(2), "director",
+                                        True, sender=ODA, attributed_to=ODA, addressed=True, sent_at=Moment(2))])
+    knowledge = actor_knowledge(ledger, ODA, as_of=2)
+    assert knowledge.evidence and knowledge.sent
+    oda = npc_brief(replace(view(ODA, "Oda"), knowledge=knowledge), voices["npc-oda"], secrets=secrets,
+                    names={BELLAMY: "Bellamy"})
+    turn = [HeardLine("Bellamy", "Coin, darling.", BELLAMY)]
+    text = text_of(npc_messages(oda, turn))
+    assert "Bellamy" not in text
+    assert "Someone told you: The wine is watered" in text and "You told Someone: The wine is watered" in text
+    assert screen_reply(oda, "Bellamy, you snake.", spoken=turn) == "unlearned_secret"
