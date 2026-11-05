@@ -101,7 +101,8 @@ class RelationChange:
     puts: tuple[tuple[ScopeRecord, str | None], ...]
     relation: RelationRef
     new: Relation | None = None  # set for an add; its endpoints and duplicates are re-checked at commit
-    endpoint_etags: Mapping[InstanceRef, str] = field(default_factory=dict)  # the instance files it was checked against
+    # The instance files it was checked against: an add's endpoints, and an end's (None = missing or unreadable)
+    endpoint_etags: Mapping[InstanceRef, str | None] = field(default_factory=dict)
     reopen: Relation | None = None  # set for a reopen; its overlap is re-checked at commit
     _committed: bool = field(default=False, repr=False)
 
@@ -139,6 +140,7 @@ class RelationChange:
                     current = ""
                 if current != expected:
                     stale.append((_path(record.address), "absent" if current is None else "changed"))
+            stale += self.library._stale_endpoints(self.endpoint_etags)
             if self.reopen is not None:
                 stale += self.library._stale_reopen(self.reopen, relations)
             return stale
@@ -150,6 +152,10 @@ class RelationChange:
                 raise StoreError("this change was already committed")
             if self.new is not None:
                 stale = self.library._stale_add(self.new, self.endpoint_etags)
+                if stale:
+                    raise StaleWrite(stale)
+            else:  # an end previewed against its endpoint files (the store's CAS covers the relation file)
+                stale = self.library._stale_endpoints(self.endpoint_etags)
                 if stale:
                     raise StaleWrite(stale)
             if self.reopen is not None:
@@ -243,13 +249,19 @@ class RelationLibrary:
         return RelationChange(self, ((record, None),), ref, relation, etags)
 
     def end(self, ref: RelationRef, *, until: Moment, provenance: str, expected: str) -> RelationChange:
-        """The relation stopped holding at ``until``. Works when an endpoint is missing (repair)."""
+        """The relation stopped holding at ``until``. Works when an endpoint is missing (repair).
+
+        The endpoint files are pinned as previewed (a missing one as missing): one replaced before the
+        commit may hold a different individual under the same id, so the commit is then ``StaleWrite``.
+        """
         current, stored = self._current(ref, expected)
         try:
             changed = current.ended(Ending(until, provenance, self._clock()))
         except GraphError as error:
             raise _refused(error) from None
-        return self._rewrite(changed, stored, expected)
+        change = self._rewrite(changed, stored, expected)
+        change.endpoint_etags = {end: self._instance_etag(end) for end in (current.subject, current.object)}
+        return change
 
     def retract(self, ref: RelationRef, *, provenance: str, expected: str) -> RelationChange:
         """The record was wrong: tombstone it. Nothing is deleted. Works when an endpoint is missing."""
@@ -319,6 +331,11 @@ class RelationLibrary:
             return self.store.read(ref).etag
         except (StoreError, LibraryPathError):
             return None  # an unreadable file still names the endpoint; its bytes are pinned as "unreadable"
+
+    def _stale_endpoints(self, etags: Mapping[InstanceRef, str | None]) -> list[tuple[str, str]]:
+        """An end's endpoint files that no longer hold the bytes it was previewed against."""
+        return [(_path(end), "endpoint changed") for end in sorted(etags, key=str)
+                if self._instance_etag(end) != etags[end]]
 
     def _stale_reopen(self, relation: Relation, relations: list | None = None) -> list[tuple[str, str]]:
         campaign = relation.ref.campaign_id

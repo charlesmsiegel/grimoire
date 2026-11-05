@@ -15,7 +15,7 @@ from .model import (
 )
 from .plan import BeginStep, EndStep, plan, records_fact
 from .verify import (
-    EffectProblem, as_knowledge_event, check_citations, edited_effects, ledger_problems, orphans,
+    EffectProblem, as_knowledge_event, bridge_problems, check_citations, edited_effects, ledger_problems, orphans,
     partial_revocations, receipt_failure, scene_events,
     verify_receipts, wrapup_problems,
 )
@@ -25,7 +25,8 @@ __all__ = [
     "AcceptedOperation", "Authorization", "BeginStep", "ContributionSnapshot", "ControlSnapshot", "EffectCodecError",
     "EffectError", "EffectProblem", "EffectProposal", "EndStep", "EndorsementRecord", "Op", "Receipt", "Revocation",
     "SceneWrapUp", "Skipped", "accepted_from_payload", "accepted_to_payload", "accepted_token", "as_knowledge_event",
-    "authorize", "check_citations", "edited_effects", "fingerprint", "ledger_problems", "orphans", "parse_token",
+    "authorize", "bridge_problems", "check_citations", "edited_effects", "fingerprint", "ledger_problems", "orphans",
+    "parse_token",
     "partial_revocations", "plan", "receipt_failure", "records_fact", "revocation_fingerprint", "revoked_token",
     "scene_events",
     "verify_receipts", "wrapup_from_payload",

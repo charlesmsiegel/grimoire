@@ -18,12 +18,13 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
-from grimoire.core.identity import ChatRef, InstanceRef, KnowledgeRef, ScopeRef
-from grimoire.core.knowledge import Belief, Knowledge, Subject
+from grimoire.core.identity import AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, ScopeRef
+from grimoire.core.knowledge import Belief, Event, Knowledge, Subject
 from grimoire.core.model import ControlAssignment
 from grimoire.core.perspective import (
     ActorKnowledge, PlayerKnowledge, actor_knowledge, admit_belief, knowledge_about, player_knowledge, standing,
 )
+from grimoire.effects import EffectCodecError, accepted_from_payload, as_knowledge_event
 from grimoire.evidence import (
     BATCH_LIMIT, FAMILIES, SCHEMAS, Assembly, EvidenceCodecError, Quarantine, ScannedFile, assemble, batch_entry,
     build_ledger, decode, encode, encode_batch,
@@ -111,6 +112,7 @@ class KnowledgeChange:
     chat: ChatRef | None
     actors: frozenset[InstanceRef]
     batch: KnowledgeRef
+    events: tuple[Event, ...] = ()  # re-checked against the accepted (021) events at commit
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -154,6 +156,9 @@ class KnowledgeChange:
         scan = store.campaign_knowledge(campaign)
         if (scan.entries, scan.problems) != self.snapshot:
             return [(f"{base}/evidence", "changed")]
+        refused = _accepted_refusal(store, campaign, self.events)  # an acceptance may have landed meanwhile
+        if refused is not None:
+            return [(f"{base}/accepted", refused[0])]
         return []
 
 
@@ -264,6 +269,11 @@ class EvidenceLibrary:
         taken = sorted(set(names) & on_disk)
         if taken:
             raise EvidenceWriteError("duplicate_id", taken)
+        # 5b: under an accepted (021) event's id, only that event's own bridge (EFFECTS.md).
+        events = tuple(record for record in new if isinstance(record, Event))
+        refused = _accepted_refusal(self.store, campaign_id, events)
+        if refused is not None:
+            raise EvidenceWriteError(*refused)
         # 6: no backdating; a delayed letter's sent_at is the single exception.
         high = assembly.high_water
         late = sorted(_name(r) for r in new if r.moment.sequence < high)  # type: ignore[attr-defined]
@@ -308,7 +318,44 @@ class EvidenceLibrary:
         if not check.clean or check.knowledge != combined:
             raise AssertionError("an append would not read back as an intact ledger")
         return KnowledgeChange(self, campaign_id, (*puts, batch), (scan.entries, scan.problems), chat,
-                               actors, batch_ref)
+                               actors, batch_ref, events)
+
+
+def _accepted_refusal(store: LibraryStore, campaign_id: str, events: tuple[Event, ...]
+                      ) -> tuple[str, list[str]] | None:
+    """Why new 012 ``Event``s may not be stored next to the campaign's accepted (021) events, or ``None``.
+
+    An accepted event's id is reserved for its bridge, ``as_knowledge_event(accepted)``: a different event
+    there is ``accepted_id``, and a revoked event's bridge is ``revoked`` (an undone turn is never stored
+    as objective fact). Fail closed: if the accepted events cannot all be listed, or the one under a new
+    event's id cannot be decoded, nothing can be compared (``accepted_unreadable``). Revoking is never
+    blocked by a stored bridge; 021's ``continuity`` reports one that survives (``revoked_but_bridged``).
+    """
+    if not events:
+        return None
+    found = store.campaign_accepted(campaign_id)
+    if found.problems:  # an unreadable file, link or look-alike folder could hold any of these ids
+        return "accepted_unreadable", sorted(_name(event) for event in events)
+    refused: dict[str, list[str]] = {}
+    for event in events:
+        ref = AcceptedRef(campaign_id, event.event_id)
+        stored = found.records.get(ref)
+        if stored is None:
+            continue
+        try:
+            accepted = accepted_from_payload(ref, stored.record.schema,  # type: ignore[union-attr]
+                                             stored.record.payload)
+        except EffectCodecError:
+            refused.setdefault("accepted_unreadable", []).append(_name(event))
+            continue
+        if not accepted.active:
+            refused.setdefault("revoked", []).append(_name(event))
+        elif event != as_knowledge_event(accepted):
+            refused.setdefault("accepted_id", []).append(_name(event))
+    for reason in ("accepted_unreadable", "revoked", "accepted_id"):
+        if reason in refused:
+            return reason, sorted(refused[reason])
+    return None
 
 
 def _staged(transaction, puts) -> str | None:  # type: ignore[no-untyped-def]

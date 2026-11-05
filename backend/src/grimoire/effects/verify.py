@@ -4,12 +4,13 @@ Accepted events say what was accepted; 017 relation files are the state. ``verif
 checks one event's receipts against the graph; ``orphans`` finds relation changes carrying a 021
 token that no event records; ``ledger_problems`` checks the event stack itself (ordinals and
 sequences); ``wrapup_problems`` and ``check_citations`` hold wrap-ups to the accepted events of
-their scene. ``as_knowledge_event`` bridges an accepted event to a 012 ``Event`` for 020.
+their scene. ``as_knowledge_event`` bridges an accepted event to a 012 ``Event`` for 020, and
+``bridge_problems`` checks what 020 stored under accepted ids.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from grimoire.core.authority import DIRECTOR
@@ -240,3 +241,24 @@ def as_knowledge_event(event: AcceptedEvent) -> Event:
     people |= {item.op.agent for item in event.operations if item.op.agent is not None}
     return Event(event.ref.campaign_id, event.event_id, event.summary, event.moment, accepted_token(event.event_id),
                  tuple(sorted(people, key=str)))
+
+
+def bridge_problems(events: Iterable[AcceptedEvent], stored: Mapping[str, Event | str]) -> tuple[EffectProblem, ...]:
+    """Does a 020 event stored under an accepted event's id hold that event's bridge?
+
+    ``stored`` maps a 020 event id to its decoded ``Event``, or to why its file cannot be read. 020's
+    ``append`` refuses anything else under an accepted id, but sync can still deliver it, so this is the
+    backstop: ``bridge_mismatch`` for an active event whose id holds a different (or unreadable) event, and
+    ``revoked_but_bridged`` for a revoked event whose bridge is still stored (it outlives the revocation until
+    030/054 own corrections). Ids only, never record text."""
+    found = []
+    for event in events:
+        if event.event_id not in stored:
+            continue
+        held = stored[event.event_id]
+        if not event.active:
+            found.append(EffectProblem("revoked_but_bridged", event.event_id))
+        elif held != as_knowledge_event(event):
+            found.append(EffectProblem("bridge_mismatch", event.event_id,
+                                       detail=held if isinstance(held, str) else "different event"))
+    return tuple(sorted(found, key=EffectProblem.sort_key))

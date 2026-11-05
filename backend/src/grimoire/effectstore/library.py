@@ -10,7 +10,8 @@ they were shown). The library only *checks* handles with ``issued``; by conventi
 An acceptance writes the accepted-event record and its 017 relation changes in **one** transaction,
 so a reroll, an alternate response, a retry after a crash, a wrap-up or a later re-mention can never
 apply it twice. Revocation is strictly latest-first and restores relations in place. Nothing here
-writes 012/020 knowledge, evidence or beliefs, and no model is called.
+writes 012/020 knowledge, evidence or beliefs, and no model is called. ``continuity`` reads 020's raw
+event files (through the store, with 020's pure codec, never its service) only to check the bridge.
 """
 
 from __future__ import annotations
@@ -20,17 +21,19 @@ from dataclasses import dataclass, field, replace
 
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
 from grimoire.core.identity import AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, WrapUpRef, validate_segment
-from grimoire.core.knowledge import Moment
+from grimoire.core.knowledge import Event, Moment
 from grimoire.core.model import ControlAssignment
 from grimoire.effects import (
     ACCEPTED_SCHEMA, WRAPUP_SCHEMA, AcceptedEvent, AcceptedOperation, EffectCodecError, EffectError, EffectProblem,
     EffectProposal, EndorsementRecord, EndStep, Receipt, Revocation, SceneWrapUp, Skipped, accepted_from_payload,
-    accepted_to_payload, accepted_token, authorize, check_citations, ledger_problems, orphans, plan,
+    accepted_to_payload, accepted_token, authorize, bridge_problems, check_citations, ledger_problems, orphans,
+    parse_token, plan,
     edited_effects, partial_revocations, receipt_failure, revocation_fingerprint, revoked_token, verify_receipts,
     wrapup_from_payload,
     wrapup_id, wrapup_problems,
     wrapup_to_payload,
 )
+from grimoire.evidence import EvidenceCodecError, decode
 from grimoire.graph import Relation
 from grimoire.graph.codec import RelationCodecError, relation_from_payload
 from grimoire.graph.index import check_as_of, require_director
@@ -38,7 +41,7 @@ from grimoire.graphstore import CampaignGraph, InvalidRelation, RelationChange, 
 from grimoire.library import LibraryPathError
 from grimoire.security.policy import is_human
 from grimoire.store import (
-    LibraryStore, LoadProblem, RecordNotFound, ScopeRecord, StaleWrite, StoreError, StoredScopeRecord,
+    KnowledgeScan, LibraryStore, LoadProblem, RecordNotFound, ScopeRecord, StaleWrite, StoreError, StoredScopeRecord,
 )
 from grimoire.store.layout import address_parts
 
@@ -248,9 +251,12 @@ class TurnEffectsLibrary:
         require_director(requested_by)
         as_of = check_as_of(as_of)
         self._require_campaign(campaign_id)  # a mistyped campaign is an error, never an empty "all clear"
-        snap = self._snapshot(campaign_id)
+        with self.store.lock:  # the bridges are read with the same snapshot
+            snap = self._snapshot(campaign_id)
+            bridges = _stored_events(self.store.campaign_knowledge(campaign_id))
         events = list(snap.events.values())
         problems = list(snap.undecodable) + list(snap.wrapup_problems) + list(ledger_problems(events))
+        problems += bridge_problems(events, bridges)
         for event in events:
             problems += verify_receipts(event, snap.graph.index)
         problems += orphans(events, snap.relations())
@@ -259,7 +265,8 @@ class TurnEffectsLibrary:
         problems += wrapup_problems(snap.wrapups.values(), events)
         active = sorted((e for e in events if e.active and e.moment.sequence <= as_of),
                         key=lambda e: (e.moment.sequence, e.ordinal, e.event_id))
-        revoked = sorted((e for e in events if not e.active), key=lambda e: (e.ordinal, e.event_id))
+        revoked = sorted((e for e in events if not e.active and e.moment.sequence <= as_of),  # never from after as_of
+                         key=lambda e: (e.ordinal, e.event_id))
         wrapups = tuple(snap.wrapups[ref] for ref in sorted(snap.wrapups, key=str)  # never narration from after as_of
                         if snap.wrapups[ref].through.sequence <= as_of)
         return Continuity(campaign_id, as_of, tuple(active), tuple(revoked), wrapups, snap.graph,
@@ -281,19 +288,25 @@ class TurnEffectsLibrary:
                 raise InvalidEffect(f"{proposal.chat} does not exist", "missing_chat")
             snap = self._snapshot(campaign)
             self._require_trustworthy(snap)
-            if _relations_unreadable(snap.graph):  # before the duplicate check, so damage is named, never a mismatch
-                raise InvalidEffect("a relation file cannot be read, so preconditions cannot be checked",
-                                    "undecodable_relation")
+            unreadable = _relations_unreadable(snap.graph)
             wanted = proposal.fingerprint
             for event in snap.active():
                 # A duplicate writes nothing, so it needs no keys: a retry after control changed hands, or with a
                 # stale endorsement, is still told that the effect is in force rather than refused for authority.
+                # Its receipts name exact relation files, so damage elsewhere does not refuse it (#586 follow-up);
+                # when they fail while a file is damaged, the damage is named, never a mismatch.
                 if event.fingerprint == wanted:
                     if verify_receipts(event, snap.graph.index):
+                        if unreadable:
+                            raise InvalidEffect("a relation file cannot be read, so the accepted effect cannot be "
+                                                "checked", "undecodable_relation")
                         raise InvalidEffect(f"{event.ref} is accepted but its receipts do not match the relations",
                                             "receipt_mismatch", (event.event_id,))
                     return EffectChange(self, event.ref, campaign_id=campaign, state=snap.state,
                                         duplicate_of=event.ref)
+            if unreadable:  # a new effect's preconditions could be hidden by any damaged relation file
+                raise InvalidEffect("a relation file cannot be read, so preconditions cannot be checked",
+                                    "undecodable_relation")
             try:
                 authorization = authorize(proposal, controls, contributions)
             except EffectError as error:
@@ -313,7 +326,7 @@ class TurnEffectsLibrary:
                 steps = plan(proposal, snap.graph.index)
             except EffectError as error:
                 raise _refused(error) from None
-            ref = self._allocate(campaign)
+            ref = self._allocate(campaign, _token_ids(self.store, campaign))
             token = accepted_token(ref.event_id)
             relations = self._relations()
             known = snap.relations()  # decoded once, under this lock; no per-operation re-read
@@ -516,13 +529,16 @@ class TurnEffectsLibrary:
             records.append(EndorsementRecord(contribution_id, principal, wanted))
         return tuple(records)
 
-    def _allocate(self, campaign_id: str) -> AcceptedRef:
+    def _allocate(self, campaign_id: str, tokened: frozenset[str] = frozenset()) -> AcceptedRef:
+        """An unused event id: no accepted-event file, no 020 event file, and no relation token naming it."""
         for _ in range(_ALLOCATION_ATTEMPTS):
             value = self._new_id("e")
             validate_segment(value, "generated id")
             ref = AcceptedRef(campaign_id, value)
             if not self._absent(ref) or not self._absent(KnowledgeRef(campaign_id, "event", value)):
                 continue  # also never a 020 event id, so the 012 bridge can later be stored under the same id
+            if value in tokened:
+                continue  # a hand-deleted event's orphaned relation changes must never be adopted by a new event
             return ref
         raise StoreError("could not allocate an unused accepted-event id")
 
@@ -621,6 +637,47 @@ def _relation_files(store: LibraryStore, campaign_id: str) -> tuple[list[Relatio
         if isinstance(relation, Relation):
             decoded.append(relation)
     return decoded, unreadable
+
+
+def _stored_events(scan: KnowledgeScan) -> dict[str, Event | str]:
+    """The campaign's 020 event files, decoded with 020's pure codec (never its service): id → ``Event``, or
+    why the file cannot be read. Raw files, not the assembled ledger, so an unlisted one still counts."""
+    found: dict[str, Event | str] = {}
+    for ref, stored in scan.records.items():
+        if ref.family != "event":
+            continue
+        try:
+            record, _ = decode(ref, stored.record.schema, stored.record.payload)
+        except EvidenceCodecError as error:
+            found[ref.record_id] = error.reason
+            continue
+        found[ref.record_id] = record  # type: ignore[assignment]
+    for ref, code in scan.damaged.items():
+        if ref.family == "event":
+            found[ref.record_id] = code
+    return found
+
+
+def _token_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
+    """Event ids named by a 021 token (``effect:accepted/<id>``, ``effect:revoked/<id>``) anywhere in the raw
+    payload of one of the campaign's relation files (provenance, endings, retractions, reopenings, unknown keys)."""
+    found: set[str] = set()
+    for stored in store.campaign_relations(campaign_id).records.values():
+        _collect_tokens(stored.record.payload, found)
+    return frozenset(found)
+
+
+def _collect_tokens(value: object, into: set[str]) -> None:
+    if isinstance(value, str):
+        token = parse_token(value)
+        if token is not None:
+            into.add(token[1])
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            _collect_tokens(item, into)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _collect_tokens(item, into)
 
 
 def accepted_instance_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:

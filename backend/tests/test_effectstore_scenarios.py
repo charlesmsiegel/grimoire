@@ -7,18 +7,22 @@ duplicate it. All names are synthetic; nothing calls a model.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from grimoire.core import DIRECTOR, Moment
 from grimoire.core.identity import AcceptedRef, RelationRef
 from grimoire.effects import EffectProposal, Op, as_knowledge_event
 from grimoire.effectstore import InvalidEffect
-from grimoire.store import LibraryStore
+from grimoire.evidencestore import EvidenceLibrary
+from grimoire.store import LibraryStore, StaleWrite
 from grimoire.testing.fileops import snapshot
 
 from effects_fixtures import (
     C, CHAT, CONTROLS, GUILD, INES, KEY1, KEY2, TAM, WREN, Handles, contribution, effects_library, give, moment, seed,
 )
+from store_helpers import OWNER
 
 SEED_KEY1 = RelationRef(C, "r-seed-1")
 
@@ -222,3 +226,90 @@ def test_a5_knowledge_bridge_and_no_knowledge_files(world):
     assert bridged.event_id == "e-1" and bridged.moment == Moment(7, "s1", "t7")
     assert not (store.root / "campaigns" / C / "evidence").exists()
     assert not (store.root / "campaigns" / C / "events").exists()
+
+
+# -- the 020 bridge as continuity sees it (sync can still deliver what 020's append refuses) -------------
+
+def _bridge(store, handles, library, ref):
+    event, _ = library.read(ref, requested_by=DIRECTOR)
+    bridged = as_knowledge_event(event)
+    EvidenceLibrary(store, handles.app, owner=OWNER).append(C, [bridged]).commit()
+    return bridged
+
+
+def _codes(library, as_of=8) -> list[tuple[str, str | None]]:
+    return sorted((p.code, p.event_id) for p in continuity(library, as_of).problems)
+
+
+def test_a_stored_bridge_is_no_problem_and_a_different_event_under_the_id_is_reported(world):
+    store, handles, library = world
+    _, done = accept_give(library, handles)
+    _bridge(store, handles, library, done.ref)
+    assert _codes(library) == []
+    path = store.root / f"campaigns/{C}/events/e-1.json"  # what another device's 020 could deliver under e-1
+    document = json.loads(path.read_bytes())
+    document["payload"]["summary"] = "Tam steals both keys."
+    path.write_bytes(json.dumps(document).encode())
+    assert _codes(library) == [("bridge_mismatch", "e-1")]
+    path.write_bytes(b"{broken")
+    assert _codes(library) == [("bridge_mismatch", "e-1")]
+
+
+def test_revoking_a_bridged_event_succeeds_and_continuity_reports_the_surviving_bridge(world):
+    store, handles, library = world
+    _, done = accept_give(library, handles)
+    _bridge(store, handles, library, done.ref)
+    _, etag = library.read(done.ref, requested_by=DIRECTOR)
+    library.revoke(done.ref, reason="reroll", expected=etag, endorsements=[handles.undo(done.ref)]).commit()
+    assert _codes(library) == [("revoked_but_bridged", "e-1")]
+
+
+# -- #586 follow-ups ----------------------------------------------------------------------------------
+
+def test_continuity_lists_only_revoked_events_up_to_as_of(world):
+    store, handles, library = world
+    _, done = accept_give(library, handles)
+    _, etag = library.read(done.ref, requested_by=DIRECTOR)
+    library.revoke(done.ref, reason="reroll", expected=etag, endorsements=[handles.undo(done.ref)]).commit()
+    assert continuity(library, as_of=6).revoked == ()
+    assert [e.event_id for e in continuity(library, as_of=7).revoked] == ["e-1"]
+
+
+def test_a_duplicate_retry_is_a_no_op_while_an_unrelated_relation_file_is_damaged(world):
+    store, handles, library = world
+    _, done = accept_give(library, handles)
+    path = store.root / f"campaigns/{C}/relations/r-zz.json"
+    path.write_bytes(b"{broken")
+    before = snapshot(store.root)
+    retry, again = accept_give(library, handles)
+    assert retry.duplicate_of == done.ref and again.ref == done.ref and snapshot(store.root) == before
+    other = give(KEY2, to=TAM, agent=TAM, backed=None, sequence=8)  # a new effect still fails closed
+    assert reason(lambda: library.accept(other, controls=CONTROLS)) == "undecodable_relation"
+
+
+def test_an_event_id_named_only_by_a_relation_token_is_never_reallocated(world):
+    store, handles, library = world
+    accept_give(library, handles)
+    (store.root / f"campaigns/{C}/accepted/e-1.json").unlink()  # its relation changes remain, as orphans
+    fresh = effects_library(store, handles)  # a generator that would start at e-1 again
+    join = EffectProposal(C, CHAT, moment(8), "Tam joins.", (Op("begin", "member_of", TAM, GUILD),), "director")
+    done = fresh.accept(join, controls=CONTROLS).commit()
+    assert done.ref.event_id != "e-1"
+    found = {(p.code, p.relation_id) for p in continuity(fresh).problems}
+    assert found == {("orphan_effect", "r-1"), ("orphan_effect", "r-seed-1")}  # never adopted by the new event
+
+
+def test_an_accepted_end_is_stale_once_an_endpoint_file_is_replaced(world):
+    store, handles, library = world
+    drop = EffectProposal(C, CHAT, moment(7), "Wren loses the brass key.", (Op("end", "carries", WREN, KEY2),),
+                          "director")
+    change = library.accept(drop, controls=CONTROLS)
+    target = store.root / f"campaigns/{C}/instances/item/key-2.json"
+    document = json.loads(target.read_bytes())
+    target.unlink()
+    document["payload"]["local_name"] = "A different key"  # another individual under the same id
+    target.write_text(json.dumps(document))
+    before = snapshot(store.root)
+    with pytest.raises(StaleWrite):
+        change.commit()
+    assert snapshot(store.root) == before

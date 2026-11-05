@@ -90,15 +90,17 @@ Reopening is the third non-destructive operation:
 Nothing is deleted, so 012/020 subjects that cite the relation stay valid. 021 reopens only endings it made; a relation that was added already bounded (`add(until=…)`) can be reopened only editorially.
 
 - **Codec.** The optional payload key is `reopenings: [{ending: {until, provenance, at}, provenance, at}]`. It is written only when nonempty, so a never-reopened file is byte-identical to 017's. An absent, `null` or empty `reopenings` all mean never reopened (as an absent or `null` ending means not ended), and re-encoding omits the key. Decoding refuses unknown keys and `until <= since`. List order is the order the reopenings were made; their `at` clock text is never compared, since clocks can step back.
+- **A file's own `reopenings` key.** 017 preserved any unknown top-level key, so a file may already carry its own `reopenings`. Only a list is 021's form, and it is decoded strictly. Any other non-`null` value (text, a number, an object) is that older key: it stays in `extras`, is written back verbatim, and the relation decodes as never reopened. A reopen of such a relation refuses with `reserved_key` rather than overwrite it; rename the key by hand to reopen. A corrupted 021 list that becomes text this way is still reported by 021's receipt checks.
 - **Older builds.** A 017-only build keeps `reopenings` as a preserved unknown key and sees no ending, so it answers `holds_at` correctly. This is tested against the verbatim 017 codec.
 - **The index** flags `RelationEntry.reopened`. `history`, `relation` and `to_json` expose the reopenings.
 - **The service.** `RelationLibrary.reopen(ref, *, provenance, expected)` mirrors `end`, works on a relation with a missing endpoint, and refuses with `duplicate_relation` when the reopened interval would overlap another unretracted record of the fact. Its overlap is re-checked at commit.
 - **`RelationChange.stale()`** is additive and public. It reports why a previewed change can no longer be committed:
   - for an add, exactly `commit`'s own check;
   - for a rewrite, the store's CAS words `absent` and `changed`;
+  - for an end, also `endpoint changed` (its pinned endpoint files);
   - for a reopen, also an overlap.
 
-  021 calls it under the store lock before folding relation changes into its own transaction. `commit` is unchanged for add, end and retract.
+  021 calls it under the store lock before folding relation changes into its own transaction. `commit` makes the same checks.
 - **Checking many changes against one read.** `add`, `reopen` and `RelationChange.stale` take an optional `relations` list (the campaign's decoded relations, read under the same lock), so 021 checks up to 32 operations against one read of the folder instead of one read each. Omitted, they read the folder as before.
 
 ## The index (director-only)
@@ -191,6 +193,7 @@ Writers must also follow these rules, which the text is not checked for, as in 0
 | `graph(campaign_id, *, requested_by)` | `CampaignGraph(index, etags, problems)`, read from one campaign's relation and instance listings under one store lock. It never loads the whole library. |
 
 - An `add` is re-checked under the store lock at commit: each endpoint's instance file must still hold the bytes it was checked against (a file replaced since the preview may be a different individual under the same id), and no duplicate may have appeared. Otherwise it raises `StaleWrite`, never reallocating an id the approval pinned.
+- An `end` pins both endpoint files the same way: a missing or unreadable one is pinned as such, so the repair path still commits, but any change to either file between the preview and the commit is `StaleWrite` (`endpoint changed`), and `RelationChange.stale()` reports it. `retract` and `reopen` pin only the relation file.
 - **Scale.** There is no cap on relations per campaign. A write reads every relation file of its campaign (O(n)); `graph()` reads the campaign's relation and instance files once, and duplicate detection compares only relations recording the same fact. Only `traverse` is bounded. `relations`, `history` and `claims_about` return everything incident to one node.
 - Relation ids come from `new_id("r")` and are taken by exact presence; any file or link already there counts as taken. A look-alike file fails the commit with `NameCollision`.
 - No model call is made, and nothing writes events, evidence or beliefs.
