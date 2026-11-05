@@ -34,6 +34,7 @@ def test_predicate_registry_is_exact():
     assert {name: p.symmetric for name, p in PREDICATES.items()} == {
         "member_of": False, "located_in": False, "owns": False, "carries": False, "knows": False,
         "has_met": True, "kin_of": True, "allied_with": True,
+        "in_party": False, "in_reserve": False,  # 033's membership (docs/PARTY.md)
     }
     assert {p.domain for p in PREDICATES.values()} == {"world_fact"}
     assert not {p.domain for p in PREDICATES.values()} & PROTECTED_DOMAINS
