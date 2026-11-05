@@ -24,7 +24,7 @@ from grimoire.core.knowledge import Event, Moment
 from grimoire.graph import GraphError, GraphIndex, Relation
 from grimoire.holdings import Holdings, Operation
 
-from .model import AcceptedEvent, EffectError, SceneWrapUp, accepted_token, parse_token, revoked_token
+from .model import NEVER_APPLIED, AcceptedEvent, EffectError, SceneWrapUp, accepted_token, parse_token, revoked_token
 from .parts import inverse_op_id
 from .plan import records_fact
 
@@ -280,8 +280,16 @@ def holdings_failures(event: AcceptedEvent, holders: Mapping[InstanceRef, Holdin
     ``holders`` maps each holder to its decoded holdings, or to why its file cannot be read (``unreadable``
     is then true: damage is named, never called a mismatch). A holder left out of ``holders`` is unreadable.
     An active event fails ``undone`` where a holder logs its inverse (a revocation that landed on the holders but
-    not on the event file), except while ``undoing``, when that inverse is the one to adopt.
+    not on the event file), except while ``undoing``, when that inverse is the one to adopt. A revocation that
+    skipped the undo as ``never applied`` fails ``applied since`` where a holder logs the forward change after all
+    (a holder file restored from after the effect): it is in force, so it is a mismatch and holds the attempt.
     """
+    if never_applied(event):
+        assert event.holdings is not None
+        return tuple((holder, held, True) if isinstance(held, str) else (holder, "applied since", False)
+                     for holder in sorted(event.holdings.holdings.holders, key=str)
+                     for held in (holders.get(holder, "not read"),)
+                     if isinstance(held, str) or any(entry.op == event.holdings.op_id for entry in held.log))
     found = holdings_receipt(event)
     if found is None:
         return ()
@@ -298,6 +306,12 @@ def holdings_failures(event: AcceptedEvent, holders: Mapping[InstanceRef, Holdin
         if why is not None:
             failures.append((holder, why, False))
     return tuple(failures)
+
+
+def never_applied(event: AcceptedEvent) -> bool:
+    """A revoked event with holdings whose undo was skipped because no holder logged the forward change."""
+    skipped = None if event.revocation is None else event.revocation.holdings_skipped
+    return event.holdings is not None and skipped is not None and skipped.startswith(NEVER_APPLIED)
 
 
 def _undone(holdings: Holdings, op_id: str) -> bool:

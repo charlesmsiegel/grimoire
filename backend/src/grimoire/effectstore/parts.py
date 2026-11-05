@@ -12,7 +12,7 @@ from collections.abc import Iterable, Mapping
 from grimoire.core.identity import InstanceRef
 from grimoire.effects import (
     NEVER_APPLIED, AbilityCharge, AcceptedEvent, AcceptedHoldings, EffectError, EffectProblem, EffectProposal,
-    accepted_token, holdings_failures, holdings_op_id, holdings_orphans, parse_token, revoked_token,
+    accepted_token, holdings_failures, holdings_op_id, holdings_orphans, never_applied, parse_token, revoked_token,
 )
 from grimoire.holdings import Holdings, HoldingsCodecError, HoldingsRefused
 from grimoire.holdingstore import HoldingsChange, HoldingsLibrary
@@ -112,7 +112,15 @@ def check_attempts(proposal: EffectProposal, events: Iterable[AcceptedEvent], ho
 
 
 def _undo_unconfirmed(event: AcceptedEvent, holdings: HoldingsLibrary, consulted: set[InstanceRef]) -> bool:
-    if event.holdings is None or not event.revocation.holdings_seqs:  # type: ignore[union-attr]
+    if event.holdings is None:
+        return False
+    if never_applied(event):  # no holder logged the forward change at the revoke; one restored since may
+        holders = read_holders(holdings, event.holdings.holdings.holders)
+        consulted.update(event.holdings.holdings.holders)
+        failures = holdings_failures(event, holders)
+        refuse_unreadable(failures)
+        return bool(failures)
+    if not event.revocation.holdings_seqs:  # type: ignore[union-attr]
         return False
     consulted.update(event.holdings.holdings.holders)
     holders = read_holders(holdings, event.holdings.holdings.holders)

@@ -462,6 +462,23 @@ def test_an_undo_with_nothing_in_force_holds_nothing(world):
     assert counts(holdings, ORIN) == {"fuel": 1}
 
 
+def test_a_never_applied_change_restored_later_holds_its_attempt(world):
+    """After a "never applied" revoke, a holder file restored from after the hop puts the change back in force."""
+    store, _, library, holdings = world
+    before = (store.root / ORIN_FILE).read_bytes()
+    library.accept(hop(), controls=CONTROLS).commit()
+    forward = (store.root / ORIN_FILE).read_bytes()
+    (store.root / ORIN_FILE).write_bytes(before)
+    revoke(library, partial=True).commit()
+    (store.root / ORIN_FILE).write_bytes(forward)  # the fuel burn is back, with no event in force for it
+    assert codes(library) == {"receipt_mismatch"}
+    revision = EffectProposal(C, CHAT, moment(8), "Orin hops; Tam's knife snaps.", (), "director",
+                              attempt_id="hop-1", holdings=EffectHoldings((Line.consume(TAM, "knife", 1),)),
+                              abilities=(assessment(),))
+    assert reason(lambda: library.accept(revision, controls=CONTROLS)) == "attempt_revoked"
+    assert counts(holdings, TAM) == {"knife": 1}
+
+
 def test_an_orphan_is_repaired_by_hand_and_then_a_fresh_attempt_lands(world):
     """The documented repair: undo (or keep) the change with a 023 operation and free the entry's cause."""
     store, _, library, holdings = world

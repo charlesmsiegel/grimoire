@@ -20,7 +20,7 @@ from .plan import BeginStep, EndStep, plan, records_fact
 from .verify import (
     EffectProblem, as_knowledge_event, bridge_problems, check_citations, edited_effects, entry_failure,
     holdings_failures, holdings_orphans, holdings_partials, holdings_problems, holdings_receipt, ledger_problems,
-    orphans, partial_revocations, receipt_failure, scene_events, verify_receipts, wrapup_problems,
+    never_applied, orphans, partial_revocations, receipt_failure, scene_events, verify_receipts, wrapup_problems,
 )
 
 __all__ = [
@@ -31,7 +31,8 @@ __all__ = [
     "EffectHoldings", "EffectProblem", "EffectProposal", "EndorsementRecord", "EndStep", "entry_failure",
     "fingerprint", "holdings_failures", "holdings_op_id", "holdings_orphans", "holdings_partials", "holdings_problems",
     "holdings_receipt", "inverse_lines", "inverse_op_id", "KINDS", "ledger_problems", "MAX_OPERATIONS",
-    "NEVER_APPLIED", "Op", "orphans", "parse_token", "partial_revocations", "plan", "PROPOSERS", "Receipt",
+    "NEVER_APPLIED", "never_applied", "Op", "orphans", "parse_token", "partial_revocations", "plan", "PROPOSERS",
+    "Receipt",
     "receipt_failure", "records_fact", "Revocation", "revocation_fingerprint", "revoked_token", "scene_events",
     "SceneWrapUp", "Skipped", "verify_receipts", "wrapup_from_payload", "wrapup_id", "wrapup_problems",
     "WRAPUP_SCHEMA", "wrapup_to_payload",
