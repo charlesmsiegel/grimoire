@@ -165,6 +165,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 - **029:** fiction-first adjudication of a mechanics-free action: frames with causes and stakes on record before the result, deterministic classification, decisions that cite only those, 025 rulings and assessments persisted in an authority ledger, and the hand-off to 021 ([ADJUDICATION](../ADJUDICATION.md)). Graded consequences and contests (milestone 3) and verifying factor sources are still open.
 - **033:** party and reserve membership as two 017 relation predicates (`in_party`, `in_reserve`), moved in one transaction, and scene casts in which a reserved member is never present or a speaker; any instance kind, a creature included, is cast under its own reference ([PARTY](../PARTY.md)). A creature in a chat's roster is its next slice.
 - **030 first slice:** a partly published acceptance is finished (`complete`, `adopt`) or aborted (`revoke(partial=True)`) exactly once, proven on a crash with removed staging ([RECOVERY](../RECOVERY.md)). A partly published revocation and multi-transaction actions are left.
+- **031 first slice:** `grimoire.context` packs one actor's bounded, audience-safe context (its own card, its own knowledge, triggered `common` lore of bound lorebooks and scenarios) in world-less and world-based chats; `grimoire.contextstore` joins 022, 020 and the store ([CONTEXT](../CONTEXT.md)). Lorebook formats and their readers are 037's; recent history is 027/035's.
 
 <a id="wave-5"></a>
 
