@@ -19,6 +19,15 @@ def test_the_runtime_holds_every_invariant_at_every_point():
     assert outcomes == {"complete", "halted", "cancelled", "stale"}  # every ending is reached
 
 
+def test_the_director_reply_meets_every_fault_too():
+    """The scene-level director call is screened and halted like a speaker's (Wave 4 audit)."""
+    traces = explore_generation_faults(seed=5).traces
+    assert traces["clean/director/x1"][4][2][-1][0] == "Narrator"
+    for fault, reason in (("leak", "unlearned_secret"), ("copy", "copied_example"), ("silent", "silent_reply")):
+        status, calls, lines = traces[f"{fault}/director/x1"][4]
+        assert (status, calls[-1], len(lines)) == ("halted", ("rejected", reason), 2)
+
+
 def test_the_explorer_is_deterministic_and_seeded():
     assert explore_generation_faults(seed=2).traces == explore_generation_faults(seed=2).traces
 

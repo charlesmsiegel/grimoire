@@ -144,8 +144,10 @@ PURE_PACKAGES = (
                                    "grimoire.evals.checks"),
                 never_import=("grimoire.core.inference",)),
     # Per-NPC generation (027): plans, voices, briefs and screens each call; the runtime is an adapter.
+    # Briefs render 031's packs (its value types), and 031 imports nothing of 027's: one direction.
     PurePackage("grimoire.generation", ("grimoire.generation", "grimoire.core", "grimoire.core.inference",
-                                        "grimoire.voice", "grimoire.evals.text", "grimoire.evals.checks")),
+                                        "grimoire.voice", "grimoire.evals.text", "grimoire.evals.checks",
+                                        "grimoire.context")),
     # Offline evaluation: of the domain core it uses only the inference contracts (sprint 015);
     # only its loader and CLI read files.
     PurePackage("grimoire.evals", ("grimoire.evals", "grimoire.core.inference"),

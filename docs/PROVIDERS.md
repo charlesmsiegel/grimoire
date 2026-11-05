@@ -157,11 +157,9 @@ Further rules:
 - **Cancellation** wakes a blocked read by shutting down the socket. A cancel during `connect()` waits for the connect timeout. On Windows, waking a blocked `recv` is not guaranteed (the test is `xfail` there).
 - **Stale-run fencing** across processes is not covered (owned by 027 and 030).
 
-## Open question for 027
+## Handle for generation (decided)
 
-The adapter works with trusted and untrusted handles alike. TOOL_AUTHORITY currently says that code which parses imported content or model output must use an untrusted handle. Such a handle needs a human approval per attempt, which a live scene cannot use.
-
-The open question for the requester and 027: may a generation runtime hold a trusted `app:` handle, on the grounds that the destination comes only from trusted configuration and prompt text is payload, never authority? This slice does not narrow the rule.
+The adapter works with trusted and untrusted handles alike. An untrusted handle needs a human approval per attempt, which a live scene cannot use, so the requester decided that 027's generation runtime holds a trusted `app:` handle: the destination comes only from trusted configuration, and prompt and reply text are payload, never authority. The limits of that exception are in [TOOL_AUTHORITY](TOOL_AUTHORITY.md#requirements-on-later-sprints).
 
 ## Downstream consumers
 

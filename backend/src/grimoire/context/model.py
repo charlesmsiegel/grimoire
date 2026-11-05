@@ -246,6 +246,8 @@ class PackedItem:
     sequence: int | None = None
     #: memory items: typed claim readings about focus nodes, when the caller passed 017 claim shapes
     claims: tuple[ClaimReading, ...] = ()
+    #: lore items: the entry's audience (``common``; a director lore pack may also hold ``director``)
+    audience: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,6 +275,29 @@ class SourceProblem:
 
 
 @dataclass(frozen=True, slots=True)
+class SelectionBasis:
+    """What a pack read from its snapshot's selection, so a brief can refuse one built over another.
+
+    Two chats of one campaign can share an actor (107's ``reuse_actors``) and her card revision yet
+    bind different lore, and one chat's lorebook can be detached or re-pinned between turns: the
+    actor, the card and the moment alone cannot tell such packs apart, and a hand edit of a file in
+    place leaves even the references equal. ``bindings`` are the sorted ``(role, selected ref,
+    resolved ref or None, contents)`` of every ``lorebook`` and ``scenario`` binding and, for an
+    actor's pack, of the actor's own bindings; ``contents`` are the content identities (stored etag,
+    else a digest) of each revision read through the binding: a lore source's selected revision, or
+    every layer of the actor's composed portrayal. ``instance_etag`` is the captured actor
+    instance's etag. ``selection_basis`` computes it; two packs read the same inputs when their bases
+    are equal.
+    """
+
+    campaign_id: str
+    #: the audience whose own bindings were read; ``None`` for the director's lore
+    actor: InstanceRef | None
+    bindings: tuple[tuple[str, SourceRef, SourceRef | None, tuple[str, ...]], ...]
+    instance_etag: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ContextPack:
     """A bounded, audience-safe context for one actor at one moment.
 
@@ -282,6 +307,10 @@ class ContextPack:
     held memory: listed by count, so a large catalog is never dumped.
     What audience rules withheld is deliberately not reported here: that is the director's.
     ``notes`` are pack-level facts the trusted caller should see, such as ``knowledge_quarantined``.
+    ``basis`` is the campaign and the bindings it read (``SelectionBasis``). ``knowledge`` is the
+    digest of the actor's 012 projection it read (``knowledge_digest``): a ledger reload that
+    quarantines a record shrinks the projection at the same ``as_of`` and binding, so only this tells
+    a pack still holding the lost record from a current one.
     It is a provisional in-memory value (``FORMAT``), not a persisted schema.
     """
 
@@ -293,6 +322,8 @@ class ContextPack:
     omitted: tuple[Omission, ...]
     untriggered: tuple[tuple[SourceRef, int], ...]
     problems: tuple[SourceProblem, ...]
+    basis: SelectionBasis
+    knowledge: str
     notes: tuple[str, ...] = ()
 
     @property
@@ -315,8 +346,48 @@ class ContextPack:
         return "\n".join(self.lines())
 
 
+@dataclass(frozen=True, slots=True)
+class LorePack:
+    """Bounded lore for the scene-level director reply: no actor, so no portrayal or memory.
+
+    Every item is in the ``lore`` lane and carries its entry's ``audience``: ``common`` lore is what
+    anyone in the setting may know, ``director`` lore is the director's alone and must never be
+    stated as table fact. ``omitted``, ``untriggered`` and ``problems`` read as in ``ContextPack``;
+    nothing here belongs to an actor, so nothing is withheld unreported. ``basis`` is the campaign
+    and the lore bindings it read (``SelectionBasis``, with no actor). ``table_text`` is the
+    table-visible text its entries were triggered on: the table saw it, so a brief counts it as
+    exposed. It is a provisional in-memory value, never persisted.
+    """
+
+    budget: Budget
+    measurement: str
+    items: tuple[PackedItem, ...]
+    omitted: tuple[Omission, ...]
+    untriggered: tuple[tuple[SourceRef, int], ...]
+    problems: tuple[SourceProblem, ...]
+    basis: SelectionBasis
+    table_text: str = ""
+
+    @property
+    def tokens(self) -> int:
+        return sum(item.tokens for item in self.items)
+
+    def audience(self, audience: str) -> tuple[PackedItem, ...]:
+        if audience not in AUDIENCES:
+            raise _fail(f"unknown audience {audience!r}", "invalid_audience")
+        return tuple(item for item in self.items if item.audience == audience)
+
+    def lines(self) -> tuple[str, ...]:
+        return tuple(item.line for item in self.items)
+
+    def render(self) -> str:
+        """The items' lines, one per line, in order (see ``ContextPack.render``)."""
+        return "\n".join(self.lines())
+
+
 __all__ = [
     "AUDIENCES", "FORMAT", "LANES", "MAX_ENTRIES", "MAX_ENTRY_TEXT", "MAX_KEYS", "MAX_KEY_TEXT", "MAX_PRESENT",
     "MAX_SCENE_TEXT", "MAX_TOKENS", "Budget", "ClaimReading", "ContextError", "ContextPack", "EntryReader", "LoreEntry",
-    "Omission", "Origin", "PackedItem", "SourceProblem", "TokenCounter", "estimate_tokens", "safe_text",
+    "LorePack", "Omission", "Origin", "PackedItem", "SelectionBasis", "SourceProblem", "TokenCounter",
+    "estimate_tokens", "safe_text",
 ]

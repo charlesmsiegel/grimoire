@@ -290,6 +290,22 @@ def test_a_reply_copying_another_speakers_example_is_rejected():
     assert (outcome.calls[1].status, outcome.calls[1].reason) == ("rejected", "copied_example")
 
 
+def test_a_reply_copying_a_silent_present_npcs_example_is_rejected():
+    """014 asks for every scene voice, not only this turn's speakers (Wave 4 audit): Quill is present
+    but silent, and Oda reciting Quill's authored example is still a copy."""
+    controls, voices = world()
+    copied = voices["npc-quill"].examples[0].text
+    plan_args = dict(present=("npc-oda", "npc-bellamy", "npc-quill", PC), speakers=("npc-oda",))
+    harness = Harness([say(copied)])
+    outcome = harness.runtime.run_turn(harness.meter(harness.plan(controls, **plan_args)), [brief(ODA, "Oda", voices)],
+                                       controls=controls, scene_voices=[voices["npc-quill"]])
+    assert outcome.lines == () and (outcome.calls[0].status, outcome.calls[0].reason) == ("rejected", "copied_example")
+    with pytest.raises(GenerationError) as caught:
+        harness.runtime.run_turn(harness.meter(harness.plan(controls, turn="t2", **plan_args)),
+                                 [brief(ODA, "Oda", voices)], controls=controls, scene_voices=["Quill"])
+    assert caught.value.reason == "bad_voice"
+
+
 def test_a_speaker_planned_after_the_director_reply_is_refused():
     controls, voices = world()
     harness = Harness([])

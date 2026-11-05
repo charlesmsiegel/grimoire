@@ -64,7 +64,12 @@ These rules reject traversal, absolute paths, separators, whitespace, control/fo
   - Keys are read only by trusted adapter code, after an allow.
   - **Recorded deviation:** keys come from environment variables, not from the reserved `secrets/` root. The native file store (010) reserves `secrets/` but does not read it yet; until a store-backed secrets reader exists, this deviation stands.
 
-  Whether a generation runtime that parses model output may hold a trusted `app:` handle is an open question for 027. It is not decided here, and this rule is unchanged.
+  **Decided for 027 (the requester, Wave 4 audit): the generation runtime holds a trusted `app:` handle.** This is a narrow exception to "code that parses model output uses an untrusted handle", and it holds only while all of these stay true:
+  - the destination of every call comes from trusted routing configuration, never from prompt or reply text;
+  - model text is payload only: no reply grants, names or widens anything, and the runtime runs no tool or command a reply asks for;
+  - the handle is used for provider calls only, so a live scene asks for no per-attempt approval.
+
+  Anything that would act on model output (tools, writes a reply names) still needs its own untrusted handle and approval.
 - **Device sync (028):** pairing keys and device credentials live under reserved roots, and peer devices are non-owner principals.
 - **Multiplayer (102):** each human approves only uses of grants they issued.
 - **V1 migration ([V1 To V2 Import Apply](roadmap/sprints/v1-to-v2-import-apply.md)):** V1 libraries have no address in the V2 namespace. A future read-only migration source must be an explicit, separate root.

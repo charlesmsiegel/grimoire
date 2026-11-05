@@ -36,7 +36,7 @@ Nothing found is `MissingVoice("no_profile")`. A binding's alternate `portrayal`
 
 A brief is a sealed value: only its builder makes one.
 
-**`npc_brief(view, voice, *, heard=(), secrets, sections=(), names=None, ...)`** builds one NPC's brief from its own `ActorView` (`actor_view` or `snapshot_actor_view`):
+**`npc_brief(view, voice, *, heard=(), secrets, sections=(), names=None, ..., context=None, snapshot=None)`** builds one NPC's brief from its own `ActorView` (`actor_view` or `snapshot_actor_view`):
 
 - It refuses `view.knowledge is None` (`no_knowledge`), and knowledge that is not this actor's own `ActorKnowledge` (`foreign_knowledge`), such as director knowledge or another actor's projection. The actor's typed ref (a character, or a speaking item) comes from its own projection. A voice for another actor, or resolved for another selected revision than `view.resolved_source`, is `voice_mismatch`.
 - Superseded beliefs keep their stance ("Earlier, you doubted: ...").
@@ -47,7 +47,41 @@ A brief is a sealed value: only its builder makes one.
 - `heard` is what the actor heard **aloud** before this turn's calls. Its text counts as learned, as a line spoken earlier this turn does, so the caller passes only lines this actor heard (every present actor, in this slice).
 - **Speaker labels are not learned.** A `HeardLine` may carry the speaker's `actor`; each listener labels it by its own `names`, else by `speaker`. A label stating a secret the listener has not learned (a disguised NPC's real name, say) is shown as `Someone`, to NPCs and to the director alike. The same holds for the names in the actor's knowledge ("X told you", "You told X"): only what its items say counts as learned, never who said them.
 
-**`director_brief(scenario, *, campaign_id, present, controls, names, heard=(), secrets)`** takes authored scenario text and table-visible lines **only**: there is no knowledge parameter at all. The player characters are **derived from control** (every present actor with a human controller), never passed in; `names` must give each a nonblank display name (`bad_players`). The brief names them and forbids writing their words, thoughts, feelings or decisions. A present actor with no controller is `unassigned_actor`. Every secret is hidden from it, but the player characters' names are table-visible, so narration may name them.
+### From 031's packs
+
+Without `context`, a brief is exactly 027's own minimal rendering above, byte for byte (a test pins the whole `system` text). With `context`, a `ContextPack` from 031's `pack_actor_context` ([CONTEXT](CONTEXT.md)) for **this same actor over the same snapshot**, the pack's lanes replace that rendering. `snapshot` is then required: the `EffectiveSnapshot` that `view` and `voice` were resolved from, which names the selection the brief is for:
+
+- `portrayal` becomes "Who you are:" (the pack's description and composed sections, never its `You are Name.` line, which the brief's opening already words, and never a `voice-evidence` section, even from a pack built with `exclude_sections=()`);
+- `lore` becomes "What anyone here may know:" (`common` entries only);
+- `memory` becomes "What you know:", in the pack's rank order.
+
+The pack is already within its own token budget, so `sections`, `context_chars` and `knowledge_chars` do not apply; passing `sections` too is `bad_sections`. `view`, `voice` and `secrets` keep every rule above: what counts as learned (`known_ids`), the hidden secrets, the screened voice fragment and the speaker labels still come from the actor's own projection.
+
+| Refusal | When |
+|---|---|
+| `bad_context` | not a `ContextPack`, one that does not open with this actor's name line, or no `snapshot` given with it |
+| `foreign_context` | a pack built for another actor (another chat's actor included), the director's `LorePack`, or a pack holding a lore item of any audience but `common` |
+| `context_mismatch` | built as of another moment than `view.knowledge`, or from another projection of the actor's knowledge at that moment (`pack.knowledge != knowledge_digest(view.knowledge)`: a ledger reload quarantined or restored one of its records); `view` is not `snapshot`'s view of the actor (the actor is not captured there, or is captured or bound otherwise); or the pack's `basis` is not `selection_basis(snapshot, ...)` |
+
+The `basis` ([CONTEXT](CONTEXT.md#the-selection-a-pack-is-built-over)) is the campaign, the actor's own bindings, every `lorebook` and `scenario` binding (as selected, as resolved, and the content etag of each revision read through it) and the captured instance's etag. So a pack from another chat that reuses the same actor and card (107's `reuse_actors`) but binds other lore is refused, and so is a pack from before a lorebook was attached, detached, re-pinned or moved to a new head, or edited by hand in place (same reference, new content), or before the actor's instance record changed. A campaign original, which has no card, is checked the same way. What is **not** checked: that `snapshot` is the chat the caller means to play. It is the caller's word for that, as `heard` is its word for what the actor heard.
+
+**Screening.** Every line the brief shows from the pack counts as exposed to this actor, so a reply quoting common lore it was given is not `unlearned_secret`. Director-only lore is never in an actor's pack (031's audience rule, and the `foreign_context` check above), and a pack read over another selection is `context_mismatch`, so lore the brief's own selection does not give the actor as `common` can never be exposed this way. A pack is not sealed: the caller builds it with `pack_actor_context` from the actor's own binding, as it builds `heard` from what the actor heard.
+
+### The director's brief
+
+**`director_brief(scenario, *, campaign_id, present, controls, names, heard=(), secrets, lore=None, snapshot=None)`** takes authored scenario text, 031's director lore and table-visible lines **only**: there is no knowledge parameter at all. The player characters are **derived from control** (every present actor with a human controller), never passed in; `names` must give each a nonblank display name (`bad_players`). The brief names them and forbids writing their words, thoughts, feelings or decisions. A present actor with no controller is `unassigned_actor`. Every secret is hidden from it, but the player characters' names are table-visible, so narration may name them.
+
+`lore` is a `LorePack` from 031's `director_lore` ([CONTEXT](CONTEXT.md#director-lore)), so a scenario-only chat's narrator gets the bound lorebook's entries that table-visible text triggered. Its `common` entries are listed as "What anyone here may know:" and count as exposed, so narration may repeat them. Its `director` entries are listed as known only to the narrator, never to be stated outright, and are **hidden like secrets**, but only sentence by sentence. Each sentence of an entry with at least `MIN_LORE_MARKER_WORDS` (5) words, its edge punctuation trimmed, is a marker of a hidden `SecretFact`. Sentences end at `.`, `!`, `?`, `;` or `…`, after any closing quotes or brackets (`"`, `'`, `”`, `’`, `»`, `›`, `」`, `』`, `）`, `)`, `]`), followed by a space, or at a full-width `。`, `！` or `？` (with any closing quotes), so `"He sold it." "She knew."` is two sentences. A fragment of under two words before a stop (`Mr.`, `Dr.`, `Rain.`) does not end a sentence: it stays with the next sentence, and that sentence is also screened without it when it is long enough on its own. In scripts written without spaces, two characters count as a word. Narration that repeats such a sentence **word for word** (whole phrase, case- and width-insensitive, as every secret marker is matched) is `unlearned_secret`, whether or not the caller registered a secret for it, unless the scenario, common lore, a player's name, the table text the lore was triggered on (`LorePack.table_text`) or a heard line says it too. What is **not** caught: part of a sentence, a paraphrase, and any sentence shorter than five words. A shorter sentence ("It is late.") is ordinary prose, so screening it would reject innocent narration and halt the turn. An entry with no sentence of five words is left unscreened and listed in `DirectorBrief.unscreened` as `(source, entry id)` pairs, for the trusted caller to review.
+
+With `lore`, `snapshot` is required: the chat's `EffectiveSnapshot` the brief is for.
+
+| Refusal | When |
+|---|---|
+| `bad_lore` | not a `LorePack` (an actor's `ContextPack` included: its memory is one actor's own), or no `snapshot` given with it |
+| `foreign_context` | lore built for another campaign than `campaign_id` |
+| `context_mismatch` | the lore's `basis` is not `selection_basis(snapshot, campaign_id)`: another chat's, or this chat's from before a lore binding was attached, detached, re-pinned, moved or edited by hand in place, so a stale pack cannot show as `common` an entry the current revision makes the director's |
+
+### Messages
 
 `npc_messages(brief, spoken)` and `director_messages(brief, spoken)` render a brief and the lines spoken so far this turn as `(role, content)` messages.
 
@@ -61,16 +95,16 @@ A brief is a sealed value: only its builder makes one.
 |---|---|
 | `silent_reply` | Blank or punctuation only. |
 | `too_long` | Longer than a heard line may be (`MAX_LINE_CHARS`, 2000 characters). |
-| `copied_example` | Reproduces an authored example of any speaker's voice in this turn (014's `example_copies`). A silent present NPC's examples are not checked. |
+| `copied_example` | Reproduces an authored example of any speaker's voice in this turn, or of a voice the caller passes as `run_turn(..., scene_voices=...)` (silent present NPCs; 014's `example_copies`). The caller owes those: a voice it leaves out is not checked. |
 | `unlearned_secret` | States a marker of a secret hidden from the speaker that nothing it held or heard exposed: its projection, its card, its heard lines, or a line spoken earlier this turn. |
 
 Every present actor hears every spoken line in this slice (no whispering), so a secret one NPC says aloud may be repeated by the next. A director reply is screened the same way against its own inputs.
 
 ## Running a turn
 
-`GenerationRuntime(adapter, routes, handle, *, approvals=None, max_output_tokens=400)` holds fixed routing. The handle and approvals pass through to `ProviderAdapter.execute` unchanged; tests cover a trusted app handle and an untrusted one approved per attempt (which of the two the app uses is still the requester's open question).
+`GenerationRuntime(adapter, routes, handle, *, approvals=None, max_output_tokens=400)` holds fixed routing. The handle and approvals pass through to `ProviderAdapter.execute` unchanged; tests cover a trusted app handle and an untrusted one approved per attempt. The app uses a trusted `app:` handle (decided; the limits are in [TOOL_AUTHORITY](TOOL_AUTHORITY.md#requirements-on-later-sprints)).
 
-`run_turn(meter, briefs, *, controls, director=None, token=None, cancel=None) -> TurnOutcome`:
+`run_turn(meter, briefs, *, controls, director=None, token=None, cancel=None, scene_voices=()) -> TurnOutcome`:
 
 - **Checked before any call** (`GenerationError`): every planned call is `npc_generation` or `director_generation` (`unsupported_stage`), each `npc_generation` call has exactly one brief (`missing_brief`, `extra_brief`, `duplicate_brief`), a director brief is given exactly when a director reply is planned (`director_mismatch`), no planned call already ran on `meter` (`call_already_run`), every brief's actor is director-controlled **now**, so a hand-built plan cannot voice a player character, and the director brief names the same player characters that the plan and control give now (`director_mismatch`; an unassigned present actor is `unassigned_actor`).
 - **Calls run in plan order**, one `execute` each. Each later call hears the lines accepted before it; a planned director reply runs after the speakers, and a speaker planned after it (a later phase added on the meter) is refused before any call (`director_not_last`).
@@ -86,6 +120,7 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 
 - Acceptance A to D and the refusals: `backend/tests/test_generation_runtime.py`.
 - Planning from control: `backend/tests/test_generation_plan.py`. Briefs and screening: `backend/tests/test_generation_brief.py`. Snapshot voices: `backend/tests/test_generation_voice.py`.
+- Briefs from 031's packs and the director's lore: `backend/tests/test_generation_context.py`; over the native store in a world-less, a world-based and a scenario-only chat: `backend/tests/test_context_scenarios.py`.
 - Every provider fault, rejection, cancel and supersede point: `explore_generation_faults` ([TESTING](TESTING.md#generation-fault-invariants-grimoiretestinggeneration)).
 
 ## Not in this slice
@@ -96,8 +131,8 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 | Persisting generated lines as messages | 035, 032 |
 | Streaming display, async UI | 035 |
 | Cross-process run fencing | 030 |
-| Director knowledge in narration | later |
+| Director ledger knowledge in narration (bound director lore is in) | later |
 | Detecting player-character authorship in generated text | 035 (`review_narration`) |
-| Trusted vs untrusted handle for the app | the requester's open question |
-| Retrieval-backed context packing | 031 |
+| Richer retrieval behind the same pack seam (recent history, unbound world records, embeddings) | 031 |
+| Building each speaker's pack and the director's lore every turn, with the transcript window as scene text | 035 |
 | Other optional stages in a generation turn (`select`/`decision` phases) | later |

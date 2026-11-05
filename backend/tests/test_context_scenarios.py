@@ -3,11 +3,14 @@
 Six NPCs share one world-less chat with a lorebook and a scenario; the antagonist is bound but
 absent. Each NPC's pack is bounded and holds only its own card, its own knowledge and the common
 lore its scene triggers. Attaching the world changes nothing (its bestiary is unbound); detaching
-the lorebook removes its lore. Every fixture is synthetic under ``tmp_path``. No model is called.
+the lorebook removes its lore. 027's briefs render these packs, in a world-less chat and a
+world-based one, and a scenario-only chat's director gets its lore. Every fixture is synthetic
+under ``tmp_path``. No model is called.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -20,13 +23,16 @@ from store_helpers import OWNER, owner_handle
 
 from grimoire.chats import Launch
 from grimoire.chatstore import ChatLibrary
-from grimoire.context import Budget, ContextError, pack_actor_context
+from grimoire.context import Budget, ContextError, director_lore, pack_actor_context
 from grimoire.contextstore import ChatContext, actor_context, stored_record
-from grimoire.core import DIRECTOR, ChatRef, ControlAssignment, InstanceRef, SourceRef
+from grimoire.core import DIRECTOR, ChatRef, ControlAssignment, InstanceRef, SourceRef, snapshot_actor_view
+from grimoire.core.perspective import actor_knowledge
 from grimoire.effective import chat_snapshot
 from grimoire.evidencestore import EvidenceLibrary
+from grimoire.generation import GenerationError, director_brief, npc_brief, resolve_snapshot_voice, screen_reply
 from grimoire.store import LibraryStore, RecordEnvelope
 from grimoire.testing.fileops import snapshot as files_of
+from grimoire.voice import SecretFact, VoiceAnchor, VoiceCatalog, VoiceProfile
 
 EVERYONE = (*NPCS, "duke")
 HIDDEN = ("SECRET-TOKEN", "PLOT-TOKEN", "DIRECTOR-TOKEN", "UNCLASSIFIED-TOKEN", "SCENARIO-TOKEN",
@@ -234,3 +240,138 @@ def test_a_head_following_lorebook_that_moves_reports_drift_and_still_packs(stor
                           mara, as_of=9, budget=BUDGET, scene_text=SCENE, readers=f.READERS)
     assert [(p.code, p.source, p.detail) for p in later.pack.problems] == [("binding_drift", LORE.unpinned(), "r1 -> r2")]
     assert "Tides turn three times now." in later.pack.lines()
+
+
+# -- 027's briefs from these packs --------------------------------------------------------------------
+
+#: A marker in the common ferry entry: no record teaches it, so only Mara's pack can expose it.
+CROSSING = SecretFact("crossing", ("crosses the marsh at dusk",))
+VOICES = VoiceCatalog([VoiceProfile(card("mara"), (VoiceAnchor("cadence", "cadence", "Mara speaks plainly."),))])
+
+
+def mara_brief(store, started, cast, evidence, *, context_of=None, secrets=(CROSSING,)):
+    """Mara's brief in ``started``'s chat, from her own pack there or from ``context_of``'s pack."""
+    view = store.load()
+    ledger = evidence.read(started.chat.campaign_id, requested_by=DIRECTOR)
+    snap = chat_snapshot(view, started.chat).snapshot
+    built = context_of or actor_context(view, started.chat, ledger, cast["mara"], as_of=9, budget=BUDGET,
+                                        scene_text=SCENE, readers=f.READERS)
+    actor_view = snapshot_actor_view(snap.instance(cast["mara"]), snap,
+                                     actor_knowledge(ledger.knowledge, cast["mara"], as_of=9))
+    return npc_brief(actor_view, resolve_snapshot_voice(cast["mara"], snap, VOICES), secrets=secrets,
+                     context=built.pack, snapshot=snap)
+
+
+def test_a_world_less_chats_npc_brief_renders_its_own_pack(store, chats):
+    started, cast = start(chats)
+    evidence = record(store, started, cast)
+    brief = mara_brief(store, started, cast, evidence)
+    assert "occupation: Mara works the Saltmarch quays." in brief.system
+    assert "- The ferry crosses the marsh at dusk." in brief.system and "You suspect: the duke paid" in brief.system
+    assert not any(token in brief.system for token in HIDDEN) and "the ferry pulling out" not in brief.system
+    assert screen_reply(brief, "The ferry crosses the marsh at dusk, friend.") is None
+
+
+def test_a_world_based_chats_derived_npc_renders_its_own_pack_and_refuses_another_chats(store, chats):
+    plain, plain_cast = start(chats)
+    plain_evidence = record(store, plain, plain_cast)
+    started, cast = start(chats, mara=DERIVED)
+    chats.attach_world(started.scope, WORLD, expected=chats.read_scope(started.scope)[1]).commit()
+    evidence = record(store, started, cast)
+    brief = mara_brief(store, started, cast, evidence)
+    assert brief.voice.actor_revision == DERIVED and brief.voice.portrayal == card("mara")
+    assert "background: Mara grew up aboard the ferry." in brief.system and "occupation" not in brief.system
+    assert not any(token in brief.system for token in HIDDEN)
+    other = contexts(store, plain.chat, plain_evidence, plain_cast)["mara"]
+    with pytest.raises(GenerationError) as caught:
+        mara_brief(store, started, cast, evidence, context_of=other)
+    assert caught.value.reason == "foreign_context"  # the other chat's Mara is another actor
+
+
+def test_a_continuation_chat_that_reuses_an_actor_refuses_her_pack_from_the_first_chat(store, chats):
+    first, cast = start(chats)
+    evidence = record(store, first, cast)
+    # The campaign goes on in a second chat: the same Mara, the same card, but no lorebook bound.
+    reused = {("character", card("mara").entity_key): cast["mara"]}
+    later = chats.start_chat(Launch("character", card("mara")), scope=first.scope, reuse_actors=reused).commit()
+    assert later.chat != first.chat and later.actors == ()  # Mara is reused, so no actor is new
+    from_first = contexts(store, first.chat, evidence, cast)["mara"]
+    assert "The ferry crosses the marsh at dusk." in from_first.pack.lines()
+    with pytest.raises(GenerationError) as caught:
+        mara_brief(store, later, cast, evidence, context_of=from_first)
+    assert caught.value.reason == "context_mismatch"  # same actor, card and moment; another selection
+    own = mara_brief(store, later, cast, evidence)
+    assert "ferry crosses the marsh" not in own.system
+    assert screen_reply(own, "The ferry crosses the marsh at dusk.") == "unlearned_secret"
+
+
+def test_a_scenario_only_chat_gives_its_director_the_lore_the_table_triggered(store, chats):
+    started = chats.start_chat(Launch("scenario", SCENARIO), attach=[(LORE, "lorebook")]).commit()
+    assert started.actors == ()
+    snap = chat_snapshot(store.load(), started.chat).snapshot
+    lore = director_lore(snap, campaign_id=started.chat.campaign_id, table_text=SCENE, budget=Budget(60),
+                         readers=f.READERS, unpack=stored_record)
+    assert [(i.origin.name, i.audience) for i in lore.items] == [
+        ("tides", "common"), ("opening", "director"), ("ferry", "common")]
+    assert lore.tokens <= 60 and [o.origin.name for o in lore.omitted] == ["lighthouse"]
+    narration = director_brief("A flooded quay at night.", campaign_id=started.chat.campaign_id, present=(),
+                               controls=(), names={}, secrets=(CROSSING,), lore=lore, snapshot=snap)
+    assert "- The ferry crosses the marsh at dusk." in narration.system and "SCENARIO-TOKEN" in narration.system
+    assert screen_reply(narration, "The ferry crosses the marsh at dusk.") is None
+    assert screen_reply(narration, "SCENARIO-TOKEN the flood comes tonight.") == "unlearned_secret"
+    other = chats.start_chat(Launch("scenario", SCENARIO)).commit()  # another campaign, with no lorebook
+    elsewhere = chat_snapshot(store.load(), other.chat).snapshot
+    with pytest.raises(GenerationError) as caught:
+        director_brief("A flooded quay at night.", campaign_id=other.chat.campaign_id, present=(), controls=(),
+                       names={}, secrets=(CROSSING,), lore=lore, snapshot=elsewhere)
+    assert caught.value.reason == "foreign_context"
+
+
+def test_a_pack_from_before_a_hand_edit_of_the_bound_lorebook_is_refused(store, chats):
+    # Same chat, same binding, same pinned revision r1: only the file's content changed, so neither the
+    # selection nor a re-pin can tell. The ferry entry becomes the director's.
+    started, cast = start(chats)
+    evidence = record(store, started, cast)
+    before = contexts(store, started.chat, evidence, cast)["mara"]
+    assert "The ferry crosses the marsh at dusk." in before.pack.lines()
+    table = director_lore(chat_snapshot(store.load(), started.chat).snapshot, campaign_id=started.chat.campaign_id,
+                          table_text=SCENE, budget=Budget(400), readers=f.READERS, unpack=stored_record)
+    [path] = (store.root / "sources").rglob("lorebook/saltmarch-lore/r1.json")
+    document = json.loads(path.read_text(encoding="utf-8"))
+    for raw in document["payload"]["entries"]:
+        if raw["id"] == "ferry":
+            raw["audience"] = "director"
+    path.write_text(json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+    with pytest.raises(GenerationError) as caught:
+        mara_brief(store, started, cast, evidence, context_of=before)
+    assert caught.value.reason == "context_mismatch"
+    fresh = mara_brief(store, started, cast, evidence)
+    assert "ferry crosses the marsh" not in fresh.system
+    assert screen_reply(fresh, "The ferry crosses the marsh at dusk.") == "unlearned_secret"
+    edited = chat_snapshot(store.load(), started.chat).snapshot
+    with pytest.raises(GenerationError) as caught:
+        director_brief("A flooded quay at night.", campaign_id=started.chat.campaign_id, present=(), controls=(),
+                       names={}, secrets=(CROSSING,), lore=table, snapshot=edited)
+    assert caught.value.reason == "context_mismatch"  # its ferry entry still reads as common
+
+
+def test_a_pack_from_before_a_reload_quarantined_one_of_her_records_is_refused(store, chats):
+    # Same chat, bindings and as_of: only the ledger read changed. Orrin's report to Mara is damaged on
+    # disk, so the reload quarantines it (and her belief that cites it), and her projection shrinks.
+    started, cast = start(chats)
+    evidence = record(store, started, cast)
+    bribe = (SecretFact("bribe", ("paid off the harbor watch",)),)
+    before = contexts(store, started.chat, evidence, cast)["mara"]
+    assert "You suspect: the duke paid off the harbor watch" in before.pack.lines()
+    told = mara_brief(store, started, cast, evidence, context_of=before, secrets=bribe)
+    assert screen_reply(told, "They say the duke paid off the harbor watch.") is None  # hers, until the reload
+    [report] = list((store.root / "campaigns" / started.chat.campaign_id).rglob("evidence/v2.json"))
+    report.write_text("{not json", encoding="utf-8")
+    with pytest.raises(GenerationError) as caught:
+        mara_brief(store, started, cast, evidence, context_of=before, secrets=bribe)
+    assert caught.value.reason == "context_mismatch"
+    after = contexts(store, started.chat, evidence, cast)["mara"]
+    assert "knowledge_quarantined" in after.pack.notes and "harbor watch" not in after.pack.render()
+    fresh = mara_brief(store, started, cast, evidence, context_of=after, secrets=bribe)
+    assert "harbor watch" not in fresh.system
+    assert screen_reply(fresh, "They say the duke paid off the harbor watch.") == "unlearned_secret"

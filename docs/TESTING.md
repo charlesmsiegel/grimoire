@@ -99,7 +99,7 @@ Each point runs twice, and is bounded by a run count, sends and scripted output 
 
 ## Generation fault invariants (`grimoire.testing.generation`)
 
-`explore_generation_faults` runs a two-speaker turn (Ash, then Brin) through the real `ProviderAdapter` and `GenerationRuntime` over `ScriptedTransport`, with one fault on either call, with and without a retry. The points are every provider fault, a reply the screen must reject (silent, a copied example, too long, a secret the speaker never learned), a `CancelAt` at every stream line, and a `Supersede` at every stream line: the transport's `on_supersede` hook claims a newer run of the same chat. Some points use an untrusted handle approved per attempt. Each point runs twice. Each invariant can fail: `backend/tests/test_generation_faults.py`.
+`explore_generation_faults` runs a two-speaker turn (Ash, then Brin) and a director reply through the real `ProviderAdapter` and `GenerationRuntime` over `ScriptedTransport`, with one fault on any of the three calls, with and without a retry. The points are every provider fault, a reply the screen must reject (silent, a copied example, too long, a secret the speaker never learned), a `CancelAt` at every stream line, and a `Supersede` at every stream line: the transport's `on_supersede` hook claims a newer run of the same chat. Some points use an untrusted handle approved per attempt. Each point runs twice. Each invariant can fail: `backend/tests/test_generation_faults.py`.
 
 | Invariant | Meaning | Proven by |
 |---|---|---|
