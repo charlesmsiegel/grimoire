@@ -626,6 +626,10 @@ def explore_crashes(scenario: CrashScenario, workdir: Path, *, torn: bool = True
     ``recovery_select`` restrict which action (resp. recovery) operations are faulted, so one
     scenario can be explored in shards: each returns ``True`` (every timing), ``False`` (none) or
     a collection of timings out of ``before``, ``after``, ``torn`` and ``fail``.
+
+    With ``recovery_crashes`` the recovery after *every* planned fault, a ``Fail`` included, is
+    crashed in turn; ``select`` returning ``{"fail"}`` explores only the I/O-error plans and the
+    recovery crashes after them (the combination ``errors`` and ``recovery_crashes`` add together).
     """
     shared = tuple(interleaves)
     if not all(isinstance(fault, Interleave) for fault in shared):
@@ -643,7 +647,9 @@ def explore_crashes(scenario: CrashScenario, workdir: Path, *, torn: bool = True
                 run = _run(scenario, workdir, action_plan=[fault, *shared], meddle=True, max_ops=max_ops,
                            baseline=baseline, shared_interleaves=bool(shared))
                 runs.append(run)
-                if recovery_crashes and isinstance(fault, Crash) and run.recovery_error is None:
+                # A Fail leaves the state only an I/O error reaches (a rollback half done, say), so the
+                # recovery that follows it is crashed too, exactly like the recovery after a Crash.
+                if recovery_crashes and run.recovery_error is None:
                     for recover_op in run.recover_trace:
                         recover_wanted = _timings(recover_op, recovery_select, torn=torn, errors=False)
                         for timing in [timing for timing in ("before", "after", "torn") if timing in recover_wanted]:

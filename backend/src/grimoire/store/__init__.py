@@ -8,7 +8,8 @@ never interprets their payloads. See docs/STORAGE.md for the contract.
 from .diskops import DiskOps, FileOps
 from .envelope import AssetRecord, KnowledgeRecord, LinkSpec, RecordEnvelope, ScopeRecord, SourceManifest
 from .errors import (
-    BlobCorrupt, CommitIncomplete, CrossDevice, ImmutableBlob, ImmutableImage, ImmutableRevision, InstanceIdConflict, InvalidBlob, InvalidEnvelope, InvalidSourceState, LibraryLocked,
+    BlobCorrupt, CommitIncomplete, CrossDevice, ImmutableBlob, ImmutableImage, ImmutableRevision, ImpreciseNumber,
+    InstanceIdConflict, InvalidBlob, InvalidEnvelope, InvalidSourceState, LibraryLocked,
     LinkRefused, LockUnavailable, MalformedRecord, NameCollision, NotALibrary, PendingRecovery,
     RecordNotFound, RecoveryBlocked, RecoveryFailed, RevisionReferenced, StaleWrite, StoreError,
     TakenIdsUnlisted, UnstorableIdentifier,
@@ -31,7 +32,8 @@ __all__ = [
     "BrokenRef", "CampaignHoldingRecords", "CampaignRecords", "CampaignRelations", "CanonicalScan",
     "CommitIncomplete", "CommitResult",
     "CrossDevice", "DiskOps", "FileOps",
-    "ImmutableRevision", "InstanceIdConflict", "InvalidEnvelope", "InvalidSourceState", "LibraryLocked", "LibraryStore",
+    "ImmutableRevision", "ImpreciseNumber", "InstanceIdConflict", "InvalidEnvelope", "InvalidSourceState", "LibraryLocked",
+    "LibraryStore",
     "KnowledgeRecord", "KnowledgeScan",
     "LibraryView", "LinkRefused", "LinkSpec", "LoadProblem", "LockUnavailable", "Locker",
     "MalformedRecord", "NameCollision", "NotALibrary", "OsLocker", "PendingRecovery", "ProcessLocker",

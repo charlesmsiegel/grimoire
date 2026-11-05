@@ -26,7 +26,7 @@ from grimoire.testing import (
 from grimoire.testing.fileops import snapshot
 
 from image_fixtures import PNG, handle
-from store_helpers import OWNER, drop_empty_dirs
+from store_helpers import EXHAUSTIVE_RECOVERY, FAIL_RECOVERY, OWNER, drop_empty_dirs, explore_mode
 
 LIB = "lib"
 JOURNAL = Target("replace", target="lib/.txn/journal.json")
@@ -101,13 +101,13 @@ def scenario(action, setup):
 
 @pytest.mark.parametrize("action, setup, mode", [
     (import_card, _setup, "errors"), (add_picture, _setup_with_source, "recovery-crashes"),
-], ids=["import-errors", "picture-recovery-crashes"])
+    pytest.param(import_card, _setup, FAIL_RECOVERY, marks=EXHAUSTIVE_RECOVERY),
+], ids=["import-errors", "picture-recovery-crashes", "import-fail-recovery-crashes"])
 def test_image_batches_survive_every_crash_error_and_recovery_crash(tmp_path, action, setup, mode):
-    report = explore_crashes(scenario(action, setup), tmp_path, errors=mode == "errors",
-                             recovery_crashes=mode == "recovery-crashes")
+    report = explore_crashes(scenario(action, setup), tmp_path, **explore_mode(mode))
     report.assert_ok()
     assert report.points_explored > 20
-    if mode == "recovery-crashes":
+    if mode in ("recovery-crashes", FAIL_RECOVERY):
         assert any(run.recover_trace for run in report.runs[1:])
 
 

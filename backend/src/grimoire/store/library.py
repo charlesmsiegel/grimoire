@@ -40,14 +40,14 @@ from .envelope import (
     source_document,
 )
 from .errors import (
-    BlobCorrupt, CommitIncomplete, ImmutableBlob, ImmutableImage, ImmutableRevision, InstanceIdConflict,
+    BlobCorrupt, CommitIncomplete, ImmutableBlob, ImmutableImage, ImmutableRevision, ImpreciseNumber, InstanceIdConflict,
     InvalidEnvelope, InvalidSourceState, LinkRefused, NameCollision, NotALibrary, LedgerBusy, PendingRecovery, RecordNotFound,
     RecoveryBlocked, RecoveryFailed, StaleWrite, StoreError, UnstorableIdentifier, WriteConflict, WriteDenied,
 )
 from .replica import CanonicalScan
 from .guard import Guard, Limits, RootIdentity
 from .journal import Entry, Journal, is_staging_name
-from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, render
+from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, reemitted_imprecise, render
 from .layout import (
     ACCEPTED, CAMPAIGNS, CHATS, CONFLICTS, DISCARD_MARKER, IMAGES, INSTANCES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
     PLACEMENTS, REPAIR_MARKER, SYNC, SYNC_PEERS, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify, conflict_parts,
@@ -1010,6 +1010,9 @@ class _Put:
     regenerable: bool = False  # exact bytes another library still holds: dropped, never preserved
     allowed: frozenset[str] = frozenset()  # manifest etags whose references a replace may ignore
     record: Parts = ()  # a kept version: the record it keeps a version of
+    #: bytes this store re-encoded from a parsed document (``put``, sync state), never another
+    #: library's exact bytes: only these can round a stored number (``imprecise_number``)
+    rendered: bool = False
 
     @property
     def ledger(self) -> bool:
@@ -1128,7 +1131,8 @@ class Transaction:
             raise InvalidEnvelope(f"{'/'.join(parts)} is written twice in one transaction")
         address = logical(parts)
         data = envelope.data if isinstance(envelope, ImageBlob) else render(document)  # type: ignore[arg-type]
-        self._add(_Put(parts, address, data, expected, envelope, "record", str(address)))
+        self._add(_Put(parts, address, data, expected, envelope, "record", str(address),
+                       rendered=not isinstance(envelope, ImageBlob)))
         return str(address)
 
     def _add(self, put: _Put) -> None:
@@ -1233,7 +1237,7 @@ class Transaction:
         parts = sync_state_parts(name)
         _check_state_bytes(data)
         key = "/".join(parts)
-        self._add(_Put(parts, None, bytes(data), expected, None, "state", key))
+        self._add(_Put(parts, None, bytes(data), expected, None, "state", key, rendered=True))
         return key
 
     def preview(self) -> dict[str, bytes]:
@@ -1331,6 +1335,7 @@ class _Commit:
         self.consumed: list[str] = []
         self.denied: frozenset[str] = frozenset()
         self.dropped: frozenset[str] = frozenset()
+        self._created: list[Parts] = []  # directories staging made, undone if the commit is refused
 
     def preflight(self) -> int:
         """Steps 1-6 (and 6b): everything decidable before authorization; reads only."""
@@ -1392,17 +1397,22 @@ class _Commit:
         self.store._staging = True                        # nested ledger commits are refused from here
         entries = self._stage(staging)                    # 8. directories and temps
         journal = Journal("commit", entries)
-        self._recheck(staging)                            # still ours, just before the commit point
+        try:
+            self._recheck(staging)                        # still ours, just before the commit point
+        except Exception:                                 # refused: nothing committed, undo step 8
+            self._unstage([self.access.path((TXN, entry.temp)) for entry in entries])
+            raise
         self._commit_point(journal)                       # 9. journal replace
         try:
             settlement = engine.settle(self.access, journal, live=True)  # 10-12
         except (OSError, StoreError, ValueError) as error:
             raise CommitIncomplete(f"failed after the commit point; recovery will finish it: {error}") from error
+        if settlement.incomplete:  # checked first: a vanished staged file abandons the whole commit
+            kept = f"; preserved: {', '.join(settlement.preserved)}" if settlement.preserved else ""
+            raise CommitIncomplete("staged files vanished before publication (removed by another program?); "
+                                   f"not written: {', '.join(settlement.incomplete)}{kept}")
         if settlement.preserved or settlement.dropped or settlement.aborted:
             raise WriteConflict(settlement.preserved, settlement.published, settlement.dropped)
-        if settlement.incomplete:
-            raise CommitIncomplete("staged files vanished before publication (removed by another program?); "
-                                   f"not written: {', '.join(settlement.incomplete)}")
         return self._result()
 
     def _result(self) -> CommitResult:
@@ -1459,7 +1469,7 @@ class _Commit:
         return staging.st_dev
 
     def _check_revisions(self) -> None:
-        stale = []
+        stale, imprecise = [], {}
         for put in self.puts:
             data = self.access.read(put.parts)
             current = None if data is None else etag(data)
@@ -1468,8 +1478,13 @@ class _Commit:
                               "absent" if current is None else "changed"))
             elif data is not None and put.kind == "record" and _unsupported(data, put.envelope):
                 stale.append(("/".join(put.parts), "unsupported_format"))
+            elif data is not None and put.rendered and (where := reemitted_imprecise(data, put.data)):
+                # The document was read as floats; writing it back would silently change these numbers.
+                imprecise["/".join(put.parts)] = where
         if stale:
             raise StaleWrite(stale)
+        if imprecise:
+            raise ImpreciseNumber(imprecise)
 
     def _check_names(self) -> None:
         for put in self.puts:
@@ -1603,7 +1618,7 @@ class _Commit:
         try:
             entries = []
             for put in self.puts:
-                access.make_parent(put.parts)
+                self._created.extend(access.make_parent(put.parts))
                 temp = access.ops.make_temp(access.path((TXN,)), prefix="rec", suffix=".new")
                 temps.append(temp)
                 access.ops.write_bytes(temp, put.data)
@@ -1611,9 +1626,15 @@ class _Commit:
                                      put.journal_kind))  # type: ignore[arg-type]
             return tuple(entries)
         except OSError as error:
-            self._discard(temps)
+            self._unstage(temps)
             self._note(error)
             raise
+
+    def _unstage(self, temps: list[str]) -> None:
+        """A commit refused before its commit point leaves no temp and no directory it created
+        that is still empty (one another writer has put something in since is kept)."""
+        self._discard(temps)
+        self.access.remove_empty(self._created)
 
     def _discard(self, temps: list[str]) -> None:
         for temp in temps:
@@ -1635,7 +1656,7 @@ class _Commit:
                 committed = True  # unknown: let recovery decide
             if committed:
                 raise CommitIncomplete(f"the commit point may have been reached: {error}") from error
-            self._discard([*(access.path((TXN, entry.temp)) for entry in journal.entries),
+            self._unstage([*(access.path((TXN, entry.temp)) for entry in journal.entries),
                            *([temp] if temp else [])])
             self._note(error)
             raise

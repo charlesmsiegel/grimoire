@@ -23,8 +23,8 @@ from grimoire.testing import (
 from grimoire.testing.fileops import snapshot
 
 from store_helpers import (
-    HARBOR, OWNER, WREN, WREN_A, WREN_R1, drop_empty_dirs, harbor_manifest, instance, make_dir_link,
-    owner_handle, seed, wren,
+    FAIL_RECOVERY, HARBOR, OWNER, WREN, WREN_A, WREN_R1, drop_empty_dirs, explore_mode, harbor_manifest, instance,
+    make_dir_link, owner_handle, seed, wren,
 )
 
 ALL = ("sources", "campaigns", "kept")
@@ -522,6 +522,8 @@ def test_a_mixed_commit_survives_every_crash_and_error(tmp_path, regenerable):
          completes_after(Target("replace", target="lib/.txn/journal.json"))),
         normalize=drop_empty_dirs)
     explore_crashes(scenario, tmp_path / "errors", errors=True).assert_ok()
+    if os.environ.get("GRIMOIRE_EXHAUSTIVE_RECOVERY"):  # every crash of the recovery after each error
+        explore_crashes(scenario, tmp_path / "fail", **explore_mode(FAIL_RECOVERY)).assert_ok()
     if not regenerable:
         return  # publish/hold recovery is the store's ordinary table, crash-explored in test_store_recovery
     report = explore_crashes(scenario, tmp_path / "recovery", recovery_crashes=True,

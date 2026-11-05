@@ -27,7 +27,7 @@ from grimoire.testing.fileops import snapshot
 
 from chat_fixtures import Clock
 from effects_fixtures import C, CONTROLS, Handles, contribution, effects_library, give, seed
-from store_helpers import OWNER, drop_empty_dirs
+from store_helpers import EXHAUSTIVE_RECOVERY, FAIL_RECOVERY, OWNER, drop_empty_dirs, explore_mode
 
 LIB = "lib"
 JOURNAL = Target("replace", target="lib/.txn/journal.json")
@@ -117,12 +117,18 @@ def scenario(action):
 
 @pytest.mark.parametrize("action, mode", [
     (accept, "errors"), (accept, "recovery-crashes"), (revoke, "errors"), (revoke_partial, "errors"),
-    (reopen, "errors"),
-], ids=["accept-errors", "accept-recovery-crashes", "revoke-errors", "revoke-partial-errors", "reopen-errors"])
+    (reopen, "errors"), pytest.param(revoke, "recovery-crashes", marks=EXHAUSTIVE_RECOVERY),
+    (revoke_partial, "recovery-crashes"),
+    (reopen, "recovery-crashes"),
+    *(pytest.param(action, FAIL_RECOVERY, marks=EXHAUSTIVE_RECOVERY) for action in (accept, revoke, revoke_partial)),
+    (reopen, FAIL_RECOVERY),
+], ids=["accept-errors", "accept-recovery-crashes", "revoke-errors", "revoke-partial-errors", "reopen-errors",
+        "revoke-recovery-crashes", "revoke-partial-recovery-crashes", "reopen-recovery-crashes",
+        "accept-fail-recovery-crashes", "revoke-fail-recovery-crashes", "revoke-partial-fail-recovery-crashes",
+        "reopen-fail-recovery-crashes"])
 def test_effect_writes_survive_every_crash_error_and_recovery_crash(tmp_path, action, mode):
-    report = explore_crashes(scenario(action), tmp_path, errors=mode == "errors",
-                             recovery_crashes=mode == "recovery-crashes")
+    report = explore_crashes(scenario(action), tmp_path, **explore_mode(mode))
     report.assert_ok()
     assert report.points_explored > 10
-    if mode == "recovery-crashes":
+    if mode != "errors":
         assert any(run.recover_trace for run in report.runs[1:])

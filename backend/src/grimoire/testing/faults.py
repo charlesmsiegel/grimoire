@@ -391,7 +391,7 @@ class RootedFileOps:
                     self.shadow.pop(destination, None)
                 else:
                     self.shadow[destination] = moved
-        elif kind == "remove":
+        elif kind in ("remove", "remove_dir"):
             self.shadow.pop(self._rel(path), None)
         elif kind == "make_dirs":
             parts = PurePath(self._rel(path)).parts
@@ -451,3 +451,8 @@ class RootedFileOps:
     def make_dirs(self, path: PathArg) -> None:
         resolved = self._resolve(path, mutating=True, allow_root=True)  # makedirs(root) is a no-op
         self._op("make_dirs", resolved, execute=lambda: self._os.make_dirs(resolved))
+
+    def remove_dir(self, path: PathArg) -> None:
+        """Remove an empty directory: crashes and errors as ``remove``; never torn (it carries no data)."""
+        resolved = self._resolve(path, mutating=True)
+        self._op("remove_dir", resolved, execute=lambda: self._os.remove_dir(resolved))

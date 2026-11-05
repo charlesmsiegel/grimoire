@@ -8,7 +8,7 @@ nothing was published.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from grimoire.library import LibraryPathError
 
@@ -101,6 +101,24 @@ class WriteConflict(StoreError):
         dropped_text = f"; set aside: {', '.join(self.dropped)}" if self.dropped else ""
         super().__init__(f"external edit kept; store version preserved at {', '.join(self.preserved) or 'nothing'}; "
                          f"published: {published_text}{dropped_text}")
+
+
+class ImpreciseNumber(StoreError):
+    """A rewrite would replace a stored number with its rounded float; nothing was written.
+
+    ``reason`` is ``imprecise_number``; ``where`` maps each file to the JSON pointers of its numbers
+    whose text a ``float`` cannot hold exactly (excess digits, underflow to zero, a huge value).
+    The file still reads (rounded); fix the number by hand, or write the value it should hold."""
+
+    reason = "imprecise_number"
+
+    def __init__(self, where: Mapping[str, Sequence[str]]) -> None:
+        self.where = {path: tuple(pointers) for path, pointers in where.items()}
+        super().__init__("imprecise_number: rewriting would round "
+                         + "; ".join(f"{path} at {', '.join(pointers)}" for path, pointers in self.where.items()))
+
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self), (self.where,))
 
 
 class CommitIncomplete(StoreError):

@@ -9,6 +9,7 @@ import pytest
 
 from grimoire.core.identity import InstanceRef
 from grimoire.library import LibraryPathError, V1IsolationError
+from grimoire.library import paths
 from grimoire.store import CommitIncomplete, LibraryStore, LinkRefused, ProcessLocker, RecoveryFailed, WriteConflict
 from grimoire.store.diskops import DiskOps
 from grimoire.testing import Crash, RootedFileOps, Target
@@ -160,11 +161,21 @@ def test_a_linked_staging_directory_is_refused_everywhere(tmp_path):
     assert snapshot(outside) == before
 
 
-def test_a_v1_shaped_directory_inside_the_library_is_never_written(tmp_path):
+def test_a_v1_library_mounted_inside_the_library_is_never_written(tmp_path, monkeypatch):
+    # A folder strictly below the root is the library's own: what its ids spell is not V1's
+    # layout (a campaign `worlds` beside one `llm_connections`). A V1 library that a bind mount
+    # puts inside the tree still has a name outside the root, so it keeps the fingerprint.
+    v1 = _v1_library(tmp_path / "old")
     with LibraryStore.create(tmp_path / "lib") as store:
         seed(store)
-        v1 = _v1_library(tmp_path / "lib" / "campaigns" / "c7")
+        (tmp_path / "lib" / "campaigns" / "c7").mkdir()
         before = snapshot(v1)
+        table, top = tmp_path / "mountinfo", Path(tmp_path.anchor)
+        rows = [("8:1", top, top), ("8:1", v1.resolve(), (tmp_path / "lib" / "campaigns" / "c7").resolve())]
+        escape = lambda p: str(p).replace("\\", "\\134").replace(" ", "\\040")  # noqa: E731
+        table.write_text("".join(f"{i} 1 {dev} {escape(root)} {escape(point)} rw - ext4 /dev/x rw\n"
+                                 for i, (dev, root, point) in enumerate(rows, 20)), encoding="utf-8")
+        monkeypatch.setattr(paths, "_MOUNTINFO", table)
         txn = store.transaction()
         txn.put(instance(InstanceRef("c7", "character", "x"), WREN_R1), None)
         with pytest.raises(V1IsolationError):

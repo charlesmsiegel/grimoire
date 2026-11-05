@@ -32,7 +32,7 @@ from grimoire.core.identity import InstanceRef
 from ledger_helpers import (
     ADDRESS, IMPORTER, OWNER, RECORD, approve, fixed_clock, grant_importer, open_authority, record_bytes,
 )
-from store_helpers import drop_empty_dirs, make_dir_link
+from store_helpers import FAIL_RECOVERY, drop_empty_dirs, explore_mode, make_dir_link
 
 LIB = "lib"
 
@@ -208,13 +208,12 @@ def _pending_after_replay(tree) -> set[str]:
     return {approval.approval_id for approval in kernel.pending_approvals()}
 
 
-@pytest.mark.parametrize("mode", ["errors", "recovery-crashes"])
+@pytest.mark.parametrize("mode", ["errors", "recovery-crashes", FAIL_RECOVERY])
 def test_a_published_record_always_has_its_decision_on_disk(tmp_path, mode):
-    report = explore_crashes(_s2_scenario(), tmp_path, errors=mode == "errors",
-                             recovery_crashes=mode == "recovery-crashes")
+    report = explore_crashes(_s2_scenario(), tmp_path, **explore_mode(mode))
     report.assert_ok()
     assert report.points_explored > 10
-    if mode == "recovery-crashes":
+    if mode != "errors":
         assert any(run.recover_trace for run in report.runs[1:])
 
 

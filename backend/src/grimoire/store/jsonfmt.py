@@ -5,6 +5,11 @@ a BOM, invalid UTF-8, duplicate keys, non-finite numbers, oversized integers,
 lone surrogates and runaway nesting. Every such failure is a ``JsonError``, so
 one bad file can be reported instead of taking a whole load down. Writing is
 sorted, indented and refuses values it could not read back.
+
+A number is read as a Python ``float`` (or exact ``int``), so a decimal with more digits than a
+double holds, one that underflows to zero, or a huge one is served rounded. Reads accept it; a
+*rewrite* that would put the rounded value back where the text held another one is refused by the
+store (``ImpreciseNumber``, reason ``imprecise_number``) through `reemitted_imprecise`.
 """
 
 from __future__ import annotations
@@ -12,7 +17,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 
 from .errors import InvalidEnvelope
@@ -65,6 +71,84 @@ def _parse_float(text: str) -> float:
     if not math.isfinite(value):
         raise JsonError(f"number {text[:24]!r} is out of range")
     return value
+
+
+def is_imprecise(text: str) -> bool:
+    """Whether the JSON number ``text`` (a fraction or exponent) changes value as a ``float``:
+    ``Decimal(text) != Decimal(repr(float(text)))``, including underflow to zero. ``1.50``,
+    ``1e2`` and ``0.1`` are precise (``repr`` is the shortest text naming the same double)."""
+    try:
+        value = float(text)
+        return math.isfinite(value) and Decimal(text) != Decimal(repr(value))
+    except (ValueError, InvalidOperation):
+        return False
+
+
+class _Imprecise(float):
+    """A float read from text it does not represent exactly (the text is kept)."""
+
+    text: str
+
+
+def _mark_imprecise(text: str) -> float:
+    value = _parse_float(text)
+    if not is_imprecise(text):
+        return value
+    marked = _Imprecise(value)
+    marked.text = text
+    return marked
+
+
+def _imprecise_at(value: object, path: tuple[object, ...] = ()) -> Iterator[tuple[tuple[object, ...], float]]:
+    stack: list[tuple[object, tuple[object, ...]]] = [(value, path)]
+    while stack:
+        item, where = stack.pop()
+        if isinstance(item, _Imprecise):
+            yield where, float(item)
+        elif isinstance(item, dict):
+            stack.extend((child, (*where, key)) for key, child in item.items())
+        elif isinstance(item, list):
+            stack.extend((child, (*where, index)) for index, child in enumerate(item))
+
+
+def _lookup(value: object, path: tuple[object, ...]) -> object:
+    for step in path:
+        if isinstance(value, dict) and isinstance(step, str) and step in value:
+            value = value[step]
+        elif isinstance(value, list) and isinstance(step, int) and step < len(value):
+            value = value[step]
+        else:
+            return _ABSENT
+    return value
+
+
+_ABSENT = object()
+
+
+def reemitted_imprecise(old: bytes, new: bytes) -> tuple[str, ...]:
+    """Where ``new`` re-emits, as its rounded float, a number ``old``'s text held more exactly.
+
+    Locations are JSON pointers. A location the new document drops or sets to another value is a
+    deliberate change and is not listed; identical bytes change nothing. Only readable JSON
+    objects are compared: anything else is the reader's to refuse.
+    """
+    if old == new:
+        return ()
+    try:
+        before = json.loads(bytes(old).decode("utf-8"), parse_float=_mark_imprecise, parse_int=_parse_int,
+                            parse_constant=_reject_constant)
+        found = list(_imprecise_at(before))
+        if not found:
+            return ()
+        after = json.loads(bytes(new).decode("utf-8"), parse_int=_parse_int, parse_constant=_reject_constant)
+    except (ValueError, RecursionError, TypeError, MemoryError):  # JsonError is a ValueError
+        return ()
+    hits = []
+    for path, rounded in found:
+        current = _lookup(after, path)
+        if type(current) in (int, float) and current == rounded:
+            hits.append("/" + "/".join(str(step).replace("~", "~0").replace("/", "~1") for step in path))
+    return tuple(sorted(hits))
 
 
 def _walk(value: object):

@@ -89,8 +89,29 @@ def shared_locker() -> ProcessLocker:
     return ProcessLocker()
 
 
+#: An exploration mode: every injected I/O error, and every crash of the recovery that follows it.
+#: (``errors`` alone stops at the first recovery; ``recovery-crashes`` crashes the recovery after a crash.)
+FAIL_RECOVERY = "fail-recovery-crashes"
+#: Explorations too slow for the CI shards (docs/TESTING.md#ci-gate) run only with this set.
+EXHAUSTIVE_RECOVERY = pytest.mark.skipif(
+    not os.environ.get("GRIMOIRE_EXHAUSTIVE_RECOVERY"),
+    reason="slow exploration: set GRIMOIRE_EXHAUSTIVE_RECOVERY=1 to run it")
+
+
+def explore_mode(mode: str) -> dict[str, object]:
+    """``explore_crashes`` keywords for ``crashes``, ``errors``, ``recovery-crashes`` or `FAIL_RECOVERY`.
+
+    `FAIL_RECOVERY` faults only with ``Fail`` (the crash plans and their recovery crashes are
+    the ``recovery-crashes`` mode's), so it adds exactly the combinations the other two miss."""
+    if mode not in ("crashes", "errors", "recovery-crashes", FAIL_RECOVERY):
+        raise ValueError(f"unknown exploration mode {mode!r}")
+    return {"errors": mode in ("errors", FAIL_RECOVERY),
+            "recovery_crashes": mode in ("recovery-crashes", FAIL_RECOVERY),
+            "select": (lambda op: {"fail"}) if mode == FAIL_RECOVERY else None}
+
+
 __all__ = [
-    "ADDON", "HARBOR", "LinkSpec", "OWNER", "WREN", "WREN_A", "WREN_B", "WREN_R1", "WREN_R2", "authorizer",
-    "drop_empty_dirs", "harbor_manifest", "instance", "make_dir_link", "new_library", "owner_handle", "seed",
-    "shared_locker", "wren",
+    "ADDON", "EXHAUSTIVE_RECOVERY", "FAIL_RECOVERY", "HARBOR", "LinkSpec", "OWNER", "WREN", "WREN_A", "WREN_B",
+    "WREN_R1", "WREN_R2", "authorizer", "drop_empty_dirs", "explore_mode", "harbor_manifest", "instance",
+    "make_dir_link", "new_library", "owner_handle", "seed", "shared_locker", "wren",
 ]

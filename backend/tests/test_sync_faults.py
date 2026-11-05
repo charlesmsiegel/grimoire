@@ -45,7 +45,7 @@ import pytest
 
 from grimoire.core.identity import InstanceRef
 
-from store_helpers import WREN_R1, drop_empty_dirs, instance
+from store_helpers import EXHAUSTIVE_RECOVERY, WREN_R1, drop_empty_dirs, instance
 from sync_helpers import (
     DESKTOP, PATHS, PHONE, WREN_A, WREN_B, chat_record, edit_instance, handle, handles, make_pair, new_revision,
     put,
@@ -244,6 +244,17 @@ def test_s9_an_io_error_at_any_commit_boundary_converges(tmp_path):
                              select=_select(points, {"fail"}))
     report.assert_ok()
     assert report.points_explored == 12
+
+
+@EXHAUSTIVE_RECOVERY  # about half a minute on Linux
+def test_s9_a_crash_while_recovering_from_an_io_error_still_converges(tmp_path):
+    """An I/O error at each commit boundary, then a crash before and after each commit point of the
+    sync that recovers from it (the recovery after a crash is the test below)."""
+    points = commit_boundaries(_baseline_trace(quiet=False))
+    report = explore_crashes(_scenario(S9, quiet=False), tmp_path, errors=True, torn=False, recovery_crashes=True,
+                             select=_select(points, {"fail"}), recovery_select=_recovery_boundary)
+    report.assert_ok()
+    assert any(" > recover:" in run.point and "@fail > " in run.point for run in report.runs)
 
 
 def test_s9_a_crash_while_recovering_still_converges(tmp_path):
@@ -550,6 +561,28 @@ def _resolve_scenario(kind: str):
                          lambda ops, root: _recover(ops, root, locker),
                          (Invariant("replaced_version_survives", survives), idempotent_recovery(), RESIDUE),
                          normalize=drop_empty_dirs)
+
+
+@EXHAUSTIVE_RECOVERY
+def test_s9u_a_crash_while_recovering_from_an_io_error_never_forgets_uncertainty(tmp_path):
+    points = commit_boundaries(_uncertain_trace())
+    report = explore_crashes(_uncertain_scenario(), tmp_path, errors=True, torn=False, recovery_crashes=True,
+                             select=_select(points, {"fail"}), recovery_select=_recovery_boundary)
+    report.assert_ok()
+    assert any(run.recover_trace for run in report.runs[1:])
+
+
+@EXHAUSTIVE_RECOVERY
+@pytest.mark.parametrize("kind", ["instance", "revision"])
+def test_resolve_survives_a_crash_while_recovering_from_an_io_error(tmp_path, kind):
+    with tempfile.TemporaryDirectory() as folder:
+        baseline = run_plans(_resolve_scenario(kind), [], Path(folder))
+        baseline.assert_ok()
+        trace = baseline.runs[0].action_trace
+    report = explore_crashes(_resolve_scenario(kind), tmp_path, errors=True, torn=False, recovery_crashes=True,
+                             select=_select(commit_boundaries(trace), {"fail"}), recovery_select=_recovery_boundary)
+    report.assert_ok()
+    assert any(run.recover_trace for run in report.runs[1:])
 
 
 @pytest.mark.parametrize("kind", ["instance", "revision"])

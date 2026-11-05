@@ -264,11 +264,13 @@ def test_a1_journaled_writer_survives_every_crash_point(tmp_path):
     assert len(mutating) == 10 and len(writes) == 3
     assert len(action_runs) == 2 * len(mutating) + len(writes) + len(mutating) == 33
     recovery_runs = [run for run in report.runs if " > " in run.point]
-    crashed = [run for run in action_runs if not run.point.endswith("@fail")]
+    # The recovery after a Fail is crashed too (the state only an I/O error reaches), not just after a Crash.
+    assert any(run.point.endswith("@fail") for run in action_runs)
     predicted = sum(2 * sum(op.mutating for op in run.recover_trace)
                     + sum(op.kind == "write_bytes" and bool(op.size) for op in run.recover_trace)
-                    for run in crashed)
-    assert len(recovery_runs) == predicted == 84  # pinned: catches silently shrinking exploration
+                    for run in action_runs)
+    assert len(recovery_runs) == predicted == 120  # pinned: catches silently shrinking exploration
+    assert any(" > " in run.point and run.point.split(" > ")[0].endswith("@fail") for run in recovery_runs)
     assert report.points_explored == len(action_runs) + len(recovery_runs)
     points = [run.point for run in report.runs]
     assert len(points) == len(set(points))
@@ -585,6 +587,46 @@ def test_a12_torn_recovery_writes_are_explored(tmp_path):
     report = explore_crashes(fragile, tmp_path, recovery_crashes=True)
     assert names(report.violations) == ["atomic_outcome"]
     assert all(" > recover:" in v.point and v.point.endswith("@torn") for v in report.violations)
+
+
+def _rollback_on_error(ops, root):
+    """Writes a rollback journal only when an I/O error interrupts it: a state no crash reaches."""
+    try:
+        ops.write_bytes(root / "j", b"new")
+        ops.write_bytes(root / "tmp", b"new")
+        ops.replace(root / "tmp", root / "target")
+        ops.remove(root / "j")
+    except OSError:
+        ops.write_bytes(root / "j", b"rollback:old")
+        raise
+
+
+def _forgets_before_restoring(ops, root):
+    for name in ("tmp", "tmp2"):
+        if ops.exists(root / name):
+            ops.remove(root / name)
+    if not ops.exists(root / "j"):
+        return
+    journal = ops.read_bytes(root / "j")
+    if journal.startswith(b"rollback:"):
+        ops.remove(root / "j")  # the bug: the journal is forgotten before the target is restored
+        ops.write_bytes(root / "target", journal[len(b"rollback:"):])
+    else:
+        if ops.read_bytes(root / "target") != b"old":
+            ops.write_bytes(root / "tmp2", b"old")
+            ops.replace(root / "tmp2", root / "target")
+        ops.remove(root / "j")
+
+
+@pytest.mark.parametrize("select", [None, lambda op: {"fail"}], ids=["every-plan", "fail-only"])
+def test_a12_the_recovery_after_an_injected_error_is_crashed_too(tmp_path, select):
+    """A recovery reached only through a ``Fail`` is crashed like one reached through a ``Crash``."""
+    sc = CrashScenario("fail-then-recovery-crash", write_files({"target": b"old"}), _rollback_on_error,
+                       _forgets_before_restoring, invariants=[atomic_outcome(), idempotent_recovery()])
+    assert explore_crashes(sc, tmp_path, errors=True).violations == ()
+    report = explore_crashes(sc, tmp_path, errors=True, recovery_crashes=True, select=select)
+    assert report.violations
+    assert all(v.point.split(" > ")[0].endswith("@fail") and " > recover:" in v.point for v in report.violations)
 
 
 def test_recovery_cannot_redefine_the_completed_state(tmp_path):

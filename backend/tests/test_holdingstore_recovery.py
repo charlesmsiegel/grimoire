@@ -25,7 +25,7 @@ from grimoire.testing import (
 from grimoire.testing.fileops import snapshot
 
 from holdings_fixtures import MARA, ORDINARY, STRONG, TOMA, holdings_library, seed_holders
-from store_helpers import drop_empty_dirs
+from store_helpers import EXHAUSTIVE_RECOVERY, FAIL_RECOVERY, drop_empty_dirs, explore_mode
 
 LIB = "lib"
 JOURNAL = Target("replace", target="lib/.txn/journal.json")
@@ -102,13 +102,12 @@ def retry_scenario(locker) -> CrashScenario:
 
 
 # Split as in test_chatstore_recovery so no test nears the 120 s watchdog on slower Windows runners.
-@pytest.mark.parametrize("mode", ["errors", "recovery-crashes"])
+@pytest.mark.parametrize("mode", ["errors", "recovery-crashes", FAIL_RECOVERY])
 def test_a_move_survives_every_crash_error_and_recovery_crash(tmp_path, mode):
-    report = explore_crashes(move_scenario(ProcessLocker()), tmp_path, errors=mode == "errors",
-                             recovery_crashes=mode == "recovery-crashes")
+    report = explore_crashes(move_scenario(ProcessLocker()), tmp_path, **explore_mode(mode))
     report.assert_ok()
     assert report.points_explored > 20
-    if mode == "recovery-crashes":
+    if mode in ("recovery-crashes", FAIL_RECOVERY):
         assert any(run.recover_trace for run in report.runs[1:])
 
 
@@ -116,6 +115,13 @@ def test_retry_after_recovery_is_exactly_once(tmp_path):
     report = explore_crashes(retry_scenario(ProcessLocker()), tmp_path, errors=True)
     report.assert_ok()
     assert report.points_explored > 20
+
+
+@EXHAUSTIVE_RECOVERY
+def test_retry_after_a_crashed_recovery_of_an_error_is_exactly_once(tmp_path):
+    report = explore_crashes(retry_scenario(ProcessLocker()), tmp_path, **explore_mode(FAIL_RECOVERY))
+    report.assert_ok()
+    assert any(run.recover_trace for run in report.runs[1:])
 
 
 def _materialize(root: Path) -> None:

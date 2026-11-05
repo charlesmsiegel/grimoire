@@ -26,8 +26,10 @@ checks here are point-in-time, so a writer must:
   write session, so a root swapped for a link into V1 is noticed;
 - never create a `V1_ROOT_MARKERS` name at a library root.
 
-Known limit: a V1 library nested somewhere *below* a candidate is refused only
-when it is one of the guarded roots; the candidate is not scanned.
+Known limits: a V1 library nested somewhere *below* a candidate is refused only
+when it is one of the guarded roots; the candidate is not scanned. Below an opened
+V2 library (``library_root``) the fingerprint skips the library's own directories, so
+a V1 library *moved* (not mounted or linked) inside one is not fingerprinted.
 """
 
 from __future__ import annotations
@@ -38,7 +40,7 @@ import re
 import stat
 import sys
 import unicodedata
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Literal
@@ -94,17 +96,25 @@ def resolve_library(*, environ: Mapping[str, str] | None = None, home: Path | No
     else:
         path, origin = home / DEFAULT_DIRNAME, "default"
     resolved = _usable_directory(path)
-    _check_isolation(resolved, _guarded_roots(environ, home))
+    _check_isolation(resolved, _guarded_roots(environ, home), files=_pointer_files(home))
     return LibraryLocation(resolved, origin)
 
 
 def check_write_destination(path: str | os.PathLike[str], *, environ: Mapping[str, str] | None = None,
-                            home: Path | None = None) -> Path:
-    """`path` resolved, if V2 may create or write a library there. Creates nothing."""
+                            home: Path | None = None, library_root: Path | None = None) -> Path:
+    """`path` resolved, if V2 may create or write a library there. Creates nothing.
+
+    `library_root` is the opened V2 library `path` lies in (the store passes it). The V1
+    fingerprint then skips a directory strictly below that root under every name it has, so
+    V2's own ids (a campaign called ``worlds`` beside one called ``llm_connections``) can never
+    make the library look like V1. Every other check runs for every directory, and a name a
+    bind mount gives such a directory outside the root keeps the fingerprint.
+    """
     environ = os.environ if environ is None else environ
     home = _known_home(home)
     resolved = _usable_directory(_parse_user_path(_fspath(path), home, "destination"))
-    _check_isolation(resolved, _guarded_roots(environ, home))
+    _check_isolation(resolved, _guarded_roots(environ, home), files=_pointer_files(home),
+                     library_root=library_root)
     return resolved
 
 
@@ -156,7 +166,7 @@ def check_report_destination(path: str | os.PathLike[str], *,
     target = parent / name
     roots = _guarded_roots(environ, known) + [
         (label, _realpath(_parse_user_path(_fspath(root), known, label))) for label, root in protected]
-    _check_isolation(target, roots, refuse_contains=False)
+    _check_isolation(target, roots, refuse_contains=False, files=_pointer_files(known))
     existing = _probe(target, follow=False)
     if existing is not None:
         if not stat.S_ISREG(existing.st_mode):
@@ -379,6 +389,21 @@ def _pointer_library(home: Path) -> Path | None:
     return Path(raw)
 
 
+def _pointer_files(home: Path | None) -> list[tuple[str, Path]]:
+    """V1's bootstrap pointer ``~/.grimoire.json``, by its own name and through a link to it.
+
+    No V2 path may be it or sit inside it: replacing it (with a report, say) would lose V1's
+    relocated library, and making it a directory would leave every later resolve unable to
+    read it. It is compared by the same name, alias and identity rules as the guarded roots;
+    a directory that merely contains it (the home directory) is not refused for it.
+    """
+    if home is None:
+        return []
+    label = f"V1's bootstrap pointer ~/{V1_POINTER_NAME}"
+    spellings = {_realpath(home) / V1_POINTER_NAME, _realpath(home / V1_POINTER_NAME)}
+    return [(label, spelling) for spelling in sorted(spellings)]
+
+
 def _require_small_file(info: os.stat_result, unusable) -> None:
     if not stat.S_ISREG(info.st_mode) or info.st_size > _POINTER_MAX_BYTES:
         raise unusable("is not a small regular file")
@@ -439,6 +464,10 @@ class _Mount:
     root: Path    # the directory of that filesystem mounted here
     point: Path   # where it is mounted
 
+    def __post_init__(self) -> None:  # the components, once: `_aliases` compares them for every probe
+        object.__setattr__(self, "root_parts", self.root.parts)
+        object.__setattr__(self, "point_parts", self.point.parts)
+
 
 #: Linux's (and Android's) mount table. Other platforms have no bind mounts to see.
 _MOUNTINFO = Path("/proc/self/mountinfo")
@@ -462,12 +491,17 @@ def _mounts() -> list[_Mount]:
         raise LibraryPathError(f"cannot read the mount table {_MOUNTINFO} (is /proc mounted?): {error}") from error
     except OSError as error:
         raise LibraryPathError(f"cannot read the mount table {_MOUNTINFO}: {error}") from error
-    mounts = []
-    for line in text.splitlines():
-        fields = line.split(" ")
-        if len(fields) > 4:
-            mounts.append(_Mount(fields[2], Path(_unescape(fields[3])), Path(_unescape(fields[4]))))
-    return mounts
+    cached = _parsed_mounts.get(text)
+    if cached is None:  # the table is read on every check; parsing it again only when it changed
+        cached = tuple(_Mount(fields[2], Path(_unescape(fields[3])), Path(_unescape(fields[4])))
+                       for fields in (line.split(" ") for line in text.splitlines()) if len(fields) > 4)
+        _parsed_mounts.clear()
+        _parsed_mounts[text] = cached
+    return list(cached)
+
+
+#: The last mount table read, parsed: keyed by its whole text, so any change is parsed afresh.
+_parsed_mounts: dict[str, tuple[_Mount, ...]] = {}
 
 
 def _under(path: Path, top: Path) -> bool:
@@ -479,16 +513,18 @@ def _aliases(path: Path, mounts: list[_Mount]) -> set[Path]:
     directory gives what sits below it a second name whose ancestors are not
     its physical ancestors, so neither names nor inodes reveal containment."""
     names = {path}
-    holder = None
+    parts, holder = path.parts, None
     for mount in mounts:  # the visible mount is the deepest, and among stacked ones the last
-        if _under(path, mount.point) and (holder is None or len(mount.point.parts) >= len(holder.point.parts)):
+        point = mount.point_parts  # type: ignore[attr-defined]
+        if parts[:len(point)] == point and (holder is None or len(point) >= len(holder.point_parts)):
             holder = mount
     if holder is None:
         return names
-    physical = holder.root.joinpath(*path.parts[len(holder.point.parts):])
+    physical = holder.root_parts + parts[len(holder.point_parts):]
     for mount in mounts:
-        if mount.device == holder.device and _under(physical, mount.root):
-            names.add(mount.point.joinpath(*physical.parts[len(mount.root.parts):]))
+        root = mount.root_parts  # type: ignore[attr-defined]
+        if mount.device == holder.device and physical[:len(root)] == root:
+            names.add(mount.point.joinpath(*physical[len(root):]))
     return names
 
 
@@ -501,25 +537,27 @@ def _lineage(path: Path) -> Iterator[Path]:
     yield from path.parents
 
 
-def _nearest_existing(path: Path) -> tuple[os.stat_result, tuple[str, ...]] | None:
+def _nearest_existing(path: Path, probe=None) -> tuple[os.stat_result, tuple[str, ...]] | None:
     """The deepest existing ancestor's identity, and the keyed names below it."""
+    probe = probe or _probe
     for ancestor in _lineage(path):
-        info = _probe(ancestor)
+        info = probe(ancestor)
         if info is not None:
             return info, _tail_key(path.parts[len(ancestor.parts):])
     return None
 
 
-def _anchored_relation(path: Path, root: Path) -> str | None:
+def _anchored_relation(path: Path, root: Path, probe=None) -> str | None:
     """Whether `path` is, is inside or contains `root` once they meet at `root`'s
     nearest existing ancestor -- which also covers a root that does not exist
     yet but lives under a directory `path` reaches by another name."""
-    anchor = _nearest_existing(root)
+    probe = probe or _probe
+    anchor = _nearest_existing(root, probe)
     if anchor is None:
         return None
     root_info, root_tail = anchor
     for ancestor in _lineage(path):
-        info = _probe(ancestor)
+        info = probe(ancestor)
         if info is None or not _same_file(info, root_info):
             continue
         tail = _tail_key(path.parts[len(ancestor.parts):])
@@ -535,12 +573,12 @@ def _anchored_relation(path: Path, root: Path) -> str | None:
 _CONVERSE = {"is": "is", "is inside": "contains", "contains": "is inside"}
 
 
-def _identity_relation(path: Path, root: Path) -> str | None:
+def _identity_relation(path: Path, root: Path, probe=None) -> str | None:
     """The relation by device and inode, which sees aliases names do not:
     case-insensitive filesystems, bind mounts, hard-linked directories, macOS
     firmlinks -- also for a root (or path) that does not exist yet."""
-    relation = _anchored_relation(path, root)
-    if relation is None and (converse := _anchored_relation(root, path)) is not None:
+    relation = _anchored_relation(path, root, probe)
+    if relation is None and (converse := _anchored_relation(root, path, probe)) is not None:
         relation = _CONVERSE[converse]
     return relation
 
@@ -553,25 +591,51 @@ def _looks_like_v1(directory: Path) -> bool:
         _probe(directory / name, follow=False) is not None for name in V1_ROOT_MARKERS)
 
 
+def _strictly_below(names: set[Path], root_names: set[Path]) -> bool:
+    """Whether every one of `names` lies strictly below one of `root_names`.
+
+    Compared by exact components, never by the case-blind keys the refusals use: there the
+    blind match is the safe side, here it would skip the fingerprint of a different directory."""
+    return all(any(name != root and _under(name, root) for root in root_names) for name in names)
+
+
 def _check_isolation(path: Path, roots: list[tuple[str, Path]], *, fingerprint: bool = True,
-                     refuse_contains: bool = True) -> None:
+                     refuse_contains: bool = True, files: Sequence[tuple[str, Path]] = (),
+                     library_root: Path | None = None) -> None:
     """Refuse `path` when it is, sits inside or (unless `refuse_contains` is
-    false, as for a single file) contains one of `roots`, or when `fingerprint`
-    finds what looks like a V1 library at or above it."""
+    false, as for a single file) contains one of `roots`, when it is or sits inside
+    one of `files`, or when `fingerprint` finds what looks like a V1 library at or above it.
+
+    With `library_root`, the fingerprint skips an ancestor that is strictly below that root
+    under every alias the mount table gives it (its own ids are V2's, whatever they spell);
+    the root itself and everything above it are fingerprinted as always."""
     mounts = _mounts()
     names = _aliases(path, mounts)
-    for label, root in roots:
+    probes: dict[Path, os.stat_result | None] = {}  # one stat per name per check: every root walks them
+
+    def probe(name: Path) -> os.stat_result | None:
+        if name not in probes:
+            probes[name] = _probe(name)
+        return probes[name]
+
+    guarded = [(label, root, refuse_contains) for label, root in roots] + [(label, f, False) for label, f in files]
+    for label, root, contains in guarded:
         root_names = _aliases(root, mounts)
-        refusable = lambda r: r is not None and (refuse_contains or r != "contains")  # noqa: E731
+        refusable = lambda r, contains=contains: r is not None and (contains or r != "contains")  # noqa: E731
         relation = next((r for name in names for root_name in root_names
                          if refusable(r := _lexical_relation(name, root_name))), None)
-        if relation is None and refusable(identity := _identity_relation(path, root)):
+        if relation is None and refusable(identity := _identity_relation(path, root, probe)):
             relation = identity
         if relation is not None:
             raise V1IsolationError(f"refusing {path}: it {relation} {label} ({root})")
     if fingerprint:
+        inside = _aliases(_realpath(library_root), mounts) if library_root is not None else set()
         for name in names:
             for ancestor in _lineage(name):
+                # Cheap test first: only a directory named below the root can be skipped at all.
+                if (inside and _strictly_below({ancestor}, inside)
+                        and _strictly_below(_aliases(ancestor, mounts), inside)):
+                    continue  # V2's own directory: what its ids spell is not V1's layout
                 if _looks_like_v1(ancestor):
                     where = "is" if ancestor == name else "is inside"
                     raise V1IsolationError(
