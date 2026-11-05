@@ -21,7 +21,7 @@ from dataclasses import dataclass, field, replace
 
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
 from grimoire.core.identity import (
-    AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, WrapUpRef, paired_instances, validate_segment,
+    AcceptedRef, ChatRef, HoldingsRef, InstanceRef, KnowledgeRef, WrapUpRef, paired_instances, validate_segment,
 )
 from grimoire.core.knowledge import Event, Moment
 from grimoire.core.model import ControlAssignment
@@ -42,7 +42,8 @@ from grimoire.holdingstore import HoldingsChange, HoldingsLibrary
 from grimoire.library import LibraryPathError
 from grimoire.security.policy import is_human
 from grimoire.store import (
-    KnowledgeScan, LibraryStore, LinkRefused, LoadProblem, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
+    KnowledgeScan, LibraryStore, LinkRefused, LoadProblem, MalformedRecord, RecordNotFound, ScopeRecord, StaleWrite,
+    StoreError,
     StoredScopeRecord, TakenIdsUnlisted,
 )
 from grimoire.store.layout import address_parts
@@ -136,6 +137,8 @@ class EffectChange:
     actors: frozenset = frozenset()  # an acceptance: every endpoint and agent, re-checked for an id pair
     rechecks_readability: bool = False  # a revocation: every relation file must still be readable at commit
     holdings_changes: tuple[HoldingsChange, ...] = ()  # the holder files, folded into this transaction
+    #: a revocation that writes no holder file (an adopted or skipped undo): each touched holder file as read
+    holder_pins: Mapping = field(default_factory=dict)
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -168,6 +171,9 @@ class EffectChange:
             found.append(("/".join(address_parts(self.chat)), "chat missing"))
         if (self.checks_relations or self.rechecks_readability) and unreadable:
             found.append((f"campaigns/{self.campaign_id}/relations", "a relation file cannot be read"))
+        for holder, pin in self.holder_pins.items():  # the adoption or skip was decided on exactly these files
+            if self.library._holder_pin(holder) != pin:
+                found.append(("/".join(address_parts(HoldingsRef.of(holder))), "holder file changed"))
         for agent, etag in self.agent_etags.items():  # a replaced file may be a different individual
             if self.library._etag(agent) != etag:
                 found.append(("/".join(address_parts(agent)), "agent missing or changed"))
@@ -460,6 +466,8 @@ class TurnEffectsLibrary:
                     continue
                 changes.append(change)
             undo, undo_seqs, holdings_skipped = parts.plan_undo(self._holdings(), event, partial)
+            pins = {} if undo is not None or event.holdings is None else {
+                holder: self._holder_pin(holder) for holder in event.holdings.holdings.holders}
             try:
                 revocation = Revocation(reason, self._clock(), str(self.handle.principal), records,  # type: ignore[attr-defined]
                                         tuple(skipped), holdings_skipped, undo_seqs)
@@ -470,7 +478,8 @@ class TurnEffectsLibrary:
             record = ScopeRecord(ref, accepted_schema(revoked), accepted_to_payload(revoked), owner=stored.owner,
                                  extra=stored.extra)
             return EffectChange(self, ref, ((record, expected),), tuple(changes), campaign, snap.state,
-                                rechecks_readability=True, holdings_changes=() if undo is None else (undo,))
+                                rechecks_readability=True, holdings_changes=() if undo is None else (undo,),
+                                holder_pins=pins)
 
     # -- wrapping up --------------------------------------------------------------------------
 
@@ -578,6 +587,17 @@ class TurnEffectsLibrary:
                 continue  # a hand-deleted event's orphaned relation changes must never be adopted by a new event
             return ref
         raise StoreError("could not allocate an unused accepted-event id")
+
+    def _holder_pin(self, holder: InstanceRef) -> str | None:
+        """A holder file's exact bytes as an etag: ``None`` when it has none, ``"unreadable"`` without bytes."""
+        try:
+            return self.store.read(HoldingsRef.of(holder)).etag
+        except RecordNotFound:
+            return None
+        except MalformedRecord as error:
+            return error.etag
+        except (StoreError, LibraryPathError, ValueError):
+            return "unreadable"
 
     def _etag(self, ref) -> str | None:  # type: ignore[no-untyped-def]
         try:

@@ -320,8 +320,8 @@ def holdings_orphans(events: Iterable[AcceptedEvent], holders: Mapping[InstanceR
                      ) -> tuple[EffectProblem, ...]:
     """Holder-log entries whose exact 021 cause names an event that does not record that operation.
 
-    ``effect:accepted/<id>``: the event must hold holdings under that op id; ``effect:revoked/<id>``: it must be
-    revoked and the entry be its inverse. Free-text causes are never interpreted.
+    The event must touch that holder. ``effect:accepted/<id>``: it must hold holdings under that op id;
+    ``effect:revoked/<id>``: it must be revoked and the entry be its inverse. Free-text causes are never interpreted.
     """
     by_id = {event.event_id: event for event in events}
     found = []
@@ -333,6 +333,7 @@ def holdings_orphans(events: Iterable[AcceptedEvent], holders: Mapping[InstanceR
             state, event_id = parsed
             event = by_id.get(event_id)
             recorded = event is not None and event.holdings is not None and (
+                holder in event.holdings.holdings.holders) and (
                 entry.op == event.holdings.op_id if state == "accepted"
                 else not event.active and entry.op == inverse_op_id(event.holdings.op_id))
             if not recorded:

@@ -189,14 +189,14 @@ def plan_undo(holdings: HoldingsLibrary, event: AcceptedEvent, partial: bool
                for entry in held.log if entry.operation == inverse}
     if len(adopted) == len(accepted.seqs):  # this revocation's own inverse landed everywhere: adopt it, first, so an
         return None, adopted, None          # evicted forward entry cannot turn a landed undo into a skipped one
+    failures = holdings_failures(event, holders, strict=True, undoing=True)
+    refuse_unreadable(failures)  # a damaged holder file refuses the undo, whatever the others log
     if adopted:  # the inverse landed on some holders only: a partial publication, whose completion is 030's
         why = f"partial_publication: the undo is logged by {len(adopted)} of {len(accepted.seqs)} holders"
         if not partial:
             raise InvalidEffect(f"the holdings of {event.ref} were partly undone: {why}", "receipt_mismatch",
                                 ("holdings",))
         return None, {}, why
-    failures = holdings_failures(event, holders, strict=True, undoing=True)
-    refuse_unreadable(failures)
     if failures:
         why = f"receipt: {failures[0][0]}: {failures[0][1]}"
         if len(failures) == len(accepted.seqs) and all(reason in _ABSENT for _, reason, _ in failures):

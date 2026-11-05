@@ -243,6 +243,44 @@ def test_an_undo_logged_by_some_holders_only_is_refused_not_adopted(world):
     assert "partial_revocation" in codes(library)
 
 
+def test_a_damaged_holder_refuses_a_partly_published_undo(world):
+    """Wren's undo landed and Tam's file is damaged: undecodable, never a recorded partial-publication skip."""
+    store, handles, library, _ = world
+    accept_pay(library, handles).commit()
+    undo = [handles.undo(EVENT, pay())]
+    wren = f"campaigns/{C}/holdings/character/wren.json"
+    (store.root / wren).write_bytes(revoke(library, endorsements=undo).preview()[wren])
+    (store.root / TAM_FILE).write_bytes(b"{not json")
+    assert reason(lambda: revoke(library, endorsements=undo)) == "undecodable_holdings"
+    assert reason(lambda: revoke(library, endorsements=undo, partial=True)) == "undecodable_holdings"
+
+
+def test_a_holder_file_changed_after_a_skip_was_planned_is_stale(world):
+    """A skip (or adoption) writes no holder file, so the files it was decided on are pinned to the commit."""
+    store, _, library, holdings = world
+    before = (store.root / ORIN_FILE).read_bytes()
+    library.accept(hop(), controls=CONTROLS).commit()
+    after = (store.root / ORIN_FILE).read_bytes()
+    (store.root / ORIN_FILE).write_bytes(before)  # restored from before the hop: the undo reads "never applied"
+    planned = revoke(library, partial=True)
+    (store.root / ORIN_FILE).write_bytes(after)  # the hop's fuel burn is back before the commit
+    with pytest.raises(StaleWrite):
+        planned.commit()
+    event, _ = library.read(EVENT, requested_by=DIRECTOR)
+    assert event.active and counts(holdings, ORIN) == {"fuel": 2}
+    assert reason(lambda: library.accept(hop(sequence=8, fuel=2), controls=CONTROLS)) == "attempt_reused"
+
+
+def test_an_entry_naming_an_event_that_never_touched_its_holder_is_an_orphan(world):
+    """The op id alone does not make an entry recorded: the event must touch that holder."""
+    _, _, library, holdings = world
+    library.accept(hop(), controls=CONTROLS).commit()
+    event, _ = library.read(EVENT, requested_by=DIRECTOR)
+    holdings.apply(Operation(event.holdings.op_id, (Line.add(TAM, "coin", 1),),
+                             cause="effect:accepted/e-1")).commit()
+    assert codes(library) == {"orphan_effect"}
+
+
 # -- scenario 5: coins spent since cannot be taken back ----------------------------------------------
 
 def test_s5_spent_coins_block_the_undo_and_a_partial_revoke_records_it(world):
