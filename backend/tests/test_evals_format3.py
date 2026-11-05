@@ -422,6 +422,137 @@ def test_honest_narration_around_quotations_and_addressees_passes(turn, text):
     assert report.passed, report.findings
 
 
+ODA_SPEAKS = {LEAK} | voices("npc-oda")
+ODA_QUOTED = {LEAK} | voices("npc-oda", how="quotation")
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    # an aside bracketed by commas after the name does not hide the name's verb
+    ("Oda, as ever, mutters that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda, as always, says the duke sold the guild.", ODA_SPEAKS),
+    ("Oda, though weary, whispers that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda, when Wren asks, mutters that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda, who never forgets a debt, mutters that the duke sold the guild.", ODA_SPEAKS),
+    # a name right after a verb is its object: it neither stops the search nor owns the verb
+    ("Oda pours Wren a drink and mutters that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda hands Wren the key and whispers that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda gives Wren a long look and says the duke sold the guild.", ODA_SPEAKS),
+    ("Oda waves Hask over and mutters that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda leans over the counter toward Wren and whispers that the duke sold the guild.",
+     ODA_SPEAKS),
+    # a place the subject is in is not the verb's subject; an opening phrase is not either
+    ("Oda by the hearth murmurs that the duke sold the guild.", ODA_SPEAKS),
+    ("With a sigh Oda mutters that the duke sold the guild.", ODA_SPEAKS),
+    # telling someone, or that, is speech
+    ("Oda tells Wren that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda turns to Wren and tells her that the duke sold the guild.", ODA_SPEAKS),
+    ('"The duke sold the guild," Oda tells Wren.', ODA_SPEAKS),
+    ("Oda answers that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda replies that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda calls out that the duke sold the guild.", ODA_SPEAKS),
+    # the lead-in's only subject, however far in, introduces the quotation
+    ('Behind the long counter, Oda leans close: "The duke sold the guild."', ODA_QUOTED),
+    ('Oda slams the ledger shut; "The duke sold the guild."', ODA_QUOTED),
+    ('Oda leans in, "The duke sold the guild."', ODA_QUOTED),
+    ('Oda leans in, "The duke sold the guild," she whispers.', ODA_QUOTED),
+    ('Oda nods to Wren: "The duke sold the guild."', ODA_QUOTED),
+    ('Oda, to Wren: "The duke sold the guild."', ODA_QUOTED),
+    # the subject of the sentence before
+    ('Oda leans in. "The duke sold the guild," she adds.', ODA_QUOTED),
+    ('Oda leans in, voice low. "The duke sold the guild."', ODA_QUOTED),
+    ('Oda looks at Wren. "The duke sold the guild."', ODA_QUOTED),
+])
+def test_asides_objects_and_lead_ins_do_not_hide_the_speaker(text, expected):
+    assert found(gate_narration(3, text)) == expected
+
+
+@pytest.mark.parametrize(("turn", "text"), [
+    # a speech verb right after an object, or an object and "to", is the object's
+    (2, "Oda waits for Wren to say something."),
+    (2, "Oda listens to Wren explain the plan."),
+    (2, "Hask steps aside for Wren to speak."),
+    (2, "Oda gestures for Wren to explain."),
+    (2, "Oda looks to Bellamy to announce the toast."),
+    (2, "Oda nods at Wren to go on speaking."),
+    (2, "Oda leans back to let Wren explain."),
+    (2, "Oda waits on Wren to answer."),
+    (2, "Oda lets Wren speak first."),
+    (2, "Oda watches Wren announce the toast."),
+    (2, "Oda hears Wren mutter a curse."),
+    (2, "Oda, as always, says nothing."),
+    # a later subject owns the verb after it
+    (2, "Wren whispers to Oda that she needs a room."),
+    (2, "Wren leans toward Oda and asks for a room."),
+    (2, "Wren asks Oda and Hask about the vault."),
+    (2, "Oda and Wren share a look; Wren asks for the key."),
+    (2, "Oda nods, and Wren says she will pay."),
+    (2, "Oda steps aside, and Wren says she will pay."),
+    (2, "Oda, Hask and Wren wait; Wren says nothing."),
+    (2, "Oda and the guards ignore Wren, who shouts for service."),
+    (2, "Oda serves Wren, and Wren asks for bread."),
+    (2, "Bellamy plays as Wren asks about the duke."),
+    (2, "Hask stands guard while Wren whispers to Bellamy."),
+    (2, "Oda counts coins. Wren says she will wait."),
+    (2, 'Oda nods. "Room for the night?" Wren asks again.'),
+    # a sound aimed at something is not words
+    (2, "Hask growls at nobody in particular, then settles by the gate."),
+    # a quotation that is a sign's, a tune's or a crowd's
+    (1, 'Oda taps a sign reading, "No credit."'),
+    (2, 'Bellamy strikes up a new tune, "The Ballad of the Broken Crown."'),
+    (1, 'Oda points at the board: "No credit, no rooms."'),
+    (1, 'Oda points at the board. "No credit."'),
+    (2, 'Oda hangs a new sign, "Rooms: two silver."'),
+    (2, 'Oda shrugs. "Rules," reads the sign above her.'),
+    (2, 'Bellamy laughs, "Darling!" echoing from the balcony.'),
+    (2, 'Bellamy bows. "Encore!" cry a dozen voices.'),
+    (2, 'Bellamy finishes. "Encore!" the crowd roars, voices ringing.'),
+])
+def test_narration_that_only_names_npcs_beside_speech_passes(turn, text):
+    report = gate_narration(turn, text)
+    assert report.passed, report.findings
+
+
+@pytest.mark.parametrize(("text", "npc"), [
+    ("Oda leans in and tells Wren the duke sold the guild.", "npc-oda"),
+    ("Oda tells Wren to wait by the hearth.", "npc-oda"),
+    ("Bellamy tells a bawdy story about the river barons.", "npc-bellamy"),
+    ("Hask told Wren to keep her hands where he could see them.", "npc-hask"),
+])
+def test_telling_someone_or_a_tale_is_speech(text, npc):
+    assert ("narration_voices_actor", 2, npc, "speech_verb") in found(gate_narration(2, text))
+
+
+@pytest.mark.parametrize("text", [
+    "Oda can tell Wren is lying.",
+    "Oda could tell something was wrong.",
+    "Hask can tell the coin is clipped.",
+    "Oda tells herself the ledger can wait.",
+    "Oda tells the hour by the bells.",
+    "Oda does as she is told and steps aside.",
+    "Bellamy, told to wait, sulks by the fire.",
+    "Wren tells Oda she needs a room.",
+    "Oda's face tells Wren everything.",
+    "Time will tell whether Oda keeps the ledger.",
+    "The scar on Hask's cheek tells its own story.",
+    "Oda answers Wren with a shrug.",
+    "Oda answers the door.",
+    "Hask answers to the captain alone.",
+    "Oda answers with a grunt and a nod.",
+    "Oda answered Wren's knock and stepped aside.",
+    "Oda replies with a shrug.",
+    "Oda replies by sliding the key across.",
+    "Hask replied in kind, drawing his blade.",
+    "Oda calls it a night and bars the door.",
+    "Hask calls the dog to heel.",
+    "Bellamy calls the tune and the hall dances.",
+    "Oda, called away to the cellar, leaves the ledger open.",
+    "Hask is called to the gate.",
+])
+def test_tell_answer_reply_and_call_that_are_not_speech_pass(text):
+    report = gate_narration(2, text)
+    assert report.passed, report.findings
+
+
 @pytest.mark.parametrize("verb", [
     "mutters", "confides", "blurts", "admits", "reveals", "adds", "breathes", "croons", "lets slip",
     "begs", "jokes", "boasts", "pleads", "threatens", "promises", "says",

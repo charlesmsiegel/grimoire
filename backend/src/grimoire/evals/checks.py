@@ -8,43 +8,15 @@ from dataclasses import dataclass
 from fractions import Fraction
 from types import MappingProxyType
 
-from .format import NARRATION, NPC_GENERATION, Actor, Call, Contribution, Run, Scenario
+from .attribution import voiced
+from .format import NARRATION, NPC_GENERATION, Call, Contribution, Run, Scenario
 from .policy import GatePolicy
-from .text import (
-    SPEECH_VERBS, cosine, first_marker, has_quotation, has_words, is_negation, longest_shared_run,
-    sentences, speech_verb_at, split_quotations, tokens, trigram_counts,
-)
+from .text import cosine, first_marker, has_words, longest_shared_run, sentences, trigram_counts
 
 #: A model NPC line sharing this many contiguous normalised characters with a voice sample is a copy.
 SAMPLE_COPY_CHARS = 24
 RP_PURPOSES = (NPC_GENERATION, NARRATION)
-#: How many tokens after an NPC's name a speech verb may stand and still be that NPC's
-#: ("Oda sets down her quill and says" is six).
-SPEECH_WINDOW = 6
-#: How early in a sentence a name must stand to be its subject ("From the corner Hask ...").
-SUBJECT_TOKENS = 4
-#: A word after one of these is a noun ("hears a shout", "finds the answer"), not a verb.
-_DETERMINERS = frozenset({"a", "an", "the", "his", "her", "their", "its", "my", "your", "our",
-                          "no", "some", "any", "this", "that", "each", "every"})
-#: After one of these a name is a common noun ("her quill", "the quill"), not an actor.
-_NOUN_MARKERS = frozenset({"a", "an", "the", "his", "her", "their", "its", "my", "your", "our",
-                           "no", "some", "any", "each", "every"})
-#: After one of these a name is an object ("turns to Wren and says"): it neither speaks nor
-#: takes the verb from the subject.
-_PREPOSITIONS = frozenset({"to", "toward", "towards", "at", "with", "beside", "near", "for", "from",
-                           "past", "behind", "about", "of", "by", "against", "around", "among",
-                           "between", "beyond", "without", "into", "upon", "over"})
-#: Words that open another clause ("Oda listens as the crowd murmurs"): a verb after them is
-#: not the earlier name's. A semicolon is a token for this purpose.
-_CLAUSE_BREAKS = frozenset({"as", "while", "when", "whenever", "who", "whom", "whose", "which",
-                            "where", "because", "though", "although", "if", "unless", "whereas",
-                            ";"})
-#: Outside a quotation these say it is spoken ("…," comes a low voice), like a speech verb.
-_SPEECH_NOUNS = frozenset({"voice", "voices"})
-#: Punctuation that introduces a quotation as the preceding subject's words (``Oda: "…"``).
-_SPEECH_LEADS = (":", ",", "-")
-#: Words of a multi-word name that never identify the actor on their own.
-_NAME_FILLER = frozenset({"a", "an", "the", "of", "de", "la", "le", "van", "von"})
+
 
 @dataclass(frozen=True, slots=True)
 class Finding:
@@ -117,8 +89,8 @@ def _leaks(scenario: Scenario, run: Run, *,
 
     Narration must not state a fact before some player character knows it. With
     ``director_narration`` (``/3`` director lines), narration that gives an NPC speech
-    (``_voiced``) must also not state, in that speech's sentence, a fact the NPC does not know yet:
-    the director cannot say for an NPC what the NPC's own line could not.
+    (``attribution.voiced``) must also not state, in that speech's sentence, a fact the NPC does
+    not know yet: the director cannot say for an NPC what the NPC's own line could not.
     """
     directors = set(scenario.director_ids())
     players = [actor.actor_id for actor in scenario.actors if actor.control == "player"]
@@ -142,7 +114,7 @@ def _leaks(scenario: Scenario, run: Run, *,
         if is_npc or not director_narration:
             continue
         parts = sentences(line.text)
-        for number, actor_id, _evidence in _voiced(scenario, parts):
+        for number, actor_id, _evidence in voiced(scenario, parts):
             for fact in scenario.facts:
                 index = first_marker(parts[number], fact.markers)
                 if index is not None and fact.known_from.get(actor_id, turn + 1) > turn:
@@ -154,121 +126,13 @@ def _leaks(scenario: Scenario, run: Run, *,
     return results
 
 
-def _name_tokens(actor: Actor) -> frozenset[str]:
-    """The tokens that name ``actor``: each word of its name, and its id."""
-    words = tokens(actor.name)
-    names = {word for word in words if word not in _NAME_FILLER} or set(words)
-    return frozenset(names | set(tokens(actor.actor_id)))
-
-
-def _speaks_after(words: list[str], at: int, subjects: dict[int, set[str]]) -> bool:
-    """Whether a speech verb within ``SPEECH_WINDOW`` tokens after the name at ``at`` is its.
-
-    The search stops at another subject name (the nearer name owns the verb) unless the two are
-    joined by ``and`` ("Oda and Hask whisper"), at a clause break
-    ("Oda listens as the crowd murmurs") and at a negation ("Oda never says"). A verb right after
-    a determiner is a noun ("hears a shout"), and one right before a negation is denied speech
-    ("says nothing").
-    """
-    for index in range(at + 1, min(len(words), at + 1 + SPEECH_WINDOW)):
-        word = words[index]
-        if index in subjects and index == at + 2 and words[at + 1] == "and":
-            continue  # "Oda and Hask whisper": both are the subject
-        if index in subjects or word in _CLAUSE_BREAKS or is_negation(word):
-            return False
-        width = speech_verb_at(words, index)
-        if width and words[index - 1] not in _DETERMINERS:
-            follower = words[index + width] if index + width < len(words) else ""
-            return not is_negation(follower)
-    return False
-
-
-def _mentions(words: list[str], names: list[tuple[str, frozenset[str]]],
-              ) -> tuple[dict[int, set[str]], dict[int, set[str]]]:
-    """Actor names in ``words``: ``(subjects, objects)``, each position to the actor ids.
-
-    A name right after a determiner is a common noun ("her quill") and no mention at all; one
-    right after a preposition is an object ("to Wren").
-    """
-    subjects: dict[int, set[str]] = {}
-    objects: dict[int, set[str]] = {}
-    for index, word in enumerate(words):
-        ids = {actor_id for actor_id, tokens_ in names if word in tokens_}
-        previous = words[index - 1] if index else ""
-        if not ids or previous in _NOUN_MARKERS:
-            continue
-        (objects if previous in _PREPOSITIONS else subjects)[index] = ids
-    return subjects, objects
-
-
-def _subject(words: list[str], names: list[tuple[str, frozenset[str]]]) -> str | None:
-    """The actor ``words`` open with: the first subject name within ``SUBJECT_TOKENS`` tokens,
-    naming one actor, with no other subject name in ``words``."""
-    subjects, _objects = _mentions(words, names)
-    if not subjects:
-        return None
-    first = min(subjects)
-    ids = set().union(*subjects.values())
-    return next(iter(ids)) if first < SUBJECT_TOKENS and len(ids) == 1 else None
-
-
-def _voiced(scenario: Scenario, parts: list[str]) -> list[tuple[int, str, str]]:
-    """``(sentence, npc_id, evidence)`` for each narration sentence that gives an NPC speech.
-
-    ``speech_verb``: a subject name of the NPC is followed, as ``_speaks_after`` reads it, by a
-    speech verb. ``quotation``: the sentence has a quotation and either a speech verb stands
-    right before the NPC's name ("mutters Oda"); or the NPC is the subject of the text before the
-    quotation and that text is the name alone or ends in ``:``, ``,`` or a dash
-    (``Oda leans in: "…"``); or the text outside the quotation names no other subject and is
-    empty or has a speech verb or ``voice``, and the NPC is the subject of the sentence just before
-    (``Oda leans in. "…"``). Player characters are never voiced here: restating a PC's action is
-    narration's job.
-    """
-    npcs = set(scenario.director_ids())
-    names = [(actor.actor_id, _name_tokens(actor)) for actor in scenario.actors]
-    found: list[tuple[int, str, str]] = []
-    previous_subject: str | None = None
-    for number, part in enumerate(parts):
-        words = tokens(part)
-        subjects, _objects = _mentions(words, names)
-        voiced: dict[str, str] = {}
-        for index, ids in subjects.items():
-            for actor_id in sorted(ids & npcs):
-                if _speaks_after(words, index, subjects):
-                    voiced.setdefault(actor_id, "speech_verb")
-        before, outside = split_quotations(part)
-        if has_quotation(part):
-            for index, ids in subjects.items():
-                if index and words[index - 1] in SPEECH_VERBS:
-                    voiced.update({actor_id: "quotation" for actor_id in ids & npcs
-                                   if actor_id not in voiced})
-            lead = _subject(tokens(before), names)
-            if lead in npcs and (before.rstrip().endswith(_SPEECH_LEADS)
-                                 or len(tokens(before)) == len(_name_tokens_in(before, names))):
-                voiced.setdefault(lead, "quotation")
-            outside_words = tokens(outside)
-            others = set().union(*_mentions(outside_words, names)[0].values())
-            spoken = not outside_words or any(speech_verb_at(outside_words, i) or word in _SPEECH_NOUNS
-                                              for i, word in enumerate(outside_words))
-            if previous_subject is not None and others <= {previous_subject} and spoken:
-                voiced.setdefault(previous_subject, "quotation")
-        found.extend((number, actor_id, evidence) for actor_id, evidence in sorted(voiced.items()))
-        subject = _subject(tokens(outside), names)
-        previous_subject = subject if subject in npcs else None
-    return found
-
-
-def _name_tokens_in(text: str, names: list[tuple[str, frozenset[str]]]) -> list[str]:
-    """The tokens of ``text`` that are actor names."""
-    return [word for word in tokens(text) if any(word in tokens_ for _id, tokens_ in names)]
-
-
 def _narration_voices(scenario: Scenario, run: Run) -> Iterator[Finding]:
-    """Director narration that gives an NPC speech; only the NPC's own call may (``_voiced``)."""
+    """Director narration that gives an NPC speech (``attribution.voiced``); only the NPC's own
+    call may."""
     for turn, position, line in _model_lines(run):
         if line.speaker_id is not None:
             continue
-        for number, actor_id, evidence in _voiced(scenario, sentences(line.text)):
+        for number, actor_id, evidence in voiced(scenario, sentences(line.text)):
             yield Finding("narration_voices_actor", "invariant",
                           f"narration gives an NPC speech (contribution {position}, sentence "
                           f"{number})", turn, actor_id, evidence)
@@ -431,7 +295,7 @@ def hard_findings(scenario: Scenario, run: Run, *,
                   director_narration: bool = False) -> tuple[Finding, ...]:
     """Every invariant violation of ``run``; empty means none of the hard checks failed.
 
-    ``director_narration`` adds the narration attribution rules (``_voiced``) for ``/3``
+    ``director_narration`` adds the narration attribution rules (``attribution.voiced``) for ``/3``
     director lines; ``/1`` narration keeps its ``/1`` checks.
     """
     findings = [finding for finding, _ in _leaks(scenario, run,

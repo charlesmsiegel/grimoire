@@ -16,7 +16,7 @@ and ledgers, see ``format2``) except:
 
 The gate reads narration through the ``/1`` ``narration`` purpose, so the leak, sovereignty,
 continuity, attribution, orphan and voice-copy checks apply to it as to ``/1`` narration. Director
-lines also get two attribution rules that ``/1`` narration does not (``checks._voiced``, per
+lines also get two attribution rules that ``/1`` narration does not (``attribution.voiced``, per
 sentence): a sentence that gives a named NPC speech is ``narration_voices_actor``, since only the
 NPC's own call speaks for it, and stating there a fact that NPC does not know yet is a
 ``knowledge_leak``. Player characters are exempt: restating a PC's action is narration's job.

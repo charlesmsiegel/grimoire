@@ -182,32 +182,53 @@ Hard invariants (the candidate fails on any; a baseline that has one is `baselin
 | `unflagged_inference` | any other call is not behind a flag listed in the run's `enabled_flags` |
 | `voice_sample_copy` | any model line (NPC or narration) shares 24+ contiguous normalised characters with a voice sample |
 
-**Attribution rule** (`/3` director lines; `checks._voiced`). The line is normalised and cut into
-sentences at `.`, `!`, `?` or `…` before a space, never inside a quotation (a matched pair of
-double quotes, guillemets or corner brackets, or single quotes opening and closing a word, so
-`duke's` and `'til` are not quotations); a quotation's closing punctuation does not end the
-sentence when a speech verb, or a word and a speech verb, follows (`"…!" Oda hisses`). Each
-sentence is cut into word tokens (an inner apostrophe or hyphen stays in the token; a semicolon
-is a token). An NPC's name tokens are each word of its scenario name (except filler such as `the`
-or `of`) and its id. A name token right after a determiner (`her quill`, `the quill`) is a common
-noun, not a name; one right after a preposition (`to`, `toward`, `at`, `with`, `near`, …) is an
-object, which neither speaks nor takes the verb from the subject; a possessive (`Oda's`) is not a
-name. A sentence gives NPC *X* speech when:
+**Attribution rule** (`/3` director lines; `grimoire.evals.attribution.voiced`). The line is
+normalised and cut into sentences at `.`, `!`, `?` or `…` before a space, never inside a
+quotation (a matched pair of double quotes, guillemets or corner brackets, or single quotes
+opening and closing a word, so `duke's` and `'til` are not quotations). A quotation's closing
+punctuation does not end the sentence when a lower-case word, a speech verb, or a word and a
+speech verb follows (`"Encore!" cry the voices`, `"…!" Oda hisses`, `"…," Oda tells Wren`).
+Each sentence is cut into words (an inner apostrophe or hyphen stays in the word), `,`, `;`,
+`:`, dashes, and one marker per quotation, so quoted words never name a speaker or a verb.
 
-- a subject name token of *X* is followed within 6 tokens by a speech verb from the closed list
-  `grimoire.evals.text.SPEECH_VERBS` (or `lets slip`), with no other subject name (except one
-  joined by `and`: `Oda and Hask whisper`), no clause break (`as`, `while`, `when`, `who`, `;`
-  and the like) and no negation (`not`, `never`, `nothing`, `cannot`, a word ending in `n't`)
-  before it, the verb not right after a determiner (`a shout`, `the answer` are nouns) and not
-  right before a negation (`says nothing`); or
+An NPC's name tokens are each word of its scenario name (except filler such as `the` or `of`)
+and its id; a possessive (`Oda's`) is not a name. A name right after a determiner (`her quill`)
+is a common noun, not a name. A name is an *object* right after a preposition (`to`, `toward`,
+`at`, `for`, `near`, …), and right after any other word once its clause already has an actor
+subject (`Oda pours Wren a drink`); after `and` it shares the role of the name just before
+(`Oda and Hask`, `asks Oda and Hask`); otherwise it is a *subject*. A clause starts again at
+punctuation, a quotation, a clause break (`as`, `while`, `when`, `who`, `though`, …) and
+`that`. A sentence gives NPC *X* speech when:
+
+- a subject name of *X* is followed within 8 words by a speech verb that is *X*'s. The verbs are
+  the closed list `grimoire.evals.text.SPEECH_VERBS`, the phrases `lets slip`, `answers that`,
+  `replies that` and `calls out` (each with its other tenses), and `tell` in any tense when
+  followed by an actor's name, `him`/`her`/`them`/`me`/`us`/`you`/`everyone`, `that`, or
+  `a`/`the` and (after at most one adjective) `story`, `tale`, `joke`, `lie` or `truth`, but not
+  after `can`, `could`, `will`, `would`, `to` or a form of `be`. The search stops at `;`, `:`, a
+  quotation, an unbracketed clause break (`Oda listens as the crowd murmurs`), a negation (`not`,
+  `never`, `nothing`, `cannot`, a word ending in `n't`) and another subject name (except one
+  joined by `and`: `Oda and Hask whisper`). An aside bracketed by commas right after the name and
+  opened by a clause break is skipped (`Oda, as ever, mutters`). A speech verb right after an
+  object, or after an object and `to` and a verb, is the object's and ends the search (`Oda
+  waits for Wren to say something`, `Oda lets Wren speak`). A verb does not count right after a
+  determiner (`a shout`), as an `-ing` form right after a preposition (`without saying`), as an
+  infinitive after a determiner or preposition (`waits for the guard to speak`), or right before
+  a negation (`says nothing`); a verb whose own subject is a noun phrase (`and the crowd
+  murmurs`, but not `Oda by the hearth murmurs`) ends the search; and one followed by `at`
+  counts only when `that` or the speech follows (`Hask growls at nobody` is a sound); or
 - the sentence has a quotation and one of:
   - a speech verb stands right before *X*'s name (`"…," mutters Oda`);
-  - *X* is the only subject named in the text before the quotation, within its first 4 tokens,
-    and that text is the name alone or ends in `:`, `,` or a dash (`Oda: "…"`,
-    `Oda leans in - "…"`);
-  - the sentence just before has *X* as its only subject, within its first 4 tokens, and the
-    text outside this quotation names no other subject and is empty or has a speech verb or the
-    word `voice` (`Oda leans in. "…"`; `Oda leans in. "…," comes a low voice.`).
+  - *X* is the only subject actor named before the first quotation, wherever it stands
+    (`Behind the long counter, Oda leans close: "…"`), and that text is the name alone or ends
+    in `:`, `;` or a dash; or ends in a comma, with at most two plain words after the name and
+    nothing but punctuation, or a speech verb or `voice` with no other subject, after the
+    quotation (`Oda leans in, "…"`); never when that text names a sign, board, note, tune, song
+    or the like (`taps a sign reading, "No credit."`);
+  - the sentence just before has *X* as its only subject actor and names no such thing, and the
+    words outside this quotation name no other subject and are none, or have a speech verb or a
+    single `voice` (`Oda leans in. "…"`; `Oda leans in. "…," comes a low voice.`; not
+    `"Encore!" cry a dozen voices`).
 
 Player characters are never given speech by this rule: restating a PC's action is narration's
 job, and PC authorship is checked by its markers and by 035's narration review.
@@ -229,16 +250,30 @@ distinguishability below baseline minus tolerance), `cost_regression` and opt-in
 ## Limitations
 
 Marker matching catches stated phrases, not paraphrase. The `/3` attribution rule is a
-deterministic heuristic, not a parse. It misses speech given to an NPC by a pronoun ("She
-mutters …"), by an epithet ("the old innkeeper mutters …") or by an unnamed speaker ("a low voice
-says …"); a speech verb more than 6 tokens after the name ("Oda wipes the long counter clean,
-then slowly mutters …" is a cliff, not a judgement); and a quotation that is neither in the NPC's
-own sentence nor in the sentence right after one with the NPC as subject (or that comes before
-the NPC's sentence). It can also flag non-speech: a bare quotation right after a sentence with
-the NPC as subject (`Oda points at the board. "No credit."`) or introduced by a colon
-(`Oda taps the sign: "No credit."`) is credited to the NPC. Its verb list is heuristic both
-ways: verbs left out because they are as often nouns or non-speech (`sings`, `cries`, `calls`,
-`talks`, `answers`, `tells`) let speech through, and listed ones can flag non-speech ("Oda adds
-a coin"). Outcome labels are recorded inputs, used
+deterministic heuristic over English word order, not a parse; it is an eval check, not a
+boundary. It misses:
+
+- speech given to an NPC by a pronoun ("She mutters …"), by an epithet ("the old innkeeper
+  mutters …") or by an unnamed speaker ("a low voice says …");
+- a speech verb more than 8 words after the name. An object's words count toward the 8 ("Oda
+  leans over the counter toward Wren and whispers" is exactly 8; one more adjective is a miss):
+  the window is a cliff, not a judgement;
+- a verb after an unbracketed clause break ("Oda glances up as the door opens and mutters …"),
+  or inside an aside;
+- a verb right after an object and `to` (`Oda turns to Wren to say …`), and verbs left out of
+  the list or allowed only in phrases (`cries`, `sings`, `talks`, `Oda calls for the guards`,
+  `Oda calls Wren a fool`, `Bellamy answers every question with a song`, `Oda shouts at Wren to
+  get out`);
+- an unclosed quotation (`Oda leans in. "The duke sold the guild.` has no quotation at all), and
+  a quotation that is neither in the NPC's own sentence nor in the sentence right after one with
+  the NPC as its only subject (or that comes before the NPC's sentence).
+
+It can also flag non-speech: the listed verbs can be non-speech ("Oda adds a coin"); a bare
+quotation right after a sentence whose only subject is the NPC is the NPC's (`Oda grunts.
+'Fine.' Wren pays.`), as is one after a colon, unless a sign, board, tune or the like is named
+(the list is short: `Oda points at the ledger. "Room four."` is credited to Oda); and a name
+after a verb whose subject is no actor is read as a subject (`The guard grabs Hask and mutters`
+credits Hask).
+Outcome labels are recorded inputs, used
 only next to marker evidence. Within-turn ordering of *learning* is not modelled; `known_from` is
 per turn.

@@ -5,7 +5,7 @@ is missing, never zero, so a cost comparison needs every attempt's input, output
 counts on both sides; otherwise the comparison says ``usage_incomplete`` instead of guessing.
 "Measured" needs verified capture evidence as well as a provider-reported ledger. A ``/3`` run is
 gated the same way; its director lines are narration to the hard checks, plus the NPC attribution
-rules of ``checks._voiced``.
+rules of ``attribution.voiced``.
 """
 
 from __future__ import annotations
