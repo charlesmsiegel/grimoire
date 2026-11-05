@@ -219,6 +219,9 @@ its event names.
 | A durable operation record for actions spanning several store transactions (inventory, actor and association) | 030 milestone 2 |
 | Detecting partial publications at open and persisting proposals so restart can recover | 035 / 030 milestone 2 |
 | Recording in the event that it was completed or adopted; the 007 decision audit | 030, later slice |
+| Cross-process run fencing of model calls ([GENERATION](GENERATION.md)); readers in other processes overlapping a commit ([TESTING](TESTING.md)) | 030, later slice (readers with 022) |
+| Persisting a holdings operation's `basis` so a retry is recognised beyond the bounded log ([HOLDINGS](HOLDINGS.md)) | 030, later slice |
+| Correcting or retiring a bridge that outlived its revocation (`revoked_but_bridged`, [EFFECTS](EFFECTS.md)) | 030 / 054 |
 
 No new record family, schema or codec: every write is an ordinary 017 relation file, 023 holder file or 021
 accepted-event file that a pre-030 build reads normally. All fixtures are synthetic.

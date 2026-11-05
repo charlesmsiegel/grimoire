@@ -476,6 +476,16 @@ class _Mapper:
             if v1.get("world") in self.sel.worlds or v1.get("campaign") in self.sel.campaigns:  # a campaign's own too
                 self.guarded(lambda row=row: self.out.not_imported.append(
                     {"legacy_id": self.legacy_of(row), "family": row["family"]}))
+        # An actor's sidecars (V1's voice_anchor.md, tagline.md...) have no V2 home yet. 011 lists
+        # them per actor rather than as definition rows, so name each here: a file left behind is
+        # reported, never dropped in silence (Wave 4 audit).
+        for actor in self.m["actors"]:
+            if not (self.sel.worlds.get(actor["scope_id"]) if actor["scope"] == "world"
+                    else self.sel.campaigns.get(actor["scope_id"])):
+                continue
+            for name in actor.get("sidecars", ()):
+                self.guarded(lambda path=f"{actor['path']}/{name}": self.out.not_imported.append(
+                    {"legacy_id": self.legacy(path), "family": "actor_sidecar"}))
 
     # -- campaigns -------------------------------------------------------------------------
     def campaigns(self) -> None:

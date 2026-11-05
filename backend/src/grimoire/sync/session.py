@@ -1308,7 +1308,9 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             if state == "ignored" or (what == "archive" and state != "valid"):
                 raise ResolveRefused(f"the {what} on {device} for this pair is {state}; sync the devices "
                                      "once first, so their uncertainty is recorded")
-    winners = [device for device in pair if _current(sides[device]) == keep]
+    # An absent side's current etag is None, so keep=None would otherwise "match" the device that
+    # lacks the record and crown it the winner; choosing a deletion is refused (docs/SYNC.md).
+    winners = [device for device in pair if keep is not None and _current(sides[device]) == keep]
     if not winners:
         raise ResolveRefused("keep must be the current etag of one device's version (deletions cannot be chosen)")
     if len(winners) == 2:

@@ -12,16 +12,20 @@ import os
 import pytest
 
 from grimoire.chatstore import campaign_taken_ids
-from grimoire.core.identity import InstanceRef, SourceRef
+from grimoire.core.identity import ImageRef, InstanceRef, SourceRef
+from grimoire.images import Placement
+from grimoire.imagestore import ImageLibrary
 from grimoire.possessions import (
     POSSESSION_KEY, PossessionRefused, Step, possession_from_payload, possession_to_payload,
 )
 from grimoire.possessionstore import PartyReplaced
 from grimoire.store import LibraryStore, StaleWrite, TakenIdsUnlisted
 
+from image_fixtures import PNG, PNG_2, handle
 from possession_fixtures import (
     ARMS, CHEST, HALL, LONGSWORD, MARA, STARFALL, TOMA, make, op, possession_library, seed,
 )
+from store_helpers import OWNER
 
 
 @pytest.fixture
@@ -327,3 +331,30 @@ def test_an_item_that_breaks_before_commit_is_stale(store, library):
     with pytest.raises(StaleWrite) as caught:
         change.commit()
     assert not isinstance(caught.value, PartyReplaced)
+
+
+def test_a_unique_item_keeps_its_own_portrait_apart_from_its_twin_across_a_gift_and_a_reopen(store, library):
+    """034 milestone 1: two longswords from one template share the catalog picture until one gets its own
+    (an 018 campaign placement); that one keeps it through a possession change and a reopen."""
+    notched = created(library, make("make-a", name="Longsword", source=LONGSWORD))
+    plain = created(library, make("make-b", name="Longsword", source=LONGSWORD))
+    images = ImageLibrary(store, handle(), owner=OWNER)
+    batch = images.change()
+    batch.add_image(ARMS, "longsword", PNG)
+    batch.place(LONGSWORD.unpinned(), "portrait", Placement("set", "portrait", ImageRef(ARMS, "longsword")), None)
+    batch.commit()
+    batch = images.change()
+    batch.add_image("campaign:c1", "notched-blade", PNG_2)
+    batch.place(notched, "portrait", Placement("set", "portrait", ImageRef("campaign:c1", "notched-blade")), None)
+    batch.commit()
+    done(library, notched, op("g1", Step.move(TOMA), Step.own(TOMA)))
+    root = store.root
+    store.close()
+    with LibraryStore.open(root) as reopened:
+        assert reopened.load().problems == ()
+        images = ImageLibrary(reopened, handle())
+        own = images.effective_placements(notched).slot("portrait")
+        shared = images.effective_placements(plain).slot("portrait")
+        assert (own.image, own.layer) == (ImageRef("campaign:c1", "notched-blade"), "campaign")
+        assert (shared.image, shared.layer) == (ImageRef(ARMS, "longsword"), "source")
+        assert possession_library(reopened).read(notched).possession.state.holder == TOMA

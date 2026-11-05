@@ -112,3 +112,4 @@ Each campaign has one authority ledger, `authority/adjudication/<campaign_id>` (
 - **No graded consequences or contests** (milestone 3). Each consequence is one declared stake, and there is no opposed action between two actors.
 - **Tail forgery.** As for every authority ledger, a valid batch appended at the tail with local file access is not detected by the chain. Replay still refuses one that breaks the rules above.
 - **Prompts and disclosure** (how much adjudication a player sees) belong to 035.
+- **A cost names no resource.** A decision records each charge by ability and cost id. Which counted resource a cost uses up (fuel for a thruster) is put in the same effect's holdings part by the caller; a rule tying a cost to a resource is 034's ([EFFECTS](EFFECTS.md)).

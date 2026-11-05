@@ -45,6 +45,19 @@ Wave 5 **must not require** a world, realm, location graph, faction, ruleset, pr
 
 When play runs ability attempts ([fictional abilities](../../ABILITIES.md)): take a player-controlled actor's attempt from that player's own contribution, obtain the controller's consent before an instance's powers change, and authenticate the ruling channel (with 029).
 
+## Obligations from Wave 4
+
+The [Wave 4 audit](../README.md#wave-4-status) collected the contracts its first slices leave to this runner. Each is stated in the named doc; they are listed here so none is missed.
+
+- **029 ([ADJUDICATION](../../ADJUDICATION.md#known-limits)):** keep the labeller that frames an action separate from the decider; refuse outcome narration for a framed but undecided attempt; take a consent decision only from the player's own live choice; never allocate a contribution id that starts with `director:`; run `check_effect` before every acceptance it hands to 021; own the prompts and how much adjudication a player sees.
+- **030 ([RECOVERY](../../RECOVERY.md#out-of-this-slice-named-owners)):** persist a proposal and its endorsements before committing its acceptance, detect a partly published acceptance when a campaign opens, and recover it (`complete`, `adopt` or `revoke(partial=True)`) before accepting the next effect.
+- **027 ([GENERATION](../../GENERATION.md)):** persisting generated lines is the runner's, re-checking the run's `FenceToken` inside that commit; every line is an unreviewed proposal until it passes `review_narration`.
+- **031 ([CONTEXT](../../CONTEXT.md)):** supply the recent `scene_text` each actor witnessed, and pack for a player character's controller.
+- **032 ([COMMUNICATION](../../COMMUNICATION.md)):** read a message only from a resolved PC intent (`read_message`); build `Presence` from the accepted scene state, never from narration; pass each NPC only the lines it received; keep private channels out of the table's transcript.
+- **033 ([PARTY](../../PARTY.md)):** build a scene's present cast from 033's staged `SceneCast`, so a reserve never hears or speaks, and read control from the sovereignty ledger.
+- **037 ([CARDS](../../CARDS.md)):** build the opening from a card's greetings.
+- **028 ([SYNC](../../SYNC.md)):** register every new stored family (scenes, transcripts, ledgers) in `grimoire.sync.syncable()`; a family it does not name is never synced.
+
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove?
 - Which optional later integrations can stay outside the first slice?

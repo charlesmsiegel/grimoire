@@ -1,5 +1,7 @@
 # Diegetic Communication, Channels and Recipients
 
+**Status:** first slice implemented ([COMMUNICATION](../../COMMUNICATION.md)): in-scene speech, whispers and telepathy delivered only to valid recipients as 020 evidence, and a routed PC intent read as a message or refused. Milestone 2 (languages, range, barriers, imperfect receipt and setting-specific channels) is open; the reader is English only.
+
 **Outcome:** Correctly distinguish who speaks, who hears, who understands, and through which fictional channel a message was communicated.
 
 ## Scope and ownership

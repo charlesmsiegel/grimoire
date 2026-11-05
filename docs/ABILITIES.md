@@ -204,7 +204,7 @@ At most 256 rulings may name one attempt id **for one actor**; rulings on other 
 
 - observed consequences as evidence (020);
 - persisting an `AbilityRuling` and assessing each `attempt_id` once across reloads: done by [029](ADJUDICATION.md), in its own authority ledger, not in 020;
-- committed costs and cooldowns (milestone 2): 021 records the charges of permitted uses, and the effect's holdings part consumes a counted resource; a cooldown is only a charged cost id, with no timing; rules tying a cost to a resource are 029's and 034's;
+- committed costs and cooldowns (milestone 2): 021 records the charges of permitted uses, and the effect's holdings part consumes a counted resource; a cooldown is only a charged cost id, with no timing; rules tying a cost to a resource are 034's ([EFFECTS](EFFECTS.md));
 - rules for combining abilities in one attempt (milestone 3): this slice reads them as `combination`, fail-closed until a director approves one case by case;
 - limits that evolve by rule, and novel high-concept power systems (milestone 3);
 - adapters to real rulesets;

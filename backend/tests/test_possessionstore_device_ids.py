@@ -205,3 +205,32 @@ def test_a_device_identity_that_is_not_a_file_refuses_new_items(store, tmp_path,
     with pytest.raises(PossessionRefused) as refused:
         possession_library(store).create(make("make-1", name="Longsword", source=LONGSWORD))
     assert refused.value.reason == "device_identity"
+
+
+def test_an_artifact_made_before_and_after_pairing_is_reported_twice_never_hidden(tmp_path):
+    """One particular artifact made on a library with no device identity yet (``starfall-1``) and on an
+    identified one (``starfall-<digest>-1``) are two files, so sync copies both without a conflict.
+    Each copy is then reported ``duplicate_individual``, naming both (Wave 4 audit); nothing is repaired."""
+    desktop = LibraryStore.create(tmp_path / "desktop")
+    seed(desktop)
+    phone = LibraryStore.create(tmp_path / "phone")
+    seed(phone)  # the same campaign set up on both devices before they ever met
+    identify(phone, "phone")
+    old = created(possession_library(desktop), make("make-desk", name=None, source=STARFALL))
+    new = created(possession_library(phone), make("make-phone", holder=TOMA, owner=TOMA, name=None, source=STARFALL))
+    assert old.instance_id == "starfall-1" and old != new
+    identify(desktop, "desktop")
+    handles = {"desktop": owner_handle(*SCOPES), "phone": owner_handle(*SCOPES)}
+    assert not sync(desktop, phone, handles).conflicts
+    for store in (desktop, phone):
+        found = possession_library(store).campaign_items("c1")
+        assert set(found.views) >= {old, new} and found.complete
+        twins = [problem for problem in found.problems if problem.code == "duplicate_individual"]
+        assert sorted(str(problem.item) for problem in twins) == sorted((str(old), str(new)))
+        assert {problem.reason for problem in twins} == {", ".join(sorted((str(old), str(new))))}
+    plain = possession_library(desktop)  # two copies of an ordinary sword add no problem: only the artifact's two
+    created(plain, make("make-a", name=None, source=LONGSWORD))
+    created(plain, make("make-b", name=None, source=LONGSWORD))
+    assert [p.code for p in plain.campaign_items("c1").problems] == ["duplicate_individual"] * 2
+    desktop.close()
+    phone.close()
