@@ -15,8 +15,19 @@ V0.2.1's quality baseline is **one independent RP-generation call per speaking N
 | `recall` | optional | Model-assisted memory recall |
 | `graph_lookup` | optional | Model-assisted graph query |
 | `critique` | optional | Model critique or continuity review |
+| `director_generation` | optional, scene-level | One director/narrator reply for the scene (027). Never an actor; at most one per turn. |
 
-**Unlisted work cannot be planned.** Narration, embeddings, image generation and authoring/import jobs have no stage yet. They must not be issued during a turn until an enum member is added for them with an explicit baseline or optional status.
+**Unlisted work cannot be planned.** Narration is `director_generation` (below). Embeddings, image generation and authoring/import jobs have no stage yet. They must not be issued during a turn until an enum member is added for them with an explicit baseline or optional status.
+
+## The scene-level director reply
+
+`director_generation` (sprint 027, [GENERATION](GENERATION.md)) is a reply for the scene, by the director or narrator. It is **optional**, like every non-baseline stage:
+
+- It is **scene-level**: its request and call carry `actor_id=None`. An actor id is refused, so it can never pose as an NPC or a player character.
+- At most **one per turn**, across all phases, whatever the policy's cap says. A second request is declined as data (`cap_reached`), like any request over its cap.
+- It is **never implicit**: it is planned only when requested and enabled. When NPCs speak too, it is planned after them in the same phase and booked in the `optional` bucket, so a director call is always visible as an extra.
+
+**Why opt-in and not baseline.** A world-based turn with speaking NPCs must never pay for narration implicitly; that is the V0.2.1 baseline. A scenario-only chat with no NPC to speak needs one reply, so its chat settings (035) enable `director_generation` with cap 1. The story-quality run format `/2` refuses this stage; recording director calls is `/3`, 027's next slice ([STORY_QUALITY](evals/STORY_QUALITY.md)).
 
 ## Policy
 
@@ -44,6 +55,7 @@ These raise `InferencePlanError` before anything is planned:
 - a duplicate present actor id;
 - a baseline stage (`npc_generation`) in an optional request;
 - an optional request about an absent or player-controlled actor;
+- a `director_generation` request about any actor;
 - a blank id, or a repeated phase.
 
 **One plan per turn.** A turn that needs a step before generation calls `plan.add_phase(...)` on the same plan. For example, a `"select"` phase holds a `decision` call that chooses who answers, and then `"main"` generates the answers. The added phase shares the turn's policy, caps and one-contribution-per-NPC rule. Re-planning a turn is not supported; use a new turn id.

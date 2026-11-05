@@ -9,7 +9,7 @@ from .profile import (
     ASPECTS, MAX_ANCHOR_CHARS, MAX_EXAMPLE_CHARS, MAX_ITEMS, ImportedVoiceSource, VoiceAnchor,
     VoiceCatalog, VoiceExample, VoiceProfile,
 )
-from .binding import ResolvedVoice, VoiceBinding, resolve_voice
+from .binding import ResolvedVoice, VoiceBinding, merge_binding, resolve_voice
 from .fragment import (
     DEFAULT_MAX_CHARS, EXAMPLES_HEADER, HEADER, MIN_MAX_CHARS, Omission, SecretFact, SpeakerFragment,
     speaker_fragment,
@@ -21,7 +21,7 @@ __all__ = [
     "InvalidVoice", "MissingVoice", "VoiceMismatch",
     "ASPECTS", "MAX_ANCHOR_CHARS", "MAX_EXAMPLE_CHARS", "MAX_ITEMS", "ImportedVoiceSource",
     "VoiceAnchor", "VoiceCatalog", "VoiceExample", "VoiceProfile",
-    "ResolvedVoice", "VoiceBinding", "resolve_voice",
+    "ResolvedVoice", "VoiceBinding", "merge_binding", "resolve_voice",
     "DEFAULT_MAX_CHARS", "EXAMPLES_HEADER", "HEADER", "MIN_MAX_CHARS", "Omission", "SecretFact",
     "SpeakerFragment", "speaker_fragment",
     "SpeakerRenderer", "SpeakerRequest", "SpokenLine", "render_speakers",

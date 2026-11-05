@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from grimoire.core.inference import (
-    OPTIONAL_STAGES, CallId, DeclinedRequest, InferencePlanError, InferencePolicy,
+    OPTIONAL_STAGES, SCENE_STAGES, CallId, DeclinedRequest, InferencePlanError, InferencePolicy,
     InferenceStage, OptionalRequest, PlannedCall, TurnInferencePlan, plan_turn,
 )
 
@@ -46,7 +46,8 @@ def test_optional_requests_are_declined_unless_enabled_and_within_cap():
 
 
 def test_default_policy_plans_no_optional_calls():
-    requests = [OptionalRequest(stage, "npc-a", "extra thought") for stage in sorted(OPTIONAL_STAGES)]
+    requests = [OptionalRequest(stage, None if stage in SCENE_STAGES else "npc-a", "extra thought")
+                for stage in sorted(OPTIONAL_STAGES)]
     result = plan(optional_requests=requests)
     assert result.optional_calls == ()
     assert [d.reason for d in result.declined] == ["disabled"] * len(OPTIONAL_STAGES)
@@ -213,3 +214,43 @@ def test_hand_built_calls_and_declines_must_follow_phase_order():
 def test_hand_built_plan_with_a_non_call_is_a_plan_error():
     with pytest.raises(InferencePlanError):
         replace(plan(), calls=("not a call",))
+
+
+# ---- 027: the director stage speaks for the scene, at most once per turn, only when enabled --------
+
+DIRECTOR = InferenceStage.DIRECTOR_GENERATION
+REPLY = OptionalRequest(DIRECTOR, None, "director reply")
+
+
+def test_director_reply_is_optional_scene_level_and_declined_by_default():
+    assert DIRECTOR in OPTIONAL_STAGES and DIRECTOR in SCENE_STAGES and not DIRECTOR.is_baseline
+    declined = plan_turn("c", "t", present_actor_ids=("pc",), player_controlled_ids=("pc",),
+                         optional_requests=(REPLY,))
+    assert declined.calls == () and [d.reason for d in declined.declined] == ["disabled"]
+    planned = plan_turn("c", "t", present_actor_ids=("pc",), player_controlled_ids=("pc",),
+                        optional_requests=(REPLY,), policy=InferencePolicy({"director_generation": 1}))
+    assert [(c.stage, c.actor_id) for c in planned.calls] == [(DIRECTOR, None)]
+    assert planned.baseline_calls == () and planned.generated_actor_ids == frozenset()
+
+
+def test_director_reply_is_never_about_an_actor():
+    with pytest.raises(InferencePlanError, match="scene"):
+        OptionalRequest(DIRECTOR, "npc-a", "director reply")
+    call = PlannedCall(CallId("c", "t", "main", DIRECTOR, "npc-a", 1), "director reply")
+    with pytest.raises(InferencePlanError, match="scene"):
+        TurnInferencePlan("c", "t", InferencePolicy({"director_generation": 1}), frozenset({"npc-a"}),
+                          frozenset(), ("main",), (call,))
+
+
+def test_one_director_reply_per_turn_whatever_the_cap():
+    policy = InferencePolicy({"director_generation": 3})
+    first = plan_turn("c", "t", present_actor_ids=PRESENT, speaking_npc_ids=("npc-a",),
+                      optional_requests=(REPLY, REPLY), policy=policy)
+    assert [c.stage for c in first.calls] == [GEN, DIRECTOR]  # after the speakers, never instead
+    assert [d.reason for d in first.declined] == ["cap_reached"]
+    later = first.add_phase("again", optional_requests=(REPLY,))
+    assert len(later.calls) == 2 and [d.reason for d in later.declined] == ["cap_reached"] * 2
+    calls = (PlannedCall(CallId("c", "t", "main", DIRECTOR, None, 1), "director reply"),
+             PlannedCall(CallId("c", "t", "more", DIRECTOR, None, 1), "director reply"))
+    with pytest.raises(InferencePlanError, match="one director_generation per turn"):
+        TurnInferencePlan("c", "t", policy, frozenset(), frozenset(), ("main", "more"), calls)

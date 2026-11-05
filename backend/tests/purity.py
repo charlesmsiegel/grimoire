@@ -73,8 +73,8 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
 ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.capture", "grimoire.chatstore", "grimoire.contextstore", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1", "grimoire.partystore",
-                      "grimoire.possessionstore", "grimoire.providers",
-                      "grimoire.store", "grimoire.sync", "grimoire.testing"})
+                      "grimoire.possessionstore", "grimoire.providers", "grimoire.runtime", "grimoire.store",
+                      "grimoire.sync", "grimoire.testing"})
 
 
 @dataclass(frozen=True)
@@ -136,6 +136,9 @@ PURE_PACKAGES = (
     PurePackage("grimoire.voice", ("grimoire.voice", "grimoire.core", "grimoire.evals.text",
                                    "grimoire.evals.checks"),
                 never_import=("grimoire.core.inference",)),
+    # Per-NPC generation (027): plans, voices, briefs and screens each call; the runtime is an adapter.
+    PurePackage("grimoire.generation", ("grimoire.generation", "grimoire.core", "grimoire.core.inference",
+                                        "grimoire.voice", "grimoire.evals.text", "grimoire.evals.checks")),
     # Offline evaluation: of the domain core it uses only the inference contracts (sprint 015);
     # only its loader and CLI read files.
     PurePackage("grimoire.evals", ("grimoire.evals", "grimoire.core.inference"),

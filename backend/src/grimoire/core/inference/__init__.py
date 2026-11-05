@@ -17,6 +17,7 @@ from .plan import (
 from .policy import (
     BASELINE_STAGES,
     OPTIONAL_STAGES,
+    SCENE_STAGES,
     InferencePolicy,
     InferenceStage,
     coerce_stage,
@@ -34,7 +35,7 @@ from .usage import (
 )
 
 __all__ = [
-    "BASELINE_STAGES", "OPTIONAL_STAGES", "InferencePolicy", "InferenceStage",
+    "BASELINE_STAGES", "OPTIONAL_STAGES", "SCENE_STAGES", "InferencePolicy", "InferenceStage",
     "coerce_stage", "CallId", "DeclinedRequest", "InferencePlanError", "OptionalRequest",
     "PlannedCall", "TurnInferencePlan", "plan_turn", "TOKEN_FIELDS", "CallAttempt",
     "Measurement", "SessionUsage", "TokenUsage", "TurnUsageLedger", "TurnUsageSummary",

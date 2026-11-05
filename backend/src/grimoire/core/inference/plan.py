@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from ._values import collection, count, identifier
-from .policy import InferencePolicy, InferenceStage, coerce_stage
+from .policy import SCENE_STAGES, InferencePolicy, InferenceStage, coerce_stage
 
 DeclineReason = Literal["disabled", "cap_reached"]
 DECLINE_REASONS: frozenset[str] = frozenset({"disabled", "cap_reached"})
@@ -48,6 +48,8 @@ class OptionalRequest:
             raise InferencePlanError(f"{stage} is planned from speakers, not requested")
         object.__setattr__(self, "stage", stage)
         _check_optional_id(self.actor_id, "actor_id")
+        if stage in SCENE_STAGES and self.actor_id is not None:
+            raise InferencePlanError(f"{stage} speaks for the scene, never for an actor")
         identifier(self.purpose, "purpose")
 
 
@@ -153,6 +155,7 @@ class TurnInferencePlan:
         position = {phase: index for index, phase in enumerate(self.phases)}
         ordinals: Counter[tuple[str, InferenceStage, str | None]] = Counter()
         generated: set[str] = set()
+        scene_spoken: set[InferenceStage] = set()
         reached = 0
         for call in self.calls:
             cid = call.call_id
@@ -175,6 +178,12 @@ class TurnInferencePlan:
             else:
                 if not self.policy.enabled(cid.stage):
                     raise InferencePlanError(f"{cid.stage} is disabled by the policy")
+                if cid.stage in SCENE_STAGES:
+                    if cid.actor_id is not None:
+                        raise InferencePlanError(f"{cid.stage} speaks for the scene: {cid!r}")
+                    if cid.stage in scene_spoken:
+                        raise InferencePlanError(f"one {cid.stage} per turn: {cid!r}")
+                    scene_spoken.add(cid.stage)
                 if cid.actor_id is not None:
                     self._check_actor(cid.actor_id)
         used = self._optional_use()
@@ -194,7 +203,7 @@ class TurnInferencePlan:
             request = declined.request
             if request.actor_id is not None:
                 self._check_actor(request.actor_id)
-            cap = self.policy.cap_for(request.stage)
+            cap = self._turn_cap(request.stage)
             if declined.reason == "disabled" and cap is not None:
                 raise InferencePlanError(f"{request.stage} is enabled, not disabled")
             if declined.reason == "cap_reached":
@@ -208,6 +217,11 @@ class TurnInferencePlan:
             raise InferencePlanError(f"{actor_id!r} is not present; absent actors get no calls")
         if actor_id in self.player_controlled_ids:
             raise InferencePlanError(f"{actor_id!r} is player-controlled; no model call decides for it")
+
+    def _turn_cap(self, stage: InferenceStage) -> int | None:
+        """The policy's cap, except that a scene stage speaks at most once per turn."""
+        cap = self.policy.cap_for(stage)
+        return min(cap, 1) if cap is not None and stage in SCENE_STAGES else cap
 
     def _optional_use(self) -> Counter[InferenceStage]:
         return Counter(call.stage for call in self.calls if not call.stage.is_baseline)
@@ -278,7 +292,7 @@ class TurnInferencePlan:
                                      GENERATION_PURPOSE))
         used = self._optional_use()
         for request in requests:
-            cap = self.policy.cap_for(request.stage)
+            cap = self._turn_cap(request.stage)
             if cap is None:
                 declined.append(DeclinedRequest(phase, request, "disabled"))
             elif used[request.stage] >= cap:

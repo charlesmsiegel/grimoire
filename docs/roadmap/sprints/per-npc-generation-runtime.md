@@ -1,5 +1,7 @@
 # One independent generation per speaking NPC
 
+**Status:** first slice implemented, headless ([GENERATION](../../GENERATION.md)): control-derived planning, snapshot voice inheritance, sealed NPC and director briefs, the runtime with screening, fencing and cancel, and the generation fault explorer. The optional `director_generation` stage is in `core.inference`. Next slice: `story-quality/3` with 015.
+
 **Outcome:** Retain 0.2.1's actor-specific generation quality but feed each model a compact evidence-safe perspective assembled deterministically.
 
 ## Scope and first proof
