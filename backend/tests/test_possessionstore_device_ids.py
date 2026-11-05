@@ -129,7 +129,8 @@ def test_a_damaged_device_identity_refuses_new_items_rather_than_plain_numbers(s
 def test_a_long_base_is_cut_before_the_tag_so_the_id_stays_one_segment(store):
     identify(store, "desktop")
     kind = "l" * SEGMENT_MAX  # the longest kind: the id still fits, with the tag and number intact
-    item = created(possession_library(store), make("make-1", name="Lantern"), kind=kind)
+    # planned, not committed: a 128-character folder plus this file name is past Windows' path limit
+    item = possession_library(store).create(make("make-1", name="Lantern"), kind=kind).item
     assert item.instance_id == f"{kind[:100]}-{tag('desktop')}-1"
     validate_segment(item.instance_id, "instance id")
 
