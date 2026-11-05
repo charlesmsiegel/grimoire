@@ -129,6 +129,10 @@ PURE_PACKAGES = (
     # It reads 017's claim shapes through ``claims_about``, never the director's graph.
     PurePackage("grimoire.context", ("grimoire.context", "grimoire.graph", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
+    # Diegetic communication (032): who an in-scene message reaches; reads 008's routed intents
+    # and 020's storage limits.
+    PurePackage("grimoire.comms", ("grimoire.comms", "grimoire.core", "grimoire.intent", "grimoire.evidence"),
+                never_import=("grimoire.core.inference",)),
     # Voice evidence: shares the gate's text matcher so screening and scoring agree.
     PurePackage("grimoire.voice", ("grimoire.voice", "grimoire.core", "grimoire.evals.text",
                                    "grimoire.evals.checks"),
