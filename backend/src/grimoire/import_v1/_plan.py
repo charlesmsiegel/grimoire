@@ -29,7 +29,9 @@ from grimoire.chats import (
 from grimoire.chatstore import campaign_taken_ids
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import ENTITY_SCHEMA, definition_to_payload, instance_to_payload
-from grimoire.core.identity import ChatRef, ImageRef, InstanceRef, LegacyId, PlacementRef, ScopeRef, SourceRef
+from grimoire.core.identity import (
+    ChatRef, ImageRef, InstanceRef, LegacyId, PlacementRef, ScopeRef, SourceRef, paired_instances,
+)
 from grimoire.core.index import LegacyIdMap
 from grimoire.images import placement_to_payload
 from grimoire.imagestore import ImageBatch, ImageLibrary
@@ -173,6 +175,8 @@ class ImportPlan:
     receipt: SourceRef | None = None
     digests: dict[str, str] = field(default_factory=dict)  # this run's writes: path -> desired digest
     relied_scopes: dict[str, str] = field(default_factory=dict)  # existing campaign -> scope its writes need
+    bound: dict[str, set[InstanceRef]] = field(default_factory=dict)  # campaign -> actors this run's new chats bind
+    _paired: dict[str, frozenset[InstanceRef]] = field(default_factory=dict)
     _probe: object = None
     _review: dict = field(default_factory=dict)
     _preview: dict = field(default_factory=dict)
@@ -494,12 +498,20 @@ class ImportPlan:
             target = self._decide(_path_of(scene.ref), "chat", scene.legacy_id, None, envelope, desired)
             if target.outcome in (PRESENT, KEPT):
                 self._cast_bound(scene.ref, scene.legacy_id, [b.actor for b in bindings])
+            elif target.outcome == WRITE:
+                self.bound.setdefault(campaign.campaign_id, set()).update(b.actor for b in bindings)
             self._put(target)
 
     def _bindable(self, actor, legacy_id: str) -> bool:  # type: ignore[no-untyped-def]
         """Whether a chat can bind ``actor`` to its V1 definition (a V2 edit may have re-sourced it)."""
         path = _path_of(actor.ref)
         if not self._usable(path):
+            return False
+        campaign = actor.ref.campaign_id
+        if campaign not in self._paired:
+            self._paired[campaign] = frozenset(paired_instances(self.store.campaign_instances(campaign)))
+        if actor.ref in self._paired[campaign]:  # load() leaves both members of the pair out: no one to bind
+            self._unresolve(legacy_id, "instance_id_conflict", str(actor.ref))
             return False
         if self.targets[path].outcome != KEPT:
             return True
@@ -721,6 +733,10 @@ class ImportPlan:
                 clash = sorted(ids & taken)
                 if clash:
                     raise StaleWrite([(_path_of(InstanceRef(cid, "character", i)), "id taken") for i in clash])
+            for cid, actors in sorted(self.bound.items()):  # another kind may have taken a bound actor's id since
+                clash = sorted(str(ref) for ref in actors & paired_instances(store.campaign_instances(cid)))
+                if clash:
+                    raise StaleWrite([(ref, "id also used by another kind") for ref in clash])
             committed = self._batch.commit(approvals)  # type: ignore[union-attr]
             self._committed = True
         return ImportResult(committed.etags, self.receipt, review)

@@ -17,11 +17,11 @@ import pytest
 from grimoire.core.entity_codec import instance_from_payload
 from grimoire.core.identity import InstanceRef, PlacementRef, SourceRef
 from grimoire.import_v1 import ImportRefused, Selection
-from grimoire.store import jsonfmt
+from grimoire.store import StaleWrite, jsonfmt
 from grimoire.store.layout import address_parts
 
 from import_fixtures import ARCHIVE, CAMPAIGN_ID, SALTMARCH, SERAPHINE_DEFAULT, SERAPHINE_REF, Env
-from v1_fixture import BLUE_ID, CAMPAIGN, MARA, SID, STAMP, card, frontmatter, placement, sha, tree_digest, write
+from v1_fixture import BLUE_ID, CAMPAIGN, MARA, RED_ID, SID, STAMP, card, frontmatter, placement, sha, tree_digest, write
 
 CAMPAIGN_DIR = f"campaigns/{CAMPAIGN_ID}/"
 WORLD_ONLY = Selection({"saltmarch": SALTMARCH})
@@ -324,3 +324,41 @@ def test_an_image_reference_in_an_imported_card_is_reported_not_rewritten(env):
     rows = [row for row in review["unresolved"] if row["reason"] == "image_reference_not_translated"]
     assert [row["legacy_id"] for row in rows] == [f"v1:{ARCHIVE}:{MARA}/older.json"]
     assert any("mara.older/" in path for path in review["writes"])  # the card itself still imports
+
+
+def test_a_sidecar_in_the_wrong_shard_does_not_hide_the_real_picture(env):
+    objects = env.v1 / "assets/image-store/objects"
+    stray = objects / "ff" / f"{RED_ID}.json"  # V1 never reads it: RED's own shard is 64
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_bytes((objects / RED_ID[4:6] / f"{RED_ID}.json").read_bytes())
+    env.rescan()
+    review = env.plan(WORLD_ONLY).review()
+    assert "image_bytes_unavailable" not in reasons(review)
+    assert any("mara.default/avatar" in path for path in review["writes"])
+
+
+def _creature_named_mara(env):
+    actor = env.store.root / CAMPAIGN_DIR / "instances" / "character" / "mara.json"
+    creature = actor.parent.parent / "creature" / "mara.json"
+    creature.parent.mkdir(parents=True, exist_ok=True)
+    creature.write_text(actor.read_text(encoding="utf-8").replace("/character/mara", "/creature/mara"),
+                        encoding="utf-8")
+
+
+def test_an_actor_whose_id_another_kind_also_uses_is_never_bound(env):
+    scene = f"v1:{ARCHIVE}:{CAMPAIGN}/scenes/{SID}.md"
+    env.plan(Selection({"saltmarch": SALTMARCH}, {"the-drowned-ledger": CAMPAIGN_ID}, frozenset({scene}))).apply()
+    _creature_named_mara(env)
+    review = env.plan(WITH_CAMPAIGN).review()
+    assert "instance_id_conflict" in reasons(review)
+    assert not any("/chats/" in path for path in review["writes"])
+
+
+def test_an_id_another_kind_takes_after_the_plan_stops_the_apply(env):
+    scene = f"v1:{ARCHIVE}:{CAMPAIGN}/scenes/{SID}.md"
+    env.plan(Selection({"saltmarch": SALTMARCH}, {"the-drowned-ledger": CAMPAIGN_ID}, frozenset({scene}))).apply()
+    plan = env.plan(WITH_CAMPAIGN)
+    assert any("/chats/" in path for path in plan.review()["writes"])
+    _creature_named_mara(env)
+    with pytest.raises(StaleWrite):
+        plan.apply()

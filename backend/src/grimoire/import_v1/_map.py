@@ -548,7 +548,8 @@ class _Mapper:
     # -- pictures --------------------------------------------------------------------------
     def pictures(self) -> None:
         images = self.m["images"]
-        objects = {row["id"]: row for row in images["objects"]}
+        # 011 lists a sidecar in the wrong shard too, but V1 only ever reads the addressable one
+        objects = {row["id"]: row for row in images["objects"] if row.get("addressable", True)}
         blobs = {row["sha256"]: row for row in images["blobs"]}
         world_rows: dict[str, tuple[Placing | None, ImageRef | None]] = {}
         layered = {layer.get("campaign_placement") for layer in images["campaign_layering"]}
