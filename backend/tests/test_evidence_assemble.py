@@ -20,8 +20,10 @@ from grimoire.core import (
 )
 from grimoire.evidence import ScannedFile, assemble, decode_batch, encode, encode_batch
 
+from grimoire.graph import ClaimSet, claims_about
+
 from evidence_fixtures import (
-    ACTORS, C, E1, INES, MARA, ORRIN, PC_CONTROLS, PLAYER, SAM, TAVI, all_records, batches, fake_etag,
+    ACTORS, C, CLAIMS, E1, INES, MARA, ORRIN, PC_CONTROLS, PLAYER, SAM, TAVI, all_records, batches, fake_etag,
     in_memory_files, m,
 )
 
@@ -42,6 +44,7 @@ def ledger(records) -> Knowledge:
 
 
 U = ledger(all_records())
+U_CLAIMS = ClaimSet(U, CLAIMS.values())
 
 
 def reasons(assembly) -> dict:
@@ -62,6 +65,7 @@ def edit_batch(files, seq, drop=None):
 def test_an_intact_ledger_assembles_to_exactly_u():
     assembly = assemble(C, in_memory_files())
     assert assembly.knowledge == U and assembly.clean and assembly.log_intact
+    assert dict(assembly.claims) == CLAIMS
     assert assembly.head[0] == 6 and assembly.high_water == 8
 
 
@@ -362,7 +366,33 @@ def _subset(small, big) -> bool:
 
 def check_guarantees(assembly, files) -> None:
     check_projections(assembly.knowledge)
+    check_claims(assembly.knowledge, assembly.claims)
     check_accounting(assembly, files)
+
+
+def _claims_within(got, want) -> None:
+    """Per field (spec B1): ids, readings and text are U's; heard/sent are subsets; a stance is U's or gone."""
+    wanted = {item.proposition_id: item for item in want.items}
+    for item in got.items:
+        theirs = wanted[item.proposition_id]
+        assert (item.predicate, item.position, item.text) == (theirs.predicate, theirs.position, theirs.text)
+        assert _subset(item.heard, theirs.heard) and _subset(item.sent, theirs.sent)
+        assert item.stance in (theirs.stance, None) and item.inherited_stance in (theirs.inherited_stance, None)
+
+
+def check_claims(knowledge: Knowledge, shapes) -> None:
+    """Stored claims only ever shrink: every kept shape is U's own, and every claims_about answer is within U's."""
+    kept = {p.proposition_id for p in knowledge.propositions}
+    assert set(shapes) <= kept and all(CLAIMS[pid] == shape for pid, shape in shapes.items())
+    claims = ClaimSet(knowledge, shapes.values())
+    for as_of in AS_OF:
+        (actors_a, player_a), (actors_u, player_u) = _views(knowledge, as_of), _views(U, as_of)
+        for node in ACTORS:
+            for a in ACTORS:
+                _claims_within(claims_about(actors_a[a], claims, node), claims_about(actors_u[a], U_CLAIMS, node))
+            assert [v.actor for v in player_a.actors] == [v.actor for v in player_u.actors]
+            for got, want in zip(player_a.actors, player_u.actors):
+                _claims_within(claims_about(got, claims, node), claims_about(want, U_CLAIMS, node))
 
 
 def check_projections(knowledge: Knowledge) -> None:

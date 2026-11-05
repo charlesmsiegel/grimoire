@@ -87,6 +87,14 @@ class ClaimSet:
     def __repr__(self) -> str:
         return f"ClaimSet({self.campaign_id!r}, {len(self.shapes)} shapes)"
 
+    def __eq__(self, other: object) -> bool:  # by content, so two reads of one ledger compare equal (020)
+        if type(other) is not ClaimSet:
+            return NotImplemented
+        return self.campaign_id == other.campaign_id and dict(self.shapes) == dict(other.shapes)
+
+    def __hash__(self) -> int:
+        return hash((self.campaign_id, frozenset(self.shapes.items())))
+
 
 @dataclass(frozen=True, slots=True)
 class NodeClaim:

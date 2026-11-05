@@ -105,7 +105,9 @@ PURE_PACKAGES = (
     # Typed relationship graph (017): values, codec, derived index and actor claims; the service is an adapter.
     PurePackage("grimoire.graph", ("grimoire.graph", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Stored events and evidence (020): codec and assembly; the store-backed service is an adapter.
-    PurePackage("grimoire.evidence", ("grimoire.evidence", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # It reads 017's claim-shape value type, stored with the propositions it shapes.
+    PurePackage("grimoire.evidence", ("grimoire.evidence", "grimoire.graph", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
     # Accepted turn effects (021): values, codecs, authority, planning and checks; the service is an adapter.
     PurePackage("grimoire.effects", ("grimoire.effects", "grimoire.graph", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),

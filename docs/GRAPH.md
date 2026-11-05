@@ -149,10 +149,12 @@ Validation:
 
 012's `Proposition` is text plus `about`. A `ClaimShape(campaign_id, proposition_id, predicate, subject, object)` gives one proposition a typed, **positive, present-tense** reading.
 
-`ClaimSet(knowledge, shapes)` validates the shapes against the ledger and keeps only the campaign id and the shapes. Its refusals are `GraphError` reasons:
+`ClaimSet(knowledge, shapes)` validates the shapes against the ledger and keeps only the campaign id and the shapes. Two `ClaimSet`s are equal (and hash alike) when their campaign and shapes are, so two reads of one stored ledger compare equal (020). Its refusals are `GraphError` reasons:
 - `unknown_proposition`, `campaign_mismatch`, `unknown_predicate`, `self_relation`;
 - `duplicate_claim`: at most one shape per proposition;
 - `not_overt`: **each endpoint must be in the proposition's `about`**. This is 012's overt-reference rule. A shape can never identify "the masked man" as the duke; that identification is a separate proposition.
+
+**Persisted by 020.** A shape is stored in its proposition's file (`grimoire.proposition/2`), written in the same append as the proposition, and read back into `CampaignKnowledge.claims` (a `ClaimSet`). `EvidenceLibrary.claims_about` and `player_claims_about` give an actor's or player's answer over the stored ledger. See [EVIDENCE](EVIDENCE.md#claim-shapes-017).
 
 Writers must also follow these rules, which the text is not checked for, as in 012:
 - shapes come with the proposition from the same writer (director, adjudication, 032);
@@ -213,7 +215,7 @@ Writers must also follow these rules, which the text is not checked for, as in 0
 | Not here | Owner |
 |---|---|
 | Relations authored inside sources or worlds | 022/026 |
-| Events as nodes; persisting claim shapes with propositions; running `check_subjects` on write; definition-subject and future-instance validity | 020 |
+| Events as nodes; running `check_subjects` on write; definition-subject and future-instance validity (claim shapes are persisted: [EVIDENCE](EVIDENCE.md#claim-shapes-017)) | 020 |
 | Play-derived relation changes and their undo | [021](EFFECTS.md) |
 | Endpoint facet constraints (`located_in` a `spatial`, `carries` a `portable`), functional predicates (one location at a time). Known gap: an item may be recorded in two places at once, and nothing reports it | 059/034 (023 shipped counted stacks only, not individual items) |
 | Species membership | 024 |
