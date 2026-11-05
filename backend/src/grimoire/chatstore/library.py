@@ -145,16 +145,26 @@ def _party_ids_in_bytes(data: bytes) -> frozenset[str]:
     """Every instance id an instance file the store cannot read as a record might name as a party.
 
     Every ``<kind>/<instance_id>`` in its text counts (an escaped ``\\/`` too), and, when the bytes parse
-    as JSON, every string ``party_ids`` finds (a ``\\u`` escape too). Over-reserving only skips an id.
+    as JSON, every one inside each decoded string (a ``\\u`` escape too). Over-reserving only skips an id.
     """
     text = data.decode("utf-8", "replace")
-    taken = {instance_id for kind, instance_id in _PARTY_TEXT.findall(text.replace("\\/", "/"))
-             if _is_party(kind, instance_id)}
+    strings = [text.replace("\\/", "/")]
     try:
         document = json.loads(text)
     except (ValueError, RecursionError, MemoryError):  # not JSON, or nested past the parser: the text scan stands
-        return frozenset(taken)
-    return frozenset(taken | party_ids(document))
+        document = None
+    stack: list[object] = [document]
+    while stack:  # every decoded string too, so an escaped slash anywhere in free text still counts
+        value = stack.pop()
+        if isinstance(value, str):
+            strings.append(value)
+        elif isinstance(value, Mapping):
+            stack.extend(value.keys())
+            stack.extend(value.values())
+        elif isinstance(value, list):
+            stack.extend(value)
+    return frozenset(instance_id for string in strings for kind, instance_id in _PARTY_TEXT.findall(string)
+                     if _is_party(kind, instance_id))
 
 
 def _is_party(kind: str, instance_id: str) -> bool:

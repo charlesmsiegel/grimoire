@@ -234,6 +234,7 @@ def test_an_id_named_only_by_a_possession_record_is_never_reallocated(store, lib
     b'{"format": "grimoire.record/9", "payload": {"possession": {"owner": "character/vex-1"}}}',  # a newer format
     b'{"format": "grimoire.record/9", "payload": {"note": "lent by character/vex-1"}}',  # inside free text
     b'{"format": "grimoire.record/9", "payload": {"owner": "character\\u002fvex-1"}}',  # an escaped slash
+    b'{"format": "grimoire.record/9", "payload": {"note": "lent by character\\u002fvex-1"}}',  # escaped in text
     b"[" * 200_000 + b'"character/vex-1"' + b"]" * 200_000,  # nested past the JSON parser
 ])
 def test_an_instance_file_the_store_cannot_read_reserves_what_it_names(store, data):
