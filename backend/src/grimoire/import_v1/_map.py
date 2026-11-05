@@ -197,6 +197,7 @@ def _display(value: object, fallback: str) -> str:
 
 def _persona_body(text: str) -> str:
     """The Markdown body of a V1 persona file (after its front matter), or ``""``."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")  # a copy for parsing: V1 accepts CRLF files
     if not text.startswith("---\n"):
         return ""
     end = text.find("\n---\n", 3)
@@ -233,6 +234,7 @@ class _Mapper:
         #: candidate texts of the portrayals the selection declines, and the (campaign, appearance) built on them
         self.declined: set[str] = set()
         self.declined_appearances: set[tuple[str, str]] = set()
+        self.metadata_reported: set[str] = set()
         self.entries = {row["path"]: row for row in manifest["entries"]}
 
     def legacy(self, path: str) -> str:
@@ -507,9 +509,14 @@ class _Mapper:
         objects = {row["id"]: row for row in images["objects"]}
         blobs = {row["sha256"]: row for row in images["blobs"]}
         world_rows: dict[str, tuple[Placing | None, ImageRef | None]] = {}
+        layered = {layer.get("campaign_placement") for layer in images["campaign_layering"]}
+        selected = {campaign.v1_id for campaign in self.out.campaigns}
         for row in images["placements"]:
             owner = row["owner"]
             if owner["scope"] != "world":
+                if owner["scope"] == "campaign" and owner.get("scope_id") in selected and row["path"] not in layered:
+                    # a campaign's own slot over no world art: not carried by this slice, and said so
+                    self.unresolved(row["legacy_id"], "campaign_only_placement", row["path"])
                 continue
             source = self.sel.worlds.get(owner["scope_id"])
             subject_pinned = self.portrayals.get((owner["scope_id"], owner["base"], owner["record"],
@@ -563,6 +570,12 @@ class _Mapper:
         if _sha(data) != obj["blob_sha256"]:  # the reader verified the walk's digest; this is the object's
             self.unresolved(obj_legacy, "image_bytes_unavailable", "hash_mismatch")
             return None
+        omitted = [name for name, present in (("description", obj.get("has_description")),
+                                               ("sources", obj.get("sources")), ("subjects", obj.get("subjects")),
+                                               ("unknown_fields", obj.get("unknown_fields"))) if present]
+        if omitted and obj_legacy not in self.metadata_reported:  # the picture imports; its metadata does not
+            self.metadata_reported.add(obj_legacy)
+            self.unresolved(obj_legacy, "image_metadata_not_carried", ", ".join(omitted))
         provenance = {"legacy_id": obj_legacy, "v1_object": obj["id"], "v1_blob": self.legacy(blob["path"])}
         self.out.pictures[ref] = Picture(ref, obj_legacy, data, provenance)
         return ref

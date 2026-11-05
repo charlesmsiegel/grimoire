@@ -259,3 +259,43 @@ def test_a_control_character_in_a_campaign_name_is_shown_as_a_space(env):
     env.rescan()
     review = env.plan(WITH_CAMPAIGN).review()
     assert f"{CAMPAIGN_DIR}scope.json" in review["writes"]
+
+
+def test_a_campaign_only_picture_is_reported_not_dropped_silently(env):
+    write(env.v1, f"{CAMPAIGN}/characters/mara/assets/default/image-refs/gallery_2.json", placement(BLUE_ID))
+    env.rescan()
+    review = env.plan(WITH_CAMPAIGN).review()
+    assert "campaign_only_placement" in reasons(review)
+
+
+def test_image_metadata_the_import_does_not_carry_is_reported(env):
+    path = env.v1 / "assets/image-store/objects" / BLUE_ID[4:6] / f"{BLUE_ID}.json"
+    sidecar = json.loads(path.read_text(encoding="utf-8"))
+    write(env.v1, str(path.relative_to(env.v1)), json.dumps({**sidecar, "description": "A tide pool."}, indent=2))
+    env.rescan()
+    review = env.plan(WORLD_ONLY).review()
+    rows = [row for row in review["unresolved"] if row["reason"] == "image_metadata_not_carried"]
+    assert rows and "description" in rows[0]["detail"]
+    assert any("mara.default/gallery_1" in path for path in review["writes"])  # the picture still imports
+
+
+def test_an_actor_re_sourced_in_v2_is_never_bound_to_its_v1_definition(env):
+    scene = f"v1:{ARCHIVE}:{CAMPAIGN}/scenes/{SID}.md"
+    env.plan(Selection({"saltmarch": SALTMARCH}, {"the-drowned-ledger": CAMPAIGN_ID}, frozenset({scene}))).apply()
+    actor = env.store.root / CAMPAIGN_DIR / "instances" / "character" / "mara.json"
+    text = actor.read_text(encoding="utf-8")
+    old = '"derived_from": "world:saltmarch/character/mara.default"'
+    new = '"derived_from": "world:saltmarch/character/mara.older"'
+    actor.write_text(text.replace(old, new), encoding="utf-8")
+    review = env.plan(WITH_CAMPAIGN).review()
+    assert "actor_changed_in_v2" in reasons(review)
+    assert not any("/chats/" in path for path in review["writes"])
+
+
+def test_a_persona_saved_with_windows_line_endings_keeps_its_description(env):
+    path = env.v1 / "worlds/saltmarch/pcs/winifred/default.md"
+    write(env.v1, "worlds/saltmarch/pcs/winifred/default.md", path.read_bytes().replace(b"\n", b"\r\n"))
+    env.rescan()
+    preview = env.plan(WORLD_ONLY).preview()
+    winifred = next(data for key, data in preview.items() if "winifred.default/" in key)
+    assert json.loads(winifred)["payload"]["description"] == "A debtor."

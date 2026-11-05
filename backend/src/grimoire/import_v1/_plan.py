@@ -451,10 +451,11 @@ class ImportPlan:
         for scene in campaign.scenes:
             bindings, persona, dropped = [], None, []
             # with a usable player the chat has its persona: another player is only ever a second one
-            player = any(actors[ref].role == "player" and self._usable(_path_of(ref)) for ref in scene.cast)
+            ok = {ref: self._bindable(actors[ref], scene.legacy_id) for ref in scene.cast}
+            player = any(actors[ref].role == "player" and ok[ref] for ref in scene.cast)
             for ref in scene.cast:
                 actor = actors[ref]
-                if not self._usable(_path_of(ref)):
+                if not ok[ref]:
                     if actor.role == "player" and player:
                         self._unresolve(scene.legacy_id, "second_persona", str(ref))
                     else:
@@ -494,6 +495,23 @@ class ImportPlan:
             if target.outcome in (PRESENT, KEPT):
                 self._cast_bound(scene.ref, scene.legacy_id, [b.actor for b in bindings])
             self._put(target)
+
+    def _bindable(self, actor, legacy_id: str) -> bool:  # type: ignore[no-untyped-def]
+        """Whether a chat can bind ``actor`` to its V1 definition (a V2 edit may have re-sourced it)."""
+        path = _path_of(actor.ref)
+        if not self._usable(path):
+            return False
+        if self.targets[path].outcome != KEPT:
+            return True
+        try:
+            stored = self.store.read(actor.ref)
+            source = SourceRef.parse(stored.envelope.derived_from)  # type: ignore[union-attr, arg-type]
+        except (StoreError, ValueError, TypeError):
+            source = None
+        if source is not None and source.entity_key == actor.definition.entity_key:
+            return True
+        self._unresolve(legacy_id, "actor_changed_in_v2", str(actor.ref))
+        return False
 
     def _cast_bound(self, ref: ChatRef, legacy_id: str, cast: list[InstanceRef]) -> None:
         """An imported chat keeps the cast it started with: an actor imported since is reported, never bound."""
