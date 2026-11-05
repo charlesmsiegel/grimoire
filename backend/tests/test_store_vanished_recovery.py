@@ -203,3 +203,43 @@ def test_a_revision_target_taken_meanwhile_holds_back_its_head_move(tmp_path):
     assert set(report.incomplete) == {R2, MANIFEST}
     with LibraryStore.open(root / LIB, locker=locker) as store:
         assert dict(store.read_source(HARBOR).manifest.heads).get("character/wren") != "r2"
+
+
+def test_a_revision_kept_aside_by_a_crashed_recovery_still_holds_back_its_head(tmp_path):
+    """Recovery keeps a revision aside (its slot holds other bytes) and crashes before deciding the
+    manifest; the next recovery still holds the head move back."""
+    locker, root, revision = _crash_after_other(tmp_path)
+    taken = revision + b"\n"
+    (root / LIB / R2).write_bytes(taken)
+    crash = Crash(Target("replace", target=f"{LIB}/.conflicts/*"), "after")
+    with pytest.raises(BaseException):
+        LibraryStore.open(root / LIB, ops=RootedFileOps(root, plan=[crash], record=False), locker=locker)
+    with LibraryStore.open(root / LIB, locker=locker) as store:
+        report = store.last_recovery
+        heads = dict(store.read_source(HARBOR).manifest.heads)
+    assert (root / LIB / R2).read_bytes() == taken
+    assert heads.get("character/wren") != "r2"
+    assert MANIFEST in report.incomplete
+
+
+def test_a_revision_slot_taken_during_a_live_commit_is_a_write_conflict(tmp_path):
+    """Nothing vanished, so the live commit reports the race as WriteConflict (not CommitIncomplete)
+    and leaves no journal; the head move is kept aside with its revision."""
+    from grimoire.store import WriteConflict
+
+    locker = ProcessLocker()
+    root = _root(tmp_path, locker)
+    other = f"{LIB}/campaigns/other/instances/character/late.json"
+    state = {}
+
+    def take_slot(ops, rooted):
+        (rooted / LIB / R2).write_bytes(state["revision"] + b"\n")
+
+    ops = RootedFileOps(root, plan=[Interleave(Target("replace", target=other), take_slot)], record=False)
+    with LibraryStore.open(root / LIB, ops=ops, locker=locker) as store:
+        txn, state["revision"] = _head_move(store, other=True)
+        with pytest.raises(WriteConflict) as raised:
+            txn.commit(owner_handle())
+        assert not (root / LIB / ".txn" / "journal.json").exists()
+        assert dict(store.read_source(HARBOR).manifest.heads).get("character/wren") != "r2"
+    assert any("manifest.json" in path for path in raised.value.preserved)

@@ -214,7 +214,8 @@ class Settlement:
 
     published: list[tuple[str, str]] = field(default_factory=list)  # (target, etag)
     preserved: list[str] = field(default_factory=list)  # conflict paths
-    incomplete: list[str] = field(default_factory=list)  # targets whose staging vanished
+    incomplete: list[str] = field(default_factory=list)  # targets not written (vanished or held back)
+    vanished: bool = False  # some staged file was gone (not only kept aside)
     dropped: list[str] = field(default_factory=list)  # keep/state targets set aside unpublished
     aborted: bool = False
 
@@ -367,8 +368,14 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
         if entry.temp not in staged:
             current_etag = access.etag_of(entry.target)
             vanished = current_etag != entry.new if live else (entry.old != entry.new and current_etag == entry.old)
+            if (not live and journal.state == "commit" and _source_of_revision(entry.target) is not None
+                    and current_etag != entry.new):
+                # A revision an earlier recovery kept aside (its slot held other bytes) still holds
+                # back its head move: that decision lived only in memory and the recovery crashed.
+                vanished = True
             if (journal.state == "commit" or vanish_abort) and vanished:
                 settlement.incomplete.append(_text(entry.target))
+                settlement.vanished = True
                 unwritten.add(entry.target)
     held_sources = {_source_of_revision(entry.target) for entry in journal.entries
                     if entry.target in unwritten} - {None}

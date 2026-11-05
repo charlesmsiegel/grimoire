@@ -1538,7 +1538,7 @@ class _Commit:
             settlement = engine.settle(self.access, journal, live=True)  # 10-12
         except (OSError, StoreError, ValueError) as error:
             raise CommitIncomplete(f"failed after the commit point; recovery will finish it: {error}") from error
-        if settlement.incomplete:  # checked first: a vanished staged file abandons the whole commit
+        if settlement.vanished:  # checked first: a vanished staged file abandons the whole commit
             kept = f"; preserved: {', '.join(settlement.preserved)}" if settlement.preserved else ""
             raise CommitIncomplete("staged files vanished before publication (removed by another program?); "
                                    f"not written: {', '.join(settlement.incomplete)}{kept}")
@@ -1777,9 +1777,9 @@ class _Commit:
             self.access.guard.check_write(put.parts, staging_device=staging)
 
     def _stage(self, staging: int) -> tuple[Entry, ...]:
-        self._recheck(staging)
         access, temps = self.access, []
         try:
+            self._recheck(staging)
             entries = []
             # Manifests are staged, and so published, after everything else: a manifest that has
             # landed then proves the revisions its heads name landed first (or were kept aside).

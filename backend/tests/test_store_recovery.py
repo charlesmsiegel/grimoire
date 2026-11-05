@@ -700,3 +700,42 @@ def test_discard_survives_every_crash_and_never_publishes(tmp_path):
     explore_crashes(sc, tmp_path, errors=True).assert_ok()
     if EXHAUSTIVE:  # and every crash of the re-run discard after an injected error (minutes on Windows)
         explore_crashes(sc, tmp_path / "fail", **explore_mode(FAIL_RECOVERY)).assert_ok()
+
+
+def test_a_staging_folder_swapped_after_authorization_names_consumed_approvals(tmp_path, monkeypatch):
+    """Staging's own first recheck refuses a .txn replaced by a link after authorization: the error
+    still names the approval that authorization consumed."""
+    from grimoire.store import library as library_mod
+
+    locker = ProcessLocker()
+    root = tmp_path / "root"
+    root.mkdir()
+    _setup(locker)(RootedFileOps(root, record=False), root)
+    authority = Authorizer([OWNER])
+    authority.add_grant(Grant("g", "app:importer", frozenset({Permission.APPLY}),
+                              ResourcePath.parse("campaigns"), OWNER))
+    store = LibraryStore.open(root / LIB, locker=locker)
+    try:
+        txn = store.transaction()
+        address = txn.put(RecordEnvelope(InstanceRef("c9", "character", "new"), {"n": 1}), None)
+        authority.register_approval(Approval("a1", "app:importer", Permission.APPLY,
+                                             ResourcePath.parse(address),
+                                             payload_digest(txn.preview()[address]), OWNER))
+        original = library_mod._Commit._authorize
+
+        def authorize_then_swap(self):
+            denied = original(self)
+            os.rename(root / LIB / ".txn", root / "moved-txn")
+            os.symlink(root / "moved-txn", root / LIB / ".txn")
+            return denied
+
+        monkeypatch.setattr(library_mod._Commit, "_authorize", authorize_then_swap)
+        with pytest.raises(Exception) as refused:
+            txn.commit(authority.handle_for("app:importer"), {address: "a1"})
+        assert authority.pending_approvals() == ()
+        assert getattr(refused.value, "consumed_approvals", ()) == ("a1",)
+    finally:
+        monkeypatch.undo()
+        os.unlink(root / LIB / ".txn")
+        os.rename(root / "moved-txn", root / LIB / ".txn")
+        store.close()

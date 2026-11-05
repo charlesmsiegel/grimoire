@@ -352,7 +352,7 @@ def _verify_blobs(plan: SyncPlan, handles: Mapping[str, object]) -> set[str]:
             continue  # trusted: verified when it was copied or first seen, and unchanged in size since
         if len(listed) == 1:
             if decide("blob", plan.bases[path], sides[a], sides[b]).action != "copy":
-                continue  # deleted, resurrected, missing_ancestor or blocked: never copied, so never read
+                continue  # deleted, missing_ancestor or blocked: never copied, so never read
             dest = plan.other(listed[0])
             if plan.stores[dest].collides(path):
                 continue  # a name_collision (``_admit``): never copied
