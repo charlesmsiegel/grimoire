@@ -89,6 +89,10 @@ def test_a_frame_is_revised_until_the_decision_and_decided_on_its_latest_revisio
     assert library.assess(Q, "c10").allowed == ("failure",)
     revised = library.frame(bridge(), contribution=vault())
     assert revised.revision == 2
+    # A revision is the same action: it cannot move to a later moment that admits later facts.
+    later = Factor("snap", "hinders", "A plank snaps.", 11, "event:e-snap")
+    moved = bridge(factors=(ACROBAT, GAP, later), at=moment(12, "t10"))
+    assert _reason(library.frame, moved, contribution=vault()) == "frame_moved"
     library.decide(Q, "c10", PARTIAL)  # supported only by the revision that records her training
     state = _reopen(table).library().state(Q)
     assert [entry.revision for entry in state.frames["c10"]] == [1, 2]

@@ -66,7 +66,7 @@ An `Outcome` is a recorded decision. `Outcome.resolution()` is the 003 `Resoluti
 
 | Call | Does |
 |---|---|
-| `frame(frame, contribution=None)` | Records a new attempt, or a revision of an undecided one (`FrameEntry.revision` counts from 1). |
+| `frame(frame, contribution=None)` | Records a new attempt, or a revision of an undecided one (`FrameEntry.revision` counts from 1). A revision is the same action: same actor, chat, moment and contribution (`frame_moved`), so it cannot admit facts established after the attempt. |
 | `rule(ruling, supersedes=())` | Records a 025 `AbilityRuling` on a recorded frame's exact ability attempt, after 025's `check_ruling`. `supersedes` names live rulings on the same attempt that this one replaces. |
 | `decide(campaign, attempt_id, decision, consent=None)` | Assesses the latest frame revision now and records the decision. Deciding the same again returns the recorded outcome; a different one is `already_decided`. |
 | `assess`, `outcome`, `resolutions`, `state` | Read. |
@@ -83,7 +83,7 @@ An `Outcome` is a recorded decision. `Outcome.resolution()` is the 003 `Resoluti
 - 021 then charges that assessment once.
 - A ruling never pins the entity's `resolved_source`. The decision's finding is the pin: a later change shows up as `assessment_changed` at hand-off.
 
-**Other refusals.** `missing_chat`, `not_in_chat`, `unresolved_actor`, `attempt_reused` (an attempt id is another actor's), `ruling_mismatch` (no frame, or other labels), `duplicate_ruling`, `unknown_ruling`, `unknown_attempt`, `stale_frame`, `consent_mismatch`, and 025's own reasons from `check_ruling` (`limit_not_approvable`, `wrong_classification` and so on). A refusal writes nothing.
+**Other refusals.** `missing_chat`, `not_in_chat`, `unresolved_actor`, `attempt_reused` (an attempt id is another actor's), `frame_moved`, `ruling_mismatch` (no frame, or other labels), `duplicate_ruling`, `unknown_ruling`, `unknown_attempt`, `stale_frame`, `consent_mismatch`, and 025's own reasons from `check_ruling` (`limit_not_approvable`, `wrong_classification` and so on). A refusal writes nothing.
 
 ## Persistence
 

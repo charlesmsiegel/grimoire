@@ -126,6 +126,10 @@ class _Builder:
         revisions = self.frames.get(frame.attempt_id, [])
         if revisions and revisions[0].frame.actor != frame.actor:
             raise _refused(f"attempt {frame.attempt_id!r} is another actor's", "attempt_reused")
+        if revisions and (revisions[0].frame.chat, revisions[0].frame.moment, revisions[0].contribution) != (
+                frame.chat, frame.moment, contribution):
+            # The same action: a later moment would admit facts established after it was attempted.
+            raise _refused("a revision keeps the action's chat, moment and contribution", "frame_moved")
         if frame.attempt_id in self.decisions:
             raise _refused(f"attempt {frame.attempt_id!r} is already decided", "already_decided")
         if contribution is not None:
