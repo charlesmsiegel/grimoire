@@ -76,7 +76,7 @@ def test_a_reserved_member_is_not_on_stage_and_never_speaks(cards):
         scene = table.runner.open(chat)
         assert scene.cast == scene.staged.present == (anya,)
         assert not [code for code, _ in scene.problems if code != "party"]  # stored away is not a problem
-        table.runner.post(table.runner.open(chat).chat, table.player(), '"Anyone here?"')
+        table.runner.post(chat, table.player(), '"Anyone here?"')
         refused("nothing_to_generate", table.runner.generate, chat, table.player())
         assert table.harness.prompts() == []
 
