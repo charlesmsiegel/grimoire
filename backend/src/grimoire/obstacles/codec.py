@@ -1,7 +1,9 @@
 """Exact JSON forms of what the obstacle ledger records (Sprint 040): obstacles and attempts.
 
 Encoding is deterministic: sets are sorted lists, bearings are objects and every key is always present
-(``None`` where a value is absent), so decoding a stored entry and encoding it again reproduces it.
+(``None`` where a value is absent), so decoding a stored entry and encoding it again reproduces it. The
+one exception is an attempt's ``supersedes``, present only on a link that superseded a pending attempt,
+so links written before it existed read back unchanged.
 Decoding is strict: exact keys, exact JSON types, then the value's own constructor, which re-runs every
 authoring check (a railroad read back is still refused). Anything else is an ``ObstacleError`` with
 reason ``undecodable_entry``; the store-backed ledger turns that into ``LedgerInvalid`` and fails closed.
@@ -18,6 +20,7 @@ from .model import Approach, Cost, Obstacle, ObstacleError, ObstacleFact, Obstac
 OBSTACLE_KEYS = frozenset({"obstacle_id", "campaign_id", "goal", "actors", "facts", "stakes", "approaches",
                            "provenance"})
 ATTEMPT_KEYS = frozenset({"obstacle_id", "attempt_id", "approach_id", "novel"})
+_SUPERSEDING_KEYS = ATTEMPT_KEYS | {"supersedes"}
 _FACT_KEYS = frozenset({"fact_id", "kind", "text", "established", "source", "bearings"})
 _STAKE_KEYS = frozenset({"stake_id", "text", "escalates"})
 _APPROACH_KEYS = frozenset({"approach_id", "text", "risks", "costs"})
@@ -143,19 +146,28 @@ def obstacle_from_payload(campaign_id: str, value: object) -> Obstacle:
 
 # --- attempts --------------------------------------------------------------------------------
 
-def attempt_to_payload(obstacle_id: str, attempt_id: str, approach: Approach, listed: bool) -> dict[str, object]:
-    """An attempt's link to its obstacle: a suggestion by id, or a novel approach in full."""
-    return {"obstacle_id": obstacle_id, "attempt_id": attempt_id, "approach_id": approach.approach_id,
-            "novel": None if listed else approach_to_payload(approach)}
+def attempt_to_payload(obstacle_id: str, attempt_id: str, approach: Approach, listed: bool,
+                       supersedes: str | None = None) -> dict[str, object]:
+    """An attempt's link to its obstacle: a suggestion by id, or a novel approach in full, and the pending
+    attempt it superseded, if any (the key is left out when there is none)."""
+    payload: dict[str, object] = {"obstacle_id": obstacle_id, "attempt_id": attempt_id,
+                                  "approach_id": approach.approach_id,
+                                  "novel": None if listed else approach_to_payload(approach)}
+    if supersedes is not None:
+        payload["supersedes"] = supersedes
+    return payload
 
 
-def attempt_from_payload(value: object) -> tuple[str, str, str, Approach | None]:
-    """``(obstacle id, attempt id, approach id, novel approach or None)``."""
-    data = _object(value, ATTEMPT_KEYS, "attempt")
+def attempt_from_payload(value: object) -> tuple[str, str, str, Approach | None, str | None]:
+    """``(obstacle id, attempt id, approach id, novel approach or None, superseded attempt id or None)``."""
+    keys = _SUPERSEDING_KEYS if isinstance(value, Mapping) and "supersedes" in value else ATTEMPT_KEYS
+    data = _object(value, keys, "attempt")
     novel = None if data["novel"] is None else approach_from_payload(data["novel"])
     approach_id = _str(data["approach_id"], "approach_id")
     if novel is not None and novel.approach_id != approach_id:
         raise _bad("a novel approach is linked under its own id")
     if novel is not None and approach_to_payload(novel) != _thaw(data["novel"]):
         raise _bad("the novel approach is not in its canonical form")
-    return _str(data["obstacle_id"], "obstacle_id"), _str(data["attempt_id"], "attempt_id"), approach_id, novel
+    supersedes = _str(data["supersedes"], "supersedes") if "supersedes" in data else None  # never null
+    return (_str(data["obstacle_id"], "obstacle_id"), _str(data["attempt_id"], "attempt_id"), approach_id, novel,
+            supersedes)

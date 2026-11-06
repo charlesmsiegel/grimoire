@@ -334,17 +334,24 @@ class Attempt:
     """One action against an obstacle: the 029 attempt it is, and the approach it takes.
 
     ``listed`` says whether the approach is one of the obstacle's suggestions; a novel approach carries
-    its own risks and costs, chosen with the player's action.
+    its own risks and costs, chosen with the player's action. ``supersedes`` names the pending attempt
+    this one replaced because it could not be decided when this one was linked: that attempt is void
+    for good, whatever 029 decides about it later.
     """
 
     attempt_id: str
     approach: Approach
     listed: bool
+    supersedes: str | None = None
 
     def __post_init__(self) -> None:
         _text(self.attempt_id, "attempt_id", TEXT_MAX)
         if type(self.approach) is not Approach or type(self.listed) is not bool:
             raise _invalid("an attempt takes an Approach and a listed flag")
+        if self.supersedes is not None:
+            _text(self.supersedes, "supersedes", TEXT_MAX)
+            if self.supersedes == self.attempt_id:
+                raise _invalid("an attempt cannot supersede itself")
 
 
 def resolve_approach(obstacle: Obstacle, approach: object) -> tuple[Approach, bool]:
@@ -506,12 +513,15 @@ def derive(obstacle: Obstacle, revision: int, attempts: Iterable[Attempt],
     service keeps (an attempt after a successful one), diverges.
 
     The service links an attempt before 029 frames it, so a link with no frame is an attempt whose frame
-    was never written (a crash): the latest is ``pending`` until framed. An undecided attempt with a
-    later attempt after it was superseded (its frame was never written, or 029 can no longer decide it
-    because its actor changed hands) and is ``void``. Decided afterwards anyway, it counts in link order,
-    and the attempts after it must agree with what it changed, or the obstacle diverges.
+    was never written (a crash): the latest is ``pending`` until framed. An attempt a later link
+    ``supersedes`` (its frame was never written, or 029 could not decide it because its actor had changed
+    hands) is ``void`` for good: control may come back and 029 may decide it after all, but that decision
+    brings nothing and the attempts after it do not answer to it. A link recorded before links named what
+    they superseded has no ``supersedes``: an undecided attempt with a later one after it is then ``void``
+    too, but decided afterwards it counts in link order, and what follows must agree with it.
     """
     attempts = list(attempts)
+    superseded = {a.supersedes for a in attempts if a.supersedes is not None}
     facts = list(obstacle.facts)
     states: list[AttemptState] = []
     status: Status = "open"
@@ -524,7 +534,7 @@ def derive(obstacle: Obstacle, revision: int, attempts: Iterable[Attempt],
         last = index == len(attempts) - 1
         if status != "open":
             reason = "attempt_out_of_turn"  # the service links nothing after a decisive attempt
-        elif outcome is None and not last:
+        elif attempt.attempt_id in superseded or (outcome is None and not last):
             states.append(AttemptState(attempt, frame, "void"))  # superseded by the attempt after it
             continue
         elif frame is None:

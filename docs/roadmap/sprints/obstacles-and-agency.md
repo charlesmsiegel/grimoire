@@ -20,7 +20,7 @@ Can create playable situations using freeform narration and current state; quest
 
 ## Status
 
-Milestones 1 and 2 are built as a first slice ([OBSTACLES](../../OBSTACLES.md)): `grimoire.obstacles` and `grimoire.obstaclestore`, with attempts framed and decided through [029](../../ADJUDICATION.md). The proving scenario runs headless: the bribe succeeds, the archive is overcome, and the purse and the guard's expected cut come due.
+Milestones 1 and 2 are built as a first slice ([OBSTACLES](../../OBSTACLES.md)): `grimoire.obstacles` and `grimoire.obstaclestore`, with attempts framed and decided through [029](../../ADJUDICATION.md). The proving scenario runs headless: the bribe succeeds, the archive is overcome, and the purse and the guard's expected cut come due. An attempt superseded because it could not be decided (its actor changed hands) is named by the link that superseded it and stays void even if control returns and 029 decides it; framing is crash-explored under the fault harness.
 
 ## Planned later work
 

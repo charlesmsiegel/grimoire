@@ -83,16 +83,25 @@ class _Builder:
                            "obstacle_engaged")
         return len(self.obstacles.get(obstacle.obstacle_id, ())) + 1
 
-    def check_attempt(self, obstacle_id: str, attempt_id: str, approach_id: str, novel: Approach | None) -> Attempt:
-        """The attempt a link records, or a refusal (everything that one ledger alone can check)."""
+    def check_attempt(self, obstacle_id: str, attempt_id: str, approach_id: str, novel: Approach | None,
+                      supersedes: str | None) -> Attempt:
+        """The attempt a link records, or a refusal (everything that one ledger alone can check).
+
+        A link supersedes only the attempt linked just before it to the same obstacle (``supersedes_mismatch``):
+        one attempt is undecided at a time, so that is the only one that can have been pending.
+        """
         entries = self.obstacles.get(obstacle_id)
         if not entries:
             raise _refused(f"no obstacle {obstacle_id!r}", "unknown_obstacle")
         if attempt_id in self.linked:
             raise _refused(f"attempt {attempt_id!r} is already linked to an obstacle", "attempt_linked")
+        earlier = self.attempts.get(obstacle_id)
+        if supersedes is not None and (not earlier or earlier[-1].attempt_id != supersedes):
+            raise _refused(f"attempt {attempt_id!r} supersedes {supersedes!r}, not the attempt before it",
+                           "supersedes_mismatch")
         obstacle = entries[-1].obstacle
         approach, listed = resolve_approach(obstacle, approach_id if novel is None else novel)
-        return Attempt(attempt_id, approach, listed)
+        return Attempt(attempt_id, approach, listed, supersedes)
 
     def add_obstacle(self, entry: ObstacleEntry) -> None:
         self.obstacles.setdefault(entry.obstacle.obstacle_id, []).append(entry)
@@ -223,8 +232,9 @@ class ObstacleLibrary:
         ``author``). The attempt is then linked, and only then framed through 029: a link always comes
         before its frame, so no frame decided in 029 can lose the obstacle it was made against. One
         attempt is undecided at a time (``attempt_pending``): the next one meets what this one changes,
-        unless the pending one can never be decided (its actor changed hands, or its frame was never
-        written), when the next one supersedes it.
+        unless the pending one cannot be decided now (its actor changed hands, or its frame was never
+        written), when the next one supersedes it: the link names it, and it stays void for good, even
+        if control comes back and 029 decides it.
         A frame for the pending attempt is a 029 revision and keeps its approach (``approach_changed``);
         it may also bring a diverged pending attempt back into agreement. Refused too:
         ``unknown_obstacle``, ``obstacle_diverged``, ``already_overcome``, ``attempt_linked`` (another
@@ -255,7 +265,7 @@ class ObstacleLibrary:
                                        f"({state.problem})", "obstacle_diverged")
                     raise _refused(f"attempt {frame.attempt_id!r} is already decided", "already_decided")
                 assert last is not None
-                if last.attempt != attempt:
+                if (last.attempt.approach, last.attempt.listed) != (given, listed):
                     raise _refused("a revision keeps the attempt's approach", "approach_changed")
                 earlier = [a.frame.moment.sequence for a in state.attempts[:-1] if a.frame is not None]
                 self._check(state, attempt, frame, max(earlier) if earlier else None)
@@ -270,15 +280,18 @@ class ObstacleLibrary:
                     and self._adjudication.undecidable(campaign_id, pending.attempt.attempt_id) is None):
                 raise _refused(f"attempt {pending.attempt.attempt_id!r} against {obstacle_id!r} is undecided",
                                "attempt_pending")
-            # This one supersedes a pending attempt that can never be decided: a link whose frame was never
+            # This one supersedes a pending attempt that cannot be decided now: a link whose frame was never
             # written, or a frame whose actor changed hands (029 makes the new controller's action a new one).
+            # The link names it, so it stays void even if control comes back and 029 decides it after all.
+            superseded = None if pending is None else pending.attempt.attempt_id
             if self._adjudication.outcome(campaign_id, frame.attempt_id) is not None:
                 # Linking a known result would let a success be pinned to an obstacle after the fact.
                 raise _refused(f"attempt {frame.attempt_id!r} is already decided", "already_decided")
-            builder.check_attempt(obstacle_id, attempt.attempt_id, given.approach_id, None if listed else given)
+            attempt = builder.check_attempt(obstacle_id, attempt.attempt_id, given.approach_id,
+                                            None if listed else given, superseded)
             self._check(state, attempt, frame, state.after)
             self._adjudication.check(frame, contribution=contribution, author=author)  # 029's refusals, unwritten
-            payload = attempt_to_payload(obstacle_id, attempt.attempt_id, given, listed)
+            payload = attempt_to_payload(obstacle_id, attempt.attempt_id, given, listed, superseded)
             self._append(builder, "attempt", payload)
             builder.add_attempt(obstacle_id, attempt)
             return self._adjudication.frame(frame, contribution=contribution, author=author)
@@ -342,8 +355,9 @@ def _replay(campaign_id: str, name: str, entries: Iterable[object], head: Head |
                 builder.add_obstacle(ObstacleEntry(obstacle, builder.check_obstacle(obstacle),
                                                    recorded_by))  # type: ignore[arg-type]
             else:
-                obstacle_id, attempt_id, approach_id, novel = attempt_from_payload(data["value"])
-                builder.add_attempt(obstacle_id, builder.check_attempt(obstacle_id, attempt_id, approach_id, novel))
+                obstacle_id, attempt_id, approach_id, novel, supersedes = attempt_from_payload(data["value"])
+                builder.add_attempt(obstacle_id, builder.check_attempt(obstacle_id, attempt_id, approach_id, novel,
+                                                                       supersedes))
         except (ObstacleError, AdjudicationError) as error:
             raise LedgerInvalid(f"{name} entry {index}: {error} ({error.reason})") from None
     builder.head = head
