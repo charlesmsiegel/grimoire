@@ -187,6 +187,7 @@ class ImportPlan:
     digests: dict[str, str] = field(default_factory=dict)  # this run's writes: path -> desired digest
     relied_scopes: dict[str, str] = field(default_factory=dict)  # existing campaign -> scope its writes need
     bound: dict[str, set[InstanceRef]] = field(default_factory=dict)  # campaign -> actors this run's new chats bind
+    transcripts: dict[object, int] = field(default_factory=dict)  # chat -> pages this run plans for it (036)
     _paired: dict[str, frozenset[InstanceRef]] = field(default_factory=dict)
     _probe: object = None
     _review: dict = field(default_factory=dict)
@@ -571,6 +572,7 @@ class ImportPlan:
                 self._unresolve(scene.legacy_id, "transcript_exists", path)
                 return
             planned.append((path, rendered, envelope, desired))
+        self.transcripts[scene.ref] = len(groups)  # rechecked by apply: no page may join past them
         for path, rendered, envelope, desired in planned:
             self._put(self._decide(path, "transcript", scene.legacy_id, rendered, envelope, desired))
 
@@ -777,8 +779,9 @@ class ImportPlan:
     def apply(self, approvals: Mapping[str, str] | None = None) -> ImportResult:
         """Commit the plan as one transaction, after re-checking under the store lock what it relied on.
 
-        ``StaleWrite`` if the receipts moved, a new campaign's id or a new actor's id was taken, or a
-        target changed since the plan; replan and review again."""
+        ``StaleWrite`` if the receipts moved, a new campaign's id or a new actor's id was taken, a
+        target changed since the plan, or a chat it writes transcript pages for gained a page past them;
+        replan and review again."""
         review = self.review()
         if not self._preview:
             return ImportResult({}, None, review)
@@ -820,6 +823,12 @@ class ImportPlan:
                 clash = sorted(str(ref) for ref in actors & paired_instances(store.campaign_instances(cid)))
                 if clash:
                     raise StaleWrite([(ref, "id also used by another kind") for ref in clash])
+            for chat, count in sorted(self.transcripts.items(), key=lambda item: str(item[0])):
+                found = store.chat_transcript(chat)  # a page added since the plan would join this history
+                beyond = [problem.path for problem in found.problems]
+                beyond += [str(ref) for ref in found.records if ref.seq > count]
+                if beyond:
+                    raise StaleWrite([(path, "transcript page changed since the plan") for path in sorted(beyond)])
             committed = self._batch.commit(approvals)  # type: ignore[union-attr]
             self._committed = True
         return ImportResult(committed.etags, self.receipt, review)
