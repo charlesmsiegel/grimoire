@@ -14,20 +14,22 @@ of its own versions ``resolve`` held here (028).
 - ``dismissed``: of the delivered versions, the ones this device never wants delivered again in
   that conflict: honoured only on its base, and dropped with it;
 - ``held``: this device's own versions that ``resolve`` held under ``.conflicts`` when it replaced
-  them with the peer's, recorded in resolve's own data commit and kept for as long as a slot holds
-  those bytes (``identify`` carries them to the new ID's record).
+  them with the peer's, recorded in a commit of its own just **before** resolve's data commit (so
+  no recovery of that commit can lose it) and kept for as long as a slot holds those bytes, or
+  might (``identify`` carries them to the new ID's record).
 
 It is what makes ``dismiss`` safe: a file under ``.conflicts/`` may be a kept copy of the peer's
 version or this device's own version that ``resolve`` held (perhaps its only copy anywhere), and
 the slot names cannot tell them apart. Only an etag delivered, and held by no pair's record, may be
 dismissed. A keep is delivered only when it writes the **first** copy of its bytes at its path: a
 slot found already holding them, or a second copy beside one, may be a hold (even one whose record
-was lost to damage), so those bytes never become dismissable through it.
+was lost to damage), so those bytes never become dismissable through it. A slot that cannot be read
+is unknown, never absent (``slot_stands``): it may be such a hold.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 
 from grimoire.store import LibraryStore, NameCollision, StoreError, etag
 from grimoire.store.engine import MAX_CONFLICT_ATTEMPTS
@@ -40,7 +42,8 @@ from .documents import KeepsView, KeptEntry, check_device_id, keeps_name, parse_
 from .model import Base
 
 State = tuple[str, bytes, "str | None"]
-#: ``(path, etag) -> bool``: whether a kept-version slot of ``path`` on the device holds those bytes
+#: ``(path, etag) -> bool``: whether a kept-version slot of ``path`` on the device holds those bytes,
+#: or might (``slot_stands``: an unreadable slot is unknown, so it counts as standing)
 Stands = Callable[[str, str], bool]
 
 
@@ -100,7 +103,8 @@ def _changed(view: KeepsView, peer: str, devices: tuple[str, str], path: str,
 
 def first_copies(store: LibraryStore, keeps: Iterable[tuple[str, bytes]]) -> set[tuple[str, str]]:
     """``(path, etag)`` of each planned keep that writes the first copy of its bytes at its path:
-    no slot holds them yet. Asked before the commit that writes them."""
+    no slot holds them yet, nor might (every slot named for them reads). Asked before the commit
+    that writes them."""
     return {(path, etag(data)) for path, data in keeps if not slot_stands(store, path, etag(data))}
 
 
@@ -157,7 +161,8 @@ def next_keeps(view: KeepsView, peer: str, devices: tuple[str, str], bases: Mapp
     ``bases`` maps every path still in conflict to its archive base token, which the entry takes:
     a dismissal carries over only on its own base, and a path no longer in conflict has none (so
     nothing of it can be dismissed). A delivered or held etag carries over while ``stands`` finds
-    its slot (a delivered one also while it is dismissed: the person deletes a dismissed copy)."""
+    its slot (a delivered one also while it is dismissed: the person deletes a dismissed copy), and
+    so while its slot cannot be read: only a slot confirmed gone lets a hold's record go."""
     entries: dict[str, KeptEntry] = {}
     for path, before in _entries(view).items():
         base = bases.get(path)
@@ -185,8 +190,8 @@ def without(view: KeepsView, peer: str, devices: tuple[str, str], paths: Iterabl
 
 
 def with_held(view: KeepsView, peer: str, devices: tuple[str, str], path: str, tag: str) -> State | None:
-    """The record with ``tag`` held for ``path``: ``resolve`` stages it beside its hold, in one commit.
-    A delivered entry of the same bytes (the hold reused its slot) stops being delivered."""
+    """The record with ``tag`` held for ``path``: ``resolve`` commits it just before its hold.
+    A delivered entry of the same bytes (the hold reuses its slot) stops being delivered."""
     return _changed(view, peer, devices, path,
                     lambda before: _entry(before.base, before.delivered, before.dismissed, {*before.held, tag}))
 
@@ -225,25 +230,37 @@ def held_anywhere(store: LibraryStore, device: str, path: str, tag: str) -> bool
     return False
 
 
-def kept_slots(store: LibraryStore, path: str, tag: str, *, first: bool = False) -> tuple[str, ...]:
-    """The kept-version files of ``path`` on this device that hold exactly the bytes ``tag`` names
-    (with ``first``, only the first one found)."""
-    parts, found = tuple(path.split("/")), []
+def _slot_reads(store: LibraryStore, path: str, tag: str) -> Iterator[tuple[str, bool]]:
+    """Each kept-version slot of ``path`` named for ``tag`` that holds exactly those bytes (``True``) or
+    cannot be read (``False``). An unreadable slot is unknown, never absent: it may be a hold, and
+    taking it for absent would let the same bytes count as a first copy elsewhere, or a hold's
+    record go while its only copy still stands. A look-alike spelling is not the slot: the store
+    never writes one, and whatever it holds stays where it is (nothing lists it as safe to delete)."""
+    parts = tuple(path.split("/"))
     for attempt in range(MAX_CONFLICT_ATTEMPTS):
         slot = "/".join(conflict_parts(parts, tag, attempt))
         try:
             data = store.read_exact(slot)
-        except (NameCollision, StoreError, OSError):  # unreadable or a look-alike: never listed
+        except NameCollision:
+            continue
+        except (StoreError, OSError):
+            yield slot, False
             continue
         if data is not None and etag(data) == tag:
-            found.append(slot)
-            if first:
-                break
-    return tuple(found)
+            yield slot, True
+
+
+def kept_slots(store: LibraryStore, path: str, tag: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The kept-version files of ``path`` on this device that hold exactly the bytes ``tag`` names,
+    and those of its slots that cannot be read (any of which might hold them too)."""
+    reads = list(_slot_reads(store, path, tag))
+    return tuple(slot for slot, read in reads if read), tuple(slot for slot, read in reads if not read)
 
 
 def slot_stands(store: LibraryStore, path: str, tag: str) -> bool:
-    return bool(kept_slots(store, path, tag, first=True))
+    """Whether a kept-version slot of ``path`` holds the bytes ``tag`` names, or might (one cannot be
+    read). Every caller fails closed this way: no first copy, a hold kept recorded and not dropped."""
+    return next(_slot_reads(store, path, tag), None) is not None
 
 
 def peer_may_write(old: bytes | None, new: bytes, devices: tuple[str, str],
@@ -254,7 +271,8 @@ def peer_may_write(old: bytes | None, new: bytes, devices: tuple[str, str],
     dismisses nothing ``old`` did not on the same base (dismissing is this device's own decision,
     authorized by ``dismiss``), whose newly delivered etags are first copies its own keep ops write
     in the same step (``first``), and which drops a held etag only once no slot holds those bytes
-    (``stands``): a peer can never relabel a version this device already held as delivered."""
+    (``stands``, which an unreadable slot also satisfies): a peer can never relabel a version this
+    device already held as delivered."""
     after, before = parse_keeps(new, devices), parse_keeps(old, devices)
     if after.state != "valid":
         return False

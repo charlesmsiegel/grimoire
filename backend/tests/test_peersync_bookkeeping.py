@@ -5,6 +5,7 @@ phone, serving on loopback)."""
 
 from __future__ import annotations
 
+import errno
 import json
 import socket
 
@@ -187,6 +188,49 @@ def test_a_keep_that_writes_nothing_never_makes_a_hold_delivered(tmp_path, reide
     with pytest.raises(DismissRefused):
         dismiss(phone.store, DESKTOP, WREN_PATH, etag(theirs), phone.handle)
     assert theirs in _kept(phone)
+
+
+@pytest.mark.parametrize("forged", ["relabelled", "relabelled over a damaged record", "dropped"])
+def test_a_hold_whose_slot_cannot_be_read_is_never_given_up(tmp_path, monkeypatch, forged):
+    """The phone's hold sits in slot 0, which fails with an I/O error while a step arrives that writes the
+    same bytes to slot 1 and records them as delivered in place of the hold, or simply drops the hold.
+    An unreadable slot may hold those bytes, so they are no first copy and the hold may not be
+    dropped: the step is refused, and once the slot reads again the hold is still never dismissable.
+    With the record damaged the hold is unknown, so only the first-copy rule stands between the step
+    and a dismissable hold; with nothing delivered, only the rule on dropping a hold does."""
+    desktop, phone = _conflict(tmp_path)
+    mine, theirs = (desktop.store.root / WREN_PATH).read_bytes(), (phone.store.root / WREN_PATH).read_bytes()
+    resolve(desktop.store, phone.store, WREN_PATH, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)},
+            {DESKTOP: desktop.handle, PHONE: phone.handle})
+    keeps = phone.store.root / f".sync/peers/{DESKTOP}/keeps.json"
+    hold = "/".join(conflict_parts(tuple(WREN_PATH.split("/")), etag(theirs), 0))
+    assert parse_keeps(keeps.read_bytes(), PAIR).entries[WREN_PATH].held == {etag(theirs)}
+    if forged == "relabelled over a damaged record":
+        keeps.write_bytes(b"{not json")
+    before = keeps.read_bytes()
+    ops, real = phone.store._access.ops, phone.store._access.ops.read_bytes
+
+    def read_bytes(path):  # type: ignore[no-untyped-def]
+        if str(path).endswith(hold):
+            raise OSError(errno.EIO, "simulated I/O error", str(path))
+        return real(path)
+    monkeypatch.setattr(ops, "read_bytes", read_bytes)
+    state = {"op": "state", "name": f"peers/{DESKTOP}/keeps.json", "expected": etag(before)}
+    if forged == "dropped":
+        step = [(state, render_keeps(PAIR, {}))]
+    else:
+        step = [({"op": "keep", "path": WREN_PATH, "slot": 1}, theirs),
+                (state, render_keeps(PAIR, {WREN_PATH: KeptEntry(_base(phone), frozenset({etag(theirs)}))}))]
+    buffer = StepBuffer(DESKTOP)
+    for header, body in step:
+        buffer.add({"t": "op", **header}, body)
+    with pytest.raises(PeerRefused) as refused:
+        buffer.commit(phone.store, phone.authority.handle_for(peer_principal(DESKTOP), trusted=True))
+    assert refused.value.code == "invalid" and keeps.read_bytes() == before
+    monkeypatch.undo()  # the slot reads again
+    with pytest.raises(DismissRefused):
+        dismiss(phone.store, DESKTOP, WREN_PATH, etag(theirs), phone.handle)
+    assert (phone.store.root / hold).read_bytes() == theirs
 
 
 @pytest.mark.parametrize("document", ["junk shards", "a listed shard missing"])

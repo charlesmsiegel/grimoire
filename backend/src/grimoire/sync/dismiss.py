@@ -66,7 +66,8 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
     that is not one, this device's own current version of ``path``, any version no sync delivered
     here from ``peer``, a path no longer in conflict with ``peer`` (as the last sync found it, or
     since ``resolve`` ended it), any version ``resolve`` held here (by
-    any pair's record, or possibly: one this device cannot read as valid), a record that would
+    any pair's record, or possibly: one this device cannot read as valid), a version one of whose
+    kept-version files cannot be read (``kept_slots``: it might hold anything), a record that would
     exceed 010's file cap, or a write the handle may not make. A record that is unreadable stops it
     (``SyncInterrupted``).
     """
@@ -99,7 +100,10 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
                              "perhaps its only copy; it is never dismissed")
     if entry.base is None:  # the devices agree again: a kept copy may be the last copy of that version
         raise DismissRefused(f"{path} is no longer in conflict with {peer}; its kept versions are not dismissed")
-    slots = kept_slots(store, path, kept)
+    slots, unreadable = kept_slots(store, path, kept)
+    if unreadable:  # it might hold anything, a hold even: never name the others safe to delete beside it
+        raise DismissRefused(f"a kept-version file of {path} cannot be read here ({', '.join(unreadable)}); "
+                             "dismiss it once every one reads again")
     if kept in entry.dismissed:
         return Dismissal(peer, path, kept, slots, False)
     entries = {**view.entries, path: KeptEntry(entry.base, entry.delivered, entry.dismissed | {kept}, entry.held)}

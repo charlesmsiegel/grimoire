@@ -151,16 +151,6 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             raise ResolveRefused(f"campaign {campaign}, which {done} belongs to, is missing on {receiver}; sync it first")
     if mine is not None:
         txn.keep_version(path, mine)
-        # 028: the hold is recorded in the same commit, so neither a peer's sync nor ``dismiss`` can ever
-        # take this device's own version (perhaps its only copy) for the peer's delivered one
-        held = [kept_record.with_held(kept_record.read_keeps(stores[receiver], other[receiver], pair),
-                                      other[receiver], pair, path, etag(mine))]
-        for peer in kept_record.other_peers(stores[receiver], receiver):  # the hold may reuse another pair's slot
-            if peer != other[receiver]:
-                devices: tuple[str, str] = tuple(sorted((receiver, peer)))  # type: ignore[assignment]
-                held.append(kept_record.not_delivered(kept_record.read_keeps(stores[receiver], peer, devices),
-                                                      peer, devices, path, etag(mine)))
-        bookkeeping.stage(txn, [state for state in held if state is not None])
     # Like a sync's copy, the resolve's copy is marked in the same commit: if the archives are not
     # written after it (a crash, a held file), the next sync still knows the peer held these bytes,
     # and a revert on either device is a conflict rather than an "unchanged" side.
@@ -179,6 +169,8 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         raise ResolveRefused(f"{path} cannot be resolved on {receiver}: {error}") from error
     try:
         with _locked(*stores.values()):  # a blob is loaded from the winner inside this commit
+            if mine is not None:
+                _record_hold(stores[receiver], receiver, other[receiver], pair, path, etag(mine))
             txn.commit(handles[receiver], dict((approvals or {}).get(receiver, {})))
     except WriteDenied as error:  # nothing was written: the grant refuses it, like any other refusal
         raise ResolveRefused(f"{path} cannot be resolved on {receiver}: {error}") from error
@@ -218,6 +210,34 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         bookkeeping.stage(writes, bookkeeping.changes(store, files, pending.files))
         _commit_state(writes, device)
     return receiver
+
+
+def _record_hold(store: LibraryStore, receiver: str, peer: str, pair: tuple[str, str], path: str, tag: str) -> None:
+    """Record ``tag`` as held for ``path`` in the pair's kept-version record, and as delivered by no other
+    pair, in a commit of its own that lands **before** resolve's data commit (028).
+
+    Neither a peer's sync nor ``dismiss`` may ever take this device's own version (perhaps its only
+    copy) for a peer's delivered one. Staged inside the data commit, the record would be ``.sync``
+    state that 010's recovery may drop (a staged file gone or damaged) while it finishes the hold and
+    the chosen version: the old record would then still list a slot the hold reused as delivered. Written
+    first, the hold's provenance no longer depends on how that commit is recovered. If the data commit
+    never lands, the record holds bytes resolve did not take: that fails closed (a held version is
+    never dismissable), and a sync drops the entry once no slot holds those bytes."""
+    held = [kept_record.with_held(kept_record.read_keeps(store, peer, pair), peer, pair, path, tag)]
+    for another in kept_record.other_peers(store, receiver):  # the hold may reuse another pair's slot
+        if another != peer:
+            devices: tuple[str, str] = tuple(sorted((receiver, another)))  # type: ignore[assignment]
+            held.append(kept_record.not_delivered(kept_record.read_keeps(store, another, devices),
+                                                  another, devices, path, tag))
+    states = [state for state in held if state is not None]
+    if states:
+        writes = store.transaction()
+        bookkeeping.stage(writes, states)
+        try:
+            writes.commit(None)
+        except (StaleWrite, WriteConflict) as error:  # nothing of the resolve is written yet
+            raise SyncInterrupted(f"the kept-version records on {receiver} changed during resolve; "
+                                  f"resolve again: {error}") from error
 
 
 def _verified(store: LibraryStore, path: str, device: str) -> str:

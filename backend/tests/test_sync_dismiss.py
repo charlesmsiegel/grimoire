@@ -6,6 +6,7 @@ conflict; a crash leaves the dismissal either recorded or not. Every library is 
 
 from __future__ import annotations
 
+import errno
 import functools
 import json
 import tempfile
@@ -241,6 +242,93 @@ def test_a_resolve_that_crashed_after_its_data_never_lets_the_old_dismissal_thro
     conflict = sync(desktop, phone, handles()).conflict(PATH)
     assert conflict.code == "missing_ancestor"  # the marker leaves the base uncertain
     assert conflict.dismissed == () and theirs in kept(desktop)
+
+
+class _PowerLoss(Exception):
+    """The process dies here: nothing after it runs, and the next open recovers."""
+
+
+def test_a_hold_over_a_delivered_copy_survives_recovery_that_loses_the_staged_record(tmp_path, monkeypatch):
+    """The desktop's own version is bytes the phone once delivered (the person copied the kept file into
+    place), and the phone no longer has them anywhere. The person picks the phone's newer version, so
+    resolve holds those bytes in the slot that already holds them. Power is lost once the chosen version
+    is in place, and the kept-version record staged with it is gone before the app opens again (010's
+    recovery then finishes the commit without it). The hold is still never dismissable: it is the only copy."""
+    desktop, phone = _conflict(tmp_path)
+    delivered = _theirs(phone)
+    (desktop.root / PATH).write_bytes(delivered)
+    edit_instance(phone, WREN_A, 2)
+    newer = _theirs(phone)
+    sync(desktop, phone, {DESKTOP: handle(), PHONE: owner_handle("sources", "campaigns")})  # the phone keeps nothing
+    entry = _entries(desktop)[PATH]
+    assert etag(delivered) in entry["delivered"] and entry["base"] is not None
+    assert _copies((desktop, phone), delivered) == [str(desktop.root / PATH)] + [
+        str(slot) for slot in (desktop.root / ".conflicts").rglob("*") if slot.is_file() and slot.read_bytes() == delivered]
+    ops, real = desktop._access.ops, desktop._access.ops.replace
+
+    def replace(source, target):  # type: ignore[no-untyped-def]
+        real(source, target)
+        if str(target).endswith(PATH) and ".txn" in str(source):
+            raise _PowerLoss("power lost after the chosen version was published")
+    monkeypatch.setattr(ops, "replace", replace)
+    with pytest.raises(_PowerLoss):
+        resolve(desktop, phone, PATH, etag(newer), {DESKTOP: etag(delivered), PHONE: etag(newer)}, handles())
+    monkeypatch.undo()
+    desktop.close()
+    staging = desktop.root / ".txn"
+    for staged in json.loads((staging / "journal.json").read_bytes())["entries"]:
+        if staged["target"].endswith("/keeps.json"):  # the record staged by that commit is lost
+            (staging / staged["temp"]).unlink(missing_ok=True)
+    desktop = LibraryStore.open(desktop.root)
+    assert (desktop.root / PATH).read_bytes() == newer and delivered in kept(desktop)
+    with pytest.raises(DismissRefused):
+        dismiss(desktop, PHONE, PATH, etag(delivered), handle())
+    sync_until_quiet(desktop, phone, handles())
+    with pytest.raises(DismissRefused):
+        dismiss(desktop, PHONE, PATH, etag(delivered), handle())
+    assert delivered in kept(desktop)
+
+
+def _unreadable(monkeypatch, store: LibraryStore, data: bytes) -> list[str]:
+    """Every kept file of ``store`` holding ``data`` fails with an I/O error until ``monkeypatch.undo``."""
+    slots = [str(slot) for slot in (store.root / ".conflicts").rglob("*") if slot.is_file() and slot.read_bytes() == data]
+    ops, real = store._access.ops, store._access.ops.read_bytes
+
+    def read_bytes(path):  # type: ignore[no-untyped-def]
+        if str(path) in slots:
+            raise OSError(errno.EIO, "simulated I/O error", str(path))
+        return real(path)
+    monkeypatch.setattr(ops, "read_bytes", read_bytes)
+    return slots
+
+
+def test_a_version_whose_kept_file_cannot_be_read_is_not_dismissed(tmp_path, monkeypatch):
+    """dismiss names the files that are safe to delete; one it cannot read might be anything (a hold,
+    even), so it refuses and writes nothing until every one reads again."""
+    desktop, phone = _conflict(tmp_path)
+    theirs = _theirs(phone)
+    record = (desktop.root / RECORD).read_bytes()
+    assert _unreadable(monkeypatch, desktop, theirs)
+    with pytest.raises(DismissRefused, match="cannot be read"):
+        dismiss(desktop, PHONE, PATH, etag(theirs), handle())
+    assert (desktop.root / RECORD).read_bytes() == record
+    monkeypatch.undo()
+    assert dismiss(desktop, PHONE, PATH, etag(theirs), handle()).wrote
+
+
+def test_a_hold_whose_file_cannot_be_read_stays_recorded(tmp_path, monkeypatch):
+    """A sync drops a hold only once its slot is confirmed gone; one that fails to read may still hold
+    the bytes, so the hold stays recorded through the sync and is never dismissable afterwards."""
+    desktop, phone = _conflict(tmp_path)
+    mine, theirs = (desktop.root / PATH).read_bytes(), _theirs(phone)
+    resolve(desktop, phone, PATH, etag(theirs), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+    assert _unreadable(monkeypatch, desktop, mine)
+    sync(desktop, phone, handles())
+    monkeypatch.undo()
+    assert _entries(desktop)[PATH]["held"] == [etag(mine)]
+    with pytest.raises(DismissRefused):
+        dismiss(desktop, PHONE, PATH, etag(mine), handle())
+    assert mine in kept(desktop)
 
 
 def test_a_hold_stays_recorded_until_its_slot_is_gone(tmp_path):
