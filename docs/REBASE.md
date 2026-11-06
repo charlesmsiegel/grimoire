@@ -63,7 +63,7 @@ The rebased instance must compose over the upstream (009 `compose_instance`), an
 | `ancestor_edited` | the ancestor's bytes no longer match `base_etag` |
 | `other_entity` | the target is another entity: a namesake or any other definition is never a rebase target |
 | `missing_target`, `up_to_date` | the target does not resolve, or is the ancestor |
-| `follows_head` | an instance that follows its head, and a target that is not the head |
+| `follows_head` | an instance that follows its head, or one a chat binds following the head, and a target that is not the head (a following chat would compose the result over the head) |
 | `chats_unreadable` | a chat file of the campaign cannot be read or interpreted, so its bindings cannot all be found |
 | `binding_disagrees` | the campaign's chats pin the actor to different revisions; rebind or detach one first |
 | `binding_limit` | a chat to re-pin already holds 107's maximum number of bindings |
@@ -83,8 +83,8 @@ The returned `RebaseChange` writes:
 - **each chat with an active pinned binding of the actor.** The binding is tombstoned and a new pinned binding of the target, for the same actor, is added. The roster is unchanged.
 
 `commit(approvals=None)` runs under the store lock. It re-checks:
-- the bytes of every layer the review composed, on both sides (a derived revision's base chain included);
-- the source's head, when the instance follows it: a new head since the review would change what the actor composes to;
+- every layer the review composed, on both sides (a derived revision's base chain included): its bytes, and that each side still composes to exactly those layers, so a manifest that dropped or changed a derivation link is stale too;
+- the source's head, when the instance or any chat binding of it follows the head: a new head since the review would change what the actor composes to;
 - every chat of the campaign, at the etags the review read: a chat added, removed or edited since could pin the actor to the old revision.
 
 Any mismatch is `StaleWrite` and nothing is written. The store's authorization (and its `approvals`) applies as for any transaction.
@@ -120,7 +120,7 @@ What the chat's snapshot refuses for an actor (missing, undecodable, broken bind
 `commit(approvals=None)` re-checks under the store lock (`StaleWrite`):
 - that the world is still absent and unnamed by a grant. The approvals this commit supplies for its own new files name the new world by design, so they do not count;
 - that the chat and each actor file still have the etags the proposal read;
-- that every layer of each portrayal's base chain still has the bytes the proposal composed.
+- that every layer each pick was composed from (a portrayal's base chain, or the template chain an individualized pick restates) still has the bytes the proposal composed, and still composes, derivation links included.
 
 ## Boundaries and deferrals
 

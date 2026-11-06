@@ -31,7 +31,7 @@ from grimoire.store import (
 )
 from grimoire.store.layout import address_parts, definition_parts, manifest_parts
 
-from .rebase import _reader
+from .rebase import _reader, chains_moved
 
 #: picks in one proposal
 MAX_PICKS = 64
@@ -87,8 +87,11 @@ class CanonProposal:
     puts: tuple[RecordEnvelope | SourceManifest, ...]
     #: the chat and each picked actor, at the etag the proposal was made from
     reads: tuple[tuple[ChatRef | InstanceRef, str], ...]
-    #: every pinned revision of each portrayal's base chain, at the etag the proposal composed
+    #: every layer each pick's definition was composed from (a portrayal's base chain, or the template
+    #: chain an individualized pick restates), at the etag the proposal composed
     definitions: tuple[tuple[SourceRef, str | None], ...] = ()
+    #: the revisions those chains were composed from: each must still compose, links included, to them
+    roots: tuple[SourceRef, ...] = ()
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -104,8 +107,9 @@ class CanonProposal:
     def commit(self, approvals: Mapping[str, str] | None = None) -> CommitResult:
         """Write exactly the previewed files, or nothing.
 
-        ``StaleWrite`` when the world appeared, a security-ledger grant came to name it, or the chat
-        or a picked actor changed since the proposal; the store's authorization applies.
+        ``StaleWrite`` when the world appeared, a security-ledger grant came to name it, or the chat,
+        a picked actor or a layer a pick was composed from (its bytes or its manifest's derivation
+        link) changed since the proposal; the store's authorization applies.
         """
         with self.store.lock:
             if self._committed:
@@ -126,11 +130,8 @@ class CanonProposal:
                     current = None
                 if current != etag:
                     moved.append(("/".join(address_parts(ref)), "absent" if current is None else "changed"))
-            for pinned, etag in self.definitions:  # a portrayal must still derive from the bytes reviewed
-                found = self.store.check_definition(pinned)
-                current = None if isinstance(found, str) else found.etag
-                if current is None or current != etag:
-                    moved.append(("/".join(definition_parts(pinned)), "absent" if current is None else "changed"))
+            # each pick must still derive from, or restate, the composed bytes reviewed
+            moved += chains_moved(self.store, self.roots, self.definitions)
             if moved:
                 raise StaleWrite(moved)
             result = self._transaction().commit(self.handle, approvals)
@@ -208,6 +209,7 @@ class CanonProposer:
         entries: list[CanonEntry] = []
         reads: list[tuple[ChatRef | InstanceRef, str]] = [(chat, captured.chat_etag)]
         chains: dict[SourceRef, str | None] = {}
+        roots: list[SourceRef] = []
         for pick in picks:
             if pick.actor not in roster:
                 raise _fail(f"{pick.actor} is not on {chat}'s roster", "not_in_chat")
@@ -229,11 +231,12 @@ class CanonProposer:
                         raise _fail(f"{owner.resolved} already composes {len(composed.chain)} layers, so a portrayal "
                                     f"of it would be deeper than {MAX_CHAIN}", "chain_too_deep")
                     base, nature = owner.resolved, composed.nature
-                    chains.update((node.ref, node.etag) for node in composed.chain)
                 else:
                     # an individualized template actor (024) is an individual now: a standalone definition
                     # (a portrayal keeps its base's nature), so it restates the sections it no longer inherits
                     sections = dict(composed.sections)
+                chains.update((node.ref, node.etag) for node in composed.chain)
+                roots.append(owner.resolved)  # type: ignore[arg-type]
             definition = canon_definition(ref, instance, entity, base, nature,
                                           {"chat": str(chat), "actor": str(pick.actor)}, sections)
             same = tuple(other for other in view.index.find_by_name(definition.name, ref.kind)
@@ -256,7 +259,8 @@ class CanonProposer:
             puts.append(RecordEnvelope(entry.definition.ref, definition_to_payload(entry.definition),
                                        name=entry.definition.name, owner=self._owner, extra={"schema": ENTITY_SCHEMA}))
         report = CanonReport(world, chat, tuple(entries))
-        return CanonProposal(self.store, self.handle, report, tuple(puts), tuple(reads), tuple(chains.items()))
+        return CanonProposal(self.store, self.handle, report, tuple(puts), tuple(reads), tuple(chains.items()),
+                              tuple(dict.fromkeys(roots)))
 
 
 __all__ = ["FIRST_REVISION", "MAX_PICKS", "CanonEntry", "CanonPick", "CanonProposal", "CanonProposer", "CanonReport"]

@@ -22,7 +22,7 @@ from grimoire.chats import chat_from_payload, chat_to_payload
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import CodecError, instance_from_payload, instance_to_payload
 from grimoire.core.identity import AcceptedRef, ChatRef, InstanceRef, RelationRef, SourceRef
-from grimoire.core.portrayal import EffectiveDefinition, compose
+from grimoire.core.portrayal import EffectiveDefinition, PortrayalError, compose
 from grimoire.effective import entity_decoder, explainer
 from grimoire.rebase import FieldReview, RebaseError, rebase_instance, review_fields
 from grimoire.store import (
@@ -110,9 +110,13 @@ class RebaseChange:
     #: since could bind the actor to the old revision, so the commit re-checks them all under the lock
     campaign: str = ""
     chats: tuple[tuple[ChatRef, str], ...] = ()
-    #: for an instance that follows its head: (unpinned source, the head the review adopted); a new
-    #: head since would leave the rebased overrides composing over a revision nobody reviewed
+    #: for an instance that follows its head, or one a chat binds following it: (unpinned source, the
+    #: head the review adopted); a new head since would leave the rebased overrides composing over a
+    #: revision nobody reviewed
     head: tuple[SourceRef, SourceRef] | None = None
+    #: the ancestor and the upstream: each must still compose, its sources' links included, to the
+    #: layers in ``definitions``
+    roots: tuple[SourceRef, ...] = ()
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -129,19 +133,15 @@ class RebaseChange:
         """Write exactly the previewed bytes, or nothing.
 
         ``StaleWrite`` when the actor, any chat of its campaign (one added or removed included), any
-        layer of the ancestor's or the upstream's derivation chain, or (for an instance that follows
-        its head) the head changed since the review (a revision file edited by hand is ``changed``);
+        layer of the ancestor's or the upstream's derivation chain (a revision file edited by hand, or a
+        derivation link a manifest no longer declares, is ``changed``), or (for an instance that follows
+        its head, or that a chat binds following it) the head changed since the review;
         the store's authorization applies.
         """
         with self.store.lock:
             if self._committed:
                 raise StoreError("this rebase was already committed")
-            moved = []
-            for ref, etag in self.definitions:
-                found = self.store.check_definition(ref)
-                current = None if isinstance(found, str) else found.etag
-                if current is None or current != etag:
-                    moved.append(("/".join(definition_parts(ref)), "absent" if current is None else "changed"))
+            moved = chains_moved(self.store, self.roots, self.definitions)
             if self.head is not None:
                 followed, adopted = self.head
                 found_head = self.store.check_definition(followed)
@@ -232,8 +232,10 @@ class SourceRebase:
         if index.check(wanted) is not None:
             raise _fail(f"{wanted} does not resolve", "missing_target")
         upstream_ref = index.resolve(wanted).ref
-        if not source.pinned and upstream_ref != index.resolve(source).ref:
-            raise _fail(f"{actor} follows the head of {source}; only the head can be adopted", "follows_head")
+        if (not source.pinned or following) and upstream_ref != index.resolve(source.unpinned()).ref:
+            # a following chat composes the rebased overrides over the head, so only the head is reviewable
+            raise _fail(f"{actor} follows the head of {source} (in its instance or a chat binding); only the head "
+                        "can be adopted", "follows_head")
         full = [chat.ref for chat in pinned if len(chat.record.bindings) >= MAX_BINDINGS]
         if full:
             raise _fail(f"{[str(ref) for ref in full]} already hold {MAX_BINDINGS} bindings, so they cannot be "
@@ -369,9 +371,41 @@ class SourceRebase:
         chain[review.ancestor.ref] = review._ancestor_etag
         chain[upstream] = review._upstream_etag
         source = review.instance.source
-        head = None if source is None or source.pinned else (source.unpinned(), upstream)
+        follows = source is not None and (not source.pinned or bool(review.following))
+        head = (source.unpinned(), upstream) if follows else None  # type: ignore[union-attr]
         return RebaseChange(self.store, self.handle, tuple(puts), rebased, tuple(chain.items()),
-                            review.actor.campaign_id, review._chat_etags, head)
+                            review.actor.campaign_id, review._chat_etags, head,
+                            (review.ancestor.ref, upstream))
+
+
+def chains_moved(store: LibraryStore, roots: tuple[SourceRef, ...],
+                 expected: tuple[tuple[SourceRef, str | None], ...]) -> list[tuple[str, str]]:
+    """``StaleWrite`` entries for reviewed layers that moved; the caller holds the store lock.
+
+    Each layer must still have the reviewed bytes, and each root must still compose to exactly the
+    reviewed layers: a manifest that dropped or changed a derivation link leaves every file intact
+    but no longer composes (``unlinked_derivation``), or composes another chain.
+    """
+    moved: list[tuple[str, str]] = []
+    for ref, etag in expected:
+        found = store.check_definition(ref)
+        current = None if isinstance(found, str) else found.etag
+        if current is None or current != etag:
+            moved.append(("/".join(definition_parts(ref)), "absent" if current is None else "changed"))
+    if moved or not roots:
+        return moved
+    view = store.load()
+    read, explain = _reader(view), explainer(view)
+    composed: dict[SourceRef, str | None] = {}
+    for root in roots:
+        try:
+            composed.update((node.ref, node.etag) for node in compose(root, view.index, read, explain).chain)
+        except PortrayalError:
+            moved.append(("/".join(definition_parts(root)), "changed"))
+    if not moved and composed != dict(expected):
+        moved += [("/".join(definition_parts(ref)), "changed")
+                  for ref in sorted(set(composed) ^ set(dict(expected)), key=str)]
+    return moved
 
 
 def _reader(view: LibraryView):  # type: ignore[no-untyped-def]
