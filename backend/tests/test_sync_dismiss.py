@@ -355,7 +355,7 @@ def test_a_hold_over_a_delivered_copy_survives_recovery_that_loses_the_staged_re
 
     def replace(source, target):  # type: ignore[no-untyped-def]
         real(source, target)
-        if str(target).endswith(PATH) and ".txn" in str(source):
+        if Path(target).as_posix().endswith(PATH) and ".txn" in Path(source).parts:
             raise _PowerLoss("power lost after the chosen version was published")
     monkeypatch.setattr(ops, "replace", replace)
     with pytest.raises(_PowerLoss):
@@ -364,7 +364,7 @@ def test_a_hold_over_a_delivered_copy_survives_recovery_that_loses_the_staged_re
     desktop.close()
     staging = desktop.root / ".txn"
     for staged in json.loads((staging / "journal.json").read_bytes())["entries"]:
-        if staged["target"].endswith("/keeps.json"):  # the record staged by that commit is lost
+        if staged["target"].replace("\\", "/").endswith("/keeps.json"):  # the record staged by that commit is lost
             (staging / staged["temp"]).unlink(missing_ok=True)
     desktop = LibraryStore.open(desktop.root)
     assert (desktop.root / PATH).read_bytes() == newer and delivered in kept(desktop)
