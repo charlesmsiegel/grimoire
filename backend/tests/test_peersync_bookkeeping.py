@@ -408,11 +408,71 @@ def test_a_conflict_resolved_over_the_transport_holds_the_replaced_version_on_it
     assert replaced in _kept(held_on)
 
 
+class _PowerLoss(Exception):
+    """The receiving device's process dies here: nothing after it runs, and the next open recovers."""
+
+
+@pytest.mark.parametrize("receiver", [PHONE, DESKTOP])
+def test_a_hold_over_a_delivered_copy_survives_recovery_that_loses_the_staged_record(tmp_path, monkeypatch,
+                                                                                      receiver):
+    """The receiver's own version is bytes the other device once delivered there (the person copied the
+    kept file into place), and the other device has moved on to a newer version. The desktop resolves
+    over the connection, keeping that newer version, so the receiver (the serving phone, or the desktop
+    itself) holds those bytes in the slot that already holds them. Power is lost on the receiver once
+    the chosen version is in place, and any kept-version record staged with it is gone before the app
+    opens again (010's recovery then finishes the commit without it). The hold is still never
+    dismissable there: it is the only copy."""
+    desktop, phone = _conflict(tmp_path)
+    devices = {DESKTOP: desktop, PHONE: phone}
+    winner = DESKTOP if receiver == PHONE else PHONE
+    delivered = (devices[winner].store.root / WREN_PATH).read_bytes()
+    (devices[receiver].store.root / WREN_PATH).write_bytes(delivered)
+    _put(devices[winner], WREN, {"hp": 12})
+    newer = (devices[winner].store.root / WREN_PATH).read_bytes()
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "conflicts"
+    entry = _held(devices[receiver], winner)
+    assert etag(delivered) in entry.delivered and entry.base is not None
+    assert _kept(devices[receiver]).count(delivered) == 1
+    ops, real = devices[receiver].store._access.ops, devices[receiver].store._access.ops.replace
+
+    def replace(source, target):  # type: ignore[no-untyped-def]
+        real(source, target)
+        if str(target).endswith(WREN_PATH) and ".txn" in str(source):
+            raise _PowerLoss("power lost after the chosen version was published")
+    monkeypatch.setattr(ops, "replace", replace)
+    chosen = {winner: etag(newer), receiver: etag(delivered)}
+    with serving(phone) as server:
+        if receiver == PHONE:  # the serving phone's connection dies with it
+            report = resolve_conflict(desktop.store, desktop.authority, PHONE, server.address, WREN_PATH,
+                                      etag(newer), chosen)
+            assert report.status == "incomplete", report
+        else:
+            with pytest.raises(_PowerLoss):
+                resolve_conflict(desktop.store, desktop.authority, PHONE, server.address, WREN_PATH, etag(newer), chosen)
+    monkeypatch.undo()
+    devices[receiver].close()
+    staging = devices[receiver].store.root / ".txn"
+    for staged in json.loads((staging / "journal.json").read_bytes())["entries"]:
+        if staged["target"].endswith("/keeps.json"):  # a record staged by that commit is lost
+            (staging / staged["temp"]).unlink(missing_ok=True)
+    held_on = devices[receiver] = Device.reopen(tmp_path, receiver)
+    assert (held_on.store.root / WREN_PATH).read_bytes() == newer and delivered in _kept(held_on)
+    with pytest.raises(DismissRefused):
+        dismiss(held_on.store, winner, WREN_PATH, etag(delivered), held_on.handle)
+    for _ in range(2):  # the next transfers record the agreement; the hold stays held
+        with serving(devices[PHONE]) as server:
+            transfer(devices[DESKTOP].store, devices[DESKTOP].authority, PHONE, server.address)
+    with pytest.raises(DismissRefused):
+        dismiss(held_on.store, winner, WREN_PATH, etag(delivered), held_on.handle)
+    assert delivered in _kept(held_on) and etag(delivered) in _held(held_on, winner).held
+
+
 def test_a_hold_on_the_serving_device_takes_its_bytes_out_of_its_other_pairs_deliveries(tmp_path):
     """The phone is paired with a laptop too, whose record there (written as its sync would) delivered the
     very bytes the phone holds when the desktop's resolve replaces them. The phone drops them from that
-    record itself, in the hold's commit, as a local resolve does: the desktop never sees the phone's
-    records of its other pairs, and may write none."""
+    record itself, in a commit of its own just before the hold's, as a local resolve does: the desktop
+    never sees the phone's records of its other pairs, and may write none."""
     desktop, phone = _conflict(tmp_path)
     mine, theirs = (desktop.store.root / WREN_PATH).read_bytes(), (phone.store.root / WREN_PATH).read_bytes()
     other = phone.store.root / ".sync/peers/laptop/keeps.json"
@@ -429,6 +489,33 @@ def test_a_hold_on_the_serving_device_takes_its_bytes_out_of_its_other_pairs_del
     assert theirs in _kept(phone)
 
 
+def test_a_chosen_version_whose_kept_file_cannot_be_read_is_not_admitted(tmp_path, monkeypatch):
+    """The phone keeps the desktop's version beside wren, and that file fails with an I/O error when the
+    desktop asks the phone to resolve keeping it. A file that cannot be read is unknown, never proof that
+    the phone ever had those bytes: the request is refused before anything is sent, and admitted once
+    the file reads again."""
+    desktop, phone = _conflict(tmp_path)
+    mine, theirs = (desktop.store.root / WREN_PATH).read_bytes(), (phone.store.root / WREN_PATH).read_bytes()
+    slot = "/".join(conflict_parts(tuple(WREN_PATH.split("/")), etag(mine), 0))
+    assert (phone.store.root / slot).read_bytes() == mine
+    ops, real = phone.store._access.ops, phone.store._access.ops.read_bytes
+
+    def read_bytes(path):  # type: ignore[no-untyped-def]
+        if str(path).endswith(slot):
+            raise OSError(errno.EIO, "simulated I/O error", str(path))
+        return real(path)
+    monkeypatch.setattr(ops, "read_bytes", read_bytes)
+    expected = {DESKTOP: etag(mine), PHONE: etag(theirs)}
+    with serving(phone) as server:
+        report = resolve_conflict(desktop.store, desktop.authority, PHONE, server.address, WREN_PATH, etag(mine), expected)
+    assert report.status == "refused" and "unknown_version" in report.reason, report
+    assert (phone.store.root / WREN_PATH).read_bytes() == theirs
+    monkeypatch.undo()  # the file reads again
+    with serving(phone) as server:
+        report = resolve_conflict(desktop.store, desktop.authority, PHONE, server.address, WREN_PATH, etag(mine), expected)
+    assert (report.status, report.receiver) == ("resolved", PHONE), report
+
+
 def _resolving(desktop: Device, server, path: str, keep: bytes, expected: dict[str, bytes]):  # type: ignore[no-untyped-def]
     """An authenticated desktop's connection with a resolve request made (its snapshot read to the end)."""
     pairing = read_pairing(desktop.store, PHONE)
@@ -440,12 +527,26 @@ def _resolving(desktop: Device, server, path: str, keep: bytes, expected: dict[s
     return channel
 
 
-@pytest.mark.parametrize("forged", ["unrecorded", "recorded as delivered", "another version held", "in a sync step"])
-def test_the_serving_device_takes_a_resolves_hold_only_recorded_and_only_its_own(tmp_path, forged):
-    """The person picked the desktop's version, so the phone holds its own. The step that writes the hold
-    must record it as held, and may hold nothing else: an unrecorded hold could later be dismissed as a
-    delivered keep, and a forged one would keep a delivered version from ever being dismissed. No sync
-    step holds anything."""
+def _send(channel, *ops: tuple[dict, bytes]):  # type: ignore[no-untyped-def,type-arg]
+    """One step of raw ops on ``channel``: its reply, or ``PeerRefused``."""
+    for header, body in ops:
+        channel.send({"t": "op", **header}, body)
+    channel.send({"t": "commit", "step": "resolve"})
+    try:
+        return channel.recv()[0]
+    except PeerRefused as refused:
+        return refused
+
+
+@pytest.mark.parametrize("forged", ["unrecorded", "recorded in the hold's own step", "recorded as delivered",
+                                    "another version held", "in a sync step"])
+def test_the_serving_device_takes_a_resolves_hold_only_recorded_before_and_only_its_own(tmp_path, forged):
+    """The person picked the desktop's version, so the phone holds its own. The hold's record must land
+    in a step of its own before the step that writes the hold, as a local resolve commits it: staged in
+    the hold's own commit, 010's recovery could finish that commit without it. That record step may
+    hold nothing but the phone's own current version: an unrecorded hold could later be dismissed as a
+    delivered keep, and a forged one would keep a delivered version from ever being dismissed. No
+    sync step holds anything."""
     desktop, phone = _conflict(tmp_path)
     mine, theirs = (desktop.store.root / WREN_PATH).read_bytes(), (phone.store.root / WREN_PATH).read_bytes()
     name = f"peers/{DESKTOP}/keeps.json"
@@ -460,8 +561,9 @@ def test_the_serving_device_takes_a_resolves_hold_only_recorded_and_only_its_own
     hold = ({"op": "keep", "path": WREN_PATH, "slot": 0, "hold": True}, theirs)
     honest = record({etag(mine)}, {etag(theirs)})
     step = {"unrecorded": [put, hold],
-            "recorded as delivered": [put, hold, record({etag(mine), etag(theirs)}, set())],
-            "another version held": [put, hold, record(set(), {etag(theirs), etag(mine)})],
+            "recorded in the hold's own step": [put, hold, honest],
+            "recorded as delivered": [record({etag(mine), etag(theirs)}, set())],
+            "another version held": [record(set(), {etag(theirs), etag(mine)})],
             "in a sync step": [record(set(), {etag(mine)})]}[forged]
     untouched = {path: (phone.store.root / path).read_bytes() for path in (WREN_PATH, f".sync/{name}")}
     with serving(phone) as server:
@@ -469,24 +571,51 @@ def test_the_serving_device_takes_a_resolves_hold_only_recorded_and_only_its_own
             _raw_step(desktop, server, (name, step[0][1]))
         else:
             channel = _resolving(desktop, server, WREN_PATH, mine, {DESKTOP: mine, PHONE: theirs})
-            for header, body in step:
-                channel.send({"t": "op", **header}, body)
-            channel.send({"t": "commit", "step": "resolve"})
-            with pytest.raises(PeerRefused) as refused:
-                channel.recv()
-            assert refused.value.code == "invalid"
+            refused = _send(channel, *step)
+            assert isinstance(refused, PeerRefused) and refused.code == "invalid", refused
             assert {path: (phone.store.root / path).read_bytes() for path in untouched} == untouched
-            # the same step with its hold recorded as resolve records it is taken
-            for header, body in (put, hold, honest):
-                channel.send({"t": "op", **header}, body)
-            channel.send({"t": "commit", "step": "resolve"})
-            assert channel.recv()[0]["t"] == "committed"
+            # the hold recorded as resolve records it, on its own and first, then the hold: both taken
+            assert _send(channel, honest)["t"] == "committed"
+            assert parse_keeps(phone.store.read_sync_state(name), PAIR).entries[WREN_PATH].held == {etag(theirs)}
+            assert _send(channel, put, hold)["t"] == "committed"
             channel.close()
     if forged == "in a sync step":  # the desktop's version stays what keep-both delivered: dismissable
         assert phone.store.read_sync_state(name) == before
         assert dismiss(phone.store, DESKTOP, WREN_PATH, etag(mine), phone.handle).wrote
         return
+    assert (phone.store.root / WREN_PATH).read_bytes() == mine
     assert parse_keeps(phone.store.read_sync_state(name), PAIR).entries[WREN_PATH].held == {etag(theirs)}
     with pytest.raises(DismissRefused):
         dismiss(phone.store, DESKTOP, WREN_PATH, etag(theirs), phone.handle)
     assert theirs in _kept(phone)
+
+
+@pytest.mark.parametrize("sent", ["in one step", "record first", "already recorded"])
+def test_a_device_that_keeps_its_own_version_never_holds_its_live_bytes(tmp_path, sent):
+    """The desktop asks the phone to resolve keeping the phone's own version, so the phone is the winner
+    and the desktop receives. It then sends a hold of the phone's live bytes with a record calling them
+    held: in one step, the record first, or the hold alone once an abandoned resolve the phone was to
+    receive left that record. Nothing at the path is replaced, so nothing is held: the hold would only
+    put a copy of the live record under ``.conflicts`` that is never dismissable. Refused."""
+    desktop, phone = _conflict(tmp_path)
+    mine, theirs = (desktop.store.root / WREN_PATH).read_bytes(), (phone.store.root / WREN_PATH).read_bytes()
+    name = f"peers/{DESKTOP}/keeps.json"
+    before = phone.store.read_sync_state(name)
+    entry = parse_keeps(before, PAIR).entries[WREN_PATH]
+    record = ({"op": "state", "name": name, "expected": etag(before)},
+              render_keeps(PAIR, {WREN_PATH: KeptEntry(entry.base, entry.delivered, frozenset(), frozenset({etag(theirs)}))}))
+    hold = ({"op": "keep", "path": WREN_PATH, "slot": 0, "hold": True}, theirs)
+    if sent == "already recorded":  # a resolve keeping the desktop's version recorded the hold, then went away
+        with serving(phone) as server:
+            channel = _resolving(desktop, server, WREN_PATH, mine, {DESKTOP: mine, PHONE: theirs})
+            assert _send(channel, record)["t"] == "committed"
+            channel.close()
+    untouched = _kept(phone), phone.store.read_sync_state(name), (phone.store.root / WREN_PATH).read_bytes()
+    with serving(phone) as server:
+        channel = _resolving(desktop, server, WREN_PATH, theirs, {DESKTOP: mine, PHONE: theirs})
+        steps = {"in one step": [[hold, record]], "record first": [[record], [hold]], "already recorded": [[hold]]}[sent]
+        for ops in steps:
+            refused = _send(channel, *ops)
+            assert isinstance(refused, PeerRefused) and refused.code == "invalid", refused
+        channel.close()
+    assert (_kept(phone), phone.store.read_sync_state(name), (phone.store.root / WREN_PATH).read_bytes()) == untouched

@@ -24,7 +24,8 @@ from grimoire.sync.bookkeeping import is_shard, listed_shards, root_name
 from grimoire.sync.bookkeeping import parse as parse_document
 from grimoire.sync.bookkeeping import stage as stage_states
 from grimoire.sync.documents import keeps_name, pair_state
-from grimoire.sync.keeps import first_copies, not_delivered_elsewhere, peer_may_write, records_hold, slot_stands
+from grimoire.sync.keeps import (State, first_copies, not_delivered_elsewhere, peer_may_write, records_hold,
+                                 slot_stands)
 
 from .errors import MirrorMismatch, PeerRefused
 from .wire import Channel
@@ -105,8 +106,9 @@ class StepBuffer:
 
     ``resolving`` is the one path a resolve request named, while the session is resolving it.
     Only then may a write carry resolve's power, and only for that path: keeping the replaced
-    version as a *hold*, which an aborted commit preserves (``hold``), and which the commit records
-    as held exactly as a local ``resolve`` does (``_record_holds``). A sync step never needs it:
+    version as a *hold*, which an aborted commit preserves (``hold``), and which is recorded as
+    held exactly as a local ``resolve`` records it, in commits that land before the hold's own
+    (``_held_beforehand``). A sync step never needs it:
     what it keeps is the other device's version, which that device still holds. A peer never
     replaces a definition revision here (``replace``): a revision is immutable, and only the
     device that holds the conflicted one replaces it, by starting the resolve itself.
@@ -153,16 +155,21 @@ class StepBuffer:
         self.reset()
         self.poisoned = refusal
 
-    def commit(self, store: LibraryStore, handle: object) -> dict[str, str]:
-        """Commit every write as one transaction; return each written file's etag as re-read."""
+    def commit(self, store: LibraryStore, handle: object, *, may_hold: str | None = None) -> dict[str, str]:
+        """Commit every write as one transaction; return each written file's etag as re-read.
+
+        ``may_hold`` is the etag of the one version this step's record may newly hold at the resolving
+        path: this device's own current version, in the step a resolve makes to record its hold
+        before the data commit (``ResolveRequest.check_step`` decides it). In every other step a
+        record may add no hold."""
         try:
             if self.poisoned is not None:
                 raise self.poisoned
-            return self._commit(store, handle)
+            return self._commit(store, handle, may_hold)
         finally:
             self.reset()
 
-    def _commit(self, store: LibraryStore, handle: object) -> dict[str, str]:
+    def _commit(self, store: LibraryStore, handle: object, may_hold: str | None) -> dict[str, str]:
         ops = self.ops
         if not ops:
             raise PeerRefused("empty", "a step with no writes")
@@ -175,8 +182,10 @@ class StepBuffer:
                      root_name("archive", self.peer), root_name("pending", self.peer))}
         try:
             self._check_documents(store, roots, ops)
-            # 028: the versions a resolve step holds here (this device's own, as ``check_step`` found):
-            # only that step's record may add them as held, and it must
+            # 028: the versions a resolve step holds here (this device's own, as ``check_step`` found),
+            # which an earlier step's record must already hold (``_held_beforehand``), and the one
+            # version a resolve's record step may add as held
+            recordable = set() if may_hold is None or self.resolving is None else {(self.resolving, may_hold)}
             holds = {(header["path"], etag(body)) for header, body in ops if header.get("op") == "keep"
                      and header.get("hold") is True and header.get("path") == self.resolving
                      and isinstance(body, bytes)}
@@ -212,12 +221,18 @@ class StepBuffer:
                     records = True
                 elif op == "state" and pair_state(header.get("name"), self.peer) and _etag_or_none(header.get("expected")):
                     name = header["name"]
-                    expected = self._state_expected(store, name, body, header.get("expected"), roots, first, holds)
+                    expected = self._state_expected(store, name, body, header.get("expected"), roots, first,
+                                                    recordable)
                     txn.put_sync_state(name, body, expected)
                     targets.append((f".sync/{name}", name, lambda name=name: store.read_sync_state(name)))
                 else:  # only this pair's own .sync files, and records the peer's grants then decide
                     raise PeerRefused("invalid", f"a write this device does not accept: {op!r}")
-            self._record_holds(store, txn, ops, holds)
+            elsewhere = self._held_beforehand(store, ops, holds)
+            if elsewhere:  # this device's own records of its other pairs, committed before the hold
+                txn.check()  # a step that cannot commit writes nothing
+                early = store.transaction()
+                stage_states(early, elsewhere)
+                early.commit(None)
             txn.commit(handle if records else None, {})  # the peer can never supply an approval
         except PeerRefused:
             raise
@@ -245,39 +260,47 @@ class StepBuffer:
             raise PeerRefused("invalid", f"{name!r} is only for the path a resolve request named")
         return True
 
-    def at(self, path: str) -> list[tuple[dict, bytes | Path]]:  # type: ignore[type-arg]
-        """The step's writes of the record at ``path`` and of its kept versions, with their bodies."""
-        return [(header, body) for header, body in self.ops if header.get("path") == path]
+    def _held_beforehand(self, store: LibraryStore, ops: list,  # type: ignore[type-arg]
+                         holds: set[tuple[str, str]]) -> list[State]:
+        """Check that each of ``holds`` is already recorded as held, as a local ``resolve`` records it
+        (``grimoire.sync.resolution``), and return what this device must still commit **before** the
+        hold: those bytes taken out of every other pair's delivered versions.
 
-    def _record_holds(self, store: LibraryStore, txn, ops: list,  # type: ignore[no-untyped-def,type-arg]
-                      holds: set[tuple[str, str]]) -> None:
-        """Record each of ``holds`` in this commit, exactly as a local ``resolve`` does
-        (``grimoire.sync.resolution``): the pair's record, as this step writes it (or as it already
-        stands, when the hold reuses a slot it already lists as held), must hold those bytes, and this
-        device drops them from every other pair's delivered versions itself (the peer sees none of
-        those records, and may write none). Otherwise a hold that landed without its record could
-        later be dismissed as a delivered keep: perhaps the only copy of that version anywhere."""
+        The pair's record must already hold the bytes on disk, written by the resolve's own record
+        step (or already so, when the hold reuses a slot it lists as held), and a record this step
+        writes must still hold them. Staged in the hold's own commit, the record would be ``.sync``
+        state that 010's recovery may drop (a staged file gone or damaged) while it finishes the hold:
+        a slot the hold reused (bytes once delivered) would then stay listed as delivered, and
+        ``dismiss`` would take this device's own version, perhaps its only copy, for a peer's. The
+        other pairs' records are this device's own (the peer sees none of them, and may write none),
+        so it writes them itself, in a commit of their own under the same lock. If the hold then
+        never lands, those bytes are only never dismissable through another pair: that fails closed."""
+        if not holds:
+            return []
         name = keeps_name(self.peer)
         written = [body for header, body in ops if header.get("op") == "state" and header.get("name") == name]
-        record = written[-1] if written else store.read_sync_state(name)
+        standing = store.read_sync_state(name)
         device = device_of(store)
         devices: tuple[str, str] = tuple(sorted((device, self.peer)))  # type: ignore[assignment]
+        states: list[State] = []
         for path, tag in sorted(holds):
-            if not records_hold(record, devices, path, tag):  # type: ignore[arg-type]
-                raise PeerRefused("invalid", f"a resolve's hold of {path} is recorded in the commit that writes it")
-            stage_states(txn, not_delivered_elsewhere(store, device, self.peer, path, tag))
+            if not all(records_hold(record, devices, path, tag) for record in (standing, *written)):
+                raise PeerRefused("invalid", f"a resolve's hold of {path} is recorded as held in a commit before "
+                                             "the one that writes it")
+            states.extend(not_delivered_elsewhere(store, device, self.peer, path, tag))
+        return states
 
     def _state_expected(self, store: LibraryStore, name: str, body: bytes, expected: str | None, roots: dict,  # type: ignore[type-arg]
-                        first: set[tuple[str, str]], holds: set[tuple[str, str]]) -> str | None:
+                        first: set[tuple[str, str]], recordable: set[tuple[str, str]]) -> str | None:
         """The etag a state write of the pair must replace, after checking the write is one a sync makes."""
         if name == keeps_name(self.peer) and not peer_may_write(
                 store.read_sync_state(name), body, tuple(sorted((device_of(store), self.peer))),  # type: ignore[arg-type]
                 lambda path, tag: (path, tag) in first, lambda path, tag: slot_stands(store, path, tag),
-                lambda path, tag: (path, tag) in holds):
+                lambda path, tag: (path, tag) in recordable):
             # a sync records as delivered only the first copies its own keeps write in the same commit, keeps
             # a held version recorded while its slot stands, and never dismisses one: dismissing is this
             # device's own decision, authorized here (``grimoire.sync.dismiss``), never the peer's. Only a
-            # resolve step adds a hold, and only of the version it holds here in that same step.
+            # resolve's record step adds a hold, and only of the version that resolve replaces here.
             raise PeerRefused("invalid", "a peer may not dismiss, add or drop a hold, or record a version it "
                                          "did not deliver")
         for kind in ("archive", "pending"):

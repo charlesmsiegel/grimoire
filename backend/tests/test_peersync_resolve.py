@@ -299,19 +299,20 @@ def test_unpairing_on_the_starting_device_mid_resolve_sends_nothing_more(tmp_pat
 
 # -- a resolve the connection drops ----------------------------------------------------------------
 
-@pytest.mark.parametrize("step,landed", [(1, False), (1, True), (2, True), (3, True)])
+@pytest.mark.parametrize("step,landed", [(1, False), (1, True), (2, False), (2, True), (3, True), (4, True)])
 def test_a_dropped_connection_mid_resolve_loses_nothing_and_the_devices_converge(tmp_path, monkeypatch, step, landed):
+    """The phone receives: its commits are the hold's record, the data, its archive and its marker."""
     case = Conflict(tmp_path)
     commits = []
 
     class Dropping(StepBuffer):
         """The phone's side of the resolve's ``step``-th commit: the cable comes out before or after it lands."""
 
-        def commit(self, store, handle):  # type: ignore[no-untyped-def]
+        def commit(self, store, handle, **options):  # type: ignore[no-untyped-def]
             commits.append(1)
             if len(commits) == step and not landed:
                 raise server_module.TransportError("the cable came out")
-            found = super().commit(store, handle)
+            found = super().commit(store, handle, **options)
             if len(commits) == step:
                 raise server_module.TransportError("the cable came out")
             return found
@@ -321,16 +322,19 @@ def test_a_dropped_connection_mid_resolve_loses_nothing_and_the_devices_converge
         report = case.resolve(server, DESKTOP)
     monkeypatch.undo()
     assert report.status == "incomplete" and report.reason.startswith("disconnected"), report
-    phone_now = case.bytes(case.phone)
-    if landed:  # as a local resolve leaves the phone after a crash past its data commit
+    phone_now, data = case.bytes(case.phone), landed and step >= 2
+    if data:  # as a local resolve leaves the phone after a crash past its data commit
         assert phone_now == case.versions[DESKTOP] and case.versions[PHONE] in _kept(case.phone.store.root)
-        if step == 1:  # the agreement is not recorded yet, but the copy is marked
+        if step == 2:  # the agreement is not recorded yet, but the copy is marked
             assert case.path.encode() in case.phone.store.read_sync_state(pending_name(DESKTOP))
     else:
         assert phone_now == case.versions[PHONE]
-    with serving(case.phone) as server:  # the same resolve again: done if nothing landed, stale if it did
+    if step <= 2:  # the hold's record lands first: never a hold without it (a record alone fails closed)
+        record = parse_keeps(case.phone.store.read_sync_state(keeps_name(DESKTOP)), (DESKTOP, PHONE))
+        assert (case.expected[PHONE] in record.entries[case.path].held) == (landed or step == 2)
+    with serving(case.phone) as server:  # the same resolve again: done if the data did not land, stale if it did
         retry = case.resolve(server, DESKTOP)
-    assert retry.status == ("refused" if landed else "resolved"), retry
+    assert retry.status == ("refused" if data else "resolved"), retry
     again = case.sync_again()
     assert again.status == "synced" and again.conflicts == (), again
     assert case.labels() == (DESKTOP_LABEL, DESKTOP_LABEL)
@@ -385,11 +389,12 @@ def test_the_serving_device_refuses_resolve_writes_beyond_the_path_and_the_grant
     with serving(case.phone) as server:
         channel = _connect(case.desktop, server)
         _request(channel, request)
-        # the writes it may make: the chosen version, with the phone's own one held beside it and
-        # recorded as held in the same step
+        # the writes it may make: the phone's own version recorded as held, in a step of its own, then
+        # the chosen version with that version held beside it
+        record = _held_record(case.phone, case.path, theirs)
+        assert _step(channel, record)["t"] == "committed"
         honest = (({"op": "put", "path": case.path, "expected": etag(theirs)}, ours),
-                  ({"op": "keep", "path": case.path, "slot": 0, "hold": True}, theirs),
-                  _held_record(case.phone, case.path, theirs))
+                  ({"op": "keep", "path": case.path, "slot": 0, "hold": True}, theirs))
         for op in attempts:
             with pytest.raises(PeerRefused) as refused:
                 _step(channel, *honest, op)
@@ -409,7 +414,8 @@ def test_the_serving_device_refuses_resolve_writes_beyond_the_path_and_the_grant
         assert refused.value.code == "denied"
         channel.send({"t": "bye"})
         channel.close()
-    assert _tree(case.phone.store.root) == before
+    # nothing but the hold's record, which holds bytes the phone still has: that only fails closed
+    assert _tree(case.phone.store.root) == {**before, f".sync/{keeps_name(DESKTOP)}": record[1]}
 
 
 def _forged(data: bytes, field: str, value: str) -> bytes:

@@ -309,9 +309,9 @@ def not_delivered(view: KeepsView, peer: str, devices: tuple[str, str], path: st
 
 def not_delivered_elsewhere(store: LibraryStore, device: str, peer: str, path: str, tag: str) -> list[State]:
     """Every other pair's record on ``device`` without ``tag`` delivered for ``path`` (``not_delivered``):
-    what a hold of those bytes for the pair with ``peer`` writes beside its own record, in its commit.
-    Written by the device that holds, whichever device started the resolve: a peer never sees, and
-    may never write, this device's records of its other pairs."""
+    what a hold of those bytes for the pair with ``peer`` commits beside its own record, before the
+    commit that writes the hold. Written by the device that holds, whichever device started the
+    resolve: a peer never sees, and may never write, this device's records of its other pairs."""
     states = []
     for other in other_peers(store, device):
         if other != peer:
@@ -323,8 +323,8 @@ def not_delivered_elsewhere(store: LibraryStore, device: str, peer: str, path: s
 
 
 def records_hold(data: bytes | None, devices: tuple[str, str], path: str, tag: str) -> bool:
-    """Whether the record ``data`` holds ``tag`` for ``path``: what a commit that holds those bytes
-    must leave, so they can never be dismissed as a delivered version."""
+    """Whether the record ``data`` holds ``tag`` for ``path``: what must already stand before a commit
+    holds those bytes, so they can never be dismissed as a delivered version."""
     view = parse_keeps(data, devices)
     entry = view.entries.get(path) if view.state == "valid" else None
     return entry is not None and tag in entry.held
@@ -395,10 +395,11 @@ def peer_may_write(old: bytes | None, new: bytes, devices: tuple[str, str],
     Exactly what ``with_delivered``, ``next_keeps``, ``without`` and ``with_held`` can produce: a valid
     record that dismisses nothing ``old`` did not on the same base (dismissing is this device's own
     decision, authorized by ``dismiss``), whose newly delivered etags are first copies its own
-    (non-hold) keep ops write in the same step (``first``), whose newly held etags are the versions
-    a resolve step holds here in the same step (``held``: never in a sync step, and never a hold
-    the step does not write, which would keep a delivered version from ever being dismissed), and
-    which drops a held etag only once no slot holds those bytes
+    (non-hold) keep ops write in the same step (``first``), whose newly held etags are the one
+    version a resolve's own record step may hold here (``held``: never in a sync step, never in
+    the step that writes the hold, which 010's recovery could finish without its staged record,
+    and never a version the resolve does not replace here, which would keep a delivered version
+    from ever being dismissed), and which drops a held etag only once no slot holds those bytes
     (``stands``, which an unreadable slot also satisfies): a peer can never relabel a version this
     device already held as delivered."""
     after, before = parse_keeps(new, devices), parse_keeps(old, devices)

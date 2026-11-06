@@ -298,9 +298,9 @@ def test_a_connection_lost_mid_transfer_is_incomplete_and_the_next_transfer_fini
     calls = []
 
     class Dropping(StepBuffer):
-        def commit(self, store, handle):  # type: ignore[no-untyped-def]
+        def commit(self, store, handle, **options):  # type: ignore[no-untyped-def]
             calls.append(1)
-            found = super().commit(store, handle)
+            found = super().commit(store, handle, **options)
             if len(calls) == 1:  # the peer committed the first step, then the connection drops
                 raise server_module.TransportError("the cable came out")
             return found
@@ -341,11 +341,11 @@ def test_a_peer_that_changes_during_a_pass_is_planned_again_and_converges(tmp_pa
     changed = []
 
     class Busy(StepBuffer):
-        def commit(self, store, handle):  # type: ignore[no-untyped-def]
+        def commit(self, store, handle, **options):  # type: ignore[no-untyped-def]
             if not changed:  # the phone's own user adds a source between the snapshot and the commit
                 changed.append(1)
                 _add_source(phone, "catalog:extra")
-            return super().commit(store, handle)
+            return super().commit(store, handle, **options)
 
     monkeypatch.setattr(server_module, "StepBuffer", Busy)
     with serving(phone) as server:

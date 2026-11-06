@@ -128,9 +128,10 @@ class PeerServer:
                             buffer.reset()
                             channel.refuse("not_paired", "this device is no longer paired with yours")
                             return
+                        may_hold = None
                         if resolving is not None and buffer.poisoned is None:
-                            resolving.check_step(self.store, buffer.at(resolving.path))
-                        etags = buffer.commit(self.store, handle)
+                            may_hold = resolving.check_step(self.store, buffer.ops)
+                        etags = buffer.commit(self.store, handle, may_hold=may_hold)
                     channel.send({"t": "committed", "count": len(etags), "digest": confirmation(etags)})
                     continue
                 if kind in ("snapshot", "resolve") and not self._still_paired(peer, channel_key):
