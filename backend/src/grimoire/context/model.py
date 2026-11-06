@@ -25,6 +25,8 @@ LANES = ("portrayal", "memory", "lore")
 #: There is no ``self`` audience for lore: a lorebook binds no actor. A card's own sections are
 #: self-only by rule, not by label (see ``pack_actor_context``).
 AUDIENCES = frozenset({"common", "director"})
+#: How a lore entry's secondary keys narrow a key hit (see ``LoreEntry``).
+SECONDARY_LOGICS = frozenset({"and_any", "and_all", "not_any", "not_all"})
 #: Bounds, so a pack's cost is predictable whatever a reader hands back.
 MAX_ENTRY_TEXT = 8000
 MAX_KEYS = 64
@@ -84,6 +86,29 @@ class _UnsafeTable(dict[int, str | None]):
 _UNSAFE_ONLY = _UnsafeTable()
 
 
+def valid_key(key: object) -> bool:
+    """Whether ``key`` can trigger lore: one safe line of at most ``MAX_KEY_TEXT`` characters with a word.
+
+    Exposed so a reader can drop a bad key and keep its entry: one invalid entry blanks its source."""
+    return (type(key) is str and safe_text(key, MAX_KEY_TEXT) and "\n" not in key and "\t" not in key
+            and bool(key_words(key)))
+
+
+def _checked_keys(entry_id: str, name: str, value: object) -> tuple[str, ...]:
+    """``value`` as a tuple of at most ``MAX_KEYS`` distinct valid keys, or ``invalid_entry``."""
+    if isinstance(value, (str, bytes)) or not isinstance(value, Iterable):
+        raise _fail(f"entry {entry_id}: {name} must be a collection of text", "invalid_entry")
+    keys = tuple(value)
+    if not all(type(key) is str for key in keys):
+        raise _fail(f"entry {entry_id}: {name} must be a collection of text", "invalid_entry")
+    if len(keys) > MAX_KEYS or len(set(keys)) != len(keys):
+        raise _fail(f"entry {entry_id}: at most {MAX_KEYS} distinct {name}", "invalid_entry")
+    if not all(valid_key(key) for key in keys):
+        raise _fail(f"entry {entry_id}: a key must be one safe line of at most {MAX_KEY_TEXT} characters "
+                    "with at least one word", "invalid_entry")
+    return keys
+
+
 @dataclass(frozen=True, slots=True)
 class LoreEntry:
     """One retrievable piece of authored setting text, as a source's reader hands it over.
@@ -91,6 +116,11 @@ class LoreEntry:
     ``keys`` trigger the entry when one occurs, as whole words, in the audience-visible scene text;
     a ``constant`` entry is a candidate without a trigger. ``audience`` defaults to ``director``: an
     entry nobody classified never reaches an actor. ``order`` is the author's ordering, lowest first.
+
+    ``secondary_keys``, when given, narrow a key hit by ``secondary_logic`` (one of
+    ``SECONDARY_LOGICS``): ``and_any`` needs one of them to occur too, ``and_all`` all of them,
+    ``not_any`` none of them and ``not_all`` not all of them. They never trigger an entry on their
+    own, and a ``constant`` entry ignores them. This is the selective logic of card lorebooks (037).
     """
 
     entry_id: str
@@ -99,8 +129,11 @@ class LoreEntry:
     constant: bool = False
     audience: str = "director"
     order: int = 0
+    secondary_keys: tuple[str, ...] = ()
+    secondary_logic: str = "and_any"
     #: each key's normalized words, computed once here so every actor's lookup reuses them
     key_sequences: tuple[tuple[str, ...], ...] = field(init=False, repr=False, compare=False)
+    secondary_sequences: tuple[tuple[str, ...], ...] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         try:
@@ -110,20 +143,13 @@ class LoreEntry:
         if not safe_text(self.text, MAX_ENTRY_TEXT):
             raise _fail(f"entry {self.entry_id}: text must be nonblank, safe and at most {MAX_ENTRY_TEXT} "
                         "characters", "invalid_entry")
-        if isinstance(self.keys, (str, bytes)) or not isinstance(self.keys, Iterable):
-            raise _fail(f"entry {self.entry_id}: keys must be a collection of text", "invalid_entry")
-        keys = tuple(self.keys)
-        if not all(type(key) is str for key in keys):
-            raise _fail(f"entry {self.entry_id}: keys must be a collection of text", "invalid_entry")
-        if len(keys) > MAX_KEYS or len(set(keys)) != len(keys):
-            raise _fail(f"entry {self.entry_id}: at most {MAX_KEYS} distinct keys", "invalid_entry")
-        sequences = tuple(key_words(key) if safe_text(key, MAX_KEY_TEXT) and "\n" not in key and "\t" not in key
-                          else () for key in keys)
-        if not all(sequences):
-            raise _fail(f"entry {self.entry_id}: a key must be one safe line of at most {MAX_KEY_TEXT} characters "
-                        "with at least one word", "invalid_entry")
-        object.__setattr__(self, "keys", keys)
-        object.__setattr__(self, "key_sequences", sequences)
+        for name, sequences in (("keys", "key_sequences"), ("secondary_keys", "secondary_sequences")):
+            keys = _checked_keys(self.entry_id, name, getattr(self, name))
+            object.__setattr__(self, name, keys)
+            object.__setattr__(self, sequences, tuple(key_words(key) for key in keys))
+        if type(self.secondary_logic) is not str or self.secondary_logic not in SECONDARY_LOGICS:
+            raise _fail(f"entry {self.entry_id}: secondary_logic must be one of {sorted(SECONDARY_LOGICS)}",
+                        "invalid_entry")
         if type(self.constant) is not bool:
             raise _fail(f"entry {self.entry_id}: constant must be a bool", "invalid_entry")
         if type(self.audience) is not str or self.audience not in AUDIENCES:
@@ -132,8 +158,33 @@ class LoreEntry:
             raise _fail(f"entry {self.entry_id}: order must be an int within ±{MAX_ORDER}", "invalid_entry")
 
 
-#: A source's reader: its stored payload -> its lore entries. Registered by record schema.
-EntryReader = Callable[[Mapping[str, object]], Iterable[LoreEntry]]
+@dataclass(frozen=True, slots=True)
+class SkippedEntry:
+    """An entry a reader left out because 031 cannot honour it, said instead of silently dropped.
+
+    A reader hands it over among its ``LoreEntry`` values; a pack reports it to a reader of its
+    ``audience`` as the problem ``skipped_entry`` (``detail``: ``<entry_id>:<reason>``), never with its
+    text. ``audience`` defaults to ``director``, like an entry's: an unclassified skip is not an actor's
+    to know of. ``reason`` is a segment such as ``secondary_keys``.
+    """
+
+    entry_id: str
+    reason: str
+    audience: str = "director"
+
+    def __post_init__(self) -> None:
+        try:
+            validate_segment(self.entry_id, "entry_id")
+            validate_segment(self.reason, "reason")
+        except ValueError as error:
+            raise _fail(f"skipped entry: {error}", "invalid_entry") from None
+        if type(self.audience) is not str or self.audience not in AUDIENCES:
+            raise _fail(f"skipped entry {self.entry_id}: audience must be one of {sorted(AUDIENCES)}",
+                        "invalid_entry")
+
+
+#: A source's reader: its stored payload -> its lore entries, and any it skipped. Registered by record schema.
+EntryReader = Callable[[Mapping[str, object]], Iterable["LoreEntry | SkippedEntry"]]
 #: A route's token counter: text -> a non-negative int.
 TokenCounter = Callable[[str], int]
 
@@ -386,8 +437,8 @@ class LorePack:
 
 
 __all__ = [
-    "AUDIENCES", "FORMAT", "LANES", "MAX_ENTRIES", "MAX_ENTRY_TEXT", "MAX_KEYS", "MAX_KEY_TEXT", "MAX_PRESENT",
-    "MAX_SCENE_TEXT", "MAX_TOKENS", "Budget", "ClaimReading", "ContextError", "ContextPack", "EntryReader", "LoreEntry",
-    "LorePack", "Omission", "Origin", "PackedItem", "SelectionBasis", "SourceProblem", "TokenCounter",
-    "estimate_tokens", "safe_text",
+    "AUDIENCES", "FORMAT", "LANES", "MAX_ENTRIES", "MAX_ENTRY_TEXT", "MAX_KEYS", "MAX_KEY_TEXT", "MAX_ORDER",
+    "MAX_PRESENT", "MAX_SCENE_TEXT", "MAX_TOKENS", "SECONDARY_LOGICS", "Budget", "ClaimReading", "ContextError",
+    "ContextPack", "EntryReader", "LoreEntry", "LorePack", "Omission", "Origin", "PackedItem", "SelectionBasis",
+    "SkippedEntry", "SourceProblem", "TokenCounter", "estimate_tokens", "safe_text", "valid_key",
 ]

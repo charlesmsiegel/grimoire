@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from grimoire.cards import scenario_lorebook
 from grimoire.chats import ChatRecord, PlayScope, chat_from_payload, scope_from_payload
 from grimoire.chats import ChatCodecError
 from grimoire.core.entity import EntityDefinition, EntityInstance
@@ -114,6 +115,44 @@ def chat_selection(chat: ChatRecord, scope: PlayScope | None) -> SourceSelection
     return SourceSelection(world, sources)
 
 
+def _with_scenario_lore(view: LibraryView, chat: ChatRecord, selection: SourceSelection
+                        ) -> tuple[SourceSelection, list[str]]:
+    """``selection`` with each bound scenario's own lorebook selected right after it (037), and problems.
+
+    The lorebook is the one the scenario's **selected revision** names, read now rather than recorded
+    when the scenario was bound: a scenario update that drops or renames its lorebook, or a re-pin,
+    changes the lore with it, and a scenario attached mid-chat brings its lore like a launched one. It
+    is selected pinned, as the scenario names it, and is never a chat binding: detaching the scenario
+    takes it away. A lorebook the chat has ever bound itself, under any revision, is the chat's choice: an
+    active binding keeps it as bound, and a detached one with none active is the player's opt-out
+    (``ChatLibrary.detach_source`` records one for an implied lorebook), until it is attached again. One that no
+    longer resolves is selected anyway, so 031 reports it ``missing_source`` and the scene plays on
+    without it. A scenario whose ``lorebook`` is not a pinned lorebook ref (a hand edit) adds the
+    problem ``invalid_scenario_lorebook:<scenario>`` and no lore.
+    """
+    # every lorebook the chat ever bound, tombstones included: an opt-out sticks through scenario updates
+    taken = {(source.role, source.ref.entity_key) for source in selection.sources}
+    taken |= {binding.key for binding in chat.bindings if binding.role == "lorebook"}
+    sources: list[SelectedSource] = []
+    problems: list[str] = []
+    for source in selection.sources:
+        sources.append(source)
+        if source.role != "scenario" or view.index.check(source.ref) is not None:
+            continue  # a broken scenario is reported as itself
+        stored = view.index.resolve(source.ref)
+        if not isinstance(stored, StoredDefinition):
+            continue
+        try:
+            own = scenario_lorebook(stored.envelope.extra.get("schema"), stored.envelope.payload)
+        except ValueError:
+            problems.append(f"invalid_scenario_lorebook:{stored.ref}")
+            continue
+        if own is not None and ("lorebook", own.entity_key) not in taken:
+            taken.add(("lorebook", own.entity_key))
+            sources.append(SelectedSource(own, "lorebook", own.revision))
+    return SourceSelection(selection.world, tuple(sources)), problems
+
+
 @dataclass(frozen=True)
 class ChatSnapshot:
     """One chat, its scope and a snapshot of what it selected, all from the same loaded library."""
@@ -142,7 +181,9 @@ def chat_snapshot(view: LibraryView, chat_ref: ChatRef) -> ChatSnapshot:
     ``RecordNotFound`` if the view holds no readable chat at that ref; ``ChatCodecError`` if this
     version cannot interpret the chat. With an ``undecodable_scope`` problem, ``world`` is ``None``
     because it is unknown, not because the chat has no world. Problems (never failures): ``orphan_chat``,
-    ``undecodable_scope``, ``missing_actor:<ref>``, ``undecodable_actor:<ref>``.
+    ``undecodable_scope``, ``missing_actor:<ref>``, ``undecodable_actor:<ref>``,
+    ``invalid_scenario_lorebook:<ref>``. The snapshot selects the chat's active bindings and each bound
+    scenario's own lorebook (``_with_scenario_lore``).
     """
     stored = view.chats.get(chat_ref)
     if stored is None:
@@ -168,7 +209,9 @@ def chat_snapshot(view: LibraryView, chat_ref: ChatRef) -> ChatSnapshot:
             problems.append(f"{captured}:{entry.actor}")
         else:
             instances.append(captured)
-    snapshot = EffectiveSnapshot(view.index, chat_selection(chat, scope), decode=entity_decoder,
+    selection, scenario_problems = _with_scenario_lore(view, chat, chat_selection(chat, scope))
+    problems += scenario_problems
+    snapshot = EffectiveSnapshot(view.index, selection, decode=entity_decoder,
                                  explain=explainer(view), instances=instances)
     return ChatSnapshot(chat, stored.etag, scope, scope_etag, snapshot, tuple(problems))
 

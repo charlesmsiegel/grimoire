@@ -248,6 +248,21 @@ def scenario_payload(card: ScenarioCard, *, lorebook: SourceRef | None = None) -
     return payload
 
 
+def scenario_lorebook(schema: object, payload: Mapping[str, object]) -> SourceRef | None:
+    """The pinned lorebook a stored scenario record names (``scenario_payload``'s ``lorebook``), if any.
+
+    ``None`` for a record of another schema or a scenario without a lorebook. A ``grimoire.scenario/1``
+    record whose ``lorebook`` is not a pinned lorebook ref (a hand edit) raises ``ValueError``: selecting
+    some other revision, or none, would silently change what the scenario's scenes know.
+    """
+    if schema != SCENARIO_SCHEMA or "lorebook" not in payload:
+        return None
+    ref = SourceRef.parse(payload["lorebook"])
+    if ref.kind != "lorebook" or not ref.pinned:
+        raise ValueError(f"a scenario's lorebook must be a pinned lorebook ref, not {ref}")
+    return ref
+
+
 @dataclass(frozen=True)
 class Piece:
     """One imported text, its authored role and where it came from. ``chars`` is its length, never its text."""

@@ -4,6 +4,9 @@ An adapter, not part of the pure package: it knows the store's ``StoredDefinitio
 ``LibraryView`` and 020's ``CampaignKnowledge``. Everything comes from **one** ``LibraryView`` and
 **one** director ledger read, which the caller holds for the whole turn. Nothing here writes, reads
 files itself, or calls a model.
+
+The library's own lore formats are read by ``DEFAULT_READERS``: 037's card lorebooks and scenarios,
+whose entries are ``common`` lore (anyone in the scene may know them).
 """
 
 from __future__ import annotations
@@ -11,16 +14,21 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 
+from grimoire.cards import LORE_READERS
 from grimoire.context import (
-    DEFAULT_EXCLUDED_SECTIONS, Budget, ContextError, ContextPack, EntryReader, TokenCounter, estimate_tokens,
-    pack_actor_context,
+    DEFAULT_EXCLUDED_SECTIONS, Budget, ContextError, ContextPack, EntryReader, LorePack, TokenCounter,
+    director_lore, estimate_tokens, pack_actor_context,
 )
 from grimoire.core.identity import ChatRef, InstanceRef
 from grimoire.effective import chat_snapshot
 from grimoire.evidencestore import CampaignKnowledge
 from grimoire.store import LibraryView, StoredDefinition
 
-__all__ = ["ChatContext", "actor_context", "stored_record"]
+__all__ = ["DEFAULT_READERS", "ChatContext", "ChatLore", "actor_context", "chat_lore", "stored_record"]
+
+#: The lore readers a store-backed pack uses when its caller passes none: every stored lore format the
+#: library itself writes. A caller with its own formats passes ``{**DEFAULT_READERS, **its_own}``.
+DEFAULT_READERS: Mapping[str, EntryReader] = LORE_READERS
 
 
 def stored_record(definition: object) -> tuple[str | None, Mapping[str, object]] | None:
@@ -61,6 +69,9 @@ def actor_context(view: LibraryView, chat: ChatRef, ledger: CampaignKnowledge, a
     (``present``, ``scene_text``) apply unchanged. When the read quarantined damaged records, the pack
     carries the note ``knowledge_quarantined``: the actor's knowledge can only have shrunk (020).
     ``RecordNotFound`` and ``ChatCodecError`` propagate from 022's ``chat_snapshot``.
+
+    ``readers`` defaults to ``DEFAULT_READERS``, so a bound card lorebook reaches the pack without
+    the caller knowing its format; ``{}`` reads no lore format at all.
     """
     if not isinstance(ledger, CampaignKnowledge):
         raise TypeError(f"expected a CampaignKnowledge read, not {type(ledger).__name__}")
@@ -70,9 +81,42 @@ def actor_context(view: LibraryView, chat: ChatRef, ledger: CampaignKnowledge, a
         raise ContextError("the ledger belongs to another campaign than the chat", "campaign_mismatch")
     captured = chat_snapshot(view, chat)
     pack = pack_actor_context(captured.snapshot, ledger.knowledge, actor, as_of=as_of, budget=budget,
-                              present=present, scene_text=scene_text, claims=ledger.claims, readers=readers,
+                              present=present, scene_text=scene_text, claims=ledger.claims,
+                              readers=DEFAULT_READERS if readers is None else readers,
                               unpack=stored_record, count=count, measurement=measurement,
                               exclude_sections=exclude_sections)
     if ledger.quarantined:
         pack = replace(pack, notes=(*pack.notes, "knowledge_quarantined"))
     return ChatContext(pack, chat, captured.chat_etag, captured.scope_etag, captured.problems)
+
+
+@dataclass(frozen=True)
+class ChatLore:
+    """The director's lore for a chat's scene and what it was built from (see ``ChatContext``).
+
+    ``problems`` are the chat snapshot's own, such as ``invalid_scenario_lorebook:<ref>``: lore the
+    chat should have had but could not select, which ``lore``'s own problems cannot show.
+    """
+
+    lore: LorePack
+    chat: ChatRef
+    chat_etag: str
+    scope_etag: str | None
+    problems: tuple[str, ...]
+
+
+def chat_lore(view: LibraryView, chat: ChatRef, *, table_text: str, budget: Budget,
+              readers: Mapping[str, EntryReader] | None = None, count: TokenCounter = estimate_tokens,
+              measurement: str = "estimated") -> ChatLore:
+    """``director_lore`` for ``chat``'s scene over ``view``, with ``actor_context``'s default readers.
+
+    The caller obligation on ``table_text`` applies unchanged. ``RecordNotFound`` and ``ChatCodecError``
+    propagate from 022's ``chat_snapshot``.
+    """
+    if not isinstance(chat, ChatRef):
+        raise TypeError(f"expected a ChatRef, not {type(chat).__name__}")
+    captured = chat_snapshot(view, chat)
+    lore = director_lore(captured.snapshot, campaign_id=chat.campaign_id, table_text=table_text, budget=budget,
+                         readers=DEFAULT_READERS if readers is None else readers, unpack=stored_record,
+                         count=count, measurement=measurement)
+    return ChatLore(lore, chat, captured.chat_etag, captured.scope_etag, captured.problems)

@@ -17,7 +17,7 @@ from context_fixtures import (
 )
 from grimoire.context import (
     FORMAT, LANES, MAX_ENTRIES, Budget, ClaimReading, ContextError, ContextPack, LoreEntry, Origin, SceneWords,
-    estimate_tokens, pack_actor_context, words,
+    SkippedEntry, director_lore, estimate_tokens, pack_actor_context, words,
 )
 from grimoire.context.pack import Candidate, pack
 from grimoire.core import DefinitionIndex, InstanceRef, SourceDescriptor, SourceRef
@@ -71,6 +71,9 @@ def test_a_budget_normalizes_its_caps_in_lane_order_and_is_hashable():
     lambda: LoreEntry("e", "t", ("k" * 101,)), lambda: LoreEntry("e", "t", constant=1),
     lambda: LoreEntry("e", "t", audience="players"), lambda: LoreEntry("e", "t", order=True),
     lambda: LoreEntry("e", "t", order=1_000_001), lambda: LoreEntry("e", "t", (3,)),
+    lambda: LoreEntry("e", "t", ("ferry",), secondary_keys="boat"),
+    lambda: LoreEntry("e", "t", ("ferry",), secondary_keys=("boat\tdeck",)),
+    lambda: LoreEntry("e", "t", ("ferry",), secondary_keys=("boat",), secondary_logic="xor"),
 ])
 def test_an_invalid_lore_entry_is_refused(make):
     assert reason(make) == "invalid_entry"
@@ -250,6 +253,24 @@ def test_an_unreadable_source_contributes_nothing_and_is_reported(reader, code, 
     built = build("mara", readers={LORE_SCHEMA: reader})
     assert built.lane("lore") == ()
     assert {(p.code, p.source, p.detail) for p in built.problems} == {(code, LORE, detail), (code, SCENARIO, detail)}
+
+
+def test_a_skipped_entry_is_named_only_to_a_reader_of_its_audience():
+    def reader(payload):
+        return [LoreEntry("ferry", "The ferry crosses the marsh at dusk.", ("ferry",), audience="common"),
+                SkippedEntry("open", "use_regex", "common"), SkippedEntry("hidden", "use_regex")]
+
+    built = build("mara", readers={LORE_SCHEMA: reader})
+    assert [i.origin.name for i in built.lane("lore")] == ["ferry", "ferry"]  # the lorebook and the scenario
+    assert {(p.code, p.detail) for p in built.problems} == {("skipped_entry", "open:use_regex")}
+    table = director_lore(snapshot(), campaign_id=f.C, table_text=SCENE, budget=Budget(400),
+                          readers={LORE_SCHEMA: reader}, unpack=f.unpack)
+    assert {(p.code, p.detail) for p in table.problems} == {("skipped_entry", "open:use_regex"),
+                                                           ("skipped_entry", "hidden:use_regex")}
+    assert reason(lambda: SkippedEntry("bad id!", "use_regex")) == "invalid_entry"
+    assert reason(lambda: SkippedEntry("e", "use_regex", "players")) == "invalid_entry"
+    duplicate = build("mara", readers={LORE_SCHEMA: lambda p: [LoreEntry("a", "t"), SkippedEntry("a", "keys")]})
+    assert {p.detail for p in duplicate.problems} == {"duplicate_entry"}
 
 
 def test_a_reader_bug_propagates():

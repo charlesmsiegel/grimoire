@@ -5,6 +5,6 @@ world-based or world-less chat's actor gets a bounded, audience-safe ``ContextPa
 docs/CONTEXT.md.
 """
 
-from .library import ChatContext, actor_context, stored_record
+from .library import DEFAULT_READERS, ChatContext, ChatLore, actor_context, chat_lore, stored_record
 
-__all__ = ["ChatContext", "actor_context", "stored_record"]
+__all__ = ["DEFAULT_READERS", "ChatContext", "ChatLore", "actor_context", "chat_lore", "stored_record"]

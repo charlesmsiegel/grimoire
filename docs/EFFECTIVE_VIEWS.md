@@ -162,12 +162,12 @@ Ancestry is walked separately from field composition (`portrayal.derivation_chai
 - `selection_snapshot(view, selection)` is a snapshot over `view.index`.
 - `explainer(view)` gives `missing_base` the store's `excluded_source`, `unreadable_revision` or `entity_dropped`, in that order of precedence; both snapshot helpers use it. It explains only bases: a broken *selection* keeps the index reason in its `BrokenReference` and `MissingDefinition`.
 - `chat_snapshot(view, chat_ref)` reads, **from the same `LibraryView`**, the chat, its scope and every roster instance, and returns a `ChatSnapshot(chat, chat_etag, scope, scope_etag, snapshot, problems)`. `scope_etag` is `None` when the scope could not be interpreted, so it is never a precondition for a record this version did not understand.
-  - **Selection.** It is built only from the chat's **active** bindings: `(ref, role, resolved_revision, actor)`.
+  - **Selection.** It is built from the chat's **active** bindings: `(ref, role, resolved_revision, actor)`, and, right after each bound `grimoire.scenario/1`, the `lorebook` its selected revision names, pinned as named and with no actor, unless the chat has ever bound that lorebook itself: an active binding is kept as bound, and a tombstone with none active is the player's opt-out ([CARDS](CARDS.md#chats)). That lorebook is read from the scenario each time, so it follows the scenario through updates and re-pins; one that no longer resolves is still selected, so it shows as broken rather than blocking play.
   - **Launch.** The launch is provenance only, so a detached launch binding is not selected.
   - **World.** The world is the scope's world, or `None`.
-  - **Problems** (never failures): `orphan_chat`, `undecodable_scope`, `missing_actor:<ref>` and `undecodable_actor:<ref>`.
+  - **Problems** (never failures): `orphan_chat`, `undecodable_scope`, `missing_actor:<ref>`, `undecodable_actor:<ref>` and `invalid_scenario_lorebook:<ref>` (a scenario whose `lorebook` is not a pinned lorebook ref: no lorebook is selected for it).
   - **Raises** `RecordNotFound` when the view has no readable chat at that ref, and `ChatCodecError` when this version cannot interpret the chat.
-  - `chat_selection(chat, scope)` is the same selection, exposed on its own for 035.
+  - `chat_selection(chat, scope)` is the bindings' selection alone (without scenario lorebooks), exposed on its own for 035.
 
 ## Not in this slice
 

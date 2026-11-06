@@ -53,6 +53,7 @@ There is **no app and no playable chat yet**. There are no messages, scenes or m
 `Launch(kind, ref | premise)` is immutable.
 - A launch ref is bound at sequence 0 under the role of the same name.
 - A premise is bounded text (≤ 4000 chars) with no source.
+- A bound imported scenario (`grimoire.scenario/1`) is not followed by a `lorebook` binding: its chat's snapshot selects the lorebook that the scenario's selected revision names, so its lore follows the scenario through updates, re-pins and detaching ([CARDS](CARDS.md#chats)). `detach_source` on such an implied lorebook is the player's opt-out: it records a binding of it, already detached, and a chat with a `lorebook` tombstone and no active binding for that entity never selects it again until it is attached.
 
 ### `SourceBinding`
 
