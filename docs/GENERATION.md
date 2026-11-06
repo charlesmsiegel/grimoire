@@ -1,6 +1,6 @@
 # Per-NPC generation (first slice of sprint 027)
 
-**Status:** first slice of roadmap sprint 027, [Per Npc Generation Runtime](roadmap/sprints/per-npc-generation-runtime.md). Headless: it plans, briefs, issues and screens a turn's generation calls through the real provider adapter, with synthetic tests and scripted providers only. It **returns proposals and commits nothing**: no message, event, belief or effect is written. Persisting the lines and showing them is 035's (with 032), and reviewing a director reply is 035's `review_narration`.
+**Status:** first slice of roadmap sprint 027, [Per Npc Generation Runtime](roadmap/sprints/per-npc-generation-runtime.md). Headless: it plans, briefs, issues and screens a turn's generation calls through the real provider adapter, with synthetic tests and scripted providers only. It **returns proposals and commits nothing**: no message, event, belief or effect is written. Persisting the lines and showing them is 035's (with 032), and reviewing a director reply is 035's `review_narration`. A finished turn can be recorded as a `story-quality/3` run for the offline gate ([STORY_QUALITY](evals/STORY_QUALITY.md#format-grimoirestory-quality3)).
 
 The code is two packages:
 
@@ -114,7 +114,9 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 - **Fence.** `RunFence.claim(key)` returns a `FenceToken`; a newer claim on the same caller-chosen key (one chat thread) makes it stale and cancels the run's token at once. The runtime also checks before each call and before returning. A stale run returns **no lines**. Staleness is checked only up to the return: a caller that persists lines (035) must re-check `token.stale` inside its own commit. Cross-process fencing is 030's.
 - **Cancel.** One `CancelToken` for the run: the in-flight call ends `cancelled` and nothing runs after it.
 
-`TurnOutcome.status` is `complete` (every planned call produced a line), `halted`, `cancelled` or `stale`. `calls` holds every planned call's `CallOutcome` in plan order: `accepted`, `rejected` (with its screen reason), the adapter's `incomplete`/`failed`/`cancelled`/`refused`, or `not_issued`. Each `GeneratedLine` carries its call id, actor (`None` for the director, shown as `Narrator`), `actor_revision` (the actor's own selected revision, such as a derived portrayal), `voice_profile` (the profile revision its voice came from, maybe an ancestor's) and the text: an **unreviewed proposal**.
+`grimoire.runtime.record.recorded_turn(turn, meter, outcome, *, player_lines=())` hands a finished turn to the story-quality `/3` recorder; it lives in its own module, so `import grimoire.runtime` loads no eval recorder. It refuses (`outcome_mismatch`) an outcome that `run_turn` did not return for this very `meter` (`TurnOutcome.meter_token`; another swipe of the same plan has the same call ids), whose calls are not `meter`'s plan, whose call results disagree with `meter`'s call statuses, or whose lines are not its accepted calls', and a meter with a failed booking (`poisoned_meter`).
+
+`TurnOutcome.status` is `complete` (every planned call produced a line), `halted`, `cancelled` or `stale`. `calls` holds every planned call's `CallOutcome` in plan order: `accepted`, `rejected` (with its screen reason), the adapter's `incomplete`/`failed`/`cancelled`/`refused`, or `not_issued`. `meter_token` is the `TurnMeter.token` of the meter the turn was billed to (an opaque per-meter id; not compared or shown); it is a plain string so an outcome pickles and keeping one never keeps its meter alive or blocks regenerating the turn on a new meter. Each `GeneratedLine` carries its call id, actor (`None` for the director, shown as `Narrator`), `actor_revision` (the actor's own selected revision, such as a derived portrayal), `voice_profile` (the profile revision its voice came from, maybe an ancestor's) and the text: an **unreviewed proposal**.
 
 ## Proofs
 
@@ -122,12 +124,12 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 - Planning from control: `backend/tests/test_generation_plan.py`. Briefs and screening: `backend/tests/test_generation_brief.py`. Snapshot voices: `backend/tests/test_generation_voice.py`.
 - Briefs from 031's packs and the director's lore: `backend/tests/test_generation_context.py`; over the native store in a world-less, a world-based and a scenario-only chat: `backend/tests/test_context_scenarios.py`.
 - Every provider fault, rejection, cancel and supersede point: `explore_generation_faults` ([TESTING](TESTING.md#generation-fault-invariants-grimoiretestinggeneration)).
+- Recording turns as gateable `/3` runs (scenario-only and two-NPC): `backend/tests/test_runtime_record.py`.
 
 ## Not in this slice
 
 | Item | Owner |
 |---|---|
-| `story-quality/3`, recording director calls in eval runs | 027's next slice, with 015 |
 | Persisting generated lines as messages | 035, 032 |
 | Streaming display, async UI | 035 |
 | Cross-process run fencing | 030 |

@@ -1,9 +1,11 @@
-"""Compare two ``/2`` runs: the ``/1`` hard checks and voice metric, then usage from the ledger.
+"""Compare two ``/2`` (or two ``/3``) runs: the ``/1`` hard checks and voice, then ledger usage.
 
 Usage is judged only from the ledgers ``parse_run_v2`` rebuilt. A count that was not reported
 is missing, never zero, so a cost comparison needs every attempt's input, output and cache-read
 counts on both sides; otherwise the comparison says ``usage_incomplete`` instead of guessing.
-"Measured" needs verified capture evidence as well as a provider-reported ledger.
+"Measured" needs verified capture evidence as well as a provider-reported ledger. A ``/3`` run is
+gated the same way; its director lines are narration to the hard checks, plus the NPC attribution
+rules of ``attribution.voiced``.
 """
 
 from __future__ import annotations
@@ -18,8 +20,10 @@ from grimoire.core.inference import Measurement, UsageTotals
 from .checks import Finding, distinguishability, finding_key, hard_findings, scorecard
 from .format import Scenario
 from .format2 import RunV2
+from .format3 import FORMAT_V3
 from .gate import _increase_exceeds
 from .policy import GatePolicy
+from .text import has_words
 from .v021 import EvidenceCheck
 
 UsageStatus = Literal["measured", "provider_reported_unverified", "estimated", "synthetic",
@@ -42,7 +46,10 @@ def usage_status(run: RunV2, evidence: EvidenceCheck | None) -> UsageStatus:
 class ScorecardV2:
     status: UsageStatus
     source: str
+    format: str
     npc_lines: int
+    #: Scene-level director lines that say something; always 0 in /2.
+    narration_lines: int
     leak_rate: Fraction | None
     negated_by_label: int
     negated_by_evidence: int
@@ -91,10 +98,14 @@ def scorecard_v2(scenario: Scenario, run: RunV2, policy: GatePolicy,
     costs = [cost for call in run.calls for each, cost in zip(call.attempts, call.costs)
              if each.outcome != "not_sent"]
     source = run.source.kind + (f" ({run.source.mode})" if run.source.mode else "")
+    narration = sum(1 for turn in view.turns for line in turn.contributions
+                    if line.author == "model" and line.speaker_id is None and has_words(line.text))
     return ScorecardV2(
         status=usage_status(run, evidence),
         source=source,
+        format=run.format,
         npc_lines=base.npc_lines,
+        narration_lines=narration,
         leak_rate=base.leak_rate,
         negated_by_label=base.negated_by_label,
         negated_by_evidence=base.negated_by_evidence,
@@ -132,6 +143,14 @@ def compare_v2(scenario: Scenario, baseline: RunV2, candidate: RunV2,
                policy: GatePolicy = GatePolicy(), *,
                baseline_evidence: EvidenceCheck | None = None,
                candidate_evidence: EvidenceCheck | None = None) -> GateReportV2:
+    """Gate ``candidate`` against ``baseline``; both must be ``/2`` or both ``/3``.
+
+    Mixing them is refused (``ValueError``), as mixing ``/1`` and ``/2`` is: a ``/2`` run cannot
+    hold a director reply, so its costs and lines are not comparable with one that can.
+    """
+    if baseline.format != candidate.format:
+        raise ValueError(f"baseline and candidate must have the same run format "
+                         f"({baseline.format} vs {candidate.format})")
     findings: list[Finding] = []
     if not baseline.scenario_id == candidate.scenario_id == scenario.scenario_id:
         findings.append(Finding("incomparable", "comparison", "runs are for different scenarios"))
@@ -149,19 +168,25 @@ def compare_v2(scenario: Scenario, baseline: RunV2, candidate: RunV2,
             findings.append(Finding("evidence_unverified", "comparison",
                                     f"supplied evidence does not verify: {evidence.reason}",
                                     subject=who))
-    for finding in hard_findings(scenario, baseline.scoring_view()):
+    for finding in hard_findings(scenario, baseline.scoring_view(),
+                                 director_narration=baseline.format == FORMAT_V3):
         findings.append(Finding("baseline_invalid", "comparison",
                                 "the baseline itself violates a hard invariant", finding.turn,
                                 finding.check, finding.subject))
-    findings.extend(hard_findings(scenario, candidate.scoring_view()))
+    findings.extend(hard_findings(scenario, candidate.scoring_view(),
+                                  director_narration=candidate.format == FORMAT_V3))
 
     base = scorecard_v2(scenario, baseline, policy, baseline_evidence)
     cand = scorecard_v2(scenario, candidate, policy, candidate_evidence)
-    if base.distinguishability is None:
+    # A scenario-only chat (/3) has no cast to tell apart: when neither run has an NPC line and
+    # both narrate, voice does not apply. A run with neither still fails closed below.
+    scene_only = (base.npc_lines == cand.npc_lines == 0
+                  and base.narration_lines > 0 and cand.narration_lines > 0)
+    if base.distinguishability is None and not scene_only:
         findings.append(Finding("baseline_invalid", "comparison",
                                 "the baseline has no NPC lines, so voice cannot be compared",
                                 subject="no_npc_contributions"))
-    if cand.distinguishability is None:
+    if cand.distinguishability is None and not scene_only:
         findings.append(Finding("no_npc_contributions", "comparison",
                                 "candidate has no NPC lines to score"))
     elif (base.distinguishability is not None

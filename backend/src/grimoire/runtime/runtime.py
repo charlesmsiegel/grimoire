@@ -64,11 +64,18 @@ class CallOutcome:
 
 @dataclass(frozen=True, slots=True)
 class TurnOutcome:
-    """The turn's lines (none when stale) and every planned call's outcome, in plan order."""
+    """The turn's lines (none when stale) and every planned call's outcome, in plan order.
+
+    ``meter_token`` is the ``token`` of the meter ``run_turn`` billed these calls to. Two meters on
+    one plan have the same call ids, so only it ties the lines to their own bill
+    (``record.recorded_turn``). It is a plain string, not the meter, so an outcome pickles and
+    keeping one never keeps its meter alive (the adapter refuses a second live meter for a turn).
+    """
 
     status: TurnStatus
     lines: tuple[GeneratedLine, ...]
     calls: tuple[CallOutcome, ...]
+    meter_token: str | None = field(default=None, repr=False, compare=False)
 
 
 def _briefs(briefs: object) -> tuple[NpcBrief, ...]:
@@ -205,7 +212,8 @@ class GenerationRuntime:
             rest = [CallOutcome(call.call_id, "not_issued") for call, _brief in pairs if call.call_id not in issued]
             if token is not None and token.stale:
                 status = "stale"
-            return TurnOutcome(status, () if status == "stale" else tuple(lines), tuple(outcomes + rest))
+            return TurnOutcome(status, () if status == "stale" else tuple(lines), tuple(outcomes + rest),
+                               meter_token=meter.token)
 
         try:
             for call, brief in pairs:

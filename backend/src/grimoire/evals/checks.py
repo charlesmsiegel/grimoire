@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from fractions import Fraction
 from types import MappingProxyType
 
+from .attribution import voiced
 from .format import NARRATION, NPC_GENERATION, Call, Contribution, Run, Scenario
 from .policy import GatePolicy
-from .text import cosine, first_marker, has_words, longest_shared_run, trigram_counts
+from .text import cosine, first_marker, has_words, longest_shared_run, sentences, trigram_counts
 
 #: A model NPC line sharing this many contiguous normalised characters with a voice sample is a copy.
 SAMPLE_COPY_CHARS = 24
@@ -82,8 +83,15 @@ def _who(contribution: Contribution) -> str:
 
 # --- individual checks --------------------------------------------------------------------------
 
-def _leaks(scenario: Scenario, run: Run) -> list[tuple[Finding, bool]]:
-    """Knowledge leaks, each flagged True when it is in an NPC line (not narration)."""
+def _leaks(scenario: Scenario, run: Run, *,
+           director_narration: bool = False) -> list[tuple[Finding, bool]]:
+    """Knowledge leaks, each flagged True when it is in an NPC line (not narration).
+
+    Narration must not state a fact before some player character knows it. With
+    ``director_narration`` (``/3`` director lines), narration that gives an NPC speech
+    (``attribution.voiced``) must also not state, in that speech's sentence, a fact the NPC does
+    not know yet: the director cannot say for an NPC what the NPC's own line could not.
+    """
     directors = set(scenario.director_ids())
     players = [actor.actor_id for actor in scenario.actors if actor.control == "player"]
     results = []
@@ -103,7 +111,31 @@ def _leaks(scenario: Scenario, run: Run) -> list[tuple[Finding, bool]]:
                             f"(contribution {position})")
             results.append((Finding("knowledge_leak", "invariant", message, turn, _who(line),
                                     f"{fact.fact_id}#{index}"), is_npc))
+        if is_npc or not director_narration:
+            continue
+        parts = sentences(line.text, keep_case=True)
+        for number, actor_id, _evidence in voiced(scenario, parts):
+            for fact in scenario.facts:
+                index = first_marker(parts[number], fact.markers)
+                if index is not None and fact.known_from.get(actor_id, turn + 1) > turn:
+                    results.append((Finding(
+                        "knowledge_leak", "invariant",
+                        f"narration has {actor_id} say a fact before it knows it "
+                        f"(contribution {position}, sentence {number})", turn, "narration",
+                        f"{fact.fact_id}#{index}"), False))
     return results
+
+
+def _narration_voices(scenario: Scenario, run: Run) -> Iterator[Finding]:
+    """Director narration that gives an NPC speech (``attribution.voiced``); only the NPC's own
+    call may."""
+    for turn, position, line in _model_lines(run):
+        if line.speaker_id is not None:
+            continue
+        for number, actor_id, evidence in voiced(scenario, sentences(line.text, keep_case=True)):
+            yield Finding("narration_voices_actor", "invariant",
+                          f"narration gives an NPC speech (contribution {position}, sentence "
+                          f"{number})", turn, actor_id, evidence)
 
 
 def _sovereignty(scenario: Scenario, run: Run) -> Iterator[Finding]:
@@ -259,11 +291,19 @@ def _sample_copies(scenario: Scenario, run: Run) -> Iterator[Finding]:
                               _who(line), f"{actor_id}#sample{index}")
 
 
-def hard_findings(scenario: Scenario, run: Run) -> tuple[Finding, ...]:
-    """Every invariant violation of ``run``; empty means none of the hard checks failed."""
-    findings = [finding for finding, _ in _leaks(scenario, run)]
-    for check in (_sovereignty, _player_input, _choices, _continuity, _script, _calls,
-                  _sample_copies):
+def hard_findings(scenario: Scenario, run: Run, *,
+                  director_narration: bool = False) -> tuple[Finding, ...]:
+    """Every invariant violation of ``run``; empty means none of the hard checks failed.
+
+    ``director_narration`` adds the narration attribution rules (``attribution.voiced``) for ``/3``
+    director lines; ``/1`` narration keeps its ``/1`` checks.
+    """
+    findings = [finding for finding, _ in _leaks(scenario, run,
+                                                  director_narration=director_narration)]
+    checks = [_sovereignty, _player_input, _choices, _continuity, _script, _calls, _sample_copies]
+    if director_narration:
+        checks.insert(0, _narration_voices)
+    for check in checks:
         findings.extend(check(scenario, run))
     return tuple(sorted(findings, key=finding_key))
 

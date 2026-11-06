@@ -5,6 +5,7 @@ from __future__ import annotations
 from fractions import Fraction
 
 from .checks import Scorecard
+from .format3 import FORMAT_V3
 from .gate import GateReport
 from .gate2 import GateReportV2, ScorecardV2
 
@@ -97,7 +98,7 @@ def render(report: GateReport) -> str:
     return "\n".join(lines) + "\n"
 
 
-# --- grimoire.story-quality/2 ------------------------------------------------------------------
+# --- grimoire.story-quality/2 and /3 -----------------------------------------------------------
 
 def _counted(sums, unreported, name: str) -> str:
     """A sum is a lower bound while any attempt left it unreported; say so beside it."""
@@ -114,10 +115,13 @@ def _rows_v2(card: ScorecardV2) -> list[tuple[str, str]]:
         f"{actor or 'scene'}=in {_counted(t.sums, t.unreported, 'input_tokens')}"
         f"/out {_counted(t.sums, t.unreported, 'output_tokens')}"
         for actor, t in sorted(card.by_actor.items(), key=lambda item: item[0] or "")) or "none"
+    # /2 reports stay as they were; only a /3 run can narrate, so only its report counts it.
+    narration = [("narration lines", _fmt(card.narration_lines))] if card.format == FORMAT_V3 else []
     return [
         ("usage status", STATUS_LABELS[card.status]),
         ("source", card.source),
         ("NPC lines", _fmt(card.npc_lines)),
+        *narration,
         ("leak rate (NPC lines)", _fmt(card.leak_rate)),
         ("choices negated by label", _fmt(card.negated_by_label)),
         ("choices negated by evidence", _fmt(card.negated_by_evidence)),

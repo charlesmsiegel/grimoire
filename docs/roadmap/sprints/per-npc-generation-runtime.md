@@ -1,6 +1,6 @@
 # One independent generation per speaking NPC
 
-**Status:** first slice implemented, headless ([GENERATION](../../GENERATION.md)): control-derived planning, snapshot voice inheritance, sealed NPC and director briefs, the runtime with screening, fencing and cancel, and the generation fault explorer. The optional `director_generation` stage is in `core.inference`. 031's adapter seam is in: `npc_brief(..., context=)` renders the actor's own `ContextPack` in place of the minimal context, and `director_brief(..., lore=)` renders 031's director lore, so a scenario-only chat's narrator gets its lorebook. Next slice: `story-quality/3` with 015.
+**Status:** first slice implemented, headless ([GENERATION](../../GENERATION.md)): control-derived planning, snapshot voice inheritance, sealed NPC and director briefs, the runtime with screening, fencing and cancel, and the generation fault explorer. The optional `director_generation` stage is in `core.inference`. 031's adapter seam is in: `npc_brief(..., context=)` renders the actor's own `ContextPack` in place of the minimal context, and `director_brief(..., lore=)` renders 031's director lore, so a scenario-only chat's narrator gets its lorebook. `story-quality/3` records director calls and runtime turns ([STORY_QUALITY](../../evals/STORY_QUALITY.md#format-grimoirestory-quality3)), with a `/3` synthetic benchmark baseline.
 
 **Outcome:** Retain 0.2.1's actor-specific generation quality but feed each model a compact evidence-safe perspective assembled deterministically.
 

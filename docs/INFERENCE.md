@@ -27,7 +27,7 @@ V0.2.1's quality baseline is **one independent RP-generation call per speaking N
 - At most **one per turn**, across all phases, whatever the policy's cap says. A second request is declined as data (`cap_reached`), like any request over its cap.
 - It is **never implicit**: it is planned only when requested and enabled. When NPCs speak too, it is planned after them in the same phase and booked in the `optional` bucket, so a director call is always visible as an extra.
 
-**Why opt-in and not baseline.** A world-based turn with speaking NPCs must never pay for narration implicitly; that is the V0.2.1 baseline. A scenario-only chat with no NPC to speak needs one reply, so its chat settings (035) enable `director_generation` with cap 1. The story-quality run format `/2` refuses this stage; recording director calls is `/3`, 027's next slice ([STORY_QUALITY](evals/STORY_QUALITY.md)).
+**Why opt-in and not baseline.** A world-based turn with speaking NPCs must never pay for narration implicitly; that is the V0.2.1 baseline. A scenario-only chat with no NPC to speak needs one reply, so its chat settings (035) enable `director_generation` with cap 1. The story-quality run format `/2` refuses this stage; `/3` records director calls, and 027's runtime turns are recorded in it ([STORY_QUALITY](evals/STORY_QUALITY.md#format-grimoirestory-quality3)).
 
 ## Policy
 

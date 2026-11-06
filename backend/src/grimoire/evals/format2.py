@@ -6,7 +6,7 @@ call the planner would refuse or decline is invalid input, every attempt is book
 retries included), and an unreported count stays ``None``. Nothing in the file says the run is
 "measured"; that is derived from its ledger and, for a capture, from verified evidence
 (``gate2.usage_status``). Scenarios are unchanged, and ``/1`` runs keep their meaning in
-``format.py``.
+``format.py``. ``/3`` (``format3.py``) is this reader with the scene-level director stage added.
 """
 
 from __future__ import annotations
@@ -17,13 +17,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 from grimoire.core.inference import (
-    CallAttempt, InferencePlanError, InferencePolicy, InferenceStage, Measurement,
+    SCENE_STAGES, CallAttempt, InferencePlanError, InferencePolicy, InferenceStage, Measurement,
     OptionalRequest, SessionUsage, TokenUsage, TurnInferencePlan, TurnUsageLedger,
     TurnUsageSummary, UnplannedCallError, plan_turn,
 )
 
 from .format import (
-    AUTHORS, NPC_GENERATION, OUTCOMES, REQUIRED_CONDITIONS, BenchmarkFormatError, Call,
+    AUTHORS, NARRATION, NPC_GENERATION, OUTCOMES, REQUIRED_CONDITIONS, BenchmarkFormatError, Call,
     Contribution, Run, Scenario, Turn, _choice, _fail, _frozen, _int, _list, _number, _obj,
     _opt_str, _str, _unique,
 )
@@ -106,6 +106,10 @@ class RunV2:
     usage: SessionUsage
 
     @property
+    def format(self) -> str:
+        return FORMAT_V2
+
+    @property
     def enabled_stages(self) -> tuple[str, ...]:
         return tuple(stage.value for stage, _ in self.policy.per_turn_call_caps)
 
@@ -113,16 +117,23 @@ class RunV2:
         """This run in the ``/1`` shape the existing hard checks and voice metric read.
 
         Token fields are reported sums (unreported counted as 0), so the view is for
-        story-quality checks only; usage questions go to ``usage`` and ``summaries``.
+        story-quality checks only; usage questions go to ``usage`` and ``summaries``. A ``/3``
+        director call has the ``/1`` ``narration`` purpose, so its lines get the same leak,
+        sovereignty, attribution and orphan checks as there; whether it was opted into is
+        judged from the policy (``enabled_stages``), not from a ``/1`` flag.
         """
         calls = []
         for call in self.calls:
             def total(name: str) -> int:
                 return sum(getattr(each.usage, name) or 0 for each in call.attempts)
-            optional = not call.stage.is_baseline
+            if call.stage in SCENE_STAGES:
+                purpose, actor, flag = NARRATION, None, None
+            elif call.stage.is_baseline:
+                purpose, actor, flag = call.stage.value, call.actor_id, None
+            else:
+                purpose, actor, flag = call.stage.value, None, call.stage.value
             calls.append(Call(
-                call.call_id, call.turn, call.stage.value,
-                None if optional else call.actor_id, call.stage.value if optional else None,
+                call.call_id, call.turn, purpose, actor, flag,
                 total("input_tokens"), total("cache_read_tokens"), total("output_tokens"),
                 call.latency_ms or 0))
         return Run(self.run_id, self.scenario_id, self.label, "synthetic", self.conditions,
@@ -143,10 +154,10 @@ def _hex(value: object, location: str, pattern: re.Pattern, what: str) -> str:
     return text
 
 
-def _source(data: object, loc: str) -> Source:
+def _source(data: object, loc: str, kinds: tuple[str, ...]) -> Source:
     if not isinstance(data, dict):
         raise _fail(loc, "expected an object")
-    kind = _choice(data.get("kind"), f"{loc}.kind", SOURCE_KINDS)
+    kind = _choice(data.get("kind"), f"{loc}.kind", kinds)
     if kind == "synthetic":
         _obj(data, loc, ("kind",))
         return Source("synthetic")
@@ -172,7 +183,7 @@ def _source(data: object, loc: str) -> Source:
     )
 
 
-def _policy(data: object, loc: str) -> InferencePolicy:
+def _policy(data: object, loc: str, stages: tuple[str, ...]) -> InferencePolicy:
     data = _obj(data, loc, ("per_turn_call_caps", "max_attempts_per_call"))
     caps = data["per_turn_call_caps"]
     if not isinstance(caps, dict):
@@ -180,7 +191,7 @@ def _policy(data: object, loc: str) -> InferencePolicy:
     checked = {}
     for stage, cap in caps.items():
         at = f"{loc}.per_turn_call_caps.{stage}"
-        _choice(stage, at, STAGES_V2)
+        _choice(stage, at, stages)
         if stage == NPC_GENERATION:
             raise _fail(at, "npc_generation is baseline, not a capped optional stage")
         checked[stage] = _int(cap, at, 1)
@@ -217,19 +228,43 @@ class _RawCall:
     raw_attempts: list[tuple[str, dict]]
 
 
+@dataclass(frozen=True, slots=True)
+class Dialect:
+    """What one ledger-backed run format admits. ``/2`` and ``/3`` differ only here."""
+
+    format: str
+    stages: tuple[str, ...]
+    source_kinds: tuple[str, ...]
+    #: The error when a model line names a call of a stage that produces no contribution.
+    not_speaking: str
+    #: Added to the error when a model line's speaker is not its call's actor.
+    speaker_hint: str
+    run_type: type
+
+
+V2 = Dialect(FORMAT_V2, STAGES_V2, SOURCE_KINDS,
+             "only an npc_generation call produces a contribution",
+             " (no scene-level narration in /2)", RunV2)
+
+
 def parse_run_v2(data: object, scenario: Scenario) -> RunV2:
+    return parse_ledger_run(data, scenario, V2)
+
+
+def parse_ledger_run(data: object, scenario: Scenario, dialect: Dialect) -> RunV2:
+    """A run of ``dialect``'s format, rebuilt as plans and ledgers; see the module docstring."""
     loc = "run"
     data = _obj(data, loc, ("format", "run_id", "scenario_id", "label", "source", "conditions",
                             "policy", "turns", "calls", "choice_outcomes"),
                 {"judge_scores": {}})
-    if data["format"] != FORMAT_V2:
-        raise _fail(f"{loc}.format", f"expected {FORMAT_V2!r}")
+    if data["format"] != dialect.format:
+        raise _fail(f"{loc}.format", f"expected {dialect.format!r}")
     run_id = _str(data["run_id"], f"{loc}.run_id")
     scenario_id = _str(data["scenario_id"], f"{loc}.scenario_id")
     if scenario_id != scenario.scenario_id:
         raise _fail(f"{loc}.scenario_id", f"does not match scenario {scenario.scenario_id!r}")
     label = _str(data["label"], f"{loc}.label")
-    source = _source(data["source"], f"{loc}.source")
+    source = _source(data["source"], f"{loc}.source", dialect.source_kinds)
 
     raw_conditions = data["conditions"]
     if not isinstance(raw_conditions, dict):
@@ -239,7 +274,7 @@ def parse_run_v2(data: object, scenario: Scenario) -> RunV2:
             raise _fail(f"{loc}.conditions.{key}", "required condition is missing")
     conditions = {_str(key, f"{loc}.conditions"): _str(value, f"{loc}.conditions.{key}")
                   for key, value in raw_conditions.items()}
-    policy = _policy(data["policy"], f"{loc}.policy")
+    policy = _policy(data["policy"], f"{loc}.policy", dialect.stages)
     directors = set(scenario.director_ids())
     players = {actor.actor_id for actor in scenario.actors if actor.control == "player"}
     known_actors = {actor.actor_id for actor in scenario.actors}
@@ -252,12 +287,14 @@ def parse_run_v2(data: object, scenario: Scenario) -> RunV2:
         raw = _obj(raw, at, ("call_id", "turn", "stage", "actor_id", "purpose", "latency_ms",
                              "attempts"), {"phase": DEFAULT_PHASE})
         call_id = _unique(call_ids, _str(raw["call_id"], f"{at}.call_id"), f"{at}.call_id")
-        stage = InferenceStage(_choice(raw["stage"], f"{at}.stage", STAGES_V2))
+        stage = InferenceStage(_choice(raw["stage"], f"{at}.stage", dialect.stages))
         actor_id = _opt_str(raw["actor_id"], f"{at}.actor_id")
         if actor_id is not None and actor_id not in known_actors:
             raise _fail(f"{at}.actor_id", f"unknown actor {actor_id!r}")
         if stage.is_baseline and actor_id not in directors:
             raise _fail(f"{at}.actor_id", "npc_generation needs a director actor")
+        if stage in SCENE_STAGES and actor_id is not None:
+            raise _fail(f"{at}.actor_id", f"{stage} speaks for the scene, never for an actor")
         raw_attempts, costs = [], []
         for position, attempt in enumerate(_list(raw["attempts"], f"{at}.attempts")):
             aat = f"{at}.attempts[{position}]"
@@ -299,6 +336,7 @@ def parse_run_v2(data: object, scenario: Scenario) -> RunV2:
     by_id = {call.call_id: call for call in booked}
 
     parsed_turns = []
+    spoken_calls: set[str] = set()
     for at, turn, raw_contributions in turns:
         contributions = []
         for position, item in enumerate(_list(raw_contributions, f"{at}.contributions")):
@@ -323,15 +361,24 @@ def parse_run_v2(data: object, scenario: Scenario) -> RunV2:
                     raise _fail(f"{cat}.call_id", f"unknown call {call_id!r}")
                 if call.turn != turn:
                     raise _fail(f"{cat}.call_id", f"call {call_id!r} belongs to another turn")
-                if not call.stage.is_baseline:
-                    raise _fail(f"{cat}.call_id",
-                                "only an npc_generation call produces a contribution")
+                scene = call.stage in SCENE_STAGES  # parsed only where the dialect has the stage
+                if not (call.stage.is_baseline or scene):
+                    raise _fail(f"{cat}.call_id", dialect.not_speaking)
                 if not call.completed:
                     raise _fail(f"{cat}.call_id", f"call {call_id!r} has no completed attempt")
-                if speaker != call.actor_id:
+                if scene and speaker is not None:
+                    # The director's line is the scene's: it can never pose as an NPC or a PC.
+                    raise _fail(f"{cat}.speaker_id",
+                                f"must be null: call {call_id!r} speaks for the scene")
+                if not scene and speaker != call.actor_id:
                     raise _fail(f"{cat}.speaker_id",
                                 f"must be {call.actor_id!r}, the actor of call {call_id!r}"
-                                " (no scene-level narration in /2)")
+                                f"{dialect.speaker_hint}")
+                # One reply is one line, an NPC's or the director's: a second would be a
+                # generation nobody paid for.
+                if call_id in spoken_calls:
+                    raise _fail(f"{cat}.call_id", f"call {call_id!r} already produced its one line")
+                spoken_calls.add(call_id)
             contributions.append(Contribution(speaker, author, text, call_id))  # type: ignore[arg-type]
         parsed_turns.append(Turn(turn, tuple(contributions)))
 
@@ -354,7 +401,7 @@ def parse_run_v2(data: object, scenario: Scenario) -> RunV2:
     judge_scores = {_str(name, f"{loc}.judge_scores"): _number(value, f"{loc}.judge_scores.{name}")
                     for name, value in raw_scores.items()}
 
-    return RunV2(run_id, scenario_id, label, source, _frozen(conditions), policy,
+    return dialect.run_type(run_id, scenario_id, label, source, _frozen(conditions), policy,
                  tuple(parsed_turns), tuple(booked), _frozen(outcomes), _frozen(judge_scores),
                  plans, summaries, SessionUsage(scenario_id, summaries))
 
@@ -374,11 +421,11 @@ def _book(scenario: Scenario, policy: InferencePolicy, calls: list[_RawCall],
         for phase in phases:
             in_phase = [entry.call for entry in mine if entry.call.phase == phase]
             speakers = [c.actor_id for c in in_phase if c.stage.is_baseline]
-            requests = [OptionalRequest(c.stage, c.actor_id, c.purpose)
-                        for c in in_phase if not c.stage.is_baseline]
             first = next((e for e in mine if e.call.phase == phase), None)
             at = f"run.calls[{first.index}]" if first else "run.turns"
             try:
+                requests = [OptionalRequest(c.stage, c.actor_id, c.purpose)
+                            for c in in_phase if not c.stage.is_baseline]
                 plan = (plan_turn(scenario.scenario_id, f"t{turn}", present_actor_ids=present,
                                   speaking_npc_ids=speakers, player_controlled_ids=players,
                                   optional_requests=requests, phase=phase, policy=policy)
@@ -440,5 +487,8 @@ def _precheck(mine: list[_RawCall], policy: InferencePolicy) -> None:
         if cap is None:
             raise _fail(f"{at}.stage", f"{call.stage} is disabled by the run's policy")
         optional[call.stage] = optional.get(call.stage, 0) + 1
+        if call.stage in SCENE_STAGES and optional[call.stage] > 1:
+            # The planner would decline it as data; a recorded call it declines is invalid input.
+            raise _fail(f"{at}.stage", f"one {call.stage} per turn, whatever the policy's cap")
         if optional[call.stage] > cap:
             raise _fail(f"{at}.stage", f"{call.stage} exceeds the policy's turn cap of {cap}")
