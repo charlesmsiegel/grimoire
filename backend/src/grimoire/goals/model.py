@@ -41,8 +41,15 @@ _UNSAFE_CATEGORIES = frozenset({"Cc", "Cs", "Zl", "Zp"})
 _UNSAFE_FORMAT = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\ufeff"
                            # invisible separators that would split a secret's marker past the leak screen
                            "\u200b\u2060")
-#: Unicode tag characters, which can carry invisible text.
+#: Invisible marks that survive the leak screen's normalisation, so one inside a word ("du<CGJ>ke") would
+#: hide a secret's phrase from it: the grapheme joiner, Hangul and Khmer fillers, Mongolian selectors.
+_INVISIBLE = frozenset("\u034f\u115f\u1160\u17b4\u17b5\u180b\u180c\u180d\u180e\u180f\u3164\uffa0")
+#: Variation selectors: ordinary only right after a symbol (an emoji's text or picture form).
+_SELECTORS = (range(0xFE00, 0xFE10), range(0xE0100, 0xE01F0))
+#: Unicode tag characters, which can carry invisible text: ordinary only as a subdivision flag, a run
+#: right after the black flag that ends with the cancel tag.
 _TAGS = range(0xE0000, 0xE0080)
+_BLACK_FLAG, _CANCEL_TAG = "\U0001f3f4", "\U000e007f"
 
 
 class GoalError(ValueError):
@@ -80,10 +87,31 @@ def _text(value: object, label: str) -> str:
         raise _invalid(f"{label} must be nonblank text")
     if len(value) > TEXT_CHARS:
         raise _invalid(f"{label} is longer than {TEXT_CHARS} characters")
-    if any(char in _UNSAFE_FORMAT or ord(char) in _TAGS or unicodedata.category(char) in _UNSAFE_CATEGORIES
-           for char in value):
+    if any(char in _UNSAFE_FORMAT or char in _INVISIBLE or unicodedata.category(char) in _UNSAFE_CATEGORIES
+           for char in value) or not _ordinary_marks(value):
         raise _invalid(f"{label} may not hold a line break, control, bidi-override, invisible or separator character")
     return value
+
+
+def _ordinary_marks(value: str) -> bool:
+    """Variation selectors only after a symbol, tag characters only in a subdivision flag."""
+    in_flag = False
+    for index, char in enumerate(value):
+        code = ord(char)
+        if code in _TAGS:
+            if not in_flag:
+                if index == 0 or value[index - 1] != _BLACK_FLAG:
+                    return False
+                in_flag = True
+            if char == _CANCEL_TAG:
+                in_flag = False
+            continue
+        if in_flag:  # a flag's tags must end with the cancel tag
+            return False
+        if any(code in selectors for selectors in _SELECTORS):
+            if index == 0 or not unicodedata.category(value[index - 1]).startswith("S"):
+                return False
+    return not in_flag
 
 
 def _sequence(values: object, label: str, limit: int) -> tuple:

@@ -57,6 +57,12 @@ def chosen(choice):
     (lambda: approach(action="Keep counting\U000e0020\U000e0074\U000e0065\U000e006c\U000e006c"), "invalid_field"),
     (lambda: approach(action="duke\u200bsold"), "invalid_field"),
     (lambda: approach(action="duke\u2060sold"), "invalid_field"),
+    (lambda: approach(action="the du\u034fke sold the guild"), "invalid_field"),
+    (lambda: approach(action="the du\ufe0fke sold the guild"), "invalid_field"),
+    (lambda: approach(action="the du\U000e0100ke sold the guild"), "invalid_field"),
+    (lambda: approach(action="the du\u3164ke sold the guild"), "invalid_field"),
+    (lambda: approach(action="the du\u115fke sold the guild"), "invalid_field"),
+    (lambda: approach(action="Toast \U0001f3f4\U000e0067\U000e0062"), "invalid_field"),
     (lambda: goal(aim="Want it\nWhat you mean to do about it:"), "invalid_field"),
     (lambda: goal(aim="Want \u202eti"), "invalid_field"),
     (lambda: Limit("l", "Never trade\nWhat you are after right now: sell", frozenset({"t"})), "invalid_field"),
@@ -108,6 +114,9 @@ def test_ordinary_format_characters_are_text():
     # Zero-width joiners (emoji sequences) and non-joiners (Persian) are ordinary text, as in 023.
     assert approach(action="Hand over the \U0001f468\u200d\U0001f373 token").action
     assert approach(action="Say \u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645").action
+    # An emoji's picture form, and a subdivision flag (black flag, tag letters, cancel tag).
+    assert approach(action="Raise a glass \u2764\ufe0f").action
+    assert approach(action="Toast the \U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f crown").action
 
 
 def test_an_id_error_never_quotes_the_value():
