@@ -12,6 +12,7 @@ from pathlib import Path
 from grimoire.core.identity import InstanceRef
 from grimoire.store import LibraryStore, RecordEnvelope, RecordNotFound
 from grimoire.sync import identify, sync
+from grimoire.testing.fileops import Tree
 
 from store_helpers import HARBOR, OWNER, WREN_R1, harbor_manifest, instance, owner_handle, seed, wren
 
@@ -113,6 +114,13 @@ def kept(store: LibraryStore) -> list[bytes]:
 
 
 __all__ = [
-    "CHAT", "DESKTOP", "OWNER", "PATHS", "PHONE", "WREN_A", "WREN_B", "canonical", "chat_record",
+    "CHAT", "DESKTOP", "OWNER", "PATHS", "PHONE", "WREN_A", "WREN_B", "canonical", "chat_record", "converged",
     "edit_instance", "handle", "handles", "kept", "make_pair", "new_revision", "put",
 ]
+
+
+def converged(recovered: Tree, completed: Tree) -> str | None:
+    """S9's convergence: after any crash, a restart and one sync reach exactly what an uninterrupted
+    sync reaches, byte for byte (028's kept-version records included)."""
+    keys = sorted(key for key in {*recovered, *completed} if recovered.get(key, "absent") != completed.get(key, "absent"))
+    return f"differs from the uninterrupted sync at {keys[:4]}" if keys else None

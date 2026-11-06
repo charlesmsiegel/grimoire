@@ -47,8 +47,8 @@ from grimoire.core.identity import InstanceRef
 
 from store_helpers import EXHAUSTIVE_RECOVERY, WREN_R1, drop_empty_dirs, instance, owner_handle
 from sync_helpers import (
-    DESKTOP, PATHS, PHONE, WREN_A, WREN_B, chat_record, edit_instance, handle, handles, make_pair, new_revision,
-    put,
+    DESKTOP, PATHS, PHONE, WREN_A, WREN_B, chat_record, converged, edit_instance, handle, handles, make_pair,
+    new_revision, put,
 )
 
 DEVICES = (DESKTOP, PHONE)
@@ -121,11 +121,7 @@ def _canonical(tree, device):
 
 def _converges(outcome):
     """S9: after any crash, a restart and one sync reach exactly what an uninterrupted sync reaches."""
-    if outcome.recovered == outcome.completed:
-        return None
-    keys = sorted(key for key in set(outcome.recovered) | set(outcome.completed)
-                  if outcome.recovered.get(key, "absent") != outcome.completed.get(key, "absent"))
-    return f"differs from the uninterrupted sync at {keys[:4]}"
+    return converged(outcome.recovered, outcome.completed)
 
 
 def _keeps_both(outcome):
@@ -331,7 +327,9 @@ def test_s9u_a_crash_or_error_at_any_commit_boundary_never_forgets_archive_borne
     points = commit_boundaries(_uncertain_trace())
     commits = [op for op in _uncertain_trace() if _is_journal_replace(op)]
     # no copies, but each device's data commit records the uncertainty before any archive is rewritten
-    assert len(commits) == 4  # marker(a), marker(b), archive(b), archive(a); the markers already say it all
+    # marker(a), marker(b), archive(b), archive(a); the markers already say it all, so the last step writes
+    # only (028) each device's kept-version record, marking the conflict's path in conflict on its new base
+    assert len(commits) == 6
     crashes = explore_crashes(_uncertain_scenario(), tmp_path / "crash", torn=False,
                               select=_select(points, {"before", "after"}))
     crashes.assert_ok()

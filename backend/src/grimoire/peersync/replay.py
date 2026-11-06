@@ -4,8 +4,9 @@ The client runs 019's ``apply_sync`` against its own library and the mirror. Eac
 commits on the mirror, the same writes travel to the serving device, which commits them as one
 010 transaction of its own under the client's peer principal, re-reads every file and answers
 with its etags. Only then does 019 go on to its next step, so the real devices are written in
-019's own order (data(a), data(b), verify, archive(b), archive(a), pending(b), pending(a)) and a
-failure at any point leaves exactly the state a crash at that point of a local sync leaves.
+019's own order (data(a), data(b), verify, keeps(b), keeps(a), archive(b), archive(a), pending(b),
+pending(a)) and a failure at any point leaves exactly the state a crash at that point of a local
+sync leaves.
 """
 
 from __future__ import annotations
@@ -18,8 +19,11 @@ from pathlib import Path
 
 from grimoire.store import LibraryStore, StaleWrite, StoreError, WriteConflict, WriteDenied, etag
 from grimoire.store.layout import conflict_parts
-from grimoire.sync import Step
-from grimoire.sync.documents import archive_name, pending_name
+from grimoire.sync import Step, device_of
+from grimoire.sync.bookkeeping import is_shard, listed_shards, root_name
+from grimoire.sync.bookkeeping import parse as parse_document
+from grimoire.sync.documents import keeps_name, pair_state
+from grimoire.sync.keeps import first_copies, peer_may_write, slot_stands
 
 from .errors import MirrorMismatch, PeerRefused
 from .wire import Channel
@@ -135,9 +139,18 @@ class StepBuffer:
             raise PeerRefused("empty", "a step with no writes")
         txn = store.transaction()
         targets: list[tuple[str, str, Callable[[], bytes | None]]] = []
-        allowed = {archive_name(self.peer), pending_name(self.peer)}
         records = False
+        # the roots this step writes, by name: a shard is accepted only as its own root lists it
+        roots = {header.get("name"): body for header, body in ops
+                 if header.get("op") == "state" and header.get("name") in (
+                     root_name("archive", self.peer), root_name("pending", self.peer))}
         try:
+            self._check_documents(store, roots, ops)
+            # 028: the keeps of this step that write the first copy of their bytes at their path, read
+            # before anything is staged: only those may this step's record add as delivered. A keep of
+            # bytes some slot already holds writes nothing new, or a second copy of what may be a hold.
+            first = first_copies(store, [(header["path"], body) for header, body in ops if header.get("op") == "keep"
+                                         and type(header.get("path")) is str and isinstance(body, bytes)])
             for header, body in ops:
                 op, path = header.get("op"), header.get("path")
                 if isinstance(body, Path):  # a spooled blob: read back only when staged
@@ -155,9 +168,10 @@ class StepBuffer:
                     txn.keep_version(path, body, slot=header["slot"], regenerable=True)  # the peer still holds them
                     targets.append((target, target, _reader(store, target)))
                     records = True
-                elif op == "state" and header.get("name") in allowed and _etag_or_none(header.get("expected")):
+                elif op == "state" and pair_state(header.get("name"), self.peer) and _etag_or_none(header.get("expected")):
                     name = header["name"]
-                    txn.put_sync_state(name, body, header.get("expected"))
+                    expected = self._state_expected(store, name, body, header.get("expected"), roots, first)
+                    txn.put_sync_state(name, body, expected)
                     targets.append((f".sync/{name}", name, lambda name=name: store.read_sync_state(name)))
                 else:  # only this pair's own .sync files, and records the peer's grants then decide
                     raise PeerRefused("invalid", f"a write this device does not accept: {op!r}")
@@ -177,6 +191,49 @@ class StepBuffer:
                 raise PeerRefused("verification", f"{key} is missing after the commit")
             found[key] = etag(data)
         return found
+
+
+    def _state_expected(self, store: LibraryStore, name: str, body: bytes, expected: str | None,
+                        roots: dict, first: set[tuple[str, str]]) -> str | None:  # type: ignore[type-arg]
+        """The etag a state write of the pair must replace, after checking the write is one a sync makes."""
+        if name == keeps_name(self.peer) and not peer_may_write(
+                store.read_sync_state(name), body, tuple(sorted((device_of(store), self.peer))),  # type: ignore[arg-type]
+                lambda path, tag: (path, tag) in first, lambda path, tag: slot_stands(store, path, tag)):
+            # a sync records as delivered only the first copies its own keeps write in the same commit, keeps
+            # a held version recorded while its slot stands, and never dismisses one: dismissing is this
+            # device's own decision, authorized here (``grimoire.sync.dismiss``), never the peer's
+            raise PeerRefused("invalid", "a peer may not dismiss, drop a hold, or record a version it did not deliver")
+        for kind in ("archive", "pending"):
+            if not is_shard(name, kind, self.peer):
+                continue
+            # a sync writes a shard only with the root that lists it, so a peer can never plant one
+            if listed_shards(kind, self.peer, roots.get(root_name(kind, self.peer))).get(name) != etag(body):
+                raise PeerRefused("invalid", f"{name} is not a shard its root lists in this step")
+            if name not in listed_shards(kind, self.peer, store.read_sync_state(root_name(kind, self.peer))):
+                # a shard this device's root does not list is stale and never read or sent, so the
+                # client could not know its etag; its own root's compare-and-swap guards the document
+                current = store.read_sync_state(name)
+                return None if current is None else etag(current)
+        return expected
+
+    def _check_documents(self, store: LibraryStore, roots: dict, ops: list) -> None:  # type: ignore[type-arg]
+        """Each archive or marker this step writes must read, with its shards, as a valid document of
+        this pair: the shards written now and the listed ones already here. A peer could otherwise
+        leave a root that lists junk shards, which every later plan reads in full and then ignores."""
+        written = {header.get("name"): body for header, body in ops if header.get("op") == "state"}
+        devices = tuple(sorted((device_of(store), self.peer)))
+        for kind in ("archive", "pending"):
+            name = root_name(kind, self.peer)
+            if name not in roots:
+                continue
+            files = {name: roots[name]}
+            for shard in listed_shards(kind, self.peer, roots[name]):
+                data = written[shard] if shard in written else store.read_sync_state(shard)
+                if data is not None:
+                    files[shard] = data
+            view = parse_document(kind, files, self.peer, devices)  # type: ignore[arg-type]
+            if view.state != "valid":
+                raise PeerRefused("invalid", f"the {kind} this step writes is not valid for this pair: {view.reason}")
 
 
 def _spooled(path: Path) -> Callable[[], bytes | None]:

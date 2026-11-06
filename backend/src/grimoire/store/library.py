@@ -52,7 +52,7 @@ from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, reemitted_imprecise, render
 from .layout import (
     ACCEPTED, CAMPAIGN_LEDGERS, CAMPAIGNS, CHATS, CONFLICTS, DISCARD_MARKER, IMAGES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
-    PLACEMENTS, REPAIR_MARKER, SECRETS, SYNC, SYNC_PEERS, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify,
+    PLACEMENTS, REPAIR_MARKER, SECRETS, SYNC, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify,
     conflict_parts,
     definition_parts, image_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
     SUFFIX, ledger_parts, ledger_seq, logical, manifest_parts, name_key, secret_parts, sync_state_parts,
@@ -1021,20 +1021,6 @@ class LibraryStore:
                     raise NotADirectoryError(errno.ENOTDIR, f"{'/'.join(parts[:depth])} is not a folder")
             return self._access.read(parts)
 
-    def sync_peers(self) -> tuple[str, ...]:
-        """The names under ``.sync/peers/`` (sync, 019), sorted; empty when there is none.
-
-        Only names are returned; ``read_sync_state`` decides whether each holds valid state.
-        """
-        with self.lock:
-            self._require_consistent()
-            presence = self._access.presence((SYNC, SYNC_PEERS))
-            if presence == "mismatch":  # on a case-insensitive filesystem it *is* the folder
-                raise NameCollision(f"{SYNC}/{SYNC_PEERS} exists only under another spelling")
-            if presence != "present":
-                return ()
-            return tuple(sorted(self._access.list_dir((SYNC, SYNC_PEERS))))
-
     def read_exact(self, path: str) -> bytes | None:
         """The exact bytes of a canonical record or kept-version file, or ``None`` when it is absent;
         never through a link. A look-alike spelling of it or of a folder above it is ``NameCollision``."""
@@ -1379,14 +1365,18 @@ class Transaction:
                 raise StaleWrite([("/".join(target), "changed")])
         raise StoreError(f"no free kept-version slot for {path}")
 
-    def put_sync_state(self, name: str, data: bytes, expected: str | None) -> str:
-        """Stage a device-local ``.sync`` file (trusted bookkeeping: not authorized)."""
+    def put_sync_state(self, name: str, data: bytes, expected: str | None, *,
+                       authorize: ResourcePath | None = None) -> str:
+        """Stage a device-local ``.sync`` file: trusted bookkeeping, not authorized. With ``authorize`` (028's
+        dismissal, a user's decision) it is authorized as ``APPLY`` on that address and keyed by it."""
         if expected is not None and not is_etag(expected):
             raise InvalidEnvelope("expected must be None or an etag")
+        if authorize is not None and not isinstance(authorize, ResourcePath):
+            raise InvalidEnvelope("authorize must be a resource address")
         parts = sync_state_parts(name)
         _check_state_bytes(data)
-        key = "/".join(parts)
-        self._add(_Put(parts, None, bytes(data), expected, None, "state", key, rendered=True))
+        key = "/".join(parts) if authorize is None else str(authorize)
+        self._add(_Put(parts, authorize, bytes(data), expected, None, "state", key, rendered=True))
         return key
 
     def put_secret(self, name: str, data: bytes, expected: str | None) -> str:
@@ -1425,7 +1415,7 @@ class Transaction:
         with store.lock:
             puts = tuple(self._puts.values())
             self._check_replaces(puts)
-            if any(put.kind != "state" for put in puts) or not puts:
+            if any(put.kind != "state" or put.address is not None for put in puts) or not puts:
                 self._require_writable_records(None, check_handle=False)
             _Commit(store, puts, None, {}).preflight()
 
@@ -1479,7 +1469,7 @@ class Transaction:
                                  "see stale listings")
             puts = tuple(self._puts.values())
             self._check_replaces(puts)
-            if any(put.kind != "state" for put in puts):  # sync state alone is trusted bookkeeping
+            if any(put.kind != "state" or put.address is not None for put in puts):  # bookkeeping is trusted
                 self._require_writable_records(handle)
             self._committed = True
             try:

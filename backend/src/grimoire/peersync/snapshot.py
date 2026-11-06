@@ -29,7 +29,8 @@ from grimoire.store.jsonfmt import MAX_FILE_BYTES
 from grimoire.store.layout import name_key
 from grimoire.store.media import MAX_BLOB_BYTES
 from grimoire.store.replica import CanonicalScan
-from grimoire.sync.documents import DEVICE_FILE, archive_name, parse_device, pending_name
+from grimoire.sync.bookkeeping import pair_files, read_document
+from grimoire.sync.documents import DEVICE_FILE, keeps_name, pair_state, parse_device
 
 from .errors import MirrorMismatch, TransportError
 from .pairing import peer_principal
@@ -255,10 +256,23 @@ def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -
     channel.send({"t": "grants", "grants": [
         {"scope": str(grant.scope), "permissions": sorted(permission.value for permission in grant.permissions)}
         for grant in authority.active_grants() if grant.principal == principal]})
-    for name in (DEVICE_FILE, archive_name(peer), pending_name(peer)):
-        data = store.read_sync_state(name)  # a read error stops the snapshot: unreadable is never absent
+    # the pair's own files as 019 reads them (028): its archive and marker, each a root and the shards it
+    # lists and, while those form a valid document, never another shard (a stale or planted file is not
+    # read here, nor sent), and its
+    # kept-version record. A read error stops the snapshot: unreadable is never absent.
+    states: dict[str, bytes] = {}
+    for name in (DEVICE_FILE, keeps_name(peer)):
+        data = store.read_sync_state(name)
         if data is not None:
-            channel.send({"t": "state", "name": name}, data)
+            states[name] = data
+    device = parse_device(states.get(DEVICE_FILE))
+    for kind in ("archive", "pending"):
+        # what this device's own plan reads: with a root lost or damaged while shards stand, they are
+        # sent as they stand, so the mirror's document is ignored with the same paths uncertain
+        states.update(pair_files(store, kind, peer) if device is None  # the mirror refuses it anyway
+                      else read_document(store, kind, peer, tuple(sorted((device, peer)))).files)  # type: ignore[arg-type]
+    for name, data in states.items():
+        channel.send({"t": "state", "name": name}, data)
     summary = scan_summary(store)  # before the walk: a file changed after it fails the client's check
     count = 0
     for kind, path, data in walk(store.root, frozenset(summary["blocked"])):  # type: ignore[arg-type]
@@ -416,7 +430,7 @@ def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Li
                 grants = header.get("grants")
             elif kind == "state":
                 name = header.get("name")
-                if name not in (DEVICE_FILE, archive_name(local), pending_name(local)) or name in states:
+                if (name != DEVICE_FILE and not pair_state(name, local)) or name in states:
                     raise TransportError(f"the snapshot carries an unexpected sync file {name!r}")
                 states[name] = body  # type: ignore[index]
             else:

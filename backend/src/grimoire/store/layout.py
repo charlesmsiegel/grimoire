@@ -42,7 +42,12 @@ LEDGERS = "authority"
 KEPT = "kept"
 SYNC_DEVICE = "device.json"
 SYNC_PEERS = "peers"
-SYNC_PEER_FILES = frozenset({"archive.json", "pending.json"})
+SYNC_PEER_FILES = frozenset({"archive.json", "pending.json", "keeps.json"})
+#: The widest shard prefix (hex digits of a path's hash) a pair's archive or pending marker is split by (028).
+SYNC_MAX_SHARD_WIDTH = 2
+#: 028's shards of a pair's archive and pending marker, ``archive.<prefix>.json``: the store accepts the
+#: names; ``grimoire.sync`` decides which of them the root document trusts.
+_SYNC_SHARD = re.compile(r"(?:archive|pending)\.[0-9a-f]{1,%d}\.json" % SYNC_MAX_SHARD_WIDTH)
 #: Device credentials (028): one pairing record per peer device under ``secrets/peers/``. Trusted
 #: bookkeeping like ``.sync``: written without a grant, never a record, never transferred.
 SECRETS = "secrets"
@@ -390,11 +395,13 @@ def is_kept_target(parts: Parts) -> bool:
 
 
 def sync_state_parts(name: str) -> Parts:
-    """``device.json`` or ``peers/<device>/{archive,pending}.json`` under ``.sync``; refuses anything else."""
+    """``device.json`` or ``peers/<device>/<file>`` under ``.sync``, where ``<file>`` is ``archive.json``,
+    ``pending.json``, ``keeps.json`` or a shard ``{archive,pending}.<hex>.json``; refuses anything else."""
     if name == SYNC_DEVICE:
         return (SYNC, SYNC_DEVICE)
     pieces = name.split("/") if isinstance(name, str) else []
-    if len(pieces) == 3 and pieces[0] == SYNC_PEERS and pieces[2] in SYNC_PEER_FILES:
+    if len(pieces) == 3 and pieces[0] == SYNC_PEERS and (pieces[2] in SYNC_PEER_FILES
+                                                        or _SYNC_SHARD.fullmatch(pieces[2])):
         try:
             validate_segment(pieces[1], "device")
             ResourcePath((pieces[1],))

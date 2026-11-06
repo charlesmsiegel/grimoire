@@ -8,14 +8,21 @@ import pytest
 pytest_plugins = ["pytester"]
 
 #: CI shards (docs/TESTING.md#ci-gate): ``GRIMOIRE_TEST_SHARD=explorations`` runs only the crash and
-#: fault explorations (files named ``*recovery*`` or ``*faults*``), ``rest`` runs every other file.
-#: The two are complements by construction, so together they always run the whole suite; unset
-#: runs everything. A new exploration file joins its shard by its name.
-SHARDS = ("explorations", "rest")
+#: fault explorations (files named ``*recovery*`` or ``*faults*``), ``sync`` runs the other
+#: replica-sync files (named ``*sync*``), and ``rest`` runs every other file. Each file belongs to
+#: exactly one shard by its name, so together they always run the whole suite; unset runs everything.
+SHARDS = ("explorations", "sync", "rest")
 
 
 def is_exploration(name: str) -> bool:
     return "recovery" in name or "faults" in name
+
+
+def shard_of(name: str) -> str:
+    """The one shard a test file runs in; explorations win, so ``test_sync_faults.py`` is one."""
+    if is_exploration(name):
+        return "explorations"
+    return "sync" if "sync" in name else "rest"
 
 
 def pytest_configure(config):
@@ -28,7 +35,7 @@ def pytest_ignore_collect(collection_path: Path, config):
     shard = os.environ.get("GRIMOIRE_TEST_SHARD", "")
     if not shard or collection_path.suffix != ".py" or not collection_path.name.startswith("test_"):
         return None
-    return None if is_exploration(collection_path.name) == (shard == "explorations") else True
+    return None if shard_of(collection_path.name) == shard else True
 
 
 def pytest_report_header(config):

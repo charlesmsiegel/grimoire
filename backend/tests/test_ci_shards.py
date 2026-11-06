@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import SHARDS, is_exploration
+from conftest import SHARDS, shard_of
 
 TESTS = Path(__file__).parent
 WORKFLOW = TESTS.parents[1] / ".github" / "workflows" / "ci.yml"
@@ -25,9 +25,12 @@ def _collected(shard: str) -> set[str]:
 
 def test_the_shards_partition_every_test_file():
     files = {path.name for path in TESTS.glob("test_*.py")}
-    explorations, rest = {name for name in files if is_exploration(name)}, {name for name in files if not is_exploration(name)}
-    assert explorations and rest and explorations | rest == files and not explorations & rest
-    assert {"test_sync_faults.py", "test_store_recovery.py"} <= explorations
+    parts = {shard: {name for name in files if shard_of(name) == shard} for shard in SHARDS}
+    assert all(parts.values()) and set().union(*parts.values()) == files
+    assert sum(len(part) for part in parts.values()) == len(files)
+    assert {"test_sync_faults.py", "test_store_recovery.py"} <= parts["explorations"]
+    assert {"test_sync_shards.py", "test_peersync.py"} <= parts["sync"]
+    assert "test_ci_shards.py" in parts["rest"]
 
 
 @pytest.mark.skipif(bool(os.environ.get("GRIMOIRE_TEST_SHARD")),
@@ -35,10 +38,10 @@ def test_the_shards_partition_every_test_file():
 def test_collection_under_each_shard_is_disjoint_and_complete():
     whole = _collected("")
     parts = [_collected(shard) for shard in SHARDS]
-    assert parts[0] and parts[1] and not parts[0] & parts[1] and parts[0] | parts[1] == whole
+    assert all(parts) and set().union(*parts) == whole and sum(len(part) for part in parts) == len(whole)
 
 
-def test_the_workflow_runs_both_windows_shards():
+def test_the_workflow_runs_every_windows_shard():
     """Read structurally (no YAML dependency): the compat matrix has exactly one windows-latest entry per
     shard, no other entry is sharded, and the compat job's pytest step passes the shard on."""
     text = WORKFLOW.read_text(encoding="utf-8")
