@@ -265,9 +265,9 @@ def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -
         if data is not None:
             states[name] = data
     for kind in ("archive", "pending"):
-        # a root lost while its shards stand: their names alone (empty, never read) keep the mirror's
-        # document ignored, as this device's own is
-        states.update(pair_files(store, kind, peer) or dict.fromkeys(orphan_shards(store, kind, peer), b""))
+        # a root lost while its shards stand: they are sent as they stand, so the mirror's document is
+        # ignored with the same paths uncertain as this device's own
+        states.update(pair_files(store, kind, peer) or orphan_shards(store, kind, peer))
     for name, data in states.items():
         channel.send({"t": "state", "name": name}, data)
     summary = scan_summary(store)  # before the walk: a file changed after it fails the client's check

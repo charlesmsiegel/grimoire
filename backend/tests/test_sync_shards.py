@@ -186,6 +186,26 @@ def test_a_tombstone_in_a_damaged_shard_is_not_forgotten(tmp_path, small_cap):
     assert report.conflict(gone).code == "missing_ancestor" and not (desktop.root / gone).exists()
 
 
+def test_a_tombstone_whose_roots_are_lost_on_both_devices_is_not_forgotten(tmp_path, small_cap):
+    """Both devices lose their archive's root while its shards stand. The next sync reads the shards
+    for the paths they name (never as bases) and keeps those paths uncertain, so the archive it
+    rebuilds forgets no deletion: a restore of the deleted bytes on one device is a conflict, never
+    a silent copy back."""
+    desktop, phone, paths = _sharded_pair(tmp_path)
+    gone = paths[7]
+    deleted = (desktop.root / gone).read_bytes()
+    for store in (desktop, phone):
+        (store.root / gone).unlink()
+    sync(desktop, phone, handles())
+    for store, peer in ((desktop, PHONE), (phone, DESKTOP)):
+        (store.root / ".sync" / "peers" / peer / "archive.json").unlink()
+    sync(desktop, phone, handles())
+    (phone.root / gone).write_bytes(deleted)  # restored on one device only
+    report = sync(desktop, phone, handles())
+    assert report.conflict(gone) is not None and report.conflict(gone).code == "missing_ancestor"
+    assert not (desktop.root / gone).exists()
+
+
 def test_shards_left_from_another_width_are_never_trusted_and_are_overwritten_safely(tmp_path, monkeypatch):
     monkeypatch.setattr(sync_session, "ARCHIVE_LIMIT", LIMIT)
     desktop, phone, _ = _sharded_pair(tmp_path)

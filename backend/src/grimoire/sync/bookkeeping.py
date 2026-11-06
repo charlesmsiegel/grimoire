@@ -141,19 +141,19 @@ def pair_files(store: LibraryStore, kind: str, peer: str) -> dict[str, bytes]:
     return files
 
 
-def orphan_shards(store: LibraryStore, kind: str, peer: str) -> tuple[str, ...]:
-    """Shard names of ``kind`` standing in the pair's folder (listed, never read): asked only when the
-    root is missing, where any of them means the document was sharded and lost its root."""
-    return tuple(name for name in state_names(store, peer) if is_shard(name, kind, peer))
+def orphan_shards(store: LibraryStore, kind: str, peer: str) -> dict[str, bytes]:
+    """The shards of ``kind`` standing in the pair's folder, by name: asked only when the root is
+    missing, where any of them means the document was sharded and lost its root. They are read only
+    for the paths they name (``named_paths``), never as bases: the document stays ignored, and those
+    paths uncertain, so an archive rebuilt without its root never forgets a tombstone a shard holds.
+    One that vanished since the listing is empty, still marking the document as lost; an unreadable
+    one stops the sync, as any unreadable ``.sync`` file does."""
+    return {name: read_state(store, name) or b"" for name in state_names(store, peer) if is_shard(name, kind, peer)}
 
 
 def read_document(store: LibraryStore, kind: str, peer: str, devices: tuple[str, str]) -> ArchiveView | PendingView:
     """The pair's archive or marker on this device, as ``parse`` reads ``pair_files``."""
-    files = pair_files(store, kind, peer)
-    if not files and orphan_shards(store, kind, peer):
-        cls = ArchiveView if kind == "archive" else PendingView
-        return cls("ignored", MappingProxyType({}), "its root document is missing")  # type: ignore[arg-type]
-    return parse(kind, files, peer, devices)
+    return parse(kind, pair_files(store, kind, peer) or orphan_shards(store, kind, peer), peer, devices)
 
 
 def _digest(document: Mapping[str, object]) -> str:

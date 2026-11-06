@@ -165,12 +165,13 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
     if already:
         return Dismissal(peer, path, kept, slots, False)
     entries = {**view.entries, path: KeptEntry(entry.base, entry.delivered, entry.dismissed | {kept}, entry.held)}
-    try:  # a full record makes room by leaving other deliveries unrecorded (never this one, nor a hold)
+    try:  # a full record makes room by leaving deliveries unrecorded, never a hold or an earlier dismissal
         entries, data = keeps.fit(view, devices, entries)
     except StoreError as error:  # larger than any reader accepts
         raise DismissRefused(f"the kept-version record would be too large: {error}") from error
-    if kept not in getattr(entries.get(path), "dismissed", ()):
-        raise DismissRefused("the kept-version record would exceed the file size limit")
+    if kept not in getattr(entries.get(path), "dismissed", ()):  # ``fit`` keeps it only after every earlier one
+        raise DismissRefused(f"the kept-version record of {peer} is full: recording this dismissal would drop an "
+                             "earlier dismissal, so it is not recorded; dismiss it once another conflict ends")
     txn = store.transaction()
     txn.put_sync_state(keeps_name(peer), data, None if view.data is None else etag(view.data),
                        authorize=kept_address(parts, kept, _attempt(parts, kept, slots[0]) if slots else 0))

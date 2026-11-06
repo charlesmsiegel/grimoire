@@ -106,21 +106,30 @@ def _render(devices: tuple[str, str], entries: Mapping[str, KeptEntry]) -> bytes
 def fit(view: KeepsView, devices: tuple[str, str], entries: Mapping[str, KeptEntry]) -> tuple[dict[str, KeptEntry], bytes]:
     """``entries`` and their bytes, within 010's file cap: one record holds every conflict of the pair.
 
-    With more deliveries than fit (thousands of conflicts at once), the excess goes unrecorded,
-    dismissed ones and those already recorded first, then by path and etag: an unrecorded delivery is only a kept copy
-    that is never dismissable, which fails closed, and a sync never stops over it. Holds are never
-    what gives way. They alone overflow only past tens of thousands of versions ``resolve`` held and
-    nobody deleted (a hold goes once its slot does); then the write still raises, and the sync or
-    resolve stops before anything of it is written."""
+    With more deliveries than fit (thousands of conflicts at once), the excess goes unrecorded, kept in
+    this order and then by path and etag: those this record already dismissed, a dismissal being
+    recorded now (``dismiss`` refuses unless every earlier one is kept, so a new dismissal never
+    evicts one), deliveries already recorded, then new ones. An unrecorded delivery is only a kept
+    copy that is never dismissable, which fails closed, and a sync never stops over it. Holds are
+    never what gives way. A sync adds no dismissal and never lengthens one (a dismissal lasts only
+    on its own base), so the dismissals already recorded outgrow the cap only if ``resolve`` adds
+    holds to a full record: then the last ones by path go, and those versions are delivered again.
+    Holds alone overflow only past tens of thousands of versions ``resolve`` held and nobody deleted
+    (a hold goes once its slot does); then the write raises, and the sync or resolve stops before
+    anything of it is written."""
     entries = dict(entries)
     try:
         return entries, _render(devices, entries)
     except InvalidEnvelope:
         pass
     before = _entries(view)
-    items = sorted(((path, tag) for path, entry in entries.items() for tag in entry.delivered),
-                   key=lambda item: (item[1] not in entries[item[0]].dismissed,
-                                     item[1] not in getattr(before.get(item[0]), "delivered", ()), item))
+    def rank(item: tuple[str, str]) -> tuple[int, str, str]:
+        path, tag = item
+        earlier = before.get(path) or KeptEntry(None, frozenset())
+        if tag in entries[path].dismissed:
+            return (0 if tag in earlier.dismissed else 1, path, tag)
+        return (2 if tag in earlier.delivered else 3, path, tag)
+    items = sorted(((path, tag) for path, entry in entries.items() for tag in entry.delivered), key=rank)
 
     def first(count: int) -> tuple[dict[str, KeptEntry], bytes] | None:
         chosen, kept = set(items[:count]), {}

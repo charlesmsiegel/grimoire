@@ -379,10 +379,10 @@ def test_a_hold_over_a_delivered_copy_survives_recovery_that_loses_the_staged_re
 def _unreadable(monkeypatch, store: LibraryStore, data: bytes) -> list[str]:
     """Every kept file of ``store`` holding ``data`` fails with an I/O error until ``monkeypatch.undo``."""
     slots = _slots(store, data)
-    ops, real = store._access.ops, store._access.ops.read_bytes
+    ops, real, unreadable = store._access.ops, store._access.ops.read_bytes, {Path(slot) for slot in slots}
 
     def read_bytes(path):  # type: ignore[no-untyped-def]
-        if str(path) in slots:
+        if Path(path) in unreadable:
             raise OSError(errno.EIO, "simulated I/O error", str(path))
         return real(path)
     monkeypatch.setattr(ops, "read_bytes", read_bytes)
@@ -651,6 +651,34 @@ def test_more_deliveries_than_one_record_holds_never_stop_a_sync(tmp_path, monke
     with pytest.raises(DismissRefused):
         dismiss(desktop, PHONE, last, etag(mine), handle())
     assert etag(mine) in _entries(desktop)[last]["held"] and mine in kept(desktop)
+
+
+def test_a_full_record_never_lets_a_new_dismissal_evict_an_earlier_one(tmp_path, monkeypatch):
+    """Three conflicts; the person dismisses (and deletes) their kept versions in reverse path order,
+    with the record's cap scaled down so only two dismissals fit. The third is refused rather than
+    pushing out the first, and the next sync delivers neither dismissed version again."""
+    desktop, phone = make_pair(tmp_path)
+    crowd = [InstanceRef("c1", "character", f"crowd-{number}") for number in range(3)]
+    for ref in crowd:
+        put(desktop, instance(ref, WREN_R1, hp=1))
+    sync(desktop, phone, handles())
+    for ref in crowd:
+        put(desktop, instance(ref, WREN_R1, hp=2))
+        put(phone, instance(ref, WREN_R1, hp=3))
+    sync(desktop, phone, handles())
+    paths = sorted(f"campaigns/c1/instances/character/{ref.instance_id}.json" for ref in crowd)
+    theirs = {path: (phone.root / path).read_bytes() for path in paths}
+    empty = len((desktop.root / RECORD).read_bytes())
+    _delete(desktop, dismiss(desktop, PHONE, paths[2], etag(theirs[paths[2]]), handle()).slots)
+    step = len((desktop.root / RECORD).read_bytes()) - empty
+    monkeypatch.setattr(sync_keeps, "RECORD_LIMIT", empty + 2 * step + step // 2)
+    _delete(desktop, dismiss(desktop, PHONE, paths[1], etag(theirs[paths[1]]), handle()).slots)
+    with pytest.raises(DismissRefused, match="earlier dismissal"):
+        dismiss(desktop, PHONE, paths[0], etag(theirs[paths[0]]), handle())
+    report = sync(desktop, phone, handles())
+    for path in paths[1:]:
+        assert report.conflict(path).dismissed == (DESKTOP,) and theirs[path] not in kept(desktop)
+    assert theirs[paths[0]] in kept(desktop)
 
 
 def test_a_new_identity_leaves_no_dismissal_behind_and_no_notice(tmp_path):

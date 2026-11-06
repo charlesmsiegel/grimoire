@@ -8,6 +8,7 @@ from __future__ import annotations
 import errno
 import json
 import socket
+from pathlib import Path
 
 import pytest
 
@@ -212,7 +213,7 @@ def test_a_hold_whose_slot_cannot_be_read_is_never_given_up(tmp_path, monkeypatc
     ops, real = phone.store._access.ops, phone.store._access.ops.read_bytes
 
     def read_bytes(path):  # type: ignore[no-untyped-def]
-        if str(path).endswith(hold):
+        if Path(path).as_posix().endswith(hold):
             raise OSError(errno.EIO, "simulated I/O error", str(path))
         return real(path)
     monkeypatch.setattr(ops, "read_bytes", read_bytes)
