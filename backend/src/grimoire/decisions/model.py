@@ -16,7 +16,6 @@ that keeps it is ``grimoire.decisionstore``.
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -158,8 +157,24 @@ def agenda_digest(agenda: Agenda) -> str:
         "limits": [{"id": limit.limit_id, "rule": limit.rule, "forbids": sorted(limit.forbids),
                     "when": [_condition(when) for when in limit.when]} for limit in agenda.limits],
     }
-    data = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return "sha256:" + hashlib.sha256(data).hexdigest()
+    return "sha256:" + hashlib.sha256(_canonical(document).encode("utf-8")).hexdigest()
+
+
+def _canonical(value: object) -> str:
+    """An unambiguous text form: length-prefixed text, keys sorted, lists in order."""
+    if value is None:
+        return "n"
+    if type(value) is bool:
+        return "t" if value else "f"
+    if type(value) is int:
+        return f"i{value};"
+    if type(value) is str:
+        return f"s{len(value)}:{value}"
+    if isinstance(value, (list, tuple)):
+        return "[" + "".join(_canonical(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{" + "".join(_canonical(key) + _canonical(value[key]) for key in sorted(value)) + "}"
+    raise DecisionError("bad_agenda", f"cannot digest {type(value).__name__}")
 
 
 def _evidence(condition: Condition, supports: str, knowledge: ActorKnowledge) -> Evidence:
