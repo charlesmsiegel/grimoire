@@ -4,99 +4,23 @@ proposed as a new reusable world. Synthetic Wren of a synthetic harbor world; no
 
 from __future__ import annotations
 
-import json
-from dataclasses import replace
-
 import pytest
-from chat_fixtures import Clock, Ids
-from store_helpers import OWNER, owner_handle
+from rebase_fixtures import (  # noqa: F401  (fixtures)
+    NAMESAKE, OWNER, R1, R2, SALTMARCH, SECTIONS, VOICE, WREN, chats, edit_instance, envelope, hand_edit, publish, put,
+    rebase, reason, start, store, wren,
+)
+from store_helpers import owner_handle
 
 from grimoire.chats import Launch
-from grimoire.chatstore import ChatLibrary
-from grimoire.core.entity import EntityDefinition
-from grimoire.core.entity_codec import ENTITY_SCHEMA, definition_to_payload
-from grimoire.core.facets import Agent, Communicative, Durable, FacetSet, Physical, Portable
+from grimoire.core.facets import Agent, Durable, Physical, Portable
 from grimoire.core.identity import AcceptedRef, InstanceRef, RelationRef, SourceRef
 from grimoire.core.portrayal import compose
 from grimoire.effective import chat_snapshot, explainer
-from grimoire.rebase import RebaseError
-from grimoire.rebasestore import (
-    ACTOR_REBOUND, ANCESTOR_UNVERIFIED, HISTORY_REVIEW, CanonPick, CanonProposer, SourceRebase,
-)
+from grimoire.rebasestore import ACTOR_REBOUND, ANCESTOR_UNVERIFIED, HISTORY_REVIEW, CanonPick, CanonProposer
 from grimoire.rebasestore.rebase import _reader
-from grimoire.store import LibraryStore, RecordEnvelope, RecordNotFound, ScopeRecord, SourceManifest, StaleWrite
-from grimoire.store.layout import definition_parts
+from grimoire.store import RecordEnvelope, ScopeRecord, SourceManifest, StaleWrite
+from grimoire.core.entity_codec import ENTITY_SCHEMA
 from grimoire.testing.fileops import snapshot as files_of
-
-WORLD, ELSEWHERE, SALTMARCH = "world:harbor", "world:elsewhere", "world:saltmarch"
-WREN = SourceRef(WORLD, "character", "wren")
-R1, R2 = WREN.at("r1"), WREN.at("r2")
-NAMESAKE = SourceRef(ELSEWHERE, "character", "wren", "r1")
-VOICE = Communicative(speaks={"speech"}, understands={"speech"})
-SECTIONS = {"biography": "Born at sea.", "voice-evidence": "Counts tides aloud."}
-
-
-def wren(ref=R1, *, name="Wren", facets=(Physical(), Agent(), VOICE), sections=None) -> EntityDefinition:
-    return EntityDefinition(ref, name, "individual", FacetSet(list(facets)), "A harbor pilot.",
-                            {"sections": dict(SECTIONS if sections is None else sections)})
-
-
-def envelope(definition: EntityDefinition) -> RecordEnvelope:
-    return RecordEnvelope(definition.ref, definition_to_payload(definition), name=definition.name, owner=OWNER,
-                          extra={"schema": ENTITY_SCHEMA})
-
-
-def put(store, *items):
-    """Write each item over whatever is there (``None`` when absent)."""
-    txn = store.transaction()
-    for item in items:
-        if isinstance(item, SourceManifest):
-            found = store.check_source(item.source)
-            expected = None if isinstance(found, str) else found.etag
-        else:
-            try:
-                expected = store.read(item.address).etag
-            except RecordNotFound:
-                expected = None
-        txn.put(item, expected)
-    return txn.commit(owner_handle())
-
-
-def hand_edit(store, ref: SourceRef, **sections) -> None:
-    """Rewrite a stored revision's bytes outside the store, as a person editing the file would."""
-    path = store.root.joinpath(*definition_parts(ref))
-    document = json.loads(path.read_text(encoding="utf-8"))
-    document["payload"]["sections"].update(sections)
-    path.write_text(json.dumps(document, indent=2), encoding="utf-8")
-
-
-def publish(store, definition: EntityDefinition) -> None:
-    """A new head revision of Wren."""
-    put(store, envelope(definition), SourceManifest(WORLD, OWNER, "Harbor", {"character/wren": definition.ref.revision}))
-
-
-@pytest.fixture
-def store(tmp_path):
-    with LibraryStore.create(tmp_path / "lib") as opened:
-        put(opened, SourceManifest(WORLD, OWNER, "Harbor", {"character/wren": "r1"}), envelope(wren()),
-            SourceManifest(ELSEWHERE, OWNER, "Elsewhere"), envelope(wren(NAMESAKE)))
-        yield opened
-
-
-@pytest.fixture
-def chats(store):
-    return ChatLibrary(store, owner_handle(), clock=Clock(), new_id=Ids(), owner=OWNER)
-
-
-@pytest.fixture
-def rebase(store):
-    return SourceRebase(store, owner_handle(), clock=Clock())
-
-
-def start(chats, ref=R1):
-    started = chats.start_chat(Launch("character", ref)).commit()
-    [actor] = started.actors
-    return started, actor
 
 
 def campaign_files(store, campaign):
@@ -107,12 +31,6 @@ def history(store, campaign, actor):
     put(store, ScopeRecord(RelationRef(campaign, "r-1"), "test.relation/1",
                            {"subject": str(actor), "object": "campaign:elsewhere/character/gull", "kind": "owes"}),
         ScopeRecord(AcceptedRef(campaign, "e-1"), "test.accepted/1", {"actor": str(actor), "summary": "Saved a ferry"}))
-
-
-def reason(call):
-    with pytest.raises(RebaseError) as caught:
-        call()
-    return caught.value.reason
 
 
 # -- scenario 1: the proof --------------------------------------------------------------------------
@@ -160,11 +78,6 @@ def test_campaign_b_takes_a_corrected_biography_and_campaign_a_keeps_r1(store, c
 
 
 # -- scenario 2 and 3: conflicts --------------------------------------------------------------------
-
-def edit_instance(store, actor, **payload):
-    stored = store.read(actor)
-    put(store, replace(stored.envelope, payload={**stored.envelope.payload, **payload}))
-
 
 def test_a_local_name_against_an_upstream_rename(store, chats, rebase):
     _, actor = start(chats)

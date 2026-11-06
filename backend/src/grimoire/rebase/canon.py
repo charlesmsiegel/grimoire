@@ -8,11 +8,13 @@ its history. Promoting it to a world copies only the **authored adaptation**, ne
   the facets those need, restated, so the portrayal's own traits are a valid set, 022's first-slice
   limit). Everything else, the description and sections included, is inherited from the base, so a
   later reviewed rebase of the portrayal can still follow it;
-- a campaign original (no source) becomes a standalone individual with its effective name and facets.
+- a campaign original (no source), or an individualized (024) template instance, becomes a
+  standalone individual with its effective name, facets and description, and the sections the
+  caller passes (an individual's template sections, which it no longer inherits).
 
 Lived state (integrity), relations, events, knowledge and transcript are never copied. Each
-definition records where it came from under ``promoted_from`` (an uncomposed extra): the chat, the
-actor and the etag of the actor file the proposal was made from.
+definition records where it came from under ``promoted_from`` (an uncomposed extra): the chat and
+the actor.
 """
 
 from __future__ import annotations
@@ -41,17 +43,21 @@ def _with_requirements(chosen: Mapping[str, Facet], composed: FacetSet) -> Facet
 
 
 def canon_definition(ref: SourceRef, instance: EntityInstance, entity: EffectiveEntity,
-                     base: SourceRef | None, nature: str, provenance: Mapping[str, str]) -> EntityDefinition:
+                     base: SourceRef | None, nature: str, provenance: Mapping[str, str],
+                     sections: Mapping[str, str] | None = None) -> EntityDefinition:
     """The new world's definition ``ref`` for one actor.
 
     ``entity`` is the actor composed over its selection (its effective name and facets); ``base`` is
-    the pinned revision its binding resolved to (``None`` for a campaign original) and ``nature`` that
-    base's composed nature (a portrayal keeps its base's nature, 022's ``nature_mismatch``).
+    the pinned revision its binding resolved to (``None`` for a standalone definition) and ``nature``
+    that base's composed nature (a portrayal keeps its base's nature, 022's ``nature_mismatch``).
+    ``sections`` are written only on a standalone definition; a portrayal inherits its base's.
     """
     if not isinstance(ref, SourceRef) or not ref.pinned:
         raise ValueError(f"a promoted definition is one pinned revision, not {ref}")
     extras: dict[str, object] = {PROMOTED_FROM: dict(provenance)}
     if base is None:
+        if sections:
+            extras["sections"] = dict(sections)
         return EntityDefinition(ref, entity.name, "individual", entity.facets, entity.description, extras)
     if not base.pinned:
         raise ValueError(f"a portrayal's base is a pinned revision, not {base}")

@@ -8,7 +8,7 @@ There is no UI yet, and no model is called. Every write is one guarded store tra
 
 ## What exists
 
-- **Reviewed rebase.** A campaign actor based on revision r1 of a definition is reviewed against a newer revision r2 of the *same* entity. A human decides each changed field (`take` or `keep`). One commit re-pins the actor's instance file and every chat binding that pins it.
+- **Reviewed rebase.** A campaign actor based on revision r1 of a definition is reviewed against another revision r2 of the *same* entity, usually a newer one (an older one is a reviewed revert). A human decides each changed field (`take` or `keep`). One commit re-pins the actor's instance file and every chat binding that pins it.
   - The actor keeps its id. Its relations, accepted events, knowledge, holdings, placements and roster entries are not rewritten, and no other campaign is read or written.
   - A campaign that does not rebase keeps r1.
 - **Chat canon.** From one chat, a human picks roster actors and proposes a new reusable world source `world:<id>`, one definition per pick.
@@ -83,7 +83,8 @@ The returned `RebaseChange` writes:
 - **each chat with an active pinned binding of the actor.** The binding is tombstoned and a new pinned binding of the target, for the same actor, is added. The roster is unchanged.
 
 `commit(approvals=None)` runs under the store lock. It re-checks:
-- the ancestor's and target's bytes;
+- the bytes of every layer the review composed, on both sides (a derived revision's base chain included);
+- the source's head, when the instance follows it: a new head since the review would change what the actor composes to;
 - every chat of the campaign, at the etags the review read: a chat added, removed or edited since could pin the actor to the old revision.
 
 Any mismatch is `StaleWrite` and nothing is written. The store's authorization (and its `approvals`) applies as for any transaction.
@@ -96,7 +97,7 @@ Each definition is `world:<id>/<actor kind>/<entity_id>@r1`:
 - **A sourced actor** becomes a 022 **derived portrayal** over the exact pinned revision its chat binding resolves to, with a `derived_variant` link declared by the new world.
   - It states the actor's effective name and only the facets the campaign overrode (with the facets those require, so its own traits are a valid set).
   - Everything else, the description and sections included, is inherited, so a later fix to the base still reaches it.
-- **A campaign original**, or an individualized (024) template instance, becomes a standalone individual with its effective name, facets and description. A portrayal must keep its base's nature, and an individual is no longer a template.
+- **A campaign original**, or an individualized (024) template instance, becomes a standalone individual with its effective name, facets and description. An individualized instance also restates the sections it no longer inherits from its template. A portrayal must keep its base's nature, and an individual is no longer a template.
 
 Each definition records `promoted_from: {chat, actor}` (an uncomposed extra). Lived state (integrity), relations, events, knowledge and transcript are never copied.
 
@@ -107,15 +108,19 @@ A same-named definition elsewhere is reported in `CanonEntry.same_name`. It is n
 | reason | when |
 |---|---|
 | `no_picks`, `too_many_picks`, `duplicate_pick` | the pick list is empty, over 64, or repeats an actor or entity id |
-| `not_a_world` | the id does not parse or is not in the `world` namespace |
-| `world_exists` | `check_source` finds anything there, or a security-ledger grant or approval still names that source id (a grant outlives a hand-deleted folder and would cover the new world) |
+| `not_a_world` | the id does not parse, or is not exactly `world:<id>` (a longer id would nest its folder inside another world's) |
+| `world_exists` | `check_source` finds anything there, or a security-ledger grant or approval still names that source id, its folder or a folder under it (a grant outlives a hand-deleted folder and would cover the new world) |
 | `definition_exists` | a stray revision file already sits where a new one would go |
 | `missing_chat`, `undecodable_chat` | the chat is absent or cannot be interpreted |
 | `not_in_chat` | a picked actor is not on the chat's roster |
+| `chain_too_deep` | a portrayal of the actor's base would be deeper than 022's chain limit |
 
-What the chat's snapshot refuses for an actor (missing, undecodable, broken binding) propagates.
+What the chat's snapshot refuses for an actor (missing, undecodable, broken binding, or `not_selected` for a detached one) propagates.
 
-`commit(approvals=None)` re-checks under the store lock that the world is still absent and unnamed by a grant, and that the chat and each actor file still have the etags the proposal read (`StaleWrite`).
+`commit(approvals=None)` re-checks under the store lock (`StaleWrite`):
+- that the world is still absent and unnamed by a grant. The approvals this commit supplies for its own new files name the new world by design, so they do not count;
+- that the chat and each actor file still have the etags the proposal read;
+- that every layer of each portrayal's base chain still has the bytes the proposal composed.
 
 ## Boundaries and deferrals
 
@@ -125,7 +130,7 @@ What the chat's snapshot refuses for an actor (missing, undecodable, broken bind
 | Campaign-local overrides of description and sections, so one of two changed sections can be kept | 042 later (a 009 payload change) |
 | Adopting a *different* entity for an existing actor (a world portrayal of its card), which needs a 107 roster change | 042 later |
 | A reviewed way to drop lived state when upstream removes the facet it needs | 042 later |
-| Checking `base_etag` of every layer of a derived ancestor (only the leaf is checked) | 042 later |
+| Checking at review that every layer of a derived ancestor is still what was adopted (`base_etag` covers the leaf; commit re-checks every layer against the review) | 042 later |
 | Review before a following chat sees a new head; pin, follow and detach modes beyond what bindings store | 042 later |
 | Semantic contradiction checks between new authored text and established events | 042 later (`history_review` only lists ids) |
 | Promoting relations, lore, places and organizations | 042 later |

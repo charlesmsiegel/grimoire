@@ -26,9 +26,9 @@ from grimoire.core.portrayal import EffectiveDefinition, compose
 from grimoire.effective import entity_decoder, explainer
 from grimoire.rebase import FieldReview, RebaseError, rebase_instance, review_fields
 from grimoire.store import (
-    CommitResult, LibraryStore, LibraryView, RecordEnvelope, RecordNotFound, ScopeRecord, StaleWrite, StoreError,
+    CommitResult, LibraryStore, LibraryView, RecordEnvelope, ScopeRecord, StaleWrite, StoreError,
 )
-from grimoire.store.layout import address_parts, chat_parts, definition_parts
+from grimoire.store.layout import address_parts, chat_parts, definition_parts, manifest_parts
 
 from .scan import names_instance
 
@@ -103,12 +103,16 @@ class RebaseChange:
     handle: object
     puts: tuple[tuple[RecordEnvelope | ScopeRecord, str | None], ...]
     instance: EntityInstance
-    #: (pinned definition, etag) the commit re-checks under the store lock
-    definitions: tuple[tuple[SourceRef, str], ...]
+    #: (pinned definition, etag) the commit re-checks under the store lock: every layer of the
+    #: ancestor's and the upstream's derivation chains, since the decisions were made on composed values
+    definitions: tuple[tuple[SourceRef, str | None], ...]
     #: the campaign and the etag of every chat of it the review read: a chat added, removed or edited
     #: since could bind the actor to the old revision, so the commit re-checks them all under the lock
     campaign: str = ""
     chats: tuple[tuple[ChatRef, str], ...] = ()
+    #: for an instance that follows its head: (unpinned source, the head the review adopted); a new
+    #: head since would leave the rebased overrides composing over a revision nobody reviewed
+    head: tuple[SourceRef, SourceRef] | None = None
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -124,8 +128,10 @@ class RebaseChange:
     def commit(self, approvals: Mapping[str, str] | None = None) -> CommitResult:
         """Write exactly the previewed bytes, or nothing.
 
-        ``StaleWrite`` when the actor, any chat of its campaign (one added or removed included), the
-        ancestor or the upstream revision changed since the review (a revision file edited by hand is ``changed``); the store's authorization applies.
+        ``StaleWrite`` when the actor, any chat of its campaign (one added or removed included), any
+        layer of the ancestor's or the upstream's derivation chain, or (for an instance that follows
+        its head) the head changed since the review (a revision file edited by hand is ``changed``);
+        the store's authorization applies.
         """
         with self.store.lock:
             if self._committed:
@@ -134,8 +140,13 @@ class RebaseChange:
             for ref, etag in self.definitions:
                 found = self.store.check_definition(ref)
                 current = None if isinstance(found, str) else found.etag
-                if current != etag:
+                if current is None or current != etag:
                     moved.append(("/".join(definition_parts(ref)), "absent" if current is None else "changed"))
+            if self.head is not None:
+                followed, adopted = self.head
+                found_head = self.store.check_definition(followed)
+                if isinstance(found_head, str) or found_head.ref != adopted:
+                    moved.append(("/".join(manifest_parts(followed.source)), "changed"))
             found = self.store.campaign_chats(self.campaign)
             moved += [(problem.path, "changed") for problem in found.problems]
             expected = dict(self.chats)
@@ -314,7 +325,8 @@ class SourceRebase:
     def _history(self, view: LibraryView, actor: InstanceRef) -> RebaseHistory:
         campaign = actor.campaign_id
         chats = tuple(sorted((ref for ref, stored in view.chats.items()
-                              if ref.campaign_id == campaign and names_instance(stored.record.payload, actor)), key=str))
+                              if ref.campaign_id == campaign and names_instance(stored.record.payload, actor)),
+                             key=str))
         relations = self.store.campaign_relations(campaign)
         accepted = self.store.campaign_accepted(campaign)
         return RebaseHistory(
@@ -348,13 +360,18 @@ class SourceRebase:
         puts: list[tuple[RecordEnvelope | ScopeRecord, str | None]] = [(envelope, review.instance_etag)]
         for chat in review._chats:
             at = self._clock()
-            record = chat.record.detach(chat.binding, chat.role, at).attach(
-                NewBinding(upstream, chat.role, upstream.revision, review.actor, CAMPAIGN_CONTINUITY), at)  # type: ignore[arg-type]
+            repinned = NewBinding(upstream, chat.role, upstream.revision, review.actor,  # type: ignore[arg-type]
+                                  CAMPAIGN_CONTINUITY)
+            record = chat.record.detach(chat.binding, chat.role, at).attach(repinned, at)
             puts.append((ScopeRecord(chat.ref, CHAT_SCHEMA, chat_to_payload(record), owner=chat.stored.owner,
                                      extra=chat.stored.extra), chat.etag))
-        definitions = ((review.ancestor.ref, review._ancestor_etag), (upstream, review._upstream_etag))
-        return RebaseChange(self.store, self.handle, tuple(puts), rebased, definitions, review.actor.campaign_id,
-                            review._chat_etags)
+        chain = {node.ref: node.etag for node in (*review.ancestor.chain, *review.upstream.chain)}
+        chain[review.ancestor.ref] = review._ancestor_etag
+        chain[upstream] = review._upstream_etag
+        source = review.instance.source
+        head = None if source is None or source.pinned else (source.unpinned(), upstream)
+        return RebaseChange(self.store, self.handle, tuple(puts), rebased, tuple(chain.items()),
+                            review.actor.campaign_id, review._chat_etags, head)
 
 
 def _reader(view: LibraryView):  # type: ignore[no-untyped-def]
@@ -364,4 +381,5 @@ def _reader(view: LibraryView):  # type: ignore[no-untyped-def]
     return read
 
 
-__all__ = ["ACTOR_REBOUND", "ANCESTOR_UNVERIFIED", "HISTORY_REVIEW", "RebaseChange", "RebaseHistory", "RebaseReview", "SourceRebase"]
+__all__ = ["ACTOR_REBOUND", "ANCESTOR_UNVERIFIED", "HISTORY_REVIEW", "RebaseChange", "RebaseHistory", "RebaseReview",
+           "SourceRebase"]

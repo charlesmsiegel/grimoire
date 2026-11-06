@@ -340,17 +340,26 @@ def security_campaign_ids(store: LibraryStore, *, spent: Collection[tuple[str, s
                      if len(parts) >= 2 and parts[0] == CAMPAIGNS)
 
 
-def security_source_ids(store: LibraryStore, *, spent: Collection[tuple[str, str, str]] = ()) -> frozenset[str]:
-    """Every source id (``<namespace>:<id>``, folded) a grant or approval in the security ledger names:
-    ``sources/<namespace>/<id>`` or anything under it, except the approvals in ``spent``.
+def security_source_named(store: LibraryStore, source_id: str, *,
+                          spent: Collection[tuple[str, str, str]] = ()) -> bool:
+    """Whether a grant or approval in the security ledger names ``sources/<source id path>``: the
+    source's own folder or anything under it, or a folder above it that is finer than a whole namespace
+    (a multi-segment id ``world:salt:marsh`` lies under ``sources/world/salt``). The approvals in
+    ``spent`` are left out (see ``_granted_addresses``).
 
     As for campaigns, a grant outlives a hand-deleted source folder and would cover a new source given
-    that id (042 proposes new world sources), so a new source must find its id outside this set. A grant
-    on ``sources`` or a whole namespace names no source and covers every new one by design. Scanned raw
-    and failing closed, as ``security_instance_ids``.
+    that id (042 proposes new world sources), so a new source must be named by none. A grant on
+    ``sources`` or on a whole namespace (``sources/world``) names no source and covers every new one
+    by design. Scanned raw and failing closed, as ``security_instance_ids``.
     """
-    return frozenset(f"{parts[1]}:{parts[2]}" for parts in _granted_addresses(store, spent)
-                     if len(parts) >= 3 and parts[0] == SOURCES)
+    own = (name_key(SOURCES), *(name_key(part) for part in source_id.split(":")))
+    for parts in _granted_addresses(store, spent):
+        if len(parts) < 3 or parts[0] != own[0]:
+            continue
+        shorter = min(len(parts), len(own))
+        if parts[:shorter] == own[:shorter]:
+            return True
+    return False
 
 
 def security_instance_ids(store: LibraryStore, campaign_id: str, *,

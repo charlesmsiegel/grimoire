@@ -20,15 +20,16 @@ from grimoire.chats import ChatCodecError
 from grimoire.core.entity import EntityDefinition
 from grimoire.core.entity_codec import ENTITY_SCHEMA, definition_to_payload
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, validate_segment, validate_source_id
-from grimoire.core.portrayal import compose
+from grimoire.core.portrayal import MAX_CHAIN, compose
 from grimoire.effective import chat_snapshot, explainer
-from grimoire.ledgers import security_source_ids
+from grimoire.ledgers import security_source_named
+from grimoire.security import payload_digest
 from grimoire.rebase import RebaseError, canon_definition
 from grimoire.store import (
     CommitResult, LibraryStore, LinkSpec, NameCollision, RecordEnvelope, RecordNotFound, SourceManifest, StaleWrite,
     StoreError,
 )
-from grimoire.store.layout import address_parts, definition_parts, manifest_parts, name_key
+from grimoire.store.layout import address_parts, definition_parts, manifest_parts
 
 from .rebase import _reader
 
@@ -86,6 +87,8 @@ class CanonProposal:
     puts: tuple[RecordEnvelope | SourceManifest, ...]
     #: the chat and each picked actor, at the etag the proposal was made from
     reads: tuple[tuple[ChatRef | InstanceRef, str], ...]
+    #: every pinned revision of each portrayal's base chain, at the etag the proposal composed
+    definitions: tuple[tuple[SourceRef, str | None], ...] = ()
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -110,7 +113,11 @@ class CanonProposal:
             world = self.report.world
             manifest = "/".join(manifest_parts(world))
             moved: list[tuple[str, str]] = []
-            if self.store.check_source(world) != "missing_source" or name_key(world) in security_source_ids(self.store):
+            # the approvals this commit supplies for its own new files name the new world by design
+            # (preview, register approvals, commit), so they do not count against it
+            spent = self._spent(approvals) if approvals else ()
+            if self.store.check_source(world) != "missing_source" or security_source_named(self.store, world,
+                                                                                           spent=spent):
                 moved.append((manifest, "changed"))
             for ref, etag in self.reads:
                 try:
@@ -119,11 +126,23 @@ class CanonProposal:
                     current = None
                 if current != etag:
                     moved.append(("/".join(address_parts(ref)), "absent" if current is None else "changed"))
+            for pinned, etag in self.definitions:  # a portrayal must still derive from the bytes reviewed
+                found = self.store.check_definition(pinned)
+                current = None if isinstance(found, str) else found.etag
+                if current is None or current != etag:
+                    moved.append(("/".join(definition_parts(pinned)), "absent" if current is None else "changed"))
             if moved:
                 raise StaleWrite(moved)
             result = self._transaction().commit(self.handle, approvals)
             self._committed = True
         return result
+
+    def _spent(self, approvals: Mapping[str, str]) -> frozenset[tuple[str, str, str]]:
+        """``(approval id, address, digest)`` of each supplied approval, for the bytes this proposal writes."""
+        preview = self.preview()
+        return frozenset((approval, address, payload_digest(preview[address]))
+                         for address, approval in approvals.items()
+                         if type(address) is str and type(approval) is str and address in preview)
 
 
 def _fail(message: str, reason: str) -> RebaseError:
@@ -149,8 +168,10 @@ class CanonProposer:
         Refusals: ``no_picks``/``too_many_picks``, ``duplicate_pick`` (an actor or entity id twice),
         ``not_a_world``, ``world_exists`` (any source there, or a security-ledger grant naming it),
         ``definition_exists`` (a stray revision file where a new one would go), ``missing_chat``,
-        ``undecodable_chat``, ``not_in_chat``. What the chat's snapshot refuses for an actor (a missing
-        or undecodable one, a broken binding) propagates.
+        ``undecodable_chat``, ``not_in_chat``, ``chain_too_deep`` (a portrayal of the base would exceed
+        022's chain limit). What the chat's snapshot refuses for an actor propagates: a missing or
+        undecodable one, a broken binding, or ``not_selected`` for a roster actor no active binding
+        selects (detached).
         """
         if not isinstance(chat, ChatRef):
             raise TypeError(f"expected a ChatRef, not {type(chat).__name__}")
@@ -167,10 +188,11 @@ class CanonProposer:
             validate_source_id(world, "world")
         except ValueError as error:
             raise _fail(str(error), "not_a_world") from None
-        if world.split(":", 1)[0] != WORLD or ":" not in world:
-            raise _fail(f"{world} is not a world source (world:<id>)", "not_a_world")
+        if len(world.split(":")) != 2 or world.split(":")[0] != WORLD:
+            # exactly world:<id>: a longer id would nest its folder inside another world's
+            raise _fail(f"{world} is not a world source id (world:<id>)", "not_a_world")
         found = self.store.check_source(world)
-        if found != "missing_source" or name_key(world) in security_source_ids(self.store):
+        if found != "missing_source" or security_source_named(self.store, world):
             # a grant outlives a hand-deleted folder and would cover a new source given its id
             raise _fail(f"{world} already exists, or its id is still named by a grant", "world_exists")
         view = self.store.load()
@@ -185,6 +207,7 @@ class CanonProposer:
         reader, explain = _reader(view), explainer(view)
         entries: list[CanonEntry] = []
         reads: list[tuple[ChatRef | InstanceRef, str]] = [(chat, captured.chat_etag)]
+        chains: dict[SourceRef, str | None] = {}
         for pick in picks:
             if pick.actor not in roster:
                 raise _fail(f"{pick.actor} is not on {chat}'s roster", "not_in_chat")
@@ -197,14 +220,22 @@ class CanonProposer:
             ref = SourceRef(world, pick.actor.kind, pick.entity_id, FIRST_REVISION)
             base: SourceRef | None = None
             nature = "individual"
-            if instance.source is not None and instance.individuality is None:
+            sections: dict[str, str] = {}
+            if instance.source is not None:
                 owner = next(resolution for resolution in snapshot.sources() if resolution.source.actor == pick.actor)
-                base = owner.resolved
-                nature = compose(base, view.index, reader, explain).nature  # type: ignore[arg-type]
-            # an individualized template actor (024) is an individual now: a standalone definition, never
-            # a derived template, since a portrayal keeps its base's nature
+                composed = compose(owner.resolved, view.index, reader, explain)  # type: ignore[arg-type]
+                if instance.individuality is None:
+                    if len(composed.chain) >= MAX_CHAIN:
+                        raise _fail(f"{owner.resolved} already composes {len(composed.chain)} layers, so a portrayal "
+                                    f"of it would be deeper than {MAX_CHAIN}", "chain_too_deep")
+                    base, nature = owner.resolved, composed.nature
+                    chains.update((node.ref, node.etag) for node in composed.chain)
+                else:
+                    # an individualized template actor (024) is an individual now: a standalone definition
+                    # (a portrayal keeps its base's nature), so it restates the sections it no longer inherits
+                    sections = dict(composed.sections)
             definition = canon_definition(ref, instance, entity, base, nature,
-                                          {"chat": str(chat), "actor": str(pick.actor)})
+                                          {"chat": str(chat), "actor": str(pick.actor)}, sections)
             same = tuple(other for other in view.index.find_by_name(definition.name, ref.kind)
                          if base is None or other.entity_key != base.entity_key)
             entries.append(CanonEntry(pick, definition, base, same))
@@ -225,7 +256,7 @@ class CanonProposer:
             puts.append(RecordEnvelope(entry.definition.ref, definition_to_payload(entry.definition),
                                        name=entry.definition.name, owner=self._owner, extra={"schema": ENTITY_SCHEMA}))
         report = CanonReport(world, chat, tuple(entries))
-        return CanonProposal(self.store, self.handle, report, tuple(puts), tuple(reads))
+        return CanonProposal(self.store, self.handle, report, tuple(puts), tuple(reads), tuple(chains.items()))
 
 
 __all__ = ["FIRST_REVISION", "MAX_PICKS", "CanonEntry", "CanonPick", "CanonProposal", "CanonProposer", "CanonReport"]
