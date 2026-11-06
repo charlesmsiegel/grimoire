@@ -5,7 +5,7 @@
 - `transmit.py`: `transmit`, which turns one in-scene message into [012](KNOWLEDGE.md) records;
 - `reader.py`: `read_message`, which reads a routed [008](intent-routing.md) PC intent as a message, or refuses.
 
-Nothing here writes a file or calls a model. The records go to [020's](EVIDENCE.md) `EvidenceLibrary.append` unchanged. There is no runner and no app: choosing the sequence and committing the turn are 035's. All scenarios are synthetic.
+Nothing here writes a file or calls a model. The records go to [020's](EVIDENCE.md) `EvidenceLibrary.append` unchanged. There is no app: 035's runner ([SCENES](SCENES.md)) reads posts and stores each message's audience on its turn; writing these records to 020 in the turn's commit is its milestone 2. All scenarios are synthetic.
 
 ## What it does
 
@@ -173,4 +173,4 @@ This follows [012's obligations for 032](KNOWLEDGE.md#consumer-obligations):
 - The reader is **English-only** and reads one sentence pattern. Non-English text that 008 routes as speech is taken as spoken words, as 008 decides. Addressed speech ("I tell Emma …") is refused rather than read; a later slice may read it once speech-tag parsing exists.
 - Quoted words may hold a dash aside ("Run — no, wait — now"), read as a spoken pause, not a stage direction.
 - Thought is interiority, a player-sovereignty domain ([003](PLAYER_SOVEREIGNTY.md)), and is never transmitted: "I think …" is `not_directed`.
-- Rendering a transcript without private channels: 035 and 065.
+- Rendering a transcript without private channels: 035's first slice keeps them out of the director's table lines and every listener's window ([SCENES](SCENES.md)); a UI view is 065's.
