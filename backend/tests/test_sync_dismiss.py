@@ -56,9 +56,15 @@ def _entries(store: LibraryStore, peer: str = PHONE) -> dict:  # type: ignore[ty
 
 
 def _copies(stores, data: bytes) -> list[str]:  # type: ignore[no-untyped-def]
-    """Every file on either device that holds ``data``: a version is lost once this is empty."""
-    return [str(path) for store in stores for path in store.root.rglob("*")
-            if path.is_file() and ".txn" not in path.parts and path.read_bytes() == data]
+    """Every file on either device that holds ``data``, sorted (directory order differs between
+    filesystems): a version is lost once this is empty."""
+    return sorted(str(path) for store in stores for path in store.root.rglob("*")
+                  if path.is_file() and ".txn" not in path.parts and path.read_bytes() == data)
+
+
+def _slots(store: LibraryStore, data: bytes) -> list[str]:
+    """Every kept-version file of ``store`` holding ``data``, sorted like ``_copies``."""
+    return sorted(str(slot) for slot in (store.root / ".conflicts").rglob("*") if slot.is_file() and slot.read_bytes() == data)
 
 
 def test_a_dismissed_kept_version_is_not_delivered_again(tmp_path):
@@ -133,8 +139,7 @@ def test_a_version_of_a_path_no_longer_in_conflict_is_never_dismissable(tmp_path
     edit_instance(desktop, WREN_A, 20)
     (phone.root / PATH).write_bytes((desktop.root / PATH).read_bytes())
     assert sync(desktop, phone, handles()).conflict(PATH) is None
-    assert _copies((desktop, phone), theirs) == [str(slot) for slot in (desktop.root / ".conflicts").rglob("*")
-                                                 if slot.is_file() and slot.read_bytes() == theirs]
+    assert _copies((desktop, phone), theirs) == _slots(desktop, theirs)
     assert etag(theirs) in _entries(desktop)[PATH]["delivered"] and _entries(desktop)[PATH]["base"] is None
     with pytest.raises(DismissRefused, match="no longer in conflict"):
         dismiss(desktop, PHONE, PATH, etag(theirs), handle())
@@ -262,8 +267,7 @@ def test_a_hold_over_a_delivered_copy_survives_recovery_that_loses_the_staged_re
     sync(desktop, phone, {DESKTOP: handle(), PHONE: owner_handle("sources", "campaigns")})  # the phone keeps nothing
     entry = _entries(desktop)[PATH]
     assert etag(delivered) in entry["delivered"] and entry["base"] is not None
-    assert _copies((desktop, phone), delivered) == [str(desktop.root / PATH)] + [
-        str(slot) for slot in (desktop.root / ".conflicts").rglob("*") if slot.is_file() and slot.read_bytes() == delivered]
+    assert _copies((desktop, phone), delivered) == sorted([str(desktop.root / PATH), *_slots(desktop, delivered)])
     ops, real = desktop._access.ops, desktop._access.ops.replace
 
     def replace(source, target):  # type: ignore[no-untyped-def]
@@ -291,7 +295,7 @@ def test_a_hold_over_a_delivered_copy_survives_recovery_that_loses_the_staged_re
 
 def _unreadable(monkeypatch, store: LibraryStore, data: bytes) -> list[str]:
     """Every kept file of ``store`` holding ``data`` fails with an I/O error until ``monkeypatch.undo``."""
-    slots = [str(slot) for slot in (store.root / ".conflicts").rglob("*") if slot.is_file() and slot.read_bytes() == data]
+    slots = _slots(store, data)
     ops, real = store._access.ops, store._access.ops.read_bytes
 
     def read_bytes(path):  # type: ignore[no-untyped-def]
@@ -466,6 +470,48 @@ def test_a_sync_interrupted_after_its_data_commit_leaves_its_keeps_dismissable(t
     assert theirs in kept(desktop) and etag(theirs) in _entries(desktop)[PATH]["delivered"]
     sync_until_quiet(desktop, phone, handles())
     assert dismiss(desktop, PHONE, PATH, etag(theirs), handle()).wrote
+
+
+@pytest.mark.parametrize("crash", ["after both archives", "between the archives", "back on the base bytes",
+                                   "after both archives, by an earlier build"])
+def test_a_sync_that_ends_a_conflict_never_leaves_its_kept_copies_dismissable(tmp_path, monkeypatch, crash):
+    """The phone takes the desktop's version by hand (or both go back to the bytes they last agreed on),
+    so the next sync finds the conflict over, and it dies before its pending step (or between its two
+    archive commits, before the desktop's). The desktop's kept copy of the phone's former version is
+    then that version's only copy: it is never named safe to delete, then or after a later sync. A build
+    that cleared the record only in the pending step left it naming the old base: the archive decides."""
+    desktop, phone = make_pair(tmp_path)
+    agreed = (desktop.root / PATH).read_bytes()
+    edit_instance(desktop, WREN_A, 9)
+    edit_instance(phone, WREN_A, 4)
+    assert sync(desktop, phone, handles()).conflict(PATH).kept == {DESKTOP: True, PHONE: True}
+    former = _theirs(phone)
+    if crash == "back on the base bytes":
+        for store in (desktop, phone):
+            (store.root / PATH).write_bytes(agreed)
+    else:
+        (phone.root / PATH).write_bytes((desktop.root / PATH).read_bytes())
+    target, calls = ("_commit_archive", 2) if crash == "between the archives" else ("_commit_pending", 1)
+    real, seen = getattr(sync_session, target), []
+
+    def dies(*args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(1)
+        if len(seen) == calls:
+            raise RuntimeError("power lost")
+        return real(*args, **kwargs)
+    monkeypatch.setattr(sync_session, target, dies)
+    if crash.endswith("by an earlier build"):
+        monkeypatch.setattr(sync_session, "_commit_keeps", lambda *args, **kwargs: None)
+    with pytest.raises(RuntimeError):
+        sync(desktop, phone, handles())
+    monkeypatch.undo()
+    assert _copies((desktop, phone), former) == _slots(desktop, former)
+    with pytest.raises(DismissRefused):
+        dismiss(desktop, PHONE, PATH, etag(former), handle())
+    assert sync_until_quiet(desktop, phone, handles()).conflicts == ()
+    with pytest.raises(DismissRefused):
+        dismiss(desktop, PHONE, PATH, etag(former), handle())
+    assert former in kept(desktop)
 
 
 def test_a_new_identity_leaves_no_dismissal_behind_and_no_notice(tmp_path):

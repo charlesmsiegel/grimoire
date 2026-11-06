@@ -13,6 +13,7 @@ import pytest
 
 from grimoire.core.identity import InstanceRef
 from grimoire.peersync import PeerRefused, read_pairing, transfer
+from grimoire.peersync import session as session_module
 from grimoire.peersync.pairing import peer_principal
 from grimoire.peersync.replay import StepBuffer
 from grimoire.peersync.wire import client_handshake
@@ -231,6 +232,28 @@ def test_a_hold_whose_slot_cannot_be_read_is_never_given_up(tmp_path, monkeypatc
     with pytest.raises(DismissRefused):
         dismiss(phone.store, DESKTOP, WREN_PATH, etag(theirs), phone.handle)
     assert (phone.store.root / hold).read_bytes() == theirs
+
+
+def test_a_transfer_that_ends_a_conflict_clears_its_record_before_either_archive(tmp_path, monkeypatch):
+    """The phone takes the desktop's version by hand; the next transfer ends the conflict. Its keeps
+    steps travel ahead of both archive steps and the phone accepts them, so a transfer cut off after an
+    archive step never leaves a kept copy dismissable on either device."""
+    desktop, phone = _conflict(tmp_path)
+    former = (phone.store.root / WREN_PATH).read_bytes()
+    (phone.store.root / WREN_PATH).write_bytes((desktop.store.root / WREN_PATH).read_bytes())
+    real, sent = session_module.send_step, []
+
+    def record(channel, step, reader):  # type: ignore[no-untyped-def]
+        sent.append(step.kind)
+        return real(channel, step, reader)
+    monkeypatch.setattr(session_module, "send_step", record)
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+    assert "keeps" in sent and sent.index("keeps") < sent.index("archive")
+    assert parse_keeps((phone.store.root / f".sync/peers/{DESKTOP}/keeps.json").read_bytes(), PAIR).entries[WREN_PATH].base is None
+    with pytest.raises(DismissRefused):
+        dismiss(desktop.store, PHONE, WREN_PATH, etag(former), desktop.handle)
+    assert former in _kept(desktop)
 
 
 @pytest.mark.parametrize("document", ["junk shards", "a listed shard missing"])

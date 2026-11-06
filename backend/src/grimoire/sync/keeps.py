@@ -189,6 +189,14 @@ def without(view: KeepsView, peer: str, devices: tuple[str, str], paths: Iterabl
     return _write(view, peer, devices, entries)
 
 
+def ended(view: KeepsView, peer: str, devices: tuple[str, str], open_paths: Iterable[str]) -> State | None:
+    """The record with every path a sync no longer finds in conflict taken out of conflict (``without``),
+    for a commit of its own before that sync writes either archive: a crash after an archive records
+    the agreement must never leave a kept copy dismissable (perhaps the last copy of a version
+    neither device holds any more) on a base only the later pending step would have cleared."""
+    return without(view, peer, devices, set(_entries(view)) - set(open_paths))
+
+
 def with_held(view: KeepsView, peer: str, devices: tuple[str, str], path: str, tag: str) -> State | None:
     """The record with ``tag`` held for ``path``: ``resolve`` commits it just before its hold.
     A delivered entry of the same bytes (the hold reuses its slot) stops being delivered."""

@@ -1,7 +1,7 @@
 """Plan and apply a transport-free sync between two open libraries (docs/SYNC.md).
 
-``plan_sync`` only reads. ``apply_sync`` writes in a fixed order — data(a), data(b), verify,
-archive(b), archive(a), pending(b), pending(a), where ``a`` is the lower device ID — each step
+``plan_sync`` only reads. ``apply_sync`` writes in a fixed order — data(a), data(b), verify, keeps(b),
+keeps(a), archive(b), archive(a), pending(b), pending(a), where ``a`` is the lower device ID — each step
 one 010 transaction. Nothing here reads a clock, a modification time or randomness: decisions
 depend only on bytes, the two devices' own archives and their unfinished-sync markers.
 """
@@ -34,7 +34,7 @@ from grimoire.store.replica import (
 from . import bookkeeping, keeps as kept_record
 from .art import art_needs, art_unmet
 from .decide import archive_candidate, decide, derive_base
-from .documents import ArchiveView, KeepsView, PendingView, syncable
+from .documents import ArchiveView, KeepsView, PendingView, parse_keeps, syncable
 from .errors import ArchiveTooLarge, SameDevice, SyncInterrupted, SyncNotQuiet
 from .identity import device_of, identify
 from .model import ASSET_KINDS, CAMPAIGN_LOCAL, HELD_BACK_KINDS, HOLDS_RELATIONS, Base, Side
@@ -903,9 +903,9 @@ def _report(plan: SyncPlan, applied: _Applied) -> SyncReport:
 class Step:
     """One committed ``apply_sync`` step on one device, exactly as it was written.
 
-    ``kind`` is ``data``, ``archive`` or ``pending``. A data step carries the copies and kept
+    ``kind`` is ``data``, ``keeps``, ``archive`` or ``pending``. A data step carries the copies and kept
     versions its commit published (after any denial) and, in ``states``, the pending marker it
-    wrote; an archive or pending step carries only its ``.sync`` file. Each state is ``(name,
+    wrote; a keeps, archive or pending step carries only its ``.sync`` files. Each state is ``(name,
     bytes, expected etag)``. 028's peer transfer replays a step on the device a local stand-in
     represents, in the same order (docs/DEVICE_SYNC.md).
     """
@@ -920,7 +920,7 @@ class Step:
 def apply_sync(plan: SyncPlan, handles: Mapping[str, object],
                approvals: Mapping[str, Mapping[str, str]] | None = None, *,
                observer: Callable[[Step], None] | None = None) -> SyncReport:
-    """Write the plan: data(a), data(b), verify, archive(b), archive(a), pending(b), pending(a).
+    """Write the plan: data(a), data(b), verify, keeps(b), keeps(a), archive(b), archive(a), pending(b), pending(a).
 
     ``observer`` is called with each step that wrote something, right after its commit and
     before the next step starts; an exception it raises stops the sync there, unchanged, so
@@ -932,6 +932,7 @@ def apply_sync(plan: SyncPlan, handles: Mapping[str, object],
     _verify(plan, applied)
     resolved = _resolved(plan, applied)
     archived = {device: _new_archive(plan, device, resolved) for device in plan.devices}
+    _commit_keeps(plan, applied)
     for device in reversed(plan.devices):
         _commit_archive(plan, device, archived[device], applied)
     for device in reversed(plan.devices):
@@ -1143,20 +1144,31 @@ def _new_archive(plan: SyncPlan, device: str,
     return {path: entry for path, entry in entries.items() if entry[0] != "deleted" or syncable(path) != "blob"}
 
 
-def _commit_archive(plan: SyncPlan, device: str, entries: Mapping[str, tuple[str, str]], applied: _Applied) -> None:
-    files, _ = bookkeeping.render_files("archive", plan.other(device), plan.devices, entries, ARCHIVE_LIMIT)
-    states = bookkeeping.changes(plan.stores[device], files, plan.archives[device].files)
-    if not states:
-        return
+def _commit_states(plan: SyncPlan, device: str, kind: str, states: list, applied: _Applied) -> bool:  # type: ignore[type-arg]
+    if not (states := [state for state in states if state is not None]):
+        return False
     txn = plan.stores[device].transaction()
     bookkeeping.stage(txn, states)
     try:
         txn.commit(None)
     except (StaleWrite, WriteConflict) as error:
-        raise SyncInterrupted(f"the archive on {device} changed during the sync: {error}",
-                              _report(plan, applied)) from error
+        raise SyncInterrupted(f"the {kind} state on {device} changed during the sync: {error}", _report(plan, applied)) from error
     applied.wrote = True
-    applied.observe(Step("archive", device, states=tuple(states)))
+    applied.observe(Step(kind, device, states=tuple(states)))
+    return True
+
+
+def _commit_keeps(plan: SyncPlan, applied: _Applied) -> None:
+    """keeps(b), keeps(a): each conflict this sync ended out of conflict before either archive records it (028)."""
+    for device in reversed(plan.devices):
+        record = kept_record.ended(plan.kept_records[device], plan.other(device), plan.devices, plan.conflicts)
+        if _commit_states(plan, device, "keeps", [record], applied):  # the pending step's record replaces it
+            plan.kept_records[device] = parse_keeps(record[1], plan.devices)  # type: ignore[index]
+
+
+def _commit_archive(plan: SyncPlan, device: str, entries: Mapping[str, tuple[str, str]], applied: _Applied) -> None:
+    files, _ = bookkeeping.render_files("archive", plan.other(device), plan.devices, entries, ARCHIVE_LIMIT)
+    _commit_states(plan, device, "archive", bookkeeping.changes(plan.stores[device], files, plan.archives[device].files), applied)
 
 
 def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object],
@@ -1178,19 +1190,7 @@ def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object],
              for path in plan.conflicts}
     record = kept_record.next_keeps(plan.kept_records[device], peer, plan.devices, bases,
                                     functools.partial(kept_record.slot_stands, plan.stores[device]))
-    if record is not None:
-        states.append(record)
-    if not states:
-        return
-    txn = plan.stores[device].transaction()
-    bookkeeping.stage(txn, states)
-    try:
-        txn.commit(None)
-    except (StaleWrite, WriteConflict) as error:
-        raise SyncInterrupted(f"the pending marker on {device} changed during the sync: {error}",
-                              _report(plan, applied)) from error
-    applied.wrote = True
-    applied.observe(Step("pending", device, states=tuple(states)))
+    _commit_states(plan, device, "pending", [*states, record], applied)
 
 
 # -- entry points ----------------------------------------------------------------------

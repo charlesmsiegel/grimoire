@@ -16,9 +16,10 @@ made from bytes, never from timestamps:
   ``Conflict.dismissed``; a **different** version from the peer (other bytes) is kept as usual;
 - it never touches the other device: the peer's file stays its canonical record, the conflict is
   still reported until a human ends it, and only this device's keep is withheld;
-- a dismissal ends with its conflict: once a completed sync finds the path no longer in conflict,
-  or its base moved, or ``resolve`` ends it, the dismissal is dropped, so the same bytes in a later
-  conflict are kept again.
+- a dismissal ends with its conflict: once a sync finds the path no longer in conflict (it clears
+  the record before writing either archive), or its base moved, or ``resolve`` ends it, the
+  dismissal is dropped, so the same bytes in a later conflict are kept again. A record whose base
+  is not the one this device's archive and marker now give the path is never trusted alone.
 
 The record is written in one 010 transaction, authorized like a keep: ``APPLY`` on the kept
 version's own address (``kept/<hash16>/<digest12>/<name>``), so a handle that may not write a
@@ -38,9 +39,10 @@ from grimoire.store import LibraryStore, NameCollision, StaleWrite, StoreError, 
 from grimoire.store.jsonfmt import MAX_FILE_BYTES, is_etag
 from grimoire.store.layout import kept_address
 
+from . import bookkeeping
 from .documents import KeptEntry, check_device_id, keeps_name, render_keeps, syncable
 from .errors import DismissRefused, SyncInterrupted
-from .keeps import held_anywhere, kept_slots, read_keeps
+from .keeps import archived_token, held_anywhere, kept_slots, read_keeps
 from .identity import device_of
 
 
@@ -57,6 +59,22 @@ class Dismissal:
     wrote: bool
 
 
+def _persisted_base(store: LibraryStore, peer: str, devices: tuple[str, str], path: str) -> str | None:
+    """The base this device's own archive and pending marker give ``path`` now, as the record spells it.
+
+    A sync clears the record's base for each conflict it ends before writing either archive, but a
+    record an earlier build left may still name a base the archive has moved past: the agreement
+    the archive records decides, never the record alone. Unknown (``None``, so no record's base
+    matches) when the archive is not valid, or when the marker is ignored or holds the path (a
+    copy that landed moved its base)."""
+    archive = bookkeeping.read_document(store, "archive", peer, devices)
+    pending = bookkeeping.read_document(store, "pending", peer, devices)
+    if archive.state != "valid" or pending.state == "ignored" or path in pending.entries:
+        return None
+    found = archive.entries.get(path)
+    return archived_token(found, found)
+
+
 def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object,
             approvals: Mapping[str, str] | None = None) -> Dismissal:
     """Never keep the version of ``path`` whose etag is ``kept`` on this device again, from ``peer``.
@@ -65,7 +83,8 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
     that is not a synchronized record that can have kept versions (a blob never has one), an etag
     that is not one, this device's own current version of ``path``, any version no sync delivered
     here from ``peer``, a path no longer in conflict with ``peer`` (as the last sync found it, or
-    since ``resolve`` ended it), any version ``resolve`` held here (by
+    since ``resolve`` ended it, or on another base than this device's archive and marker now give
+    it), any version ``resolve`` held here (by
     any pair's record, or possibly: one this device cannot read as valid), a version one of whose
     kept-version files cannot be read (``kept_slots``: it might hold anything), a record that would
     exceed 010's file cap, or a write the handle may not make. A record that is unreadable stops it
@@ -100,6 +119,9 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
                              "perhaps its only copy; it is never dismissed")
     if entry.base is None:  # the devices agree again: a kept copy may be the last copy of that version
         raise DismissRefused(f"{path} is no longer in conflict with {peer}; its kept versions are not dismissed")
+    if entry.base != _persisted_base(store, peer, devices, path):
+        raise DismissRefused(f"{path} is not in conflict with {peer} on the base this device last recorded "
+                             "(a sync may have ended it); its kept versions are not dismissed")
     slots, unreadable = kept_slots(store, path, kept)
     if unreadable:  # it might hold anything, a hold even: never name the others safe to delete beside it
         raise DismissRefused(f"a kept-version file of {path} cannot be read here ({', '.join(unreadable)}); "

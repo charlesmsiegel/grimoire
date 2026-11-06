@@ -4,8 +4,9 @@ The client runs 019's ``apply_sync`` against its own library and the mirror. Eac
 commits on the mirror, the same writes travel to the serving device, which commits them as one
 010 transaction of its own under the client's peer principal, re-reads every file and answers
 with its etags. Only then does 019 go on to its next step, so the real devices are written in
-019's own order (data(a), data(b), verify, archive(b), archive(a), pending(b), pending(a)) and a
-failure at any point leaves exactly the state a crash at that point of a local sync leaves.
+019's own order (data(a), data(b), verify, keeps(b), keeps(a), archive(b), archive(a), pending(b),
+pending(a)) and a failure at any point leaves exactly the state a crash at that point of a local
+sync leaves.
 """
 
 from __future__ import annotations
