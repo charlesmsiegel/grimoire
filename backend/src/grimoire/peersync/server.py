@@ -1,9 +1,12 @@
 """The serving end of a peer transfer (028): authenticate a paired device, then answer its requests.
 
 A session is one connection. After the handshake the client asks for snapshots (``snapshot``) and
-sends 019 steps to commit here (``op`` frames, then ``commit``); ``bye`` ends it. A refused step
-is answered with a named error and changes nothing here; the session goes on. This slice listens
-on loopback only: frames are authenticated but not encrypted (docs/DEVICE_SYNC.md).
+sends 019 steps to commit here (``op`` frames, then ``commit``); ``bye`` ends it. A ``resolve``
+request is a snapshot to end one conflict from, and that resolve's steps follow it (``resolving``);
+a server that predates it answers ``protocol`` and ends the session, as for any request it does
+not know. A refused step is answered with a named error and changes nothing here; the session
+goes on. This slice listens on loopback only: frames are authenticated but not encrypted
+(docs/DEVICE_SYNC.md).
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from grimoire.sync.documents import check_device_id
 from .errors import AuthenticationFailed, PeerRefused, TransportError
 from .pairing import peer_principal, read_pairing
 from .replay import StepBuffer, confirmation
+from .resolving import ResolveRequest, committing, resolving_out
 from .snapshot import send_snapshot
 from .wire import Channel, is_loopback, no_delay, server_handshake
 
@@ -109,24 +113,46 @@ class PeerServer:
         peer = channel.peer
         handle = self.authority.handle_for(peer_principal(peer), trusted=True)
         buffer = StepBuffer(peer)
+        resolving: ResolveRequest | None = None
         while True:
             header, body = channel.recv()
             kind = header["t"]
             try:
                 if kind == "bye":
                     return
-                if kind in ("snapshot", "commit") and not self._still_paired(peer, channel_key):
+                if kind == "commit":
+                    # Held from the pairing check to the last write; while a resolve of this
+                    # library's own is in flight, the wait for it is bounded (``committing``).
+                    with committing(self.store):
+                        if not self._still_paired(peer, channel_key):
+                            buffer.reset()
+                            channel.refuse("not_paired", "this device is no longer paired with yours")
+                            return
+                        may_hold = None
+                        if resolving is not None and buffer.poisoned is None:
+                            may_hold = resolving.check_step(self.store, buffer.ops)
+                        etags = buffer.commit(self.store, handle, may_hold=may_hold)
+                    channel.send({"t": "committed", "count": len(etags), "digest": confirmation(etags)})
+                    continue
+                if kind in ("snapshot", "resolve") and not self._still_paired(peer, channel_key):
                     buffer.reset()
                     channel.refuse("not_paired", "this device is no longer paired with yours")
                     return
                 if kind == "snapshot":
                     buffer.reset()
+                    buffer.resolving = resolving = None
+                    send_snapshot(channel, self.store, self.authority, peer)
+                elif kind == "resolve":  # a snapshot to resolve one path from, then that resolve's steps
+                    buffer.reset()
+                    buffer.resolving = resolving = None
+                    if resolving_out(self.store):  # its steps could wait on that resolve, and it on them
+                        raise PeerRefused("busy", "this library is resolving a conflict of its own; try again")
+                    request = ResolveRequest.parse(header, self.device, peer)
+                    request.admit(self.store)  # before anything is sent
+                    buffer.resolving, resolving = request.path, request
                     send_snapshot(channel, self.store, self.authority, peer)
                 elif kind == "op":
                     buffer.add(header, body)  # a refusal here is held and answered at "commit"
-                elif kind == "commit":
-                    etags = buffer.commit(self.store, handle)
-                    channel.send({"t": "committed", "count": len(etags), "digest": confirmation(etags)})
                 else:  # a client this confused cannot be kept in step: refuse and end the session
                     channel.refuse("protocol", f"unexpected request {kind!r}")
                     return

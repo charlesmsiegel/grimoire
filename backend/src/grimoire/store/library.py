@@ -1402,11 +1402,14 @@ class Transaction:
         """The keys ``preview`` would return, without loading any bytes."""
         return tuple(put.key for put in self._puts.values())
 
-    def check(self) -> None:
+    def check(self, handle: object | None = None) -> None:
         """Run commit steps 1-6 read-only; raises what ``commit`` would raise before authorizing.
 
-        Consumes no approval and writes nothing. With no puts it checks the library itself
-        (root, V1, ``.txn``, ``.conflicts`` and ``.sync``).
+        With ``handle``, step 7 too: every put is authorized as ``commit(handle)`` with no approval
+        would authorize it (``WriteDenied`` if any is refused), for a caller that must commit
+        something else first only if this commit will be allowed. Those decisions are audited
+        like any other; commit decides again. Consumes no approval and writes nothing. With no
+        puts it checks the library itself (root, V1, ``.txn``, ``.conflicts`` and ``.sync``).
         """
         store = self._store
         store._require_open()
@@ -1416,8 +1419,13 @@ class Transaction:
             puts = tuple(self._puts.values())
             self._check_replaces(puts)
             if any(put.kind != "state" or put.address is not None for put in puts) or not puts:
-                self._require_writable_records(None, check_handle=False)
-            _Commit(store, puts, None, {}).preflight()
+                self._require_writable_records(handle, check_handle=handle is not None)
+            commit = _Commit(store, puts, handle, {})
+            commit.preflight()
+            if handle is not None and not any(put.ledger for put in puts):
+                authority = store._authority
+                with authority.consequential_scope() if authority is not None else contextlib.nullcontext():
+                    commit._authorize()
 
     def _require_writable_records(self, handle: object, *, check_handle: bool = True) -> None:
         store = self._store
