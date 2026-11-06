@@ -326,7 +326,11 @@ class StImporter:
         for post, sid in zip(scan.chat.posts, scan.chat.speaker_ids):
             speaker = Speaker(post.speaker.role, actors.get(sid), post.speaker.label)
             posts.append(dataclasses.replace(post, speaker=speaker, source={**post.source, "speaker": sid}))
-        first = len(render({"origin": {**origin, "pages": 10**9}, "header": scan.chat.header}))
+        try:
+            first = len(render({"origin": {**origin, "pages": 10**9}, "header": scan.chat.header}))
+        except InvalidEnvelope as error:  # past the store's document limit, or nested past what it writes
+            raise ImportRefused(f"the export's header cannot be stored on a transcript page: {error}",
+                                "header_too_large") from None
         if first > HEADER_BUDGET:
             raise ImportRefused(f"the export's header and speaker table take more than {HEADER_BUDGET} bytes",
                                 "header_too_large")

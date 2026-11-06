@@ -528,11 +528,16 @@ class ImportPlan:
         absent nor exactly as this run would write it, none is written (``transcript_exists``)."""
         marker = scene.extras[MARKER]
         posts = []
-        for number, (row, text) in enumerate(zip(marker["posts"], scene.texts or ()), start=1):
-            role = "system" if row["synthetic"] else "user" if row["role"] == "user" else "assistant"
-            source = {"v1_index": row["index"], "v1_post_id": row["post_id"], "content_sha256": row["content_sha256"]}
-            posts.append(Post(f"p{number:06d}", Speaker(role, None, row["speaker"]),
-                              (Variant(text, None, {"field": "content"}),), 0, source=source))
+        try:
+            for number, (row, text) in enumerate(zip(marker["posts"], scene.texts or ()), start=1):
+                role = "system" if row["synthetic"] else "user" if row["role"] == "user" else "assistant"
+                source = {"v1_index": row["index"], "v1_post_id": row["post_id"],
+                          "content_sha256": row["content_sha256"]}
+                posts.append(Post(f"p{number:06d}", Speaker(role, None, row["speaker"]),
+                                  (Variant(text, None, {"field": "content"}),), 0, source=source))
+        except TranscriptError as error:  # a post no page can record exactly (a speaker label too long, say)
+            self._unresolve(scene.legacy_id, "transcript_unrepresentable", f"{scene.ref}: {error}")
+            return
         if not posts:
             return
         origin = {"format": V1_SCENE_FORMAT, "legacy_id": scene.legacy_id, "sha256": marker["sha256"]}

@@ -19,7 +19,8 @@ from grimoire.store.layout import address_parts, classify
 from grimoire.sync import syncable
 from grimoire.sync.model import CAMPAIGN_LOCAL, IMMUTABLE_KINDS, SYNCED_KINDS
 from grimoire.transcripts import (
-    TRANSCRIPT_SCHEMA, Post, Speaker, TranscriptPage, Variant, page_from_payload, page_to_payload,
+    TRANSCRIPT_SCHEMA, Post, Speaker, TranscriptError, TranscriptPage, Variant, page_from_payload,
+    page_to_payload,
 )
 
 from chat_fixtures import MARA, chat_library, seed_sources
@@ -147,6 +148,17 @@ def test_a_payload_that_repeats_its_identity_is_refused(store, chat):
     with pytest.raises(ValueError) as caught:
         page_from_payload(ref, stored.record.schema, stored.record.payload)
     assert caught.value.reason == "identity_in_payload"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("role", [{}, [], ["user"], 1, None])
+def test_a_speaker_role_that_is_not_text_is_refused_not_raised(chat, role):
+    ref = TranscriptRef(chat.campaign_id, chat.chat_id, 1)
+    payload = thaw(page(chat, 1, "Hi.").payload)
+    payload["posts"][0]["speaker"]["role"] = role
+    with pytest.raises(TranscriptError):  # a ValueError a reader contains, never a TypeError
+        page_from_payload(ref, TRANSCRIPT_SCHEMA, payload)
+    with pytest.raises(TranscriptError):
+        Speaker(role)
 
 
 def test_reading_a_missing_page_is_not_found(store, chat):

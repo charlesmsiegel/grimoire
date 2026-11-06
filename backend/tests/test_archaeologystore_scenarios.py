@@ -302,6 +302,15 @@ def test_page_one_budgets_for_its_header_and_a_huge_header_is_refused(store):
     assert caught.value.reason == "header_too_large"
 
 
+def test_a_header_that_renders_past_the_store_limit_is_refused_not_raised(store):
+    # two bytes a number on the export's line, about ten once rendered with indentation
+    dense = dict(HEADER, chat_metadata={"marks": [0] * (1024 * 1024)})
+    rows = [dense, {"name": "Mara", "is_user": False, "mes": "Hi."}]
+    with pytest.raises(ImportRefused) as caught:
+        importer(store).plan(export(rows))
+    assert caught.value.reason == "header_too_large"
+
+
 def test_a_transcript_missing_its_last_page_is_not_a_complete_import(store):
     rows = [HEADER] + [{"name": "Mara", "is_user": False, "mes": f"line {i}"} for i in range(1500)]
     plan = importer(store).plan(export(rows))
@@ -536,3 +545,16 @@ def test_a_v1_post_past_the_store_limit_leaves_the_scene_without_a_transcript(en
     assert "too_large" in {row["reason"] for row in review["unresolved"]}
     assert not [path for path in review["writes"] if "/transcripts/" in path]
 
+
+
+def test_a_v1_speaker_label_past_the_limit_leaves_the_scene_without_a_transcript(env):
+    scene = env.v1 / CAMPAIGN / "scenes" / f"{SID}.md"
+    text = scene.read_text(encoding="utf-8")
+    at = text.index("**Winifred:**")
+    long = ("**Mara (" + "m" * 1200 + '):** <!-- grimoire-response {"post_id": "00000000000000000000000000000010"} -->\n'
+            "A bell rings.\n\n")
+    scene.write_text(text[:at] + long + text[at:], encoding="utf-8")
+    review = env.plan(manifest=env.rescan()).review()  # reported, not raised
+    assert "transcript_unrepresentable" in {row["reason"] for row in review["unresolved"]}
+    assert not [path for path in review["writes"] if "/transcripts/" in path]
+    assert [path for path in review["writes"] if path.endswith(f"/chats/{V1_CHAT.chat_id}.json")]  # the chat still imports

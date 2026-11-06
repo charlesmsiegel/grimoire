@@ -88,7 +88,7 @@ class Speaker:
     label: str | None = None
 
     def __post_init__(self) -> None:
-        if self.role not in ROLES:
+        if type(self.role) is not str or self.role not in ROLES:
             raise TranscriptError(f"speaker role must be one of {sorted(ROLES)}: {self.role!r}")
         if self.actor is not None and not isinstance(self.actor, InstanceRef):
             raise TranscriptError("a speaker's actor must be an InstanceRef")
