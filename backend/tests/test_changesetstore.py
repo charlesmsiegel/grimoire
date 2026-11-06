@@ -443,3 +443,35 @@ def test_approving_again_replaces_the_earlier_approvals(store):
         lib.apply(review, first)  # withdrawn: no longer authorizes anything
     lib.apply(review, second)
     assert review.state == "applied" and authority.pending_approvals() == ()
+
+
+class PersistsThenFails:
+    """A durable authority whose ledger fails after its commit point: the approval is persisted,
+    yet registering it raises and leaves the instance unusable."""
+
+    def __init__(self, inner: Authorizer) -> None:
+        self.inner, self.usable = inner, True
+
+    def register_approval(self, approval) -> None:
+        self.inner.register_approval(approval)  # what recovery will find on disk
+        self.usable = False
+        raise OSError("settle failed")
+
+    def pending_approvals(self):
+        return self.inner.pending_approvals()
+
+    def revoke_approval(self, approval_id: str) -> None:
+        raise AssertionError("an unusable authority is never asked to revoke")
+
+
+def test_a_registration_with_an_uncertain_outcome_is_resolved_before_reject_succeeds(store):
+    inner = worker_authority()
+    lib = library(store, inner.handle_for(WORKER))
+    review = lib.review(move_the_guild(lib))
+    with pytest.raises(OSError):
+        lib.approve(review, PersistsThenFails(inner), approved_by=OWNER, new_id=ids())
+    with pytest.raises(AuthorityUnavailable):
+        lib.reject(review)
+    assert len(inner.pending_approvals()) == 1
+    lib.reject(review, inner)  # the reopened authority holds it: withdrawn there
+    assert review.state == "rejected" and inner.pending_approvals() == ()

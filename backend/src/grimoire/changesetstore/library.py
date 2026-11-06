@@ -289,9 +289,12 @@ class ChangeSetLibrary:
         try:
             for item in needed:
                 approval = _approval(new_id(), principal, item, approved_by)
-                authority.register_approval(approval)  # type: ignore[attr-defined]
-                review._approvals.append((authority, approval.approval_id))  # tracked as soon as it exists
+                # tracked before it is registered: a registration that raises may still have been
+                # persisted (a failure after the ledger's commit point), so its withdrawal must be
+                # resolved through the authority, never assumed
+                review._approvals.append((authority, approval.approval_id))
                 made.append(approval.approval_id)
+                authority.register_approval(approval)  # type: ignore[attr-defined]
         except BaseException:
             for approval_id in made:
                 try:
