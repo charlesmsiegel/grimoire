@@ -3,7 +3,7 @@
 Six NPCs share one chat with a lorebook. The duke, the antagonist, is bound but absent: his card has
 a secret section and he alone holds a private report. A world source holds a bestiary lorebook that
 no chat binds. The lorebook format (``test.lorebook/0``) is owned by these tests: 031 defines no
-lorebook schema, and its reader here stands in for the one 037 will register.
+lorebook schema, and this reader, unlike 037's card readers, lets an entry be the director's.
 """
 
 from __future__ import annotations

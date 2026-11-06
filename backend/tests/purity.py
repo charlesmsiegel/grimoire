@@ -105,7 +105,9 @@ PURE_PACKAGES = (
     # World-optional chats (107): values, codec and navigation; the store-backed service is an adapter.
     PurePackage("grimoire.chats", ("grimoire.chats", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Character, scenario and lorebook cards (037): parse decoded documents, map to records; the importer is an adapter.
-    PurePackage("grimoire.cards", ("grimoire.cards", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # Its lore readers build 031's ``LoreEntry`` values, and 031 imports nothing of 037's: one direction.
+    PurePackage("grimoire.cards", ("grimoire.cards", "grimoire.core", "grimoire.context"),
+                never_import=("grimoire.core.inference",)),
     # Typed relationship graph (017): values, codec, derived index and actor claims; the service is an adapter.
     PurePackage("grimoire.graph", ("grimoire.graph", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Party membership and scene casts (033): pure state over 017 relations; the service is an adapter.

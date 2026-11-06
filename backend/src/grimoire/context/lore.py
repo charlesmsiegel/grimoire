@@ -16,7 +16,7 @@ from grimoire.core.identity import SourceRef
 from grimoire.core.index import Definition
 from grimoire.core.snapshot import EffectiveSnapshot
 
-from .model import MAX_ENTRIES, ContextError, EntryReader, LoreEntry, Origin, SourceProblem
+from .model import MAX_ENTRIES, ContextError, EntryReader, LoreEntry, Origin, SkippedEntry, SourceProblem
 from .pack import Candidate
 from .trigger import SceneWords
 
@@ -45,8 +45,9 @@ def _plain(value: object) -> object:
 
 
 def _entries(reader: EntryReader, payload: Mapping[str, object]
-             ) -> tuple[tuple[LoreEntry, ...], tuple[str, str] | None]:
-    """The reader's entries, or none and ``(code, detail)`` when the source must contribute nothing.
+             ) -> tuple[tuple[LoreEntry, ...], tuple[SkippedEntry, ...], tuple[str, str] | None]:
+    """The reader's entries and the ones it skipped, or none and ``(code, detail)`` when the source must
+    contribute nothing. A skipped entry counts toward ``MAX_ENTRIES`` and shares the entries' ids.
 
     The reader gets a fresh plain copy of the payload (dicts and lists, never the store's read-only
     proxies), so it cannot change the loaded view it came from. A payload the reader cannot interpret
@@ -59,21 +60,34 @@ def _entries(reader: EntryReader, payload: Mapping[str, object]
     try:
         copied = _plain(payload)
     except RecursionError:
-        return (), ("unreadable_entries", "too_deep")
+        return (), (), ("unreadable_entries", "too_deep")
     except (TypeError, copy.Error):  # a leaf that cannot be copied is not record data
-        return (), ("unreadable_entries", "uncopyable")
+        return (), (), ("unreadable_entries", "uncopyable")
     try:
-        entries = tuple(itertools.islice(reader(copied), MAX_ENTRIES + 1))
+        found = tuple(itertools.islice(reader(copied), MAX_ENTRIES + 1))
     except (ValueError, TypeError, LookupError, AttributeError) as error:
         detail = getattr(error, "reason", None)
-        return (), ("unreadable_entries", detail if type(detail) is str else type(error).__name__)
-    if not all(isinstance(entry, LoreEntry) for entry in entries):
-        return (), ("unreadable_entries", "not_lore_entry")
-    if len(entries) > MAX_ENTRIES:
-        return (), ("too_many_entries", f">{MAX_ENTRIES}")
-    if len({entry.entry_id for entry in entries}) != len(entries):
-        return (), ("unreadable_entries", "duplicate_entry")
-    return entries, None
+        return (), (), ("unreadable_entries", detail if type(detail) is str else type(error).__name__)
+    if not all(isinstance(entry, (LoreEntry, SkippedEntry)) for entry in found):
+        return (), (), ("unreadable_entries", "not_lore_entry")
+    if len(found) > MAX_ENTRIES:
+        return (), (), ("too_many_entries", f">{MAX_ENTRIES}")
+    if len({entry.entry_id for entry in found}) != len(found):
+        return (), (), ("unreadable_entries", "duplicate_entry")
+    return (tuple(entry for entry in found if isinstance(entry, LoreEntry)),
+            tuple(entry for entry in found if isinstance(entry, SkippedEntry)), None)
+
+
+def _secondary_holds(scene: SceneWords, entry: LoreEntry) -> bool:
+    """Whether a key hit survives the entry's secondary keys (``LoreEntry.secondary_logic``).
+
+    Only a hit is narrowed, so the hit count that ranks the entry stays its primary keys' alone."""
+    wanted = tuple(dict.fromkeys(entry.secondary_sequences))  # keys that normalize alike count once
+    if not wanted:
+        return True
+    found = scene.count(wanted)
+    return {"and_any": found > 0, "and_all": found == len(wanted), "not_any": found == 0,
+            "not_all": found < len(wanted)}[entry.secondary_logic]
 
 
 def lore_problems(snapshot: EffectiveSnapshot) -> list[SourceProblem]:
@@ -119,12 +133,14 @@ def lore(snapshot: EffectiveSnapshot, scene: SceneWords, readers: Mapping[str, E
         if reader is None:
             problems.append(SourceProblem("no_entry_reader", pinned, schema if isinstance(schema, str) else None))
             continue
-        entries, refused = _entries(reader, payload)
+        entries, skipped, refused = _entries(reader, payload)
         if refused is not None:
             problems.append(SourceProblem(refused[0], pinned, refused[1]))
             continue
+        problems += [SourceProblem("skipped_entry", pinned, f"{entry.entry_id}:{entry.reason}")
+                     for entry in skipped if entry.audience in audiences]  # another audience's skip is withheld
         scene.prime(sequence for entry in entries if entry.audience in audiences and not entry.constant
-                    for sequence in entry.key_sequences)  # one batch per source: a pass per key length
+                    for sequence in (*entry.key_sequences, *entry.secondary_sequences))  # a pass per key length
         quiet = 0
         for entry in entries:
             if entry.audience not in audiences:
@@ -133,7 +149,7 @@ def lore(snapshot: EffectiveSnapshot, scene: SceneWords, readers: Mapping[str, E
                 rank: tuple[object, ...] = (0, 0, entry.order, str(pinned), entry.entry_id)
             else:
                 hits = scene.count(entry.key_sequences)
-                if not hits:
+                if not hits or not _secondary_holds(scene, entry):
                     quiet += 1
                     continue
                 rank = (1, -hits, entry.order, str(pinned), entry.entry_id)

@@ -202,6 +202,8 @@ def lorebook_payload(book: Lorebook, *, extras: Mapping[str, object] | None = No
         if not entry.enabled:
             found["enabled"] = False
         _put(found, "secondary_keys", list(entry.secondary_keys))
+        if entry.secondary_keys_lost:
+            found["secondary_keys_lost"] = True
         _put(found, "settings", entry.settings)
         _put(found, "extensions", entry.extensions)
         _put(found, "extras", entry.extras)
@@ -246,6 +248,21 @@ def scenario_payload(card: ScenarioCard, *, lorebook: SourceRef | None = None) -
     _put(payload, "extensions", card.extensions)
     _put(payload, "extras", card.extras)
     return payload
+
+
+def scenario_lorebook(schema: object, payload: Mapping[str, object]) -> SourceRef | None:
+    """The pinned lorebook a stored scenario record names (``scenario_payload``'s ``lorebook``), if any.
+
+    ``None`` for a record of another schema or a scenario without a lorebook. A ``grimoire.scenario/1``
+    record whose ``lorebook`` is not a pinned lorebook ref (a hand edit) raises ``ValueError``: selecting
+    some other revision, or none, would silently change what the scenario's scenes know.
+    """
+    if schema != SCENARIO_SCHEMA or "lorebook" not in payload:
+        return None
+    ref = SourceRef.parse(payload["lorebook"])
+    if ref.kind != "lorebook" or not ref.pinned:
+        raise ValueError(f"a scenario's lorebook must be a pinned lorebook ref, not {ref}")
+    return ref
 
 
 @dataclass(frozen=True)

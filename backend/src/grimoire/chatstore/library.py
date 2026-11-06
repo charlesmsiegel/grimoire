@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 
 from grimoire.adjudicationstore import adjudication_actor_ids
+from grimoire.cards import scenario_lorebook
 from grimoire.chats import (
     ACTOR_ROLES, CAMPAIGN_CONTINUITY, CHAT_SCHEMA, NOT_WITNESSED, ROLE_KINDS, SCOPE_SCHEMA, ChatCodecError,
     ChatRecord, Launch, NavigationIndex, NewBinding, PlayScope, ScopeEntry, WorldBinding, chat_from_payload,
@@ -548,9 +549,18 @@ class ChatLibrary:
                                  etag)
 
     def detach_source(self, chat: ChatRef, ref: SourceRef, role: str, *, expected: str) -> ChatChange:
-        """Tombstone a binding; works for a broken reference (the repair path). Actors stay."""
+        """Tombstone a binding; works for a broken reference (the repair path). Actors stay.
+
+        A lorebook a bound scenario implies (037; its snapshot selects it, unbound) is detached by
+        recording it as bound and detached at once: the tombstone is the chat's opt-out, which
+        ``chat_snapshot`` honours through scenario updates until the lorebook is attached again."""
         record, base = self._current(chat, expected)
-        return self._chat_change(chat, record.detach(ref, role, self._clock()), base, expected)
+        at = self._clock()
+        if role == "lorebook" and not any(b.key == (role, ref.entity_key) for b in record.active_bindings(role)):
+            implied = self._implied_lorebook(record, ref)
+            if implied is not None:
+                record = record.attach(NewBinding(implied, role, implied.revision), at)  # type: ignore[arg-type]
+        return self._chat_change(chat, record.detach(ref, role, at), base, expected)
 
     def set_persona(self, chat: ChatRef, ref: SourceRef | None, *, expected: str,
                     actor: InstanceRef | None = None) -> ChatChange:
@@ -620,6 +630,21 @@ class ChatLibrary:
         if isinstance(found, str):
             raise InvalidBinding(f"{ref} cannot be bound: {found}", found)
         return found.ref.revision, found.etag  # type: ignore[return-value]
+
+    def _implied_lorebook(self, record: ChatRecord, ref: SourceRef) -> SourceRef | None:
+        """The lorebook of ``ref``'s entity that one of the chat's bound scenarios names, as it names it
+        (``grimoire.effective`` selects it with the scenario), or ``None``."""
+        for binding in record.active_bindings("scenario"):
+            found = self.store.check_definition(binding.ref)
+            if isinstance(found, str):
+                continue
+            try:
+                own = scenario_lorebook(found.envelope.extra.get("schema"), found.envelope.payload)
+            except ValueError:
+                continue
+            if own is not None and own.entity_key == ref.entity_key:
+                return own
+        return None
 
     def _prepare(self, campaign: str, ref: SourceRef, role: str, reuse: InstanceRef | None,
                  taken: set[str] | _LazyTaken) -> tuple[NewBinding, RecordEnvelope | None, str | None]:

@@ -3,6 +3,8 @@
 > **V2 scope correction:** Treat CC V2/V3 as an interchange adapter, not native storage. Reuse the V0.2.1 mapping skill for original provenance and source image references, and import into composable V2 entities/portrayals. See the [V2 ordered roadmap](../README.md) for hard prerequisites and delivery wave; older references to existing V1 systems are porting targets, not the V2 starting baseline.
 
 
+**Status:** first slice implemented ([CARDS](../../CARDS.md)): approved world-less import of a Character Card V3 (embedded or separate lorebook, portrait), a V3 lorebook or a scenario document. Imported lore reaches play: 031 reads card lorebooks as `common` lore (any NPC in the scene may know a triggered entry, SillyTavern style), and a bound scenario's embedded lorebook is selected with the scenario, following its selected revision ([CARDS](../../CARDS.md#lore-in-play-031)). PNG/CHARX, V1/V2 cards and the lore settings 031 does not read are later work.
+
 **Outcome:** Directly import standalone character, scenario and lorebook cards into V2 sources **without creating a world**, and later attach them to an existing chat or authored setting while retaining their original provenance.
 
 ## Scope

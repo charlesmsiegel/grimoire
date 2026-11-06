@@ -96,6 +96,9 @@ class LoreEntry:
     extras: Mapping[str, object] = field(default_factory=_empty)
     #: the entry's place in the book's ``entries`` array (from 0); preview paths use it
     index: int = 0
+    #: a secondary key could not be read and was dropped (a loss was reported): ``secondary_keys``
+    #: is then narrower than the author wrote, so 031 skips the entry when it is selective
+    secondary_keys_lost: bool = False
 
 
 @dataclass(frozen=True)
