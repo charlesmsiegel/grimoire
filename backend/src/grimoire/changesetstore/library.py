@@ -285,10 +285,14 @@ class ChangeSetLibrary:
         self._withdraw(review, authority)  # approving again replaces the earlier set: never two usable sets
         principal = self.handle.principal  # type: ignore[attr-defined]
         needed = [item for item in review.files if item.path in review.needs_approval]
+        pending = {approval.approval_id for approval in authority.pending_approvals()}  # type: ignore[attr-defined]
         made: list[str] = []
         try:
             for item in needed:
                 approval = _approval(new_id(), principal, item, approved_by)
+                if approval.approval_id in pending or approval.approval_id in made:
+                    # another approval's id: never taken over, so a rollback cannot withdraw it
+                    raise ChangeSetError("invalid_field", f"approval id {approval.approval_id!r} is in use")
                 # tracked before it is registered: a registration that raises may still have been
                 # persisted (a failure after the ledger's commit point), so its withdrawal must be
                 # resolved through the authority, never assumed
@@ -316,6 +320,13 @@ class ChangeSetLibrary:
         changeset, store = review.changeset, self.store
         with store.lock:  # the state is checked and moved under the lock, so reject cannot race it
             self._require_open(review)
+            if review.conflicts or review.blocked:
+                # its envelopes were built from what the conflict changed: never applied, even if the
+                # conflict has since gone away; review the change set again
+                self._fail(review)
+                if review.conflicts:
+                    raise ChangeSetConflict(review.conflicts)
+                raise ChangeSetError("not_applicable", "the store refuses this review; review it again")
             try:
                 stored = self._source(changeset.source)
             except ChangeSetError as error:

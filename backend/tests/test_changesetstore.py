@@ -475,3 +475,34 @@ def test_a_registration_with_an_uncertain_outcome_is_resolved_before_reject_succ
     assert len(inner.pending_approvals()) == 1
     lib.reject(review, inner)  # the reopened authority holds it: withdrawn there
     assert review.state == "rejected" and inner.pending_approvals() == ()
+
+
+def test_a_review_that_saw_a_conflict_is_never_applied_even_once_it_clears(store):
+    lib = library(store)
+    path = record_path(GUILD.at("r1"))
+    original = (store.root / path).read_bytes()
+    changeset = move_the_guild(lib)
+    hand_write(store.root, path, original.replace(b"human:author", b"human:other"))
+    review = lib.review(changeset)  # reports base_edited; its envelope inherits the edited owner
+    assert [c.reason for c in review.conflicts] == ["base_edited"]
+    hand_write(store.root, path, original)
+    before = snapshot(store.root)
+    with pytest.raises(ChangeSetConflict):
+        lib.apply(review)
+    assert snapshot(store.root) == before
+    fresh = lib.review(changeset)
+    lib.apply(fresh)
+    assert json.loads((store.root / record_path(GUILD.at("r2"))).read_text("utf-8"))["owner"] == "human:author"
+
+
+def test_an_approval_id_already_in_use_is_never_taken_over(store):
+    authority = worker_authority()
+    lib = library(store, authority.handle_for(WORKER))
+    first = lib.review(move_the_guild(lib))
+    held = lib.approve(first, authority, approved_by=OWNER, new_id=ids())
+    second = lib.review(move_the_guild(lib, "cs-2"))
+    with pytest.raises(ChangeSetError) as caught:
+        lib.approve(second, authority, approved_by=OWNER, new_id=ids())  # a second generator from ap-1
+    assert caught.value.reason == "invalid_field"
+    assert {a.approval_id for a in authority.pending_approvals()} == set(held.values())
+    lib.apply(first, held)

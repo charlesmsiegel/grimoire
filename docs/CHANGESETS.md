@@ -77,7 +77,7 @@ There is no app or UI, and no model or worker is involved. The scenarios are syn
 
 The store's own compare-and-swap words (`changed`, `absent`, with a file path as `target`) appear only when no record conflict explains them.
 
-**The manifest is shared.** Every record of a world has its head in one manifest, so a change to another entity's head, or to the title, changes the manifest bytes a human approved. That is not a conflict of any record, but the review is out of date: `apply` refuses with only `manifest_changed`, and `ChangeSetConflict.needs_redraft` is False. Review the same change set again and apply the fresh review. Any other conflict needs a new draft. Nothing is merged silently.
+**The manifest is shared.** Every record of a world has its head in one manifest, so a change to another entity's head, or to the title, changes the manifest bytes a human approved. That is not a conflict of any record, but the review is out of date: `apply` refuses with only `manifest_changed`, and `ChangeSetConflict.needs_redraft` is False. Review the same change set again and apply the fresh review. Any other conflict needs a new draft. Nothing is merged silently. A review that reported a conflict or a block is never applied, even if the conflict has gone away by then: its files were built from what the conflict changed, so review again.
 
 ### Applying
 
