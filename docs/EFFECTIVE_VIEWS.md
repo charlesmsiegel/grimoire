@@ -175,7 +175,7 @@ Ancestry is walked separately from field composition (`portrayal.derivation_chai
 |---|---|
 | A compiled or persisted projection, and the virtual-vs-compiled comparison (milestone 3) | 022 later milestones |
 | Follow-head derivation, multiple bases, `overrides` | 022 later, 046 |
-| Reviewed rebase and inheritance UI | 042, 046 |
+| Reviewed rebase (first slice: one instance onto a newer revision of its entity, [REBASE](REBASE.md)) and inheritance UI | 042, 046 |
 | Relationship remapping between portrayals | 017 |
 | Voice item composition, and cross-source art inheritance and placement merging | 027, 038 |
 | Snapshot-aware control and damage, and prompt assembly | 035, 027, 031 |

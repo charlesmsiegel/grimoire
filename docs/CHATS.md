@@ -189,7 +189,7 @@ Actor instances are written as `grimoire.record/1` with:
 | Control assignment for the persona's actor | 003/035 |
 | Effective portrayal composition (first slice implemented: [EFFECTIVE_VIEWS](EFFECTIVE_VIEWS.md), including `chat_snapshot`) and derivation-aware navigation filters | 022/065 |
 | Card import | 037 |
-| World promotion and release pinning | 042/056 |
+| World promotion and release pinning | 042 (first slice: a chat's actors proposed as a new world, and reviewed re-pinning of an actor and its bindings, [REBASE](REBASE.md)); release pins 056 |
 | Cross-device merge of chat metadata | [028](roadmap/sprints/app-managed-device-sync.md) |
 | A persisted navigation cache and the richer library browser | 065 |
 

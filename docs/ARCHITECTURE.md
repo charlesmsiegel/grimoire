@@ -39,6 +39,10 @@ One actor's bounded context from its own card, its own knowledge and the trigger
 
 Two libraries exchange records directly, three-way against the last state both agreed on, and every overlapping edit becomes a named conflict kept on both devices rather than a silent overwrite. Families whose merge rules are not written yet are held back and reported. See [SYNC.md](SYNC.md).
 
+### Reviewed rebase and chat canon (first slice implemented: `grimoire.rebase`, `grimoire.rebasestore`)
+
+A campaign actor moves to a newer revision of its own entity only through a field-by-field review of the common ancestor, the new revision and the campaign's overrides, re-pinning the actor and its chat bindings while every history record stays as it is. A chat's picked actors can be proposed as a new reusable world of derived portrayals with provenance. See [REBASE.md](REBASE.md).
+
 ### Library location and V1 isolation (implemented: `grimoire.library`)
 
 `resolve_library()` returns the V2 library and what selected it (`default` or `env`); `python -m grimoire.library` prints the same. Resolution is **read-only**: it creates nothing and never opens or lists a V1 directory.

@@ -23,7 +23,7 @@ from grimoire.security import (
 from grimoire.security.policy import CONSEQUENTIAL
 from grimoire.store import LibraryStore
 from grimoire.store.errors import AuthorityUnavailable, LedgerInvalid, TakenIdsUnlisted
-from grimoire.store.layout import CAMPAIGNS, HOLDINGS, INSTANCES, PLACEMENTS, SUFFIX, name_key
+from grimoire.store.layout import CAMPAIGNS, HOLDINGS, INSTANCES, PLACEMENTS, SOURCES, SUFFIX, name_key
 from grimoire.store.ledger import MAX_BATCH_ENTRIES, Head, Ledger, entry_cost
 from grimoire.store.library import LedgerWriter
 
@@ -338,6 +338,19 @@ def security_campaign_ids(store: LibraryStore, *, spent: Collection[tuple[str, s
     """
     return frozenset(parts[1] for parts in _granted_addresses(store, spent)
                      if len(parts) >= 2 and parts[0] == CAMPAIGNS)
+
+
+def security_source_ids(store: LibraryStore, *, spent: Collection[tuple[str, str, str]] = ()) -> frozenset[str]:
+    """Every source id (``<namespace>:<id>``, folded) a grant or approval in the security ledger names:
+    ``sources/<namespace>/<id>`` or anything under it, except the approvals in ``spent``.
+
+    As for campaigns, a grant outlives a hand-deleted source folder and would cover a new source given
+    that id (042 proposes new world sources), so a new source must find its id outside this set. A grant
+    on ``sources`` or a whole namespace names no source and covers every new one by design. Scanned raw
+    and failing closed, as ``security_instance_ids``.
+    """
+    return frozenset(f"{parts[1]}:{parts[2]}" for parts in _granted_addresses(store, spent)
+                     if len(parts) >= 3 and parts[0] == SOURCES)
 
 
 def security_instance_ids(store: LibraryStore, campaign_id: str, *,
