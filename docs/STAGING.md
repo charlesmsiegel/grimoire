@@ -41,9 +41,10 @@ The stage is **scene-local staging and director truth**:
 - `actors` are the individuals who act (the runner builds them from 033's cast). Every other placed individual is a thing.
 - Every actor is placed or absent, never both (`placed_twice`) and never neither (`actor_unplaced`). Only an actor can be absent (`not_cast`).
 - A holder is itself placed, or is an absent actor (`orphan_holder`): **what someone carries leaves with them** and stays in their custody. No individual holds itself at any depth (`custody_cycle`).
+- An actor goes off stage only by leaving, never as someone's load: a placed actor's custody chain ends in an area (`carried_off_stage`). So `stage.on_stage()` and every question agree on who is present.
 - Areas and ways named exist (`unknown_area`, `unknown_way`); an absence's `via` leads off stage (`leads_to_area`); no fact is later than `as_of` (`future_fact`); ids are unique (`duplicate_id`); everything is in the stage's campaign (`campaign_mismatch`).
 - Bounds: 1–64 areas, 128 ways, 256 actors (033's cast limit), 1024 placements (`too_large`).
-- Collections are sorted, so equal facts give equal stages.
+- Collections are sorted, so equal facts give equal stages. A stage pickles, copies and converts with `dataclasses.asdict` by its facts alone.
 
 `stage.at(sequence)` is the same facts at a later sequence: the caller's word that nothing physical changed in between. `stage.on_stage()` lists the actors physically present.
 
@@ -56,34 +57,36 @@ The stage is **scene-local staging and director truth**:
 | Change | Needs | Result | Refusals |
 |---|---|---|---|
 | `move(who, way)` | the way touches who's area, its other side is an area, it is open | who in the other area | `way_elsewhere`, `leads_off_stage`, `way_closed`, `way_locked`, `unknown_way` |
-| `leave(who, way)` | the way touches who's area, leads off stage, is open | who absent via the way, with everything they carry | `leads_to_area`, … |
+| `leave(who, way)` | the way touches who's area, leads off stage, is open; who carries no actor | who absent via the way, with everything they carry | `leads_to_area`, `holds_actor`, … |
 | `enter(who, way)` | who is absent; the way leads off stage and is open | who in the way's area, with what they carry | `already_on_stage`, `leads_to_area`, … |
 | `take(who, thing)` | the reach rule below | held by who | the reach reasons, `already_held` |
-| `drop(who, thing)` | who holds it directly | it rests in who's area | `not_holding` |
-| `give(who, thing, to)` | who holds it directly; `to` is an actor standing in the same area | held by `to` | `not_holding`, `is_self`, `custody_cycle`, `not_actor`, `recipient_off_stage`, `recipient_restrained`, `recipient_elsewhere` |
+| `drop(who, thing)` | who holds it directly; it is not an actor | it rests in who's area | `not_holding`, `is_actor` |
+| `give(who, thing, to)` | who holds it directly; it is not an actor and holds none; `to` is an actor standing in the same area | held by `to` | `not_holding`, `is_actor`, `holds_actor`, `is_self`, `custody_cycle`, `not_actor`, `recipient_off_stage`, `recipient_restrained`, `recipient_elsewhere` |
 | `open_way`, `close_way(who, way)` | who's area is a side; closed→open, open→closed | the state | `way_elsewhere`, `already_open`, `way_locked`, `already_closed` |
-| `lock_way`, `unlock_way(who, way)` | who at a side; the way has a key; the key is in who's custody at any depth (a key in a satchel works); closed→locked, locked→closed | the state | `no_lock`, `still_open`, `already_locked`, `not_locked`, `no_key` |
+| `lock_way`, `unlock_way(who, way)` | who at a side; the way has a key; the key is in who's own custody at any depth (a key in their satchel works; one in the pocket of someone they carry does not: `stage.own_custody`); closed→locked, locked→closed | the state | `no_lock`, `still_open`, `already_locked`, `not_locked`, `no_key` |
 
 An **absent actor stands outside**: it may open, close, lock or unlock a way that leads off stage, so it can come back in through a door shut behind it. Any other way is `not_on_stage`.
+
+**People are not handed around.** An actor carried by another (set there by a correction) is set down or moved only by a correction: `drop` and `give` refuse `is_actor`, and nothing that holds an actor at any depth can be taken, given or carried off stage (`holds_actor`).
 
 **Corrections and staging assumptions** have no physical check (a director or player correction) and still keep every invariant:
 
 | Correction | Effect |
 |---|---|
 | `place(who, area=… or holder=…, basis="established")` | Puts `who` there. An absent actor placed this way is on stage again. `basis="assumed"` records plausible, unstated staging; a later `place` with the default basis establishes it. |
-| `remove(who)` | An actor becomes absent with no way, keeping what it carries (`already_absent`). A thing stops being tracked with everything inside or on it (`untracked`), unless an actor is inside it (`holds_actor`). |
+| `remove(who)` | An actor becomes absent with no way, keeping what it carries (`already_absent`; `holds_actor` while it carries an actor). A thing stops being tracked with everything inside or on it (`untracked`), unless an actor is inside it (`holds_actor`). |
 | `set_way(way, state, basis="established")` | Sets the state, whoever holds the key, and a keyless way may be set `locked`. |
 
 Recasting (a new actor, area or way) is a new `Stage`, checked again against 033's cast.
 
 ## Questions (`senses.py`)
 
-Each returns `Answer(ok, reason, assumed)` unless noted. `assumed` lists the facts the answer rests on that are only assumed, as `placement:<ref>` and `way:<way_id>`.
+Each returns `Answer(ok, reason, assumed)` unless noted. `assumed` lists the facts the answer rests on that are only assumed, as `placement:<ref>` and `way:<way_id>`, for a no as much as a yes (a letter assumed to be in the hall is `elsewhere` on a guess).
 
 | Question | Yes | No |
 |---|---|---|
 | `where(stage, x)` → `Whereabouts(status, area, holder, absent, assumed)` | `in_area`, `held` (with the area its custody ends in) | `off_stage` (an absent actor, or carried by one: `absent` names who), `untracked` |
-| `reach(stage, who, thing)`: the rule `take` applies | `within_reach`, `in_hand` (already in who's custody) | `not_actor`, `not_on_stage`, `restrained`, `is_self`, `is_actor` (people are not taken), `untracked`, `thing_off_stage`, `held_by_other` (in another actor's hand or pack, at any depth), `elsewhere` |
+| `reach(stage, who, thing)`: the rule `take` applies | `within_reach`, `in_hand` (already in who's custody) | `not_actor`, `not_on_stage`, `restrained`, `is_self`, `is_actor` (people are not taken), `untracked`, `holds_actor` (someone is inside it), `thing_off_stage`, `held_by_other` (in another actor's hand or pack, at any depth), `elsewhere` |
 | `sees(stage, viewer, target)` | `same_area`, `through_open_way`, `is_self` | `not_actor`, `viewer_off_stage`, `viewer_contained` (an actor inside a thing sees nothing), `untracked`, `target_off_stage`, `contained` (inside or on a thing), `door_shut`, `elsewhere` |
 | `hears(stage, listener, speaker, channel)` | `same_area`, `through_open_way` (speech), `no_barrier` (telepathy), `is_self` | `unknown_channel`, `not_actor`, `speaker_off_stage`, `listener_off_stage`, `door_shut`, `out_of_earshot` (a whisper through an open way), `elsewhere` |
 
@@ -96,7 +99,7 @@ Room scale, no distances:
 
 ### Delivering a message within earshot (032)
 
-- `presence(stage, message, *, telepaths=(), allow_assumed=False)` builds a 032 `Presence` of the sender and everyone who physically receives the sender **on the message's own channel**. It takes the message, never a bare channel, so a presence built for speech cannot carry a whisper through an open door. Use it only for that message.
+- `presence(stage, message, *, telepaths=(), allow_assumed=False)` builds a 032 `Presence` of the sender and everyone who physically receives the sender **on the message's own channel**. It takes the message, never a bare channel, so a presence built for speech cannot carry a whisper through an open door. Use it only for that message and that stage: it carries no sequence, so one kept after the stage changes is stale. 032's `transmit` over it reports room speech heard through an open way as `told`; only `deliver` makes it `overheard`, so prefer `deliver`.
 - `deliver(stage, message, *, sequence, provenance, turn_id=None, telepaths=(), allow_assumed=False)` is `presence` then 032's `transmit`, at the stage's own sequence (`stale_stage` otherwise). It adds one rule: **speech to the room is addressed only to the speaker's own area.** A listener who hears it through an open way gets an `overheard` report (unaddressed, no `sent_at`), so it never enters the speaker's `sent`; the speaker did not knowingly tell them. A named addressee in the next area is still told. 032's refusals raise `TransmissionError` as before.
 - So a whisper to someone behind a shut door is `addressee_absent`, and nothing is written.
 
@@ -106,15 +109,16 @@ Room scale, no distances:
 - `perceptions(stage, event, *, area, percept, provenance, channel="witnessed", allow_assumed=False)` gives one confirmed 012 `Perception` per witness, sorted by holder, at the event's moment.
   - The stage must be the scene at the event's own sequence (`stale_stage`; `stage.at` moves a stage forward when nothing changed), and in the event's scene when the event names one (`scene_mismatch`).
   - `percept` is sensory register only (012's rule), nonempty, at most 20 000 characters.
-  - Ids are `<event_id>.w-<16 hex>`, the first 16 hex digits of SHA-256 over the holder's reference text: neutral, deterministic, and silent about other witnesses. An event id is at most `EVENT_ID_MAX` (104) characters (`too_long`), so the id plus 020's `.json` fits a store slot.
+  - Ids are `perception_id(event_id, holder, *, channel, area, percept)`: `<event_id>.w-<16 hex>`, the first 16 hex digits of SHA-256 over the holder's reference text, the channel, the area and the percept. Neutral, deterministic (a repeated call is 012's and 020's `duplicate_id`) and silent about other witnesses; a second channel or percept for the same event (seen, then heard) is a second perception. An event id is at most `EVENT_ID_MAX` (104) characters (`too_long`), so the id plus 020's `.json` fits a store slot.
+- Witnesses are judged on the stage after any change the event itself made: an actor behind a door the event shut, or one the event took off stage, gets nothing of it. Perceiving the change itself is later work.
 - 020 stores the result unchanged.
 
-**Evidence is never invented.** `presence`, `deliver` and `perceptions` decide who receives evidence, which 020 cannot take back. When an answer they use rests on an assumed fact (an assumed position, or an assumed open door), they refuse with `rests_on_assumption` unless the caller passes `allow_assumed=True`: ask, or establish the position, first.
+**Evidence is never invented.** `presence`, `deliver` and `perceptions` decide who receives evidence, which 020 cannot take back. When an answer they use rests on an assumed fact (an assumed position, or an assumed open door), they refuse with `rests_on_assumption` unless the caller passes `allow_assumed=True`: ask, or establish the position, first. That includes an actor left out on a guess (assumed inside a wardrobe, or behind a door assumed shut). For a whisper or telepathy only the addressees' staging counts, since no one else receives it; for speech every listener's does.
 
 ### Checks against 033 and 034
 
-- `check_cast(stage, cast)` refuses a stage whose actors are not exactly 033's staged `SceneCast` of the same campaign (`cast_mismatch`). **Physical presence** is the cast less the stage's absences (`stage.on_stage()`). 033's `presence` and `may_speak` still answer cast membership. A runner (035) takes 032 presences from the stage, and treats an absent cast member as not speaking in the room.
-- `custody_divergence(stage, holders)` takes each 034 unique item's canonical holder and returns the items whose staging disagrees. A holder the stage does not track (a place, a chest elsewhere) means the item rests in an area. A runner checks this when it builds a stage and before it turns a stage custody change into a 034 move. The stage knows nothing of 034's equipped slots: 034's own move refuses `still_equipped`.
+- `check_cast(stage, cast)` refuses a stage whose actors are not exactly 033's staged `SceneCast` of the same campaign and scene (`cast_mismatch`). The cast's sequence is not compared: a cast is staged once and the stage moves on. **Physical presence** is the cast less the stage's absences (`stage.on_stage()`). 033's `presence` and `may_speak` still answer cast membership. A runner (035) takes 032 presences from the stage, and treats an absent cast member as not speaking in the room.
+- `custody_divergence(stage, holders, *, here=())` takes each 034 unique item's canonical holder and returns the items whose staging disagrees. `here` names the canonical holders that stand for this scene's ground (the place it is set in): an item resting in an area agrees with those. Any other holder the stage does not track (a chest in another town, someone not in the scene) disagrees with an item on this stage. A runner checks this when it builds a stage and before it turns a stage custody change into a 034 move. The stage knows nothing of 034's equipped slots: 034's own move refuses `still_equipped`.
 
 ## Errors
 
@@ -131,5 +135,6 @@ Room scale, no distances:
 | Positions and spots within an area, distance bands, posture, cover, barriers within an area, hiding and stealth | 041 later |
 | Putting things into containers, lockable containers, keys that are not items | 041 later |
 | Audibility levels (a shout through a door), languages, range | 041 later, 032 milestone 2 |
+| Perceiving a change itself: those a shutting door hides seeing it shut, an actor's own exit, carrying an actor | 041 later |
 | Spatial and sensory affordance queries for maps, audio and combat (milestone 3) | 041 milestone 3 |
 | Geography between places | [Location Topology](roadmap/sprints/location-topology.md) |

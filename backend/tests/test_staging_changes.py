@@ -8,7 +8,7 @@ import pytest
 
 from grimoire.core import InstanceRef
 from grimoire.staging import (
-    Absence, Change, Placement, Stage, StagingRefused, apply, close_way, drop, enter, give, leave, lock_way,
+    Absence, Change, actor_refusal, reach_refusal, Placement, Stage, StagingRefused, apply, close_way, drop, enter, give, leave, lock_way,
     move, open_way, place, remove, set_way, take, unlock_way,
 )
 
@@ -114,6 +114,37 @@ def test_a_restrained_actor_cannot_act_or_receive():
     s = do(stage(), place(TOMA, holder=MARA))
     refused("restrained", s, take(TOMA, LETTER))
     refused("recipient_restrained", s, give(MARA, KEY, TOMA))
+
+
+def test_people_are_never_carried_off_or_handed_around():
+    # Emma, set in Toma's arms by a correction, never leaves with him
+    s = do(stage(door="open"), place(EMMA, holder=TOMA))
+    s = do(s, move(TOMA, STUDY_DOOR))
+    refused("holds_actor", s, leave(TOMA, FRONT_DOOR))
+    refused("holds_actor", s, remove(TOMA))
+    refused("carried_off_stage", s, place(TOMA, holder=ODD))
+    refused("is_actor", s, drop(TOMA, EMMA))
+    refused("is_actor", s, give(TOMA, EMMA, EMMA))
+    # nor shut in a box that someone then picks up or hands over
+    box = ref("box", "item")
+    boxed = do(stage(), place(box, area="study"), place(EMMA, holder=box))
+    refused("holds_actor", boxed, take(TOMA, box))
+    held = do(stage(), place(box, holder=MARA), place(EMMA, holder=box))
+    refused("holds_actor", held, give(MARA, box, TOMA))
+    assert do(held, drop(MARA, box)).placement(box).area == "study"
+
+
+def test_a_key_in_someone_elses_pocket_does_not_unlock():
+    s = do(stage(), place(EMMA, holder=TOMA), place(KEY, holder=EMMA))
+    refused("no_key", s, unlock_way(TOMA, STUDY_DOOR))
+
+
+def test_refusal_helpers_refuse_malformed_input():
+    for call in (lambda: actor_refusal(stage(), []), lambda: reach_refusal(stage(), MARA, []),
+                 lambda: actor_refusal("stage", MARA)):
+        with pytest.raises(StagingRefused) as caught:
+            call()
+        assert caught.value.reason == "invalid_field"
 
 
 def test_corrections_need_no_physical_check_but_keep_the_invariants():

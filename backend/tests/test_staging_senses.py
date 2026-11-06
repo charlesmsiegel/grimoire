@@ -55,6 +55,9 @@ def test_reach():
     assert reach(s, LETTER, KEY) == Answer(False, "not_actor")
     assert reach(do(stage(), place(LETTER, area="study", basis="assumed")), TOMA, LETTER) == Answer(
         True, "within_reach", (f"placement:{LETTER}",))
+    # a no that rests on a guess says so too
+    assert reach(do(stage(), place(LETTER, area="hall", basis="assumed")), TOMA, LETTER) == Answer(
+        False, "elsewhere", (f"placement:{LETTER}",))
 
 
 def test_sight_follows_the_door():
@@ -114,6 +117,11 @@ def test_presence_is_built_from_the_message_channel():
     refused("rests_on_assumption", presence, assumed, speech)
     assert EMMA in presence(assumed, speech, allow_assumed=True).present
     refused("invalid_field", presence, o, speech, telepaths="mara")
+    # a whisper reaches only its addressee, so a bystander's assumed staging does not matter
+    guessed = do(stage(), place(EMMA, area="hall", basis="assumed"))
+    to_toma = Message("m-5", MARA, "whisper", "now", (TOMA,))
+    assert TOMA in presence(guessed, to_toma).present
+    refused("rests_on_assumption", presence, guessed, Message("m-6", MARA, "speech", "now"))
     refused("not_on_stage", presence, o, Message("m-4", ODD, "speech", "hi"))
 
 
@@ -138,9 +146,14 @@ def test_perceptions_go_to_witnesses_only():
     s = stage()
     got = perceptions(s, event(1), area="study", percept="smoke curls from the desk", provenance=P)
     assert [p.holder for p in got] == [MARA, TOMA]
-    assert got[0] == Perception(C, perception_id("e-1", MARA), MARA, "e-1", "witnessed",
+    pid = perception_id("e-1", MARA, channel="witnessed", area="study", percept="smoke curls from the desk")
+    assert got[0] == Perception(C, pid, MARA, "e-1", "witnessed",
                                 "smoke curls from the desk", Moment(1, SCENE), P, confirmed=True)
-    assert perception_id("e-1", MARA).startswith("e-1.w-") and len(perception_id("e-1", MARA)) == len("e-1.w-") + 16
+    assert pid.startswith("e-1.w-") and len(pid) == len("e-1.w-") + 16
+    # another channel or percept for the same event is another, storable perception
+    heard = perceptions(s, event(1), area="study", percept="a crackle", provenance=P, channel="heard")
+    assert not {p.evidence_id for p in got} & {p.evidence_id for p in heard}
+    assert perceptions(s, event(1), area="study", percept="smoke curls from the desk", provenance=P) == got
     assert witnesses(opened(), "study") == (EMMA, MARA, TOMA)
     assert witnesses(stage(), "hall") == (EMMA,)
     refused("stale_stage", perceptions, stage(as_of=2), event(1), area="study", percept="x", provenance=P)
@@ -154,13 +167,27 @@ def test_perceptions_go_to_witnesses_only():
     assumed = do(stage(as_of=0), place(TOMA, area="study", basis="assumed"))
     refused("rests_on_assumption", perceptions, assumed, event(1), area="study", percept="x", provenance=P)
     assert len(perceptions(assumed, event(1), area="study", percept="x", provenance=P, allow_assumed=True)) == 2
+    # an actor assumed to be inside a wardrobe is left out only on a guess: refused too
+    wardrobe = ref("wardrobe", "item")
+    boxed = do(do(stage(as_of=0), place(wardrobe, area="study")), place(TOMA, holder=wardrobe, basis="assumed"))
+    refused("rests_on_assumption", perceptions, boxed, event(boxed.as_of), area="study", percept="x", provenance=P)
+    assert [p.holder for p in perceptions(boxed, event(boxed.as_of), area="study", percept="x", provenance=P,
+                                          allow_assumed=True)] == [MARA]
+    assert sees(boxed, MARA, TOMA) == Answer(False, "contained", (f"placement:{TOMA}",))
+    assert sees(boxed, TOMA, MARA) == Answer(False, "viewer_contained", (f"placement:{TOMA}",))
 
 
 def test_custody_divergence_against_034_holders():
     s = stage()
     chest = ref("chest", "item")
-    assert custody_divergence(s, {KEY: MARA, LETTER: chest, COIN: SATCHEL}) == ()
+    study = ref("the-study-room", "location")
+    assert custody_divergence(s, {KEY: MARA, LETTER: study, COIN: SATCHEL}, here=(study,)) == ()
     assert custody_divergence(s, {KEY: TOMA, LETTER: MARA, ref("cup", "item"): MARA}) == (KEY, LETTER)
+    # a holder that is not this scene's ground disagrees with an item on the desk
+    assert custody_divergence(s, {LETTER: chest}) == (LETTER,)
+    assert custody_divergence(s, {LETTER: ref("bob", "character")}, here=(study,)) == (LETTER,)
+    assert custody_divergence(s, {KEY: study}, here=(study,)) == (KEY,)  # the stage has it in Mara's hand
+    refused("invalid_field", custody_divergence, s, {}, here="x")
 
 
 def test_check_cast_against_033():
@@ -170,3 +197,5 @@ def test_check_cast_against_033():
     check_cast(stage(), cast)
     short = stage_cast(state, SCENE, (MARA, TOMA, EMMA), instances=(MARA, TOMA, EMMA))
     refused("cast_mismatch", check_cast, stage(), short)
+    other_scene = stage_cast(state, "another-scene", (MARA, TOMA, EMMA, ODD), instances=(MARA, TOMA, EMMA, ODD))
+    refused("cast_mismatch", check_cast, stage(), other_scene)

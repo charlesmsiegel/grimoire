@@ -115,10 +115,10 @@ def reach(stage: Stage, who: InstanceRef, thing: InstanceRef) -> Answer:
     ``untracked``, ``thing_off_stage``, ``held_by_other``, ``elsewhere``). The same rule ``take`` applies."""
     stage = _stage(stage)
     who, thing = _ref(stage, who), _ref(stage, thing)
+    assumed = (_assumed_chain(stage, who), _assumed_chain(stage, thing))
     reason = reach_refusal(stage, who, thing)
     if reason is not None:
-        return _answer(False, reason)
-    assumed = (_assumed_chain(stage, who), _assumed_chain(stage, thing))
+        return _answer(False, reason, *assumed)
     if who in stage.root(thing).holders:
         return _answer(True, "in_hand", *assumed)
     return _answer(True, "within_reach", *assumed)
@@ -152,21 +152,21 @@ def sees(stage: Stage, viewer: InstanceRef, target: InstanceRef) -> Answer:
     viewer, target = _ref(stage, viewer), _ref(stage, target)
     if not stage.is_actor(viewer):
         return _answer(False, "not_actor")
+    assumed = (_assumed_chain(stage, viewer), _assumed_chain(stage, target))
     area, inside = _sensing(stage, viewer)
     if area is None:
-        return _answer(False, "viewer_off_stage")
+        return _answer(False, "viewer_off_stage", *assumed)
     if target == viewer:
-        return _answer(True, "is_self")
+        return _answer(True, "is_self", *assumed)
     if inside:
-        return _answer(False, "viewer_contained")
+        return _answer(False, "viewer_contained", *assumed)
     if stage.placement(target) is None and stage.absence(target) is None:
         return _answer(False, "untracked")
     target_area, target_inside = _sensing(stage, target)
     if target_area is None:
-        return _answer(False, "target_off_stage")
+        return _answer(False, "target_off_stage", *assumed)
     if target_inside:
-        return _answer(False, "contained")
-    assumed = (_assumed_chain(stage, viewer), _assumed_chain(stage, target))
+        return _answer(False, "contained", *assumed)
     if target_area == area:
         return _answer(True, "same_area", *assumed)
     joined, ways = _between(stage, area, target_area)
@@ -188,15 +188,15 @@ def hears(stage: Stage, listener: InstanceRef, speaker: InstanceRef, channel: st
         return _answer(False, "unknown_channel")
     if not stage.is_actor(listener) or not stage.is_actor(speaker):
         return _answer(False, "not_actor")
+    assumed = (_assumed_chain(stage, listener), _assumed_chain(stage, speaker))
     speaker_area, _ = _sensing(stage, speaker)
     if speaker_area is None:
-        return _answer(False, "speaker_off_stage")
+        return _answer(False, "speaker_off_stage", *assumed)
     listener_area, _ = _sensing(stage, listener)
     if listener_area is None:
-        return _answer(False, "listener_off_stage")
+        return _answer(False, "listener_off_stage", *assumed)
     if listener == speaker:
-        return _answer(True, "is_self")
-    assumed = (_assumed_chain(stage, listener), _assumed_chain(stage, speaker))
+        return _answer(True, "is_self", *assumed)
     if channel == "telepathy":
         return _answer(True, "no_barrier", *assumed)
     if listener_area == speaker_area:
@@ -252,11 +252,16 @@ def _current(stage: Stage, sequence: object, scene_id: object) -> None:
 def presence(stage: Stage, message: Message, *, telepaths: tuple[InstanceRef, ...] = (),
              allow_assumed: bool = False) -> Presence:
     """A 032 ``Presence`` for ``message``: its sender and everyone who physically receives the sender on
-    the message's own channel. ``transmit`` over it delivers only within earshot: a whisper to an actor
-    behind a shut door is refused (``addressee_absent``), and speech is overheard only where it carries.
+    the message's own channel, on the stage as it stands. ``transmit`` over it reaches only those within
+    earshot: a whisper to an actor behind a shut door is refused (``addressee_absent``), and room speech
+    reaches no one beyond the next open way.
 
     Built from the message, never from a bare channel, so a presence made for speech cannot carry a
-    whisper through an open door. Use it only for this message; ``deliver`` does both steps.
+    whisper through an open door. Use it only for this message and this stage (it carries no sequence, so
+    a presence kept after the stage changes is stale). Prefer ``deliver``: it checks the stage is current
+    and makes room speech heard through an open way ``overheard``, which ``transmit`` alone reports as
+    ``told``. For a whisper or telepathy only the addressees' staging matters, since no one else receives
+    it; for speech every listener's does.
     ``telepaths`` (who may send telepathically; 032's input, later 025's) is kept for those present.
     A presence resting on assumed staging is ``rests_on_assumption`` unless ``allow_assumed``: it decides
     who receives evidence, which is never invented.
@@ -268,8 +273,9 @@ def presence(stage: Stage, message: Message, *, telepaths: tuple[InstanceRef, ..
             or any(type(ref) is not InstanceRef for ref in telepaths):
         fail("invalid_field")
     listeners = _listeners(stage, message.sender, message.channel)
-    _no_guess([answer for _, answer in listeners] + [Answer(True, "", tuple(_assumed_chain(stage, message.sender)))],
-              allow_assumed)
+    relevant = [answer for actor, answer in listeners
+                if message.channel == "speech" or actor in message.addressees]
+    _no_guess(relevant + [Answer(True, "", tuple(_assumed_chain(stage, message.sender)))], allow_assumed)
     present = (message.sender, *(actor for actor, answer in listeners if answer.ok))
     return Presence(stage.campaign_id, stage.scene_id, present,
                     telepaths=tuple(ref for ref in dict.fromkeys(telepaths) if ref in present))
@@ -309,9 +315,12 @@ def _witness_answers(stage: Stage, area: str) -> list[tuple[InstanceRef, Answer]
     answers = []
     for actor in stage.actors:
         actor_area, inside = _sensing(stage, actor)
-        if actor_area is None or inside:
+        if actor_area is None:
             continue
         assumed = _assumed_chain(stage, actor)
+        if inside:
+            answers.append((actor, _answer(False, "viewer_contained", assumed)))
+            continue
         if actor_area == area:
             answers.append((actor, _answer(True, "same_area", assumed)))
             continue
@@ -327,9 +336,14 @@ def witnesses(stage: Stage, area: str) -> tuple[InstanceRef, ...]:
     return tuple(actor for actor, answer in _witness_answers(stage, area) if answer.ok)
 
 
-def perception_id(event_id: str, holder: InstanceRef) -> str:
-    """The id of ``holder``'s perception of an event: neutral, and silent about other witnesses."""
-    return f"{event_id}.w-{hashlib.sha256(str(holder).encode('utf-8')).hexdigest()[:16]}"
+def perception_id(event_id: str, holder: InstanceRef, *, channel: str, area: str, percept: str) -> str:
+    """The id of ``holder``'s perception of an event on ``channel``, seen in ``area`` as ``percept``.
+
+    Neutral and silent about other witnesses. The same call always gives the same id (a repeat is 012's
+    and 020's ``duplicate_id``); another channel, area or percept for the same event gives another id.
+    """
+    key = "\x00".join((str(holder), channel, area, percept)).encode("utf-8")
+    return f"{event_id}.w-{hashlib.sha256(key).hexdigest()[:16]}"
 
 
 def perceptions(stage: Stage, event: Event, *, area: str, percept: str, provenance: str,
@@ -339,8 +353,10 @@ def perceptions(stage: Stage, event: Event, *, area: str, percept: str, provenan
     ``percept`` is sensory register only (012's rule). The stage must be the scene at the event's own
     sequence (``stale_stage`` otherwise; ``Stage.at`` moves a stage forward when nothing changed), and in
     the event's scene when the event names one (``scene_mismatch``). Witnesses resting on assumed staging
-    are ``rests_on_assumption`` unless ``allow_assumed``. 020 stores the result unchanged. An actor who had
-    left, or stood behind a shut door, gets nothing, and so holds no evidence of the event.
+    (an assumed placement of any actor on stage, or an assumed way between them and ``area``) are
+    ``rests_on_assumption`` unless ``allow_assumed``. 020 stores the result unchanged. An actor who had
+    left, stood behind a shut door or was inside a thing gets nothing, and so holds no evidence of the
+    event. Witnesses are judged on the stage at the event's sequence, after any change the event made.
     """
     stage = _stage(stage)
     if type(event) is not Event:
@@ -361,22 +377,30 @@ def perceptions(stage: Stage, event: Event, *, area: str, percept: str, provenan
     answers = _witness_answers(stage, area)
     _no_guess([answer for _, answer in answers], allow_assumed)
     return tuple(
-        Perception(stage.campaign_id, perception_id(event.event_id, holder), holder, event.event_id,
+        Perception(stage.campaign_id,
+                   perception_id(event.event_id, holder, channel=channel, area=area, percept=percept),
+                   holder, event.event_id,
                    channel, percept, event.moment, provenance, confirmed=True)
         for holder, answer in answers if answer.ok)
 
 
-def custody_divergence(stage: Stage, holders: Mapping[InstanceRef, InstanceRef]) -> tuple[InstanceRef, ...]:
+def custody_divergence(stage: Stage, holders: Mapping[InstanceRef, InstanceRef], *,
+                       here: tuple[InstanceRef, ...] = ()) -> tuple[InstanceRef, ...]:
     """The unique items whose staging disagrees with their canonical holder, sorted by reference text.
 
     ``holders`` maps each 034 unique item to its possession record's holder (034 is the authority for
-    that). An item the stage tracks disagrees when its stage holder is not that holder, where a canonical
-    holder the stage does not track (a place, a chest elsewhere) means resting in an area. The stage is a
-    scene projection: a runner checks this when it builds a stage and before it proposes a 034 move.
+    that). ``here`` lists the canonical holders that stand for this scene's own ground (the place the scene
+    is set in), which the stage shows as resting in an area. An item the stage tracks agrees when its stage
+    holder is that holder, or when it rests in an area and its holder is in ``here``. Any other canonical
+    holder the stage does not track (a chest in another town, someone not in the scene) disagrees with an
+    item on this stage. The stage is a scene projection: a runner checks this when it builds a stage and
+    before it proposes a 034 move.
     """
     stage = _stage(stage)
-    if not isinstance(holders, Mapping):
+    if not isinstance(holders, Mapping) or isinstance(here, (str, bytes)) \
+            or not isinstance(here, (tuple, list, frozenset, set)):
         fail("invalid_field")
+    ground = {_ref(stage, ref) for ref in here}
     diverging = []
     for item, holder in holders.items():
         _ref(stage, item)
@@ -384,14 +408,18 @@ def custody_divergence(stage: Stage, holders: Mapping[InstanceRef, InstanceRef])
         placement = stage.placement(item)
         if placement is None:
             continue
-        tracked = stage.placement(holder) is not None or stage.absence(holder) is not None
-        if placement.holder != (holder if tracked else None):
+        if placement.holder is not None:
+            agrees = placement.holder == holder
+        else:
+            agrees = holder in ground
+        if not agrees:
             diverging.append(item)
     return tuple(sorted(diverging, key=str))
 
 
 def check_cast(stage: Stage, cast: SceneCast) -> None:
-    """Refuse a stage whose actors are not exactly 033's staged cast of the same campaign (``cast_mismatch``).
+    """Refuse a stage whose actors are not exactly 033's staged cast of the same campaign and scene
+    (``cast_mismatch``). The cast's own sequence is not compared: a cast is staged once, the stage moves on.
 
     033's cast is who is present in the scene; the stage's absences are who of them has physically left.
     So the actors physically present are ``stage.on_stage()``, and a 032 presence comes from the stage.
@@ -399,7 +427,8 @@ def check_cast(stage: Stage, cast: SceneCast) -> None:
     stage = _stage(stage)
     if type(cast) is not SceneCast:
         fail("invalid_field")
-    if cast.campaign_id != stage.campaign_id or set(cast.present) != set(stage.actors):
+    if cast.campaign_id != stage.campaign_id or cast.scene_id != stage.scene_id \
+            or set(cast.present) != set(stage.actors):
         fail("cast_mismatch")
 
 

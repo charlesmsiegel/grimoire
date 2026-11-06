@@ -16,7 +16,7 @@ has held.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import MappingProxyType
 
 from ..core import InstanceRef
@@ -241,16 +241,8 @@ class Stage:
     actors: tuple[InstanceRef, ...] = ()
     placements: tuple[Placement, ...] = ()
     absences: tuple[Absence, ...] = ()
-    _areas: Mapping[str, Area] = field(init=False, repr=False, compare=False, hash=False, default=None)
-    _ways: Mapping[str, Way] = field(init=False, repr=False, compare=False, hash=False, default=None)
-    _placed: Mapping[InstanceRef, Placement] = field(init=False, repr=False, compare=False, hash=False,
-                                                     default=None)
-    _absent: Mapping[InstanceRef, Absence] = field(init=False, repr=False, compare=False, hash=False,
-                                                   default=None)
-    _actor_set: frozenset[InstanceRef] = field(init=False, repr=False, compare=False, hash=False,
-                                               default=frozenset())
-    _held: Mapping[InstanceRef, tuple[InstanceRef, ...]] = field(init=False, repr=False, compare=False,
-                                                                 hash=False, default=None)
+    # private indices (_areas, _ways, _placed, _absent, _actor_set, _held) are set by _index and are not
+    # dataclass fields, so replace(), asdict() and copies see only the facts above
 
     def __post_init__(self) -> None:
         def shapes() -> None:
@@ -322,6 +314,8 @@ class Stage:
                     fail("custody_cycle")
                 seen.add(current.holder)
                 current = placed[current.holder]
+            if start in actors and current.holder is not None:
+                fail("carried_off_stage")  # an actor goes off stage only by leaving, never as someone's load
         object.__setattr__(self, "areas", tuple(sorted(self.areas, key=lambda a: a.area_id)))
         object.__setattr__(self, "ways", tuple(sorted(self.ways, key=lambda w: w.way_id)))
         object.__setattr__(self, "actors", tuple(sorted(self.actors, key=str)))
@@ -334,6 +328,10 @@ class Stage:
         object.__setattr__(self, "_actor_set", actors)
         object.__setattr__(self, "_held", MappingProxyType(
             {holder: tuple(sorted(items, key=str)) for holder, items in held.items()}))
+
+    def __reduce__(self):
+        return (Stage, (self.campaign_id, self.scene_id, self.as_of, self.areas, self.ways, self.actors,
+                        self.placements, self.absences))
 
     def at(self, sequence: int) -> Stage:
         """The same facts at a later ``sequence``: the caller's word that nothing physical changed between.
@@ -380,6 +378,19 @@ class Stage:
         stack = list(reversed(self.held_by(holder)))
         while stack:
             item = stack.pop()
+            found.append(item)
+            stack.extend(reversed(self.held_by(item)))
+        return tuple(found)
+
+    def own_custody(self, holder: InstanceRef) -> tuple[InstanceRef, ...]:
+        """What ``holder`` holds at any depth without reaching into another actor's hands, in a stable
+        order: what it can use itself (a key in its bag, not one in the pocket of someone it carries)."""
+        found: list[InstanceRef] = []
+        stack = list(reversed(self.held_by(holder)))
+        while stack:
+            item = stack.pop()
+            if item in self._actor_set:
+                continue
             found.append(item)
             stack.extend(reversed(self.held_by(item)))
         return tuple(found)

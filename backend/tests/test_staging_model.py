@@ -61,6 +61,8 @@ def test_lookups_roots_and_custody():
                                       Placement(SATCHEL, holder=COIN))}),
     ("placed_twice", {"placements": (Placement(MARA, area="study"), Placement(MARA, area="hall"),
                                      Placement(TOMA, area="study"), Placement(EMMA, area="hall"))}),
+    ("carried_off_stage", {"placements": (Placement(MARA, area="study"), Placement(TOMA, area="study"),
+                                          Placement(EMMA, holder=ODD))}),
     ("unknown_area", {"ways": (Way(STUDY_DOOR, ("study", "cellar")),)}),
     ("duplicate_id", {"ways": (Way("w", ("study", "hall")), Way("w", ("hall", None)))}),
 ])
@@ -87,6 +89,14 @@ def test_errors_pickle_with_their_reason_only():
         Placement(InstanceRef("other", "item", "x"), area="study")))
     again = pickle.loads(pickle.dumps(error))
     assert type(again) is StagingRefused and again.reason == "campaign_mismatch" and again.args == ("campaign_mismatch",)
+
+
+def test_a_stage_pickles_copies_and_converts():
+    import copy
+    s = stage()
+    assert pickle.loads(pickle.dumps(s)) == s and copy.deepcopy(s) == s
+    assert pickle.loads(pickle.dumps(s)).placement(COIN).holder == SATCHEL
+    assert dataclasses.asdict(s)["scene_id"] == SCENE
 
 
 def test_replace_is_checked_too():

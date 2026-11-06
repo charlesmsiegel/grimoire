@@ -151,8 +151,18 @@ def set_way(way: str, state: str, *, basis: str = "established") -> Change:
 # -- applying ---------------------------------------------------------------------------------------
 
 
+def _known(stage: object, *refs: object) -> None:
+    if type(stage) is not Stage or any(type(ref) is not InstanceRef for ref in refs):
+        fail("invalid_field")
+
+
+def _carries_actor(stage: Stage, holder: InstanceRef) -> bool:
+    return any(stage.is_actor(item) for item in stage.custody(holder))
+
+
 def actor_refusal(stage: Stage, who: InstanceRef) -> str | None:
     """Why ``who`` cannot act physically now (``not_actor``, ``not_on_stage``, ``restrained``), or ``None``."""
+    _known(stage, who)
     if not stage.is_actor(who):
         return "not_actor"
     if stage.absence(who) is not None:
@@ -194,6 +204,7 @@ def reach_refusal(stage: Stage, who: InstanceRef, thing: InstanceRef) -> str | N
     a tracked, on-stage non-actor in ``who``'s area, held by no other actor at any depth (a thing inside a
     container on the table is reachable; one in another actor's hand or pack is not).
     """
+    _known(stage, who, thing)
     reason = actor_refusal(stage, who)
     if reason is not None:
         return reason
@@ -203,6 +214,8 @@ def reach_refusal(stage: Stage, who: InstanceRef, thing: InstanceRef) -> str | N
         return "is_actor"
     if stage.placement(thing) is None:
         return "untracked"
+    if _carries_actor(stage, thing):
+        return "holds_actor"  # people are not carried off in a box
     root = stage.root(thing)
     if root.absent is not None:
         return "thing_off_stage"
@@ -256,7 +269,7 @@ def _worked(stage: Stage, way: Way, who: InstanceRef, op: str, sequence: int) ->
         fail("still_open" if way.state == "open" else "already_locked")
     if op == "unlock" and way.state != "locked":
         fail("not_locked")
-    if way.key not in stage.custody(who):
+    if way.key not in stage.own_custody(who):
         fail("no_key")
     return _way_state(way, "locked" if op == "lock" else "closed", sequence)
 
@@ -297,6 +310,8 @@ def apply(stage: Stage, change: Change, *, sequence: int, provenance: str) -> St
             if not way.to_off_stage:
                 fail("leads_to_area")
             _passable(way)
+            if _carries_actor(stage, who):
+                fail("holds_actor")
             return _with(stage, sequence, placements={who: None},
                          absences={who: Absence(who, way.way_id, sequence)})
         return _with(stage, sequence, ways={way.way_id: _worked(stage, way, who, op, sequence)})
@@ -327,6 +342,8 @@ def apply(stage: Stage, change: Change, *, sequence: int, provenance: str) -> St
         placement = stage.placement(thing)
         if placement is None or placement.holder != who:
             fail("not_holding")
+        if stage.is_actor(thing):
+            fail("is_actor")  # a carried actor is set down or handed over only by a correction
         if op == "drop":
             return _with(stage, sequence, placements={thing: Placement(thing, area=area, since=sequence)})
         if change.to == who:
@@ -342,6 +359,8 @@ def apply(stage: Stage, change: Change, *, sequence: int, provenance: str) -> St
             fail("recipient_restrained")
         if recipient.area != area:
             fail("recipient_elsewhere")
+        if _carries_actor(stage, thing):
+            fail("holds_actor")
         return _with(stage, sequence, placements={thing: Placement(thing, holder=change.to, since=sequence)})
 
     if op == "place":
@@ -355,6 +374,8 @@ def apply(stage: Stage, change: Change, *, sequence: int, provenance: str) -> St
         if stage.is_actor(who):
             if stage.absence(who) is not None:
                 fail("already_absent")
+            if _carries_actor(stage, who):
+                fail("holds_actor")
             return _with(stage, sequence, placements={who: None}, absences={who: Absence(who, None, sequence)})
         if stage.placement(who) is None:
             fail("untracked")
