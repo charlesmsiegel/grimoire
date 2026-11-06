@@ -13,7 +13,7 @@ from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TurnRef
 from grimoire.core.inference import CallAttempt, CallId, InferenceStage, TokenUsage
 from grimoire.generation import MAX_HEARD, MAX_LINE_CHARS
 from grimoire.scene import (
-    MAX_CHAT_ID, MAX_TAKES, NARRATOR, TURN_SCHEMA, CallRecord, Post, SceneLine, SceneRefused, Take, TurnRecord,
+    MAX_CHAT_ID, MAX_TAGGED_CHAT_ID, MAX_TAKES, NARRATOR, TURN_SCHEMA, CallRecord, Post, SceneLine, SceneRefused, Take, TurnRecord,
     heard_for, parse_turn_id, render, segments, table_lines, turn_from_payload, turn_id, turn_to_payload,
     usage_totals,
 )
@@ -128,8 +128,11 @@ def test_turn_ids_are_the_chat_and_a_six_digit_number():
         assert parse_turn_id(text) is None
     with pytest.raises(SceneRefused, match="chat_id_too_long"):
         turn_id(ChatRef(C, "x" * (MAX_CHAT_ID + 1)), 1)
-    # 032's message id limit holds with the device tag, so identifying a library never strands a chat
-    assert len(turn_id(ChatRef(C, "x" * MAX_CHAT_ID), 999_999, "0" * 8)) == 104
+    # 032's message id limit (104) holds untagged at 97 characters and tagged at 88
+    assert len(turn_id(ChatRef(C, "x" * MAX_CHAT_ID), 999_999)) == 104
+    assert len(turn_id(ChatRef(C, "x" * MAX_TAGGED_CHAT_ID), 999_999, "0" * 8)) == 104
+    with pytest.raises(SceneRefused, match="chat_id_too_long"):
+        turn_id(ChatRef(C, "x" * (MAX_TAGGED_CHAT_ID + 1)), 1, "0" * 8)
     with pytest.raises(SceneRefused, match="too_many_turns"):
         turn_id(CHAT, 1_000_000)
     for device in ("", "3F2A91C0", "3f2a91c", "-3f2a91c0", 7):
@@ -154,6 +157,17 @@ def test_a_turn_keeps_its_device_and_a_turn_written_without_one_still_reads():
         turn_from_payload(tagged.ref, TURN_SCHEMA, old)
     with pytest.raises(SceneRefused, match="invalid_field"):
         turn_from_payload(untagged.ref, TURN_SCHEMA, {**old, "device": 7})
+
+
+def test_an_untagged_turn_of_a_chat_id_longer_than_the_tagged_cap_still_reads():
+    # turns saved before device tags, under the 97-character cap they were written with
+    long_chat = ChatRef(C, "x" * MAX_CHAT_ID)
+    untagged = TurnRecord(long_chat, 3, "prompt")
+    old = turn_to_payload(untagged)
+    del old["device"]
+    assert turn_from_payload(untagged.ref, TURN_SCHEMA, old) == untagged
+    with pytest.raises(SceneRefused, match="chat_id_too_long"):  # but it takes no tagged turn
+        TurnRecord(long_chat, 4, "prompt", device="3f2a91c0")
 
 
 @pytest.mark.parametrize("build", [

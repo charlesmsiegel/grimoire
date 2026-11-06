@@ -35,9 +35,11 @@ MAX_TAKES = 16
 #: 032's channels that reach only their addressees.
 _PRIVATE = frozenset({"whisper", "telepathy"})
 #: A turn id is ``<chat_id>.<number:06d>`` (``-<device>`` on a library with a device identity), and the post's
-#: message id is the turn id, which 032 caps at 104: 88 + 7 + 9. One cap, tagged or not, so giving a library its
-#: device identity never makes a chat unplayable.
-MAX_CHAT_ID = 88
+#: message id is the turn id, which 032 caps at 104: 97 + 7 untagged, 88 + 7 + 9 tagged. An untagged turn keeps
+#: the cap it was written under, so turns saved before device tags still read; a chat whose id is over 88
+#: characters takes no new turn once its library has a device identity.
+MAX_CHAT_ID = 97
+MAX_TAGGED_CHAT_ID = 88
 MAX_TEXT = 20_000
 MAX_NUMBER = 999_999
 #: Room for 107's principals, which are opaque text.
@@ -85,8 +87,10 @@ def turn_id(chat: ChatRef, number: int, device: str | None = None) -> str:
     """``<chat_id>.<number:06d>``, or ``<chat_id>.<number:06d>-<device>`` for a turn a library with a device
     identity (028) created: campaign-unique, and the id of the turn's post and its message. Two paired devices
     that each play turn n of a chat offline write two turns with two ids, never one id with two contents."""
-    if len(chat.chat_id) > MAX_CHAT_ID:
-        raise _fail("chat_id_too_long", f"a played chat's id is at most {MAX_CHAT_ID} characters")
+    limit = MAX_CHAT_ID if device is None else MAX_TAGGED_CHAT_ID
+    if len(chat.chat_id) > limit:
+        raise _fail("chat_id_too_long", f"a played chat's id is at most {limit} characters"
+                    + ("" if device is None else " on a library with a device identity"))
     if type(number) is not int or not 1 <= number <= MAX_NUMBER:
         raise _fail("too_many_turns", f"a chat has at most {MAX_NUMBER} turns")
     if device is not None and (type(device) is not str or not _DEVICE.fullmatch(device)):
@@ -404,7 +408,8 @@ def usage_totals(attempts: Iterable[CallAttempt]) -> dict[str, int]:
 
 
 __all__ = [
-    "CALL_STATES", "CallRecord", "LINE_STATES", "MAX_CHAT_ID", "MAX_TAKES", "ORIGINS", "POST_KINDS", "Post",
+    "CALL_STATES", "CallRecord", "LINE_STATES", "MAX_CHAT_ID", "MAX_TAGGED_CHAT_ID", "MAX_TAKES", "ORIGINS",
+    "POST_KINDS", "Post",
     "SceneLine", "SceneRefused", "TAKE_STATES", "Take", "TokenUsage", "TurnRecord", "parse_turn_id", "turn_id",
     "usage_totals",
 ]
