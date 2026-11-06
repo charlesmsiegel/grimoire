@@ -40,6 +40,10 @@ For Elderfen variants, **do not** coalesce multiple Mara Vale cards by display n
 
 Do not confuse V0.2.1 **world/campaign import (026)** with **direct SillyTavern-style character/scenario/lorebook import (037, moved to Wave 4)**. The latter is a separate adapter over the same source/store identities and does not wait for a complete V1 world migration; 036 later imports historical ST chat swipes. The source V1 library is never modified. [Chat lifecycle](../CHAT_MODEL.md).
 
+## Imported portrayals speak (Wave 4 audit G1)
+
+`import_v1.imported_voices` builds the play catalog: its adapter `v1_voice_texts` reads each portrayal's `mes_example` and `personality` out of the verbatim card in `extras.v1.text`, and 027's `SnapshotVoices` derives the voice of exactly that revision from them ([GENERATION](../../GENERATION.md#imported-voices), [IMPORT_V1](../../IMPORT_V1.md#known-limits)). The stored revision is unchanged, so a re-run sees no change and an earlier import speaks without re-import. A portrayal with no usable text stays `MissingVoice("no_voice_text")`. `voice_anchor.md`, a world actor's or a campaign's, is still listed (`actor_sidecar`), not carried.
+
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove?
 - Which optional later integrations can stay outside the first slice?

@@ -32,7 +32,7 @@ These caps are **provisional** first-slice values.
 - Nesting is capped at 64 levels.
 - A bad value is located **by index path only** (`extensions[0][1]`). Card keys can carry private names, so error messages never echo them. No error message echoes an offending id, marker or text.
 
-How V1 `mes_example` and `voice_anchor.md` content becomes native examples and anchors is decided by the importers (026 for V1, 037 for Character Card V3), not here. Neither produces a profile yet: 026 lists `voice_anchor.md` as `actor_sidecar` and 037 keeps the card's text in its authored roles.
+How V1 `mes_example` and `voice_anchor.md` content and a Character Card V3's text become native examples and anchors is not decided here. 026 and 037 keep that text in the imported revision (026 keeps the V1 card verbatim in `extras.v1.text`; 037 keeps the card's text in its authored roles), and 027's `derive_voice` builds the profile of exactly that revision from it when a play catalog is built, reading a V1 card through 026's adapter `v1_voice_texts`. A V1 `voice_anchor.md` is not read yet. See [GENERATION](GENERATION.md#imported-voices).
 
 ## Downstream requirement: reusable base character voice across derived portrayals
 
@@ -156,5 +156,5 @@ None of this makes V2 playable.
 - **012 (epistemic policy):** supplies `known` and the `SecretFact` set from actor-only evidence projections.
 - **010 (native storage):** persists profiles and bindings as opaque envelopes without interpreting them.
 - **009 (entity facets):** decides which kinds besides `character` can carry a voice.
-- **026 (V1 import) and 037 (card import):** fill `ImportedVoiceSource` and the native anchors and examples from `voice_anchor.md` and Character Card V3. Not built yet: 027's `npc_brief` refuses an imported NPC (`MissingVoice`) until it is.
+- **026 (V1 import) and 037 (card import):** keep the voice text in the imported revision (a V1 card verbatim, read by 026's `v1_voice_texts`); 027's `derive_voice` turns it into native anchors and examples and fills `ImportedVoiceSource` (format `chara_card_v3` only), so an imported NPC speaks ([GENERATION](GENERATION.md#imported-voices)). Only an imported revision with no usable text at all is still refused (`MissingVoice("no_voice_text")`).
 - **015 (V0.2.1 measurement):** may reuse `voice_overlap` for voice baselines.

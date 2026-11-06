@@ -32,6 +32,37 @@ Failures raise `GenerationError` with a `reason`.
 
 Nothing found is `MissingVoice("no_profile")`. A binding's alternate `portrayal` is refused here (`VoiceMismatch("alternate_portrayal")`): a snapshot actor's portrayal is its selection. Item-level portrayal deltas for voice are later work.
 
+### Imported voices
+
+An imported character has no hand-authored profile, so the catalog for play is built from the snapshot: **`SnapshotVoices(snapshot, authored=None, readers=())`**. For every revision on a selected actor's pinned chain (leaf first, then its bases) with no profile in `authored`, `derive_voice(definition, readers)` builds one from **that revision's own text**. Nothing is stored and nothing is matched by name: the same revision always derives the same profile, and a new revision (a card update's `r2`, a changed V1 card) derives its own. An authored profile for the same revision wins.
+
+Where the text comes from is a `VoiceReader`: a function from a revision's definition to its `VoiceTexts(examples, personality, description, imported, notes)` of plain strings, or `None` when the revision is not its kind. 027 is pure and parses nothing, so it reads only the 037 card shape itself (`card_voice_texts`). A V1 portrayal keeps its card verbatim in `extras.v1.text`, so its reader is the adapter `grimoire.import_v1.v1_voice_texts`, and the play catalog of a V1 import is `grimoire.import_v1.imported_voices(snapshot, authored=None)` (`SnapshotVoices` with that reader). Without it a V1 portrayal derives nothing and stays `no_profile`.
+
+- `catalog` is the 014 `VoiceCatalog` (authored plus derived) that `resolve_snapshot_voice` and `run_turn(..., scene_voices=)` take.
+- `resolve(ref, binding=None)` is `resolve_snapshot_voice` over that catalog. When the actor's leaf, or a revision its chain would inherit from, is an imported revision with no usable text, the bare `no_profile` becomes **`MissingVoice("no_voice_text")`**, naming the revision; `gaps` lists those revisions.
+- `derived` maps each derived revision to its `DerivedVoice(portrayal, profile, notes, texts)`: `notes` are `VoiceNote(field, index, reason)` values, never text.
+
+What is read, by payload shape (any other revision derives nothing):
+
+| Revision | Reader | Examples | Anchors |
+|---|---|---|---|
+| 037 card character (`card.format` `chara_card_v3`) | built in | `card.texts.example-messages` | the `personality` section (or `card.unsectioned.personality`), the description |
+| 026 V1 card portrayal (`extras.v1`) | `import_v1.v1_voice_texts` | the verbatim card's `data.mes_example` | its `data.personality`, the description |
+| 026 V1 persona (`persona_md`), or a V1 card that does not parse | `import_v1.v1_voice_texts` | none | the description |
+
+A card's system prompt, post-history instructions, scenario, greetings and creator notes are never read: they are not how the character sounds, and some are private.
+
+- **Examples** (`example-<n>`, `n` the turn's place in `mes_example`): the text is split on `<START>`; a turn starts at a speaker label and runs to the next one. Only turns labelled `{{char}}`, `<BOT>` or the character's own name are kept. `{{char}}` becomes the name and `{{user}}` becomes `you`.
+- **Labels fail closed.** A line wrongly kept would put someone else's words, maybe a secret, in this voice, so anything that might be a label ends the turn. A label is optional `*`/`_` markup, a macro or one to four words starting with a letter, markup, an optional `(aside)`, then `:` or the full-width `：`, with or without a space after it (`**{{user}}** (quietly)：hi`). A continuation line that opens with any macro but `{{char}}`/`<BOT>` (`{{user}} leans in.`) ends the turn and is dropped, and another speaker's macro label inside a line (`Hi. {{user}}: …`) cuts the turn where it starts. What follows is dropped, never appended. So a line of the character's own that is shaped like a label is dropped too: in `{{char}}: Listen.` / `Remember: the tide waits.` only `Listen.` is kept. Text before the first label is not a turn.
+- **Anchors**, in this order: the personality's sentences packed into anchors of at most 400 characters (`personality-<n>`, `register`); description sentences that are about speech (they name speaking, a voice, words, an accent, swearing and the like: `description-<n>`, `habit`). The rest of a description is biography, which the brief already shows as context. An anchor's aspect comes from the first rule its words match (`avoid`: never, refuses, won't…; `cadence`: sentences, clipped, pauses…; `register`: formal, blunt, wry…; `diction`: words, slang, accent…), else the default.
+- **Caps** are 014's: at most 32 anchors and 32 examples, anchors of 400 and examples of 600 characters. A longer item is cut after its last whole sentence that fits (else at a space, else hard) and noted `truncated`; a blank item is skipped (`blank`), a repeat (`duplicate`) and one past the count cap (`over_cap`).
+- **Speak anyway.** With no example and no anchor, the description's opening sentences (up to 400 characters) are one `register` anchor, `description-0`, noted `description_fallback`. Only a revision with no usable text at all (no example turn of its own, no personality, no description) has no profile: `no_voice_text`.
+- **Derived layers.** A layer with no voice of its own inherits its base's as above, with one exception: when the base's voice was *derived* and a layer between it and the leaf authors or clears `personality`, or replaces or clears the description, that voice describes text the leaf no longer has. The leaf then derives its own from its effective personality and description and the base's examples. A hand-authored base voice is inherited unchanged, and a layer that authors or clears `voice-evidence` still stops the walk.
+- **Export.** For a V3 card (037, or a V1 card whose spec is `chara_card_v3`), `imported` is an `ImportedVoiceSource` holding the exact `mes_example` and the card's extensions (`card_version` is the V1 card's `LegacyId`; `anchor_text` is empty). Extensions 014 cannot freeze are left out (`extensions_not_carried`); the verbatim card still holds them.
+- **Screening is unchanged.** Derived examples carry no `reveals`; 014's marker denylist still omits any anchor or example that states a secret the speaker has not learned.
+
+Not yet: a V1 record's `voice_anchor.md` (the world actor's or a campaign's own) is not read: 026 lists it as `actor_sidecar` ([IMPORT_V1](IMPORT_V1.md#known-limits)). Speaker labels naming another character by more than four words, or the character's own name spelled otherwise, are not recognised.
+
 ## Briefs
 
 A brief is a sealed value: only its builder makes one.
@@ -122,6 +153,7 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 
 - Acceptance A to D and the refusals: `backend/tests/test_generation_runtime.py`.
 - Planning from control: `backend/tests/test_generation_plan.py`. Briefs and screening: `backend/tests/test_generation_brief.py`. Snapshot voices: `backend/tests/test_generation_voice.py`.
+- Imported voices, end to end from 026's and 037's real importers through a brief and a scripted call; anchors-only, nothing usable, caps, fail-closed speaker labels, derived layers that change personality or description, a V1 re-run from a library imported before voices, revision pinning and secret screening: `backend/tests/test_generation_imported_voice.py`.
 - Briefs from 031's packs and the director's lore: `backend/tests/test_generation_context.py`; over the native store in a world-less, a world-based and a scenario-only chat: `backend/tests/test_context_scenarios.py`.
 - Every provider fault, rejection, cancel and supersede point: `explore_generation_faults` ([TESTING](TESTING.md#generation-fault-invariants-grimoiretestinggeneration)).
 - Recording turns as gateable `/3` runs (scenario-only and two-NPC): `backend/tests/test_runtime_record.py`.

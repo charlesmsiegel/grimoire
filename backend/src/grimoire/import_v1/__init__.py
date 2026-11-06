@@ -8,15 +8,18 @@ appearance, scenes to chats and pictures to 018 image objects and placements; ``
 ``preview()`` show it, and ``apply()`` writes it as **one** guarded store transaction together with a
 receipt that maps every V1 file to what it became. A re-run writes only what is missing and never
 overwrites, recreates or duplicates: V2 edits are kept, deletions stay deleted. The V1 library is
-never written, no model is called and nothing is fetched. See docs/IMPORT_V1.md.
+never written, no model is called and nothing is fetched. ``imported_voices`` builds the play voice
+catalog with the V1 portrayals' voices read from their verbatim cards. See docs/IMPORT_V1.md.
 """
 
 from ._map import MARKER, Desired, ImportRefused, Selection, chat_id_of, image_id_of, revision_of
+from .voice import imported_voices, v1_voice_texts
 from ._plan import (
     RECEIPT_SCHEMA, ImportPlan, ImportResult, Receipts, legacy_map, plan_import, read_receipts, receipt_source,
 )
 
 __all__ = [
     "MARKER", "RECEIPT_SCHEMA", "Desired", "ImportPlan", "ImportRefused", "ImportResult", "Receipts", "Selection",
-    "chat_id_of", "image_id_of", "legacy_map", "plan_import", "read_receipts", "receipt_source", "revision_of",
+    "chat_id_of", "image_id_of", "imported_voices", "legacy_map", "plan_import", "read_receipts", "receipt_source",
+    "revision_of", "v1_voice_texts",
 ]
