@@ -36,6 +36,7 @@ from grimoire.import_v1 import imported_voices
 from grimoire.intent import RoutingContext, Utterance, route
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import ControlChange
+from grimoire.party import PartyRefused, SceneCast, stage
 from grimoire.partystore import PartyLibrary
 from grimoire.providers.meter import TurnMeter
 from grimoire.runtime import GenerationRuntime, RunFence
@@ -70,6 +71,8 @@ class Scene:
     still here after a restart). ``interrupted`` is true when that turn holds a ``running`` take: a run
     that never finished, whose usage is unknown; the next generation supersedes it. ``problems`` are
     ``(code, detail)`` pairs from the snapshot, the turn files, the party and the voices, never hidden.
+    ``staged`` is 033's ``SceneCast`` the cast was staged as (``cast`` is its ``present``), or ``None`` when
+    no cast could be staged (membership unreadable): then nobody is present and play waits.
     """
 
     chat: ChatRef
@@ -79,6 +82,7 @@ class Scene:
     persona: InstanceRef | None
     names: Mapping[InstanceRef, str]
     problems: tuple[tuple[str, str], ...]
+    staged: SceneCast | None = None
 
     @property
     def records(self) -> tuple[TurnRecord, ...]:
@@ -188,16 +192,18 @@ class SceneRunner:
         party = PartyLibrary(self.store, self.handle, clock=_no_clock, new_id=_no_id).view(chat.campaign_id, as_of=NOW)
         party_problems = tuple(f"{problem.path}:{problem.code}" for problem in party.problems)
         problems += [("party", problem) for problem in party_problems]
-        cast = []
+        candidates = []
         for binding in captured.chat.active_bindings():
             actor = binding.actor
             if actor is None:
                 continue
             if party.state.uncertain(actor):
                 problems.append(("party_uncertain", str(actor)))  # fail closed: it may be stored away
-            elif not party.state.reserved(actor):
-                cast.append(actor)
-        cast_t = tuple(sorted(set(cast), key=str))
+            elif not party.state.reserved(actor):  # a reserved member is stored away: never on stage
+                candidates.append(actor)
+        staged, unstaged = _stage(party, chat, candidates)
+        problems += unstaged
+        cast_t = staged.present if staged is not None else ()
         persona_binding = captured.chat.persona
         persona = persona_binding.actor if persona_binding is not None else None
         snap = captured.snapshot
@@ -208,7 +214,7 @@ class SceneRunner:
             except Exception as error:  # 022's refusals: the actor stays nameless, and says why
                 problems.append(("unnamed_actor", f"{actor}:{type(error).__name__}"))
         voices = imported_voices(snap, self.authored)
-        scene = Scene(chat, turns, controls, cast_t, persona, names, ())
+        scene = Scene(chat, turns, controls, cast_t, persona, names, (), staged)
         for actor in scene.cast:
             if actor == persona or _human_of(scene, actor) is not None:
                 continue  # a player character speaks through its player
@@ -700,6 +706,8 @@ class SceneRunner:
 
     def _ready(self, scene: Scene) -> None:
         _readable(scene)
+        if scene.staged is None:
+            raise _refuse("party_unreadable", "who is present cannot be staged; nobody is on stage")
         if scene.paused:
             raise _refuse("paused", "play is paused")
         if scene.persona is not None and scene.persona in scene.cast and scene.controller(scene.persona) == DIRECTOR:
@@ -721,6 +729,26 @@ def _readable(scene: Scene) -> None:
 
 class _Stale(Exception):
     """The run's fence went stale before its take was written."""
+
+
+def _stage(party, chat: ChatRef, candidates: Sequence[InstanceRef]
+           ) -> tuple[SceneCast | None, list[tuple[str, str]]]:
+    """033's staged cast of ``candidates`` (the chat's bound actors that are neither reserved nor uncertain),
+    with each member ``stage`` refuses (``missing_actor``, ``instance_id_conflict``...) left out and reported by
+    its reason. ``None`` (reported ``cast_unstaged``) when the cast as a whole cannot be staged, such as while a
+    relation file cannot be read: then nobody is present."""
+    chosen = sorted(set(candidates), key=str)
+    problems: list[tuple[str, str]] = []
+    while True:
+        try:
+            return stage(party.state, chat.chat_id, chosen, instances=party.instances), problems
+        except PartyRefused as refused:
+            members = [member for member in refused.members if member in chosen]
+            if not members:
+                problems.append(("cast_unstaged", refused.reason))
+                return None, problems
+            problems += [(refused.reason, str(member)) for member in members]
+            chosen = [actor for actor in chosen if actor not in members]
 
 
 def _no_clock() -> str:
