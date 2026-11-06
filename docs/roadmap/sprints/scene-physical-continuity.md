@@ -26,3 +26,14 @@ Owns *local physical facts*, not geography ([Location Topology](location-topolog
 - How much geometry is useful before it becomes simulation clutter?
 - When should the director ask rather than invent a position?
 - What is the distinction between visible staging and canonical movement?
+
+## First slice (implemented)
+
+The headless first slice is [`grimoire.staging`](../../STAGING.md). It reaches milestone 1 and the proving scenario on synthetic fixtures: an actor who left the room cannot take the letter from the table, sight between two rooms follows the door, a whisper through a shut door is refused while telepathy reaches, and only those who can see an event get a perception of it.
+
+Answers to the open questions, for this slice:
+- **How much geometry:** areas and the ways between them, nothing finer. No coordinates, spots or distances.
+- **Ask or invent:** every fact is `established` or `assumed`; each answer lists the assumed facts it rests on, and anything that would become evidence (a presence, a perception) refuses an assumed fact unless the caller allows it.
+- **Staging or canon:** the stage is scene-local director truth, never canon and never actor knowledge. Durable consequences become 021 operations in the next slice.
+
+Later work: a stage persisted and maintained across turns with 035 (milestone 2); 021 operations and seeding from 017 `located_in`/`carries` and 034 holders; positions within an area, distance bands, posture, cover, stealth; containers and lockable containers; audibility levels; affordance queries for maps, audio and combat (milestone 3). See [STAGING](../../STAGING.md#boundaries-and-later-work).

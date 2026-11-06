@@ -41,7 +41,7 @@ from grimoire.ledgers.codec import envelope, exact
 from grimoire.security import is_human, is_valid_principal
 from grimoire.store import LibraryStore, RecordNotFound
 from grimoire.store.errors import InvalidEnvelope, LedgerInvalid, TakenIdsUnlisted
-from grimoire.store.ledger import Head
+from grimoire.store.ledger import Head, entry_cost
 
 _KINDS = frozenset({"frame", "ruling", "decision"})
 
@@ -383,35 +383,74 @@ class AdjudicationLibrary:
         handle from this authority (``not_controller`` otherwise): the adjudication key labels actions,
         it never speaks for a player. An actor no human controls takes neither (``unexpected_backing``).
         """
+        with self._authority.lock:  # control is read and the entry appended as one step
+            builder, revision, payload = self._prepare(frame, contribution, author)
+            entry = FrameEntry(frame, contribution, revision, self._principal)
+            self._append(builder, "frame", payload)
+            builder.add_frame(entry)
+            return entry
+
+    def check(self, frame: ActionFrame, *, contribution: PlayerContribution | None = None,
+              author: object = None) -> int:
+        """The revision ``frame`` would record now, or the refusal ``frame`` would raise. Writes nothing.
+
+        For a caller that must write its own record first and then the frame, under the authority's
+        lock (040 links an attempt to its obstacle before framing it). The entry is rendered too, so
+        text the store cannot hold (``invalid_field``) or an entry too large for a batch (``too_large``)
+        is refused here, not when ``frame`` writes it.
+        """
+        with self._authority.lock:
+            return self._prepare(frame, contribution, author)[1]
+
+    def undecidable(self, campaign_id: str, attempt_id: str) -> str | None:
+        """Why the recorded attempt can no longer be decided, whatever is decided: its actor's control
+        changed since it was framed (``control_changed``, ``non_human_controller``). ``None`` when it can be,
+        or when there is no such frame or it is already decided."""
+        with self._authority.lock:
+            state = self._builder(campaign_id).state()
+            entry = state.frame(attempt_id)
+            if entry is None or attempt_id in state.decisions:
+                return None
+            try:
+                self._check_control(entry)
+            except AdjudicationError as error:
+                return error.reason
+            return None
+
+    def _prepare(self, frame: ActionFrame, contribution: PlayerContribution | None, author: object
+                 ) -> tuple[_Builder, int, dict[str, object]]:
+        """Every check ``frame`` makes before it writes: the ledger, the revision and the payload."""
         if type(frame) is not ActionFrame:
             raise TypeError("expected an ActionFrame")
         campaign_id = frame.campaign_id
         if contribution is not None:
             _check_backing(frame, contribution)
         payload = frame_to_payload(frame, contribution)
-        with self._authority.lock:  # control is read and the entry appended as one step
-            controller = self._controller(campaign_id, frame.actor.instance_id)
-            if controller is None or controller == DIRECTOR:
-                if contribution is not None or author is not None:
-                    raise _refused("an actor no player controls has no contribution to back it",
-                                   "unexpected_backing")
-            elif not is_human(controller):
-                raise _refused(f"{frame.actor} is controlled by {controller!r}, not a human", "non_human_controller")
-            elif contribution is None:
-                raise _refused("a player character's action is backed by the player's own contribution",
-                               "pc_authorship")
-            elif contribution.submitted_by != controller:
-                raise _refused("the contribution is not the current controller's", "invalid_expression")
-            elif not self._is_own(author, controller):
-                raise _refused("only the controller's own trusted handle gives their contribution",
-                               "not_controller")
-            self._entity(frame)
-            builder = self._builder(campaign_id)
-            revision = builder.check_frame(frame, contribution)
-            entry = FrameEntry(frame, contribution, revision, self._principal)
-            self._append(builder, "frame", payload)
-            builder.add_frame(entry)
-            return entry
+        controller = self._controller(campaign_id, frame.actor.instance_id)
+        if controller is None or controller == DIRECTOR:
+            if contribution is not None or author is not None:
+                raise _refused("an actor no player controls has no contribution to back it",
+                               "unexpected_backing")
+        elif not is_human(controller):
+            raise _refused(f"{frame.actor} is controlled by {controller!r}, not a human", "non_human_controller")
+        elif contribution is None:
+            raise _refused("a player character's action is backed by the player's own contribution",
+                           "pc_authorship")
+        elif contribution.submitted_by != controller:
+            raise _refused("the contribution is not the current controller's", "invalid_expression")
+        elif not self._is_own(author, controller):
+            raise _refused("only the controller's own trusted handle gives their contribution",
+                           "not_controller")
+        self._entity(frame)
+        builder = self._builder(campaign_id)
+        revision = builder.check_frame(frame, contribution)
+        try:  # what _append would refuse, refused before anything is written
+            entry_cost(envelope("frame", self._authority.now(), recorded_by=self._principal, value=payload))
+        except InvalidEnvelope as error:
+            raise _refused(str(error), "invalid_field") from None
+        except ValueError as error:
+            raise _refused(str(error), "too_large") from None
+        return builder, revision, payload
 
     def rule(self, ruling: AbilityRuling, *, supersedes: Iterable[str] = ()) -> RulingEntry:
         """Record a director's 025 ruling on a recorded frame's ability use, before its decision.

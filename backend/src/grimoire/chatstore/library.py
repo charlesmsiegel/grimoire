@@ -42,6 +42,7 @@ from grimoire.holdingstore import holdings_holder_ids, holdings_peer_ids
 from grimoire.imagestore import placement_subject_ids
 from grimoire.ledgers import security_campaign_ids, security_instance_ids, sovereignty_actor_ids
 from grimoire.library import LibraryPathError
+from grimoire.obstaclestore import obstacle_actor_ids
 from grimoire.possessions import POSSESSION_KEY, party_ids
 from grimoire.security import payload_digest
 from grimoire.store import (
@@ -114,8 +115,8 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str, *,
     allocator (107 here; 024, 026, 037 later) must use this at plan time and again under the store
     lock at commit, and any later record family that names instance ids must extend it. Its cost
     grows with play history: it reads every instance, relation, chat, transcript page, accepted-event, knowledge,
-    holder and turn file and every sovereignty and adjudication batch of the campaign, and every security batch of
-    the library.
+    holder and turn file and every sovereignty, adjudication and obstacle batch of the campaign, and every security
+    batch of the library.
 
     ``spent`` is ``(approval id, address, payload digest)`` of the approvals a commit supplies for
     its own writes: at that commit's re-check they name its new individuals by design and do not
@@ -140,6 +141,7 @@ def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool,
     taken |= possession_party_ids(store, campaign_id)
     taken |= adjudication_actor_ids(store, campaign_id)
     taken |= turn_instance_ids(store, campaign_id)
+    taken |= obstacle_actor_ids(store, campaign_id)
     if security:  # skipped only by _fresh_campaign_taken_ids
         taken |= security_instance_ids(store, campaign_id, spent=spent)
     return frozenset(taken)

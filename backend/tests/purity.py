@@ -73,7 +73,7 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
 ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.archaeologystore", "grimoire.capture", "grimoire.cardstore", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.contextstore", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       "grimoire.import_v1", "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1",
-                      "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
+                      "grimoire.obstaclestore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
                       "grimoire.play", "grimoire.runtime", "grimoire.scenestore",
                       "grimoire.store", "grimoire.sync", "grimoire.testing"})
 
@@ -133,6 +133,10 @@ PURE_PACKAGES = (
     # Fiction-first adjudication (029): frames, assessment, decisions and codecs; the service is an adapter.
     PurePackage("grimoire.adjudication", ("grimoire.adjudication", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
+    # Open obstacles (040): obstacles, the frame rules, codecs and derivation over 029's values;
+    # the service is an adapter.
+    PurePackage("grimoire.obstacles", ("grimoire.obstacles", "grimoire.adjudication", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
     PurePackage("grimoire.security", ("grimoire.security",)),
     # World Change Sets (043): values, codec and diffs; reviewing and applying is an adapter.
     PurePackage("grimoire.changesets", ("grimoire.changesets", "grimoire.core"),
@@ -144,6 +148,10 @@ PURE_PACKAGES = (
     # Diegetic communication (032): who an in-scene message reaches; reads 008's routed intents
     # and 020's storage limits.
     PurePackage("grimoire.comms", ("grimoire.comms", "grimoire.core", "grimoire.intent", "grimoire.evidence"),
+                never_import=("grimoire.core.inference",)),
+    # Scene staging (041): who and what is where in one scene; builds 032 presences and 012 perceptions.
+    PurePackage("grimoire.staging", ("grimoire.staging", "grimoire.core", "grimoire.comms", "grimoire.evidence",
+                                      "grimoire.party"),
                 never_import=("grimoire.core.inference",)),
     # Voice evidence: shares the gate's text matcher so screening and scoring agree.
     PurePackage("grimoire.voice", ("grimoire.voice", "grimoire.core", "grimoire.evals.text",
