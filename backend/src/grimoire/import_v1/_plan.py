@@ -538,7 +538,7 @@ class ImportPlan:
         origin = {"format": V1_SCENE_FORMAT, "legacy_id": scene.legacy_id, "sha256": marker["sha256"]}
         try:
             groups = paginate(posts, _measure_post, _PAGE_BUDGET)
-        except TranscriptError as error:
+        except (TranscriptError, InvalidEnvelope) as error:  # a post past what any page could hold
             self._unresolve(scene.legacy_id, "too_large", f"{scene.ref}: {error}")
             return
         planned = []

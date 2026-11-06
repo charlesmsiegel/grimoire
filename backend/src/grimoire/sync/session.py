@@ -474,8 +474,9 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
             pins = {"/".join(definition_parts(ref)) for ref in pinned_by(parts, copy.data)}  # type: ignore[arg-type]
             missing = sorted(path for path in pins | heads if final(path) != origin_files.get(path) or blocked(path)
                              or (path in heads and origin_files.get(path) is None))
+            owner = set(_owning_chat(copy.path))  # needed on the receiver even when the origin lost it
             actors = sorted(path for path in [*_named_paths(parts, copy.data), *_home_scope(copy.path)]
-                            if (path in origin_files and final(path) is None) or blocked(path))
+                            if ((path in origin_files or path in owner) and final(path) is None) or blocked(path))
             campaign = _knowledge_campaign(copy.path)
             if campaign is not None and campaign not in here and (
                     campaign in origins[copy.origin] or blocked(f"campaigns/{campaign}/scope.json")):
@@ -506,6 +507,12 @@ def _home_scope(path: str) -> list[str]:
         parts = path.split("/")
         return [f"campaigns/{parts[1]}/chats/{parts[3]}.json"]
     return []
+
+
+def _owning_chat(path: str) -> list[str]:
+    """A transcript page's chat, which must be on the receiver whether or not the origin still holds it:
+    a page is history of one chat and never lands alone (a later chat given that id would inherit it)."""
+    return _home_scope(path) if syncable(path) == "transcript" else []
 
 
 def _campaigns_with_state(paths) -> set[str]:  # type: ignore[no-untyped-def]

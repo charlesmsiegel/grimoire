@@ -357,6 +357,22 @@ def test_two_paired_devices_importing_one_export_make_two_chats_that_sync_cleanl
         right.close()
 
 
+def test_an_import_made_before_the_library_had_a_device_identity_is_still_found(store):
+    first = importer(store).plan(export())
+    first.commit()
+    identify(store, "desktop")
+    again = importer(store).plan(export())
+    assert again.status == "already_imported" and again.chat == first.chat
+
+
+def test_a_message_too_large_for_a_page_is_refused_not_raised(store):
+    rows = [HEADER, {"name": "Mara", "is_user": False, "mes": "x", "swipes": ["x", "y" * (6 * 1024 * 1024)],
+                     "swipe_id": 0}]  # one line under the store's limit, one post over a page
+    with pytest.raises(ImportRefused) as caught:
+        importer(store).plan(export(rows))
+    assert caught.value.reason == "post_too_large"
+
+
 def test_the_importer_never_imports_a_provider():
     assert not any(name == "grimoire.providers" or name.startswith("grimoire.providers.") for name in sys.modules
                    if name.startswith("grimoire.archaeology"))
@@ -507,4 +523,16 @@ def test_a_foreign_first_page_blocks_the_whole_transcript(env, monkeypatch):
     review = env.plan().review()
     assert "transcript_exists" in {row["reason"] for row in review["unresolved"]}
     assert not [path for path in review["writes"] if "/transcripts/" in path]  # not page 2 behind it either
+
+
+def test_a_v1_post_past_the_store_limit_leaves_the_scene_without_a_transcript(env):
+    scene = env.v1 / CAMPAIGN / "scenes" / f"{SID}.md"
+    text = scene.read_text(encoding="utf-8")
+    at = text.index("**Winifred:**")
+    huge = ('**Mara:** <!-- grimoire-response {"post_id": "00000000000000000000000000000010"} -->\n'
+            + "w" * (9 * 1024 * 1024) + "\n\n")
+    scene.write_text(text[:at] + huge + text[at:], encoding="utf-8")
+    review = env.plan(manifest=env.rescan()).review()
+    assert "too_large" in {row["reason"] for row in review["unresolved"]}
+    assert not [path for path in review["writes"] if "/transcripts/" in path]
 

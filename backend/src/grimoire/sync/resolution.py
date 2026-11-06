@@ -25,8 +25,8 @@ from .errors import ResolveRefused, SameDevice, SyncInterrupted
 from .model import ASSET_KINDS, HELD_BACK_KINDS
 from .session import (
     _HELD, PER_PATH_ERRORS, Copy, _archived, _blob_etag, _campaigns_with_state, _current, _held_campaigns,
-    _held_relation, _home_scope, _kind, _knowledge_campaign, _locked, _manifest_heads, _named_paths, _side,
-    _source_of, _unknown_logs, device_of,
+    _held_relation, _home_scope, _kind, _knowledge_campaign, _locked, _manifest_heads, _named_paths, _owning_chat,
+    _side, _source_of, _unknown_logs, device_of,
 )
 
 
@@ -145,8 +145,9 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             if scans[winner].files.get(pinned) != scans[receiver].files.get(pinned) or any(
                     scans[device].blocked_reason(pinned) is not None for device in pair):
                 raise ResolveRefused(f"{pinned}, which {done} pins, differs between the devices; resolve it first")
+        owner = set(_owning_chat(done))
         for named in [*_named_paths(tuple(done.split("/")), written), *_home_scope(done)]:
-            if (named in scans[winner].files and named not in scans[receiver].files) or any(
+            if ((named in scans[winner].files or named in owner) and named not in scans[receiver].files) or any(
                     scans[device].blocked_reason(named) is not None for device in pair):
                 raise ResolveRefused(f"{named}, which {done} names, is missing on {receiver}; sync or resolve it first")
         campaign = _knowledge_campaign(done)

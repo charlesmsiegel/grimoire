@@ -181,6 +181,8 @@ class _Reader:
             self.lose(line, "swipe_id", "invalid_swipe_id")
             chosen = swipes.index(mes) if mes in swipes else None
         if chosen is None or swipes[chosen] != mes:
+            if "swipe_id" in message:  # the swipe the edit was made on, which the active index no longer says
+                extras["swipe_id"] = message["swipe_id"]
             variants.append(Variant(mes, at, {"field": "mes"}))
             chosen = len(variants) - 1
             self.lose(line, "mes", "edited_text_differs")

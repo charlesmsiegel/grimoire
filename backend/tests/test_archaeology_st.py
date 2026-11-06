@@ -57,6 +57,11 @@ def test_an_edited_message_keeps_both_texts_and_shows_the_edit():
     assert ("mes", "edited_text_differs") in {(loss.path, loss.reason) for loss in chat.losses}
 
 
+def test_an_edit_keeps_which_swipe_it_was_made_on():
+    made_on = [read_st_chat(lines(mara("edited", swipes=["One", "Two"], swipe_id=i))).posts[0] for i in (0, 1)]
+    assert [post.extras["swipe_id"] for post in made_on] == [0, 1]
+
+
 @pytest.mark.parametrize("swipe_id", [5, -1, "0", None, True])
 def test_an_invalid_swipe_id_is_reported_and_the_shown_text_decides(swipe_id):
     chat = read_st_chat(lines(mara("Two", swipes=["One", "Two"], swipe_id=swipe_id)))

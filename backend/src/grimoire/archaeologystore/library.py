@@ -32,7 +32,7 @@ from grimoire.chatstore import (
 )
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TranscriptRef
 from grimoire.ledgers import security_campaign_ids
-from grimoire.store import LibraryStore, RecordNotFound, ScopeRecord, StaleWrite
+from grimoire.store import InvalidEnvelope, LibraryStore, RecordNotFound, ScopeRecord, StaleWrite
 from grimoire.store.jsonfmt import MAX_FILE_BYTES, JsonError, is_imprecise, parse_strict, render
 from grimoire.transcripts import (
     TRANSCRIPT_SCHEMA, Post, Speaker, TranscriptError, TranscriptPage, page_from_payload,
@@ -234,6 +234,14 @@ class StImporter:
         presence = self.store.campaign_presence(campaign)
         if presence != "absent":
             return self._existing(scan, chat, mapping, origin, presence)
+        if campaign != scan.campaign_id and self.store.campaign_presence(scan.campaign_id) == "present":
+            # imported here before this library had a device identity: that import is this one's
+            untagged = ChatRef(scan.campaign_id, scan.campaign_id)
+            try:
+                return self._existing(scan, untagged, mapping, origin, "present")
+            except ImportRefused as refused:
+                if refused.reason != "campaign_exists":
+                    raise
         if (self.store.campaign_authority_presence(campaign) != "absent"
                 or campaign in security_campaign_ids(self.store)):
             raise ImportRefused(f"a ledger still names campaigns/{campaign}, whose folder is gone; this export "
@@ -326,6 +334,8 @@ class StImporter:
             groups = paginate(posts, measure_post, PAGE_BUDGET, first_budget=PAGE_BUDGET - first)
         except TranscriptError as error:
             raise ImportRefused(str(error), error.reason) from None
+        except InvalidEnvelope:  # one post past the store's document limit
+            raise ImportRefused("a message is too large for one transcript page", "post_too_large") from None
         origin = {**origin, "pages": len(groups)}
         pages = []
         for seq, group in enumerate(groups, start=1):

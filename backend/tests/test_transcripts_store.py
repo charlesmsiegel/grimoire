@@ -175,3 +175,22 @@ def test_sync_never_delivers_a_page_without_its_chat(tmp_path):
         desktop.close()
         phone.close()
 
+
+def test_sync_never_delivers_a_page_whose_chat_the_origin_lost(tmp_path):
+    from sync_helpers import DESKTOP, PHONE, handles
+    from grimoire.sync import identify, sync
+    desktop, phone = LibraryStore.create(tmp_path / DESKTOP), LibraryStore.create(tmp_path / PHONE)
+    try:
+        seed_sources(desktop)
+        identify(desktop, DESKTOP)
+        identify(phone, PHONE)
+        sync(desktop, phone, handles())
+        chat = chat_library(desktop).start_chat(Launch("character", MARA)).commit().chat
+        put(desktop, page(chat, 1, "Hi."))
+        (desktop.root / "campaigns" / chat.campaign_id / "chats" / f"{chat.chat_id}.json").unlink()
+        sync(desktop, phone, handles())
+        assert not (phone.root / "campaigns" / chat.campaign_id / "transcripts").exists()
+    finally:
+        desktop.close()
+        phone.close()
+
