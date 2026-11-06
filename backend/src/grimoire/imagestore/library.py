@@ -21,7 +21,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from grimoire.core.identity import ChatRef, ImageRef, InstanceRef, PlacementRef, ScopeRef, SourceRef, paired_instances
+from grimoire.core.identity import (
+    ChatRef, ImageRef, InstanceRef, PlacementRef, ScopeRef, SourceRef, TranscriptRef, paired_instances,
+)
 from grimoire.images import (
     IMAGE_SCHEMA, PLACEMENT_SCHEMA, BlobFact, BlobInfo, Facts, ImageEntry, ImageModelError, ImageObject, Placement,
     PlacementEntry, Problem, Resolution, Shown, image_from_payload, image_to_payload, inherited,
@@ -348,12 +350,14 @@ class ImageBatch:
         return result
 
     def put(self, envelope: RecordEnvelope | SourceManifest | ScopeRecord, expected: str | None) -> None:
-        """An importer's own definition, instance, manifest, play scope or chat, in the same transaction.
+        """An importer's own definition, instance, manifest, play scope, chat or transcript page (036), in the
+        same transaction.
 
-        A play scope or chat record makes its campaign exist for the batch's later ops (W5)."""
+        A play scope or chat record makes its campaign exist for the batch's later ops (W5); a transcript
+        page does not."""
         if isinstance(envelope, ScopeRecord):
-            if not isinstance(envelope.address, (ScopeRef, ChatRef)):
-                raise TypeError("an image batch puts only play-scope and chat scope records")
+            if not isinstance(envelope.address, (ScopeRef, ChatRef, TranscriptRef)):
+                raise TypeError("an image batch puts only play-scope, chat and transcript scope records")
         elif not isinstance(envelope, (RecordEnvelope, SourceManifest)):
             raise TypeError("an image batch puts only RecordEnvelopes, SourceManifests and scope or chat records")
         # an address no portable path can hold raises UnstorableIdentifier now, never at commit
@@ -477,7 +481,8 @@ def _apply(library: ImageLibrary, state: _State, disk: _Disk, op: tuple) -> obje
         if isinstance(envelope, SourceManifest):
             state.manifests.add(envelope.source)
         elif isinstance(envelope, ScopeRecord):
-            state.campaigns.add(envelope.address.campaign_id)
+            if not isinstance(envelope.address, TranscriptRef):
+                state.campaigns.add(envelope.address.campaign_id)
         elif isinstance(envelope.address, SourceRef):
             state.definitions.add(envelope.address.entity_key)
         else:

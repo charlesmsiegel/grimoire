@@ -30,7 +30,7 @@ from grimoire.chatstore import campaign_taken_ids
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import ENTITY_SCHEMA, definition_to_payload, instance_to_payload
 from grimoire.core.identity import (
-    ChatRef, ImageRef, InstanceRef, LegacyId, PlacementRef, ScopeRef, SourceRef, paired_instances,
+    ChatRef, ImageRef, InstanceRef, LegacyId, PlacementRef, ScopeRef, SourceRef, TranscriptRef, paired_instances,
 )
 from grimoire.core.index import LegacyIdMap
 from grimoire.images import placement_to_payload
@@ -42,12 +42,18 @@ from grimoire.store import (
     InvalidEnvelope, LibraryStore, LinkSpec, RecordEnvelope, ScopeRecord, SourceManifest, StaleWrite,
     StoredDefinition, StoreError, TakenIdsUnlisted, UnstorableIdentifier, etag,
 )
-from grimoire.store.jsonfmt import thaw
+from grimoire.store.jsonfmt import MAX_FILE_BYTES, render, thaw
+from grimoire.transcripts import (
+    TRANSCRIPT_SCHEMA, Post, Speaker, TranscriptError, TranscriptPage, Variant, page_to_payload, paginate,
+)
 from grimoire.store.layout import address_parts, manifest_parts
 
-from ._map import MARKER, Campaign, Definition, Desired, ImportRefused, Selection, desired_state
+from ._map import MARKER, Campaign, Definition, Desired, ImportRefused, Scene, Selection, desired_state
 
 RECEIPT_SCHEMA = "grimoire.v1-import-receipt/0"
+#: the ``format`` a V0.2.1 scene's transcript pages name in their origin (036)
+V1_SCENE_FORMAT = "grimoire-v0.2.1-scene"
+_PAGE_BUDGET = MAX_FILE_BYTES // 2
 RECEIPT_KIND, RECEIPT_ENTITY = "receipt", "runs"
 WRITE, PRESENT, KEPT, REMOVED = "write", "present", "kept", "removed"
 _USABLE = frozenset({WRITE, PRESENT, KEPT})
@@ -72,6 +78,11 @@ def _digest(value: object) -> str:
     """A digest of what a target is meant to hold, independent of when it was written."""
     text = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
     return "sha256:" + hashlib.sha256(text.encode("ascii")).hexdigest()
+
+
+def _measure_post(post: Post) -> int:
+    probe = TranscriptPage(TranscriptRef("probe", "probe", 1), (post,))
+    return len(render({"post": page_to_payload(probe)["posts"][0]}))
 
 
 def _render(store: LibraryStore, envelope: object) -> bytes:
@@ -176,6 +187,7 @@ class ImportPlan:
     digests: dict[str, str] = field(default_factory=dict)  # this run's writes: path -> desired digest
     relied_scopes: dict[str, str] = field(default_factory=dict)  # existing campaign -> scope its writes need
     bound: dict[str, set[InstanceRef]] = field(default_factory=dict)  # campaign -> actors this run's new chats bind
+    transcripts: dict[object, int] = field(default_factory=dict)  # chat -> pages this run plans for it (036)
     _paired: dict[str, frozenset[InstanceRef]] = field(default_factory=dict)
     _probe: object = None
     _review: dict = field(default_factory=dict)
@@ -501,6 +513,79 @@ class ImportPlan:
             elif target.outcome == WRITE:
                 self.bound.setdefault(campaign.campaign_id, set()).update(b.actor for b in bindings)
             self._put(target)
+            path = _path_of(scene.ref)
+            # pages only for the scene as the chat was imported: a changed scene is v1_changed, and its
+            # rows (and texts) are no longer what the chat records
+            imported_as = path not in self.receipts.written or self.receipts.desired.get(path, desired) == desired
+            if target.outcome in _USABLE and scene.texts is not None and imported_as:
+                self._plan_transcript(scene)
+
+    def _plan_transcript(self, scene: Scene) -> None:
+        """The scene's posts as transcript pages (036): exact V1 text, label-only speakers, no audience.
+
+        A page is create-only: a V1 scene that gained posts since it was imported is ``v1_changed`` and its
+        pages stay as written (none are added). A chat imported before 036 gets its pages on the next run,
+        if its scene is still as imported. Pages are decided per chat, all or none: if any page is neither
+        absent nor exactly as this run would write it, or the chat already holds a page past this split or one
+        no reader can check, none is written (``transcript_exists``)."""
+        marker = scene.extras[MARKER]
+        posts = []
+        try:
+            for number, (row, text) in enumerate(zip(marker["posts"], scene.texts or ()), start=1):
+                role = "system" if row["synthetic"] else "user" if row["role"] == "user" else "assistant"
+                source = {"v1_index": row["index"], "v1_post_id": row["post_id"],
+                          "content_sha256": row["content_sha256"]}
+                posts.append(Post(f"p{number:06d}", Speaker(role, None, row["speaker"]),
+                                  (Variant(text, None, {"field": "content"}),), 0, source=source))
+        except TranscriptError as error:  # a post no page can record exactly (a speaker label too long, say)
+            self._unresolve(scene.legacy_id, "transcript_unrepresentable", f"{scene.ref}: {error}")
+            return
+        if not posts:
+            return
+        origin = {"format": V1_SCENE_FORMAT, "legacy_id": scene.legacy_id, "sha256": marker["sha256"]}
+        try:
+            groups = paginate(posts, _measure_post, _PAGE_BUDGET)
+        except (TranscriptError, InvalidEnvelope) as error:  # a post past what any page could hold
+            self._unresolve(scene.legacy_id, "too_large", f"{scene.ref}: {error}")
+            return
+        try:  # a page past this split, or one no reader can check, would join the chat's history unreviewed
+            existing = self.store.chat_transcript(scene.ref)
+        except (StoreError, ValueError, OSError) as error:
+            self._unresolve(scene.legacy_id, "transcript_exists", f"{scene.ref}: {type(error).__name__}")
+            return
+        beyond = [problem.path for problem in existing.problems]
+        beyond += [str(ref) for ref in existing.records if ref.seq > len(groups)]
+        if beyond:
+            self._unresolve(scene.legacy_id, "transcript_exists", min(beyond))
+            return
+        planned = []
+        for seq, group in enumerate(groups, start=1):
+            ref = TranscriptRef(scene.ref.campaign_id, scene.ref.chat_id, seq)
+            envelope = ScopeRecord(ref, TRANSCRIPT_SCHEMA, page_to_payload(TranscriptPage(ref, group, origin)),
+                                   owner=self.owner)
+            path = _path_of(ref)
+            rendered = self._rendered(path, "transcript", scene.legacy_id, envelope)
+            if rendered is None:
+                return
+            desired = _digest({"origin": origin, "seq": seq, "posts": [p.source for p in group]})
+            if not self._page_fits(path, rendered, desired):
+                self._unresolve(scene.legacy_id, "transcript_exists", path)
+                return
+            planned.append((path, rendered, envelope, desired))
+        self.transcripts[scene.ref] = len(groups)  # rechecked by apply: no page may join past them
+        for path, rendered, envelope, desired in planned:
+            self._put(self._decide(path, "transcript", scene.legacy_id, rendered, envelope, desired))
+
+    def _page_fits(self, path: str, rendered: bytes, desired: str) -> bool:
+        """Whether a planned page is absent (and never written) or already exactly this run's page."""
+        prior = self.receipts.written.get(path)
+        try:
+            current = self.store.read_exact(path)
+        except (StoreError, ValueError, OSError):
+            return False
+        if prior is not None:
+            return current is not None and etag(current) == prior and self.receipts.desired.get(path) == desired
+        return current is None or current == rendered
 
     def _bindable(self, actor, legacy_id: str) -> bool:  # type: ignore[no-untyped-def]
         """Whether a chat can bind ``actor`` to its V1 definition (a V2 edit may have re-sourced it)."""
@@ -694,8 +779,9 @@ class ImportPlan:
     def apply(self, approvals: Mapping[str, str] | None = None) -> ImportResult:
         """Commit the plan as one transaction, after re-checking under the store lock what it relied on.
 
-        ``StaleWrite`` if the receipts moved, a new campaign's id or a new actor's id was taken, or a
-        target changed since the plan; replan and review again."""
+        ``StaleWrite`` if the receipts moved, a new campaign's id or a new actor's id was taken, a
+        target changed since the plan, or a chat it writes transcript pages for gained a page past them;
+        replan and review again."""
         review = self.review()
         if not self._preview:
             return ImportResult({}, None, review)
@@ -737,6 +823,12 @@ class ImportPlan:
                 clash = sorted(str(ref) for ref in actors & paired_instances(store.campaign_instances(cid)))
                 if clash:
                     raise StaleWrite([(ref, "id also used by another kind") for ref in clash])
+            for chat, count in sorted(self.transcripts.items(), key=lambda item: str(item[0])):
+                found = store.chat_transcript(chat)  # a page added since the plan would join this history
+                beyond = [problem.path for problem in found.problems]
+                beyond += [str(ref) for ref in found.records if ref.seq > count]
+                if beyond:
+                    raise StaleWrite([(path, "transcript page changed since the plan") for path in sorted(beyond)])
             committed = self._batch.commit(approvals)  # type: ignore[union-attr]
             self._committed = True
         return ImportResult(committed.etags, self.receipt, review)

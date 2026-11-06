@@ -70,7 +70,7 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
                                          "datetime", "uuid", "secrets")
 
 #: grimoire packages that are adapters or test infrastructure, not pure.
-ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.capture", "grimoire.cardstore", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.contextstore", "grimoire.effective", "grimoire.effectstore",
+ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.archaeologystore", "grimoire.capture", "grimoire.cardstore", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.contextstore", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       "grimoire.import_v1", "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1",
                       "grimoire.obstaclestore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
@@ -160,6 +160,11 @@ PURE_PACKAGES = (
     # NPC goals (039): authored agendas and the deterministic policy that chooses from the NPC's own
     # knowledge. It calls no model, so it never touches the inference contracts.
     PurePackage("grimoire.goals", ("grimoire.goals", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # Transcripts (036): stored pages of posts and variants; SillyTavern chat reading over decoded lines.
+    PurePackage("grimoire.transcripts", ("grimoire.transcripts", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
+    PurePackage("grimoire.archaeology", ("grimoire.archaeology", "grimoire.transcripts", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
     # Per-NPC generation (027): plans, voices, briefs and screens each call; the runtime is an adapter.
     # Briefs render 031's packs and 039's choices (their value types), and neither imports anything of
     # 027's: one direction.

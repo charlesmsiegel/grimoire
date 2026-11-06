@@ -99,7 +99,7 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str, *,
 
     A hand-deleted individual's id must never go to a different one, who would silently inherit its
     past. Reserved: every instance file of any kind (a pair two kinds share keeps both); every id
-    named by a relation (017), a chat roster (107), an accepted event (021), the events, evidence and
+    named by a relation (017), a chat roster (107), a chat's transcript pages (036), an accepted event (021), the events, evidence and
     knowledge log (020), a holder file's log (023's move peers), the sovereignty ledger (010b's bare
     ``actor_id``s), the adjudication ledger (029's frames, rulings and decisions) or a security-ledger grant or approval scoped to one individual (its instance,
     holder or placement address), each scanned raw so an undecodable record still protects its ids;
@@ -114,8 +114,9 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str, *,
     folder at an instance path takes only its own id (the store never reads it as a record). Every instance
     allocator (107 here; 024, 026, 037 later) must use this at plan time and again under the store
     lock at commit, and any later record family that names instance ids must extend it. Its cost
-    grows with play history: it reads every instance, relation, chat, accepted-event, knowledge, holder and turn file
-    and every sovereignty, adjudication and obstacle batch of the campaign, and every security batch of the library.
+    grows with play history: it reads every instance, relation, chat, transcript page, accepted-event, knowledge,
+    holder and turn file and every sovereignty, adjudication and obstacle batch of the campaign, and every security
+    batch of the library.
 
     ``spent`` is ``(approval id, address, payload digest)`` of the approvals a commit supplies for
     its own writes: at that commit's re-check they name its new individuals by design and do not
@@ -130,6 +131,7 @@ def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool,
     taken |= _named_ids(store.campaign_relations(campaign_id), campaign_id, "relation")
     taken |= relation_endpoint_ids(store, campaign_id)
     taken |= _named_ids(store.campaign_chats(campaign_id), campaign_id, "chat")
+    taken |= _named_ids(store.campaign_transcripts(campaign_id), campaign_id, "transcript")
     taken |= accepted_instance_ids(store, campaign_id)
     taken |= holdings_holder_ids(store, campaign_id)
     taken |= holdings_peer_ids(store, campaign_id)

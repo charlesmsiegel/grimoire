@@ -24,7 +24,7 @@ from grimoire.core.identity import (
     ChatRef, ImageRef, InstanceRef, LegacyId, PlacementRef, ScopeRef, SourceRef, validate_segment, validate_source_id,
 )
 from grimoire.images import Expression, Focus, ImageModelError, Placement, slot_role, validate_placement
-from grimoire.migrate_v1 import definition_candidate, parse_frontmatter, world_source
+from grimoire.migrate_v1 import decode_v1_text, definition_candidate, parse_frontmatter, parse_posts, post_row, world_source
 from grimoire.store.errors import UnstorableIdentifier
 from grimoire.store.layout import address_parts, manifest_parts
 
@@ -134,6 +134,9 @@ class Scene:
     label: str | None
     cast: list[InstanceRef]
     extras: dict
+    #: each post's exact text as V1 parses it (036), verified against 011's hashes; ``None`` when it
+    #: could not be verified (the chat is still imported, without its transcript)
+    texts: list[str] | None = None
 
 
 @dataclass
@@ -626,7 +629,28 @@ class _Mapper:
                            "title": row.get("title"), "posts": posts}}
         label = _display(row.get("title"), row["sid"])
         chat = ChatRef(campaign.campaign_id, chat_id_of(campaign.legacy_id, row["identity"]))
-        campaign.scenes.append(Scene(chat, legacy, label, cast, extras))
+        campaign.scenes.append(Scene(chat, legacy, label, cast, extras, self._scene_texts(legacy, row, entry)))
+
+    def _scene_texts(self, legacy: str, row: Mapping, entry: Mapping) -> list[str] | None:
+        """The scene's post texts (036), re-read and re-parsed as 011 parsed them, only if every post's index,
+        speaker, role, id and content hash match its row; otherwise ``None`` and ``transcript_unverified``."""
+        try:
+            data = self.read(row["path"])
+            if entry.get("sha256") is None or _sha(data) != entry["sha256"]:
+                raise ValueError("changed since the scan")
+            body = parse_frontmatter(decode_v1_text(data))[1]  # as 011 read it: universal newlines
+        except (ValueError, KeyError) as error:
+            self.unresolved(legacy, "transcript_unverified", type(error).__name__)
+            return None
+        players = row.get("players")
+        posts = parse_posts(body, list(players) if isinstance(players, (list, tuple)) else [])[0]
+        keys = ("index", "speaker", "role", "synthetic", "post_id", "content_sha256")
+        expected = [tuple(post.get(key) for key in keys) for post in row.get("posts", ())]
+        found = [tuple(post_row(post)[key] for key in keys) for post in posts]
+        if found != expected:
+            self.unresolved(legacy, "transcript_unverified", "posts_differ")
+            return None
+        return [post.content for post in posts]
 
     def _scenes_of(self, campaign: Campaign, actor: Actor) -> list[str] | None:
         row = next(r for r in self.m["campaigns"] if r["id"] == campaign.v1_id)

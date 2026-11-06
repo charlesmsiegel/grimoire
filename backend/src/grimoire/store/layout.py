@@ -18,7 +18,7 @@ from typing import Literal
 
 from grimoire.core.identity import (
     KNOWLEDGE_FAMILIES, AcceptedRef, ChatRef, HoldingsRef, ImageRef, InstanceRef, KnowledgeRef, PlacementRef,
-    RelationRef, ScopeRef, SourceRef, TurnRef, WrapUpRef, validate_segment, validate_source_id,
+    RelationRef, ScopeRef, SourceRef, TranscriptRef, TurnRef, WrapUpRef, validate_segment, validate_source_id,
 )
 from grimoire.security import InvalidResourcePath, ResourcePath
 
@@ -74,6 +74,8 @@ ASSETS = "assets"  # assets/blobs/<sha[:2]>/<sha256>.<ext>: content-addressed by
 BLOBS = "blobs"
 BLOB_EXTS = tuple(MEDIA)  # the sniffer's formats are the only blob extensions
 _BLOB_NAME = re.compile(rf"(?P<sha>[0-9a-f]{{64}})\.(?P<ext>{'|'.join(map(re.escape, BLOB_EXTS))})")
+TRANSCRIPTS = "transcripts"  # campaigns/<id>/transcripts/<chat_id>/<seq:010d>.json: one transcript page (036)
+_PAGE_NAME = re.compile(r"[0-9]{10}\.json")
 HOLDINGS = "holdings"  # campaigns/<id>/holdings/<kind>/<instance_id>.json: counted holdings (023)
 
 ROOT_ENTRIES = frozenset({MARKER, SOURCES, CAMPAIGNS, TXN, CONFLICTS, SYNC})
@@ -87,7 +89,7 @@ RESERVED_CAMPAIGN_ENTRIES = frozenset({"scenes", "events", "evidence", HOLDINGS}
 _NOISE = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
 
 Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat", "relation", "knowledge", "blob",
-               "image", "placement", "accepted", "wrapup", "holdings", "turn"]
+               "image", "placement", "accepted", "wrapup", "holdings", "transcript", "turn"]
 
 
 def is_noise(name: str) -> bool:
@@ -183,12 +185,16 @@ def blob_parts(sha256: str, ext: str) -> Parts:
     return _checked((ASSETS, BLOBS, sha256[:2], f"{sha256}.{ext}"))
 
 
+def transcript_parts(ref: TranscriptRef) -> Parts:
+    return _checked((CAMPAIGNS, ref.campaign_id, TRANSCRIPTS, ref.chat_id, f"{ref.seq:010d}{SUFFIX}"))
+
+
 def holdings_parts(ref: HoldingsRef) -> Parts:
     return _checked((CAMPAIGNS, ref.campaign_id, HOLDINGS, ref.kind, ref.instance_id + SUFFIX))
 
 
 Address = (SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef | ImageRef | PlacementRef
-           | AcceptedRef | WrapUpRef | HoldingsRef | TurnRef)
+           | AcceptedRef | WrapUpRef | HoldingsRef | TranscriptRef | TurnRef)
 
 
 def address_parts(address: Address) -> Parts:
@@ -212,6 +218,8 @@ def address_parts(address: Address) -> Parts:
         return wrapup_parts(address)
     if isinstance(address, HoldingsRef):
         return holdings_parts(address)
+    if isinstance(address, TranscriptRef):
+        return transcript_parts(address)
     if isinstance(address, TurnRef):
         return turn_parts(address)
     return definition_parts(address)
@@ -316,6 +324,9 @@ def classify(parts: Parts) -> tuple[Kind, object] | None:
             stem = _stem(parts[3])
             if stem is not None:
                 found = ("accepted", AcceptedRef(parts[1], stem))
+        elif len(parts) == 5 and parts[0] == CAMPAIGNS and parts[2] == TRANSCRIPTS:
+            if _PAGE_NAME.fullmatch(parts[4]) and int(parts[4][:10]) >= 1:
+                found = ("transcript", TranscriptRef(parts[1], parts[3], int(parts[4][:10])))
         elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == WRAPUPS:
             stem = _stem(parts[3])
             if stem is not None:

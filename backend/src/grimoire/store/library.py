@@ -24,7 +24,7 @@ from types import MappingProxyType
 
 from grimoire.core.identity import (
     AcceptedRef, ChatRef, HoldingsRef, IdentityConflict, ImageRef, InstanceRef, KnowledgeRef, PlacementRef,
-    RelationRef, ScopeRef, SourceRef, TurnRef, WrapUpRef,
+    RelationRef, ScopeRef, SourceRef, TranscriptRef, TurnRef, WrapUpRef,
     validate_segment,
 )
 from grimoire.core.index import DefinitionIndex, SourceDescriptor
@@ -481,14 +481,15 @@ class LibraryStore:
 
     # -- reading -----------------------------------------------------------------
     def read(self, ref: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef | ImageRef
-             | PlacementRef | AcceptedRef | WrapUpRef | HoldingsRef | TurnRef
+             | PlacementRef | AcceptedRef | WrapUpRef | HoldingsRef | TranscriptRef | TurnRef
              ) -> StoredRecord | StoredScopeRecord | StoredKnowledgeRecord | StoredAssetRecord:
         """One record by exact address (a definition must be pinned)."""
         if isinstance(ref, SourceRef) and not ref.pinned:
             raise ValueError("read a pinned revision; resolve unpinned references with load().index")
         with self.lock:  # reads wait for this process's commits, so they never see one half-done
             self._require_consistent()
-            if isinstance(ref, (ScopeRef, ChatRef, RelationRef, AcceptedRef, WrapUpRef, HoldingsRef, TurnRef)):
+            if isinstance(ref, (ScopeRef, ChatRef, RelationRef, AcceptedRef, WrapUpRef, HoldingsRef, TranscriptRef,
+                                TurnRef)):
                 return loader.read_scope_record(self._access, address_parts(ref))
             if isinstance(ref, KnowledgeRef):
                 return loader.read_knowledge_record(self._access, address_parts(ref))
@@ -737,6 +738,26 @@ class LibraryStore:
             self._require_consistent()
             with self._access.cached_listings():
                 return loader.campaign_family(self._access, campaign_id, family)
+
+    def chat_transcript(self, chat: ChatRef) -> CampaignRecords:
+        """One chat's transcript pages (036) and their problems, contained per file as ``load()`` contains
+        records; ``records`` iterates in page order. Reads only ``transcripts/<chat_id>``; ``load()`` never
+        reads transcripts, so its cost does not grow with play."""
+        if not isinstance(chat, ChatRef):
+            raise TypeError("chat_transcript takes a ChatRef")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return loader.chat_transcript(self._access, chat.campaign_id, chat.chat_id)
+
+    def campaign_transcripts(self, campaign_id: str) -> CampaignRecords:
+        """Every transcript page (036) of one campaign, every chat's, and their problems; for allocators that
+        must reserve the instance ids pages name (``campaign_taken_ids``). Reads every page."""
+        validate_segment(campaign_id, "campaign_id")
+        with self.lock:
+            self._require_consistent()
+            with self._access.cached_listings():
+                return loader.campaign_transcripts(self._access, campaign_id)
 
     def campaign_holding_names(self, campaign_id: str) -> tuple[tuple[HoldingsRef, ...], bool]:
         """One campaign's canonically named holder files (023) from listings only, and whether the
@@ -1206,6 +1227,8 @@ class Transaction:
             parts = address_parts(envelope.address)
             document = record_document(envelope, expected)
         elif isinstance(envelope, ScopeRecord):
+            if isinstance(envelope.address, TranscriptRef) and expected is not None:
+                raise ImmutableRevision(f"{envelope.address} is create-only; add a later page")
             envelope.check_writable()
             parts = address_parts(envelope.address)
             document = scope_record_document(envelope, expected)
@@ -1269,7 +1292,8 @@ class Transaction:
             raise InvalidEnvelope("path must be text")
         parts = tuple(path.split("/"))
         envelope = replica.parse_exact(parts, data)
-        if isinstance(envelope, KnowledgeRecord):
+        if isinstance(envelope, KnowledgeRecord) or (isinstance(envelope, ScopeRecord)
+                                                     and isinstance(envelope.address, TranscriptRef)):
             if expected is not None or replace_unreferenced:
                 raise ImmutableRevision(f"{envelope.address} is create-only; correct it by appending")
         elif isinstance(envelope, RecordEnvelope) and envelope.is_definition:
