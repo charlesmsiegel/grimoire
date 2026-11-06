@@ -202,6 +202,24 @@ def test_a_problem_in_the_campaigns_transcripts_folder_does_not_give_a_new_chat_
         table.runner.begin(card_chat, table.player())  # a chat started here still opens
 
 
+def test_a_transcripts_folder_that_cannot_be_walked_hides_the_history_and_says_so(tmp_path):
+    folder = v1_library(tmp_path)
+    real = folder / "campaigns" / V1_CHAT.campaign_id / "transcripts"
+    moved = tmp_path / "elsewhere"
+    real.rename(moved)
+    try:
+        real.symlink_to(moved, target_is_directory=True)  # a link is never followed
+    except OSError:  # Windows without the privilege to make one
+        pytest.skip("this platform cannot make a directory link here")
+    with Table(folder, voices=MARA_VOICE) as table:
+        scene = table.runner.open(V1_CHAT)
+        assert scene.imported is None and problems(scene, "imported_history_unreadable")
+        table.runner.seat(V1_CHAT, ANA)
+        with pytest.raises(SceneRefused) as refused:
+            table.runner.begin(V1_CHAT, table.player())  # its pages may be there: no second opening
+        assert refused.value.reason == "already_begun"
+
+
 def test_damaged_imported_pages_are_heard_by_nobody_and_reported(tmp_path):
     folder = v1_library(tmp_path)
     (page,) = pages_of(folder, V1_CHAT)

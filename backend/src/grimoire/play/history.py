@@ -67,8 +67,12 @@ def _imported_player(record, names: Mapping[InstanceRef, str]) -> str | None:
 
 
 def _about_chat(problem: object, chat: ChatRef) -> bool:
-    """Whether a transcript problem is about this chat's own pages or folder, not the campaign's folder."""
+    """Whether a transcript problem can hide this chat's pages: one about its own pages or folder, or about
+    the campaign's ``transcripts`` folder itself (a link, a file, an unlistable folder), behind which nobody
+    can tell whether the chat has pages. A look-alike sibling (``Transcripts``) hides none of them."""
     text = _problem_text(problem)
+    if any(text.startswith(f"campaigns/{chat.campaign_id}{folder}:") for folder in ("", "/transcripts")):
+        return True
     return any(f"{prefix}{chat.chat_id}{end}" in text
                for prefix in ("transcripts/", "#transcript/") for end in ("/", ":"))
 
