@@ -126,6 +126,23 @@ def test_a_dismissal_on_the_serving_device_after_its_snapshot_is_never_undone(tm
     assert report.passes[-1].conflict(WREN_PATH).dismissed == (PHONE,)  # the next pass read the dismissal
 
 
+def test_a_keep_that_refills_a_recorded_slot_rewrites_the_same_record_over_the_transport(tmp_path):
+    """As above with no dismissal: the data step keeps the desktop's version again, adding no delivery,
+    and still guards the phone's record by rewriting its own bytes (compare-and-swap against what the
+    plan read). The phone takes that unchanged record, and the copy stays the one it delivered."""
+    desktop, phone = _conflict(tmp_path)
+    mine = (desktop.store.root / WREN_PATH).read_bytes()
+    for slot in (phone.store.root / ".conflicts").rglob("*"):
+        if slot.is_file() and slot.read_bytes() == mine:
+            slot.unlink()
+    before = phone.store.read_sync_state(f"peers/{DESKTOP}/keeps.json")
+    with serving(phone) as server:
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert report.status == "conflicts" and report.passes[-1].conflict(WREN_PATH) is not None, report
+    assert mine in _kept(phone) and phone.store.read_sync_state(f"peers/{DESKTOP}/keeps.json") == before
+    assert dismiss(phone.store, DESKTOP, WREN_PATH, etag(mine), phone.handle).wrote
+
+
 def _raw_step(desktop, server, *ops: tuple[str, bytes]) -> None:  # type: ignore[no-untyped-def]
     """Send one step of ``.sync`` writes as a hostile but authenticated desktop would; it must be refused."""
     pairing = read_pairing(desktop.store, PHONE)
