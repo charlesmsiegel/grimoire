@@ -337,8 +337,9 @@ class Stage:
         """The same facts at a later ``sequence``: the caller's word that nothing physical changed between.
 
         ``perceptions`` and ``deliver`` need a stage whose ``as_of`` is the moment they record. ``apply``
-        takes one change per sequence, so a stage at a sequence is the scene after everything done at it and
-        a stage left behind by a later change can never be used by mistake. Earlier sequences are
+        takes one change per sequence, so a stage at a sequence is the scene after everything done at it.
+        A stage is a value with no lineage: the caller must keep and pass on the latest stage, since an
+        older one (or ``at`` on it) cannot know of a change made from it elsewhere. Earlier sequences are
         ``out_of_order``.
         """
         def shapes() -> None:

@@ -145,6 +145,18 @@ def event(sequence, event_id="e-1", scene=SCENE):
     return Event(C, event_id, "a letter is burned", Moment(sequence, scene), "director")
 
 
+def test_room_speech_never_tells_someone_the_speaker_cannot_see():
+    wardrobe = ref("wardrobe", "item")
+    s = do(stage(), place(wardrobe, area="study"), place(TOMA, holder=wardrobe))
+    call = deliver(s, Message("m-w", MARA, "speech", "is anyone here?"), sequence=s.as_of, provenance=P)
+    by_holder = {report.holder: report for report in call.reports}
+    assert by_holder[TOMA].channel == "overheard" and not by_holder[TOMA].addressed
+    back = deliver(s, Message("m-x", TOMA, "speech", "only me"), sequence=s.as_of, provenance=P)
+    assert {r.holder: r.channel for r in back.reports}[MARA] == "overheard"
+    named = deliver(s, Message("m-y", MARA, "speech", "come out", (TOMA,)), sequence=s.as_of, provenance=P)
+    assert {r.holder: r.channel for r in named.reports}[TOMA] == "told"
+
+
 def test_perceptions_go_to_witnesses_only():
     s = stage()
     got = perceptions(s, event(1), area="study", percept="smoke curls from the desk", provenance=P)
@@ -154,8 +166,10 @@ def test_perceptions_go_to_witnesses_only():
                                 "smoke curls from the desk", Moment(1, SCENE), P, confirmed=True)
     assert pid.startswith("e-1.w-") and len(pid) == len("e-1.w-") + 16
     for bad in (dict(channel=None, area="study", percept="x"), dict(channel="seen", area="study", percept="\ud800"),
-                dict(channel="seen", area="", percept="x")):
+                dict(channel="seen", area="", percept="x"), dict(channel="seen", area="A study", percept="x")):
         refused("invalid_field", perception_id, "e-1", MARA, **bad)
+    refused("invalid_field", perception_id, "Not An Id", MARA, channel="seen", area="study", percept="x")
+    refused("invalid_field", perception_id, "e" * (EVENT_ID_MAX + 1), MARA, channel="seen", area="study", percept="x")
     # another channel or percept for the same event is another, storable perception
     heard = perceptions(s, event(1), area="study", percept="a crackle", provenance=P, channel="heard")
     assert not {p.evidence_id for p in got} & {p.evidence_id for p in heard}

@@ -46,7 +46,7 @@ The stage is **scene-local staging and director truth**:
 - Bounds: 1–64 areas (none is `invalid_field`), 128 ways, 256 actors (033's cast limit), 1024 placements (`too_large`).
 - Collections are sorted, so equal facts give equal stages. A stage pickles, copies and converts with `dataclasses.asdict` by its facts alone.
 
-`stage.at(sequence)` is the same facts at a later sequence: the caller's word that nothing physical changed in between. `stage.on_stage()` lists the actors physically present.
+`stage.at(sequence)` is the same facts at a later sequence: the caller's word that nothing physical changed in between. A stage has no lineage, so the caller (035's runner) must keep and pass on the latest stage: an older stage, or `at` on it, cannot know of a change made from it elsewhere. `stage.on_stage()` lists the actors physically present.
 
 ## Changes (`apply(stage, change, *, sequence, provenance)`)
 
@@ -100,7 +100,7 @@ Room scale, no distances:
 ### Delivering a message within earshot (032)
 
 - `presence(stage, message, *, telepaths=(), allow_assumed=False)` builds a 032 `Presence` of the sender and everyone who physically receives the sender **on the message's own channel**. It takes the message, never a bare channel, so a presence built for speech cannot carry a whisper through an open door. Use it only for that message and that stage: it carries no sequence, so one kept after the stage changes is stale. 032's `transmit` over it reports room speech heard through an open way as `told`; only `deliver` makes it `overheard`, so prefer `deliver`.
-- `deliver(stage, message, *, sequence, provenance, turn_id=None, telepaths=(), allow_assumed=False)` is `presence` then 032's `transmit`, at the stage's own sequence (`stale_stage` otherwise). It adds one rule: **speech to the room is addressed only to the speaker's own area.** A listener who hears it through an open way gets an `overheard` report (unaddressed, no `sent_at`), so it never enters the speaker's `sent`; the speaker did not knowingly tell them. A named addressee in the next area is still told. 032's refusals raise `TransmissionError` as before.
+- `deliver(stage, message, *, sequence, provenance, turn_id=None, telepaths=(), allow_assumed=False)` is `presence` then 032's `transmit`, at the stage's own sequence (`stale_stage` otherwise). It adds one rule: **speech to the room is told only to those the speaker can see in its own area.** A listener who hears it from the next area through an open way, or out of the speaker's sight in the same room (inside a wardrobe, or with the speaker inside one), gets an `overheard` report (unaddressed, no `sent_at`), so it never enters the speaker's `sent` and the speaker's own knowledge never reveals someone hidden; the speaker did not knowingly tell them. A named addressee is still told wherever they hear it. 032's refusals raise `TransmissionError` as before.
 - So a whisper to someone behind a shut door is `addressee_absent`, and nothing is written.
 
 ### Perceptions for witnesses (012, 020)

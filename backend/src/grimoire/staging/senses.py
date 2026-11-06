@@ -287,10 +287,11 @@ def deliver(stage: Stage, message: Message, *, sequence: int, provenance: str, t
             telepaths: tuple[InstanceRef, ...] = (), allow_assumed: bool = False) -> Transmission:
     """032's ``transmit`` of ``message`` within earshot on this stage, at the stage's own ``sequence``.
 
-    One rule is added to 032's: speech to the room is addressed only to the speaker's own area. A listener
-    who hears it through an open way overhears it (an unaddressed ``overheard`` report with no ``sent_at``),
-    so it never enters the speaker's ``sent``: the speaker did not knowingly tell them. A named addressee
-    in the next area is still told. 032's refusals are raised as ``TransmissionError``.
+    One rule is added to 032's: speech to the room is told only to those the speaker can see in its own
+    area. A listener who hears it from the next area, or out of the speaker's sight (inside a wardrobe, or
+    with the speaker inside one), overhears it (an unaddressed ``overheard`` report with no ``sent_at``), so it never
+    enters the speaker's ``sent``: the speaker did not knowingly tell them. A named addressee is still
+    told wherever they hear it. 032's refusals are raised as ``TransmissionError``.
     """
     stage = _stage(stage)
     if type(message) is not Message:
@@ -300,9 +301,8 @@ def deliver(stage: Stage, message: Message, *, sequence: int, provenance: str, t
                     sequence=sequence, provenance=provenance, turn_id=turn_id)
     if message.channel != "speech" or message.addressees:
         return sent
-    area = _sensing(stage, message.sender)[0]
     reports = tuple(
-        report if _sensing(stage, report.holder)[0] == area else Report(
+        report if sees(stage, message.sender, report.holder).reason in ("same_area", "is_self") else Report(
             report.campaign_id, report.evidence_id, report.holder, report.proposition_id, "overheard",
             report.moment, report.provenance, confirmed=True, sender=report.sender,
             attributed_to=report.attributed_to)
@@ -345,11 +345,13 @@ def perception_id(event_id: str, holder: InstanceRef, *, channel: str, area: str
     and 020's ``duplicate_id``); another channel, area or percept for the same event gives another id.
     """
     def shapes() -> None:
-        _label(event_id)
+        validate_segment(event_id, "event_id")
+        if len(event_id) > EVENT_ID_MAX:
+            raise ValueError("event_id leaves no room for the witness suffix")
         if type(holder) is not InstanceRef:
             raise TypeError("holder")
         validate_segment(channel, "channel")
-        _label(area)
+        validate_segment(area, "area")
         if type(percept) is not str or not percept:
             raise TypeError("percept")
         percept.encode("utf-8")
