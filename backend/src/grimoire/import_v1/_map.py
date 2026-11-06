@@ -849,6 +849,9 @@ class _Mapper:
         legacy = self.legacy_of(row)
         missing = None
         if row.get("status") != "resolved":
+            obj = objects.get(row.get("image")) if isinstance(row.get("image"), str) else None
+            if row.get("status") in MISSING_NOTES and obj is not None and self.skipped(self.legacy(obj["path"])):
+                return None, None  # the reviewer declined the picture: no missing slot either, as in picture()
             self.unresolved(legacy, str(row.get("status")), row.get("image"))
             if row.get("status") not in MISSING_NOTES:  # malformed, or no picture named: nothing to place
                 return None, None

@@ -105,6 +105,19 @@ def test_a_world_picture_whose_bytes_are_missing_is_an_unresolved_slot(env):
     assert ("dangling_object", MISSING_ID) in _reasons(result.review)  # still reported
 
 
+def test_a_declined_world_picture_whose_bytes_are_missing_leaves_no_slot(env):
+    _unarrived(env)
+    write(env.v1, f"{MARA}/assets/default/image-refs/gallery_2.json", placement(GREEN_ID))
+    env.rescan()
+    green = f"v1:{ARCHIVE}:assets/image-store/objects/{GREEN_ID[4:6]}/{GREEN_ID}.json"
+    result = env.plan(Selection({"saltmarch": SALTMARCH}, {}, frozenset({green}))).apply()
+    assert result.review["skipped"] == [green]
+    assert str(PlacementRef(MARA_SUBJECT, "gallery_2")) not in _placements(result.review)
+    assert not any("gallery_2" in path for path in result.review["writes"])
+    slot = _images(env).effective_placements(MARA_SUBJECT).slot("gallery_2")
+    assert not isinstance(slot, Unavailable)  # declined, not missing: nothing was placed
+
+
 def test_a_campaign_crop_of_a_missing_world_picture_is_reported_and_the_slot_stays_missing(env):
     write(env.v1, WORLD_AVATAR, placement(MISSING_ID, focus=40))  # the campaign re-crops this avatar
     env.rescan()
