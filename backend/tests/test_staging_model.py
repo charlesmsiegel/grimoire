@@ -76,6 +76,7 @@ def test_shapes_are_refused_without_text():
                  lambda: Way("w", "ab"), lambda: Placement(MARA), lambda: Placement(MARA, area="a", holder=KEY),
                  lambda: Placement(MARA, area="a", basis="guessed"), lambda: Placement(MARA, area="a", since=-1),
                  lambda: Placement(MARA, area="a", since=True), lambda: Absence("campaign:c1/character/x"),
+                 lambda: Absence(MARA, basis="guessed"), lambda: Absence(MARA, basis=1),
                  lambda: stage(as_of=-1), lambda: Stage(C, "", 0, (Area("a"),)),
                  lambda: Stage(C, "s\ud800", 0, (Area("a"),)), lambda: Stage(C, "s", 0, ())):
         error = refused("invalid_field", call)

@@ -9,7 +9,7 @@ from grimoire.core import Event, InstanceRef, Moment, Perception
 from grimoire.staging import (
     EVENT_ID_MAX, Absence, Answer, Placement, StagingRefused, Whereabouts, apply, audience, check_cast,
     custody_divergence, deliver, hears, leave, move, open_way, perception_id, perceptions, place, presence,
-    reach, sees, set_way, take, unlock_way, where, witnesses,
+    reach, remove, sees, set_way, take, unlock_way, where, witnesses,
 )
 
 from staging_fixtures import C, COIN, EMMA, FRONT_DOOR, KEY, LETTER, MARA, ODD, SATCHEL, SCENE, STUDY_DOOR, TOMA, ref, stage
@@ -215,7 +215,8 @@ def test_custody_divergence_against_034_holders():
     chest = ref("chest", "item")
     study = ref("the-study-room", "location")
     assert custody_divergence(s, {KEY: MARA, LETTER: study, COIN: SATCHEL}, here=(study,)) == ()
-    assert custody_divergence(s, {KEY: TOMA, LETTER: MARA, ref("cup", "item"): MARA}) == (KEY, LETTER)
+    cup = ref("cup", "item")
+    assert custody_divergence(s, {KEY: TOMA, LETTER: MARA, cup: MARA}) == (KEY, cup, LETTER)
     # a holder that is not this scene's ground disagrees with an item on the desk
     assert custody_divergence(s, {LETTER: chest}) == (LETTER,)
     assert custody_divergence(s, {LETTER: ref("bob", "character")}, here=(study,)) == (LETTER,)
@@ -223,12 +224,113 @@ def test_custody_divergence_against_034_holders():
     refused("invalid_field", custody_divergence, s, {}, here="x")
 
 
+def test_an_untracked_item_whose_holder_is_on_stage_diverges():
+    # 034 says Mara holds the study key; a stage seeded without it would refuse her her own door (no_key)
+    full = stage()
+    seeded = stage(placements=tuple(p for p in full.placements if p.who != KEY))
+    assert custody_divergence(seeded, {KEY: MARA}) == (KEY,)
+    refused("no_key", lambda: apply(seeded, unlock_way(MARA, STUDY_DOOR), sequence=2, provenance=P))
+    assert custody_divergence(seeded, {KEY: ODD}) == (KEY,)  # an absent actor's own pocket is on this stage too
+    assert custody_divergence(seeded, {KEY: SATCHEL}) == (KEY,)  # and so is a thing the stage places
+    # a holder the stage does not track (elsewhere, or this scene's own ground) needs no staged copy
+    study = ref("the-study-room", "location")
+    assert custody_divergence(seeded, {KEY: ref("bob"), ref("cup", "item"): study}, here=(study,)) == ()
+
+
+def test_reaching_what_an_absent_actor_carries_is_thing_off_stage():
+    gone = do(opened(), move(MARA, STUDY_DOOR), leave(MARA, FRONT_DOOR))
+    assert reach(gone, EMMA, KEY) == Answer(False, "thing_off_stage")
+    assert reach(gone, EMMA, COIN) == Answer(False, "thing_off_stage")  # in her satchel, gone with her
+    refused("thing_off_stage", lambda: apply(gone, take(EMMA, KEY), sequence=gone.as_of + 1, provenance=P))
+    # resting on a guess that the carrier is away, it says so
+    guessed = do(stage(), remove(MARA, basis="assumed"))
+    assert reach(guessed, TOMA, KEY) == Answer(False, "thing_off_stage", (f"absence:{MARA}",))
+
+
+def test_an_assumed_absence_is_never_a_silent_guess():
+    # Odd is only guessed not to have arrived yet: the stage must say so, and evidence must not rest on it
+    guessed = stage(absences=(Absence(ODD, basis="assumed"),))
+    assert where(guessed, ODD) == Whereabouts("off_stage", absent=ODD, assumed=(f"absence:{ODD}",))
+    assert sees(guessed, ODD, MARA) == Answer(False, "viewer_off_stage", (f"absence:{ODD}",))
+    assert hears(guessed, ODD, MARA, "speech") == Answer(False, "listener_off_stage", (f"absence:{ODD}",))
+    assert witnesses(guessed, "study") == (MARA, TOMA)
+    refused("rests_on_assumption", perceptions, guessed, event(1), area="study", percept="a vase shatters",
+            provenance=P)
+    assert [p.holder for p in perceptions(guessed, event(1), area="study", percept="a vase shatters",
+                                          provenance=P, allow_assumed=True)] == [MARA, TOMA]
+    refused("rests_on_assumption", deliver, guessed, Message("m-1", MARA, "speech", "hush"),
+            sequence=1, provenance=P)  # room speech is judged by every listener's staging, Odd's among them
+    to_toma = Message("m-2", MARA, "whisper", "now", (TOMA,))
+    assert [r.holder for r in deliver(guessed, to_toma, sequence=1, provenance=P).reports] == [TOMA]
+    refused("rests_on_assumption", presence, guessed, Message("m-3", MARA, "whisper", "psst", (ODD,)))
+    # once established (play says Odd is outside), the same events go ahead without him
+    known = do(guessed, remove(ODD))
+    assert [p.holder for p in perceptions(known, event(known.as_of), area="study", percept="a vase shatters",
+                                          provenance=P)] == [MARA, TOMA]
+
+
+def party_rel(n, predicate, subject, obj, since, until=None):
+    from grimoire.core.identity import RelationRef
+    from grimoire.graph import Ending, Relation
+    ending = None if until is None else Ending(Moment(until), "d", "t")
+    return Relation(RelationRef(C, f"r-{n}"), predicate, subject, obj, Moment(since), "d", "t", ending)
+
+
 def test_check_cast_against_033():
     from grimoire.party import PartyState, stage as stage_cast
     state = PartyState.build(C, (), as_of=1, unreadable=False)
     cast = stage_cast(state, SCENE, (MARA, TOMA, EMMA, ODD), instances=(MARA, TOMA, EMMA, ODD))
-    check_cast(stage(), cast)
+    check_cast(stage(), cast, state=state)
     short = stage_cast(state, SCENE, (MARA, TOMA, EMMA), instances=(MARA, TOMA, EMMA))
-    refused("cast_mismatch", check_cast, stage(), short)
+    refused("cast_mismatch", check_cast, stage(), short, state=state)
     other_scene = stage_cast(state, "another-scene", (MARA, TOMA, EMMA, ODD), instances=(MARA, TOMA, EMMA, ODD))
-    refused("cast_mismatch", check_cast, stage(), other_scene)
+    refused("cast_mismatch", check_cast, stage(), other_scene, state=state)
+    refused("stale_state", check_cast, stage(), cast, state=PartyState.build(C, (), as_of=2, unreadable=False))
+    refused("campaign_mismatch", check_cast, stage(), cast,
+            state=PartyState.build("c2", (), as_of=1, unreadable=False))
+    # a cast of an earlier sequence is staged again at the stage's own (033: a cast is of one sequence)
+    later = PartyState.build(C, (), as_of=2, unreadable=False)
+    refused("stale_cast", check_cast, stage().at(2), cast, state=later)
+    check_cast(stage().at(2), stage_cast(later, SCENE, cast.present, instances=cast.present), state=later)
+    from grimoire.staging import Area, Stage
+    lone = Stage(C, SCENE, 2, (Area("study"),))
+    empty = stage_cast(state, SCENE, (), instances=())
+    refused("stale_cast", check_cast, lone, empty, state=later)  # no member to ask 033 about, still stale
+    unreadable = PartyState.build(C, (), as_of=1, unreadable=True)
+    refused("relations_unreadable", check_cast, stage(), cast, state=unreadable)
+    refused("invalid_field", check_cast, stage(), cast, state=None)
+    refused("invalid_field", check_cast, stage(), "cast", state=state)
+
+
+def test_a_member_boxed_after_staging_is_refused_and_never_hears_the_room():
+    from grimoire.party import PartyRefused, PartyState, presence as party_presence, stage as stage_cast
+    grub = ref("goblin", "creature")
+    s = stage(placements=(*stage().placements, Placement(grub, area="study")))
+    s = type(s)(C, SCENE, 2, s.areas, s.ways, (*s.actors, grub), s.placements, s.absences)
+    members = (*s.actors,)
+    travelling = PartyState.build(C, [party_rel(1, "in_party", grub, MARA, 1)], as_of=2, unreadable=False)
+    cast = stage_cast(travelling, SCENE, members, instances=members)
+    check_cast(s, cast, state=travelling)
+    # at the same sequence, Mara boxes the goblin: 033 calls the cast stale, and so does the stage check
+    boxed = PartyState.build(C, [party_rel(1, "in_party", grub, MARA, 1, until=2),
+                                 party_rel(2, "in_reserve", grub, MARA, 2)], as_of=2, unreadable=False)
+    assert boxed.reserved(grub)
+    with pytest.raises(PartyRefused) as caught:
+        party_presence(boxed, cast, grub)
+    assert caught.value.reason == "stale_cast"
+    with pytest.raises(StagingRefused) as refusal:
+        check_cast(s, cast, state=boxed)
+    assert refusal.value.reason == "stale_cast" and str(refusal.value) == "stale_cast"
+    assert refusal.value.__cause__ is None and refusal.value.__context__ is None
+    # and the reserve cannot be staged again: 033 refuses it, so it is recast off the stage first
+    with pytest.raises(PartyRefused) as recast:
+        stage_cast(boxed, SCENE, members, instances=members)
+    assert recast.value.reason == "in_reserve"
+    # the audit's case: a stage checked at sequence 1 and moved on, after the box, is refused
+    one = PartyState.build(C, [party_rel(1, "in_party", grub, MARA, 1)], as_of=1, unreadable=False)
+    first = stage_cast(one, SCENE, members, instances=members)
+    s1 = type(s)(C, SCENE, 1, s.areas, s.ways, s.actors, s.placements, s.absences)
+    check_cast(s1, first, state=one)
+    later = PartyState.build(C, [party_rel(1, "in_party", grub, MARA, 1, until=2),
+                                 party_rel(2, "in_reserve", grub, MARA, 2)], as_of=2, unreadable=False)
+    refused("stale_cast", check_cast, s1.at(2), first, state=later)

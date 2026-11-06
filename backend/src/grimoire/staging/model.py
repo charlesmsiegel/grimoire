@@ -8,9 +8,9 @@ It is scene-local staging and director truth. It is never world canon (durable c
 021's accepted effects) and never an actor's knowledge (what an actor knows comes only from its own 012
 evidence). Nothing here touches files or calls a model, and nothing is stored in this slice.
 
-Every fact carries a ``basis``: ``established`` (stated in accepted play or by a correction) or
-``assumed`` (plausible staging the director filled in, never stated), and the sequence ``since`` which it
-has held.
+Every fact (a way, a placement, an absence) carries a ``basis``: ``established`` (stated in accepted play
+or by a correction) or ``assumed`` (plausible staging the director filled in, never stated), and the
+sequence ``since`` which it has held.
 """
 
 from __future__ import annotations
@@ -196,10 +196,15 @@ class Placement:
 
 @dataclass(frozen=True, slots=True)
 class Absence:
-    """A cast actor who is off stage: who left through ``via`` (a way id), or who has not entered (``None``)."""
+    """A cast actor who is off stage: who left through ``via`` (a way id), or who has not entered (``None``).
+
+    ``basis`` is ``established`` (play or a correction said so) or ``assumed`` (plausible staging the
+    director filled in: an actor guessed not to have arrived yet), as a placement's is.
+    """
 
     actor: InstanceRef
     via: str | None = None
+    basis: str = "established"
     since: int = 0
 
     def __post_init__(self) -> None:
@@ -207,6 +212,7 @@ class Absence:
             _ref(self.actor)
             if self.via is not None:
                 _segment(self.via, "via")
+            _basis(self.basis)
             _sequence(self.since)
         checked(check)
 

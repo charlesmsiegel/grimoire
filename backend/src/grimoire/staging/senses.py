@@ -15,8 +15,8 @@ Rules of this slice (room scale, no distances):
   shut way stops it. ``whisper`` reaches only the same area. ``telepathy`` ignores ways and walls: any actor
   on stage. Who may send telepathically stays 032's (and later 025's) question.
 
-``assumed`` in an answer lists the facts it rests on that are only assumed, as ``placement:<ref>`` and
-``way:<way_id>``, so a caller can ask rather than invent.
+``assumed`` in an answer lists the facts it rests on that are only assumed, as ``placement:<ref>``,
+``absence:<ref>`` and ``way:<way_id>``, so a caller can ask rather than invent.
 """
 
 from __future__ import annotations
@@ -28,7 +28,8 @@ from collections.abc import Mapping
 
 from ..comms import CHANNELS, Message, Presence, Transmission, transmit
 from ..core import Event, InstanceRef, Perception, Report
-from ..party import SceneCast
+from ..party import PartyRefused, PartyState, SceneCast
+from ..party import presence as party_presence
 from ..core.identity import SLOT_MAX, validate_segment
 from ..evidence import TEXT_LIMIT
 from .changes import reach_refusal
@@ -76,14 +77,24 @@ def _ref(stage: Stage, value: object) -> InstanceRef:
 
 
 def _assumed_chain(stage: Stage, who: InstanceRef) -> list[str]:
-    """The assumed placements of ``who`` and of every holder above it."""
+    """The assumed placements of ``who`` and of every holder above it, and the assumed absence of the
+    off-stage actor the chain ends at (``who`` itself, or whoever carries it off)."""
     found = []
-    current = stage.placement(who)
-    while current is not None:
-        if current.basis == "assumed":
-            found.append(f"placement:{current.who}")
-        current = stage.placement(current.holder) if current.holder is not None else None
-    return found
+    current = who
+    while True:
+        absence = stage.absence(current)
+        if absence is not None:
+            if absence.basis == "assumed":
+                found.append(f"absence:{current}")
+            return found
+        placement = stage.placement(current)
+        if placement is None:
+            return found
+        if placement.basis == "assumed":
+            found.append(f"placement:{current}")
+        if placement.holder is None:
+            return found
+        current = placement.holder
 
 
 def _answer(ok: bool, reason: str, *assumed: list[str]) -> Answer:
@@ -96,7 +107,7 @@ def where(stage: Stage, who: InstanceRef) -> Whereabouts:
     stage = _stage(stage)
     who = _ref(stage, who)
     if stage.absence(who) is not None:
-        return Whereabouts("off_stage", absent=who)
+        return Whereabouts("off_stage", absent=who, assumed=tuple(_assumed_chain(stage, who)))
     placement = stage.placement(who)
     if placement is None:
         return Whereabouts("untracked")
@@ -319,9 +330,11 @@ def _witness_answers(stage: Stage, area: str) -> list[tuple[InstanceRef, Answer]
     answers = []
     for actor in stage.actors:
         actor_area, inside = _sensing(stage, actor)
-        if actor_area is None:
-            continue
         assumed = _assumed_chain(stage, actor)
+        if actor_area is None:
+            # off stage: no witness, but one only assumed not to have arrived is left out on a guess
+            answers.append((actor, _answer(False, "viewer_off_stage", assumed)))
+            continue
         if inside:
             answers.append((actor, _answer(False, "viewer_contained", assumed)))
             continue
@@ -410,8 +423,10 @@ def custody_divergence(stage: Stage, holders: Mapping[InstanceRef, InstanceRef],
     is set in), which the stage shows as resting in an area. An item the stage tracks agrees when its stage
     holder is that holder, or when it rests in an area and its holder is in ``here``. Any other canonical
     holder the stage does not track (a chest in another town, someone not in the scene) disagrees with an
-    item on this stage. The stage is a scene projection: a runner checks this when it builds a stage and
-    before it proposes a 034 move.
+    item on this stage. An item the stage does not track disagrees when its canonical holder is on the
+    stage (an actor, placed or absent, or a thing it places): the stage would deny that holder its own
+    item (a door its key cannot unlock). The stage is a scene projection: a runner checks this when it
+    builds a stage and before it proposes a 034 move.
     """
     stage = _stage(stage)
     if not isinstance(holders, Mapping) or isinstance(here, (str, bytes)) \
@@ -424,6 +439,8 @@ def custody_divergence(stage: Stage, holders: Mapping[InstanceRef, InstanceRef],
         _ref(stage, holder)
         placement = stage.placement(item)
         if placement is None:
+            if stage.placement(holder) is not None or stage.absence(holder) is not None:
+                diverging.append(item)  # its holder is here, and the stage has lost the item
             continue
         if placement.holder is not None:
             agrees = placement.holder == holder
@@ -434,19 +451,44 @@ def custody_divergence(stage: Stage, holders: Mapping[InstanceRef, InstanceRef],
     return tuple(sorted(diverging, key=str))
 
 
-def check_cast(stage: Stage, cast: SceneCast) -> None:
-    """Refuse a stage whose actors are not exactly 033's staged cast of the same campaign and scene
-    (``cast_mismatch``). The cast's own sequence is not compared: a cast is staged once, the stage moves on.
+def check_cast(stage: Stage, cast: SceneCast, *, state: PartyState) -> None:
+    """Refuse a stage whose actors are not 033's current cast of the scene, judged by 033's own rule.
+
+    ``cast`` must be 033's staged cast of the same campaign and scene with exactly the stage's actors
+    (``cast_mismatch``). ``state`` is the campaign's 033 membership at the stage's sequence
+    (``campaign_mismatch``, ``stale_state``), and the cast must still hold against it, as 033's
+    ``presence`` says: a cast of another sequence, or one a member was boxed, moved or made ambiguous
+    since, is ``stale_cast``; a state 033 cannot read in full is ``relations_unreadable``. So a cast is
+    staged again (033's ``stage``) at each sequence, and checked here before ``deliver`` or ``perceptions``
+    there: a member reserved after staging never hears the room or witnesses an event.
 
     033's cast is who is present in the scene; the stage's absences are who of them has physically left.
     So the actors physically present are ``stage.on_stage()``, and a 032 presence comes from the stage.
     """
     stage = _stage(stage)
-    if type(cast) is not SceneCast:
+    if type(cast) is not SceneCast or type(state) is not PartyState:
         fail("invalid_field")
     if cast.campaign_id != stage.campaign_id or cast.scene_id != stage.scene_id \
             or set(cast.present) != set(stage.actors):
         fail("cast_mismatch")
+    if state.campaign_id != stage.campaign_id:
+        fail("campaign_mismatch")
+    if state.as_of != stage.as_of:
+        fail("stale_state")
+    if cast.as_of != state.as_of:
+        fail("stale_cast")  # 033's own rule, said here too so a cast with no members is held to it
+    reason = None
+    for actor in cast.present:
+        try:
+            if party_presence(state, cast, actor) != "present":
+                reason = "stale_cast"
+        except PartyRefused as refused:
+            reason = refused.reason if refused.reason in ("stale_cast", "relations_unreadable") \
+                else "invalid_field"
+        if reason is not None:
+            break
+    if reason is not None:
+        fail(reason)  # outside the handler: 033's refusal names members, which a StagingRefused never does
 
 
 __all__ = [

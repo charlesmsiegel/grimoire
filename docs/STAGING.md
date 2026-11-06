@@ -32,10 +32,10 @@ The stage is **scene-local staging and director truth**:
 | `Area(area_id, label=None)` | One room-scale local area: a study, a hall. No coordinates, distances or positions within it. `label` is for people. |
 | `Way(way_id, sides, state, key=None, basis, since)` | A door or passage between two areas, or from an area to off stage (`sides == (area, None)`). `state` is `open`, `closed` or `locked`. `key` is the item that locks and unlocks it; a way with no key has no lock (only a correction can change a locked one: a door barred from the other side). |
 | `Placement(who, area=None, holder=None, basis, since)` | Exactly one of `area` (rests or stands in it) and `holder` (held or carried by that individual). A thing held by an actor is in hand; a thing held by a thing is inside or on it (**contained**). |
-| `Absence(actor, via=None, since)` | A cast actor who is off stage: who left through `via` (a way that leads off stage), or who has not entered (`None`). |
+| `Absence(actor, via=None, basis, since)` | A cast actor who is off stage: who left through `via` (a way that leads off stage), or who has not entered (`None`). |
 | `Stage(campaign_id, scene_id, as_of, areas, ways, actors, placements, absences)` | The staging at campaign sequence `as_of`. `scene_id` is a label of at most 200 characters, as 032's. |
 
-**Basis.** Every placement and way carries `basis`, `established` (stated in accepted play, or corrected) or `assumed` (plausible staging the director filled in that nothing has stated), and `since`, the sequence it has held from. Every answer lists the assumed facts it rests on, so a caller can ask rather than invent.
+**Basis.** Every placement, way and absence carries `basis`, `established` (stated in accepted play, or corrected) or `assumed` (plausible staging the director filled in that nothing has stated), and `since`, the sequence it has held from. Every answer lists the assumed facts it rests on, so a caller can ask rather than invent.
 
 **Invariants**, checked on every construction, `dataclasses.replace` included:
 - `actors` are the individuals who act (the runner builds them from 033's cast). Every other placed individual is a thing.
@@ -50,7 +50,7 @@ The stage is **scene-local staging and director truth**:
 
 ## Changes (`apply(stage, change, *, sequence, provenance)`)
 
-`apply` returns the new stage (its `as_of` is `sequence`) or raises `StagingRefused`, with nothing changed. `sequence` must be after `as_of` (`out_of_order`): **one change per sequence**, so a stage at a sequence is the scene after everything done at it, and `perceptions` and `deliver` at that sequence never judge against a later change. A turn of several physical steps (unlock, open, walk through) takes one sequence per step. `provenance` is attribution text, validated and not recorded on the stage in this slice.
+`apply` returns the new stage (its `as_of` is `sequence`) or raises `StagingRefused`, with nothing changed. `sequence` must be after `as_of` (`out_of_order`): **one change per sequence**, so a stage at a sequence is the scene after everything done at it, and `perceptions` and `deliver` at that sequence never judge against a later change. A turn of several physical steps (unlock, open, walk through) takes one sequence per step; how that fits 021's one sequence per turn is [open](#open-design-question-one-sequence-per-change). `provenance` is attribution text, validated and not recorded on the stage in this slice.
 
 **Physical changes** are made by an actor standing in an area. One who is not an actor (`not_actor`), off stage (`not_on_stage`) or carried by someone (`restrained`) cannot act. Every fact a physical change sets is `established`: accepted play establishes its own result, even where it rested on an assumption.
 
@@ -65,7 +65,7 @@ The stage is **scene-local staging and director truth**:
 | `open_way`, `close_way(who, way)` | who's area is a side; closed→open, open→closed | the state | `way_elsewhere`, `already_open`, `way_locked`, `already_closed` |
 | `lock_way`, `unlock_way(who, way)` | who at a side; the way has a key; the key is in who's own custody at any depth (a key in their satchel works; one in the pocket of someone they carry does not: `stage.own_custody`); closed→locked, locked→closed | the state | `no_lock`, `still_open`, `already_locked`, `not_locked`, `no_key` |
 
-An **absent actor stands outside**: it may open, close, lock or unlock a way that leads off stage, so it can come back in through a door shut behind it. Any other way is `not_on_stage`.
+An **absent actor stands outside**: it may open, close, lock or unlock a way that leads off stage, so it can come back in through a door shut behind it. Any other way is `not_on_stage`. Accepted play then has it outside, so an assumed absence becomes established. Off stage is one place: see [later work](#boundaries-and-later-work).
 
 **People are not handed around.** An actor carried by another (set there by a correction) is set down or moved only by a correction: `drop` and `give` refuse `is_actor`, and nothing that holds an actor at any depth can be taken, given or carried off stage (`holds_actor`).
 
@@ -74,14 +74,14 @@ An **absent actor stands outside**: it may open, close, lock or unlock a way tha
 | Correction | Effect |
 |---|---|
 | `place(who, area=… or holder=…, basis="established")` | Puts `who` there. An absent actor placed this way is on stage again. `basis="assumed"` records plausible, unstated staging; a later `place` with the default basis establishes it. |
-| `remove(who)` | An actor becomes absent with no way, keeping what it carries (`already_absent`; `holds_actor` while it carries an actor). A thing stops being tracked with everything inside or on it (`untracked`), unless an actor is inside it (`holds_actor`). |
+| `remove(who, basis="established")` | An actor becomes absent with no way, keeping what it carries (`already_absent`; `holds_actor` while it carries an actor). `basis="assumed"` records an actor the director only guesses is not here (not arrived yet); a later `remove` with the default basis establishes that absence, and an established one is never made a guess again (`already_absent`). A thing stops being tracked with everything inside or on it (`untracked`), unless an actor is inside it (`holds_actor`); it leaves no record to hold a guess, so its removal cannot be assumed (`not_actor`). |
 | `set_way(way, state, basis="established")` | Sets the state, whoever holds the key, and a keyless way may be set `locked`. |
 
 Recasting (a new actor, area or way) is a new `Stage`, checked again against 033's cast.
 
 ## Questions (`senses.py`)
 
-Each returns `Answer(ok, reason, assumed)` unless noted. `assumed` lists the facts the answer rests on that are only assumed, as `placement:<ref>` and `way:<way_id>`, for a no as much as a yes (a letter assumed to be in the hall is `elsewhere` on a guess).
+Each returns `Answer(ok, reason, assumed)` unless noted. `assumed` lists the facts the answer rests on that are only assumed, as `placement:<ref>`, `absence:<ref>` (the off-stage actor itself, or whoever carries the thing off) and `way:<way_id>`, for a no as much as a yes (a letter assumed to be in the hall is `elsewhere` on a guess).
 
 | Question | Yes | No |
 |---|---|---|
@@ -113,16 +113,22 @@ Room scale, no distances:
 - Witnesses are judged on the stage after any change the event itself made: an actor behind a door the event shut, or one the event took off stage, gets nothing of it. Perceiving the change itself is later work.
 - 020 stores the result unchanged.
 
-**Evidence is never invented.** `presence`, `deliver` and `perceptions` decide who receives evidence, which 020 cannot take back. When an answer they use rests on an assumed fact (an assumed position, or an assumed open door), they refuse with `rests_on_assumption` unless the caller passes `allow_assumed=True`: ask, or establish the position, first. That includes an actor left out on a guess (assumed inside a wardrobe, or behind a door assumed shut). For a whisper or telepathy only the addressees' staging counts, since no one else receives it; for speech every listener's does. One established open way between two areas is enough on its own; an assumed open way beside it is not relied on.
+**Evidence is never invented.** `presence`, `deliver` and `perceptions` decide who receives evidence, which 020 cannot take back. When an answer they use rests on an assumed fact (an assumed position, or an assumed open door), they refuse with `rests_on_assumption` unless the caller passes `allow_assumed=True`: ask, or establish the position, first. That includes an actor left out on a guess (assumed inside a wardrobe, behind a door assumed shut, or assumed not to have arrived yet). For a whisper or telepathy only the addressees' staging counts, since no one else receives it; for speech every listener's does. One established open way between two areas is enough on its own; an assumed open way beside it is not relied on.
 
 ### Checks against 033 and 034
 
-- `check_cast(stage, cast)` refuses a stage whose actors are not exactly 033's staged `SceneCast` of the same campaign and scene (`cast_mismatch`). The cast's sequence is not compared: a cast is staged once and the stage moves on. **Physical presence** is the cast less the stage's absences (`stage.on_stage()`). 033's `presence` and `may_speak` still answer cast membership. A runner (035) takes 032 presences from the stage, and treats an absent cast member as not speaking in the room.
-- `custody_divergence(stage, holders, *, here=())` takes each 034 unique item's canonical holder and returns the items whose staging disagrees. `here` names the canonical holders that stand for this scene's ground (the place it is set in): an item resting in an area agrees with those. Any other holder the stage does not track (a chest in another town, someone not in the scene) disagrees with an item on this stage. A runner checks this when it builds a stage and before it turns a stage custody change into a 034 move. The stage knows nothing of 034's equipped slots: 034's own move refuses `still_equipped`.
+- `check_cast(stage, cast, *, state)` refuses a stage whose actors are not exactly 033's staged `SceneCast` of the same campaign and scene (`cast_mismatch`), judged against `state`, 033's `PartyState` of the campaign at the stage's own sequence (`campaign_mismatch`, `stale_state`). The cast must still hold by 033's own `presence`: a cast of another sequence, or one a member was boxed, moved or made ambiguous since staging, is `stale_cast`, and a state 033 cannot read in full is `relations_unreadable`. So the runner stages the cast again (033's `stage`) at each sequence and checks it here before `deliver` or `perceptions` there; a member reserved after staging is refused rather than hearing the room or witnessing events (033 refuses to stage a reserved member, so it is recast off the stage first). **Physical presence** is the cast less the stage's absences (`stage.on_stage()`). 033's `presence` and `may_speak` still answer cast membership. A runner (035) takes 032 presences from the stage, and treats an absent cast member as not speaking in the room.
+- `custody_divergence(stage, holders, *, here=())` takes each 034 unique item's canonical holder and returns the items whose staging disagrees. `here` names the canonical holders that stand for this scene's ground (the place it is set in): an item resting in an area agrees with those. Any other holder the stage does not track (a chest in another town, someone not in the scene) disagrees with an item on this stage. An item the stage does not track disagrees when its canonical holder is on the stage (an actor, placed or absent, or a thing the stage places): the stage would deny that holder its own item, such as the key to its door (`no_key`). A runner checks this when it builds a stage and before it turns a stage custody change into a 034 move. The stage knows nothing of 034's equipped slots: 034's own move refuses `still_equipped`.
 
 ## Errors
 
 `StagingRefused(reason)` carries a machine reason and no text, label or reference. It is raised outside any handler, so its cause and context are empty, and it pickles with its reason only. Malformed values are `invalid_field`.
+
+## Open design question: one sequence per change
+
+Not decided in this slice; it is for 041 milestone 2 and 035 milestone 2 together. `apply` takes one change per campaign sequence, and `perceptions` and `deliver` need the stage at their record's own sequence. 021 accepts one effect per turn at **one** sequence (several things that happen in one turn are one proposal). So a turn such as "Mara unlocks the door, opens it and walks out" is three stage sequences; the turn's event can be perceived only on the stage after the last of them, and the states between have no record; and a message and a physical change cannot share a sequence, so a whisper and a leave in one turn must put the whisper first. Either:
+- **a turn allocates several sequences** (one per staged step, messages included), which 021 and 035 do not record yet; or
+- **staging takes a list of changes per sequence** (`apply` of an ordered batch at one sequence), with `perceptions` and `deliver` told which point of the batch they judge against.
 
 ## Boundaries and later work
 
@@ -132,6 +138,7 @@ Room scale, no distances:
 | Turning narration or an intent into a `Change`; refereeing narration against the stage | 035, 047 |
 | Durable consequences as 021 operations (`located_in`, `carries`), and seeding a stage from 017 relations and 034 holders. 021 has no 034 possession part yet | 041 next slice, 021, 034 |
 | A player-scoped view of the staging, and players' own corrections through 003's channels | 041 later, 003 |
+| Where off stage an absent actor is. Off stage is one place: the stage does not remember which outside an actor left to, so one who left by the front door can work, or come back in through, any other way that leads off stage (a study window) | 041 later, [Location Topology](roadmap/sprints/location-topology.md) |
 | Positions and spots within an area, distance bands, posture, cover, barriers within an area, hiding and stealth | 041 later |
 | Putting things into containers, lockable containers, keys that are not items | 041 later |
 | Audibility levels (a shout through a door), languages, range | 041 later, 032 milestone 2 |

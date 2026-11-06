@@ -2,6 +2,8 @@
 
 **Outcome:** Maintain the immediate physical situation—presence, position, reachable objects, line of sight and local affordances—through ordinary dialogue and action.
 
+**Status:** **first slice implemented**, headless and pure: `grimoire.staging` (no store, no runner). The contract is in [STAGING.md](../../STAGING.md). Milestone 1 and the proving scenario are met on synthetic fixtures; milestone 2 (a stage kept across narrated turns, with 035) is next, and how a turn's several staged steps map to 021's one sequence per turn is an [open question](../../STAGING.md#open-design-question-one-sequence-per-change) for it.
+
 ## Scope and ownership
 - Track salient local positions, posture, held objects, barriers, exits, visibility, audibility, distance bands and object/door states only where gameplay or narration needs them.
 - Separate locally ephemeral staging from durable changes; do not require global map coordinates or tactical grids.
@@ -33,7 +35,7 @@ The headless first slice is [`grimoire.staging`](../../STAGING.md). It reaches m
 
 Answers to the open questions, for this slice:
 - **How much geometry:** areas and the ways between them, nothing finer. No coordinates, spots or distances.
-- **Ask or invent:** every fact is `established` or `assumed`; each answer lists the assumed facts it rests on, and anything that would become evidence (a presence, a perception) refuses an assumed fact unless the caller allows it.
+- **Ask or invent:** every fact (a way, a placement, an absence) is `established` or `assumed`; each answer lists the assumed facts it rests on, and anything that would become evidence (a presence, a perception) refuses an assumed fact unless the caller allows it.
 - **Staging or canon:** the stage is scene-local director truth, never canon and never actor knowledge. Durable consequences become 021 operations in the next slice.
 
-Later work: a stage persisted and maintained across turns with 035 (milestone 2); 021 operations and seeding from 017 `located_in`/`carries` and 034 holders; positions within an area, distance bands, posture, cover, stealth; containers and lockable containers; audibility levels; affordance queries for maps, audio and combat (milestone 3). See [STAGING](../../STAGING.md#boundaries-and-later-work).
+Later work: a stage persisted and maintained across turns with 035 (milestone 2); 021 operations and seeding from 017 `located_in`/`carries` and 034 holders; where off stage an absent actor is (off stage is one place); positions within an area, distance bands, posture, cover, stealth; containers and lockable containers; audibility levels; affordance queries for maps, audio and combat (milestone 3). See [STAGING](../../STAGING.md#boundaries-and-later-work).
