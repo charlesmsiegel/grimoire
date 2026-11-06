@@ -7,7 +7,11 @@ definitions, so a derived upstream portrayal is compared by its composed values,
 delta. Nothing here is matched by name: a namesake, or any other entity, is never a rebase target.
 
 Fields are named as 022's provenance names them: ``name``, ``description``, ``section:<n>`` and
-``facet:<n>``. Only fields that changed upstream or that the instance overrides get a row:
+``facet:<n>``, plus ``extra:<key>`` for a payload key 022 does not compose (``uncomposed``: 037's
+``card``, with a card's example dialogue, greetings and system prompt, which 035 reads for the
+actor's voice and opening). An ``extra:`` row compares the key's value in every layer of the chain,
+leaf first, and lists the paths that changed in ``changed``. Only fields that changed upstream or
+that the instance overrides get a row:
 
 | status | meaning | decision |
 |---|---|---|
@@ -21,25 +25,35 @@ Fields are named as 022's provenance names them: ``name``, ``description``, ``se
 campaign's value as an instance override: the ancestor value on an ``upstream`` row, the override
 on a ``conflict`` row. Only what an instance can carry can be kept (a name as ``local_name``, a
 facet as ``replaced`` or ``added``). Description and sections have no instance override in this
-slice, and an instance cannot suppress a trait its source adds, so ``keep`` there is
+slice, an instance carries no payload extras (a campaign keeping its own voice or greeting is 046's
+design), and an instance cannot suppress a trait its source adds, so ``keep`` there is
 ``not_overridable``: the campaign stays pinned instead.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Literal, Union
 
 from grimoire.core.entity import EffectiveEntity, EntityInstance, compose_instance
 from grimoire.core.facets import Facet, FacetBundle
+from grimoire.core.identity import SourceRef
+from grimoire.core.json_value import JsonObject, JsonValue
 from grimoire.core.portrayal import EffectiveDefinition
 
 Status = Literal["upstream", "conflict", "converged", "local", "individual"]
 Decision = Literal["take", "keep"]
 DECISIONS = frozenset({"take", "keep"})
-#: a field's value: text (name, description, a section), a facet, or ``None`` (absent)
-Value = Union[str, Facet, None]
+#: the field-name prefix of an uncomposed payload key's row
+EXTRA_PREFIX = "extra:"
+#: a field's value: text (name, description, a section), a facet, an uncomposed key's value in each
+#: layer of the chain (leaf first; ``None`` where a layer lacks it), or ``None`` (absent)
+Value = Union[str, Facet, tuple[JsonValue, ...], None]
+#: one revision's payload extras (009 ``EntityDefinition.extras``), for ``extra:`` rows
+ExtrasReader = Callable[[SourceRef], Mapping[str, object]]
+#: nesting ``changed`` follows inside an extra; a deeper difference is reported at that depth
+_MAX_PATH_DEPTH = 16
 
 
 class RebaseError(ValueError):
@@ -66,6 +80,9 @@ class FieldReview:
     ancestor: Value
     upstream: Value
     local: Value = None
+    #: for an ``extra:`` row, the dotted paths that differ (``card.texts.example-messages``); a path
+    #: in a base layer, not the leaf, starts ``base<n>:`` (``base1:`` is the leaf's base)
+    changed: tuple[str, ...] = ()
 
     @property
     def needs_decision(self) -> bool:
@@ -77,7 +94,7 @@ class FieldReview:
         if self.field == "name":
             return True
         if not self.field.startswith("facet:"):
-            return False  # description and sections: no instance-level override in this slice
+            return False  # description, sections and payload extras: no instance-level override in this slice
         # an upstream-only change that adds a trait cannot be suppressed by an instance
         return self.status == "conflict" or self.ancestor is not None
 
@@ -97,9 +114,67 @@ def _row(field: str, ancestor: Value, upstream: Value, local: Value, overridden:
     return FieldReview(field, "conflict", ancestor, upstream, local)
 
 
+def _same(left: object, right: object) -> bool:
+    """JSON equality that keeps types apart at every depth (``true``, ``1`` and ``1.0`` differ)."""
+    return JsonObject({"v": left}) == JsonObject({"v": right})
+
+
+def _paths(left: JsonValue, right: JsonValue, path: str, depth: int, out: list[str]) -> None:
+    if _same(left, right):
+        return
+    if depth < _MAX_PATH_DEPTH and isinstance(left, JsonObject) and isinstance(right, JsonObject):
+        found = len(out)
+        for key in sorted(set(left) | set(right)):
+            _paths(left.get(key), right.get(key), f"{path}.{key}", depth + 1, out)
+        if len(out) > found:
+            return
+    out.append(path)
+
+
+def _layer_values(definition: EffectiveDefinition, read_extras: ExtrasReader) -> dict[str, tuple[JsonValue, ...]]:
+    """Each uncomposed key of ``definition``: its value in every layer, leaf first (``None`` where absent)."""
+    named = set(definition.uncomposed)
+    layers = [node.ref for node in definition.chain]
+    extras = {ref: read_extras(ref) for ref in {ref for ref, _ in named}}
+    values: dict[str, tuple[JsonValue, ...]] = {}
+    for key in sorted({key for _, key in named}):
+        found = [extras[ref][key] if (ref, key) in named else None for ref in layers]
+        while found and found[-1] is None:
+            found.pop()
+        values[key] = tuple(found)  # type: ignore[arg-type]
+    return values
+
+
+def _extra_rows(ancestor: EffectiveDefinition, upstream: EffectiveDefinition,
+                read_extras: ExtrasReader | None) -> list[FieldReview]:
+    if not (ancestor.uncomposed or upstream.uncomposed):
+        return []
+    if read_extras is None:
+        raise TypeError(f"{ancestor.ref} or {upstream.ref} has uncomposed payload keys; review_fields needs "
+                        "read_extras to compare them")
+    old, new = _layer_values(ancestor, read_extras), _layer_values(upstream, read_extras)
+    rows = []
+    for key in sorted(set(old) | set(new)):
+        before, after = old.get(key, ()), new.get(key, ())
+        if _same(before, after):
+            continue
+        changed: list[str] = []
+        for depth in range(max(len(before), len(after))):
+            prefix = key if depth == 0 else f"base{depth}:{key}"
+            _paths(before[depth] if depth < len(before) else None, after[depth] if depth < len(after) else None,
+                   prefix, 0, changed)
+        rows.append(FieldReview(f"{EXTRA_PREFIX}{key}", "upstream", before or None, after or None,
+                                changed=tuple(changed)))
+    return rows
+
+
 def review_fields(ancestor: EffectiveDefinition, upstream: EffectiveDefinition,
-                  instance: EntityInstance) -> tuple[FieldReview, ...]:
+                  instance: EntityInstance, *, read_extras: ExtrasReader | None = None) -> tuple[FieldReview, ...]:
     """The rows of a rebase of ``instance`` from ``ancestor`` onto ``upstream``, in field order.
+
+    ``read_extras`` gives one chain layer's payload extras; it is needed (``TypeError`` otherwise)
+    when either side has uncomposed keys, which get an ``extra:<key>`` row when they differ. An
+    instance carries no extras, so such a row is always ``upstream`` and only ``take`` applies.
 
     Refuses (``RebaseError``): ``campaign_original`` (an instance with no source has nothing to
     rebase), ``other_entity`` (the two definitions or the instance's source are not one entity),
@@ -140,6 +215,7 @@ def review_fields(ancestor: EffectiveDefinition, upstream: EffectiveDefinition,
     for name in sorted(set(old_facets) | set(new_facets) | set(local)):
         rows.append(_row(f"facet:{name}", old_facets.get(name), new_facets.get(name), local.get(name),
                          name in local))
+    rows.extend(_extra_rows(ancestor, upstream, read_extras))
     return tuple(row for row in rows if row is not None)
 
 
@@ -160,7 +236,7 @@ def _check_decisions(rows: tuple[FieldReview, ...], decisions: Mapping[str, str]
     fixed = tuple(row.field for row in rows if decisions.get(row.field) == "keep" and not row.keepable)
     if fixed:
         raise RebaseError(f"{list(fixed)} cannot be kept by the campaign in this slice (no instance override of "
-                          "authored text, or of a trait the source adds); take it or stay pinned",
+                          "authored text or payload extras, or of a trait the source adds); take it or stay pinned",
                           "not_overridable", fixed)
 
 
@@ -188,7 +264,7 @@ def rebase_instance(instance: EntityInstance, rows: tuple[FieldReview, ...], dec
                 local_name = row.ancestor  # type: ignore[assignment]
             continue
         if not row.field.startswith("facet:"):
-            continue  # authored text: take inherits it, and keep was refused above
+            continue  # authored text and payload extras: take inherits it, and keep was refused above
         name = row.field.split(":", 1)[1]
         if decision == "take":
             replaced.pop(name, None)

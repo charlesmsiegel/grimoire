@@ -7,9 +7,13 @@ turns the human's ``take``/``keep`` decisions into one ``RebaseChange``: ``previ
 bytes, ``commit`` writes them in one guarded store transaction with CAS on every record it touches.
 
 It writes the actor's instance file and the chats that pin it, nothing else: the actor keeps its id,
-so every relation, accepted event, knowledge record, holding and placement that names it stays
-valid and unrewritten, and no other campaign's actor is read or written. A campaign that does not
-rebase keeps its pinned revision. No model is called.
+so every relation, accepted event, played turn, transcript page, knowledge record, holding and
+placement that names it stays valid and unrewritten, and no other campaign's actor is read or
+written. A campaign that does not rebase keeps its pinned revision. No model is called.
+
+A review is director-level: its history lists the ids of 020 events and evidence that name the actor,
+whoever observed them, so it is shown to the campaign's owner and never placed in a character's
+prompt or context.
 """
 
 from __future__ import annotations
@@ -21,18 +25,21 @@ from grimoire.chats import CAMPAIGN_CONTINUITY, CHAT_SCHEMA, MAX_BINDINGS, ChatC
 from grimoire.chats import chat_from_payload, chat_to_payload
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import CodecError, instance_from_payload, instance_to_payload
-from grimoire.core.identity import AcceptedRef, ChatRef, InstanceRef, RelationRef, SourceRef
+from grimoire.core.identity import (
+    AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, RelationRef, SourceRef, TranscriptRef, TurnRef,
+)
 from grimoire.core.portrayal import EffectiveDefinition, PortrayalError, compose
 from grimoire.effective import entity_decoder, explainer
-from grimoire.rebase import FieldReview, RebaseError, rebase_instance, review_fields
+from grimoire.rebase import EXTRA_PREFIX, FieldReview, RebaseError, rebase_instance, review_fields
 from grimoire.store import (
     CommitResult, LibraryStore, LibraryView, RecordEnvelope, ScopeRecord, StaleWrite, StoreError,
 )
-from grimoire.store.layout import address_parts, chat_parts, definition_parts, manifest_parts
+from grimoire.store.layout import address_parts, chat_parts, definition_parts, knowledge_parts, manifest_parts
 
 from .scan import names_instance
 
-#: notice: upstream changes authored text (description or a section) and the actor has history
+#: notice: upstream changes authored text (description, a section or an uncomposed payload key such as a
+#: card's greetings) and the actor has history
 HISTORY_REVIEW = "history_review"
 #: notice: the actor's chats pin another revision than the one its file records (a 107 rebind)
 ACTOR_REBOUND = "actor_rebound"
@@ -42,20 +49,27 @@ ANCESTOR_UNVERIFIED = "ancestor_unverified"
 
 @dataclass(frozen=True)
 class RebaseHistory:
-    """What already names the actor in its campaign. The rebase keeps all of it unchanged.
+    """What already names the actor in its campaign (read-only references). The rebase keeps all of it
+    unchanged.
 
-    ``problems`` lists the paths of files that could not be read for this list (reported, never a
-    refusal: the rebase does not write them).
+    ``chats`` (107), ``relations`` (017), ``accepted`` events (021), played ``turns`` (035),
+    ``transcripts`` pages (036) and ``knowledge``: 020 events, evidence and knowledge-log batches.
+    Each is a raw scan for the actor's id (``names_instance``). ``problems`` lists the paths of files
+    that could not be read for this list (reported, never a refusal: the rebase does not write them).
     """
 
     chats: tuple[ChatRef, ...] = ()
     relations: tuple[RelationRef, ...] = ()
     accepted: tuple[AcceptedRef, ...] = ()
     problems: tuple[str, ...] = ()
+    turns: tuple[TurnRef, ...] = ()
+    transcripts: tuple[TranscriptRef, ...] = ()
+    knowledge: tuple[KnowledgeRef, ...] = ()
 
     @property
     def empty(self) -> bool:
-        return not (self.chats or self.relations or self.accepted)
+        return not (self.chats or self.relations or self.accepted or self.turns or self.transcripts
+                    or self.knowledge)
 
 
 @dataclass(frozen=True)
@@ -244,9 +258,10 @@ class SourceRebase:
         explain = explainer(view)
         old = compose(ancestor, index, read, explain)
         new = compose(upstream_ref, index, read, explain)
-        rows = review_fields(old, new, instance)
+        rows = review_fields(old, new, instance, read_extras=lambda ref: read(ref)[0].extras)
         history = self._history(view, actor)
-        authored = any(row.field == "description" or row.field.startswith("section:") for row in rows)
+        authored = any(row.field == "description" or row.field.startswith(("section:", EXTRA_PREFIX))
+                       for row in rows)
         if authored and not history.empty:
             notices.append(HISTORY_REVIEW)
         return RebaseReview(actor, instance, etag, old, new, rows, tuple(chat.ref for chat in pinned), following,
@@ -329,15 +344,20 @@ class SourceRebase:
         chats = tuple(sorted((ref for ref, stored in view.chats.items()
                               if ref.campaign_id == campaign and names_instance(stored.record.payload, actor)),
                              key=str))
-        relations = self.store.campaign_relations(campaign)
-        accepted = self.store.campaign_accepted(campaign)
+        families = [self.store.campaign_relations(campaign), self.store.campaign_accepted(campaign),
+                    self.store.campaign_turns(campaign), self.store.campaign_transcripts(campaign)]
+        relations, accepted, turns, transcripts = (
+            tuple(sorted((ref for ref, stored in family.records.items()  # type: ignore[misc]
+                          if names_instance(stored.record.payload, actor)), key=str))
+            for family in families)
+        knowledge = self.store.campaign_knowledge(campaign)
+        problems = {problem.path for family in families for problem in family.problems}
+        problems |= {problem.path for problem in knowledge.problems}
+        problems |= {"/".join(knowledge_parts(ref)) for ref in knowledge.damaged}
         return RebaseHistory(
-            chats,
-            tuple(sorted((ref for ref, stored in relations.records.items()  # type: ignore[misc]
-                          if names_instance(stored.record.payload, actor)), key=str)),
-            tuple(sorted((ref for ref, stored in accepted.records.items()  # type: ignore[misc]
-                          if names_instance(stored.record.payload, actor)), key=str)),
-            tuple(sorted({problem.path for problem in (*relations.problems, *accepted.problems)})))
+            chats, relations, accepted, tuple(sorted(problems)), turns, transcripts,
+            tuple(sorted((ref for ref, stored in knowledge.records.items()
+                          if names_instance(stored.record.payload, actor)), key=str)))
 
     # -- apply --------------------------------------------------------------------------------
 

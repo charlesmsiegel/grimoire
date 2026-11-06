@@ -9,7 +9,7 @@ There is no UI yet, and no model is called. Every write is one guarded store tra
 ## What exists
 
 - **Reviewed rebase.** A campaign actor based on revision r1 of a definition is reviewed against another revision r2 of the *same* entity, usually a newer one (an older one is a reviewed revert). A human decides each changed field (`take` or `keep`). One commit re-pins the actor's instance file and every chat binding that pins it.
-  - The actor keeps its id. Its relations, accepted events, knowledge, holdings, placements and roster entries are not rewritten, and no other campaign is read or written.
+  - The actor keeps its id. Its relations, accepted events, played turns, transcript pages, knowledge, holdings, placements and roster entries are not rewritten, and no other campaign is read or written.
   - A campaign that does not rebase keeps r1.
 - **Chat canon.** From one chat, a human picks roster actors and proposes a new reusable world source `world:<id>`, one definition per pick.
   - Only new files under `sources/<world>/` are written. The chat, its scope, its actors and every history record are byte-identical.
@@ -27,7 +27,7 @@ There is no UI yet, and no model is called. Every write is one guarded store tra
 
 The recorded `base_etag` must still match the ancestor's bytes. If it doesn't, the review refuses with `ancestor_edited`: a hand edit means the ancestor is no longer what was adopted. When no adoption etag exists for the ancestor (a rebound actor, or an instance written before `base_etag`), the review reports `ancestor_unverified`.
 
-**Fields** are named as 022's provenance names them: `name`, `description`, `section:<n>` and `facet:<n>`. A row exists only for a field upstream changed or the instance overrides. The instance's overrides are its `local_name` and its `replaced` and `added` facets.
+**Fields** are named as 022's provenance names them: `name`, `description`, `section:<n>` and `facet:<n>`, plus `extra:<key>` for an uncomposed payload key (below). A row exists only for a field upstream changed or the instance overrides. The instance's overrides are its `local_name` and its `replaced` and `added` facets.
 
 | status | meaning | decision |
 |---|---|---|
@@ -41,15 +41,26 @@ The recorded `base_etag` must still match the ancestor's bytes. If it doesn't, t
 - **`keep`** keeps the campaign's value as an instance override: the ancestor value on an `upstream` row, the override on a `conflict` row.
   - A name goes to `local_name`.
   - A facet goes to `replaced` if upstream has that trait, otherwise to `added`. A converged or kept `added` facet that upstream now has moves to `replaced`, because 009 refuses an `added` facet that shadows a trait.
-  - Description and sections have no instance-level override in this slice. An instance also cannot suppress a trait upstream adds. `keep` on those is `not_overridable`: take the change, or stay pinned.
+  - Description, sections and payload extras have no instance-level override in this slice. An instance also cannot suppress a trait upstream adds. `keep` on those is `not_overridable`: take the change, or stay pinned. A campaign keeping its own voice or greeting is 046's design.
+
+**Uncomposed payload keys** get an `extra:<key>` row too. 022 does not compose them (`EffectiveDefinition.uncomposed`), but other sprints read them. The main one is 037's `card`, which holds a card's example dialogue, greetings and system prompt; 035 reads it for the actor's voice and its opening line.
+- The row compares the key's value in every layer of the chain, leaf first, because 035's voice reads a base's card too. `ancestor` and `upstream` hold those values (`None` where a layer lacks the key).
+- `FieldReview.changed` lists the paths that differ, such as `card.texts.example-messages` or `card.instructions.system_prompt`. A path in a base layer starts `base<n>:` (`base1:` is the leaf's base).
+- An instance carries no payload extras, so the row is always `upstream`, and only `take` applies. A changed card therefore needs an explicit decision like any other changed field: `apply` without one refuses with `undecided`.
 
 The rebased instance must compose over the upstream (009 `compose_instance`), and its reasons propagate. For example, taking the removal of `durable` while the instance holds `Integrity` raises `state_without_facet`.
 
 **Review also reports** (and never changes):
 - `repinned`: chats whose active binding pins the ancestor; the commit re-pins them.
 - `following`: chats whose binding follows the head. Those chats already show the new head; they are not rewritten.
-- `history`: chats, relations and accepted events that name the actor (a raw scan), all kept.
-- `history_review`: upstream changes the description or a section and the actor has history. Established events may contradict the new authored text, so a human reads both. This is a notice listing ids, not a contradiction check.
+- `history`: read-only references to what names the actor (a raw scan for its id), all kept:
+  - chats (107), relations (017) and accepted events (021);
+  - played turns (035) and transcript pages (036);
+  - `knowledge`: 020 events, evidence and knowledge-log batches.
+
+  `history.problems` lists files that could not be read for the list. It is reported, never a refusal, since the rebase writes none of them.
+  A review is director-level: it names evidence ids whoever observed them, so it is for the campaign's owner and never goes into a character's prompt.
+- `history_review`: upstream changes the description, a section or an uncomposed payload key, and the actor has history. Established events may contradict the new authored text, so a human reads both. This is a notice listing ids, not a contradiction check.
 
 **Refusals** (`RebaseError.reason`):
 
@@ -73,7 +84,7 @@ Composition refusals of either side (`PortrayalError`) propagate.
 
 ## Rebase apply (`SourceRebase.apply(review, decisions)`)
 
-Decision refusals: `undecided` (a changed field without a decision), `unknown_decision` (a decision for a field that needs none or does not exist), `invalid_decision` (not `take`/`keep`) and `not_overridable`.
+Decision refusals: `undecided` (a changed field, an `extra:` row included, without a decision), `unknown_decision` (a decision for a field that needs none or does not exist), `invalid_decision` (not `take`/`keep`) and `not_overridable`.
 
 The returned `RebaseChange` writes:
 - **the instance**, guarded by CAS on its reviewed etag.
@@ -88,6 +99,8 @@ The returned `RebaseChange` writes:
 - every chat of the campaign, at the etags the review read: a chat added, removed or edited since could pin the actor to the old revision.
 
 Any mismatch is `StaleWrite` and nothing is written. The store's authorization (and its `approvals`) applies as for any transaction.
+
+Both this commit and the canon proposal's are crash-explored under the 006 fault harness (`test_rebasestore_recovery.py`): recovery yields the state before or after, with no residue.
 
 ## Canon proposal (`CanonProposer.propose(chat, world, picks, title=None)`)
 
@@ -128,6 +141,7 @@ What the chat's snapshot refuses for an actor (missing, undecodable, broken bind
 |---|---|
 | Rebasing a derived portrayal onto its base's new revision (source-level rebase) | 042 later |
 | Campaign-local overrides of description and sections, so one of two changed sections can be kept | 042 later (a 009 payload change) |
+| Keeping a campaign's own voice, greeting or system prompt when a card changes (`keep` on an `extra:` row) | 046 |
 | Adopting a *different* entity for an existing actor (a world portrayal of its card), which needs a 107 roster change | 042 later |
 | A reviewed way to drop lived state when upstream removes the facet it needs | 042 later |
 | Checking at review that every layer of a derived ancestor is still what was adopted (`base_etag` covers the leaf; commit re-checks every layer against the review) | 042 later |

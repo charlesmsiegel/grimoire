@@ -8,7 +8,7 @@ store-backed service.
 """
 
 from .canon import PROMOTED_FROM, canon_definition
-from .review import DECISIONS, FieldReview, RebaseError, rebase_instance, review_fields
+from .review import DECISIONS, EXTRA_PREFIX, FieldReview, RebaseError, rebase_instance, review_fields
 
-__all__ = ["DECISIONS", "PROMOTED_FROM", "FieldReview", "RebaseError", "canon_definition", "rebase_instance",
-           "review_fields"]
+__all__ = ["DECISIONS", "EXTRA_PREFIX", "PROMOTED_FROM", "FieldReview", "RebaseError", "canon_definition",
+           "rebase_instance", "review_fields"]
