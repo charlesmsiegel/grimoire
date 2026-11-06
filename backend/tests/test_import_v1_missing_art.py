@@ -275,6 +275,17 @@ def test_a_declined_campaign_sprite_writes_nothing_and_is_reported_skipped(env):
                    for path in review["writes"])
 
 
+def test_a_campaign_sprite_whose_picture_was_declined_writes_nothing(env):
+    _unarrived(env)
+    _sprites(env, {}, own={"casual/image-refs/neutral.json": placement(GREEN_ID).encode()})
+    green = f"v1:{ARCHIVE}:assets/image-store/objects/{GREEN_ID[4:6]}/{GREEN_ID}.json"
+    review = env.plan(_skipping(green)).review()
+    assert review["skipped"] == [green]
+    assert str(PlacementRef(CAMPAIGN_MARA, "expr.casual.neutral")) not in _placements(review)
+    assert not any(path.startswith(f"campaigns/{CAMPAIGN_ID}/placements/") and "expr.casual.neutral" in path
+                   for path in review["writes"])
+
+
 def test_a_declined_campaign_layer_writes_none_of_its_hides(env):
     _sprites(env, {"hidden_expressions": {"casual": ["neutral"]}})
     layer = f"v1:{ARCHIVE}:{CAMPAIGN_LAYER}"

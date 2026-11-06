@@ -692,7 +692,7 @@ class _Mapper:
                 self.guarded(lambda path=layer["path"]: self.out.not_imported.append(
                     {"legacy_id": self.legacy(path), "family": "expression_settings"}))
                 self.guarded(self.campaign_expressions, layer, images.get("expression_layers", ()), world_rows,
-                             images["placements"])
+                             images["placements"], objects)
         for row in images.get("legacy_images", ()) + images.get("collections", ()):
             if isinstance(row, Mapping) and "path" in row:
                 self.guarded(lambda path=row["path"]: self.out.not_imported.append(
@@ -739,7 +739,18 @@ class _Mapper:
         overrides = layer.get("overrides") if layer is not None else None
         return isinstance(overrides, list) and f"{row.get('outfit')}/{row.get('name')}" in overrides
 
-    def campaign_expressions(self, layer: Mapping, layers: object, world_rows: Mapping, placements: list) -> None:
+    def _object_legacy(self, objects: Mapping, object_id: object) -> str | None:
+        """The legacy id of the image object ``object_id`` names, or ``None`` (unknown, or a refused path)."""
+        obj = objects.get(object_id) if isinstance(object_id, str) else None
+        if obj is None:
+            return None
+        try:
+            return self.legacy(obj["path"])
+        except _Refused:
+            return None
+
+    def campaign_expressions(self, layer: Mapping, layers: object, world_rows: Mapping, placements: list,
+                             objects: Mapping) -> None:
         """A campaign expression layer over a world one, on each actor playing the world portrayal under
         it, over each world sprite it touches: what it hides (011's ``hides``: ``<outfit>/<name>`` or a
         whole ``<outfit>/*``) becomes a ``hide``, and a sprite it replaces with its own (``overrides``),
@@ -761,7 +772,7 @@ class _Mapper:
             hidden = set()
         if not hidden and not replaced:
             return
-        own = {f"{row.get('outfit')}/{row.get('name')}": row["legacy_id"] for row in placements
+        own = {f"{row.get('outfit')}/{row.get('name')}": row for row in placements
                if row.get("area") == "expression" and row.get("owner") == layer.get("owner") and row.get("live")
                and isinstance(row.get("legacy_id"), str)}
         declined: set[str] = set()  # campaign sprites the reviewer declined, each reported skipped once
@@ -778,9 +789,18 @@ class _Mapper:
             if hide:
                 placement, source = Placement("hide", provenance={"legacy_id": legacy}), legacy
             else:
-                source = own.get(sprite, legacy)
-                if source in declined or (source != legacy and self.skipped(source)):
-                    declined.add(source)  # declined in review, like any placement: nothing is written
+                own_row = own.get(sprite)
+                source = own_row["legacy_id"] if own_row is not None else legacy
+                picture = self._object_legacy(objects, own_row.get("image")) if own_row is not None else None
+                # declined in review, the sprite or the picture it names, like any placement: nothing is
+                # written (``picture`` and ``world_placement`` honour a declined picture the same way)
+                if source in declined or picture in declined:
+                    continue
+                if source != legacy and self.skipped(source):
+                    declined.add(source)
+                    continue
+                if picture is not None and self.skipped(picture):
+                    declined.add(picture)
                     continue
                 placement = Placement("unresolved", "expression", expression=placing.placement.expression,
                                       provenance={"legacy_id": source, "note": CAMPAIGN_SPRITE_NOTE})
@@ -849,8 +869,8 @@ class _Mapper:
         legacy = self.legacy_of(row)
         missing = None
         if row.get("status") != "resolved":
-            obj = objects.get(row.get("image")) if isinstance(row.get("image"), str) else None
-            if row.get("status") in MISSING_NOTES and obj is not None and self.skipped(self.legacy(obj["path"])):
+            picture = self._object_legacy(objects, row.get("image"))
+            if row.get("status") in MISSING_NOTES and picture is not None and self.skipped(picture):
                 return None, None  # the reviewer declined the picture: no missing slot either, as in picture()
             self.unresolved(legacy, str(row.get("status")), row.get("image"))
             if row.get("status") not in MISSING_NOTES:  # malformed, or no picture named: nothing to place
