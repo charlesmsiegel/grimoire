@@ -191,6 +191,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 #### Wave 5 status
 
 - **039 first slice:** authored NPC agendas (goals, approaches, limits) and a deterministic policy that picks what one director NPC pursues from its own knowledge and the scene's cast, carried into its one ordinary generation call; a planner's wish is recorded and explained, never obeyed ([GOALS](../GOALS.md)). Storing agendas, commitments, ability and holding feasibility, and consequences in time and resources are later 039 slices.
+- **043 first slice:** World Change Sets: create and revise one world source's definitions together, reviewed as exact bytes with per-file diffs, conflicts and the authority's decision, then applied all or nothing; a hand edit between review and apply aborts with nothing written, and approvals are bound to the reviewed bytes ([CHANGESETS](../CHANGESETS.md)). Worker submission, persisted proposals, undo, manifest links and campaign records are later 043 work.
 
 <a id="wave-6"></a>
 
