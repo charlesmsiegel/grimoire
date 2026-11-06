@@ -13,7 +13,7 @@ from grimoire.obstaclestore import ObstacleLibrary, obstacle_actor_ids
 from grimoire.store import LibraryStore, ProcessLocker, TakenIdsUnlisted
 from grimoire.store.ledger import render_batches
 
-from adjudication_fixtures import BOB, IRIS, Q, SOLA, build_library, moment
+from adjudication_fixtures import ANA, BOB, IRIS, Q, SOLA, build_library, moment
 from obstacle_fixtures import (
     ALARM, ARMED, BRIBE, FORCE, FORGE, GREEDY, LANTERN, LOYAL, REPORTED, SEALS, SILVER, SPENT, TRAINING, WATCH,
     WINDOWLESS, ArchiveTable, archive, attempt, offer, stakes_of,
@@ -37,7 +37,7 @@ def _reopen(table: ArchiveTable) -> ArchiveTable:
     table.store.close()
     fresh = ArchiveTable(LibraryStore.open(table.store.root, locker=table.locker))
     fresh.locker = table.locker
-    table.store, table.authority, table.key = fresh.store, fresh.authority, fresh.key
+    table.store, table.authority, table.key, table.owner = fresh.store, fresh.authority, fresh.key, fresh.owner
     return table
 
 
@@ -287,7 +287,9 @@ def _forge(table, kind: str, value: dict) -> None:
     ("attempt", {"obstacle_id": "vault", "attempt_id": "c10", "approach_id": "bribe", "novel": None},
      "unknown_obstacle"),
     ("obstacle", None, "railroaded"),
-], ids=["approach", "obstacle", "railroad"])
+    ("attempt", {"obstacle_id": "archive", "attempt_id": "c10", "approach_id": "bribe", "novel": None,
+                 "supersedes": "c9"}, "supersedes_mismatch"),
+], ids=["approach", "obstacle", "railroad", "supersedes"])
 def test_a_forged_entry_makes_the_ledger_unreadable(table, kind, value, match):
     table.obstacles().record(archive())
     if value is None:
@@ -385,6 +387,64 @@ def test_an_attempt_whose_actor_changed_hands_gives_way_to_the_new_controllers(t
                   author=table.player(BOB))
     state = library.state(Q, "archive")
     assert ([a.status for a in state.attempts], state.pending.attempt.attempt_id) == (["void", "pending"], "c11")
+
+
+def _sneak(table, library: ObstacleLibrary, *, cid: str = "c11", sequence: int = 11, by: str = BOB):
+    frame = attempt(library.required(Q, "archive", "sneak", sequence) + (TRAINING,), (ALARM.stake,), cid=cid,
+                    at=moment(sequence, f"t{sequence}"))
+    return library.frame("archive", frame, approach="sneak",
+                         contribution=offer(cid=cid, turn=f"t{sequence}", by=by), author=table.player(by))
+
+
+def _links(table) -> list[dict]:
+    return [entry["value"] for entry in table.store.read_ledger(f"obstacles/{Q}").entries
+            if entry["kind"] == "attempt"]
+
+
+def test_a_superseded_attempt_stays_void_when_control_comes_back_and_029_decides_it(table):
+    library = table.obstacles()
+    library.record(archive())
+    _bribe(table, library)
+    table.control("mara-1", BOB)
+    _sneak(table, library)  # Ana's bribe cannot be decided now, so Bob's sneak supersedes it
+    assert [link.get("supersedes") for link in _links(table)] == [None, "c10"]
+    table.control("mara-1", ANA)  # control comes back: 029 can decide the bribe again, and does
+    assert library.adjudication.undecidable(Q, "c10") is None
+    library.adjudication.decide(Q, "c10", Decision("success", "adjudicated", {"greedy", "silver"}))
+    state = library.state(Q, "archive")
+    assert ([a.status for a in state.attempts], state.status, state.problem) == (["void", "pending"], "open", None)
+    assert state.due() == () and state.pending.attempt.attempt_id == "c11"  # the bribe's price never comes due
+    assert _reopen(table).obstacles().state(Q, "archive") == state
+    library = table.obstacles()
+    # Bob's sneak is still the attempt that counts: back in his hands, it is decided and its alarm escalates.
+    table.control("mara-1", BOB)
+    library.adjudication.decide(Q, "c11", Decision("failure", "adjudicated", {"lantern"}, {"alarm"}))
+    state = library.state(Q, "archive")
+    assert [a.status for a in state.attempts] == ["void", "failed"] and state.status == "open"
+    assert [c.consequence_id for c in state.due()] == ["alarm"] and any(f.fact_id == "alarm" for f in state.facts)
+    _sneak(table, library, cid="c12", sequence=12)  # and the obstacle takes the next attempt
+    assert library.state(Q, "archive").pending.attempt.attempt_id == "c12"
+
+
+def test_a_crash_after_a_superseding_link_still_keeps_the_superseded_attempt_void(table, monkeypatch):
+    library = table.obstacles()
+    library.record(archive())
+    _bribe(table, library)
+    table.control("mara-1", BOB)
+    with monkeypatch.context() as patch:
+        patch.setattr(library.adjudication, "frame", _crash)
+        with pytest.raises(OSError):
+            _sneak(table, library)  # the link naming c10 is written; Bob's frame is not
+    table.control("mara-1", ANA)
+    library = _reopen(table).obstacles()
+    library.adjudication.decide(Q, "c10", Decision("success", "adjudicated", {"greedy", "silver"}))
+    state = library.state(Q, "archive")
+    assert [(a.status, a.frame is None) for a in state.attempts] == [("void", False), ("pending", True)]
+    assert state.status == "open" and state.due() == ()
+    _bribe(table, library, cid="c12", at=moment(12, "t12"))  # Ana's new attempt supersedes Bob's unwritten one
+    state = library.state(Q, "archive")
+    assert [a.status for a in state.attempts] == ["void", "void", "pending"]
+    assert [link.get("supersedes") for link in _links(table)] == [None, "c10", "c11"]
 
 
 def test_text_the_store_cannot_hold_is_refused_before_the_link(table):

@@ -403,9 +403,10 @@ class AdjudicationLibrary:
             return self._prepare(frame, contribution, author)[1]
 
     def undecidable(self, campaign_id: str, attempt_id: str) -> str | None:
-        """Why the recorded attempt can no longer be decided, whatever is decided: its actor's control
+        """Why the recorded attempt cannot be decided now, whatever is decided: its actor's control
         changed since it was framed (``control_changed``, ``non_human_controller``). ``None`` when it can be,
-        or when there is no such frame or it is already decided."""
+        or when there is no such frame or it is already decided. This is as of now: if control returns to
+        whoever held it when the attempt was framed, it can be decided again."""
         with self._authority.lock:
             state = self._builder(campaign_id).state()
             entry = state.frame(attempt_id)

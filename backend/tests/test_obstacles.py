@@ -76,9 +76,22 @@ def test_the_codecs_round_trip_exactly_and_refuse_a_non_canonical_form():
     assert _reason(obstacle_from_payload, "q-9", payload) == "undecodable_entry"
     assert approach_from_payload(approach_to_payload(FORGE)) == FORGE
     assert attempt_from_payload(attempt_to_payload("archive", "c10", FORGE, False)) == ("archive", "c10", "forge",
-                                                                                      FORGE)
+                                                                                      FORGE, None)
     assert attempt_from_payload(attempt_to_payload("archive", "c10", BRIBE, True)) == ("archive", "c10", "bribe",
-                                                                                     None)
+                                                                                     None, None)
+
+
+def test_a_link_names_what_it_supersedes_and_one_that_supersedes_nothing_keeps_its_old_form():
+    plain = attempt_to_payload("archive", "c11", BRIBE, True)
+    assert set(plain) == {"obstacle_id", "attempt_id", "approach_id", "novel"}  # links written before read back
+    superseding = attempt_to_payload("archive", "c11", BRIBE, True, "c10")
+    assert superseding == dict(plain, supersedes="c10")
+    assert attempt_from_payload(superseding) == ("archive", "c11", "bribe", None, "c10")
+    for bad in (None, 10, ["c10"]):  # absent, never null
+        assert _reason(attempt_from_payload, dict(plain, supersedes=bad)) == "undecodable_entry"
+    assert _reason(attempt_from_payload, dict(superseding, extra=1)) == "undecodable_entry"
+    assert _reason(Attempt, "c11", BRIBE, True, "c11") == "invalid_field"
+    assert _reason(Attempt, "c11", BRIBE, True, " ") == "invalid_field"
 
 
 # -- the frame rules --------------------------------------------------------------------------
@@ -126,3 +139,24 @@ def test_a_stake_escalates_once_and_superseded_or_out_of_turn_links_do_not_count
     won = derive(obstacle, 1, [Attempt("c10", BRIBE, True), Attempt("c11", SNEAK, True)], {},
                  {"c10": _outcome(first, "success", {"greedy"})})
     assert (won.status, won.problem) == ("diverged", "attempt_out_of_turn")
+
+
+def test_a_superseded_attempt_stays_void_whatever_029_decides_about_it_later():
+    obstacle, first = archive(), _bribe_frame()
+    after = _bribe_frame("c11", moment(11, "t11"))
+    attempts = [Attempt("c10", BRIBE, True), Attempt("c11", BRIBE, True, supersedes="c10")]
+    # Control came back and 029 decided the superseded bribe: neither a success nor a failure counts.
+    for result, consequences in (("success", ()), ("failure", {"reported"})):
+        decided = {"c10": _outcome(first, result, {"greedy"}, consequences)}
+        state = derive(obstacle, 1, attempts, {"c11": after}, decided)
+        assert ([a.status for a in state.attempts], state.status, state.problem) == (["void", "pending"], "open", None)
+        assert state.due() == () and state.facts == obstacle.facts and state.pending.attempt.attempt_id == "c11"
+    # The attempt after it is decided on its own terms.
+    state = derive(obstacle, 1, attempts, {}, {"c10": _outcome(first, "success", {"greedy"}),
+                                               "c11": _outcome(after, "failure", {"loyal"}, {"reported"})})
+    assert [a.status for a in state.attempts] == ["void", "failed"] and state.status == "open"
+    assert [c.consequence_id for c in state.due()] == ["reported"]
+    # A link from before links named what they superseded keeps the old reading: decided later, it counts.
+    legacy = derive(obstacle, 1, [Attempt("c10", BRIBE, True), Attempt("c11", BRIBE, True)], {"c11": after},
+                    {"c10": _outcome(first, "success", {"greedy"})})
+    assert (legacy.status, legacy.problem) == ("diverged", "attempt_out_of_turn")
