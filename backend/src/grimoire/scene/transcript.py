@@ -63,11 +63,13 @@ class ImportedHistory:
     """A chat's imported posts as lines: what its imported cast heard, and what the table saw.
 
     ``listeners`` are the actors the chat was imported with. ``heard`` is what each of them heard: every
-    shown post written by the player, a character or a source's generated reply (V0.2.1's ``assistant``,
-    which does not say whether a character spoke or the narrator did). ``table`` is the director's view:
-    those posts and the narrator's. A narrator post is never heard by an NPC (as in play), and a source's
-    own ``system`` notice (a V0.2.1 synthetic post, a dice roll), a ``hidden`` post, an unchosen variant
-    and a post with no chosen text are in neither. ``posts`` counts the posts the pages hold.
+    shown post written by the player, a character, or a source's generated reply that names its speaker.
+    ``table`` is the director's view: those posts and the narrator's. A narrator post is never heard by an
+    NPC (as in play); V0.2.1 writes its narrator (the reserved ``**Grimoire:**`` speaker) as an
+    ``assistant`` post with no label, so such a post is narration too. A source's own ``system`` notice
+    (a V0.2.1 synthetic post, a dice roll), a ``hidden`` post, an unchosen variant and a post with no
+    chosen text are in neither. Each keeps only its last ``MAX_HEARD`` lines, the most any window holds.
+    ``posts`` counts the posts the pages hold.
     """
 
     listeners: frozenset[InstanceRef]
@@ -79,37 +81,61 @@ class ImportedHistory:
 #: who an imported post's role says wrote it, and whether an NPC of the imported cast heard it
 _HEARD_ROLES = frozenset({"user", "character", "assistant"})
 _TABLE_ROLES = _HEARD_ROLES | {"narrator"}
+PLAYER = "Player"
 
 
-def _imported_line(post: ImportedPost, names: Mapping[InstanceRef, str]) -> HeardLine | None:
+def _narrated(post: ImportedPost) -> bool:
+    """Whether a post is narration: the source says so, or it is V0.2.1's unlabelled narrator."""
+    return post.speaker.role == "narrator" or (post.speaker.role == "assistant" and post.speaker.actor is None
+                                               and not (post.speaker.label or "").strip())
+
+
+def _imported_line(post: ImportedPost, names: Mapping[InstanceRef, str], player: str | None,
+                   ) -> tuple[HeardLine, bool] | None:
+    """A post's line and whether the imported cast heard it (``False``: the table's only)."""
     if post.hidden or post.active is None or post.speaker.role not in _TABLE_ROLES:
         return None
+    text = post.variants[post.active].text
+    if _narrated(post):
+        line = _heard(NARRATOR, text, None)
+        return None if line is None else (line, False)
     actor = post.speaker.actor
-    if post.speaker.role == "narrator":
-        speaker = NARRATOR
-    elif actor is not None and names.get(actor):
-        speaker = names[actor]
-    else:  # a label is display text, kept as the source wrote it; it never names an actor
-        speaker = (post.speaker.label or "").strip() or post.speaker.role.capitalize()
-    return _heard(speaker, post.variants[post.active].text, actor)
+    fallback = (player or PLAYER) if post.speaker.role == "user" else post.speaker.role.capitalize()
+    # a label is display text, kept as the source wrote it; it never names an actor. One with no words
+    # (``???``, an emoji) cannot be a heard speaker, so the post falls back rather than vanish.
+    for speaker in (names.get(actor) if actor is not None else None, (post.speaker.label or "").strip(), fallback):
+        line = _heard(speaker, text, actor) if speaker else None
+        if line is not None:
+            return line, True
+    return None
 
 
 def imported_history(pages: Iterable[TranscriptPage], listeners: Iterable[InstanceRef],
-                     names: Mapping[InstanceRef, str]) -> ImportedHistory:
-    """The history ``pages`` hold, in page and post order, heard by ``listeners`` (the imported cast)."""
+                     names: Mapping[InstanceRef, str], *, player: str | None = None,
+                     limit: int = MAX_HEARD) -> ImportedHistory:
+    """The history ``pages`` hold, in page and post order, heard by ``listeners`` (the imported cast).
+
+    ``player`` names the player's posts that carry neither an actor nor a label (V0.2.1's ``**You:**``).
+    Posts are read newest first and only until both views hold ``limit`` lines: no window holds more, and a
+    long SillyTavern chat need not become lines it never shows.
+    """
     heard: list[HeardLine] = []
     table: list[HeardLine] = []
-    count = 0
-    for page in sorted(pages, key=lambda found: found.ref.seq):
-        for post in page.posts:
-            count += 1
-            line = _imported_line(post, names)
-            if line is None:
+    ordered = sorted(pages, key=lambda found: found.ref.seq)
+    count = sum(len(page.posts) for page in ordered)
+    for page in reversed(ordered):
+        for post in reversed(page.posts):
+            if len(table) >= limit and len(heard) >= limit:
+                break
+            found = _imported_line(post, names, player)
+            if found is None:
                 continue
-            table.append(line)
-            if post.speaker.role in _HEARD_ROLES:
+            line, cast_heard = found
+            if len(table) < limit:
+                table.append(line)
+            if cast_heard and len(heard) < limit:
                 heard.append(line)
-    return ImportedHistory(frozenset(listeners), tuple(heard), tuple(table), count)
+    return ImportedHistory(frozenset(listeners), tuple(reversed(heard)), tuple(reversed(table)), count)
 
 
 def heard_for(turns: Iterable[TurnRecord], actor: InstanceRef, names: Mapping[InstanceRef, str], *,

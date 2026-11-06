@@ -16,7 +16,6 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from grimoire.archaeologystore import read_transcript
 from grimoire.chats import ChatCodecError
 from grimoire.comms import Message, Presence, TransmissionError, Unread, read_message, transmit
 from grimoire.context import Budget
@@ -39,11 +38,12 @@ from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import ControlChange
 from grimoire.party import PartyRefused, SceneCast, stage
 from grimoire.partystore import PartyLibrary
+from grimoire.play.history import chat_history
 from grimoire.providers.meter import TurnMeter
 from grimoire.runtime import GenerationRuntime, RunFence
 from grimoire.scene import (
     MAX_TAKES, NARRATOR, CallRecord, ImportedHistory, Post, SceneLine, SceneRefused, Take, TurnRecord, audible,
-    heard_for, imported_history, render, segments, table_lines, turn_id,
+    heard_for, render, segments, table_lines, turn_id,
 )
 from grimoire.scenestore import ChatTurns, SceneLibrary, StoredTurn
 from grimoire.security import is_human
@@ -193,11 +193,8 @@ class SceneRunner:
                      if resolution.broken is not None]
         turns = self.scenes.turns(chat)
         problems += [("turns", f"{path}:{code}") for path, code in turns.problems]
-        pages, unreadable = read_transcript(self.store, chat)
-        if unreadable:
-            # A damaged page, or a gap in the numbering: a listener would hear some of the history and not the
-            # rest, unmarked. Fail closed: nobody heard any of it, and the chat says so.
-            problems += [("imported_history_unreadable", _problem_text(problem)) for problem in unreadable]
+        history, history_problems = chat_history(self.store, chat, captured.chat, captured.snapshot)
+        problems += history_problems
         controls = tuple(self.sovereignty.load(chat.campaign_id).controls)
         party = PartyLibrary(self.store, self.handle, clock=_no_clock, new_id=_no_id).view(chat.campaign_id, as_of=NOW)
         party_problems = tuple(f"{problem.path}:{problem.code}" for problem in party.problems)
@@ -224,9 +221,6 @@ class SceneRunner:
             except Exception as error:  # 022's refusals: the actor stays nameless, and says why
                 problems.append(("unnamed_actor", f"{actor}:{type(error).__name__}"))
         voices = imported_voices(snap, self.authored)
-        history = None
-        if pages and not unreadable:
-            history = imported_history(pages, _imported_cast(captured.chat), _imported_names(snap, captured.chat))
         scene = Scene(chat, turns, controls, cast_t, persona, names, (), staged, history)
         for actor in scene.cast:
             if actor == persona or _human_of(scene, actor) is not None:
@@ -772,35 +766,8 @@ def _stage(party, chat: ChatRef, candidates: Sequence[InstanceRef]
             chosen = [actor for actor in chosen if actor not in members]
 
 
-def _imported_cast(chat) -> tuple[InstanceRef, ...]:
-    """The actors a chat was imported with: on its roster from its start (sequence 0). An importer starts a
-    chat with its whole cast and writes its pages in the same commit; an actor attached later was not there."""
-    return tuple(entry.actor for entry in chat.roster if entry.introduced_seq == 0)
-
-
-def _imported_names(snap, chat) -> dict[InstanceRef, str]:
-    """Names for the imported cast, present or not; an actor 022 cannot name keeps its post's own label."""
-    names = {}
-    for actor in _imported_cast(chat):
-        try:
-            names[actor] = snap.entity(actor).name
-        except Exception:  # 022's refusals: the post's label stands
-            continue
-    return names
-
-
 def _has_imported(scene: Scene) -> bool:
     return any(code == "imported_history_unreadable" for code, _ in scene.problems)
-
-
-def _problem_text(problem: object) -> str:
-    """One readable detail for a transcript problem: a store problem's path and code, or a page's reason."""
-    path, code = getattr(problem, "path", None), getattr(problem, "code", None)
-    if path is not None and code is not None:
-        return f"{path}:{code}"
-    if isinstance(problem, tuple) and len(problem) == 2:
-        return f"{problem[0]}:{problem[1]}"
-    return str(problem)[:200]
 
 
 def _no_clock() -> str:

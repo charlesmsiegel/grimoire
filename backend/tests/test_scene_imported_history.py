@@ -16,12 +16,13 @@ import shutil
 import pytest
 
 from scene_fixtures import (
-    ANA, ANYA, MARA_VELL, MARA_VOICE, V1_CHAT, Table, attach_tamsin, card_library, say, v1_library,
+    ANA, ANYA, MARA_VELL, MARA_VOICE, STORM, V1_CHAT, Table, Tagged, attach_tamsin, card_library, say, v1_library,
 )
 from store_helpers import OWNER
 
 from chat_fixtures import Clock
 from grimoire.archaeologystore import StImporter
+from grimoire.chatstore import ChatLibrary
 from grimoire.core.identity import InstanceRef, TranscriptRef
 from grimoire.scene import NARRATOR, SceneRefused, heard_for, imported_history, table_lines
 from grimoire.transcripts import Post, Speaker, TranscriptPage, Variant
@@ -74,6 +75,16 @@ def import_st(table):
                          name="harbor.jsonl")
     plan.commit()
     return plan.chat
+
+
+def add_v1_post(folder, speaker: dict, text: str) -> None:
+    """A post appended to the V1 chat's page, as 026 writes them (V0.2.1's narrator has no label)."""
+    (page,) = pages_of(folder, V1_CHAT)
+    envelope = json.loads(page.read_text(encoding="utf-8"))
+    posts = envelope["payload"]["posts"]
+    posts.append({"id": f"p{len(posts) + 1:06d}", "speaker": speaker, "variants": [{"text": text}], "active": 0,
+                  "audience": "unknown"})
+    page.write_text(json.dumps(envelope), encoding="utf-8")
 
 
 def test_a_migrated_v1_scene_chat_plays_on_from_its_imported_posts(tmp_path):
@@ -132,6 +143,63 @@ def test_a_sillytavern_chat_is_heard_by_its_imported_cast_and_not_by_a_card_atta
         assert "Someone new is on the quay." in late
         assert not [text for text in (LAMPS, TIDE, UNCHOSEN, HIDDEN, NARRATED) if text in late]
         assert "Wait, then." not in late  # nor what was said before she arrived
+
+
+def test_v1_narration_is_the_tables_and_never_an_npcs(tmp_path):
+    folder = v1_library(tmp_path)
+    secret = "Unseen by Mara, Seraphine pockets the key."
+    add_v1_post(folder, {"role": "assistant"}, secret)  # V0.2.1's **Grimoire:** narrator
+    with Table(folder, [say("Counted."), say("The lamps.")], voices=MARA_VOICE) as table:
+        runner, ana = table.runner, table.player()
+        runner.seat(V1_CHAT, ANA)
+        scene = runner.open(V1_CHAT)
+        assert scene.imported.posts == 4
+        assert [line.speaker for line in scene.imported.table if line.text == secret] == [NARRATOR]
+        assert secret not in [line.text for line in scene.imported.heard]
+        runner.post(V1_CHAT, ana, '"Where were we?"')
+        runner.generate(V1_CHAT, ana)
+        assert all(secret not in prompt and V1_IMPORTED[1] in prompt for prompt in table.harness.prompts())
+
+
+def test_the_director_sees_the_imported_table_view(cards):
+    folder, _, _ = cards
+    with Table(folder, [say("Rain hammers the quay.")]) as table:
+        runner, ana = table.runner, table.player()
+        chat = import_st(table)
+        chats = ChatLibrary(table.store, table.owner, clock=Clock(), new_id=Tagged("s"), owner=OWNER)
+        _, etag = chats.read_chat(chat)
+        chats.attach_source(chat, STORM, "scenario", expected=etag).commit()
+        runner.seat(chat, ANA)
+        runner.generate(chat, ana, speakers=[], director=True)
+        (prompt,) = table.harness.prompts()
+        assert prompt.index(LAMPS) < prompt.index(NARRATED) < prompt.index(TIDE)
+        assert UNCHOSEN not in prompt and HIDDEN not in prompt
+
+
+def test_a_sillytavern_import_missing_its_last_page_is_heard_by_nobody(cards):
+    folder, _, _ = cards
+    with Table(folder) as table:
+        chat = import_st(table)
+    (page,) = pages_of(folder, chat)
+    envelope = json.loads(page.read_text(encoding="utf-8"))
+    envelope["payload"]["origin"]["pages"] = 2  # its import wrote two pages; the second is gone
+    page.write_text(json.dumps(envelope), encoding="utf-8")
+    with Table(folder) as table:
+        scene = table.runner.open(chat)
+        assert scene.imported is None
+        assert any("missing_pages" in detail for detail in problems(scene, "imported_history_unreadable"))
+
+
+def test_a_problem_in_the_campaigns_transcripts_folder_does_not_give_a_new_chat_history(cards):
+    folder, card_chat, _ = cards
+    stray = folder / "campaigns" / card_chat.campaign_id / "Transcripts" / "stray.txt"  # a look-alike folder
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_text("not a page", encoding="utf-8")
+    with Table(folder) as table:
+        scene = table.runner.open(card_chat)
+        assert problems(scene, "transcripts") and not problems(scene, "imported_history_unreadable")
+        table.runner.seat(card_chat, ANA)
+        table.runner.begin(card_chat, table.player())  # a chat started here still opens
 
 
 def test_damaged_imported_pages_are_heard_by_nobody_and_reported(tmp_path):
@@ -194,3 +262,17 @@ def test_who_hears_which_imported_post():
     assert heard_for((), LATE, {}, before=history) == ()  # not imported with the chat
     assert [line.text for line in table_lines((), {}, before=history)] == ["Hello.", "Hm.", "Rain.", "Fine."]
     assert [line.text for line in heard_for((), MARA, {}, before=history, limit=1)] == ["Fine."]  # one window
+    tail = imported_history(pages, (MARA,), {}, limit=2)
+    assert [line.text for line in tail.heard] == ["Hm.", "Fine."] and [line.text for line in tail.table] == [
+        "Rain.", "Fine."]
+    assert tail.posts == 7
+
+
+def test_unnamed_and_unlabelled_imported_speakers():
+    pages = [page(post(1, "user", "I knock."), post(2, "assistant", "The door opens."),
+                  post(3, "character", "Who?", label="???"), post(4, "character", "Me.", label="🐉"))]
+    history = imported_history(pages, (MARA,), {}, player="Winifred")
+    assert [(line.speaker, line.text) for line in history.heard] == [("Winifred", "I knock."),
+                                                                      ("Character", "Who?"), ("Character", "Me.")]
+    assert [(line.speaker, line.text) for line in history.table][1] == (NARRATOR, "The door opens.")
+    assert imported_history(pages, (MARA,), {}).heard[0].speaker == "Player"
