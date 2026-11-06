@@ -17,6 +17,8 @@ from .model import CallRecord, Post, SceneLine, SceneRefused, Take, TurnRecord, 
 
 TURN_SCHEMA = "grimoire.scene-turn/1"
 _TURN_KEYS = frozenset({"chat", "number", "origin", "post", "takes", "paused", "paused_by", "passed_by"})
+#: Written on every turn; a turn written before turn ids carried a device tag has none (read as untagged).
+_OPTIONAL_TURN_KEYS = frozenset({"device"})
 _IDENTITY_KEYS = frozenset({"schema", "address", "campaign_id", "ref"})
 _POST_KEYS = frozenset({"submitted_by", "actor", "kind", "text", "audience", "channel", "addressees", "withheld"})
 _TAKE_KEYS = frozenset({"take", "state", "origin", "cast", "lines", "calls", "outcome", "declined", "unscreened",
@@ -42,6 +44,7 @@ def turn_to_payload(record: TurnRecord) -> dict[str, object]:
         "post": None if record.post is None else _post(record.post),
         "takes": [_take(take) for take in record.takes],
         "paused": record.paused, "paused_by": record.paused_by, "passed_by": record.passed_by,
+        "device": record.device,
     })
     return payload
 
@@ -127,15 +130,18 @@ def turn_from_payload(address: TurnRef, schema: str, payload: object) -> TurnRec
     except (ValueError, TypeError):
         raise _invalid("chat must be a chat id") from None
     number = _int(data["number"], "number")
-    if turn_id(chat, number) != address.turn_id:
-        raise SceneRefused("address_mismatch", "a turn's chat and number must spell its address")
-    extras = {key: value for key, value in data.items() if key not in _TURN_KEYS}
+    device = data.get("device")
+    if device is not None and type(device) is not str:
+        raise _invalid("device must be a device tag or null")
+    if turn_id(chat, number, device) != address.turn_id:  # type: ignore[arg-type]
+        raise SceneRefused("address_mismatch", "a turn's chat, number and device must spell its address")
+    extras = {key: value for key, value in data.items() if key not in _TURN_KEYS | _OPTIONAL_TURN_KEYS}
     try:
         return TurnRecord(chat, number, data["origin"],  # type: ignore[arg-type]
                           None if data["post"] is None else _decode_post(data["post"]),
                           tuple(_decode_take(item, address) for item in _list(data["takes"], "takes")),
                           data["paused"], data["paused_by"], data["passed_by"],  # type: ignore[arg-type]
-                          extras=extras)
+                          device, extras=extras)  # type: ignore[arg-type]
     except SceneRefused:
         raise
     except (ValueError, TypeError) as error:

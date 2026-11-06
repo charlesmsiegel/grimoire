@@ -10,7 +10,7 @@
 - A session-zero configuration is not executed (016 has no codec yet): a scope with one refuses generation. Mid-session requests run with an empty configuration.
 - A redirect's or rephrase's direction is recorded on its take but not sent to the model.
 - UI commands, director instructions and interiority are refused (`not_in_this_slice`); PC-authorship detection in generated text, the UI, streaming, the chat list and `last_activity` per post are later.
-- Merging turns across devices is 028's milestone before 044.
+- Turn ids carry the device's tag on a library with a device identity, so two offline devices' turn *n* are two turns; a chat holding both is forked and waits. Merging forked turns is 028's merge milestone before 044.
 
 ## Scope and first proof
 Open scene, post as player, run an independent NPC reply, accept/save, reopen and resume from persisted state.

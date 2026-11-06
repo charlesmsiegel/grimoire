@@ -10,6 +10,7 @@ present player characters), never by an NPC. Withdrawn and struck lines are show
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 
@@ -33,12 +34,17 @@ TURN_OUTCOMES = ("complete", "halted", "cancelled", "stale")
 MAX_TAKES = 16
 #: 032's channels that reach only their addressees.
 _PRIVATE = frozenset({"whisper", "telepathy"})
-#: A turn id is ``<chat_id>.<number:06d>``, and the post's message id is the turn id, which 032 caps at 104.
-MAX_CHAT_ID = 97
+#: A turn id is ``<chat_id>.<number:06d>`` (``-<device>`` on a library with a device identity), and the post's
+#: message id is the turn id, which 032 caps at 104: 88 + 7 + 9. One cap, tagged or not, so giving a library its
+#: device identity never makes a chat unplayable.
+MAX_CHAT_ID = 88
 MAX_TEXT = 20_000
 MAX_NUMBER = 999_999
 #: Room for 107's principals, which are opaque text.
 MAX_PRINCIPAL = 200
+#: 028's device tag in a turn id: the first eight hex digits of the SHA-256 of the device id (``device_tag``).
+_DEVICE = re.compile(r"[0-9a-f]{8}")
+_NUMBER = re.compile(r"(?P<number>[0-9]{6})(?:-(?P<device>[0-9a-f]{8}))?")
 
 
 class SceneRefused(ValueError):
@@ -75,13 +81,26 @@ def _actors(values: Iterable[object], label: str, campaign: str) -> tuple[Instan
     return tuple(sorted(found, key=str))
 
 
-def turn_id(chat: ChatRef, number: int) -> str:
-    """``<chat_id>.<number:06d>``: campaign-unique, and the id of the turn's post and its message."""
+def turn_id(chat: ChatRef, number: int, device: str | None = None) -> str:
+    """``<chat_id>.<number:06d>``, or ``<chat_id>.<number:06d>-<device>`` for a turn a library with a device
+    identity (028) created: campaign-unique, and the id of the turn's post and its message. Two paired devices
+    that each play turn n of a chat offline write two turns with two ids, never one id with two contents."""
     if len(chat.chat_id) > MAX_CHAT_ID:
         raise _fail("chat_id_too_long", f"a played chat's id is at most {MAX_CHAT_ID} characters")
     if type(number) is not int or not 1 <= number <= MAX_NUMBER:
         raise _fail("too_many_turns", f"a chat has at most {MAX_NUMBER} turns")
-    return f"{chat.chat_id}.{number:06d}"
+    if device is not None and (type(device) is not str or not _DEVICE.fullmatch(device)):
+        raise _fail("invalid_field", "a turn's device is eight lowercase hex digits (028's device tag)")
+    return f"{chat.chat_id}.{number:06d}" + ("" if device is None else f"-{device}")
+
+
+def parse_turn_id(value: str) -> tuple[str, int, str | None] | None:
+    """``(chat_id, number, device)`` of a turn id, or ``None`` for text that does not spell one."""
+    chat_id, _, last = value.rpartition(".")
+    found = _NUMBER.fullmatch(last)
+    if not chat_id or found is None:
+        return None
+    return chat_id, int(found["number"]), found["device"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,7 +294,9 @@ class TurnRecord:
     """One turn of one chat: ``post`` (or none), its takes, and whether the table closed it.
 
     Open while no take is kept and nobody passed it. While the last turn is ``paused`` no new turn is
-    posted, begun or generated; who paused is kept for ``resume`` only and never shown.
+    posted, begun or generated; who paused is kept for ``resume`` only and never shown. ``device`` is the
+    tag of the device that created it (028), or ``None`` for a turn created on a library with no identity;
+    a turn keeps it for good.
     """
 
     chat: ChatRef
@@ -286,12 +307,13 @@ class TurnRecord:
     paused: bool = False
     paused_by: str | None = None
     passed_by: str | None = None
+    device: str | None = None
     extras: dict[str, object] = field(default_factory=dict, compare=False)
 
     def __post_init__(self) -> None:
         if type(self.chat) is not ChatRef:
             raise _fail("invalid_field", "a turn's chat is a ChatRef")
-        turn_id(self.chat, self.number)
+        turn_id(self.chat, self.number, self.device)
         if self.origin not in ORIGINS:
             raise _fail("invalid_field", f"a turn's origin is one of {ORIGINS}")
         if (self.post is not None) != (self.origin == "post"):
@@ -332,7 +354,7 @@ class TurnRecord:
 
     @property
     def turn_id(self) -> str:
-        return turn_id(self.chat, self.number)
+        return turn_id(self.chat, self.number, self.device)
 
     @property
     def ref(self) -> TurnRef:
@@ -383,5 +405,6 @@ def usage_totals(attempts: Iterable[CallAttempt]) -> dict[str, int]:
 
 __all__ = [
     "CALL_STATES", "CallRecord", "LINE_STATES", "MAX_CHAT_ID", "MAX_TAKES", "ORIGINS", "POST_KINDS", "Post",
-    "SceneLine", "SceneRefused", "TAKE_STATES", "Take", "TokenUsage", "TurnRecord", "turn_id", "usage_totals",
+    "SceneLine", "SceneRefused", "TAKE_STATES", "Take", "TokenUsage", "TurnRecord", "parse_turn_id", "turn_id",
+    "usage_totals",
 ]

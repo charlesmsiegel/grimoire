@@ -18,7 +18,7 @@ Each speaking NPC gets its own call, with its own voice, its own [031](CONTEXT.m
 
 ## A turn
 
-`TurnRef(campaign_id, turn_id)` is `campaign:<c>#turn/<t>`, stored at `campaigns/<c>/turns/<t>.json` in the scope-record envelope ([STORAGE](STORAGE.md)). `turn_id` is `<chat_id>.<n:06d>`, numbered from 1 per chat. A chat id over 97 characters cannot be played (`chat_id_too_long`), so the turn id still fits 032's message ids; a chat holds at most 999,999 turns (`too_many_turns`).
+`TurnRef(campaign_id, turn_id)` is `campaign:<c>#turn/<t>`, stored at `campaigns/<c>/turns/<t>.json` in the scope-record envelope ([STORAGE](STORAGE.md)). `turn_id` is `<chat_id>.<n:06d>`, numbered from 1 per chat. On a library with a device identity ([SYNC](SYNC.md)) a new turn's id also carries that device's tag, `<chat_id>.<n:06d>-<tag>` (`chatstore.device_tag`, the tag 028 gives new chat actors and 034 new items, [DEVICE_SYNC](DEVICE_SYNC.md)), recorded in the payload as `device`, so two paired devices that each play turn *n* offline write two turns with two ids, never one id with two contents (which 032 would read as one message, and 020 as one immutable record, once milestone 2 writes deliveries under it). A library never given an identity numbers turns as before. A turn keeps its id for good: turns played before `identify` are still read, rewritten under their own id, and play goes on from them with tagged turns; a turn planned before `identify` and written after it is refused `turn_changed`, and a damaged identity refuses every new turn (`device_identity`) rather than mint untagged ids. A payload without `device` (written before the tag existed) reads as untagged. A chat id over 88 characters cannot be played (`chat_id_too_long`), so a tagged turn id still fits 032's message ids; one cap for tagged and untagged ids, so identifying a library never strands a chat. A chat holds at most 999,999 turns (`too_many_turns`).
 
 A `TurnRecord` holds:
 - `origin`: `post` (a player's post), `prompt` (the table asked the cast to go on), `opening` (a card's greeting or a scenario's opening), or `imported` (reserved; 036's imported history lives in its own `transcripts/` family);
@@ -73,10 +73,10 @@ While play is paused nothing is begun, posted, generated, kept or passed (`pause
 
 ## Storage and sync
 
-- `turns/` is a history family: `load()` never reads it, and `store.campaign_turns(campaign)` lists it with per-file problems. A turn is created once (create-only, so two posts can never both become turn *n*) and then changed only by compare-and-swap.
-- A turn file of this chat that cannot be read stops every write to the chat, marks and pauses included (`turns_unreadable`), as does a gap in the numbering; a damaged turn of another chat does not.
+- `turns/` is a history family: `load()` never reads it, and `store.campaign_turns(campaign)` lists it with per-file problems. A turn is created once (create-only, so two posts can never both become turn *n*: a library never creates turn *n* while it holds any turn *n*, under any tag) and then changed only by compare-and-swap. A chat's turns are ordered by number, then an untagged turn first, then by device tag: one order on every device.
+- A turn file of this chat that cannot be read stops every write to the chat, marks and pauses included (`turns_unreadable`), as does a gap in the numbering (`turn_gap`) or two turns of one number (`turn_fork`); a damaged turn of another chat does not.
 - Every actor id a turn names stays taken for 107's allocators (`turn_instance_ids`), so a deleted actor's id never goes to a newcomer who would inherit what it heard.
-- **Sync holds turns back** (`turn` is a held kind, [SYNC](SYNC.md)): two devices playing one chat offline would both write its next turn. Devices that differ get a `held` conflict, never a silent drop. Turn merges are 028's milestone, due before 044.
+- **Sync holds turns back** (`turn` is a held kind, [SYNC](SYNC.md)): two devices playing one chat offline both write its next turn, as two files with two ids. Devices that differ get a `held` conflict, never a silent drop. A chat that holds both devices' turn *n* (keep-both) is **forked**: it opens, with both turns in order and `turn_fork` reported, and nothing more is written to it. Merging forked turns (choosing how the chat goes on, and what each actor heard) is 028's merge milestone, due before 044.
 
 ## Known limits
 

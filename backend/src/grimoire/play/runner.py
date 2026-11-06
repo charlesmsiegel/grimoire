@@ -271,7 +271,7 @@ class SceneRunner:
         self._ready(scene)
         stored = scene.turns.last
         if stored is None:
-            record = TurnRecord(chat, 1, "opening")
+            record = TurnRecord(chat, 1, "opening", device=self.scenes.device())
         elif len(scene.turns.turns) == 1 and stored.record.origin == "opening" and stored.record.open:
             record = stored.record  # the opening again, for the cast as it is now (an earlier one went stale)
             if len(record.takes) >= MAX_TAKES:
@@ -330,7 +330,8 @@ class SceneRunner:
             raise _refuse("persona_absent", "the player character is not present in this scene")
         last = scene.last
         number = 1 if last is None else last.number + 1
-        tid = turn_id(chat, number)
+        device = self.scenes.device()
+        tid = turn_id(chat, number, device)
         if not isinstance(text, str) or not text.strip():
             raise _refuse("no_content", "a post needs text")
         try:
@@ -372,7 +373,7 @@ class SceneRunner:
             if last.post == post and not last.takes:
                 return last  # the same post retried: it is already saved
             raise _refuse("turn_open", "the last turn is still open: keep a take, or pass it")
-        record = TurnRecord(chat, number, "post", post)
+        record = TurnRecord(chat, number, "post", post, device=device)
         self.scenes.write(record, None, after=scene.turns.last)
         return record
 
@@ -405,7 +406,7 @@ class SceneRunner:
         pending = scene.pending
         stored = scene.turns.last if pending is not None else None
         record = pending if pending is not None else TurnRecord(
-            chat, 1 if scene.last is None else scene.last.number + 1, "prompt")
+            chat, 1 if scene.last is None else scene.last.number + 1, "prompt", device=self.scenes.device())
         number = len(record.takes) + 1
         if number > MAX_TAKES:
             raise _refuse("too_many_takes", f"a turn holds at most {MAX_TAKES} takes")
@@ -572,7 +573,7 @@ class SceneRunner:
                     raise
             # someone else wrote the turn (an older run's usage, a pass, a newer run): read it again
             current = self.scenes.turns(chat)
-            found = next((s for s in current.turns if s.record.number == stored.record.number), None)
+            found = next((s for s in current.turns if s.record.ref == stored.record.ref), None)
             if found is None:
                 break
             stored = found
