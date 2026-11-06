@@ -143,6 +143,9 @@ class NpcBrief:
     hidden: tuple[SecretFact, ...]  # the secrets this actor has not learned, by id
     exposed: tuple[str, ...]  # what the actor holds or heard: a marker in here is not a leak
     names: tuple[tuple[InstanceRef, str], ...]  # how this actor labels others
+    #: with an intention, the actor ids of the cast it was chosen for: ``run_turn`` refuses the brief in a
+    #: turn whose plan does not have them all present (an approach needing someone who has left)
+    cast: frozenset[str] | None = None
     _seal: InitVar[object] = None
 
     __hash__ = None  # type: ignore[assignment]  # holds a ResolvedVoice
@@ -426,7 +429,8 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
     do about it now and what it will not do here are added to the brief, so the NPC pursues its goal
     in this same call and no other is made. It must be this actor's (``foreign_intention``), made from
     this very knowledge projection (``intention_mismatch``), and none of its shown text may state a
-    secret hidden from the actor (``intention_leak``). Its shown text then counts as exposed.
+    secret hidden from the actor (``intention_leak``). ``run_turn`` refuses the brief in a turn whose plan
+    does not have the whole cast it was chosen for present (``intention_cast_mismatch``).
     """
     actor, knowledge = _check_view(view)
     # The voice reaches the prompt only through the screened fragment: the card's raw voice-evidence
@@ -473,7 +477,6 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
     if context is not None:
         own += (*card, *setting, *memory)
     aims = _intention(intention, actor, hidden, own) if intention is not None else []
-    own += tuple(text for _heading, texts in aims for text in texts)
     rendered = [text for _key, text in _knowledge_items(knowledge, names, hidden, own)]
     try:
         fragment = speaker_fragment(voice, secrets=secrets, known=known, max_chars=voice_chars)
@@ -500,8 +503,9 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
         parts.append("You know nothing yet beyond what you hear now.")
     parts.extend(_listed(heading, texts) for heading, texts in aims)
     names[actor] = name
+    cast = frozenset(ref.instance_id for ref in intention.present) if intention is not None else None
     return NpcBrief(actor, name, voice, fragment, "\n\n".join(parts), heard, hidden,
-                    own + (name,) + tuple(line.text for line in heard), tuple(names.items()), _SEAL)
+                    own + (name,) + tuple(line.text for line in heard), tuple(names.items()), cast, _SEAL)
 
 
 def _check_lore(lore: object, campaign_id: str, snapshot: object) -> None:

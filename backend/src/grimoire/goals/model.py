@@ -13,10 +13,11 @@ here is stored yet.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import unicodedata
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from grimoire.core.identity import InstanceRef, validate_segment
+from grimoire.core.identity import SEGMENT_MAX, InstanceRef, validate_segment
 
 #: How an NPC may hold a proposition. The first three are its current belief's stance; ``aware``
 #: is holding it at all: a report received or sent, or a belief of any stance, current or earlier.
@@ -32,6 +33,12 @@ MAX_APPROACHES = 8
 MAX_LIMITS = 16
 MAX_CONDITIONS = 8
 MAX_TAGS = 8
+#: Control characters (line breaks and tabs included), surrogates and line or paragraph separators:
+#: an authored text is one line of the NPC's brief, and a line break could fake a heading of its own.
+_UNSAFE_CATEGORIES = frozenset({"Cc", "Cs", "Zl", "Zp"})
+#: Bidi embeddings, overrides and isolates, and the byte-order mark, which can disguise what the director
+#: reads. Other format characters (zero-width joiners in emoji, ZWNJ in Persian) are ordinary text.
+_UNSAFE_FORMAT = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\ufeff")
 
 
 class GoalError(ValueError):
@@ -58,8 +65,9 @@ def _segment(value: object, label: str) -> str:
         raise _invalid(f"{label} must be plain text")
     try:
         validate_segment(value, label)
-    except ValueError as error:
-        raise _invalid(str(error)) from None
+    except ValueError:
+        # Not the value itself: a mistyped id can hold authored text, and messages are safe to log.
+        raise _invalid(f"{label} must be a lowercase id segment of at most {SEGMENT_MAX} characters") from None
     return value
 
 
@@ -68,8 +76,8 @@ def _text(value: object, label: str) -> str:
         raise _invalid(f"{label} must be nonblank text")
     if len(value) > TEXT_CHARS:
         raise _invalid(f"{label} is longer than {TEXT_CHARS} characters")
-    if any(not char.isprintable() and not char.isspace() for char in value):
-        raise _invalid(f"{label} holds a control character")
+    if any(char in _UNSAFE_FORMAT or unicodedata.category(char) in _UNSAFE_CATEGORIES for char in value):
+        raise _invalid(f"{label} may not hold a line break, control, bidi-override or separator character")
     return value
 
 
@@ -86,6 +94,16 @@ def _sequence(values: object, label: str, limit: int) -> tuple:
     return values
 
 
+def _sequence_any(values: object, label: str) -> tuple:
+    """``values`` as a tuple of any length: a real collection, never one string or a mapping."""
+    if isinstance(values, (str, bytes, Mapping)):
+        raise _invalid(f"{label} must be a collection, not {type(values).__name__}")
+    try:
+        return tuple(values)  # type: ignore[arg-type]
+    except TypeError:
+        raise _invalid(f"{label} must be a collection") from None
+
+
 def _tags(values: object, label: str) -> frozenset[str]:
     tags = _sequence(values, label, MAX_TAGS)
     return frozenset(_segment(tag, label) for tag in tags)
@@ -93,7 +111,7 @@ def _tags(values: object, label: str) -> frozenset[str]:
 
 @dataclass(frozen=True, slots=True)
 class Present:
-    """The scene's cast includes ``actor``: the NPC can see and reach it now."""
+    """``actor`` is in the scene as the NPC knows it: the cast the caller gives ``choose`` (see GOALS.md)."""
 
     actor: InstanceRef
 
@@ -226,9 +244,10 @@ class Agenda:
         approaches = [approach for goal in goals for approach in goal.approaches]
         tags = frozenset(tag for approach in approaches for tag in approach.tags)
         for limit in limits:
-            # A limit that can forbid nothing is a mistyped tag: a safety rule must never silently lapse.
-            if not limit.forbids & tags:
-                raise GoalError("unused_limit", f"limit {limit.limit_id} forbids no tag any approach has")
+            # A forbidden tag no approach has is a mistyped tag, so part of a safety rule would lapse
+            # silently. Ids in ``when`` are checked against the ledger by ``check_agenda``.
+            if limit.forbids - tags:
+                raise GoalError("unused_limit", f"limit {limit.limit_id} forbids a tag no approach has")
         needs = [condition for approach in approaches for condition in approach.needs]
         for condition in needs + [condition for limit in limits for condition in limit.when]:
             if isinstance(condition, Present):
@@ -248,3 +267,32 @@ class Agenda:
                         return goal, approach
         raise GoalError("unknown_approach", f"{self.actor} has no approach {goal_id}/{approach_id}")
 
+
+
+def conditions_of(agenda: Agenda) -> tuple[Condition, ...]:
+    """Every condition the agenda names, in approaches' needs and limits' ``when``, in authored order."""
+    found = [condition for goal in agenda.goals for approach in goal.approaches for condition in approach.needs]
+    found += [condition for limit in agenda.limits for condition in limit.when]
+    return tuple(dict.fromkeys(found))
+
+
+def check_agenda(agenda: Agenda, *, propositions: Iterable[str], actors: Iterable[InstanceRef]) -> None:
+    """Refuse an agenda naming a proposition or an actor the campaign does not have.
+
+    A mistyped id in a ``Holds`` or ``Present`` never holds, so an approach needing it is never possible
+    and a limit gated on it never applies: a safety rule would lapse silently. ``propositions`` are the
+    campaign ledger's proposition ids (director-side) and ``actors`` its actor instances. Run it where an
+    agenda is authored, stored or loaded; ``choose`` cannot, as it sees only the NPC's projection.
+    Raises ``unknown_proposition`` or ``unknown_actor``, citing the id.
+    """
+    if type(agenda) is not Agenda:
+        raise GoalError("bad_agenda", "check_agenda needs an Agenda")
+    known = frozenset(_sequence_any(propositions, "propositions"))
+    cast = frozenset(_sequence_any(actors, "actors"))
+    if not all(isinstance(ref, InstanceRef) for ref in cast):
+        raise _invalid("actors must be InstanceRef values")
+    for condition in conditions_of(agenda):
+        if isinstance(condition, Holds) and condition.proposition_id not in known:
+            raise GoalError("unknown_proposition", f"{agenda.actor} names unknown proposition {condition.proposition_id}")
+        if isinstance(condition, Present) and condition.actor not in cast:
+            raise GoalError("unknown_actor", f"{agenda.actor} names unknown actor {condition.actor}")

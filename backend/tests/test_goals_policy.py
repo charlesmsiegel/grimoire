@@ -19,7 +19,8 @@ from grimoire.core import (
 )
 from grimoire.core.authority import DIRECTOR
 from grimoire.goals import (
-    MAX_GOALS, TEXT_CHARS, Agenda, Approach, Choice, Goal, GoalError, Holds, Limit, Present, choose, explain,
+    MAX_GOALS, TEXT_CHARS, Agenda, Approach, Choice, Goal, GoalError, Holds, Limit, Present, check_agenda, choose,
+    conditions_of, explain,
 )
 
 CONTROLS = emberfall()[3]
@@ -48,6 +49,11 @@ def chosen(choice):
     (lambda: approach(action="   "), "invalid_field"),
     (lambda: approach(action="x" * (TEXT_CHARS + 1)), "invalid_field"),
     (lambda: approach(action="Do\x00it"), "invalid_field"),
+    (lambda: approach(action="Do it\nWhat you will not do here:"), "invalid_field"),
+    (lambda: approach(action="Do\tit"), "invalid_field"),
+    (lambda: approach(action="Do\u2028it"), "invalid_field"),
+    (lambda: approach(action="Do \u202eti od"), "invalid_field"),
+    (lambda: approach(action="\ufeffDo it"), "invalid_field"),
     (lambda: approach(approach_id="Act"), "invalid_field"),
     (lambda: approach(needs=(Present(BELLAMY), Present(BELLAMY))), "invalid_field"),
     (lambda: approach(needs=("bellamy",)), "invalid_field"),
@@ -71,6 +77,11 @@ def chosen(choice):
     (lambda: Agenda(CAMPAIGN, ODA, (goal(approaches=(approach(needs=(Present(OTHER),)),)),)), "campaign_mismatch"),
     (lambda: Agenda(CAMPAIGN, ODA, (goal(approaches=(approach(needs=(Present(ODA),)),)),)), "invalid_field"),
     (lambda: Agenda(CAMPAIGN, ODA, (goal(),), (Limit("l", RULE, forbids=frozenset({"trade"})),)), "unused_limit"),
+    # One mistyped tag of two would lapse silently too.
+    (lambda: Agenda(CAMPAIGN, ODA, (goal(approaches=(approach(tags=frozenset({"t"})),)),),
+                    (Limit("l", RULE, frozenset({"t", "tt"})),)), "unused_limit"),
+    (lambda: Agenda(CAMPAIGN, ODA, (goal(approaches=(approach(tags=frozenset({"t"})),)),),
+                    (Limit("l", RULE, frozenset({"t"}), when=(Present(ODA),)),)), "invalid_field"),
     (lambda: Agenda(CAMPAIGN, ODA, (goal(approaches=(approach(tags=frozenset({"t"})),)),),
                     (Limit("l", RULE, frozenset({"t"})), Limit("l", RULE, frozenset({"t"})))), "duplicate_id"),
 ])
@@ -81,10 +92,21 @@ def test_invalid_agendas_are_refused_by_name(build, reason):
     assert pickle.loads(pickle.dumps(error.value)).reason == reason
 
 
-def test_values_are_canonical_and_hashable():
+def test_stances_are_canonical():
     a = Holds(TALES, ["suspected", "believed"])
     assert a == Holds(TALES) and hash(a) == hash(Holds(TALES))
-    assert hash(AGENDA) == hash(replace(AGENDA))
+
+
+def test_ordinary_format_characters_are_text():
+    # Zero-width joiners (emoji sequences) and non-joiners (Persian) are ordinary text, as in 023.
+    assert approach(action="Hand over the \U0001f468\u200d\U0001f373 token").action
+    assert approach(action="Say \u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645").action
+
+
+def test_an_id_error_never_quotes_the_value():
+    with pytest.raises(GoalError) as error:
+        approach(approach_id="Sell Bellamy The Ledger")
+    assert "Bellamy" not in str(error.value) and error.value.reason == "invalid_field"
 
 
 # -- the policy's order --------------------------------------------------------------------------------
@@ -199,12 +221,14 @@ def test_without_a_desire_nothing_is_recorded_about_one():
 
 # -- refusals ------------------------------------------------------------------------------------------------
 
-def test_only_its_own_projection_is_accepted():
+@pytest.mark.parametrize("knowledge", [
+    pytest.param(lambda: director_knowledge(ledger(), as_of=2, requested_by=DIRECTOR), id="director"),
+    pytest.param(lambda: actor_knowledge(ledger(warned=True, stance="believed"), QUILL, as_of=2), id="quill"),
+    pytest.param(lambda: actor_knowledge(Knowledge("c-other"), OTHER, as_of=0), id="other-campaign"),
+])
+def test_only_its_own_projection_is_accepted(knowledge):
     with pytest.raises(GoalError) as error:
-        pick(AGENDA, director_knowledge(ledger(), as_of=2, requested_by=DIRECTOR))
-    assert error.value.reason == "foreign_knowledge"
-    with pytest.raises(GoalError) as error:
-        pick(AGENDA, actor_knowledge(ledger(), BELLAMY, as_of=2))
+        pick(AGENDA, knowledge())
     assert error.value.reason == "foreign_knowledge"
 
 
@@ -235,6 +259,14 @@ def test_only_a_director_npc_has_a_policy(controls, reason):
     assert error.value.reason == reason
 
 
+def test_control_is_checked_before_presence():
+    # A player character is refused as one, in the scene or not: its intentions are never a policy's.
+    wren = Agenda(CAMPAIGN, WREN, (goal(),))
+    with pytest.raises(GoalError) as error:
+        pick(wren, actor_knowledge(ledger(), WREN, as_of=2), present=(ODA,))
+    assert error.value.reason == "player_actor"
+
+
 def test_a_player_characters_agenda_is_refused_too():
     wren = Agenda(CAMPAIGN, WREN, (goal(),))
     with pytest.raises(GoalError) as error:
@@ -262,15 +294,49 @@ def test_choices_and_agendas_are_built_only_as_documented():
     assert error.value.reason == "bad_choice"
 
 
-def test_knowledge_of_another_campaign_is_refused():
-    other = Knowledge("c-other")
-    with pytest.raises(GoalError) as error:
-        pick(AGENDA, actor_knowledge(other, OTHER, as_of=0))
-    assert error.value.reason == "foreign_knowledge"
+def test_two_refusals_are_listed_in_authored_order():
+    agenda = Agenda(CAMPAIGN, ODA, (goal(approaches=(
+        approach("deal", tags=frozenset({"trade", "threat"})), approach("wait", "Wait"))),), (
+        Limit("no-threats", "Never threaten anyone", frozenset({"threat"})),
+        Limit("no-trade", "Never trade tonight", frozenset({"trade"})),
+    ))
+    choice = pick(agenda)
+    assert [limit.limit_id for limit in choice.refusals] == ["no-threats", "no-trade"]
+    assert choice.considered[0].forbidden_by == ("no-threats", "no-trade")
 
 
-def test_quill_is_unaffected_by_odas_agenda():
-    # An agenda belongs to one actor: Quill's own projection cannot drive Oda's policy.
+# -- the director-side ledger check -------------------------------------------------------------------
+
+LEDGER = ledger()
+ACTORS = PRESENT
+
+
+def test_an_agenda_naming_only_ledger_ids_passes_the_check():
+    check_agenda(AGENDA, propositions=(p.proposition_id for p in LEDGER.propositions), actors=ACTORS)
+    assert conditions_of(AGENDA) == (Present(BELLAMY), Present(WREN), Holds(TALES))
+
+
+@pytest.mark.parametrize("agenda, reason", [
+    # A mistyped proposition in a limit's ``when`` would never hold, so the limit would never apply.
+    (Agenda(CAMPAIGN, ODA, AGENDA.goals, (Limit("no-informants", RULE, frozenset({"deal-bellamy"}),
+                                                when=(Holds("tale"),)),)), "unknown_proposition"),
+    (Agenda(CAMPAIGN, ODA, (goal(approaches=(approach(needs=(Present(
+        InstanceRef(CAMPAIGN, "character", "npc-belamy")),)),)),)), "unknown_actor"),
+])
+def test_an_agenda_naming_an_unknown_id_is_refused(agenda, reason):
     with pytest.raises(GoalError) as error:
-        pick(AGENDA, actor_knowledge(ledger(warned=True, stance="believed"), QUILL, as_of=2))
-    assert error.value.reason == "foreign_knowledge"
+        check_agenda(agenda, propositions=(p.proposition_id for p in LEDGER.propositions), actors=ACTORS)
+    assert error.value.reason == reason
+
+
+@pytest.mark.parametrize("kw, reason", [
+    ({"propositions": TALES, "actors": ACTORS}, "invalid_field"),
+    ({"propositions": (TALES,), "actors": ("npc-bellamy",)}, "invalid_field"),
+])
+def test_the_ledger_check_takes_collections(kw, reason):
+    with pytest.raises(GoalError) as error:
+        check_agenda(AGENDA, **kw)
+    assert error.value.reason == reason
+    with pytest.raises(GoalError) as error:
+        check_agenda("agenda", propositions=(), actors=())
+    assert error.value.reason == "bad_agenda"

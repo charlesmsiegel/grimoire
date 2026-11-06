@@ -71,7 +71,7 @@ class Choice:
 
     ``knowledge`` is the very projection the choice was made from: a brief built from another one (a
     later moment, or a reload that quarantined a record) refuses it. ``present`` is the cast it was
-    made for, as the caller gave it.
+    made for, as the caller gave it: the actors this NPC knows to be in the scene (GOALS.md).
     """
 
     agenda: Agenda
@@ -180,9 +180,9 @@ def choose(agenda: Agenda, knowledge: ActorKnowledge, *, present: Iterable[Insta
     """What ``agenda``'s NPC pursues now, from its own ``knowledge`` and the scene's cast ``present``.
 
     Refusals (``GoalError``): ``bad_agenda``; ``foreign_knowledge`` (not exactly an ``ActorKnowledge``,
-    or another actor's); ``bad_present`` and ``campaign_mismatch`` for the cast; ``absent_actor`` (the
-    NPC is not in the scene, so it can pursue nothing in it); ``bad_controls``, ``ambiguous_control``,
-    ``unassigned_actor`` and ``player_actor`` (only a director-controlled NPC has a policy); and
+    or another actor's); ``bad_present`` and ``campaign_mismatch`` for the cast; ``bad_controls``,
+    ``ambiguous_control``, ``unassigned_actor`` and ``player_actor`` (only a director-controlled NPC has
+    a policy); ``absent_actor`` (the NPC is not in the scene, so it can pursue nothing in it); and
     ``unknown_approach`` for a ``desired`` (goal id, approach id) the agenda does not have.
     """
     if type(agenda) is not Agenda:
@@ -194,9 +194,9 @@ def choose(agenda: Agenda, knowledge: ActorKnowledge, *, present: Iterable[Insta
     if knowledge.actor != actor:
         raise GoalError("foreign_knowledge", f"{actor} was given the knowledge of {knowledge.actor}")
     cast = _present(present, agenda.campaign_id)
+    _check_control(actor, controls)
     if actor not in cast:
         raise GoalError("absent_actor", f"{actor} is not in the scene")
-    _check_control(actor, controls)
     if desired is not None:
         if not (isinstance(desired, tuple) and len(desired) == 2 and all(type(part) is str for part in desired)):
             raise GoalError("unknown_approach", "desired must be a (goal id, approach id) pair")

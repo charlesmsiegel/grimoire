@@ -107,9 +107,11 @@ With `intention`, a `Choice` from 039's `choose` ([GOALS](GOALS.md)) for **this 
 | `bad_intention` | not a `Choice` |
 | `foreign_intention` | another actor's choice |
 | `intention_mismatch` | chosen from another `ActorKnowledge` than `view.knowledge` (another moment, or a projection a ledger reload has since changed): it may rest on a belief the actor no longer holds, or miss one that would have stopped it |
-| `intention_leak` | an aim, action or rule shown would state a hidden secret's marker that nothing the actor holds exposes. The agenda is the director's, so its text may name what this NPC has not learned; an approach gated on `Holds` of that proposition is safe, any other is an authoring error |
+| `intention_leak` | an aim, action or rule shown would state a hidden secret's marker that nothing the actor holds exposes. The agenda is the director's, so its text may name what this NPC has not learned. Gating an approach on `Holds` of that proposition makes **that approach's action** safe (the actor holds it by the time it is chosen). It does not make the goal's aim safe, which is shown whenever any approach of the goal is chosen, nor a limit's rule, which is shown whenever the limit refuses something: keep those free of what the NPC may not know. A disguised actor's real name in an action is caught the same way when its identity is registered as a `SecretFact`, as for labels |
 
-What the brief shows of the intention counts as exposed, so a reply stating the NPC's own aim or rule is no `unlearned_secret`. Not checked: that the choice was made for the cast this turn plans (`Choice.present` is the caller's word, as `heard` is).
+Shown intention text is screened, not added to what the actor holds: it never states a hidden secret, so a reply repeating it is screened as any other reply.
+
+`run_turn` refuses, before any call, a brief whose intention was chosen for an actor this turn's plan does not have present (`intention_cast_mismatch`): the chosen approach may need someone who has left. A subset check, not equality: the cast an NPC chooses from leaves out who it cannot recognise ([GOALS](GOALS.md#choosing)), and they may still be in the scene.
 
 ### The director's brief
 
@@ -150,7 +152,7 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 
 `run_turn(meter, briefs, *, controls, director=None, token=None, cancel=None, scene_voices=()) -> TurnOutcome`:
 
-- **Checked before any call** (`GenerationError`): every planned call is `npc_generation` or `director_generation` (`unsupported_stage`), each `npc_generation` call has exactly one brief (`missing_brief`, `extra_brief`, `duplicate_brief`), a director brief is given exactly when a director reply is planned (`director_mismatch`), no planned call already ran on `meter` (`call_already_run`), every brief's actor is director-controlled **now**, so a hand-built plan cannot voice a player character, and the director brief names the same player characters that the plan and control give now (`director_mismatch`; an unassigned present actor is `unassigned_actor`).
+- **Checked before any call** (`GenerationError`): every planned call is `npc_generation` or `director_generation` (`unsupported_stage`), each `npc_generation` call has exactly one brief (`missing_brief`, `extra_brief`, `duplicate_brief`), a director brief is given exactly when a director reply is planned (`director_mismatch`), no planned call already ran on `meter` (`call_already_run`), every brief's actor is director-controlled **now**, so a hand-built plan cannot voice a player character, the director brief names the same player characters that the plan and control give now (`director_mismatch`; an unassigned present actor is `unassigned_actor`), and every NPC brief's intention was chosen for actors this plan has present (`intention_cast_mismatch`, 039).
 - **Calls run in plan order**, one `execute` each. Each later call hears the lines accepted before it; a planned director reply runs after the speakers, and a speaker planned after it (a later phase added on the meter) is refused before any call (`director_not_last`).
 - **An exception from the adapter or an approvals callback** ends the call `failed` (reason: the exception type) and the turn `halted`, keeping earlier lines.
 - **Only accepted, screened text becomes a line.** A provider status other than `accepted`, or a screen rejection, ends the turn: later calls are `not_issued`. A rejected call is still billed.

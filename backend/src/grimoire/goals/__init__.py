@@ -7,13 +7,13 @@ and in memory. See docs/GOALS.md for the contract.
 
 from .model import (
     CREDITED, MAX_APPROACHES, MAX_CONDITIONS, MAX_GOALS, MAX_LIMITS, MAX_TAGS, PRIORITY_MAX, PRIORITY_MIN, STANCES,
-    TEXT_CHARS, Agenda, Approach, Condition, Goal, GoalError, Holds, Limit, Present,
+    TEXT_CHARS, Agenda, Approach, Condition, Goal, GoalError, Holds, Limit, Present, check_agenda, conditions_of,
 )
 from .policy import OUTCOMES, Choice, Considered, Desire, choose, explain, held
 
 __all__ = [
     "CREDITED", "MAX_APPROACHES", "MAX_CONDITIONS", "MAX_GOALS", "MAX_LIMITS", "MAX_TAGS", "PRIORITY_MAX",
     "PRIORITY_MIN", "STANCES", "TEXT_CHARS", "Agenda", "Approach", "Condition", "Goal", "GoalError", "Holds", "Limit",
-    "Present",
+    "Present", "check_agenda", "conditions_of",
     "OUTCOMES", "Choice", "Considered", "Desire", "choose", "explain", "held",
 ]

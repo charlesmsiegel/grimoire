@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from generation_fixtures import BELLAMY, ODA, Harness, say
+from generation_fixtures import BELLAMY, ODA, QUILL, WREN, Harness, say
 from goals_fixtures import (
     AGENDA, COLLECT_AIM, PRESENT, PRESS_ACTION, RULE, SELL, SELL_ACTION, TALES, TALES_TEXT, ledger, oda_knows,
 )
@@ -21,7 +21,9 @@ from grimoire.core import Knowledge, Moment, Proposition, Report, Ruling, actor_
 from grimoire.core.inference import InferenceStage
 from grimoire.core.model import ActorView
 from grimoire.generation import GenerationError, npc_brief
-from grimoire.goals import Agenda, Approach, Goal, Holds, choose, explain
+from grimoire.core.identity import InstanceRef
+from grimoire.goals import Agenda, Approach, Goal, Holds, Limit, Present, choose, explain
+from grimoire.voice import SecretFact
 
 CONTROLS = emberfall()[3]
 VOICES = emberfall()[4]
@@ -66,10 +68,24 @@ def test_a_oda_refuses_the_dangerous_trade_and_pursues_the_goal_in_its_one_call(
     assert set(summary.by_actor) == {ODA.instance_id}
 
 
-def test_a_a_reply_that_states_its_own_intention_is_no_leak():
-    knowledge = oda_knows(warned=True, stance="believed")
-    _choice, outcome, _meter, _prompts = oda_turn(knowledge, f"{RULE}. {PRESS_ACTION}.")
-    assert outcome.status == "complete"
+def test_a_only_an_npc_with_something_to_pursue_takes_the_turn():
+    # Initiative comes from the choices themselves: Quill has an agenda too, but believes nothing that
+    # would let it act, so the scene rule (035's) gives the turn to Oda alone and Quill costs nothing.
+    quill_agenda = Agenda(CAMPAIGN, QUILL, (Goal("warn", "Keep the guild clear of informants", 40, (
+        Approach("accuse", "Name the informant to the guild master", needs=(Holds(TALES),)),)),))
+    knowledge = ledger(warned=True, stance="believed")
+    oda = choose(AGENDA, actor_knowledge(knowledge, ODA, as_of=2), present=PRESENT, controls=CONTROLS)
+    quill = choose(quill_agenda, actor_knowledge(knowledge, QUILL, as_of=2), present=PRESENT, controls=CONTROLS)
+    speakers = tuple(choice.actor.instance_id for choice in (oda, quill) if choice.acts)
+    assert speakers == (ODA.instance_id,)
+
+    harness = Harness([say("Wren. Your tally. Now.")])
+    plan = harness.plan(CONTROLS, present=tuple(ref.instance_id for ref in PRESENT), speakers=speakers)
+    meter = harness.meter(plan)
+    brief = npc_brief(oda_view(oda.knowledge), VOICES[ODA.instance_id], secrets=SECRETS, intention=oda)
+    outcome = harness.runtime.run_turn(meter, [brief], controls=CONTROLS)
+    assert outcome.status == "complete" and [line.actor for line in outcome.lines] == [ODA]
+    assert meter.summary().baseline.attempts == 1 and set(meter.summary().by_actor) == {ODA.instance_id}
 
 
 # -- B. no omniscience: only what Oda holds moves it -------------------------------------------------
@@ -175,3 +191,56 @@ def test_c_a_refusal_alone_still_reaches_the_brief():
     brief = npc_brief(oda_view(knowledge), VOICES[ODA.instance_id], secrets=SECRETS, intention=choice)
     assert RULE in brief.system and COLLECT_AIM not in brief.system
 
+
+def test_c_a_refusal_rule_stating_an_unlearned_secret_is_refused():
+    knowledge = oda_knows()
+    leaky = Agenda(CAMPAIGN, ODA, (Goal("talk", "Keep the dinner pleasant", 5, (
+        Approach("gossip", "Trade gossip with Bellamy", tags=frozenset({"gossip"})),
+        Approach("wait", "Keep counting and say nothing"),)),),
+        (Limit("hush", "Never let slip that the duke sold the guild", frozenset({"gossip"})),))
+    choice = choose(leaky, knowledge, present=PRESENT, controls=CONTROLS)
+    assert choice.approach.approach_id == "wait" and [limit.limit_id for limit in choice.refusals] == ["hush"]
+    with pytest.raises(GenerationError) as error:
+        npc_brief(oda_view(knowledge), VOICES[ODA.instance_id], secrets=SECRETS, intention=choice)
+    assert error.value.reason == "intention_leak" and "duke-betrayal" in str(error.value)
+
+
+HASK = InstanceRef(CAMPAIGN, "character", "npc-hask")
+#: Hask is at the dinner disguised as a pilgrim; who the pilgrim is, is the director's secret.
+DISGUISE = SecretFact("pilgrim-is-hask", ("Hask",))
+TOLL = Agenda(CAMPAIGN, ODA, (Goal("collect", COLLECT_AIM, 50, (
+    Approach("press-hask", "Press Hask for the unpaid gate toll", needs=(Present(HASK),)),
+    Approach("press-wren", PRESS_ACTION, needs=(Present(WREN),)),)),))
+
+
+def test_c_a_disguised_actor_is_not_in_the_cast_the_npc_knows():
+    knowledge = oda_knows()
+    secrets = (*SECRETS, DISGUISE)
+    # Given the true cast, Oda would press the pilgrim by its real name: the brief refuses to say it.
+    told_truth = choose(TOLL, knowledge, present=(*PRESENT, HASK), controls=CONTROLS)
+    assert told_truth.approach.approach_id == "press-hask"
+    with pytest.raises(GenerationError) as error:
+        npc_brief(oda_view(knowledge), VOICES[ODA.instance_id], secrets=secrets, intention=told_truth)
+    assert error.value.reason == "intention_leak" and "pilgrim-is-hask" in str(error.value)
+
+    # The cast Oda recognises leaves Hask out; the turn still has Hask present, and that is allowed.
+    choice = choose(TOLL, knowledge, present=PRESENT, controls=CONTROLS)
+    assert choice.approach.approach_id == "press-wren"
+    harness = Harness([say("Wren. Your tally. Now.")])
+    plan = harness.plan(CONTROLS, present=(*(ref.instance_id for ref in PRESENT), HASK.instance_id),
+                        speakers=(ODA.instance_id,))
+    brief = npc_brief(oda_view(knowledge), VOICES[ODA.instance_id], secrets=secrets, intention=choice)
+    assert harness.runtime.run_turn(harness.meter(plan), [brief], controls=CONTROLS).status == "complete"
+
+
+def test_c_a_choice_for_a_cast_that_has_left_is_refused_before_any_call():
+    knowledge = oda_knows()
+    choice = choose(AGENDA, knowledge, present=PRESENT, controls=CONTROLS)
+    assert choice.approach.approach_id == "sell-ledger"  # needs Bellamy, who then leaves
+    harness = Harness([say("Coin on the counter.")])
+    plan = harness.plan(CONTROLS, present=(ODA.instance_id, WREN.instance_id), speakers=(ODA.instance_id,))
+    brief = npc_brief(oda_view(knowledge), VOICES[ODA.instance_id], secrets=SECRETS, intention=choice)
+    with pytest.raises(GenerationError) as error:
+        harness.runtime.run_turn(harness.meter(plan), [brief], controls=CONTROLS)
+    assert error.value.reason == "intention_cast_mismatch"
+    assert harness.prompts() == []
