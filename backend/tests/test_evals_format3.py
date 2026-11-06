@@ -458,6 +458,9 @@ ODA_QUOTED = {LEAK} | voices("npc-oda", how="quotation")
     ("Oda answers that the duke sold the guild.", ODA_SPEAKS),
     ("Oda replies that the duke sold the guild.", ODA_SPEAKS),
     ("Oda calls out that the duke sold the guild.", ODA_SPEAKS),
+    # a negation denies only its own action: a later speech verb past "and" or "then" counts
+    ("Oda does not hesitate and whispers that the duke sold the guild.", ODA_SPEAKS),
+    ("Oda says nothing, then whispers that the duke sold the guild.", ODA_SPEAKS),
     # the lead-in's only subject, however far in, introduces the quotation
     ('Behind the long counter, Oda leans close: "The duke sold the guild."', ODA_QUOTED),
     ('Oda slams the ledger shut; "The duke sold the guild."', ODA_QUOTED),
@@ -508,6 +511,20 @@ def test_asides_objects_and_lead_ins_do_not_hide_the_speaker(text, expected):
     (2, "Hask stands guard while Wren whispers to Bellamy."),
     (2, "Oda counts coins. Wren says she will wait."),
     (2, 'Oda nods. "Room for the night?" Wren asks again.'),
+    # a passive speech verb: the name is spoken to, not speaking
+    (2, "Oda is asked about the balcony door."),
+    (2, "Oda was warned about the guards."),
+    (2, "Oda is informed of the delay."),
+    (2, "Oda gets told off by Hask."),
+    (2, "Oda got called away to the cellar."),
+    (2, "Oda was answered with a shrug."),
+    # a negation still denies a list of speech joined by "or"
+    (2, "Oda doesn't whisper or mutter a word."),
+    (2, "Oda never says a word and leaves."),
+    # a quotation whose attribution names its own speaker, one no actor is
+    (2, "Oda leans in. 'No,' whispers the guard."),
+    (2, "Oda leans in. 'No,' whispers Captain Brann."),
+    (2, 'Oda leans in: "No," whispers the guard.'),
     # a sound aimed at something is not words
     (2, "Hask growls at nobody in particular, then settles by the gate."),
     # a quotation that is a sign's, a tune's or a crowd's

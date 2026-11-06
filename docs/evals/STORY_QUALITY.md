@@ -210,19 +210,26 @@ punctuation, a quotation, a clause break (`as`, `while`, `when`, `who`, `though`
   or `truth`, or by `a`/`the`, one or two words and `that` (`tells the whole room that`); never
   after `can`, `could`, `will`, `would`, `to` or a form of `be`. The search stops at `;`, `:`, a
   quotation, an unbracketed clause break (`Oda listens as the crowd murmurs`), a negation (`not`,
-  `never`, `nothing`, `cannot`, a word ending in `n't`), a subject pronoun after a conjunction or
-  comma (`Oda glares at the guards, and they mutter`) and another subject name (except one joined
-  by `and`: `Oda and Hask whisper`). An aside bracketed by commas right after the name and opened
-  by a clause break is skipped (`Oda, as ever, mutters`). A speech verb right after an object, or
+  `never`, `nothing`, `cannot`, a word ending in `n't`) that no `and`, `but` or `then` follows
+  before such a stop (a negation denies only its own action: `Oda does not hesitate and
+  whispers` counts, `Oda doesn't whisper or mutter` does not), a subject pronoun after a
+  conjunction or comma (`Oda glares at the guards, and they mutter`) and another subject name
+  (except one joined by `and`: `Oda and Hask whisper`). An aside bracketed by commas right after
+  the name and opened by a clause break is skipped (`Oda, as ever, mutters`). A speech verb right after an object, or
   after an object and `to` and a verb, is the object's and ends the search (`Oda waits for Wren
   to say something`, `Oda lets Wren speak`). A verb does not count right after a determiner (`a
-  shout`), as an `-ing` form right after a preposition (`without saying`), as an infinitive whose
-  noun phrase before `to` follows `for` or a verb (`waits for the guard to speak`, `asks the
+  shout`), as a past participle after a form of `be` or `get`, perhaps with an `-ly` adverb
+  between (`Oda is asked`, `was warned`: the passive is spoken to), as an `-ing` form right
+  after a preposition (`without saying`), as an infinitive whose noun phrase before `to`
+  follows `for` or a verb (`waits for the guard to speak`, `asks the
   guard to explain`; after a place it is the subject's own: `leans across the bar to whisper`),
   or right before a negation (`says nothing`); a verb whose own subject is a noun phrase (`and
   the crowd murmurs`, but not `Oda by the hearth murmurs`) ends the search; and one followed by
   `at` counts only when `that` or the speech follows (`Hask growls at nobody` is a sound); or
-- the sentence has a quotation and one of:
+- the sentence has a quotation and one of the following, the last two only when no speech verb
+  after the quotation names its own speaker that is no actor, by a determiner and noun or a
+  capitalised name the scenario does not know (`"No," whispers the guard`, `"No," says Captain
+  Brann`):
   - a speech verb stands right before *X*'s name (`"…," mutters Oda`);
   - *X* is the only subject actor named before the first quotation, wherever it stands
     (`Behind the long counter, Oda leans close: "…"`), and that text is the name alone or ends
@@ -254,13 +261,19 @@ distinguishability below baseline minus tolerance), `cost_regression` and opt-in
 
 ## Limitations
 
-Marker matching catches stated phrases, not paraphrase. The `/3` attribution rule is a
-deterministic heuristic over English word order, not a parse; it is an eval check, not a
-boundary. It misses:
+Marker matching catches stated phrases, not paraphrase.
+
+The `/3` attribution rule is a deterministic heuristic over English word order, not a parse,
+and an eval check, not a boundary. It recognises only the constructions stated above. Any other
+construction can be missed or misread: passives, perception complements, possessives, pronouns,
+epithets, and the like. The examples below are illustrative, not exhaustive. Among its misses:
 
 - speech given to an NPC by a pronoun ("She mutters …", "Oda nods. Then she mutters …", "Oda
   nods at Hask, and he growls …" credits no one), by an epithet ("the old innkeeper mutters …")
   or by an unnamed speaker ("a low voice says …");
+- a speaker named after a perception verb ("Wren hears Oda whisper that …": Oda is read as
+  Wren's object) or through a possessive ("Oda's voice whispers that …": `Oda's` is not a
+  name);
 - a speech verb more than 8 words after the name. An object's words count toward the 8 ("Oda
   leans over the counter toward Wren and whispers" is exactly 8; one more adjective is a miss):
   the window is a cliff, not a judgement;
@@ -274,7 +287,7 @@ boundary. It misses:
   a quotation that is neither in the NPC's own sentence nor in the sentence right after one with
   the NPC as its only subject (or that comes before the NPC's sentence).
 
-It can also flag non-speech: the listed verbs can be non-speech ("Oda adds a coin"), and
+Among the non-speech it can flag: the listed verbs can be non-speech ("Oda adds a coin"), and
 `calls out` counts whatever is called ("Oda calls out the last orders"); a bare
 quotation right after a sentence whose only subject is the NPC is the NPC's (`Oda grunts.
 'Fine.' Wren pays.`), as is one after a colon, unless a sign, board, tune or the like is named

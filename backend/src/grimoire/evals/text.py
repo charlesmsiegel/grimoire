@@ -31,7 +31,7 @@ def normalize(text: str) -> str:
     return _SPACE.sub(" ", folded).strip()
 
 
-def _fold_keeping_case(text: str) -> str:
+def fold_keeping_case(text: str) -> str:
     """``normalize`` without the casefold, so a sentence cut can see a capital letter."""
     text = unicodedata.normalize("NFKC", text).translate(_FOLD)
     text = "".join(char for char in text if unicodedata.category(char) != "Cf")
@@ -152,8 +152,8 @@ def quotation_spans(text: str) -> list[tuple[int, int]]:
     return [match.span() for match in _QUOTATION.finditer(text)]
 
 
-def sentences(text: str) -> list[str]:
-    """``text`` normalised and cut into sentences.
+def sentences(text: str, *, keep_case: bool = False) -> list[str]:
+    """``text`` normalised (with ``keep_case``, folded but not casefolded) and cut into sentences.
 
     A sentence ends at ``.``, ``!``, ``?`` or ``…`` before a space, never inside a quotation, so a
     quoted speech of several sentences stays in one. A quotation's own closing punctuation does
@@ -161,7 +161,7 @@ def sentences(text: str) -> list[str]:
     verb or a word and a speech verb does (``"…!" Oda hisses``, ``"…?" asks Wren``,
     ``"…," Oda tells Wren``): what follows belongs to the quotation.
     """
-    kept = _fold_keeping_case(text)
+    kept = fold_keeping_case(text)
     spans = quotation_spans(kept)
     parts, start = [], 0
     for end in _SENTENCE_END.finditer(kept):
@@ -173,7 +173,8 @@ def sentences(text: str) -> list[str]:
         parts.append(kept[start:cut])
         start = cut
     parts.append(kept[start:])
-    return [normalize(part) for part in parts if part.strip()]
+    fold = fold_keeping_case if keep_case else normalize
+    return [fold(part) for part in parts if part.strip()]
 
 
 def _continues(rest: str) -> bool:

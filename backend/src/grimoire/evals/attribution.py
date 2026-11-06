@@ -13,7 +13,14 @@ import re
 from dataclasses import dataclass
 
 from .format import Actor, Scenario
-from .text import SPEECH_VERBS, is_negation, normalize, quotation_spans, speech_verb_at
+from .text import (
+    SPEECH_VERBS,
+    fold_keeping_case,
+    is_negation,
+    normalize,
+    quotation_spans,
+    speech_verb_at,
+)
 
 #: How many words after an NPC's name its speech verb may stand. An object's words count too
 #: ("Oda leans over the counter toward Wren and whispers" is eight).
@@ -42,6 +49,14 @@ _CONJUNCTIONS = frozenset({"and", "then", "but", "or", "nor", "yet"})
 #: After a conjunction or comma these start a clause with its own subject ("and they mutter"),
 #: so a verb after them is not the earlier name's.
 _SUBJECT_PRONOUNS = frozenset({"he", "she", "they", "it", "we", "i", "you"})
+#: Before a past participle these make it passive ("Oda is asked"): the name is spoken to.
+_PASSIVE = frozenset({"am", "is", "are", "was", "were", "be", "been", "being", "get", "gets",
+                      "got", "gotten", "getting"})
+#: A negation denies only its own action, up to one of these ("does not hesitate and whispers").
+_NEGATION_ENDS = frozenset({"and", "but", "then"})
+#: After a speech verb these open its own subject ("…," whispers the guard). ``her`` is left out:
+#: it is as often the one spoken to ("she tells her").
+_SPEAKER_MARKERS = _NOUN_MARKERS - {"her"}
 #: Where a noun phrase before ``to`` says where the subject is, not who acts ("steps into the
 #: light to announce"); ``for`` is left out ("waits for the guard to speak").
 _PLACES = (_PREPOSITIONS - {"for"}) | frozenset({
@@ -100,17 +115,22 @@ def _words(text: str) -> list[str]:
             and not piece.startswith("-")]
 
 
-def _pieces(text: str) -> list[str]:
-    """The words and clause punctuation of ``text``, each quotation one ``QUOTE``."""
-    normalized = normalize(text)
-    found: list[str] = []
+def _pieces(text: str) -> tuple[list[str], frozenset[int]]:
+    """The words and clause punctuation of ``text``, each quotation one ``QUOTE``, and which of
+    them were capitalised (a name the scenario does not know: "whispers Captain Brann")."""
+    kept = fold_keeping_case(text)
+    raw: list[str] = []
     last = 0
-    for left, right in quotation_spans(normalized):
-        found += _PIECE.findall(normalized[last:left])
-        found.append(QUOTE)
+    for left, right in quotation_spans(kept):
+        raw += _PIECE.findall(kept[last:left])
+        raw.append(QUOTE)
         last = right
-    found += _PIECE.findall(normalized[last:])
-    return ["-" if piece.startswith("-") else piece for piece in found]
+    raw += _PIECE.findall(kept[last:])
+    words = [piece if piece == QUOTE else "-" if piece.startswith("-") else normalize(piece)
+             for piece in raw]
+    capitals = frozenset(index for index, piece in enumerate(raw)
+                         if piece != QUOTE and piece[:1].isupper())
+    return words, capitals
 
 
 def _mentions(words: list[str], names: _Names) -> dict[int, _Mention]:
@@ -155,8 +175,8 @@ def _speaks(words: list[str], at: int, mentions: dict[int, _Mention], names: _Na
     """Whether a speech verb after the subject name at ``at`` is that subject's.
 
     The search runs ``SPEECH_WINDOW`` words and stops at ``;``, ``:``, a quotation, an unbracketed
-    clause break, a negation and another subject (unless joined by ``and``: "Oda and Hask
-    whisper"). An aside bracketed by commas right after the name is skipped
+    clause break, a negation that no ``and``, ``but`` or ``then`` ends ("Oda never mutters a
+    word"), and another subject (unless joined by ``and``: "Oda and Hask whisper"). An aside bracketed by commas right after the name is skipped
     ("Oda, who never forgets a debt, mutters"). A verb right after an object, or after an object
     and ``to``, is the object's ("Oda waits for Wren to say something").
     """
@@ -164,8 +184,15 @@ def _speaks(words: list[str], at: int, mentions: dict[int, _Mention], names: _Na
     index, counted = name.end + 1, 0
     while index < len(words) and counted < SPEECH_WINDOW:
         word = words[index]
-        if word in _STOPS or word in _CLAUSE_BREAKS or is_negation(word):
+        if word in _STOPS or word in _CLAUSE_BREAKS:
             return False
+        if is_negation(word):
+            end = _negation_end(words, index)
+            if end is None:
+                return False  # "Oda never mutters a word"
+            counted += end - index
+            index = end  # "does not hesitate and whispers": the denial ends at "and"
+            continue
         if word in _SUBJECT_PRONOUNS and words[index - 1] in _CONJUNCTIONS | {","}:
             return False  # "and they mutter": a new subject
         aside = index + 1 < len(words) and words[index + 1] in _CLAUSE_BREAKS
@@ -197,6 +224,16 @@ def _speaks(words: list[str], at: int, mentions: dict[int, _Mention], names: _Na
     return False
 
 
+def _negation_end(words: list[str], start: int) -> int | None:
+    """Where the negation at ``start`` stops denying: its next ``and``, ``but`` or ``then``."""
+    for index in range(start + 1, len(words)):
+        if words[index] in _NEGATION_ENDS:
+            return index
+        if words[index] in _STOPS or words[index] in _CLAUSE_BREAKS:
+            return None
+    return None
+
+
 def _closing_comma(words: list[str], start: int) -> int | None:
     for index in range(start, len(words)):
         if words[index] == ",":
@@ -224,6 +261,8 @@ def _verb_is_subjects(words: list[str], index: int, width: int, name_end: int) -
     previous = words[index - 1]
     if previous in _DETERMINERS:
         return None  # a noun: "hears a shout"
+    if not words[index].endswith("ing") and _passive(words, index, name_end):
+        return None  # "Oda is asked about the door": spoken to, not speaking
     if words[index].endswith("ing") and previous in _PREPOSITIONS:
         return None  # "leaves without saying"
     if previous == "to" and _someone_elses_infinitive(words, index - 1, name_end):
@@ -232,10 +271,34 @@ def _verb_is_subjects(words: list[str], index: int, width: int, name_end: int) -
         return False  # "and the crowd murmurs": the verb has its own subject
     follower = words[index + width] if index + width < len(words) else ""
     if is_negation(follower):
-        return False  # "says nothing"
+        return None  # "says nothing": the negation that follows decides how far it reaches
     if follower in _DIRECTED and not _speech_follows(words, index + width):
         return None  # "growls at nobody in particular"
     return True
+
+
+def _passive(words: list[str], index: int, name_end: int) -> bool:
+    """Whether the verb at ``index`` follows a form of ``be`` or ``get``, perhaps with an adverb
+    between ("is asked", "was sharply warned")."""
+    before = index - 1
+    if words[before].endswith("ly") and before - 1 > name_end:
+        before -= 1
+    return before > name_end and words[before] in _PASSIVE
+
+
+def _other_speaker(words: list[str], capitals: frozenset[int], start: int, names: _Names) -> bool:
+    """Whether a speech verb from ``start`` on names its own speaker, one that is no actor
+    ("…," whispers the guard; "…," says Captain Brann)."""
+    for index in range(start, len(words)):
+        width = speech_verb_at(words, index, names.tokens)
+        after = index + width
+        if not width or after >= len(words):
+            continue
+        if words[after] in _SPEAKER_MARKERS:
+            return True
+        if after in capitals and not names.ids(words[after]) and words[after] != "i":
+            return True
+    return False
 
 
 def _someone_elses_infinitive(words: list[str], to: int, name_end: int) -> bool:
@@ -337,7 +400,7 @@ def voiced(scenario: Scenario, parts: list[str]) -> list[tuple[int, str, str]]:
     found: list[tuple[int, str, str]] = []
     previous: str | None = None
     for number, part in enumerate(parts):
-        words = _pieces(part)
+        words, capitals = _pieces(part)
         mentions = _mentions(words, names)
         voices: dict[str, str] = {}
         for index, mention in mentions.items():
@@ -353,12 +416,13 @@ def voiced(scenario: Scenario, parts: list[str]) -> list[tuple[int, str, str]]:
             tail = words[last_quote + 1:]
             tail_spoken = all(word in _PUNCTUATION for word in tail) or (
                 _attributed(tail, names) and not _subjects(tail, _mentions(tail, names))[1])
+            other = _other_speaker(words, capitals, first_quote + 1, names)
             lead = _lead_voices(words, first_quote, tail_spoken, names)
-            if lead is not None:
+            if lead is not None and not other:
                 voices.setdefault(lead, "quotation")
             _first, others = _subjects(words, mentions)
             plain = [word for word in words if word not in _PUNCTUATION]
-            if previous is not None and others <= {previous} and (
+            if previous is not None and not other and others <= {previous} and (
                     not plain or _attributed(plain, names)):
                 voices.setdefault(previous, "quotation")
         found.extend((number, actor_id, evidence) for actor_id, evidence in sorted(voices.items()))

@@ -113,7 +113,7 @@ def _leaks(scenario: Scenario, run: Run, *,
                                     f"{fact.fact_id}#{index}"), is_npc))
         if is_npc or not director_narration:
             continue
-        parts = sentences(line.text)
+        parts = sentences(line.text, keep_case=True)
         for number, actor_id, _evidence in voiced(scenario, parts):
             for fact in scenario.facts:
                 index = first_marker(parts[number], fact.markers)
@@ -132,7 +132,7 @@ def _narration_voices(scenario: Scenario, run: Run) -> Iterator[Finding]:
     for turn, position, line in _model_lines(run):
         if line.speaker_id is not None:
             continue
-        for number, actor_id, evidence in voiced(scenario, sentences(line.text)):
+        for number, actor_id, evidence in voiced(scenario, sentences(line.text, keep_case=True)):
             yield Finding("narration_voices_actor", "invariant",
                           f"narration gives an NPC speech (contribution {position}, sentence "
                           f"{number})", turn, actor_id, evidence)
