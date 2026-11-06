@@ -7,6 +7,10 @@
 - Present per-file human-readable diffs, scope/permission checks, conflicts and explicit apply/reject decisions.
 - Reuse guarded file publication with recovery and undo semantics appropriate to authored content.
 
+## Status
+
+**First slice implemented** ([CHANGESETS](../../CHANGESETS.md)): milestones 1 and 2 for one world source's definitions. A change set creates and revises definitions and moves their heads in one guarded transaction; a reviewer sees each file's exact bytes and diff, the conflicts and the authority's decision, and approvals are bound to the reviewed bytes. The proof adds the Saltmarch Docks and moves the Ashen Guild's seat there; a hand edit of the guild between review and apply aborts with nothing written. Milestone 3, persisted proposals, undo, manifest links and campaign records are planned later work listed there.
+
 ## Milestones
 1. Manually draft and apply a two-record world Change Set.
 2. Detect an external hand edit between proposal and acceptance.
