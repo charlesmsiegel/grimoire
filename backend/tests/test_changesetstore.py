@@ -428,6 +428,8 @@ def test_a_withdrawal_an_unusable_authority_cannot_confirm_never_counts(store):
         with pytest.raises((OSError, AuthorityUnavailable)):
             lib.reject(review)
     assert review.state == "open"
+    lib.reject(review, inner)  # the reopened authority finishes the withdrawal
+    assert review.state == "rejected" and inner.pending_approvals() == ()
 
 
 def test_approving_again_replaces_the_earlier_approvals(store):

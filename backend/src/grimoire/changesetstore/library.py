@@ -282,7 +282,7 @@ class ChangeSetLibrary:
                    if not check.allowed and check.reason != "approval_required"]
         if refused or not review.permissions:
             raise ChangeSetError("not_applicable", f"the handle may not write {', '.join(refused) or 'these files'}")
-        self._withdraw(review)  # approving again replaces the earlier set: never two usable sets
+        self._withdraw(review, authority)  # approving again replaces the earlier set: never two usable sets
         principal = self.handle.principal  # type: ignore[attr-defined]
         needed = [item for item in review.files if item.path in review.needs_approval]
         made: list[str] = []
@@ -349,17 +349,19 @@ class ChangeSetLibrary:
         return AppliedChangeSet(changeset.changeset_id, tuple(changeset.target(c) for c in changeset.changes),
                                 dict(result.etags))
 
-    def reject(self, review: ChangeSetReview) -> None:
+    def reject(self, review: ChangeSetReview, authority: object | None = None) -> None:
         """End the review without writing; approvals ``approve`` issued for it are revoked.
 
         A review whose apply failed may be rejected too: that withdraws any of its approvals the
-        failed apply could not (the authority was unavailable then)."""
+        failed apply could not (the authority was unavailable then). After the authority failed,
+        pass the reopened one as ``authority``: the approvals are withdrawn (or found already
+        withdrawn) through it instead of the instance that failed."""
         with self.store.lock:
             if type(review) is not ChangeSetReview or review._library is not self:
                 raise ChangeSetError("invalid_field", "not a review made by this library")
             if review._state not in ("open", "failed"):
                 raise ChangeSetError("already_decided", f"this review was {review._state}")
-            self._withdraw(review)  # first: if the authority fails, the review stays as it was
+            self._withdraw(review, authority)  # first: if the authority fails, the review stays as it was
             review._state = "rejected"
 
     def _fail(self, review: ChangeSetReview) -> None:
@@ -373,10 +375,12 @@ class ChangeSetLibrary:
             pass
 
     @staticmethod
-    def _withdraw(review: ChangeSetReview) -> None:
+    def _withdraw(review: ChangeSetReview, authority: object | None = None) -> None:
+        """Withdraw every approval tracked for ``review``: through ``authority`` when given (a
+        reopened one replaces the instance that issued them), else through that instance."""
         while review._approvals:
-            authority, approval_id = review._approvals[0]
-            _revoke(authority, approval_id)
+            issuer, approval_id = review._approvals[0]
+            _revoke(issuer if authority is None else authority, approval_id)
             review._approvals.pop(0)
 
     # -- internals --------------------------------------------------------------------------------

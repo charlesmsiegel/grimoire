@@ -49,7 +49,7 @@ There is no app or UI, and no model or worker is involved. The scenarios are syn
 | `review(changeset)` | A `ChangeSetReview`. Reads under one store lock and writes nothing. Refusals: `missing_source`, `excluded_source`, and `unstorable` for content the store cannot encode (over its size limit, or a number it cannot write exactly). |
 | `approve(review, authority, *, approved_by, new_id)` | One digest-bound approval per file that needs one (below). |
 | `apply(review, approvals=None)` | Commits exactly the reviewed bytes, or raises. |
-| `reject(review)` | Ends the review without writing, and revokes the approvals `approve` issued for it. A review whose apply failed may be rejected too. |
+| `reject(review, authority=None)` | Ends the review without writing, and revokes the approvals `approve` issued for it. A review whose apply failed may be rejected too. |
 
 ### The review
 
@@ -94,7 +94,7 @@ A trusted `human:` handle with a covering grant applies directly. An untrusted h
 
 `approve` registers, for each file in `needs_approval`, `Approval(new_id(), <the library handle's principal>, apply, path, digest of the reviewed bytes, approved_by)`, and returns the `{path: approval_id}` mapping `apply` takes. A handle that needs no approval gets none, and a file the handle may not write at all (`not_granted`) makes the review `not_applicable`.
 - **Call it only from a human's direct action on this review**, after showing its files' bytes and `describe_approvals` (the `Approval.describe()` sentences, including the non-ASCII flag). This is 007's obligation on this sprint. It is trusted code; a worker handle cannot reach the authority.
-- `approved_by` must be a human with an active grant covering every file. Registration is all or nothing. Approving the same review again withdraws the earlier set first, so a review never has two usable sets. An approval the library cannot confirm as withdrawn (the authority failed or cannot be trusted) stays tracked, and `reject` keeps failing until it can be withdrawn. `reject` revokes the ones still pending before it ends the review, so a failing authority leaves the review open.
+- `approved_by` must be a human with an active grant covering every file. Registration is all or nothing. Approving the same review again withdraws the earlier set first, so a review never has two usable sets. An approval the library cannot confirm as withdrawn (the authority failed or cannot be trusted) stays tracked, and `reject` keeps failing until it can be withdrawn: after reopening the authority, `reject(review, authority=<the reopened one>)` finishes it. `reject` revokes the ones still pending before it ends the review, so a failing authority leaves the review open.
 - A review with conflicts or blocks is not approved (`not_applicable`).
 - The approvals cover those exact bytes: they do not authorize another review of the same paths with other content.
 
