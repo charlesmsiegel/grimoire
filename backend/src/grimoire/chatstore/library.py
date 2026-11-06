@@ -393,6 +393,46 @@ class _LazyTaken:
         self._get().add(value)
 
 
+def _check_role(ref: SourceRef, role: str) -> None:
+    if role not in ROLE_KINDS or ref.kind != ROLE_KINDS[role]:
+        raise InvalidBinding(f"role {role!r} cannot bind {ref}", "role_kind")
+
+
+def campaign_plays(store: LibraryStore, actor: InstanceRef, ref: SourceRef) -> frozenset[SourceRef] | None:
+    """The revisions of ``ref``'s entity that the active pinned bindings of ``actor`` in its campaign's
+    chats name (empty: no chat binds it pinned), or ``None`` when a chat of the campaign cannot be read
+    or interpreted, so its bindings cannot all be known. 042's rebase takes the one agreed revision as
+    the common ancestor and refuses disagreement; a new pinned binding of the actor keeps to that rule."""
+    found = store.campaign_chats(actor.campaign_id)
+    if found.problems:
+        return None
+    revisions: set[SourceRef] = set()
+    for chat, stored in found.records.items():
+        try:
+            record = chat_from_payload(chat, stored.record.schema, stored.record.payload)  # type: ignore[arg-type]
+        except ChatCodecError:
+            return None
+        revisions.update(binding.ref for binding in record.active_bindings()
+                         if binding.actor == actor and binding.ref.pinned
+                         and binding.ref.entity_key == ref.entity_key)
+    return frozenset(revisions)
+
+
+def instance_plays(envelope: RecordEnvelope, ref: SourceRef) -> SourceRef | None:
+    """The revision of ``ref``'s entity an actor's own file says it plays: its ``source`` if pinned (``None``
+    if it follows the head, so it plays the head now), else, with no ``source``, its pinned ``base``."""
+    payload = envelope.payload if isinstance(envelope.payload, Mapping) else {}
+    source = payload.get("source")
+    text = source if source is not None else envelope.base
+    try:
+        played = SourceRef.parse(text) if isinstance(text, str) else None
+    except ValueError:
+        return None
+    if played is not None and played.pinned and played.entity_key == ref.entity_key:
+        return played
+    return None
+
+
 class ChatLibrary:
     """Durable world-optional chats over one open, writable ``LibraryStore``."""
 
@@ -586,6 +626,8 @@ class ChatLibrary:
             if (ref is not None and actor is None and ref.entity_key == current.ref.entity_key
                     and current.actor in self.store.campaign_instances(chat.campaign_id)):
                 actor = current.actor  # the same persona (perhaps another revision) keeps its body
+                if not follow and not ref.pinned and current.ref.pinned:
+                    ref = current.ref  # and, named without a revision, the revision this chat plays it at
             record = record.detach(current.ref, "persona", at)
         envelope = bound = etag = None
         if ref is not None:
@@ -639,8 +681,7 @@ class ChatLibrary:
                                                                         for entry in record.roster}
 
     def _resolve(self, ref: SourceRef, role: str) -> tuple[str, str]:
-        if role not in ROLE_KINDS or ref.kind != ROLE_KINDS[role]:
-            raise InvalidBinding(f"role {role!r} cannot bind {ref}", "role_kind")
+        _check_role(ref, role)
         found = self.store.check_definition(ref)
         if isinstance(found, str):
             raise InvalidBinding(f"{ref} cannot be bound: {found}", found)
@@ -669,19 +710,23 @@ class ChatLibrary:
         An unpinned ``ref`` is pinned to the revision it resolves to now, the very revision whose bytes
         were checked (and a new actor is based on), unless the caller asked to ``follow`` the head. For a
         reused actor it is pinned to the revision that actor plays (``_plays``), never to a newer head
-        nobody reviewed for it."""
-        if reuse is not None and role in ACTOR_ROLES and not follow and not ref.pinned:
-            ref = self._plays(campaign, reuse, ref) or ref
+        nobody reviewed for it; when that cannot be told, to the revision it resolves to now."""
+        _check_role(ref, role)
+        if role not in ACTOR_ROLES and reuse is not None:
+            raise InvalidBinding(f"a {role} binding has no actor", "role_kind")
+        if reuse is not None:
+            etag, stored = self._check_reuse(campaign, reuse, ref)
+            if not follow and not ref.pinned:
+                ref = self._plays(reuse, ref, stored) or ref
+            revision, _ = self._resolve(ref, role)
+            if not follow and not ref.pinned:
+                ref = ref.at(revision)
+            return NewBinding(ref, role, revision, reuse, CAMPAIGN_CONTINUITY), None, etag
         revision, definition_etag = self._resolve(ref, role)
         if not follow and not ref.pinned:
             ref = ref.at(revision)
         if role not in ACTOR_ROLES:
-            if reuse is not None:
-                raise InvalidBinding(f"a {role} binding has no actor", "role_kind")
             return NewBinding(ref, role, revision), None, None
-        if reuse is not None:
-            etag = self._check_reuse(campaign, reuse, ref)
-            return NewBinding(ref, role, revision, reuse, CAMPAIGN_CONTINUITY), None, etag
         base, number = ref.entity_id[:100] + self._device_tag(), 1
         while f"{base}-{number}" in taken:
             number += 1
@@ -693,24 +738,19 @@ class ChatLibrary:
             extra={"schema": ENTITY_SCHEMA})
         return NewBinding(ref, role, revision, actor, NOT_WITNESSED), envelope, None
 
-    def _plays(self, campaign: str, actor: InstanceRef, ref: SourceRef) -> SourceRef | None:
-        """The revision of ``ref``'s entity that the existing ``actor`` plays: its pinned ``source``, else its
-        pinned ``base``; ``None`` when its file names neither (``_check_reuse`` then judges the actor)."""
-        if actor.campaign_id != campaign or actor.kind != "character":
+    def _plays(self, actor: InstanceRef, ref: SourceRef, stored: RecordEnvelope) -> SourceRef | None:
+        """The revision of ``ref``'s entity the existing ``actor`` plays, by 042's ancestor rule: the one
+        revision its active pinned chat bindings in the campaign agree on (composition follows the
+        binding, so an explicit rebind counts); with none, its pinned ``source``, else, with no source,
+        its pinned ``base``. ``None`` (pin the head as it resolves now) when the bindings disagree or a
+        chat cannot be read (no silent choice), or when the actor's ``source`` follows the head (it plays
+        the head now). ``stored`` is the actor's file as ``_check_reuse`` read it."""
+        bound = campaign_plays(self.store, actor, ref)
+        if bound is None or len(bound) > 1:
             return None
-        try:
-            envelope = self.store.read(actor).envelope  # type: ignore[union-attr]
-        except (StoreError, LibraryPathError, ValueError):
-            return None
-        payload = envelope.payload if isinstance(envelope.payload, Mapping) else {}
-        for text in (payload.get("source"), envelope.base):
-            try:
-                played = SourceRef.parse(text) if isinstance(text, str) else None
-            except ValueError:
-                played = None
-            if played is not None and played.pinned and played.entity_key == ref.entity_key:
-                return played
-        return None
+        if bound:
+            return next(iter(bound))
+        return instance_plays(stored, ref)
 
     def _device_tag(self) -> str:
         """This library's ``device_tag``; an unusable identity refuses the binding (``device_identity``)."""
@@ -719,8 +759,8 @@ class ChatLibrary:
         except DeviceIdentityUnusable as error:
             raise InvalidBinding(str(error), "device_identity") from error
 
-    def _check_reuse(self, campaign: str, actor: InstanceRef, ref: SourceRef) -> str:
-        """The etag of the actor's file as checked: the commit binds only these very bytes."""
+    def _check_reuse(self, campaign: str, actor: InstanceRef, ref: SourceRef) -> tuple[str, RecordEnvelope]:
+        """The etag of the actor's file as checked, and the file: the commit binds only these very bytes."""
         if actor.campaign_id != campaign or actor.kind != "character":
             raise InvalidBinding(f"{actor} is not a character of {campaign}", "actor_mismatch")
         try:
@@ -735,7 +775,7 @@ class ChatLibrary:
             raise InvalidBinding(f"{actor} is not an instance of {ref.unpinned()}", "actor_mismatch")
         if actor in paired_instances(self.store.campaign_instances(campaign)):  # load() leaves both members out
             raise InvalidBinding(f"{actor}'s id is also used by another kind in {campaign}", "instance_id_conflict")
-        return stored.etag
+        return stored.etag, stored.envelope  # type: ignore[return-value]
 
     def _chat_record(self, record: ChatRecord, base: ScopeRecord | None = None) -> ScopeRecord:
         return self._envelope(record.ref, CHAT_SCHEMA, chat_to_payload(record), base)

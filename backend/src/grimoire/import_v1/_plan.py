@@ -26,7 +26,7 @@ from grimoire.chats import (
     CAMPAIGN_CONTINUITY, CHAT_SCHEMA, NOT_WITNESSED, SCOPE_SCHEMA, ChatModelError, ChatRecord, Launch, NewBinding,
     PlayScope, WorldBinding, chat_from_payload, chat_to_payload, scope_to_payload,
 )
-from grimoire.chatstore import campaign_taken_ids
+from grimoire.chatstore import campaign_plays, campaign_taken_ids, instance_plays
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import ENTITY_SCHEMA, definition_to_payload, instance_to_payload
 from grimoire.core.identity import (
@@ -189,6 +189,7 @@ class ImportPlan:
     bound: dict[str, set[InstanceRef]] = field(default_factory=dict)  # campaign -> actors this run's new chats bind
     transcripts: dict[object, int] = field(default_factory=dict)  # chat -> pages this run plans for it (036)
     _paired: dict[str, frozenset[InstanceRef]] = field(default_factory=dict)
+    _played: dict[InstanceRef, SourceRef] = field(default_factory=dict)  # actor -> revision ``_plays`` found
     _probe: object = None
     _review: dict = field(default_factory=dict)
     _preview: dict = field(default_factory=dict)
@@ -476,23 +477,33 @@ class ImportPlan:
 
     def _plays(self, actor) -> SourceRef:  # type: ignore[no-untyped-def]
         """The revision a chat binds ``actor`` at: the imported one for an actor this run writes, otherwise the
-        one the stored instance plays (its pinned ``source``, else its ``base``, of the same entity), so a
-        scene first imported after a reviewed rebase (042) never pins the actor back to the old revision."""
+        one the campaign plays it at, by 042's ancestor rule (``ChatLibrary`` keeps the same rule): the one
+        revision its active pinned chat bindings agree on, so an explicit rebind in a kept chat counts; with
+        none, the stored instance's pinned ``source``, else its pinned ``base``. A scene first imported after
+        a reviewed rebase so never pins the actor back to the old revision. When the bindings disagree, a
+        chat cannot be read, or the instance follows its head (an earlier build), the revision the head
+        resolves to now: what such an actor plays today."""
         if self.targets[_path_of(actor.ref)].outcome == WRITE:
             return actor.definition
-        try:
-            envelope = self.store.read(actor.ref).envelope  # type: ignore[union-attr]
-        except (StoreError, ValueError, OSError):
-            return actor.definition
-        payload = envelope.payload if isinstance(envelope.payload, Mapping) else {}
-        for text in (payload.get("source"), envelope.base):
+        if actor.ref not in self._played:  # one read of the campaign's chats per actor, not per scene
+            self._played[actor.ref] = self._played_now(actor)
+        return self._played[actor.ref]
+
+    def _played_now(self, actor) -> SourceRef:  # type: ignore[no-untyped-def]
+        bound = campaign_plays(self.store, actor.ref, actor.definition)
+        if bound is not None and len(bound) == 1:
+            return next(iter(bound))
+        if bound is not None and not bound:
             try:
-                ref = SourceRef.parse(text) if isinstance(text, str) else None
-            except ValueError:
-                ref = None
-            if ref is not None and ref.pinned and ref.entity_key == actor.definition.entity_key:
-                return ref
-        return actor.definition
+                envelope = self.store.read(actor.ref).envelope  # type: ignore[union-attr]
+            except (StoreError, ValueError, OSError):
+                return actor.definition
+            payload = envelope.payload if isinstance(envelope.payload, Mapping) else {}
+            source = payload.get("source")
+            if not (isinstance(source, str) and _follows(source)):
+                return instance_plays(envelope, actor.definition) or actor.definition
+        found = self.store.check_definition(actor.definition.unpinned())
+        return actor.definition if isinstance(found, str) else found.ref  # type: ignore[union-attr]
 
     def _plan_chats(self, campaign: Campaign) -> None:
         seen: set[InstanceRef] = set()
@@ -929,3 +940,11 @@ def plan_import(store: LibraryStore, source, manifest: Mapping, *, handle: objec
 
 __all__ = ["ImportPlan", "ImportResult", "RECEIPT_SCHEMA", "Receipts", "legacy_map", "plan_import", "read_receipts",
            "receipt_source"]
+
+
+def _follows(text: str) -> bool:
+    """Whether a stored ``source`` names an entity without a revision (it follows the head)."""
+    try:
+        return not SourceRef.parse(text).pinned
+    except ValueError:
+        return False
