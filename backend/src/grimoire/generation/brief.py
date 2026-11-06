@@ -28,6 +28,7 @@ from grimoire.core.portrayal import PortrayalError
 from grimoire.core.resolve import MissingDefinition, snapshot_actor_view
 from grimoire.core.snapshot import EffectiveSnapshot
 from grimoire.evals.text import contains_marker, count_words, has_words
+from grimoire.goals import Choice
 from grimoire.voice import DEFAULT_MAX_CHARS, ResolvedVoice, SecretFact, SpeakerFragment, speaker_fragment
 
 from .errors import GenerationError
@@ -142,6 +143,9 @@ class NpcBrief:
     hidden: tuple[SecretFact, ...]  # the secrets this actor has not learned, by id
     exposed: tuple[str, ...]  # what the actor holds or heard: a marker in here is not a leak
     names: tuple[tuple[InstanceRef, str], ...]  # how this actor labels others
+    #: with an intention, the actor ids of the whole scene it was chosen for: ``run_turn`` refuses the brief
+    #: in a turn whose plan has other actors present (someone left, or someone arrived a limit watches for)
+    cast: frozenset[str] | None = None
     _seal: InitVar[object] = None
 
     __hash__ = None  # type: ignore[assignment]  # holds a ResolvedVoice
@@ -330,6 +334,44 @@ def _check_context(context: object, actor: InstanceRef, knowledge: ActorKnowledg
     return context
 
 
+def _check_intention(intention: object, actor: InstanceRef, knowledge: ActorKnowledge) -> None:
+    """``intention`` if it is this actor's choice, made from this very projection of its knowledge."""
+    if type(intention) is not Choice:
+        raise GenerationError("bad_intention", "intention must be a Choice from grimoire.goals.choose")
+    if intention.actor != actor:
+        raise GenerationError("foreign_intention", f"the intention was chosen for {intention.actor}, not {actor}")
+    if intention.knowledge != knowledge:
+        # Another moment's, or a projection a reload has since changed: it may rest on a belief the actor
+        # no longer holds, or miss one that would have stopped it.
+        raise GenerationError("intention_mismatch", f"the intention for {actor} was chosen from another "
+                              "projection of its knowledge")
+
+
+def _intention(intention: Choice, actor: InstanceRef, hidden: tuple[SecretFact, ...],
+               exposed: Sequence[str]) -> list[tuple[str, list[str]]]:
+    """The intention's parts as (heading, lines); refused if any states a secret the actor has not learned.
+
+    The agenda is the director's, so its text may name what this NPC has not learned yet: an approach
+    gated on holding the proposition is safe (the actor then holds it), any other is an authoring
+    error, refused rather than shown.
+    """
+    parts: list[tuple[str, list[str]]] = []
+    goal, approach = intention.goal, intention.approach
+    if goal is not None and approach is not None:
+        parts.append(("What you are after right now:", [_one_line(goal.aim)]))
+        parts.append(("What you mean to do about it:", [_one_line(approach.action)]))
+    rules = [_one_line(limit.rule) for limit in intention.refusals]
+    if rules:
+        parts.append(("What you will not do here, whatever it would gain you:", rules))
+    for _heading, texts in parts:
+        for text in texts:
+            leak = _leaks(text, hidden, exposed)
+            if leak is not None:
+                raise GenerationError("intention_leak", f"the intention for {actor} states secret {leak}, "
+                                      "which it has not learned")
+    return parts
+
+
 def _packed(context: ContextPack, lane: str) -> list[str]:
     """A lane's lines as the brief shows them: never the name line, never the card's voice section."""
     return [_one_line(item.line) for item in context.lane(lane) if item.origin.kind != "identity"
@@ -361,7 +403,8 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
               secrets: Iterable[SecretFact], sections: Iterable[tuple[str, str]] = (),
               names: Mapping[InstanceRef, str] | None = None, knowledge_chars: int = KNOWLEDGE_CHARS,
               context_chars: int = CONTEXT_CHARS, voice_chars: int = DEFAULT_MAX_CHARS,
-              context: ContextPack | None = None, snapshot: EffectiveSnapshot | None = None) -> NpcBrief:
+              context: ContextPack | None = None, snapshot: EffectiveSnapshot | None = None,
+              intention: Choice | None = None) -> NpcBrief:
     """Build one NPC's sealed brief from its own view; ``secrets`` has no default on purpose.
 
     ``view`` must carry the actor's own ``ActorKnowledge`` (``no_knowledge``/``foreign_knowledge``
@@ -381,6 +424,13 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
     pack whose ``basis`` is not ``snapshot``'s: built in another chat (one that reuses the actor
     included), or before a lore or card binding was attached, detached, re-pinned or moved, or before
     the actor's instance changed. Everything it shows counts as exposed to this actor when screening.
+
+    ``intention`` is 039's ``Choice`` for this actor (``choose``): what it is after, what it means to
+    do about it now and what it will not do here are added to the brief, so the NPC pursues its goal
+    in this same call and no other is made. It must be this actor's (``foreign_intention``), made from
+    this very knowledge projection (``intention_mismatch``), and none of its shown text may state a
+    secret hidden from the actor (``intention_leak``). ``run_turn`` refuses the brief in a turn whose plan
+    has other actors present than the scene it was chosen for (``intention_cast_mismatch``).
     """
     actor, knowledge = _check_view(view)
     # The voice reaches the prompt only through the screened fragment: the card's raw voice-evidence
@@ -396,6 +446,8 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
     secrets = _secrets(secrets)
     heard = heard_lines(heard)
     sections = _sections(sections)
+    if intention is not None:
+        _check_intention(intention, actor, knowledge)
     if context is not None:
         context = _check_context(context, actor, knowledge, view, snapshot)
         if sections:
@@ -424,6 +476,7 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
         text for _name, text in sections)
     if context is not None:
         own += (*card, *setting, *memory)
+    aims = _intention(intention, actor, hidden, own) if intention is not None else []
     rendered = [text for _key, text in _knowledge_items(knowledge, names, hidden, own)]
     try:
         fragment = speaker_fragment(voice, secrets=secrets, known=known, max_chars=voice_chars)
@@ -448,9 +501,11 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
         parts.append(_listed("What you know, oldest first:" if context is None else "What you know:", shown))
     elif not rendered:
         parts.append("You know nothing yet beyond what you hear now.")
+    parts.extend(_listed(heading, texts) for heading, texts in aims)
     names[actor] = name
+    cast = frozenset(ref.instance_id for ref in intention.scene) if intention is not None else None
     return NpcBrief(actor, name, voice, fragment, "\n\n".join(parts), heard, hidden,
-                    own + (name,) + tuple(line.text for line in heard), tuple(names.items()), _SEAL)
+                    own + (name,) + tuple(line.text for line in heard), tuple(names.items()), cast, _SEAL)
 
 
 def _check_lore(lore: object, campaign_id: str, snapshot: object) -> None:
