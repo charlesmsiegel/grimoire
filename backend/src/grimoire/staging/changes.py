@@ -29,7 +29,7 @@ _FIELDS = {
     "move": ("who", "way"), "leave": ("who", "way"), "enter": ("who", "way"),
     "take": ("who", "thing"), "drop": ("who", "thing"), "give": ("who", "thing", "to"),
     "open": ("who", "way"), "close": ("who", "way"), "lock": ("who", "way"), "unlock": ("who", "way"),
-    "place": ("who", "area|holder", "basis"), "remove": ("who",), "set_way": ("way", "state", "basis"),
+    "place": ("who", "area|holder", "basis"), "remove": ("who", "basis"), "set_way": ("way", "state", "basis"),
 }
 
 
@@ -137,10 +137,15 @@ def place(who: InstanceRef, *, area: str | None = None, holder: InstanceRef | No
     return Change("place", who=who, area=area, holder=holder, basis=basis)
 
 
-def remove(who: InstanceRef) -> Change:
-    """Correct: take ``who`` off the stage. An actor becomes absent (with no way), keeping what they carry;
-    a thing stops being tracked, together with everything inside or on it."""
-    return Change("remove", who=who)
+def remove(who: InstanceRef, *, basis: str = "established") -> Change:
+    """Correct or stage: take ``who`` off the stage. An actor becomes absent (with no way), keeping what
+    they carry; a thing stops being tracked, together with everything inside or on it.
+
+    ``basis="assumed"`` records an actor the director only guesses is not here (not arrived yet); a later
+    ``remove`` with the default basis establishes that absence. A thing's removal leaves no record, so it
+    cannot be assumed (``not_actor``).
+    """
+    return Change("remove", who=who, basis=basis)
 
 
 def set_way(way: str, state: str, *, basis: str = "established") -> Change:
@@ -297,7 +302,12 @@ def apply(stage: Stage, change: Change, *, sequence: int, provenance: str) -> St
         way = _way(stage, change.way)
         if not way.to_off_stage:
             fail("not_on_stage")
-        return _with(stage, sequence, ways={way.way_id: _worked(stage, way, who, op, sequence)})
+        worked = _worked(stage, way, who, op, sequence)
+        absence = stage.absence(who)
+        # accepted play has the actor outside, so an absence that was only assumed is now established
+        absences = {} if absence.basis == "established" else {
+            who: Absence(who, absence.via, "established", sequence)}
+        return _with(stage, sequence, ways={way.way_id: worked}, absences=absences)
 
     if op in ("move", "leave", "open", "close", "lock", "unlock"):
         area = _free(stage, who)
@@ -315,7 +325,7 @@ def apply(stage: Stage, change: Change, *, sequence: int, provenance: str) -> St
             if _carries_actor(stage, who):
                 fail("holds_actor")
             return _with(stage, sequence, placements={who: None},
-                         absences={who: Absence(who, way.way_id, sequence)})
+                         absences={who: Absence(who, way.way_id, since=sequence)})
         return _with(stage, sequence, ways={way.way_id: _worked(stage, way, who, op, sequence)})
 
     if op == "enter":
@@ -374,11 +384,18 @@ def apply(stage: Stage, change: Change, *, sequence: int, provenance: str) -> St
 
     if op == "remove":
         if stage.is_actor(who):
-            if stage.absence(who) is not None:
-                fail("already_absent")
+            absence = stage.absence(who)
+            if absence is not None:
+                if absence.basis == "established" or change.basis == "assumed":
+                    fail("already_absent")
+                # an assumed absence established: where they left by, if anywhere, is kept
+                return _with(stage, sequence, absences={who: Absence(who, absence.via, "established", sequence)})
             if _carries_actor(stage, who):
                 fail("holds_actor")
-            return _with(stage, sequence, placements={who: None}, absences={who: Absence(who, None, sequence)})
+            return _with(stage, sequence, placements={who: None},
+                         absences={who: Absence(who, None, change.basis, sequence)})
+        if change.basis != "established":
+            fail("not_actor")  # an untracked thing has no record to carry the guess
         if stage.placement(who) is None:
             fail("untracked")
         if any(stage.is_actor(item) for item in stage.custody(who)):

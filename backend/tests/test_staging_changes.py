@@ -8,7 +8,7 @@ import pytest
 
 from grimoire.core import InstanceRef
 from grimoire.staging import (
-    Absence, Change, actor_refusal, reach_refusal, Placement, Stage, StagingRefused, apply, close_way, drop, enter, give, leave, lock_way,
+    Absence, Change, actor_refusal, reach_refusal, Placement, Stage, StagingRefused, Way, apply, close_way, drop, enter, give, leave, lock_way,
     move, open_way, place, remove, set_way, take, unlock_way,
 )
 
@@ -66,7 +66,7 @@ def test_a_key_in_a_bag_still_unlocks():
 def test_leaving_takes_what_you_carry_and_entering_brings_it_back():
     s = do(stage(), unlock_way(MARA, STUDY_DOOR), open_way(MARA, STUDY_DOOR), move(MARA, STUDY_DOOR),
            leave(MARA, FRONT_DOOR))
-    assert s.absence(MARA) == Absence(MARA, FRONT_DOOR, 5) and s.placement(MARA) is None
+    assert s.absence(MARA) == Absence(MARA, FRONT_DOOR, since=5) and s.placement(MARA) is None
     assert s.root(COIN).absent == MARA and s.root(KEY).absent == MARA
     back = do(s, enter(MARA, FRONT_DOOR))
     assert back.placement(MARA).area == "hall" and back.root(COIN).area == "hall"
@@ -155,7 +155,7 @@ def test_corrections_need_no_physical_check_but_keep_the_invariants():
     s = do(s, place(ODD, area="study", basis="assumed"))
     assert s.absence(ODD) is None and s.placement(ODD).basis == "assumed"
     s = do(s, remove(ODD))
-    assert s.absence(ODD) == Absence(ODD, None, s.as_of)
+    assert s.absence(ODD) == Absence(ODD, None, since=s.as_of)
     refused("already_absent", s, remove(ODD))
     s = do(s, remove(SATCHEL))
     assert s.placement(SATCHEL) is None and s.placement(COIN) is None
@@ -166,6 +166,30 @@ def test_corrections_need_no_physical_check_but_keep_the_invariants():
     sack = ref("sack", "item")
     s = do(s, place(sack, area="hall"), place(TOMA, holder=sack))
     refused("holds_actor", s, remove(sack))
+
+
+def test_an_absence_can_be_assumed_and_then_established():
+    # Odd, on stage, is guessed to have stepped out: an assumed absence with no way
+    s = do(stage(), place(ODD, area="study"), remove(ODD, basis="assumed"))
+    assert s.absence(ODD) == Absence(ODD, None, "assumed", s.as_of)
+    refused("already_absent", s, remove(ODD, basis="assumed"))
+    s = do(s, remove(ODD))  # play says so: established, from now
+    assert s.absence(ODD) == Absence(ODD, None, "established", s.as_of)
+    refused("already_absent", s, remove(ODD))
+    refused("already_absent", s, remove(ODD, basis="assumed"))  # never weakened back to a guess
+    # a thing's removal leaves no record to hold a guess
+    refused("not_actor", stage(), remove(LETTER, basis="assumed"))
+    # an actor assumed outside who opens the front door from outside is, by accepted play, outside
+    outside = stage(absences=(Absence(ODD, basis="assumed"),),
+                    ways=(Way(STUDY_DOOR, ("study", "hall"), "locked", key=KEY), Way(FRONT_DOOR, ("hall", None), "closed")))
+    opened = do(outside, open_way(ODD, FRONT_DOOR))
+    assert opened.way(FRONT_DOOR).state == "open"
+    assert opened.absence(ODD) == Absence(ODD, None, "established", opened.as_of)
+    # an established absence is left as it was
+    shut = do(opened, close_way(ODD, FRONT_DOOR))
+    assert shut.absence(ODD) == opened.absence(ODD)
+    # enter clears it whatever its basis
+    assert do(outside, set_way(FRONT_DOOR, "open"), enter(ODD, FRONT_DOOR)).placement(ODD).area == "hall"
 
 
 def test_change_shapes_and_order():
@@ -201,7 +225,7 @@ def test_random_changes_never_break_a_stage_and_a_refusal_changes_nothing():
         lambda: rng.choice((open_way, close_way, lock_way, unlock_way))(rng.choice(individuals), rng.choice(ways)),
         lambda: place(rng.choice(individuals), area=rng.choice(("study", "hall"))),
         lambda: place(rng.choice(individuals), holder=rng.choice(individuals)),
-        lambda: remove(rng.choice(individuals)),
+        lambda: remove(rng.choice(individuals), basis=rng.choice(("established", "assumed"))),
         lambda: set_way(rng.choice(ways), rng.choice(("open", "closed", "locked"))),
     )
     applied = 0
