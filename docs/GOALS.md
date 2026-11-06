@@ -4,7 +4,7 @@
 
 ## The rule
 
-An NPC's pursuit of its goals costs **no model call**. Its policy is deterministic: authored goals, its own knowledge and the scene's cast go in, one `Choice` comes out. The choice reaches the NPC's one ordinary `npc_generation` call through its brief ([GENERATION](GENERATION.md#intentions-039)), so a turn in which an NPC acts on its goals plans exactly the calls a turn without goals does ([INFERENCE](INFERENCE.md#the-rule)). The intention adds its own text to that call's input: an aim, an action and the rules refused now, each at most 400 characters. Model-assisted `planning` and `decision` calls stay optional, off by default and are 045's ([Decision Policies](roadmap/sprints/decision-policies.md)). An NPC being present, or having an agenda, never starts a call.
+An NPC's pursuit of its goals costs **no model call**. Its policy is deterministic: authored goals, its own knowledge and the scene's cast go in, one `Choice` comes out. The choice reaches the NPC's one ordinary `npc_generation` call through its brief ([GENERATION](GENERATION.md#intentions-039)), so a turn in which an NPC acts on its goals plans exactly the calls a turn without goals does ([INFERENCE](INFERENCE.md#the-rule)). The intention adds its own text to that call's input: an aim, an action and the rules refused now, each at most 400 characters. Model-assisted `planning` and `decision` calls stay optional and off by default; the `decision` call is 045's ([DECISIONS](DECISIONS.md)). An NPC being present, or having an agenda, never starts a call.
 
 ## Agendas
 
@@ -66,7 +66,7 @@ The sprint's proving scenario is `backend/tests/test_goals_scenarios.py`: the gu
 |---|---|
 | 035 (scene runner) | Choose afresh for every turn's plan, from the same `ActorKnowledge` the brief is built from, with the turn's cast split into who this NPC recognises (`present`) and who it does not (`unrecognised`). A warning heard aloud moves an NPC only once admitted as its evidence or belief, so admit, then choose again. A scene rule may give an NPC whose `Choice.acts` the turn; that is a scene rule, not a model call. Run `check_agenda` against the campaign ledger before an agenda is used. Never let a narrator, a player's text or a model reply author or change an agenda: agendas are director-authored input. |
 | Persisting agendas | A campaign record family, registered in `syncable()` (019/028), built through these constructors on read (never unpickled, which skips validation), checked with `check_agenda` against the ledger it is loaded with, and serialised with `tags`, `forbids` and `stances` sorted, since frozenset order changes with the hash seed. |
-| 045 (decision policies) | A model-selected choice is an optional, capped `decision` call, never a replacement for this deterministic default. It may pick only among approaches whose outcome is `chosen` or `outranked`, through a new argument of `choose`: never through `desired`, which is a planner's wish that is never obeyed, and never a hand-built `Choice` (sealed, and closed to subclasses). |
+| 045 (decision policies) | Met by 045's first slice ([DECISIONS](DECISIONS.md)): a model-selected choice is an optional, capped `decision` call, never a replacement for this deterministic default, and picks only among approaches whose outcome is `chosen` or `outranked`, through `choose(..., selected=)`: never through `desired`, which is a planner's wish that is never obeyed, and never a hand-built `Choice` (sealed, and closed to subclasses). The turn's choice is recorded with its evidence and replayed on a reroll. |
 
 ## Not in this slice
 
@@ -80,5 +80,5 @@ The sprint's proving scenario is `backend/tests/test_goals_scenarios.py`: the gu
 | Checking a reply against the NPC's briefed intention: a reply that breaks a refusal (the NPC does what a limit forbids) is kept today, like any other line | [Narration Continuity Referee](roadmap/sprints/narration-continuity-referee.md) (047): its `acts` check flags the breach against the turn's `Choice` ([REFEREE](REFEREE.md#claims)); labelling replies and running it in play are 047 milestone 2. 045 never rewrites a recorded intention |
 | Longer personal plans and self-initiated scene hooks | 039 milestone 3 |
 | Who may see whom (disguises, hidden actors) | 041 |
-| Model-assisted planning or decisions | 045 |
+| Model-assisted decisions (done in 045's first slice, [DECISIONS](DECISIONS.md)); model-assisted planning | 045; 039 milestone 3 |
 | Factions' goals | [Faction Decision Making](roadmap/sprints/faction-decision-making.md) |

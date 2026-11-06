@@ -681,9 +681,9 @@ class LibraryStore:
     def campaign_authority_presence(self, campaign_id: str) -> str:
         """``absent``, ``present`` or ``mismatch`` for the campaign's authority ledger folders
         (``authority/campaigns/<id>``, 010b's sovereignty ledger, ``authority/adjudication/<id>``, 029's,
-        and ``authority/obstacles/<id>``, 040's), which outlive ``campaigns/<id>`` when that folder is
-        deleted by hand: ``present`` if any is, else ``mismatch`` if any has a look-alike. Decided from listings, as
-        ``campaign_presence``."""
+        ``authority/obstacles/<id>``, 040's, and ``authority/decisions/<id>``, 045's), which outlive
+        ``campaigns/<id>`` when that folder is deleted by hand: ``present`` if any is, else ``mismatch``
+        if any has a look-alike. Decided from listings, as ``campaign_presence``."""
         validate_segment(campaign_id, "campaign_id")
         with self.lock:
             self._require_consistent()

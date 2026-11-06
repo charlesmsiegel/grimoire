@@ -42,6 +42,7 @@ from grimoire.holdingstore import holdings_holder_ids, holdings_peer_ids
 from grimoire.imagestore import ART_PIN, freeze_art, pinned_base, placement_subject_ids
 from grimoire.ledgers import security_campaign_ids, security_instance_ids, sovereignty_actor_ids
 from grimoire.library import LibraryPathError
+from grimoire.decisionstore import decision_actor_ids
 from grimoire.obstaclestore import obstacle_actor_ids
 from grimoire.possessions import POSSESSION_KEY, party_ids
 from grimoire.security import payload_digest
@@ -143,6 +144,7 @@ def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool,
     taken |= adjudication_actor_ids(store, campaign_id)
     taken |= turn_instance_ids(store, campaign_id)
     taken |= obstacle_actor_ids(store, campaign_id)
+    taken |= decision_actor_ids(store, campaign_id)
     if security:  # skipped only by _fresh_campaign_taken_ids
         taken |= security_instance_ids(store, campaign_id, spent=spent)
     return frozenset(taken)

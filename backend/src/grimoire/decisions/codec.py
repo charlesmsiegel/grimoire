@@ -59,7 +59,7 @@ def _text(value: object, label: str, optional: bool = False) -> str | None:
 
 
 def _texts(value: object, label: str) -> tuple[str, ...]:
-    if type(value) is not list:
+    if type(value) not in (list, tuple):  # a ledger reads its arrays back as tuples
         raise _bad(f"{label} must be a list")
     return tuple(_text(item, label) for item in value)  # type: ignore[misc]
 
@@ -92,7 +92,7 @@ def decision_from_payload(payload: object) -> DecisionRecord:
     as_of = data["as_of"]
     if type(as_of) is not int:
         raise _bad("as_of must be an integer")
-    if type(data["candidates"]) is not list or type(data["evidence"]) is not list:
+    if type(data["candidates"]) not in (list, tuple) or type(data["evidence"]) not in (list, tuple):
         raise _bad("candidates and evidence must be lists")
     candidates = []
     for raw in data["candidates"]:

@@ -225,9 +225,9 @@ def address_parts(address: Address) -> Parts:
     return definition_parts(address)
 
 
-#: Per-campaign authority ledgers: ``campaigns/`` (003 sovereignty), ``adjudication/`` (029) and
-#: ``obstacles/`` (040).
-CAMPAIGN_LEDGERS = ("campaigns/", "adjudication/", "obstacles/")
+#: Per-campaign authority ledgers: ``campaigns/`` (003 sovereignty), ``adjudication/`` (029),
+#: ``obstacles/`` (040) and ``decisions/`` (045).
+CAMPAIGN_LEDGERS = ("campaigns/", "adjudication/", "obstacles/", "decisions/")
 
 
 def ledger_name(name: object) -> str:

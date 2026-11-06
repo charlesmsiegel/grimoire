@@ -117,6 +117,8 @@ format `/2` ([docs/evals/STORY_QUALITY.md](evals/STORY_QUALITY.md)) rebuilds eac
 as a plan and ledger, and reports a run as measured only from such a summary plus verified
 capture evidence.
 
+**Status (Wave 6):** the `decision` stage is issued by `GenerationRuntime.decide` for one NPC's bounded choice among the approaches its policy allows, in a `select` phase before generation ([DECISIONS](DECISIONS.md)).
+
 **Status (Wave 2):** [`grimoire.providers`](PROVIDERS.md) meets this obligation for model calls:
 - It refuses any `PlannedCall` its turn's plan lacks.
 - It books every attempt, including retries and fallbacks, through one `TurnMeter` per turn.
