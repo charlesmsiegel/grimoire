@@ -54,7 +54,7 @@ Every method reads the chat afresh (one `LibraryView`, 022's chat snapshot, the 
 
 | Method | What it does |
 |---|---|
-| `open(chat)` | The `Scene` as it stands: turns, cast, persona, names, controls and problems (a damaged turn, an `interrupted` run, a bound source that is gone: `broken_source` with its exact ref, a cast member with `no_voice`, a party member left out (`party_uncertain`, `missing_actor`, `instance_id_conflict`, `cast_unstaged`), a persona the director controls: `persona_not_player`). Writes nothing. |
+| `open(chat)` | The `Scene` as it stands: turns, cast, persona, names, controls and problems (a damaged turn, an `interrupted` run, a bound source that is gone: `broken_source` with its exact ref, imported history the runner does not read yet: `imported_history_unread` with its page count, a cast member with `no_voice`, a party member left out (`party_uncertain`, `missing_actor`, `instance_id_conflict`, `cast_unstaged`), a persona the director controls: `persona_not_player`). Writes nothing. |
 | `seat(chat, player)` | Records control for actors with none: the persona to `player`, every other bound character to the director. A recorded controller is never changed. |
 | `begin(chat, by)` | The opening turn, as a proposed take: a scenario's first opening (narrated to the table), else the launch card's first greeting spoken by its character, else the chat's premise. `{{char}}` and `{{user}}` are filled. While that opening is not yet kept, `begin` again adds a fresh opening take for the cast as it is now. |
 | `post(chat, by, text, *, mode="auto")` | The player's line (it needs words: `"..."` alone is `no_content`), routed by 008, checked by 003's `submit_contribution`, read by 032's `read_message`, and saved as a new turn before anything is generated. The same post retried onto its own untouched turn returns that turn. |
@@ -87,6 +87,7 @@ While play is paused nothing is begun, posted, generated, kept or passed (`pause
 - **No control history.** `seat` records control for the chat's current actors; reassigning a character mid-chat is 003's.
 - **Party.** The cast is 033's staged `SceneCast` (`Scene.staged`; `Scene.cast` is its `present`), staged with 033's `stage` under the chat id as the scene id, from the chat's active bound actors less 033's reserved members (stored away: left out, not a problem) and members whose membership is uncertain (left out and reported `party_uncertain`, fail closed). A member `stage` refuses is left out and reported by its reason: `missing_actor` (no instance file) or `instance_id_conflict` (its id is also used by another kind). While a relation file cannot be read no cast is staged (`cast_unstaged`, `relations_unreadable`): nobody is present, `begin`, `post` and `generate` refuse `party_unreadable`, and a take is not kept (`cast_changed`). Any party problem refuses generation. The cast is staged afresh on every call, never stored; 041's `check_cast` takes `Scene.staged`.
 - **No `last_activity` update** per post (107's chat record would need a second write in the commit).
+- **Imported history is not read yet.** A chat with 036 transcript pages (a migrated V0.2.1 scene, a SillyTavern import) plays on from its first played turn: no NPC has heard any imported line, and the director's view holds none of it. `open` says so (`("imported_history_unread", "3 pages")`, adding how many pages could not be read, if any) rather than play on as if the chat began here. Nothing else changes; reading the pages is milestone 2's first item.
 - **A missing source.** A bound card, lorebook or scenario that is gone (deleted while the app was closed) is reported as `("broken_source", <ref>)`, the exact ref the chat bound, alongside what follows from it (the character's `unnamed_actor` and `no_voice`). The turns are kept as they were, the chat still opens and takes posts, and nothing similarly named is bound in its place: a character without its card is silent (`nothing_to_generate`), a chat without its scenario has no director text (`no_scenario`).
 - **The director reply's scenario text** is the scenario's premise, setting and instructions, or the chat's premise.
 
@@ -94,6 +95,7 @@ While play is paused nothing is begun, posted, generated, kept or passed (`pause
 
 | Item | Owner |
 |---|---|
+| **First:** reading a chat's imported history (026's V0.2.1 scene pages, 036's SillyTavern pages, in 036's immutable `transcripts/` family) as the history before turn 1, and deciding who heard it. Until then the runner reads none of it, so no NPC has heard any imported line (fail closed), and `open` reports `imported_history_unread` | 035 M2, 036; due before 044 (phone play) |
 | Labelling kept narration into proposals; 029 framing and decision; `check_effect`; 021 acceptance; 030 recovery at open before the next acceptance | 035 M2, 029, 021, 030 |
 | Writing 032's delivery records to 020 in the turn's commit, so NPC memory of a scene is knowledge, not only a window | 035 M2 |
 | Executing a session-zero configuration (016 has no codec yet; a scope with one refuses generation) | 035 M2, 016 |
@@ -103,4 +105,3 @@ While play is paused nothing is begun, posted, generated, kept or passed (`pause
 | UI, streaming, async, the chat list | 035 M2, 065 |
 | Several human players at one table | 102 |
 | Merging turns across devices | 028 milestone, before 044 |
-| Continuing a chat from its imported history: 036 stores imported chats in its own immutable `transcripts/` family; the runner does not read it yet, so NPCs have heard none of it (fail closed) | 035 M2, 036 |

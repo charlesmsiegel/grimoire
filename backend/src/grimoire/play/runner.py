@@ -188,6 +188,13 @@ class SceneRunner:
                      if resolution.broken is not None]
         turns = self.scenes.turns(chat)
         problems += [("turns", f"{path}:{code}") for path, code in turns.problems]
+        imported = self.store.chat_transcript(chat)
+        if imported.records or imported.problems:
+            # 036/026's imported pages are not read as history yet (milestone 2): no NPC heard any of them.
+            # Say so rather than play on as if the chat began here. Nothing is read from the pages.
+            unreadable = f", {len(imported.problems)} unreadable" if imported.problems else ""
+            count = len(imported.records)
+            problems.append(("imported_history_unread", f"{count} page{'' if count == 1 else 's'}{unreadable}"))
         controls = tuple(self.sovereignty.load(chat.campaign_id).controls)
         party = PartyLibrary(self.store, self.handle, clock=_no_clock, new_id=_no_id).view(chat.campaign_id, as_of=NOW)
         party_problems = tuple(f"{problem.path}:{problem.code}" for problem in party.problems)
