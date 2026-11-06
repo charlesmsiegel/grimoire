@@ -30,9 +30,8 @@ from grimoire.core.identity import ChatRef, InstanceRef
 from grimoire.core.inference import InferencePolicy, InferenceStage, TurnUsageLedger
 from grimoire.core.perspective import actor_knowledge
 from grimoire.effective import chat_snapshot
-from grimoire.evals.text import has_words
 from grimoire.evidencestore import EvidenceLibrary
-from grimoire.generation import MAX_LINE_CHARS, GenerationError, director_brief, npc_brief, plan_generation_turn
+from grimoire.generation import GenerationError, director_brief, npc_brief, plan_generation_turn
 from grimoire.import_v1 import imported_voices
 from grimoire.intent import RoutingContext, Utterance, route
 from grimoire.ledgers import SovereigntyLedger
@@ -41,8 +40,8 @@ from grimoire.partystore import PartyLibrary
 from grimoire.providers.meter import TurnMeter
 from grimoire.runtime import GenerationRuntime, RunFence
 from grimoire.scene import (
-    MAX_TAKES, NARRATOR, CallRecord, Post, SceneLine, SceneRefused, Take, TurnRecord, heard_for, render, segments,
-    table_lines, turn_id,
+    MAX_TAKES, NARRATOR, CallRecord, Post, SceneLine, SceneRefused, Take, TurnRecord, audible, heard_for, render,
+    segments, table_lines, turn_id,
 )
 from grimoire.scenestore import ChatTurns, SceneLibrary, StoredTurn
 from grimoire.security import is_human
@@ -260,19 +259,28 @@ class SceneRunner:
         scene = context.scene
         principal = self._principal(scene, by)
         self._ready(scene)
-        if scene.turns.turns:
+        stored = scene.turns.last
+        if stored is None:
+            record = TurnRecord(chat, 1, "opening")
+        elif len(scene.turns.turns) == 1 and stored.record.origin == "opening" and stored.record.open:
+            record = stored.record  # the opening again, for the cast as it is now (an earlier one went stale)
+            if len(record.takes) >= MAX_TAKES:
+                raise _refuse("too_many_takes", f"a turn holds at most {MAX_TAKES} takes")
+            if record.running is not None:
+                record = record.with_take(replace(record.running, state="superseded"))
+        else:
             raise _refuse("already_begun", "the chat has turns; it opens only once")
-        record = TurnRecord(chat, 1, "opening")
-        line = self._opening(context, record)
-        take = Take(1, "proposed", "opening", scene.cast, lines=(line,), by=principal)
+        number = len(record.takes) + 1
+        line = self._opening(context, record, number)
+        take = Take(number, "proposed", "opening", scene.cast, lines=(line,), by=principal)
         record = record.with_take(take)
-        self.scenes.write(record, None)
+        self.scenes.write(record, stored)
         return record
 
-    def _opening(self, context: _Context, record: TurnRecord) -> SceneLine:
+    def _opening(self, context: _Context, record: TurnRecord, take: int) -> SceneLine:
         scene, chat = context.scene, context.captured.chat
         user = scene.names.get(scene.persona) if scene.persona is not None else None
-        line_id = f"{record.turn_id}.1.1"
+        line_id = f"{record.turn_id}.{take}.1"
         for binding in chat.active_bindings("scenario"):
             payload = _payload(context.captured.snapshot, binding.ref, "scenario")
             text = _first_text(payload.get("openings"))
@@ -337,15 +345,18 @@ class SceneRunner:
         except TransmissionError as error:
             raise _refuse(error.reason, "the post cannot be read") from None
         if isinstance(read, Unread):
-            # 032: an Unread transmits nothing. Only an action that is no message at all is seen by everyone
-            # present; a message 032 cannot read (a private one above all) is refused, never made public.
-            if kind == "speech" or read.reason != "not_directed":
+            # 032: an Unread transmits nothing. An action that is no message at all is seen by everyone present;
+            # one 032 cannot rule out as a private message (a note, an aside, a signal) is withheld: its sender
+            # alone hears it. A message aimed at someone 032 cannot resolve is refused, never made public.
+            if kind == "speech" or read.reason not in ("not_directed", "unresolved_private"):
                 raise _refuse(read.reason, "the line cannot be read as a message; say who it is for, and what")
-            post = Post(principal, persona, "action", intent.text, scene.cast)
+            withheld = read.reason == "unresolved_private"
+            post = Post(principal, persona, "action", intent.text, (persona,) if withheld else scene.cast,
+                        withheld=withheld)
         else:
             post = Post(principal, persona, kind, read.text, _audience(read, scene, chat, tid, number),
                         read.channel, read.addressees)
-        if not has_words(post.text[:MAX_LINE_CHARS - 1]):  # what a listener hears is clipped to this
+        if not audible(post):  # as clipped and shown
             raise _refuse("no_content", "a post needs words someone could hear")
         if last is not None and last.open:
             if last.post == post and not last.takes:
@@ -577,8 +588,11 @@ class SceneRunner:
         if found.unscreened and not acknowledge_unscreened:
             raise _refuse("unscreened_lore", "this take was written with director lore no screen covered; "
                                             "keep it only after reading it")
-        if set(found.cast) != set(scene.cast):
-            raise _refuse("cast_changed", "who is present changed since this take was written; ask again")
+        if set(found.cast) != set(scene.cast) or any(
+                set(line.audience) != set(scene.players if line.actor is None else scene.cast)
+                for line in found.shown()):
+            raise _refuse("cast_changed", "who is present, or who plays them, changed since this take was written; "
+                                          "ask again")
         if record.running is not None:  # a run still in flight loses: its take lands stale
             record = record.with_take(replace(record.running, state="superseded"))
         record = record.with_take(replace(found, state="kept", by=principal))
@@ -639,7 +653,7 @@ class SceneRunner:
             if not decision.halt:
                 raise _refuse(decision.reason, "the pause was refused")
             record = replace(stored.record, paused=True, paused_by=principal)
-            self.scenes.write(record, stored)
+            self.scenes.write(record, stored, last=True)
             return record
         stored, _take, _line = _find_line(scene, targets[0])
         decision = decide_request(request, boundary, segments(stored.record))

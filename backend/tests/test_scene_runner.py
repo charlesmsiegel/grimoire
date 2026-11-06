@@ -26,7 +26,8 @@ from grimoire.core.identity import InstanceRef, ScopeRef
 from grimoire.core.inference import InferencePolicy
 from grimoire.runtime import RunFence
 from grimoire.play import SceneRunner
-from grimoire.scene import SceneRefused, TurnRecord, Take
+from grimoire.ledgers.codec import ControlChange
+from grimoire.scene import SceneRefused, TurnRecord, Take, heard_for, table_lines
 from grimoire.testing.providers import Supersede
 
 
@@ -116,9 +117,9 @@ def test_a_card_chat_opens_with_its_first_greeting_spoken_by_its_character(cards
         (line,) = take.lines
         assert line.actor == mara and line.speaker == "Mara Vell" and "{{" not in line.text
         assert set(line.audience) == {anya, mara}
-        refused("already_begun", table.runner.begin, chat, table.player())
         table.runner.keep(chat, table.player(), 1)
         assert not table.runner.open(chat).last.open
+        refused("already_begun", table.runner.begin, chat, table.player())
 
 
 def test_a_scenario_chat_opens_narrated_to_the_players(cards):
@@ -161,7 +162,6 @@ def test_an_action_everyone_present_sees(cards):
     # 032 transmits nothing on an Unread: a message it cannot read is refused, never made a public action
     ('I whisper to Mara, "the vault code is 1234"', "auto", "unknown_addressee"),
     ("I whisper to Mara Vell: the vault code is 1234", "auto", "unclear_content"),
-    ("*I whisper the vault code under my breath*", "auto", "unresolved_private"),
     ("Could you pause?", "command", "uncertain"),
 ])
 def test_a_post_that_cannot_be_played_writes_nothing(cards, text, mode, reason):
@@ -512,3 +512,51 @@ def test_keeping_a_take_while_another_runs_lands_the_other_stale(cards, monkeypa
         assert (second.state, second.lines) == ("stale", ()) and second.calls[0].attempts
         record = table.runner.open(chat).records[-1]
         assert not record.open and [t.state for t in record.takes] == ["kept", "stale"]
+
+
+def test_an_action_that_may_carry_a_private_message_is_heard_by_its_sender_alone(cards):
+    folder, chat, _ = cards
+    with Table(folder, [say("Well then.")]) as table:
+        seated(table, chat)
+        anya, mara = actors(table, chat)
+        turn = table.runner.post(chat, table.player(), "*I whisper the vault code 1234 under my breath*")
+        assert turn.post.withheld and turn.post.audience == (anya,) and turn.post.private
+        scene = table.runner.open(chat)
+        assert not [h for h in heard_for(scene.records, mara, scene.names) if "1234" in h.text]
+        assert not [h for h in table_lines(scene.records, scene.names) if "1234" in h.text]
+        assert [h.text for h in heard_for(scene.records, anya, scene.names)] == [
+            "*I whisper the vault code 1234 under my breath*"]
+        table.runner.generate(chat, table.player())
+        assert "1234" not in table.harness.prompts()[0]
+        table.runner.keep(chat, table.player(), 1)
+        plain = table.runner.post(chat, table.player(), "*I light a lamp*")
+        assert not plain.post.withheld and set(plain.post.audience) == {anya, mara}
+
+
+def test_an_opening_is_asked_again_when_the_cast_changed_before_it_was_kept(cards):
+    folder, chat, _ = cards
+    with Table(folder) as table:
+        seated(table, chat)
+        table.runner.begin(chat, table.player())
+        tamsin = attach_tamsin(table.store, table.owner, chat)
+        table.runner.seat(chat, ANA)
+        refused("cast_changed", table.runner.keep, chat, table.player(), 1)
+        again = table.runner.begin(chat, table.player())
+        assert [t.take for t in again.takes] == [1, 2] and tamsin in again.takes[1].lines[0].audience
+        table.runner.keep(chat, table.player(), 2)
+
+
+def test_a_take_is_not_kept_once_a_listener_changed_hands(cards):
+    folder, _, storm = cards
+    with Table(folder, [say("Only the players see the hidden door.")]) as table:
+        tamsin = attach_tamsin(table.store, table.owner, storm)
+        table.runner.sovereignty.record(storm.campaign_id, ControlChange(storm.campaign_id, tamsin.instance_id, BOB),
+                                        table.owner)
+        seated(table, storm)
+        table.runner.begin(storm, table.player())
+        table.runner.keep(storm, table.player(), 1)
+        take = table.runner.generate(storm, table.player(), director=True)
+        assert tamsin in take.lines[0].audience  # narration: the table, Bob's Tamsin included
+        table.runner.sovereignty.record(storm.campaign_id, ControlChange(storm.campaign_id, tamsin.instance_id,
+                                                                         DIRECTOR), table.owner)
+        refused("cast_changed", table.runner.keep, storm, table.player(), take.take)  # she is an NPC now

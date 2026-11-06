@@ -22,7 +22,7 @@ Each speaking NPC gets its own call, with its own voice, its own [031](CONTEXT.m
 
 A `TurnRecord` holds:
 - `origin`: `post` (a player's post), `prompt` (the table asked the cast to go on), `opening` (a card's greeting or a scenario's opening), or `imported` (reserved; 036's imported history lives in its own `transcripts/` family);
-- `post`: the player's line, who submitted it, its kind (`speech` or `action`), channel (one of 032's: `speech`, `whisper`, `telepathy`), addressees (a private channel needs at least one) and **audience**;
+- `post`: the player's line, who submitted it, its kind (`speech` or `action`), channel (one of 032's: `speech`, `whisper`, `telepathy`), addressees (a private channel needs at least one), **audience**, and whether it is `withheld` (an action its sender alone hears);
 - `takes`: up to 16. A take is `running`, `proposed`, `kept`, `withdrawn`, `stale` or `superseded`. It records its cast, its lines, every planned call with its status and attempts, the policy's declined calls, any unscreened director lore, a redirect's direction, and who chose it;
 - `paused` (and, kept only for `resume`, who paused), and `passed_by`.
 
@@ -32,9 +32,9 @@ A turn is open until one take is kept or somebody passes it. Lines are `<turn_id
 
 ## Who heard what
 
-- A post's audience is 032's `transmit` receivers plus the sender. Room speech with nobody else present is heard by the speaker alone. An action that is no message at all (032's `not_directed`) is seen by everyone present. A line 032 cannot read is refused with 032's reason (`unknown_addressee`, `unclear_content`, `unresolved_private`, ...) and never falls back to a public action: an unread whisper, or a gesture 032 reads as a possible private signal (`*I nod*`), is not saved.
+- A post's audience is 032's `transmit` receivers plus the sender. Room speech with nobody else present is heard by the speaker alone. An action that is no message at all (032's `not_directed`) is seen by everyone present. An action 032 cannot rule out as a private message (`unresolved_private`: a note, an aside under the breath, a nod) is **withheld**: its sender alone hears it, and it is in neither an NPC's window nor the table's. A message aimed at someone 032 cannot resolve is refused with 032's reason (`unknown_addressee`, `unclear_content`, `ambiguous_addressee`, ...); nothing 032 cannot read ever falls back to a public line.
 - An NPC line is heard by everyone present, even when it answers a whisper. A narrator line is heard by the table (the present player characters), never by an NPC.
-- **Audience is fixed when a line is spoken.** An actor attached later was in no earlier audience, so it hears nothing that came before.
+- **Audience is fixed when a line is spoken.** An actor attached later was in no earlier audience, so it hears nothing that came before. A character handed to the director later keeps what it heard as a player.
 - Proposals, withdrawn lines and struck lines are heard by no one. A reroll never hears the take it replaces. A line with no words (`...`) is heard by no one either, and does not take a place in the window.
 - `heard_for` gives an NPC's window (the last `MAX_HEARD` lines, each capped at 027's `MAX_LINE_CHARS`); it is both its brief's `heard` and its pack's `scene_text`. `table_lines` is the director's view: every post but a private one, and every kept line.
 
@@ -54,16 +54,16 @@ Every method reads the chat afresh (one `LibraryView`, 022's chat snapshot, the 
 |---|---|
 | `open(chat)` | The `Scene` as it stands: turns, cast, persona, names, controls and problems (a damaged turn, an `interrupted` run, a cast member with `no_voice`, a party member left out, a persona the director controls: `persona_not_player`). Writes nothing. |
 | `seat(chat, player)` | Records control for actors with none: the persona to `player`, every other bound character to the director. A recorded controller is never changed. |
-| `begin(chat, by)` | The opening turn, as a proposed take: a scenario's first opening (narrated to the table), else the launch card's first greeting spoken by its character, else the chat's premise. `{{char}}` and `{{user}}` are filled. |
+| `begin(chat, by)` | The opening turn, as a proposed take: a scenario's first opening (narrated to the table), else the launch card's first greeting spoken by its character, else the chat's premise. `{{char}}` and `{{user}}` are filled. While that opening is not yet kept, `begin` again adds a fresh opening take for the cast as it is now. |
 | `post(chat, by, text, *, mode="auto")` | The player's line (it needs words: `"..."` alone is `no_content`), routed by 008, checked by 003's `submit_contribution`, read by 032's `read_message`, and saved as a new turn before anything is generated. The same post retried onto its own untouched turn returns that turn. |
 | `generate(chat, by, *, speakers=None, director=False)` | One new proposed take for the open turn (a `prompt` turn is opened when none is). Writes a `running` take with its planned calls first, then the result. |
-| `keep(chat, by, take, *, acknowledge_unscreened=False)` | Keeps one proposed take with a shown line; the turn closes and a run still in flight lands stale. A take is kept only by the cast it was written for (`cast_changed` once someone arrived or left: ask again). A take written with unscreened director lore needs the acknowledgement. |
+| `keep(chat, by, take, *, acknowledge_unscreened=False)` | Keeps one proposed take with a shown line; the turn closes and a run still in flight lands stale. A take is kept only by the cast it was written for: once someone arrived or left, or a listener changed hands, it is refused `cast_changed` (ask again; `begin` asks for the opening again). A take written with unscreened director lore needs the acknowledgement. |
 | `strike(chat, by, line_id)` | Takes a shown line of a kept take out of the transcript. |
 | `pass_turn(chat, by)` | Closes the open turn with nothing kept. |
-
-While play is paused nothing is begun, posted, generated, kept or passed (`paused`); marks and `resume` still work. A run already in flight when the pause lands writes its take, which waits for the resume.
 | `request(chat, by, kind, targets=(), *, direction=None)` | 016's mid-session request with no session-zero configuration: `pause`, or `skip`, `redirect` and `rephrase` naming lines, which are withdrawn (kept or proposed). A direction is recorded on the take. |
 | `resume(chat, by)` | Lifts a pause; only the player who paused, or the library owner, may. |
+
+While play is paused nothing is begun, posted, generated, kept or passed (`paused`); marks and `resume` still work. A run already in flight when the pause lands writes its take, which waits for the resume. A pause is written only on the chat's last turn: if play went on meanwhile, it is refused `turn_changed`.
 
 **Who may act.** `by` is a handle the same authority issued, trusted and human. Its principal must be the library owner or the controller of a present player character (`not_at_table`). Only the persona's controller may post for it (`not_your_character`). A persona whose recorded controller is the director (an actor reused from an NPC) is never played: `begin`, `post` and `generate` refuse `persona_not_player` until a player takes it back through 003. The principal is stored as `submitted_by` or `by`.
 

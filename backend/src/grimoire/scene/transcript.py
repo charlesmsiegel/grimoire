@@ -41,6 +41,11 @@ def _post_line(post: Post, names: Mapping[InstanceRef, str]) -> HeardLine | None
     return _heard(_speaker(post.actor, names), text, post.actor)
 
 
+def audible(post: Post) -> bool:
+    """Whether a listener would hear words in this post, as clipped and shown (027 needs words)."""
+    return _post_line(post, {}) is not None
+
+
 def _ordered(turns: Iterable[TurnRecord]) -> list[TurnRecord]:
     return sorted(turns, key=lambda turn: turn.number)
 
@@ -88,4 +93,4 @@ def segments(turn: TurnRecord) -> tuple[NarrationSegment, ...]:
     return tuple(found)
 
 
-__all__ = ["NARRATOR", "heard_for", "render", "segments", "table_lines"]
+__all__ = ["NARRATOR", "audible", "heard_for", "render", "segments", "table_lines"]

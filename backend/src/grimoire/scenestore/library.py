@@ -12,8 +12,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from grimoire.core.identity import ChatRef, InstanceRef
-from grimoire.scene import TURN_SCHEMA, SceneRefused, TurnRecord, turn_from_payload, turn_to_payload
+from grimoire.core.identity import ChatRef, InstanceRef, TurnRef
+from grimoire.scene import TURN_SCHEMA, SceneRefused, TurnRecord, turn_from_payload, turn_id, turn_to_payload
+from grimoire.scene.model import MAX_NUMBER
 from grimoire.store import LibraryStore, ScopeRecord, StaleWrite, TakenIdsUnlisted
 from grimoire.store.layout import address_parts
 
@@ -92,12 +93,13 @@ class SceneLibrary:
         return ChatTurns(chat, tuple(turns), tuple(sorted(problems)))
 
     def write(self, record: TurnRecord, base: StoredTurn | None, *, after: StoredTurn | None = None,
-              before_commit: Callable[[], None] | None = None) -> StoredTurn:
+              last: bool = False, before_commit: Callable[[], None] | None = None) -> StoredTurn:
         """Create (``base=None``) or compare-and-swap one turn over ``base``, as read; the turn as now stored.
 
         A rewrite keeps ``base``'s envelope owner and unknown fields. ``after`` is the chat's previous turn as
         the caller read it: a new turn is created only while that turn is unchanged (a pause written on it
-        meanwhile refuses the create), so no turn is ever played over a change it did not see.
+        meanwhile refuses the create), so no turn is ever played over a change it did not see. ``last`` writes
+        only while no later turn of the chat exists (a pause belongs on the turn play would go on from).
         ``before_commit`` runs under the store lock just before the commit point (the runner re-checks its
         fence there): raising from it writes nothing.
         """
@@ -107,6 +109,9 @@ class SceneLibrary:
         else:
             envelope = ScopeRecord(record.ref, TURN_SCHEMA, payload, owner=base.owner, extra=base.extra)
         with self.store.lock:
+            if last and record.number < MAX_NUMBER and TurnRef(record.chat.campaign_id, turn_id(
+                    record.chat, record.number + 1)) in self.store.campaign_turns(record.chat.campaign_id).records:
+                raise SceneRefused("turn_changed", "a later turn was played since this one was read; read it again")
             if after is not None:
                 current = self.store.campaign_turns(record.chat.campaign_id).records.get(after.record.ref)
                 if current is None or current.etag != after.etag:

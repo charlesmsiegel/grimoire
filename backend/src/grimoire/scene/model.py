@@ -88,8 +88,10 @@ def turn_id(chat: ChatRef, number: int) -> str:
 class Post:
     """What a player wrote for their character, as read: who heard it is fixed here.
 
-    ``channel`` is 032's channel for a message (``speech``, ``whisper``...), or ``None`` for a visible
-    action that is not a message. ``submitted_by`` is the authenticated principal, never the director.
+    ``channel`` is 032's channel for a message (``speech``, ``whisper``...), or ``None`` for an action that
+    is not a message. ``withheld`` marks an action 032 could not rule out as a private message (a note, a
+    whispered aside, a signal): its sender alone hears it, and it is in no one else's transcript, the table's
+    included. ``submitted_by`` is the authenticated principal, never the director.
     """
 
     submitted_by: str
@@ -99,6 +101,7 @@ class Post:
     audience: tuple[InstanceRef, ...]
     channel: str | None = None
     addressees: tuple[InstanceRef, ...] = ()
+    withheld: bool = False
 
     def __post_init__(self) -> None:
         _text(self.submitted_by, "submitted_by", limit=MAX_PRINCIPAL)
@@ -120,11 +123,15 @@ class Post:
             raise _fail("invalid_field", "a whisper or a telepathic message names who it is for")
         if self.actor not in self.audience:
             raise _fail("invalid_field", "a post's speaker hears it")
+        if type(self.withheld) is not bool:
+            raise _fail("invalid_field", "withheld is true or false")
+        if self.withheld and (self.kind != "action" or self.channel is not None or self.audience != (self.actor,)):
+            raise _fail("invalid_field", "a withheld post is an action its sender alone hears")
 
     @property
     def private(self) -> bool:
-        """A message for its addressees only: never in the table's transcript."""
-        return self.channel in _PRIVATE
+        """A message for its addressees only, or a withheld action: never in the table's transcript."""
+        return self.channel in _PRIVATE or self.withheld
 
 
 @dataclass(frozen=True, slots=True)

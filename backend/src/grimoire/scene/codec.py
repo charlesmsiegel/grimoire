@@ -18,7 +18,7 @@ from .model import CallRecord, Post, SceneLine, SceneRefused, Take, TurnRecord, 
 TURN_SCHEMA = "grimoire.scene-turn/1"
 _TURN_KEYS = frozenset({"chat", "number", "origin", "post", "takes", "paused", "paused_by", "passed_by"})
 _IDENTITY_KEYS = frozenset({"schema", "address", "campaign_id", "ref"})
-_POST_KEYS = frozenset({"submitted_by", "actor", "kind", "text", "audience", "channel", "addressees"})
+_POST_KEYS = frozenset({"submitted_by", "actor", "kind", "text", "audience", "channel", "addressees", "withheld"})
 _TAKE_KEYS = frozenset({"take", "state", "origin", "cast", "lines", "calls", "outcome", "declined", "unscreened",
                         "direction", "by"})
 _LINE_KEYS = frozenset({"line", "actor", "speaker", "text", "audience", "state", "by", "actor_revision",
@@ -49,7 +49,7 @@ def turn_to_payload(record: TurnRecord) -> dict[str, object]:
 def _post(post: Post) -> dict[str, object]:
     return {"submitted_by": post.submitted_by, "actor": str(post.actor), "kind": post.kind, "text": post.text,
             "audience": [str(a) for a in post.audience], "channel": post.channel,
-            "addressees": [str(a) for a in post.addressees]}
+            "addressees": [str(a) for a in post.addressees], "withheld": post.withheld}
 
 
 def _take(take: Take) -> dict[str, object]:
@@ -148,7 +148,8 @@ def _decode_post(value: object) -> Post:
                 data["text"],  # type: ignore[arg-type]
                 tuple(_actor(item, "post.audience") for item in _list(data["audience"], "post.audience")),
                 data["channel"],  # type: ignore[arg-type]
-                tuple(_actor(item, "post.addressees") for item in _list(data["addressees"], "post.addressees")))
+                tuple(_actor(item, "post.addressees") for item in _list(data["addressees"], "post.addressees")),
+                data["withheld"])  # type: ignore[arg-type]
 
 
 def _decode_take(value: object, address: TurnRef) -> Take:

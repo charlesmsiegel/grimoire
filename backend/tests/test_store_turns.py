@@ -155,3 +155,13 @@ def test_sync_holds_turns_back_and_never_hides_a_divergence(tmp_path):
     finally:
         desktop.close()
         phone.close()
+
+
+def test_a_last_turn_write_waits_for_no_later_turn(library):
+    lib = scenes(library)
+    first = lib.write(post_turn(CHAT, 1), None)
+    lib.write(post_turn(CHAT, 2), None, after=first)  # play went on before the pause landed
+    with pytest.raises(SceneRefused) as error:
+        lib.write(post_turn(CHAT, 1, "Paused."), first, last=True)
+    assert error.value.reason == "turn_changed"
+    assert lib.turns(CHAT).turns[0].record.post.text == "Hello."

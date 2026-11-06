@@ -11,7 +11,7 @@ from .model import (
     Post, SceneLine, SceneRefused, Take, TurnRecord, turn_id, usage_totals,
 )
 
-_TRANSCRIPT = frozenset({"NARRATOR", "heard_for", "render", "segments", "table_lines"})
+_TRANSCRIPT = frozenset({"NARRATOR", "audible", "heard_for", "render", "segments", "table_lines"})
 
 
 def __getattr__(name: str):
@@ -23,6 +23,7 @@ def __getattr__(name: str):
 
 __all__ = [
     "CALL_STATES", "CallRecord", "LINE_STATES", "MAX_CHAT_ID", "MAX_TAKES", "NARRATOR", "ORIGINS", "POST_KINDS",
+    "audible",
     "Post", "SceneLine", "SceneRefused", "TAKE_STATES", "TURN_OUTCOMES", "TURN_SCHEMA", "Take", "TurnRecord",
     "heard_for", "render", "segments", "table_lines", "turn_from_payload", "turn_id", "turn_to_payload",
     "usage_totals",

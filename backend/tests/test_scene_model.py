@@ -135,6 +135,8 @@ def test_turn_ids_are_the_chat_and_a_six_digit_number():
     lambda: Post("human:ana", PC, "speech", "Hi", (PC, InstanceRef("other", "character", "x")), "speech"),
     lambda: Post("human:ana", PC, "speech", "Hi", (PC, MARA), "shout"),  # not one of 032's channels
     lambda: Post("human:ana", PC, "speech", "Hi", (PC, MARA), "whisper"),  # private, yet addressed to no one
+    lambda: Post("human:ana", PC, "action", "I nod.", (PC, MARA), withheld=True),  # withheld, yet heard by others
+    lambda: Post("human:ana", PC, "speech", "Hi.", (PC,), "speech", withheld=True),
     lambda: TurnRecord(CHAT, 1, "prompt", takes=(Take(1, "proposed", "generated", (InstanceRef("zz", "character", "x"),)),)),
     lambda: TurnRecord(CHAT, 1, "prompt", takes=(Take(1, "proposed", "generated", (PC,), lines=(
         line(1, 1, 1, audience=(InstanceRef("zz", "character", "x"),)),)),)),
@@ -204,3 +206,12 @@ def test_a_wordless_line_is_heard_by_no_one_and_never_crowds_out_the_window():
              kept(3, line(3, 1, 1, text="*—*"), post=spoken(3, "?!"))]
     assert [h.text for h in heard_for(turns, PC, NAMES)] == ["Words first."]
     assert [h.text for h in table_lines(turns, NAMES)] == ["Words first."]
+
+
+def test_a_withheld_action_round_trips_and_reaches_only_its_sender():
+    post = Post("human:ana", PC, "action", "I slip a note under the door.", (PC,), withheld=True)
+    turn = kept(1, line(1, 1, 1, text="Mara speaks."), post=post)
+    assert turn_from_payload(turn.ref, TURN_SCHEMA, turn_to_payload(turn)) == turn
+    assert [h.text for h in heard_for((turn,), PC, NAMES)] == ["*I slip a note under the door.*", "Mara speaks."]
+    assert [h.text for h in heard_for((turn,), MARA, NAMES)] == ["Mara speaks."]
+    assert [h.text for h in table_lines((turn,), NAMES)] == ["Mara speaks."]
