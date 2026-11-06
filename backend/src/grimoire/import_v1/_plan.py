@@ -438,10 +438,7 @@ class ImportPlan:
             self._unresolve(legacy, "actor_base_not_imported", str(actor.ref))
             return
         base = self.targets[base_path]
-        source = actor.definition  # pinned: the campaign plays this revision until a reviewed rebase (042)
-        instance = EntityInstance(actor.ref, source=source, extras=actor.extras)
-        envelope = RecordEnvelope(actor.ref, instance_to_payload(instance), owner=self.owner, derived_from=str(source),
-                                  base=str(actor.definition), base_etag=base.etag, extra={"schema": ENTITY_SCHEMA})
+        envelope = self._actor_envelope(actor, actor.definition, base.etag)
         path = _path_of(actor.ref)
         if path not in self.receipts.written and actor.ref.instance_id in taken:
             try:
@@ -456,10 +453,46 @@ class ImportPlan:
         rendered = self._rendered(path, "actor", legacy, envelope)
         if rendered is None:
             return
-        target = self._decide(path, "actor", legacy, rendered, envelope, etag(rendered))
+        desired = etag(rendered)
+        if path in self.receipts.written and self.receipts.desired.get(path) != desired:
+            # an actor an earlier build wrote follows its source (unpinned): the same V1 content, recorded
+            # under that rendering's digest, so it is not ``v1_changed`` (and a real V1 change still is)
+            earlier = self._rendered(path, "actor", legacy,
+                                     self._actor_envelope(actor, actor.definition.unpinned(), base.etag))
+            if earlier is not None and self.receipts.desired.get(path) == etag(earlier):
+                desired = etag(earlier)
+        target = self._decide(path, "actor", legacy, rendered, envelope, desired)
         if target.outcome == WRITE:
             self.new_actors.setdefault(campaign.campaign_id, set()).add(actor.ref.instance_id)
         self._put(target)
+
+    def _actor_envelope(self, actor, source: SourceRef, base_etag: str | None) -> RecordEnvelope:  # type: ignore[no-untyped-def]
+        """The actor's instance file with ``source`` (and ``derived_from``) as given: pinned to the imported
+        revision, so the campaign plays it until a reviewed rebase (042); unpinned only to recognise what an
+        earlier build wrote."""
+        instance = EntityInstance(actor.ref, source=source, extras=actor.extras)
+        return RecordEnvelope(actor.ref, instance_to_payload(instance), owner=self.owner, derived_from=str(source),
+                              base=str(actor.definition), base_etag=base_etag, extra={"schema": ENTITY_SCHEMA})
+
+    def _plays(self, actor) -> SourceRef:  # type: ignore[no-untyped-def]
+        """The revision a chat binds ``actor`` at: the imported one for an actor this run writes, otherwise the
+        one the stored instance plays (its pinned ``source``, else its ``base``, of the same entity), so a
+        scene first imported after a reviewed rebase (042) never pins the actor back to the old revision."""
+        if self.targets[_path_of(actor.ref)].outcome == WRITE:
+            return actor.definition
+        try:
+            envelope = self.store.read(actor.ref).envelope  # type: ignore[union-attr]
+        except (StoreError, ValueError, OSError):
+            return actor.definition
+        payload = envelope.payload if isinstance(envelope.payload, Mapping) else {}
+        for text in (payload.get("source"), envelope.base):
+            try:
+                ref = SourceRef.parse(text) if isinstance(text, str) else None
+            except ValueError:
+                ref = None
+            if ref is not None and ref.pinned and ref.entity_key == actor.definition.entity_key:
+                return ref
+        return actor.definition
 
     def _plan_chats(self, campaign: Campaign) -> None:
         seen: set[InstanceRef] = set()
@@ -478,9 +511,10 @@ class ImportPlan:
                         dropped.append(str(ref))
                     continue
                 prior = CAMPAIGN_CONTINUITY if ref in seen else NOT_WITNESSED
-                # pinned to the imported revision: a later world revision (a 043 change set, say) reaches
-                # the chat only through 042's reviewed rebase
-                binding = NewBinding(actor.definition, "character", actor.definition.revision, ref, prior)
+                # pinned to the revision the campaign plays (the imported one, or what a reviewed rebase took):
+                # a later world revision (a 043 change set, say) reaches the chat only through 042's rebase
+                plays = self._plays(actor)
+                binding = NewBinding(plays, "character", plays.revision, ref, prior)
                 if actor.role == "player":
                     if persona is not None:  # V2 chats have one persona: the chat starts with the first
                         self._unresolve(scene.legacy_id, "second_persona", str(ref))
@@ -622,9 +656,10 @@ class ImportPlan:
     def _cast_bound(self, ref: ChatRef, legacy_id: str, cast: list[InstanceRef]) -> None:
         """An imported chat keeps the cast it started with: an actor imported since is reported, never bound.
 
-        A chat an earlier build imported binds its cast unpinned (following the world's head). It is
-        never rewritten here: each such binding is reported (``binding_follows_head``) so a human can
-        re-pin it through 042's reviewed rebase or leave it following."""
+        A chat that binds a source unpinned (one an earlier build imported, or one made to follow with
+        ``follow=True``) is never rewritten here: each such binding is reported (``binding_follows_head``),
+        so a human can re-pin it (detach and re-attach in 107) or leave it following. 042's rebase
+        re-pins only chats that are already pinned."""
         try:
             stored = self.store.read(ref)
             record = chat_from_payload(ref, stored.record.schema, stored.record.payload)

@@ -667,7 +667,11 @@ class ChatLibrary:
         """The binding, a new actor's envelope (or ``None``) and a reused actor's etag as checked (or ``None``).
 
         An unpinned ``ref`` is pinned to the revision it resolves to now, the very revision whose bytes
-        were checked (and a new actor is based on), unless the caller asked to ``follow`` the head."""
+        were checked (and a new actor is based on), unless the caller asked to ``follow`` the head. For a
+        reused actor it is pinned to the revision that actor plays (``_plays``), never to a newer head
+        nobody reviewed for it."""
+        if reuse is not None and role in ACTOR_ROLES and not follow and not ref.pinned:
+            ref = self._plays(campaign, reuse, ref) or ref
         revision, definition_etag = self._resolve(ref, role)
         if not follow and not ref.pinned:
             ref = ref.at(revision)
@@ -688,6 +692,25 @@ class ChatLibrary:
             derived_from=str(ref), base=str(ref.at(revision)), base_etag=definition_etag,
             extra={"schema": ENTITY_SCHEMA})
         return NewBinding(ref, role, revision, actor, NOT_WITNESSED), envelope, None
+
+    def _plays(self, campaign: str, actor: InstanceRef, ref: SourceRef) -> SourceRef | None:
+        """The revision of ``ref``'s entity that the existing ``actor`` plays: its pinned ``source``, else its
+        pinned ``base``; ``None`` when its file names neither (``_check_reuse`` then judges the actor)."""
+        if actor.campaign_id != campaign or actor.kind != "character":
+            return None
+        try:
+            envelope = self.store.read(actor).envelope  # type: ignore[union-attr]
+        except (StoreError, LibraryPathError, ValueError):
+            return None
+        payload = envelope.payload if isinstance(envelope.payload, Mapping) else {}
+        for text in (payload.get("source"), envelope.base):
+            try:
+                played = SourceRef.parse(text) if isinstance(text, str) else None
+            except ValueError:
+                played = None
+            if played is not None and played.pinned and played.entity_key == ref.entity_key:
+                return played
+        return None
 
     def _device_tag(self) -> str:
         """This library's ``device_tag``; an unusable identity refuses the binding (``device_identity``)."""

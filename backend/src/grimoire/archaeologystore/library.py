@@ -104,8 +104,9 @@ class StImport:
 
     #: provider calls this import makes, ever: scanning and applying are text only
     provider_calls: int = 0
-    #: ``already_imported`` only: the earlier import's active bindings that follow their head (an import
-    #: made before chats were pinned by default). Reported, never rewritten: 042's reviewed rebase re-pins.
+    #: ``already_imported`` only: the chat's active bindings that follow their head (an import made before
+    #: chats were pinned by default, or one made to follow since). Reported, never rewritten: re-pin one by
+    #: detaching and re-attaching it (107); 042's rebase re-pins only chats that are already pinned.
     following: tuple[SourceRef, ...] = ()
 
     def preview(self) -> dict[str, bytes]:
