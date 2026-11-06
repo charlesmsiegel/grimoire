@@ -512,14 +512,20 @@ class ImportPlan:
             elif target.outcome == WRITE:
                 self.bound.setdefault(campaign.campaign_id, set()).update(b.actor for b in bindings)
             self._put(target)
-            if target.outcome in _USABLE and scene.texts is not None:
+            path = _path_of(scene.ref)
+            # pages only for the scene as the chat was imported: a changed scene is v1_changed, and its
+            # rows (and texts) are no longer what the chat records
+            imported_as = path not in self.receipts.written or self.receipts.desired.get(path, desired) == desired
+            if target.outcome in _USABLE and scene.texts is not None and imported_as:
                 self._plan_transcript(scene)
 
     def _plan_transcript(self, scene: Scene) -> None:
         """The scene's posts as transcript pages (036): exact V1 text, label-only speakers, no audience.
 
         A page is create-only: a V1 scene that gained posts since it was imported is ``v1_changed`` and its
-        pages stay as written. A chat imported before 036 gets its pages on the next run."""
+        pages stay as written (none are added). A chat imported before 036 gets its pages on the next run,
+        if its scene is still as imported. Pages are decided per chat, all or none: if any page is neither
+        absent nor exactly as this run would write it, none is written (``transcript_exists``)."""
         marker = scene.extras[MARKER]
         posts = []
         for number, (row, text) in enumerate(zip(marker["posts"], scene.texts or ()), start=1):
@@ -535,6 +541,7 @@ class ImportPlan:
         except TranscriptError as error:
             self._unresolve(scene.legacy_id, "too_large", f"{scene.ref}: {error}")
             return
+        planned = []
         for seq, group in enumerate(groups, start=1):
             ref = TranscriptRef(scene.ref.campaign_id, scene.ref.chat_id, seq)
             envelope = ScopeRecord(ref, TRANSCRIPT_SCHEMA, page_to_payload(TranscriptPage(ref, group, origin)),
@@ -544,7 +551,23 @@ class ImportPlan:
             if rendered is None:
                 return
             desired = _digest({"origin": origin, "seq": seq, "posts": [p.source for p in group]})
+            if not self._page_fits(path, rendered, desired):
+                self._unresolve(scene.legacy_id, "transcript_exists", path)
+                return
+            planned.append((path, rendered, envelope, desired))
+        for path, rendered, envelope, desired in planned:
             self._put(self._decide(path, "transcript", scene.legacy_id, rendered, envelope, desired))
+
+    def _page_fits(self, path: str, rendered: bytes, desired: str) -> bool:
+        """Whether a planned page is absent (and never written) or already exactly this run's page."""
+        prior = self.receipts.written.get(path)
+        try:
+            current = self.store.read_exact(path)
+        except (StoreError, ValueError, OSError):
+            return False
+        if prior is not None:
+            return current is not None and etag(current) == prior and self.receipts.desired.get(path) == desired
+        return current is None or current == rendered
 
     def _bindable(self, actor, legacy_id: str) -> bool:  # type: ignore[no-untyped-def]
         """Whether a chat can bind ``actor`` to its V1 definition (a V2 edit may have re-sourced it)."""

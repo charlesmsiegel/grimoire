@@ -20,7 +20,7 @@ A transcript is **evidence that something was written, never of who heard it.** 
 
 Files are contained per file as `load()` contains other families: a damaged page, a stray file, a link or a look-alike spelling (`Transcripts/`, a case-folded chat folder) is a problem in the result, never a crashed read. `grimoire.archaeologystore.read_transcript(store, chat)` decodes the pages and reports undecodable pages and a gap in the numbering.
 
-A page holds at most 1000 posts. Writers split long transcripts by size too (half of the store's 8 MiB document limit); `grimoire.transcripts.paginate` does that split in order, and a single post too large for a page is refused (`post_too_large`).
+A page holds at most 1000 posts. Writers split long transcripts by size too (posts take at most half of the store's 8 MiB document limit per page, less page 1's header and origin); `grimoire.transcripts.paginate` does that split in order (`first_budget` for page 1), and a single post too large for a page is refused (`post_too_large`).
 
 **Rollback.** A pre-036 build reports `transcripts/` as unrecognized load problems and never writes there. It cannot recover a journal naming a transcript path: recover with a 036+ build or run `discard_journal`. Its allocators do not read pages; the importers in this slice name only actors that also have instance files, which every build reserves.
 

@@ -19,6 +19,9 @@ from grimoire.core.identity import ChatRef, SourceRef
 from grimoire.import_v1 import chat_id_of
 from grimoire.migrate_v1 import parse_frontmatter, parse_posts
 from grimoire.store import LibraryStore, StaleWrite
+from grimoire.store.jsonfmt import MAX_FILE_BYTES
+from grimoire.store.layout import ledger_folder
+from grimoire.sync import identify, sync
 from grimoire.testing.fileops import snapshot
 
 from chat_fixtures import ANYA, LORE, MARA, NAMESAKE, SAM, Clock, Ids, seed_sources
@@ -287,6 +290,73 @@ def test_a_long_chat_is_split_into_numbered_pages(store):
     assert problems == () and [p.post_id for page in pages for p in page.posts][-1] == "p002500"
 
 
+def test_page_one_budgets_for_its_header_and_a_huge_header_is_refused(store):
+    roomy = dict(HEADER, chat_metadata={"note_prompt": "n" * (1024 * 1024)})
+    rows = [roomy] + [{"name": "Mara", "is_user": False, "mes": "x" * 200_000} for _ in range(20)]
+    plan = importer(store).plan(export(rows))
+    assert len(plan.pages) == 2  # the header's megabyte pushes posts to page 2
+    assert all(len(data) <= MAX_FILE_BYTES for data in plan.preview().values())
+    huge = [dict(HEADER, chat_metadata={"note_prompt": "n" * (3 * 1024 * 1024)})] + rows[1:]
+    with pytest.raises(ImportRefused) as caught:
+        importer(store).plan(export(huge))
+    assert caught.value.reason == "header_too_large"
+
+
+def test_a_transcript_missing_its_last_page_is_not_a_complete_import(store):
+    rows = [HEADER] + [{"name": "Mara", "is_user": False, "mes": f"line {i}"} for i in range(1500)]
+    plan = importer(store).plan(export(rows))
+    plan.commit()
+    last = plan.pages[-1].ref
+    (store.root / "campaigns" / last.campaign_id / "transcripts" / last.chat_id / f"{last.seq:010d}.json").unlink()
+    with pytest.raises(ImportRefused) as caught:
+        importer(store).plan(export(rows))
+    assert caught.value.reason == "campaign_exists"
+
+
+def test_a_repeat_with_other_lorebooks_or_label_is_refused(store):
+    importer(store).plan(export()).commit()
+    for change in ({"lorebooks": [LORE]}, {"label": "Harbor"}):
+        with pytest.raises(ImportRefused) as caught:
+            importer(store).plan(export(), **change)
+        assert caught.value.reason == "imported_differently"
+
+
+def test_a_ledger_that_outlived_the_campaign_folder_refuses_the_import(store):
+    plan = importer(store).plan(export())
+    folder = store.root.joinpath(*ledger_folder(f"campaigns/{plan.chat.campaign_id}"))
+    folder.mkdir(parents=True)
+    (folder / "0000000001.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ImportRefused) as caught:
+        importer(store).plan(export())
+    assert caught.value.reason == "campaign_exists"
+
+
+def test_two_paired_devices_importing_one_export_make_two_chats_that_sync_cleanly(tmp_path):
+    left, right = LibraryStore.create(tmp_path / "desktop"), LibraryStore.create(tmp_path / "phone")
+    try:
+        seed_sources(left)
+        identify(left, "desktop")
+        identify(right, "phone")
+        handles = {"desktop": owner_handle(), "phone": owner_handle()}
+        sync(left, right, handles)
+        chats = []
+        for device in (left, right):
+            scan = importer(device).scan(export())
+            plan = importer(device).plan(export(), speakers=mapping(scan))
+            plan.commit()
+            chats.append(plan.chat)
+        assert chats[0] != chats[1] and all(c.campaign_id.startswith(scan.campaign_id + "-") for c in chats)
+        assert sync(left, right, handles).conflicts == ()
+        for device in (left, right):
+            for chat in chats:  # each device holds both imports, each whole
+                assert read_transcript(device, chat)[1] == ()
+            again = importer(device).plan(export(), speakers=mapping(scan))
+            assert again.status == "already_imported"
+    finally:
+        left.close()
+        right.close()
+
+
 def test_the_importer_never_imports_a_provider():
     assert not any(name == "grimoire.providers" or name.startswith("grimoire.providers.") for name in sys.modules
                    if name.startswith("grimoire.archaeology"))
@@ -382,3 +452,59 @@ def test_a_scene_whose_posts_do_not_match_the_review_imports_without_a_transcrip
     assert "transcript_unverified" in {row["reason"] for row in review["unresolved"]}
     assert not [path for path in review["writes"] if "/transcripts/" in path]
     assert [path for path in review["writes"] if "/chats/" in path]  # the chat itself still imports
+
+
+INSERTED = ('**Mara:** <!-- grimoire-response {"post_id": "00000000000000000000000000000010"} -->\nA bell rings.\n\n')
+
+
+def insert_first_post(env) -> None:
+    scene = env.v1 / CAMPAIGN / "scenes" / f"{SID}.md"
+    text = scene.read_text(encoding="utf-8")
+    at = text.index("**Winifred:**")
+    scene.write_text(text[:at] + INSERTED + text[at:], encoding="utf-8")
+
+
+def test_a_chat_imported_before_036_whose_scene_changed_gets_no_transcript(env, monkeypatch):
+    from grimoire.import_v1 import _plan
+    monkeypatch.setattr(_plan.ImportPlan, "_plan_transcript", lambda self, scene: None)
+    env.plan().apply()
+    monkeypatch.undo()
+    insert_first_post(env)
+    review = env.plan(manifest=env.rescan()).review()
+    assert "v1_changed" in {row["reason"] for row in review["unresolved"]}
+    assert not [path for path in review["writes"] if "/transcripts/" in path]  # never the unreviewed version
+
+
+def test_a_scene_that_grows_past_a_page_boundary_writes_no_shifted_page(env, monkeypatch):
+    from grimoire.import_v1 import _plan
+    real = _plan.paginate
+    monkeypatch.setattr(_plan, "paginate", lambda posts, measure, budget: real(posts, measure, budget, max_posts=3))
+    env.plan().apply()
+    before = read_transcript(env.store, V1_CHAT)[0]
+    insert_first_post(env)
+    plan = env.plan(manifest=env.rescan())
+    assert not [path for path in plan.review()["writes"] if "/transcripts/" in path]
+    plan.apply()
+    assert read_transcript(env.store, V1_CHAT)[0] == before
+
+
+def test_a_foreign_first_page_blocks_the_whole_transcript(env, monkeypatch):
+    from grimoire.import_v1 import _plan
+    from grimoire.core.identity import TranscriptRef
+    from grimoire.store import ScopeRecord
+    from grimoire.transcripts import TRANSCRIPT_SCHEMA, Post, Speaker, TranscriptPage, Variant, page_to_payload
+    real = _plan.paginate
+    monkeypatch.setattr(_plan, "paginate", lambda posts, measure, budget: real(posts, measure, budget, max_posts=2))
+    planner = _plan.ImportPlan._plan_transcript
+    monkeypatch.setattr(_plan.ImportPlan, "_plan_transcript", lambda self, scene: None)
+    env.plan().apply()  # the chat, imported without pages
+    monkeypatch.setattr(_plan.ImportPlan, "_plan_transcript", planner)
+    ref = TranscriptRef(V1_CHAT.campaign_id, V1_CHAT.chat_id, 1)
+    page = TranscriptPage(ref, (Post("p1", Speaker("user"), (Variant("someone else's"),), 0),))
+    txn = env.store.transaction()
+    txn.put(ScopeRecord(ref, TRANSCRIPT_SCHEMA, page_to_payload(page), owner=OWNER), None)
+    txn.commit(owner_handle())
+    review = env.plan().review()
+    assert "transcript_exists" in {row["reason"] for row in review["unresolved"]}
+    assert not [path for path in review["writes"] if "/transcripts/" in path]  # not page 2 behind it either
+

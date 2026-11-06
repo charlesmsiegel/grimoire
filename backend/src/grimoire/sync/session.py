@@ -497,8 +497,15 @@ def _named_paths(parts: tuple[str, ...], data: bytes) -> list[str]:
 
 
 def _home_scope(path: str) -> list[str]:
-    """A 107 chat's own play scope: a chat never lands without the scope the origin homes it in."""
-    return [f"campaigns/{path.split('/')[1]}/scope.json"] if syncable(path) == "chat" else []
+    """A 107 chat's own play scope, and a 036 transcript page's own chat: a chat never lands without the
+    scope the origin homes it in, nor a page without its chat (a page's payload never names its chat)."""
+    kind = syncable(path)
+    if kind == "chat":
+        return [f"campaigns/{path.split('/')[1]}/scope.json"]
+    if kind == "transcript":
+        parts = path.split("/")
+        return [f"campaigns/{parts[1]}/chats/{parts[3]}.json"]
+    return []
 
 
 def _campaigns_with_state(paths) -> set[str]:  # type: ignore[no-untyped-def]

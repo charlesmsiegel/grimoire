@@ -122,6 +122,30 @@ def test_an_export_with_no_messages_is_refused():
     assert caught.value.reason == "no_messages"
 
 
+@pytest.mark.parametrize("names", [("A" * 1001, "B" * 1001), (5, [1])])
+def test_names_the_label_cannot_hold_still_tell_speakers_apart(names):
+    chat = read_st_chat(lines(*({"name": name, "is_user": False, "mes": "x"} for name in names)))
+    assert len(chat.speakers) == 2 and all(s.label is None for s in chat.speakers)
+
+
+@pytest.mark.parametrize("fields,kept", [
+    ({"swipes": None}, "swipes"),
+    ({"swipes": ["Hi"], "swipe_id": 0, "swipe_info": None}, "swipe_info"),
+    ({"swipes": ["Hi"], "swipe_id": 0, "swipe_info": []}, "swipe_info"),
+    ({"swipes": ["Hi", "Yo"], "swipe_id": 0, "swipe_info": [None, {}]}, "swipe_info"),
+])
+def test_a_swipe_field_the_variants_cannot_reproduce_is_kept_verbatim(fields, kept):
+    extras = read_st_chat(lines(mara("Hi", **fields))).posts[0].extras
+    value = fields[kept]
+    assert extras[kept] == (tuple(value) if isinstance(value, list) else value)
+
+
+def test_a_first_line_with_message_fields_is_a_message_not_the_header():
+    with pytest.raises(StError) as caught:
+        read_st_chat([(1, {"name": "M", "is_user": False, "create_date": "x"}), (2, mara("hi"))])
+    assert (caught.value.reason, caught.value.line) == ("invalid_message", 1)
+
+
 # -- the stored page model ------------------------------------------------------------------------
 
 REF = TranscriptRef("quick-1", "t-1", 1)

@@ -32,6 +32,8 @@ from grimoire.transcripts import MAX_VARIANTS, Post, Speaker, TranscriptError, V
 FORMAT = "sillytavern-jsonl"
 #: header keys that mark the first line as SillyTavern's chat header rather than a message
 HEADER_KEYS = frozenset({"user_name", "character_name", "create_date", "chat_metadata"})
+#: fields only a message holds: a first line with any of them is read as a message, never the header
+MESSAGE_KEYS = frozenset({"mes", "name", "is_user", "is_system", "swipes", "swipe_id", "send_date"})
 #: message fields this reader interprets; every other field is kept verbatim in the post's ``extras``
 READ_FIELDS = frozenset({"mes", "swipes", "swipe_id", "swipe_info"})
 MAX_MESSAGES = 200_000
@@ -91,9 +93,9 @@ class StChat:
         raise KeyError(speaker_id)
 
 
-def speaker_id(role: str, avatar: str | None, label: str | None) -> str:
+def speaker_id(role: str, avatar: str | None, label: object) -> str:
     """``s-`` and 12 hex digits of a digest of the speaker's role, avatar and name (``None`` distinct
-    from empty text)."""
+    from empty text; a name the label cannot hold, too long or not text, by the source's own value)."""
     key = repr((role, avatar, label)).encode("utf-8", "surrogatepass")
     return "s-" + hashlib.sha256(key).hexdigest()[:12]
 
@@ -142,7 +144,7 @@ class _Reader:
         at = send_date if type(send_date) is str else None
         swipes = message.get("swipes")
         if swipes is None:
-            for key in ("swipe_id", "swipe_info"):
+            for key in ("swipes", "swipe_id", "swipe_info"):
                 if key in message:
                     extras[key] = message[key]
                     self.lose(line, key, "kept_without_swipes")
@@ -155,6 +157,10 @@ class _Reader:
             self.lose(line, "swipes", "invalid_swipes")
             return (Variant(mes, at, {"field": "mes"}),), 0
         info = message.get("swipe_info")
+        if "swipe_info" in message and not (isinstance(info, (list, tuple)) and len(info) == len(swipes)
+                                            and all(isinstance(entry, Mapping) for entry in info)):
+            extras["swipe_info"] = info  # the variants cannot reproduce it exactly: keep it verbatim
+            self.lose(line, "swipe_info", "kept_not_interpreted")
         if info is not None and not (isinstance(info, (list, tuple)) and len(info) <= len(swipes)):
             extras["swipe_info"] = info
             self.lose(line, "swipe_info", "invalid_swipe_info")
@@ -164,7 +170,6 @@ class _Reader:
             entry = info[index] if info is not None and index < len(info) else None
             if entry is not None and not isinstance(entry, Mapping):
                 self.lose(line, f"swipe_info[{index}]", "invalid_swipe_info")
-                extras.setdefault("swipe_info", info)
                 entry = None
             stamp = entry.get("send_date") if entry is not None else None
             variants.append(Variant(text, stamp if type(stamp) is str else None, {"swipe": index},
@@ -187,7 +192,7 @@ def read_st_chat(lines: Sequence[tuple[int, Mapping]]) -> StChat:
     reader = _Reader()
     items = list(lines)
     header: Mapping | None = None
-    if items and "mes" not in items[0][1] and HEADER_KEYS & set(items[0][1]):
+    if items and not MESSAGE_KEYS & set(items[0][1]) and HEADER_KEYS & set(items[0][1]):
         line, raw = items.pop(0)
         header = reader.kept(raw, "header", line)  # type: ignore[assignment]
         metadata = raw.get("chat_metadata")
@@ -206,6 +211,8 @@ def read_st_chat(lines: Sequence[tuple[int, Mapping]]) -> StChat:
             raise StError(f"line {line}: a message needs its text (mes)", "invalid_message", line)
         role = _role(message, line)
         name = message.get("name")
+        # the speaker is told apart by the source's own value, even one the label cannot show
+        named = name if name is None or type(name) is str else ("name", repr(name))
         if name is not None and type(name) is not str:
             reader.lose(line, "name", "invalid_name")
             name = None
@@ -215,7 +222,7 @@ def read_st_chat(lines: Sequence[tuple[int, Mapping]]) -> StChat:
             reader.lose(line, "name", "name_too_long")
             name = None
         avatar = _avatar(message, role)
-        sid = speaker_id(role, avatar, name)
+        sid = speaker_id(role, avatar, named)
         if sid not in found:
             if len(found) >= MAX_SPEAKERS:
                 raise StError(f"the export has more than {MAX_SPEAKERS} speakers", "too_many_speakers", line)

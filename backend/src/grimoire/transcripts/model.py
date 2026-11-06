@@ -191,16 +191,19 @@ class TranscriptPage:
 
 
 def paginate(posts: tuple[Post, ...] | list[Post], measure: Callable[[Post], int], budget: int,
-             max_posts: int = MAX_POSTS_PER_PAGE) -> list[tuple[Post, ...]]:
+             max_posts: int = MAX_POSTS_PER_PAGE, *, first_budget: int | None = None) -> list[tuple[Post, ...]]:
     """Posts split, in order, into page-sized groups: at most ``max_posts`` each, and at most ``budget``
-    by ``measure`` (a post's stored size) unless one post alone is larger (``post_too_large``)."""
+    by ``measure`` (a post's stored size; ``first_budget`` for page 1, which also holds the header). A
+    page always takes its first post, and one post larger than ``budget`` is refused (``post_too_large``),
+    so page 1 holds at most ``budget`` beyond its header."""
     groups: list[list[Post]] = []
     size = 0
     for post in posts:
         measured = measure(post)
         if measured > budget:
             raise TranscriptError(f"{post.post_id} is too large for one transcript page", "post_too_large")
-        if not groups or size + measured > budget or len(groups[-1]) >= max_posts:
+        limit = first_budget if len(groups) == 1 and first_budget is not None else budget
+        if not groups or size + measured > limit or len(groups[-1]) >= max_posts:
             groups.append([])
             size = 0
         groups[-1].append(post)

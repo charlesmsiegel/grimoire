@@ -9,8 +9,10 @@ display name. The plan is one ``ChatChange`` (107's writer): the play scope, the
 bindings and new actors, and the transcript pages, committed in one transaction. ``preview()`` shows
 the exact bytes; ``commit(approvals)`` writes them.
 
-The campaign and chat ids are ``st-`` and 16 hex digits of the export's SHA-256, so a repeat of the
-same file finds its earlier import (``already_imported``, nothing to write) instead of a second copy.
+The campaign and chat ids are ``st-``, 16 hex digits of the export's SHA-256 and this library's
+device tag (028), so a repeat of the same file on this device finds its earlier import
+(``already_imported``, nothing to write) instead of a second copy, and two paired devices that each
+import it offline make two chats rather than two versions of one.
 Nothing here writes events, evidence, beliefs or relations: a transcript records what was written.
 See docs/ARCHAEOLOGY.md.
 """
@@ -25,8 +27,11 @@ from dataclasses import dataclass
 
 from grimoire.archaeology import FORMAT, Loss, StChat, StError, StSpeaker, read_st_chat
 from grimoire.chats import ChatRecord, Launch, chat_from_payload
-from grimoire.chatstore import ChatChange, ChatCommit, ChatLibrary, InvalidBinding
+from grimoire.chatstore import (
+    ChatChange, ChatCommit, ChatLibrary, DeviceIdentityUnusable, InvalidBinding, device_tag,
+)
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TranscriptRef
+from grimoire.ledgers import security_campaign_ids
 from grimoire.store import LibraryStore, RecordNotFound, ScopeRecord, StaleWrite
 from grimoire.store.jsonfmt import MAX_FILE_BYTES, JsonError, is_imprecise, parse_strict, render
 from grimoire.transcripts import (
@@ -37,6 +42,8 @@ from grimoire.transcripts import (
 MAX_EXPORT_BYTES = 64 * 1024 * 1024
 #: rendered bytes of posts one page holds at most: half a store file, so the page's own JSON fits
 PAGE_BUDGET = MAX_FILE_BYTES // 2
+#: rendered bytes of page 1's header and origin at most; page 1's posts get the rest of PAGE_BUDGET
+HEADER_BUDGET = PAGE_BUDGET // 2
 #: the premise a chat with no mapped character or lorebook launches from (display only)
 IMPORTED_PREMISE = "Imported SillyTavern chat"
 _BOM = b"\xef\xbb\xbf"
@@ -76,6 +83,8 @@ class StScan:
 
     @property
     def campaign_id(self) -> str:
+        """The export's id, ``st-`` and 16 hex digits of its digest; a library with a device identity
+        imports it under this id plus its device tag (``StImport.chat`` is the id actually used)."""
         return "st-" + self.sha256[:16]
 
 
@@ -213,13 +222,22 @@ class StImporter:
                                     "role_kind")
         if name is not None and (type(name) is not str or len(name) > 1000):
             raise ImportRefused("name must be text of at most 1000 characters", "invalid_field")
+        if label is not None and (type(label) is not str or len(label) > 1000):
+            raise ImportRefused("label must be text of at most 1000 characters", "invalid_field")
         persona, characters = self._bindings(scan, mapping)
-        campaign = scan.campaign_id
+        try:
+            campaign = scan.campaign_id + device_tag(self.store)
+        except DeviceIdentityUnusable as error:
+            raise ImportRefused(str(error), "device_identity") from None
         chat = ChatRef(campaign, campaign)
-        origin = self._origin(scan, mapping, name)
+        origin = self._origin(scan, mapping, name, lorebooks, label)
         presence = self.store.campaign_presence(campaign)
         if presence != "absent":
             return self._existing(scan, chat, mapping, origin, presence)
+        if (self.store.campaign_authority_presence(campaign) != "absent"
+                or campaign in security_campaign_ids(self.store)):
+            raise ImportRefused(f"a ledger still names campaigns/{campaign}, whose folder is gone; this export "
+                                "cannot be imported again on this device until it is cleared", "campaign_exists")
         if characters:
             launch, attach = Launch("character", characters[0]), [(ref, "character") for ref in characters[1:]]
         elif lorebooks:
@@ -270,11 +288,14 @@ class StImporter:
                                 "persona_is_character")
         return persona, list(characters.values())
 
-    def _origin(self, scan: StScan, mapping: Mapping[str, SourceRef], name: str | None) -> dict:
+    def _origin(self, scan: StScan, mapping: Mapping[str, SourceRef], name: str | None,
+                lorebooks: Sequence[SourceRef], label: str | None) -> dict:
         origin: dict = {"format": FORMAT, "sha256": scan.sha256, "bytes": scan.byte_length,
+                        "posts": len(scan.chat.posts),
                         "speakers": {s.id: {"role": s.role, "label": s.label, "avatar": s.avatar,
                                             "definition": str(mapping[s.id]) if s.id in mapping else None}
-                                     for s in scan.chat.speakers}}
+                                     for s in scan.chat.speakers},
+                        "lorebooks": [str(ref) for ref in lorebooks], "label": label}
         if name is not None:
             origin["name"] = name
         return origin
@@ -297,10 +318,15 @@ class StImporter:
         for post, sid in zip(scan.chat.posts, scan.chat.speaker_ids):
             speaker = Speaker(post.speaker.role, actors.get(sid), post.speaker.label)
             posts.append(dataclasses.replace(post, speaker=speaker, source={**post.source, "speaker": sid}))
+        first = len(render({"origin": {**origin, "pages": 10**9}, "header": scan.chat.header}))
+        if first > HEADER_BUDGET:
+            raise ImportRefused(f"the export's header and speaker table take more than {HEADER_BUDGET} bytes",
+                                "header_too_large")
         try:
-            groups = paginate(posts, measure_post, PAGE_BUDGET)
+            groups = paginate(posts, measure_post, PAGE_BUDGET, first_budget=PAGE_BUDGET - first)
         except TranscriptError as error:
             raise ImportRefused(str(error), error.reason) from None
+        origin = {**origin, "pages": len(groups)}
         pages = []
         for seq, group in enumerate(groups, start=1):
             page_origin = dict(origin) if seq == 1 else {k: origin[k] for k in ("format", "sha256")}
@@ -320,15 +346,17 @@ class StImporter:
             raise ImportRefused(f"campaigns/{chat.campaign_id} exists and is not this export's import",
                                 "campaign_exists") from None
         pages, problems = read_transcript(self.store, chat)
-        if problems or not pages or pages[0].origin.get("sha256") != scan.sha256:
+        if problems or not _complete(pages, scan):
             raise ImportRefused(f"campaigns/{chat.campaign_id} exists and is not a complete import of this export",
                                 "campaign_exists")
-        stored = pages[0].origin.get("speakers")
-        if not isinstance(stored, Mapping) or {k: v.get("definition") for k, v in stored.items()
-                                               if isinstance(v, Mapping)} != {k: v.get("definition") for k, v in
-                                                                              origin["speakers"].items()}:
-            raise ImportRefused("this export was already imported with a different speaker mapping",
-                                "imported_differently")
+        earlier = pages[0].origin
+        stored = earlier.get("speakers")
+        if (not isinstance(stored, Mapping)
+                or {k: v.get("definition") for k, v in stored.items() if isinstance(v, Mapping)}
+                != {k: v.get("definition") for k, v in origin["speakers"].items()}
+                or list(earlier.get("lorebooks", ())) != origin["lorebooks"] or earlier.get("label") != origin["label"]):
+            raise ImportRefused("this export was already imported with a different speaker mapping, lorebooks "
+                                "or label", "imported_differently")
         actors = {}
         for page in pages:
             for post in page.posts:
@@ -336,6 +364,17 @@ class StImporter:
                 if post.speaker.actor is not None and type(sid) is str:
                     actors[sid] = post.speaker.actor
         return StImport("already_imported", scan, chat, mapping, actors, scan.losses, pages, None)
+
+
+def _complete(pages: Sequence[TranscriptPage], scan: StScan) -> bool:
+    """Whether the stored pages begin with this export's whole import: page 1 names the export and
+    how many pages and posts it wrote, and exactly those are there (a live runner may append more)."""
+    if not pages or pages[0].origin.get("sha256") != scan.sha256 or pages[0].origin.get("format") != FORMAT:
+        return False
+    count, posts = pages[0].origin.get("pages"), pages[0].origin.get("posts")
+    if type(count) is not int or type(posts) is not int or not 1 <= count <= len(pages):
+        return False
+    return posts == len(scan.chat.posts) == sum(len(page.posts) for page in pages[:count])
 
 
 def _chat_record(change: ChatChange) -> ChatRecord:

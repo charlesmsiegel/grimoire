@@ -152,3 +152,26 @@ def test_a_payload_that_repeats_its_identity_is_refused(store, chat):
 def test_reading_a_missing_page_is_not_found(store, chat):
     with pytest.raises(RecordNotFound):
         store.read(TranscriptRef(chat.campaign_id, chat.chat_id, 1))
+
+
+def test_sync_never_delivers_a_page_without_its_chat(tmp_path):
+    from sync_helpers import DESKTOP, PHONE, handles
+    from grimoire.sync import identify, sync
+    desktop, phone = LibraryStore.create(tmp_path / DESKTOP), LibraryStore.create(tmp_path / PHONE)
+    try:
+        seed_sources(desktop)
+        identify(desktop, DESKTOP)
+        identify(phone, PHONE)
+        sync(desktop, phone, handles())
+        chat = chat_library(desktop).start_chat(Launch("character", MARA)).commit().chat
+        put(desktop, page(chat, 1, "Hi."))
+        folder = phone.root / "campaigns" / chat.campaign_id / "chats"
+        folder.mkdir(parents=True)
+        (folder / f"{chat.chat_id.upper()}.json").write_bytes(b"{}")  # the chat cannot land on the phone
+        sync(desktop, phone, handles())
+        assert not (phone.root / "campaigns" / chat.campaign_id / "chats" / f"{chat.chat_id}.json").exists()
+        assert not (phone.root / "campaigns" / chat.campaign_id / "transcripts").exists()
+    finally:
+        desktop.close()
+        phone.close()
+
