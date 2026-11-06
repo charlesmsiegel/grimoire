@@ -175,6 +175,9 @@ class Placing:
     placement: Placement
     legacy_id: str
     needs: tuple[object, ...]  # the definitions, actors and pictures it relies on
+    #: for a campaign actor's placement over world art: the world portrayal the actor must still derive
+    #: from as stored (a V2 edit may have re-sourced it), checked by the planner
+    derives_from: SourceRef | None = None
 
 
 @dataclass
@@ -754,11 +757,14 @@ class _Mapper:
         legacy = self.legacy(layer["path"])
         hidden = {hide for hide in layer.get("hides") or () if isinstance(hide, str)}
         replaced = {sprite for sprite in layer.get("overrides") or () if isinstance(sprite, str)}
+        if hidden and self.skipped(legacy):  # the reviewer declined the layer: none of its hides is written
+            hidden = set()
         if not hidden and not replaced:
             return
         own = {f"{row.get('outfit')}/{row.get('name')}": row["legacy_id"] for row in placements
                if row.get("area") == "expression" and row.get("owner") == layer.get("owner") and row.get("live")
                and isinstance(row.get("legacy_id"), str)}
+        declined: set[str] = set()  # campaign sprites the reviewer declined, each reported skipped once
         for row in placements:
             if row.get("area") != "expression" or row.get("owner") != world_layer.get("owner"):
                 continue
@@ -773,6 +779,9 @@ class _Mapper:
                 placement, source = Placement("hide", provenance={"legacy_id": legacy}), legacy
             else:
                 source = own.get(sprite, legacy)
+                if source in declined or (source != legacy and self.skipped(source)):
+                    declined.add(source)  # declined in review, like any placement: nothing is written
+                    continue
                 placement = Placement("unresolved", "expression", expression=placing.placement.expression,
                                       provenance={"legacy_id": source, "note": CAMPAIGN_SPRITE_NOTE})
             for actor in campaign.actors:
@@ -781,7 +790,8 @@ class _Mapper:
                 if not storable(PlacementRef(actor.ref, placing.slot)):
                     self.unresolved(source, "unstorable_id", placing.slot)
                     continue
-                self.out.placings.append(Placing(actor.ref, placing.slot, placement, source, (actor.ref, placing)))
+                self.out.placings.append(Placing(actor.ref, placing.slot, placement, source, (actor.ref, placing),
+                                                 actor.definition))
 
     def references(self, rows: object) -> None:
         """Markdown image references inside imported text keep their V1 URLs: reported, never rewritten."""
@@ -954,7 +964,7 @@ class _Mapper:
             if not storable(PlacementRef(actor.ref, placing.slot)):
                 self.unresolved(legacy, "unstorable_id", placing.slot)
                 continue
-            self.out.placings.append(Placing(actor.ref, placing.slot, placement, legacy, needs))
+            self.out.placings.append(Placing(actor.ref, placing.slot, placement, legacy, needs, actor.definition))
 
 
 def desired_state(manifest: Mapping, selection: Selection, read: Callable[[str], bytes], owner: str) -> Desired:

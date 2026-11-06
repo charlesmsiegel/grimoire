@@ -598,17 +598,24 @@ class ImportPlan:
         if actor.ref in self._paired[campaign]:  # load() leaves both members of the pair out: no one to bind
             self._unresolve(legacy_id, "instance_id_conflict", str(actor.ref))
             return False
-        if self.targets[path].outcome != KEPT:
-            return True
-        try:
-            stored = self.store.read(actor.ref)
-            source = SourceRef.parse(stored.envelope.derived_from)  # type: ignore[union-attr, arg-type]
-        except (StoreError, ValueError, TypeError):
-            source = None
-        if source is not None and source.entity_key == actor.definition.entity_key:
+        if self._derives(actor.ref, actor.definition):
             return True
         self._unresolve(legacy_id, "actor_changed_in_v2", str(actor.ref))
         return False
+
+    def _derives(self, ref: InstanceRef, definition: SourceRef) -> bool:
+        """Whether the actor at ``ref``, as stored, still derives from ``definition``: always when this
+        run writes it or it is as an earlier run wrote it; when a V2 edit kept it, only if its stored
+        ``derived_from`` names the same entity (a V2 edit may have re-sourced it to another portrayal)."""
+        target = self.targets.get(_path_of(ref))
+        if target is None or target.outcome != KEPT:
+            return True
+        try:
+            stored = self.store.read(ref)
+            source = SourceRef.parse(stored.envelope.derived_from)  # type: ignore[union-attr, arg-type]
+        except (StoreError, ValueError, TypeError):
+            source = None
+        return source is not None and source.entity_key == definition.entity_key
 
     def _cast_bound(self, ref: ChatRef, legacy_id: str, cast: list[InstanceRef]) -> None:
         """An imported chat keeps the cast it started with: an actor imported since is reported, never bound."""
@@ -663,6 +670,12 @@ class ImportPlan:
         for placing in self.desired.placings:
             if not all(self._need_ok(need) for need in placing.needs):
                 self._unresolve(placing.legacy_id, "placement_needs_not_imported", f"{placing.subject} {placing.slot}")
+                continue
+            if placing.derives_from is not None and isinstance(placing.subject, InstanceRef) \
+                    and not self._derives(placing.subject, placing.derives_from):
+                # the campaign's V1 art is about the world portrayal it played; a V2 edit re-sourced the
+                # actor to another, whose art it must not hide or replace
+                self._unresolve(placing.legacy_id, "actor_changed_in_v2", f"{placing.subject} {placing.slot}")
                 continue
             desired = _digest({"subject": str(placing.subject), "slot": placing.slot,
                                "placement": placement_to_payload(placing.placement)})

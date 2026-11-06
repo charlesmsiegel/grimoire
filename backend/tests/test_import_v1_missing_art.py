@@ -242,3 +242,53 @@ def test_a_campaign_layer_not_yet_synchronized_still_hides_what_it_hides(env):
         in result.review["not_imported"]
     assert _images(env).effective_placements(CAMPAIGN_MARA).slot("expr.casual.neutral") == \
         Hidden("expr.casual.neutral")
+
+
+# -- Codex review: a declined campaign sprite or layer, and an actor re-sourced in V2 -----------------
+
+CAMPAIGN_NEUTRAL = f"v1:{ARCHIVE}:{CAMPAIGN_SPRITES}/casual/image-refs/neutral.json"
+
+
+def _skipping(*legacy_ids: str) -> Selection:
+    return Selection({"saltmarch": SALTMARCH}, {"the-drowned-ledger": CAMPAIGN_ID}, frozenset(legacy_ids))
+
+
+def test_a_declined_campaign_sprite_writes_nothing_and_is_reported_skipped(env):
+    _sprites(env, {}, own={"casual/image-refs/neutral.json": placement(BLUE_ID).encode()})
+    review = env.plan(_skipping(CAMPAIGN_NEUTRAL)).review()
+    assert review["skipped"] == [CAMPAIGN_NEUTRAL]
+    assert str(PlacementRef(CAMPAIGN_MARA, "expr.casual.neutral")) not in _placements(review)
+    assert not any(path.startswith(f"campaigns/{CAMPAIGN_ID}/placements/") and "expr.casual.neutral" in path
+                   for path in review["writes"])
+
+
+def test_a_declined_campaign_layer_writes_none_of_its_hides(env):
+    _sprites(env, {"hidden_expressions": {"casual": ["neutral"]}})
+    layer = f"v1:{ARCHIVE}:{CAMPAIGN_LAYER}"
+    result = env.plan(_skipping(layer)).apply()
+    assert result.review["skipped"] == [layer]
+    shown = _images(env).effective_placements(CAMPAIGN_MARA).slot("expr.casual.neutral")
+    assert isinstance(shown, Shown)  # the reviewer declined the hide: the world's sprite shows, as for any skip
+
+
+def test_a_campaign_hide_never_lands_on_an_actor_re_sourced_in_v2(env):
+    scene = f"v1:{ARCHIVE}:{CAMPAIGN}/scenes/001--the-tide-comes-in.md"
+    first = env.plan(_skipping(scene)).apply()  # Mara's actor, no chat: a re-sourced actor is then still kept
+    older = next(row["ref"] for row in first.review["mapping"]["definitions"] if "/mara.older@" in row["ref"])
+    actor = env.store.root / "campaigns" / CAMPAIGN_ID / "instances" / "character" / "mara.json"
+    text = actor.read_text(encoding="utf-8")
+    for old, new in (('"derived_from": "world:saltmarch/character/mara.default"',
+                      '"derived_from": "world:saltmarch/character/mara.older"'),
+                     (f'"base": "{MARA_DEFAULT_REF}"', f'"base": "{older}"')):
+        assert old in text
+        text = text.replace(old, new)
+    actor.write_text(text, encoding="utf-8")  # a V2 edit: the actor now plays the older portrayal
+    images = _images(env)
+    slot = "expr.casual.neutral"
+    assert isinstance(images.effective_placements(CAMPAIGN_MARA).slot(slot), Shown)  # the older portrayal's
+
+    _sprites(env, {"hidden_expressions": {"casual": ["neutral"]}})  # a V1 hide of the default portrayal's sprite
+    result = env.plan(_skipping(scene)).apply()
+    assert ("actor_changed_in_v2", f"{CAMPAIGN_MARA} {slot}") in _reasons(result.review)
+    assert isinstance(images.effective_placements(CAMPAIGN_MARA).slot(slot), Shown)  # never hidden by it
+    assert isinstance(images.effective_placements(MARA_SUBJECT).slot(slot), Shown)  # the default's own imported
