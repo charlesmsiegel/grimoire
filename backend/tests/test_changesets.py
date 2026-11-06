@@ -98,3 +98,11 @@ def test_a_diff_of_a_new_file_and_of_a_missing_final_newline():
     assert '+  "a": 1\n' in created
     changed = unified("sources/x.json", b"{}", "sources/x.json", b"{}\n")
     assert "-{}\n\\ No newline at end of file\n+{}\n" in changed
+
+
+def test_a_line_separator_inside_a_string_does_not_split_a_diff_line():
+    # the store writes U+2028 raw; only a newline ends a line of the file
+    new = '{\n  "bio": "a sailor\u2028and smuggler"\n}\n'.encode("utf-8")
+    diff = unified(None, None, "sources/x.json", new)
+    assert '+  "bio": "a sailor\u2028and smuggler"\n' in diff
+    assert "No newline" not in diff

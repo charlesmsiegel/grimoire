@@ -29,7 +29,7 @@ There is no app or UI, and no model or worker is involved. The scenarios are syn
 
 - **Create** (`base` is `None`): a new entity, written at `revision` (usually `r1`). It must not exist.
 - **Revise**: `base` is the head revision it was drafted against and `base_etag` that file's etag. The new `revision` is written and the head moves to it.
-- `payload` (a JSON object) and `name` are the proposed content, exactly. A revision carries its base's `owner` and unknown envelope keys forward unchanged.
+- `payload` (a JSON object) and `name` are the proposed content, exactly. A revision carries its base's `owner` (including none) and unknown envelope keys forward unchanged.
 - `evidence` is up to 16 lines of attribution text ("session 12 notes"). It is shown, never interpreted.
 
 `ChangeSetError(reason)` refusals: `invalid_field`, `empty_changeset`, `too_many_changes`, `too_many_preconditions`, `duplicate_target`, `duplicate_precondition`, `precondition_on_target`, `unsupported_schema`.
@@ -46,10 +46,10 @@ There is no app or UI, and no model or worker is involved. The scenarios are syn
 | `create(source, kind, entity_id, payload, *, name, evidence, revision="r1")` | A create change. Whether the entity exists is judged at review. |
 | `revise(source, kind, entity_id, payload, *, name, evidence)` | A revise change based on the current head. `name` defaults to the head's. The new revision is the next free `r<N>` after every revision file of the entity, headed or not. |
 | `pin(source, kind, entity_id)` | A precondition on the entity's current head and bytes. |
-| `review(changeset)` | A `ChangeSetReview`. Reads under one store lock and writes nothing. Refusals: `missing_source`, `excluded_source`. |
+| `review(changeset)` | A `ChangeSetReview`. Reads under one store lock and writes nothing. Refusals: `missing_source`, `excluded_source`, and `unstorable` for content the store cannot encode (over its size limit, or a number it cannot write exactly). |
 | `approve(review, authority, *, approved_by, new_id)` | One digest-bound approval per file that needs one (below). |
 | `apply(review, approvals=None)` | Commits exactly the reviewed bytes, or raises. |
-| `reject(review)` | Ends the review without writing, and revokes the approvals `approve` issued for it. |
+| `reject(review)` | Ends the review without writing, and revokes the approvals `approve` issued for it. A review whose apply failed may be rejected too. |
 
 ### The review
 
@@ -86,7 +86,7 @@ The store's own compare-and-swap words (`changed`, `absent`, with a file path as
 2. stages the reviewed envelopes, and verifies the staged bytes equal the reviewed ones;
 3. commits them in one store transaction with the library's handle and `approvals`. The store's guarantees apply: compare-and-swap, journal, crash recovery and authorization of every file over its exact bytes ([STORAGE](STORAGE.md#writing)).
 
-It returns `AppliedChangeSet(changeset_id, revisions, etags)`. A review is applied at most once. `WriteDenied` writes nothing and leaves the review open, so it can be retried with approvals; any other failure ends it. The store's pinned residual race (R7: an external edit landing during publication) is still reported as `WriteConflict`. A pinned record is not part of the transaction, so the store does not re-hash it before publishing: a hand edit to it in the moment between the check in step 1 and the commit is not caught (the library's writer lock keeps other Grimoire processes out of that moment).
+It returns `AppliedChangeSet(changeset_id, revisions, etags)`. A review is applied at most once, and its state is checked and moved under the store lock, so a `reject` and an `apply` never both win. `WriteDenied` writes nothing and leaves the review open, so it can be retried with approvals; any other failure ends it and withdraws its pending approvals, so none outlives it (if the authority is unavailable at that moment, `reject` withdraws them later). The store's pinned residual race (R7: an external edit landing during publication) is still reported as `WriteConflict`. A pinned record, and a revised record's base revision, are not written by the transaction, so the store does not re-hash them before publishing: a hand edit to one in the moment between the check in step 1 and the commit is not caught (the library's writer lock keeps other Grimoire processes out of that moment).
 
 ### Approvals: the first approval UI (007)
 

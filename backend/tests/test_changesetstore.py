@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
@@ -80,6 +81,16 @@ def test_a_revision_keeps_its_base_owner_and_unknown_envelope_keys(store):
     assert written["owner"] == "human:author" and written["x-review"] == {"checked": True}
     created = json.loads((store.root / record_path(DOCKS.at("r1"))).read_text("utf-8"))
     assert created["owner"] == "human:owner"
+
+
+def test_a_revision_of_an_unowned_record_stays_unowned(store):
+    # the change set's author is attribution for what it creates, never a new owner of what it revises
+    lib = library(store)
+    hall = lib.revise(HARBOR, "location", "old-hall", {"traits": {"spatial": {}}, "ruined": True})
+    review = lib.review(ChangeSet("cs-hall", HARBOR, "The hall burns", "human:someone", (hall,)))
+    assert "owner" not in review.files[0].diff
+    lib.apply(review)
+    assert "owner" not in json.loads((store.root / record_path(HALL.at("r2"))).read_text("utf-8"))
 
 
 # -- an external edit between proposal and acceptance -----------------------------------------------
@@ -300,3 +311,50 @@ def test_a_review_blocked_by_an_imprecise_number_is_reported_not_raised(store):
     lib = library(store)
     review = lib.review(move_the_guild(lib))
     assert not review.applicable and review.blocked and "ImpreciseNumber" in review.blocked[0]
+
+
+def test_a_failed_apply_withdraws_its_approvals(store):
+    # the "review again" path must not leave approvals behind that another transaction could use
+    authority = worker_authority()
+    lib = library(store, authority.handle_for(WORKER))
+    stale = lib.review(move_the_guild(lib))
+    lib.approve(stale, authority, approved_by=OWNER, new_id=ids())
+    owner_lib = library(store)
+    wren = owner_lib.revise(HARBOR, "character", "wren", {"bio": "harbourmaster"})
+    owner_lib.apply(owner_lib.review(ChangeSet("cs-wren", HARBOR, "Promote Wren", "human:owner", (wren,))))
+
+    with pytest.raises(ChangeSetConflict):
+        lib.apply(stale)
+    assert stale.state == "failed" and authority.pending_approvals() == ()
+    lib.reject(stale)  # a failed review may still be rejected; nothing is left to withdraw
+    assert stale.state == "rejected"
+
+
+def test_a_reject_while_an_apply_waits_for_the_lock_wins(store):
+    lib = library(store)
+    review = lib.review(move_the_guild(lib))
+    before = snapshot(store.root)
+    outcome = []
+
+    def apply():
+        try:
+            lib.apply(review)
+            outcome.append("applied")
+        except ChangeSetError as error:
+            outcome.append(error.reason)
+
+    with store.lock:  # another writer holds the library: the apply waits, the reject decides first
+        worker = threading.Thread(target=apply)
+        worker.start()
+        lib.reject(review)
+    worker.join(timeout=30)
+    assert outcome == ["already_decided"] and review.state == "rejected"
+    assert snapshot(store.root) == before
+
+
+def test_content_the_store_cannot_encode_is_refused_at_review(store):
+    lib = library(store)
+    huge = lib.create(HARBOR, "location", "vault", {"n": 10 ** 5000})
+    with pytest.raises(ChangeSetError) as caught:
+        lib.review(ChangeSet("cs-vault", HARBOR, "A vault", "human:owner", (huge,)))
+    assert caught.value.reason == "unstorable"

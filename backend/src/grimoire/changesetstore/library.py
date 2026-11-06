@@ -26,7 +26,7 @@ from grimoire.core.identity import SourceRef
 from grimoire.core.json_value import thaw
 from grimoire.security import Approval, Permission, ResourcePath, payload_digest
 from grimoire.store import (
-    ImpreciseNumber, InstanceIdConflict, InvalidSourceState, LibraryStore, NameCollision, RecordEnvelope, RecordNotFound,
+    ImpreciseNumber, InstanceIdConflict, InvalidEnvelope, InvalidSourceState, LibraryStore, NameCollision, RecordEnvelope, RecordNotFound,
     SourceManifest, StaleWrite, StoreError, StoredSource, UnstorableIdentifier, WriteDenied,
 )
 from grimoire.store.layout import definition_parts, manifest_parts
@@ -213,7 +213,9 @@ class ChangeSetLibrary:
 
         Reads under one store lock and writes nothing. Permission is checked with the store's
         read-only ``Transaction.check(handle)``: those decisions are audited like any other, and
-        no approval is consumed. Refusals: ``missing_source``, ``excluded_source``."""
+        no approval is consumed. Refusals: ``missing_source``, ``excluded_source``, and
+        ``unstorable`` for proposed content the store cannot encode (too large, a number it
+        cannot write exactly)."""
         if type(changeset) is not ChangeSet:
             raise ChangeSetError("invalid_field", "review takes a ChangeSet")
         store = self.store
@@ -235,8 +237,11 @@ class ChangeSetLibrary:
             manifest_path = _path(manifest_parts(changeset.source))
             olds.append((None, manifest_path, self._exact(manifest_path)))
             transaction = store.transaction()
-            keys = [transaction.put(envelope, expected) for envelope, expected in puts]
-            preview = transaction.preview()
+            try:
+                keys = [transaction.put(envelope, expected) for envelope, expected in puts]
+                preview = transaction.preview()
+            except InvalidEnvelope as error:
+                raise ChangeSetError("unstorable", str(error)) from None
             permissions, blocked = self._check(transaction, keys, conflicts)
         files = []
         for key, (change, old_path, old) in zip(keys, olds):
@@ -262,6 +267,11 @@ class ChangeSetLibrary:
         ``Authorizer``); ``approved_by`` must hold an active grant covering every file. All or
         nothing: if one registration fails, those already made are revoked. Returns the
         ``approvals`` mapping ``apply`` takes; empty when the handle needs none."""
+        with self.store.lock:  # one decision at a time: never approve a review being applied
+            return self._approve(review, authority, approved_by, new_id)
+
+    def _approve(self, review: ChangeSetReview, authority: object, approved_by: str,
+                 new_id: Callable[[], str]) -> dict[str, str]:
         self._require_open(review)
         if review.conflicts or review.blocked:
             raise ChangeSetError("not_applicable", "resolve the conflicts and review again before approving")
@@ -290,47 +300,76 @@ class ChangeSetLibrary:
         Under the store lock every changed and pinned record is checked again, and the manifest
         must be the one reviewed: otherwise ``ChangeSetConflict`` and nothing is written. The
         store's own refusals propagate (``WriteDenied`` leaves the review open for a retry with
-        approvals; any other failure ends it). ``WriteConflict`` is the store's pinned R7 race."""
-        self._require_open(review)
+        approvals; any other failure ends it, and withdraws the approvals ``approve`` issued for
+        it). ``WriteConflict`` is the store's pinned R7 race."""
         changeset, store = review.changeset, self.store
-        with store.lock:
+        with store.lock:  # the state is checked and moved under the lock, so reject cannot race it
+            self._require_open(review)
             try:
                 stored = self._source(changeset.source)
             except ChangeSetError as error:
+                self._fail(review)
                 raise ChangeSetConflict((Conflict("source", "source_unavailable", error.reason),)) from None
             conflicts = self._conflicts(changeset, stored, store.source_entities(changeset.source))
             if stored.etag != review.manifest_etag:
                 conflicts.append(Conflict("manifest", "manifest_changed",
                                           "the source manifest changed since review; review again"))
             if conflicts:
-                review._state = "failed"
+                self._fail(review)
                 raise ChangeSetConflict(tuple(conflicts))
             transaction = store.transaction()
             for envelope, expected in review._puts:
                 transaction.put(envelope, expected)
             if transaction.preview() != review.preview():  # deterministic encoding; never expected
-                review._state = "failed"
+                self._fail(review)
                 raise ChangeSetError("preview_mismatch", "the staged bytes differ from the reviewed bytes")
             try:
                 result = transaction.commit(self.handle, approvals)
             except WriteDenied:
                 raise  # nothing written; approvals it consumed are named on the error
             except StaleWrite as error:
-                review._state = "failed"
+                self._fail(review)
                 raise ChangeSetConflict(tuple(Conflict(path, reason) for path, reason in error.stale)) from error
             except BaseException:
-                review._state = "failed"
+                self._fail(review)
                 raise
             review._state = "applied"
+            try:  # the commit consumed what it needed; nothing issued for this review outlives it
+                self._withdraw(review)
+            except Exception:  # noqa: BLE001 - the change set is written; reject cannot run now
+                pass
         return AppliedChangeSet(changeset.changeset_id, tuple(changeset.target(c) for c in changeset.changes),
                                 dict(result.etags))
 
     def reject(self, review: ChangeSetReview) -> None:
-        """End the review without writing; approvals ``approve`` issued for it are revoked."""
-        self._require_open(review)
-        for authority, approval_id in review._approvals:  # first: if the authority fails, the review stays open
+        """End the review without writing; approvals ``approve`` issued for it are revoked.
+
+        A review whose apply failed may be rejected too: that withdraws any of its approvals the
+        failed apply could not (the authority was unavailable then)."""
+        with self.store.lock:
+            if type(review) is not ChangeSetReview or review._library is not self:
+                raise ChangeSetError("invalid_field", "not a review made by this library")
+            if review._state not in ("open", "failed"):
+                raise ChangeSetError("already_decided", f"this review was {review._state}")
+            self._withdraw(review)  # first: if the authority fails, the review stays as it was
+            review._state = "rejected"
+
+    def _fail(self, review: ChangeSetReview) -> None:
+        """End a review whose apply failed, withdrawing its approvals so none outlives it. The
+        apply's own error is what the caller sees; if the authority is unavailable now, the
+        approvals stay listed and ``reject`` withdraws them later."""
+        review._state = "failed"
+        try:
+            self._withdraw(review)
+        except Exception:  # noqa: BLE001 - never mask why the apply failed; reject retries
+            pass
+
+    @staticmethod
+    def _withdraw(review: ChangeSetReview) -> None:
+        while review._approvals:
+            authority, approval_id = review._approvals[0]
             _revoke(authority, approval_id)
-        review._state = "rejected"
+            review._approvals.pop(0)
 
     # -- internals --------------------------------------------------------------------------------
     def _require_open(self, review: ChangeSetReview) -> None:
@@ -410,8 +449,7 @@ class ChangeSetLibrary:
         old = self._exact(old_path)
         record, _ = self._read(base_ref)
         owner, extra = (record.envelope.owner, record.envelope.extra) if record is not None else (None, {})  # type: ignore[union-attr]
-        return RecordEnvelope(ref, payload, name=change.name, owner=owner or changeset.author,
-                              extra=extra), old_path, old
+        return RecordEnvelope(ref, payload, name=change.name, owner=owner, extra=extra), old_path, old
 
     def _check(self, transaction: object, keys: list[str], conflicts: list[Conflict]
                ) -> tuple[tuple[PermissionCheck, ...], tuple[str, ...]]:

@@ -13,7 +13,11 @@ import difflib
 def _lines(data: bytes | None) -> list[str]:
     if data is None:
         return []
-    return data.decode("utf-8", errors="replace").splitlines(keepends=True)
+    # only "\n" ends a line: the store writes U+2028, U+2029 and U+0085 raw inside strings, and
+    # str.splitlines would cut a JSON line at them
+    text = data.decode("utf-8", errors="replace")
+    lines = text.split("\n")
+    return [line + "\n" for line in lines[:-1]] + ([lines[-1]] if lines[-1] else [])
 
 
 def unified(old_path: str | None, old: bytes | None, new_path: str, new: bytes) -> str:
