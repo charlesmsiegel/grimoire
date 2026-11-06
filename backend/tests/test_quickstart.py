@@ -6,6 +6,7 @@ fake. Each test starts from a fresh copy of one built library.
 
 from __future__ import annotations
 
+import json
 import shutil
 
 import pytest
@@ -18,6 +19,7 @@ from scene_fixtures import (
 )
 from store_helpers import OWNER
 
+from grimoire.archaeologystore import StImporter
 from grimoire.cardstore import CardImporter
 from grimoire.chats import Launch
 from grimoire.chatstore import ChatLibrary
@@ -249,14 +251,107 @@ def test_an_interrupted_launch_is_finished_by_continue_never_started_twice(folde
         assert [r.number for r in table.runner.open(started.chat).records] == [1] and chat_count(table) == 1
 
 
-def test_continue_from_another_player_is_refused_and_writes_nothing(folder):
+def test_only_the_owner_or_the_chats_player_may_continue_or_change_it(folder, monkeypatch):
+    with Table(folder) as table:
+        ana, bob, qs = table.player(), table.player(BOB), quick(table)
+        started = qs.start(Selection.character(MARA_VELL), ana, persona=ANYA)
+        before = (qs.chats.read_chat(started.chat), table.runner.open(started.chat).records)
+        for act in (lambda: qs.continue_chat(started.chat, bob), lambda: qs.add_card(started.chat, TAMSIN, bob),
+                    lambda: qs.name_campaign(started.chat, "Mine now", bob)):
+            with pytest.raises(QuickStartRefused) as refused:
+                act()
+            assert refused.value.reason == "not_at_table"
+        assert (qs.chats.read_chat(started.chat), table.runner.open(started.chat).records) == before
+        assert qs.continue_chat(started.chat, ana).opening == before[1][0]  # its own player may
+
+        # a persona nobody controls yet (its seat was lost) is never claimed by another player
+        monkeypatch.setattr(table.runner, "seat", lambda *_a, **_k: (_ for _ in ()).throw(SceneRefused("not_seated")))
+        lost = qs.start(Selection.character(MARA_VELL), ana, persona=ANYA)
+        assert lost.unfinished == "not_seated"
+        monkeypatch.undo()
+        with pytest.raises(QuickStartRefused) as refused:
+            qs.continue_chat(lost.chat, bob)
+        assert refused.value.reason == "not_at_table" and table.runner.open(lost.chat).controls == ()
+
+        # a chat with no persona at all: only the owner continues it, and a refusal records no control
+        bare = qs.chats.start_chat(Launch("character", MARA_VELL.at("r1"))).commit().chat
+        with pytest.raises(QuickStartRefused):
+            qs.continue_chat(bare, bob)
+        assert table.runner.open(bare).controls == ()
+
+
+def test_a_kept_opening_lost_to_a_race_is_kept_by_continue(folder, monkeypatch):
     with Table(folder) as table:
         ana, qs = table.player(), quick(table)
-        started = qs.start(Selection.character(MARA_VELL), ana, persona=ANYA)
-        before = table.runner.open(started.chat).records
-        resumed = qs.continue_chat(started.chat, table.player(BOB))
-        assert resumed.opening == before[0]  # reading the opening needs no seat
-        assert table.runner.open(started.chat).records == before
+        monkeypatch.setattr(table.runner, "keep", lambda *_a, **_k: (_ for _ in ()).throw(SceneRefused("turn_changed")))
+        started = qs.start(Selection.character(MARA_VELL), ana, persona=ANYA, opening="alt-1")
+        assert started.unfinished == "turn_changed"
+        monkeypatch.undo()
+        resumed = qs.continue_chat(started.chat, ana)
+        assert resumed.unfinished is None and not resumed.opening.open
+        assert resumed.opening.takes[-1].lines[0].text == "The tide is late tonight."  # the take it proposed
+        table.runner.post(started.chat, ana, '"Hello?"')  # play goes on
+
+
+def test_continue_refuses_a_bad_opening_before_writing(folder):
+    with Table(folder) as table:
+        owner, qs = table.owner, quick(table)  # a persona nobody controls yet is the owner's to seat
+        chat = qs.chats.start_chat(Launch("character", MARA_VELL.at("r1")), persona=ANYA.at("r1")).commit().chat
+        for bad, reason in (("alt-9", "unknown_opening"), ("", "invalid_field"), (["x"], "invalid_field")):
+            with pytest.raises(QuickStartRefused) as refused:
+                qs.continue_chat(chat, owner, opening=bad)
+            assert refused.value.reason == reason
+        assert table.runner.open(chat).controls == ()  # nothing seated
+        opened = qs.continue_chat(chat, owner, opening="group-1")
+        assert opened.opening.takes[-1].lines[0].text.startswith("Everyone, sit down")
+        with pytest.raises(QuickStartRefused) as refused:
+            qs.continue_chat(chat, owner, opening="first")
+        assert refused.value.reason == "already_begun"
+
+
+def test_continuing_an_imported_conversation_adds_no_greeting_after_it(folder):
+    rows = [{"user_name": "Anya Rook", "character_name": "Mara Vell", "create_date": "2026-01-02@10h00m00s"},
+            {"name": "Mara Vell", "is_user": False, "mes": "The lamps are out tonight.", "original_avatar": "mara.png"},
+            {"name": "Anya Rook", "is_user": True, "mes": "Then we wait for the tide.",
+             "force_avatar": "User Avatars/anya.png"}]
+    data = ("\n".join(json.dumps(row) for row in rows) + "\n").encode("utf-8")
+    with Table(folder) as table:
+        importer = StImporter(table.store, table.owner, clock=Clock(), owner=OWNER)
+        scan = importer.scan(data)
+        avatars = {s.avatar: s.id for s in scan.speakers}
+        plan = importer.plan(data, speakers={avatars["mara.png"]: MARA_VELL, avatars["User Avatars/anya.png"]: ANYA},
+                             name="harbor.jsonl")
+        plan.commit()
+        resumed = quick(table).continue_chat(plan.chat, table.owner)
+        assert resumed.opening is None and resumed.unfinished is None
+        scene = table.runner.open(plan.chat)
+        assert scene.records == () and scene.controller(scene.persona) == OWNER  # seated, nothing played
+        with pytest.raises(QuickStartRefused) as refused:
+            quick(table).continue_chat(plan.chat, table.owner, opening="first")
+        assert refused.value.reason == "already_begun"
+
+
+def test_every_entry_point_refuses_what_is_not_a_chat(folder):
+    with Table(folder) as table:
+        ana, qs = table.player(), quick(table)
+        for act in (lambda: qs.continue_chat("chat", ana), lambda: qs.add_card("chat", TAMSIN, ana),
+                    lambda: qs.repairs("chat"), lambda: qs.name_campaign("chat", "x", ana),
+                    lambda: qs.start(Selection.from_premise("x"), ana, persona=ANYA, opening=["x"])):
+            with pytest.raises(QuickStartRefused) as refused:
+                act()
+            assert refused.value.reason == "invalid_field"
+        untrusted = ChatLibrary(table.store, table.authority.handle_for(OWNER, trusted=False), clock=Clock(),
+                                new_id=Tagged("w"), owner=OWNER)
+        with pytest.raises(QuickStartRefused) as refused:
+            QuickStart(untrusted, table.runner)
+        assert refused.value.reason == "invalid_field"
+
+
+def test_a_bundle_preview_without_an_embedded_lorebook_offers_none(folder):
+    with Table(folder) as table:
+        options = quick(table).options(Selection.bundle(TAMSIN))
+        assert options.sources == (TAMSIN.at("r1"),) and options.lorebook is None
+        assert quick(table).options(Selection.character(ANYA)).related == ()
 
 
 # -- a source gone ---------------------------------------------------------------------------------------
@@ -277,10 +372,10 @@ def test_a_missing_card_offers_detach_and_keeps_the_chat(folder):
             ("bindings.lorebook", str(MARA_LORE.at("r1")), ("detach",)),
         }
         lore = next(r for r in repairs if r.role == "lorebook")
-        qs.detach_broken(started.chat, lore)
+        qs.detach_broken(started.chat, lore, ana)
         assert {r.field for r in qs.repairs(started.chat)} == {"launch", "bindings.character"}
         with pytest.raises(QuickStartRefused) as refused:
-            qs.detach_broken(started.chat, lore)
+            qs.detach_broken(started.chat, lore, ana)
         assert refused.value.reason == "not_broken"
         assert table.runner.open(started.chat).records == story  # the story stays
         table.runner.post(started.chat, ana, '"Mara?"')
@@ -293,7 +388,7 @@ def test_naming_the_chat_a_campaign_changes_no_identity(folder):
         ana, qs = table.player(), quick(table)
         started = qs.start(Selection.bundle(MARA_VELL), ana, persona=ANYA)
         record = qs.chats.read_chat(started.chat)[0]
-        qs.name_campaign(started.chat, "The Drowned Light")
+        qs.name_campaign(started.chat, "The Drowned Light", ana)
         assert qs.chats.read_scope(started.chat.scope)[0].title == "The Drowned Light"
         after = qs.chats.read_chat(started.chat)[0]
         assert (after.ref, after.launch, after.roster, after.bindings) == (
