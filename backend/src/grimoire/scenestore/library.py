@@ -98,8 +98,8 @@ class SceneLibrary:
         turns.sort(key=lambda stored: (stored.record.number, stored.record.device or ""))
         numbers = [stored.record.number for stored in turns]
         if len(set(numbers)) != len(numbers):
-            # two devices each played turn n offline (keep-both): two turns, never one silently dropped. Play
-            # waits until 028's turn merge decides how the chat goes on.
+            # two devices' turn n in one library (a hand copy, or 028's future merge; sync copies no turn
+            # file): both are kept and read, never one silently dropped, and play waits for 028's turn merge.
             problems.append((str(chat), "turn_fork"))
         if sorted(set(numbers)) != list(range(1, len(set(numbers)) + 1)):
             problems.append((str(chat), "turn_gap"))

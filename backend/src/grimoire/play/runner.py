@@ -730,9 +730,14 @@ class SceneRunner:
 
 
 def _readable(scene: Scene) -> None:
-    """Every write needs the chat's whole history: one unreadable turn file stops them all."""
-    if not scene.turns.complete:
-        raise _refuse("turns_unreadable", "a turn file of this chat cannot be read; nothing is written")
+    """Every write needs the chat's whole history: one unreadable turn file stops them all, and so does a fork
+    (two turns of one number, every file readable), which only 028's turn merge can settle."""
+    if scene.turns.complete:
+        return
+    if set(scene.turns.problems) == {(str(scene.chat), "turn_fork")}:
+        raise _refuse("turn_fork", "this chat holds two devices' turns of one number; nothing is written until "
+                                   "they are merged")
+    raise _refuse("turns_unreadable", "a turn file of this chat cannot be read; nothing is written")
 
 
 class _Stale(Exception):

@@ -2,9 +2,10 @@
 
 A turn is ``<chat_id>.<n:06d>`` on a library with no device identity (as before) and
 ``<chat_id>.<n:06d>-<device tag>`` on one with an identity. Turns made before ``identify`` keep their ids and
-are still read; play goes on from them with tagged turns. Two devices' turn n are two files (keep-both), and a
-chat holding both is forked: it still opens, in one order on every device, and play waits for 028's turn
-merge. Over the synthetic card library; every model call is a scripted fake.
+are still read; play goes on from them with tagged turns. Two devices' turn n are two files. Sync copies
+neither (turns are held back), but if both are ever in one library (a hand copy, or 028's future merge), the
+chat is forked: it still opens, in one order on every device, and every write is refused ``turn_fork`` until
+028's turn merge. Over the synthetic card library; every model call is a scripted fake.
 """
 
 from __future__ import annotations
@@ -121,7 +122,7 @@ def test_two_offline_devices_playing_turn_n_keep_both_turns_and_the_chat_waits_f
             played[device] = table.runner.post(chat, table.player(), f'"Asked on the {device}."')
     assert played["desktop"].number == played["phone"].number == 2
     assert played["desktop"].turn_id != played["phone"].turn_id  # untagged, both would be chat.000002
-    # 028's keep-both delivery: the phone's turn arrives beside the desktop's, as its own file
+    # both devices' turn 2 in one library (a hand copy here; sync holds turns back): two files, side by side
     name = f"{played['phone'].turn_id}.json"
     turns = folder / "campaigns" / chat.campaign_id / "turns"
     (turns / name).write_bytes((phone_folder / "campaigns" / chat.campaign_id / "turns" / name).read_bytes())
@@ -135,9 +136,12 @@ def test_two_offline_devices_playing_turn_n_keep_both_turns_and_the_chat_waits_f
             f"{chat.chat_id}.000001", turn_id(chat, 2, first), turn_id(chat, 2, second)]
         for call, args in ((runner.post, ('"Hello?"',)), (runner.generate, ()), (runner.pass_turn, ()),
                            (runner.request, ("pause",))):
-            refused("turns_unreadable", call, chat, ana, *args)
+            refused("turn_fork", call, chat, ana, *args)
         assert table.harness.prompts() == []
     assert turn_files(folder, chat) == before  # neither turn was dropped or overwritten
+    (turns / f"{chat.chat_id}.000003.json").write_bytes(b"{not json")  # a fork and an unreadable file
+    with Table(folder) as table:
+        refused("turns_unreadable", table.runner.post, chat, table.player(), '"Hello?"')
 
 
 def test_a_damaged_device_identity_refuses_new_turns_rather_than_untagged_ids(cards):

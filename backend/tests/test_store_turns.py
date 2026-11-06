@@ -155,7 +155,8 @@ def test_sync_holds_turns_back_and_never_hides_a_divergence(tmp_path):
         assert path in report.skipped[DESKTOP]
         assert [(c.path, c.code) for c in report.conflicts if c.path == path] == [(path, "held")]
         assert scenes(phone).turns(CHAT).turns == ()
-        # both played turn 1 offline: two turn files with two ids (keep-both), never one id with two contents
+        # both played turn 1 offline: two turn files with two ids, never one id with two contents; sync copies
+        # neither (both are held), so if both are ever in one library it is by a hand copy or 028's future merge
         scenes(phone).write(post_turn(CHAT, 1, "From the phone.", device=tag(PHONE)), None)
         other = f"campaigns/{C}/turns/{turn_id(CHAT, 1, tag(PHONE))}.json"
         report = sync(desktop, phone, handles())

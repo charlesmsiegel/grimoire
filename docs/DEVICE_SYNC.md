@@ -65,6 +65,8 @@ The audit left actor numbering with 028. 107 numbered a new actor by the first f
 
 034's unique items use the same tag (`chatstore.device_tag`): a new item is `<base>-<tag>-<n>` (`longsword-3f2a91c0-1`) on an identified library and `<base>-<n>` otherwise, and a damaged or unreadable identity (a link or folder included) refuses the creation (`PossessionRefused`, reason `device_identity`). An instance of an `individual` definition (one particular artifact) is tagged by its definition instead, with the first eight hex digits of the SHA-256 of its unpinned source ref (`starfall-0f8a3e79-1`): it may exist once per campaign, so two devices that each made it offline collide on one file, which 019 keeps both of as a conflict, while two different artifacts that share an entity id never meet. A creation planned before the library was identified is stale at commit, so it is never written under the plain number. Items and actors already made keep their IDs ([POSSESSIONS](POSSESSIONS.md#service-grimoirepossessionstorepossessionlibrary)).
 
+035's played turns use the same tag: a new turn is `<chat_id>.<n:06d>-<tag>` on an identified library and `<chat_id>.<n:06d>` otherwise, a damaged identity refuses it (`device_identity`), and turns made before `identify` keep their IDs ([SCENES](SCENES.md#a-turn)).
+
 ## Known limits
 
 - **Loopback only, not encrypted.** Frames are authenticated, not encrypted: anyone who can read the path reads the library's records. `PeerServer` therefore refuses any address that is not a loopback IP. Encrypted transport, LAN discovery and a user-chosen remote endpoint or relay are later milestones of this sprint.
