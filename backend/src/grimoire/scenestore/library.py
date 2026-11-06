@@ -63,10 +63,10 @@ def _other_chat(path: str, chat: ChatRef) -> bool:
     return parsed is not None and parsed[0] != chat.chat_id
 
 
-def _numbered(store: LibraryStore, chat: ChatRef) -> list[tuple[int, TurnRef]]:
-    """The number of every turn file of ``chat`` the store lists, whatever device made it."""
+def _numbered(records: Mapping[TurnRef, object], chat: ChatRef) -> list[tuple[int, TurnRef]]:
+    """The number of every turn file of ``chat`` among a campaign's listed turns, whatever device made it."""
     found = []
-    for ref in store.campaign_turns(chat.campaign_id).records:
+    for ref in records:
         parsed = parse_turn_id(ref.turn_id)
         if parsed is not None and parsed[0] == chat.chat_id:
             found.append((parsed[1], ref))
@@ -135,16 +135,18 @@ class SceneLibrary:
         else:
             envelope = ScopeRecord(record.ref, TURN_SCHEMA, payload, owner=base.owner, extra=base.extra)
         with self.store.lock:
+            listed = (self.store.campaign_turns(record.chat.campaign_id).records
+                      if base is None or last or after is not None else {})  # one read for every check
             if base is None:
                 if record.device != self.device():  # identified (or re-identified) since the turn was planned
                     raise SceneRefused("turn_changed", "this library's device identity changed; read it again")
-                if any(number == record.number for number, _ in _numbered(self.store, record.chat)):
+                if any(number == record.number for number, _ in _numbered(listed, record.chat)):
                     # this library already holds turn n under another device's tag (made before identify)
                     raise SceneRefused("turn_changed", "this turn was played since it was read; read it again")
-            if last and any(number > record.number for number, _ in _numbered(self.store, record.chat)):
+            if last and any(number > record.number for number, _ in _numbered(listed, record.chat)):
                 raise SceneRefused("turn_changed", "a later turn was played since this one was read; read it again")
             if after is not None:
-                current = self.store.campaign_turns(record.chat.campaign_id).records.get(after.record.ref)
+                current = listed.get(after.record.ref)
                 if current is None or current.etag != after.etag:
                     raise SceneRefused("turn_changed", "the chat's last turn changed since it was read; read it again")
             if before_commit is not None:
