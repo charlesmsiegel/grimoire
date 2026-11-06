@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.core.identity import SourceRef
+from grimoire.core.identity import InstanceRef, SourceRef
 from grimoire.peersync import PeerRefused, read_pairing, resolve_conflict, transfer, unpair
 from grimoire.peersync import resolving as resolving_module
 from grimoire.peersync import server as server_module
@@ -26,7 +26,8 @@ from grimoire.peersync.pairing import peer_principal
 from grimoire.peersync.replay import StepBuffer
 from grimoire.peersync.wire import Channel, client_handshake, server_handshake
 from grimoire.store import RecordEnvelope, SourceManifest, etag
-from grimoire.sync.documents import pending_name
+from grimoire.sync import session as sync_session
+from grimoire.sync.documents import KeptEntry, keeps_name, parse_keeps, pending_name, render_keeps
 
 from chat_fixtures import CARDS
 from peersync_helpers import DESKTOP, PHONE, Device, paired, seed_cards, serving, start_scene
@@ -350,6 +351,17 @@ def _request(channel: Channel, request: dict) -> None:  # type: ignore[type-arg]
         pass
 
 
+def _held_record(device: Device, path: str, held: bytes) -> tuple[dict, bytes]:  # type: ignore[type-arg]
+    """The phone's record of its pair with the desktop as a resolve that holds ``held`` writes it."""
+    name = keeps_name(DESKTOP)
+    before = device.store.read_sync_state(name)
+    entries = dict(parse_keeps(before, (DESKTOP, PHONE)).entries)
+    entry = entries.get(path, KeptEntry(None, frozenset()))
+    entries[path] = KeptEntry(entry.base, entry.delivered - {etag(held)}, entry.dismissed, entry.held | {etag(held)})
+    return ({"op": "state", "name": name, "expected": None if before is None else etag(before)},
+            render_keeps((DESKTOP, PHONE), entries))
+
+
 def _step(channel: Channel, *ops: tuple[dict, bytes]) -> dict:  # type: ignore[type-arg]
     for header, body in ops:
         channel.send({"t": "op", **header}, body)
@@ -373,9 +385,11 @@ def test_the_serving_device_refuses_resolve_writes_beyond_the_path_and_the_grant
     with serving(case.phone) as server:
         channel = _connect(case.desktop, server)
         _request(channel, request)
-        # the writes it may make: the chosen version, with the phone's own one held beside it
+        # the writes it may make: the chosen version, with the phone's own one held beside it and
+        # recorded as held in the same step
         honest = (({"op": "put", "path": case.path, "expected": etag(theirs)}, ours),
-                  ({"op": "keep", "path": case.path, "slot": 0, "hold": True}, theirs))
+                  ({"op": "keep", "path": case.path, "slot": 0, "hold": True}, theirs),
+                  _held_record(case.phone, case.path, theirs))
         for op in attempts:
             with pytest.raises(PeerRefused) as refused:
                 _step(channel, *honest, op)
@@ -494,9 +508,14 @@ class UncopiedEdit:
     nothing on either device (a denied write is never kept, and the desktop's copy is the agreed
     version the phone moved on from)."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, extra: int = 0) -> None:
         self.desktop, self.phone, _ = paired(root)
         started, _ = start_scene(self.desktop)
+        if extra:  # more records than one archive file holds at the test's cap: the archive is sharded
+            txn = self.desktop.store.transaction()
+            for number in range(extra):
+                txn.put(RecordEnvelope(InstanceRef("c9", "character", f"extra-{number:03d}"), {"n": number}), None)
+            txn.commit(self.desktop.handle)
         self.chat = started.chat
         self.path = f"campaigns/{self.chat.campaign_id}/chats/{self.chat.chat_id}.json"
         with serving(self.phone) as server:
@@ -515,8 +534,16 @@ class UncopiedEdit:
         self.expected = {DESKTOP: etag(self.agreed), PHONE: etag(self.edited)}
 
 
-def test_the_agreed_version_ends_a_conflict_that_kept_nothing_on_the_receiver(tmp_path):
-    case = UncopiedEdit(tmp_path)
+@pytest.mark.parametrize("sharded", [False, True])
+def test_the_agreed_version_ends_a_conflict_that_kept_nothing_on_the_receiver(tmp_path, monkeypatch, sharded):
+    """The serving phone reads its archive as a sync does, so the agreed version is still one it admits
+    once the pair's archive outgrows one file and is sharded."""
+    if sharded:
+        monkeypatch.setattr(sync_session, "ARCHIVE_LIMIT", 12_000)  # about 30 paths a file; 120 extra records
+    case = UncopiedEdit(tmp_path, extra=120 if sharded else 0)
+    if sharded:
+        root = json.loads(case.phone.store.read_sync_state(f"peers/{DESKTOP}/archive.json"))  # type: ignore[arg-type]
+        assert root["format"] == "grimoire.sync.archive/2"
     with serving(case.phone) as server:  # the desktop keeps the version both agreed on: the phone receives it
         report = resolve_conflict(case.desktop.store, case.desktop.authority, PHONE, server.address, case.path,
                                   etag(case.agreed), case.expected)

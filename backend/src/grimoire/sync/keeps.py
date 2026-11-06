@@ -307,6 +307,29 @@ def not_delivered(view: KeepsView, peer: str, devices: tuple[str, str], path: st
                     lambda before: _entry(before.base, before.delivered - {tag}, before.dismissed, before.held))
 
 
+def not_delivered_elsewhere(store: LibraryStore, device: str, peer: str, path: str, tag: str) -> list[State]:
+    """Every other pair's record on ``device`` without ``tag`` delivered for ``path`` (``not_delivered``):
+    what a hold of those bytes for the pair with ``peer`` writes beside its own record, in its commit.
+    Written by the device that holds, whichever device started the resolve: a peer never sees, and
+    may never write, this device's records of its other pairs."""
+    states = []
+    for other in other_peers(store, device):
+        if other != peer:
+            devices: tuple[str, str] = tuple(sorted((device, other)))  # type: ignore[assignment]
+            state = not_delivered(read_keeps(store, other, devices), other, devices, path, tag)
+            if state is not None:
+                states.append(state)
+    return states
+
+
+def records_hold(data: bytes | None, devices: tuple[str, str], path: str, tag: str) -> bool:
+    """Whether the record ``data`` holds ``tag`` for ``path``: what a commit that holds those bytes
+    must leave, so they can never be dismissed as a delivered version."""
+    view = parse_keeps(data, devices)
+    entry = view.entries.get(path) if view.state == "valid" else None
+    return entry is not None and tag in entry.held
+
+
 def other_peers(store: LibraryStore, device: str) -> list[str]:
     """Every pair folder of this device named by a device ID (nothing else there is ever read)."""
     found = []
@@ -366,13 +389,16 @@ def slot_stands(store: LibraryStore, path: str, tag: str) -> bool:
 
 
 def peer_may_write(old: bytes | None, new: bytes, devices: tuple[str, str],
-                   first: Stands, stands: Stands) -> bool:
-    """Whether a peer replaying a sync step may write ``new`` over ``old`` (028's transport).
+                   first: Stands, stands: Stands, held: Stands) -> bool:
+    """Whether a peer replaying a sync or resolve step may write ``new`` over ``old`` (028's transport).
 
-    Exactly what ``with_delivered``, ``next_keeps`` and ``with_held`` can produce: a valid record that
-    dismisses nothing ``old`` did not on the same base (dismissing is this device's own decision,
-    authorized by ``dismiss``), whose newly delivered etags are first copies its own keep ops write
-    in the same step (``first``), and which drops a held etag only once no slot holds those bytes
+    Exactly what ``with_delivered``, ``next_keeps``, ``without`` and ``with_held`` can produce: a valid
+    record that dismisses nothing ``old`` did not on the same base (dismissing is this device's own
+    decision, authorized by ``dismiss``), whose newly delivered etags are first copies its own
+    (non-hold) keep ops write in the same step (``first``), whose newly held etags are the versions
+    a resolve step holds here in the same step (``held``: never in a sync step, and never a hold
+    the step does not write, which would keep a delivered version from ever being dismissed), and
+    which drops a held etag only once no slot holds those bytes
     (``stands``, which an unreadable slot also satisfies): a peer can never relabel a version this
     device already held as delivered."""
     after, before = parse_keeps(new, devices), parse_keeps(old, devices)
@@ -389,5 +415,7 @@ def peer_may_write(old: bytes | None, new: bytes, devices: tuple[str, str],
         if not entry.dismissed <= (prior.dismissed if same else frozenset()):  # type: ignore[union-attr]
             return False
         if not all(first(path, tag) for tag in entry.delivered - (prior.delivered if prior else frozenset())):
+            return False
+        if not all(held(path, tag) for tag in entry.held - (prior.held if prior else frozenset())):
             return False
     return True

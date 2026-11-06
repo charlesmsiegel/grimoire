@@ -32,7 +32,7 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 - **Deletion propagation**, and resolving toward a deletion.
 - **Per-device actor id allocation:** done in the first slice; an identified library numbers actors `<entity>-<tag>-<n>`, and 034's unique items the same way ([DEVICE_SYNC](../../DEVICE_SYNC.md#per-device-ids)).
 - **Archive compaction:** done. An archive or marker past one file is sharded by path hash (`grimoire.sync.archive/2`, `pending/2`), up to about six million paths per pair; a `/1` file is still read and written while it fits. Blob tombstones are dropped (provably redundant); record tombstones are kept, since each is a resurrection check ([SYNC](../../SYNC.md#sharding-and-tombstones-028)).
-- **Resolving a conflict over the transport:** done; either paired device ends a reported conflict with 019's `resolve` over the authenticated connection ([DEVICE_SYNC](../../DEVICE_SYNC.md#resolving-a-conflict-over-the-transport)).
+- **Resolving a conflict over the transport:** done; either paired device ends a reported conflict with 019's `resolve` over the authenticated connection, and the receiver records its replaced version as `held` in the commit that writes the hold, as a local resolve does, so it is never dismissable ([DEVICE_SYNC](../../DEVICE_SYNC.md#resolving-a-conflict-over-the-transport)).
 
 ## Milestone: merges before 044
 

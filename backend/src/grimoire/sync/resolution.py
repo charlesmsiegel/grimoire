@@ -247,13 +247,12 @@ def _record_hold(store: LibraryStore, receiver: str, peer: str, pair: tuple[str,
     first, the hold's provenance no longer depends on how that commit is recovered. If the data commit
     never lands, the record holds bytes resolve did not take: that fails closed (a held version is
     never dismissable), and a sync drops the entry once no slot holds those bytes."""
-    held = [kept_record.with_held(kept_record.read_keeps(store, peer, pair), peer, pair, path, tag)]
-    for another in kept_record.other_peers(store, receiver):  # the hold may reuse another pair's slot
-        if another != peer:
-            devices: tuple[str, str] = tuple(sorted((receiver, another)))  # type: ignore[assignment]
-            held.append(kept_record.not_delivered(kept_record.read_keeps(store, another, devices),
-                                                  another, devices, path, tag))
-    states = [state for state in held if state is not None]
+    held = kept_record.with_held(kept_record.read_keeps(store, peer, pair), peer, pair, path, tag)
+    # the hold may reuse another pair's slot. Over the transport the mirror holds this pair's record
+    # alone, so the serving device drops the bytes from its other pairs' records itself, likewise
+    # in a commit before its data commit (``peersync.replay``): a peer may write none of them
+    states = [*([] if held is None else [held]),
+              *kept_record.not_delivered_elsewhere(store, receiver, peer, path, tag)]
     if states:
         writes = store.transaction()
         bookkeeping.stage(writes, states)
