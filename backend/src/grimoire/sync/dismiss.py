@@ -39,12 +39,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from grimoire.store import LibraryStore, NameCollision, StaleWrite, StoreError, WriteConflict, WriteDenied, etag
-from grimoire.store.jsonfmt import MAX_FILE_BYTES, is_etag
+from grimoire.store.jsonfmt import is_etag
 from grimoire.store.engine import MAX_CONFLICT_ATTEMPTS
 from grimoire.store.layout import conflict_parts, kept_address
 
-from . import bookkeeping
-from .documents import KeptEntry, check_device_id, keeps_name, render_keeps, syncable
+from . import bookkeeping, keeps
+from .documents import KeptEntry, check_device_id, keeps_name, syncable
 from .errors import DismissRefused, SyncInterrupted
 from .keeps import archived_token, held_anywhere, kept_slots, read_keeps
 from .identity import device_of
@@ -165,11 +165,11 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
     if already:
         return Dismissal(peer, path, kept, slots, False)
     entries = {**view.entries, path: KeptEntry(entry.base, entry.delivered, entry.dismissed | {kept}, entry.held)}
-    try:
-        data = render_keeps(devices, entries)
+    try:  # a full record makes room by leaving other deliveries unrecorded (never this one, nor a hold)
+        entries, data = keeps.fit(view, devices, entries)
     except StoreError as error:  # larger than any reader accepts
         raise DismissRefused(f"the kept-version record would be too large: {error}") from error
-    if len(data) > MAX_FILE_BYTES:
+    if kept not in getattr(entries.get(path), "dismissed", ()):
         raise DismissRefused("the kept-version record would exceed the file size limit")
     txn = store.transaction()
     txn.put_sync_state(keeps_name(peer), data, None if view.data is None else etag(view.data),

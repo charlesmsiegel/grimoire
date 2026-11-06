@@ -15,19 +15,21 @@ from pathlib import Path
 
 import pytest
 
+from grimoire.core.identity import InstanceRef
 from grimoire.store import LibraryStore, ProcessLocker, etag
 from grimoire.store.layout import conflict_parts, kept_address
 from grimoire.sync import (
     DismissRefused, SyncInterrupted, apply_sync, dismiss, identify, plan_sync, resolve, sync, sync_until_quiet,
 )
+from grimoire.sync import keeps as sync_keeps
 from grimoire.sync import resolution as sync_resolution
 from grimoire.sync import session as sync_session
 from grimoire.sync.documents import KeptEntry, parse_keeps, render_keeps
 from grimoire.testing import CrashScenario, Invariant, explore_crashes, idempotent_recovery, no_residue, run_plans
 from grimoire.testing.fileops import snapshot
 
-from store_helpers import drop_empty_dirs, owner_handle
-from sync_helpers import DESKTOP, PATHS, PHONE, WREN_A, WREN_B, edit_instance, handle, handles, kept, make_pair
+from store_helpers import WREN_R1, drop_empty_dirs, instance, owner_handle
+from sync_helpers import DESKTOP, PATHS, PHONE, WREN_A, WREN_B, edit_instance, handle, handles, kept, make_pair, put
 
 PATH = PATHS["wren_a"]
 RECORD = f".sync/peers/{PHONE}/keeps.json"  # the desktop's kept versions from the phone, and its dismissals
@@ -275,8 +277,9 @@ def test_resolve_ends_a_dismissal_before_any_sync_so_a_new_conflict_keeps_the_sa
 
 
 def test_a_resolve_that_crashed_after_its_data_never_lets_the_old_dismissal_through(tmp_path, monkeypatch):
-    """resolve's copy landed and its marker moved the base, but the crash came before its archive step
-    dropped the dismissal: the next conflict stands on another base, so the version is kept again."""
+    """resolve's copy landed, but the crash came before its archive step: the dismissal went before
+    anything of the resolve was written (and its marker moved the base), so the next conflict keeps
+    the version again."""
     desktop, phone = _conflict(tmp_path)
     mine, theirs = (desktop.root / PATH).read_bytes(), _theirs(phone)
     _delete(desktop, dismiss(desktop, PHONE, PATH, etag(theirs), handle()).slots)
@@ -287,13 +290,46 @@ def test_a_resolve_that_crashed_after_its_data_never_lets_the_old_dismissal_thro
     with pytest.raises(RuntimeError):
         resolve(desktop, phone, PATH, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
     monkeypatch.undo()
-    assert _theirs(phone) == mine and etag(theirs) in _entries(desktop)[PATH]["dismissed"]  # the record survived
+    assert _theirs(phone) == mine
     # a new conflict: the phone restores its own held version, the desktop edits on
     (phone.root / PATH).write_bytes(theirs)
     edit_instance(desktop, WREN_A, 11)
     conflict = sync(desktop, phone, handles()).conflict(PATH)
     assert conflict.code == "missing_ancestor"  # the marker leaves the base uncertain
     assert conflict.dismissed == () and theirs in kept(desktop)
+
+
+@pytest.mark.parametrize("crash", ["after the records are cleared", "after the data commit", "between the archives"])
+def test_a_resolve_that_crashes_never_leaves_the_winners_kept_copy_dismissable(tmp_path, monkeypatch, crash):
+    """The phone deleted its version, and the person resolves to the desktop's: the desktop's kept copy is
+    now the phone's former version's only copy. resolve dies at a boundary (its records cleared, its
+    data written, or one archive written): the desktop never names that copy safe to delete, then or
+    after the next syncs, though its own archive and marker are untouched by everything before."""
+    desktop, phone = _conflict(tmp_path)
+    mine, theirs = (desktop.root / PATH).read_bytes(), _theirs(phone)
+    (phone.root / PATH).unlink()
+    target, calls = ("_end_deliveries", 1) if crash == "after the records are cleared" else (
+        "_commit_state", 1 if crash == "after the data commit" else 2)
+    real, seen = getattr(sync_resolution, target), []
+
+    def dies(*args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(1)
+        if target == "_end_deliveries":
+            real(*args, **kwargs)
+        if len(seen) == calls:
+            raise RuntimeError("power lost")
+        return real(*args, **kwargs)
+    monkeypatch.setattr(sync_resolution, target, dies)
+    with pytest.raises(RuntimeError):
+        resolve(desktop, phone, PATH, etag(mine), {DESKTOP: etag(mine), PHONE: None}, handles())
+    monkeypatch.undo()
+    assert _copies((desktop, phone), theirs) == _slots(desktop, theirs)
+    with pytest.raises(DismissRefused):
+        dismiss(desktop, PHONE, PATH, etag(theirs), handle())
+    sync_until_quiet(desktop, phone, handles())
+    with pytest.raises(DismissRefused):
+        dismiss(desktop, PHONE, PATH, etag(theirs), handle())
+    assert theirs in kept(desktop)
 
 
 class _PowerLoss(Exception):
@@ -583,6 +619,38 @@ def test_a_version_delivered_in_an_ended_conflict_is_never_dismissable_in_the_ne
         dismiss(desktop, PHONE, PATH, etag(theirs), handle())
     assert dismiss(desktop, PHONE, PATH, etag(newer), handle()).wrote  # this conflict's own delivery still is
     assert theirs in kept(desktop)
+
+
+def test_more_deliveries_than_one_record_holds_never_stop_a_sync(tmp_path, monkeypatch):
+    """45 conflicts at once, with the file cap scaled down so their deliveries cannot all fit one
+    kept-version record: the sync still completes, keeps every version and copies an unrelated
+    record. The deliveries that fit stay dismissable; the rest go unrecorded, so those copies are
+    never dismissable. A hold is never what gives way: resolve still records it in a full record."""
+    monkeypatch.setattr(sync_keeps, "RECORD_LIMIT", 8_000)  # about 25 deliveries: 010's cap, scaled down
+    desktop, phone = make_pair(tmp_path)
+    crowd = [InstanceRef("c1", "character", f"crowd-{number:02d}") for number in range(45)]
+    for ref in crowd:
+        put(desktop, instance(ref, WREN_R1, hp=1))
+    sync(desktop, phone, handles())
+    for ref in crowd:
+        put(desktop, instance(ref, WREN_R1, hp=2))
+        put(phone, instance(ref, WREN_R1, hp=3))
+    edit_instance(desktop, WREN_B, 7)  # an unrelated copy to the phone
+    paths = [f"campaigns/c1/instances/character/{ref.instance_id}.json" for ref in crowd]
+    report = sync(desktop, phone, handles())
+    assert all(report.conflict(path).kept == {DESKTOP: True, PHONE: True} for path in paths)
+    assert (phone.root / PATHS["wren_b"]).read_bytes() == (desktop.root / PATHS["wren_b"]).read_bytes()
+    first, last = paths[0], paths[-1]
+    theirs = {path: (phone.root / path).read_bytes() for path in paths}
+    assert dismiss(desktop, PHONE, first, etag(theirs[first]), handle()).wrote
+    with pytest.raises(DismissRefused, match="not a version"):
+        dismiss(desktop, PHONE, last, etag(theirs[last]), handle())
+    mine = (desktop.root / last).read_bytes()
+    resolve(desktop, phone, last, etag(theirs[last]), {DESKTOP: etag(mine), PHONE: etag(theirs[last])}, handles())
+    sync(desktop, phone, handles())
+    with pytest.raises(DismissRefused):
+        dismiss(desktop, PHONE, last, etag(mine), handle())
+    assert etag(mine) in _entries(desktop)[last]["held"] and mine in kept(desktop)
 
 
 def test_a_new_identity_leaves_no_dismissal_behind_and_no_notice(tmp_path):

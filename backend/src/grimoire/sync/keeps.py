@@ -33,8 +33,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
 
-from grimoire.store import LibraryStore, NameCollision, StoreError, etag
+from grimoire.store import InvalidEnvelope, LibraryStore, NameCollision, StoreError, etag
 from grimoire.store.engine import MAX_CONFLICT_ATTEMPTS
+from grimoire.store.jsonfmt import MAX_FILE_BYTES
 from grimoire.store.layout import conflict_parts
 from grimoire.store.syncstate import sync_peers
 
@@ -44,6 +45,8 @@ from .documents import KeepsView, KeptEntry, check_device_id, keeps_name, parse_
 from .model import Base
 
 State = tuple[str, bytes, "str | None"]
+#: the largest record this device writes: 010's file cap (a test scales it down, as ``ARCHIVE_LIMIT``)
+RECORD_LIMIT = MAX_FILE_BYTES
 #: ``(path, etag) -> bool``: whether a kept-version slot of ``path`` on the device holds those bytes,
 #: or might (``slot_stands``: an unreadable slot is unknown, so it counts as standing)
 Stands = Callable[[str, str], bool]
@@ -87,9 +90,60 @@ def _entries(view: KeepsView) -> dict[str, KeptEntry]:
 
 
 def _write(view: KeepsView, peer: str, devices: tuple[str, str], entries: Mapping[str, KeptEntry]) -> State | None:
+    entries, data = fit(view, devices, entries)
     if (view.state == "valid" and dict(entries) == dict(view.entries)) or (view.state == "missing" and not entries):
         return None
-    return keeps_name(peer), render_keeps(devices, entries), None if view.data is None else etag(view.data)
+    return keeps_name(peer), data, None if view.data is None else etag(view.data)
+
+
+def _render(devices: tuple[str, str], entries: Mapping[str, KeptEntry]) -> bytes:
+    data = render_keeps(devices, entries)
+    if len(data) > RECORD_LIMIT:
+        raise InvalidEnvelope(f"the kept-version record would be larger than {RECORD_LIMIT} bytes")
+    return data
+
+
+def fit(view: KeepsView, devices: tuple[str, str], entries: Mapping[str, KeptEntry]) -> tuple[dict[str, KeptEntry], bytes]:
+    """``entries`` and their bytes, within 010's file cap: one record holds every conflict of the pair.
+
+    With more deliveries than fit (thousands of conflicts at once), the excess goes unrecorded,
+    dismissed ones and those already recorded first, then by path and etag: an unrecorded delivery is only a kept copy
+    that is never dismissable, which fails closed, and a sync never stops over it. Holds are never
+    what gives way. They alone overflow only past tens of thousands of versions ``resolve`` held and
+    nobody deleted (a hold goes once its slot does); then the write still raises, and the sync or
+    resolve stops before anything of it is written."""
+    entries = dict(entries)
+    try:
+        return entries, _render(devices, entries)
+    except InvalidEnvelope:
+        pass
+    before = _entries(view)
+    items = sorted(((path, tag) for path, entry in entries.items() for tag in entry.delivered),
+                   key=lambda item: (item[1] not in entries[item[0]].dismissed,
+                                     item[1] not in getattr(before.get(item[0]), "delivered", ()), item))
+
+    def first(count: int) -> tuple[dict[str, KeptEntry], bytes] | None:
+        chosen, kept = set(items[:count]), {}
+        for path, entry in entries.items():
+            entry = _entry(entry.base, {tag for tag in entry.delivered if (path, tag) in chosen}, entry.dismissed, entry.held)
+            if entry is not None:
+                kept[path] = entry
+        try:
+            return kept, _render(devices, kept)
+        except InvalidEnvelope:
+            return None
+    best = first(0)
+    if best is None:  # the holds alone do not fit
+        raise InvalidEnvelope("the kept-version record's holds alone exceed the file size limit")
+    low, high = 1, len(items) - 1  # the most deliveries that fit: fewer always fit too
+    while low <= high:
+        middle = (low + high) // 2
+        found = first(middle)
+        if found is None:
+            high = middle - 1
+        else:
+            best, low = found, middle + 1
+    return best
 
 
 def _changed(view: KeepsView, peer: str, devices: tuple[str, str], path: str,

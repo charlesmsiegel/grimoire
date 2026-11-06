@@ -169,6 +169,7 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         raise ResolveRefused(f"{path} cannot be resolved on {receiver}: {error}") from error
     try:
         with _locked(*stores.values()):  # a blob is loaded from the winner inside this commit
+            _end_deliveries(stores, other, pair, resolved)
             if mine is not None:
                 _record_hold(stores[receiver], receiver, other[receiver], pair, path, etag(mine))
             txn.commit(handles[receiver], dict((approvals or {}).get(receiver, {})))
@@ -210,6 +211,29 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         bookkeeping.stage(writes, bookkeeping.changes(store, files, pending.files))
         _commit_state(writes, device)
     return receiver
+
+
+def _end_deliveries(stores: Mapping[str, LibraryStore], other: Mapping[str, str], pair: tuple[str, str],
+                    resolved: list[str]) -> None:
+    """Take the conflicts this resolve ends out of conflict in both devices' kept-version records
+    (``keeps.without``), each in a commit of its own **before** anything of the resolve is written (028).
+
+    Only the receiver's data commit writes a pending marker, so after a crash between that commit
+    and the archive steps the winner's own archive, marker and record still read as the open
+    conflict: its kept copy of the receiver's former version (perhaps the only copy once the
+    receiver holds the winner's) would be dismissable. Cleared first, it never is. If the resolve
+    then stops, the conflict stays open with those deliveries unrecorded: that only fails closed."""
+    for device in reversed(pair):
+        state = kept_record.without(kept_record.read_keeps(stores[device], other[device], pair),
+                                    other[device], pair, resolved)
+        if state is not None:
+            writes = stores[device].transaction()
+            bookkeeping.stage(writes, [state])
+            try:
+                writes.commit(None)
+            except (StaleWrite, WriteConflict) as error:  # nothing of the resolve is written yet
+                raise SyncInterrupted(f"the kept-version record on {device} changed during resolve; "
+                                      f"resolve again: {error}") from error
 
 
 def _record_hold(store: LibraryStore, receiver: str, peer: str, pair: tuple[str, str], path: str, tag: str) -> None:
