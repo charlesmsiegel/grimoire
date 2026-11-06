@@ -1,0 +1,351 @@
+"""Pin by default (Wave 5 audit 042 D2; owner's decision, Nov 6).
+
+Both Wave 5 exit-gate chat kinds used to bind their sources unpinned, so a new card or world revision
+changed a running chat's NPC with nobody reviewing it, and 042's reviewed rebase protected none of the
+default chats. Now every product path pins the revision a source resolves to when it is bound:
+
+- a card chat started as 035 starts it (``Launch("character", <unpinned card ref>)``), its lorebook,
+  its persona and a second card attached mid-chat;
+- 026's V0.2.1 scene chats (and their actors' instance files);
+- 036's SillyTavern chats (through 107's writer).
+
+A new revision reaches such a chat only through ``SourceRebase.review`` + ``apply`` with a ``take``.
+``follow=True`` is the explicit opt-in to follow a head. Chats an earlier build stored unpinned keep
+reading and keep following; a rerun of either importer over such a library rewrites none of them and
+reports them instead.
+
+Every fixture is synthetic under ``tmp_path``. No model is called.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+import grimoire.archaeologystore.library as st_library
+import grimoire.import_v1._plan as v1_plan
+from card_fixtures import V3, card, encode, land
+from chat_fixtures import CARDS, Clock, chat_library, seed_sources
+from import_fixtures import CAMPAIGN_ID, SALTMARCH, Env
+from scene_fixtures import V1_CHAT
+from store_helpers import OWNER, owner_handle
+
+from grimoire.archaeologystore import StImporter
+from grimoire.changesets import ChangeSet
+from grimoire.changesetstore import ChangeSetLibrary
+from grimoire.chats import Launch, NewBinding
+from grimoire.chatstore import ChatLibrary
+from grimoire.core.identity import InstanceRef, SourceRef
+from grimoire.effective import chat_snapshot
+from grimoire.generation import SnapshotVoices
+from grimoire.rebase import RebaseError
+from grimoire.rebasestore import SourceRebase
+from grimoire.store import LibraryStore, RecordEnvelope
+from grimoire.testing.fileops import snapshot
+
+MARA = SourceRef("card:mara-vell", "character", "mara-vell")
+LORE = SourceRef("card:mara-vell", "lorebook", "mara-vell-lore")
+ANYA = SourceRef("card:anya-rook", "character", "anya-rook")
+TAMSIN = SourceRef("card:tamsin-hale", "character", "tamsin-hale")
+R1_LINE, R2_LINE = "We sail when the lamps go out.", "Lanterns out. Now."
+R1_LORE, R2_LORE = V3["data"]["character_book"]["entries"][0]["content"], "The lighthouse burns again."
+VOICED = card(V3, mes_example="<START>\n{{char}}: " + R1_LINE)
+UPDATED = card(V3, personality="Sharper now; trusts no one.", mes_example="<START>\n{{char}}: " + R2_LINE,
+               character_book={**V3["data"]["character_book"], "entries": [
+                   {**V3["data"]["character_book"]["entries"][0], "content": R2_LORE},
+                   V3["data"]["character_book"]["entries"][1]]})
+ANYA_CARD = card(V3, name="Anya Rook", description="A harbor pilot.", character_book=None,
+                 mes_example="<START>\n{{char}}: Mind the shoals.")
+TAMSIN_CARD = card(V3, name="Tamsin Hale", description="A customs clerk.", character_book=None,
+                   mes_example="<START>\n{{char}}: Every crate has a stamp.")
+MARA_V1 = InstanceRef(CAMPAIGN_ID, "character", "mara")
+
+
+@pytest.fixture
+def store(tmp_path):
+    with LibraryStore.create(tmp_path / "lib") as opened:
+        for document in (VOICED, ANYA_CARD, TAMSIN_CARD):
+            land(opened, encode(document))
+        yield opened
+
+
+def rebase(store) -> SourceRebase:
+    return SourceRebase(store, owner_handle(), clock=Clock())
+
+
+def take_all(store, actor: InstanceRef):
+    """Review ``actor`` against its source's head and take every change, as a human would."""
+    review = rebase(store).review(actor)
+    rebase(store).apply(review, {name: "take" for name in review.decisions_needed}).commit()
+    return review
+
+
+def card_chat(store, chats: ChatLibrary):
+    """Started as 035's fixtures start it: unpinned card and lorebook refs, then an unpinned persona."""
+    started = chats.start_chat(Launch("character", MARA), attach=[(LORE, "lorebook")]).commit()
+    _, etag = chats.read_chat(started.chat)
+    chats.set_persona(started.chat, ANYA, expected=etag).commit()
+    return started
+
+
+def voice_line(store, chat, actor) -> str:
+    snap = chat_snapshot(store.load(), chat).snapshot
+    return SnapshotVoices(snap).resolve(actor).examples[0].text
+
+
+def lore_text(store, chat) -> list[str]:
+    snap = chat_snapshot(store.load(), chat).snapshot
+    raw = snap.resolve(LORE.unpinned(), "lorebook")
+    return [entry["content"] for entry in raw.envelope.payload["entries"]]
+
+
+def pinned_at(bindings, revision: str) -> bool:
+    return all(b.ref.pinned and b.ref.revision == b.resolved_revision == revision for b in bindings)
+
+
+# -- exit-gate kind 1: a card chat ------------------------------------------------------------------
+
+def test_a_card_chat_pins_card_lorebook_and_persona_and_holds_r1_until_a_reviewed_take(store):
+    chats = chat_library(store, owner_handle())
+    started = card_chat(store, chats)
+    [actor] = started.actors
+    record, _ = chats.read_chat(started.chat)
+    assert record.launch.ref == MARA.at("r1")  # the launch names what its binding pins
+    assert pinned_at(record.active_bindings(), "r1") and len(record.active_bindings()) == 3
+    stored = store.read(actor).envelope
+    assert (stored.payload["source"], stored.derived_from, stored.base) == (str(MARA.at("r1")),) * 3
+    other = chats.start_chat(Launch("character", MARA)).commit()  # another campaign of the same card
+    [other_actor] = other.actors
+
+    land(store, encode(UPDATED), target=MARA.source)  # the card's update: r2 of the character and its lore
+    assert store.check_definition(MARA).ref == MARA.at("r2") and store.check_definition(LORE).ref == LORE.at("r2")
+    snap = chat_snapshot(store.load(), started.chat).snapshot
+    assert snap.effective(MARA).ref == MARA.at("r1")
+    assert snap.effective(MARA).section("personality") == V3["data"]["personality"]
+    assert [n for r in snap.sources() for n in r.notices] == []  # no drift: nothing reached the chat
+    assert voice_line(store, started.chat, actor) == R1_LINE and lore_text(store, started.chat)[0] == R1_LORE
+
+    review = take_all(store, actor)
+    assert review.repinned == (started.chat,) and review.following == ()
+    assert [(row.field, row.status) for row in review.rows] == [("section:personality", "upstream")]
+    record, _ = chats.read_chat(started.chat)
+    [character] = record.active_bindings("character")
+    assert character.ref == MARA.at("r2") and character.actor == actor  # re-pinned, same actor
+    snap = chat_snapshot(store.load(), started.chat).snapshot
+    assert snap.effective(MARA).section("personality") == "Sharper now; trusts no one."
+    assert voice_line(store, started.chat, actor) == R2_LINE
+    # only the actor was rebased: the lorebook stays pinned until it is re-attached (no actor to rebase)
+    assert lore_text(store, started.chat)[0] == R1_LORE
+    # a campaign that did not rebase keeps r1
+    assert voice_line(store, other.chat, other_actor) == R1_LINE
+    assert rebase(store).review(other_actor).repinned == (other.chat,)
+
+
+def test_a_card_chat_is_up_to_date_until_its_card_changes(store):
+    chats = chat_library(store, owner_handle())
+    started = card_chat(store, chats)
+    with pytest.raises(RebaseError) as caught:
+        rebase(store).review(started.actors[0])
+    assert caught.value.reason == "up_to_date"
+
+
+def test_a_second_card_attached_mid_chat_is_pinned(store):
+    chats = chat_library(store, owner_handle())
+    started = card_chat(store, chats)
+    _, etag = chats.read_chat(started.chat)
+    joined = chats.attach_source(started.chat, TAMSIN, "character", expected=etag).commit()
+    [tamsin] = joined.actors
+    record, _ = chats.read_chat(started.chat)
+    [late] = [b for b in record.active_bindings("character") if b.actor == tamsin]
+    assert late.ref == TAMSIN.at("r1") and late.resolved_revision == "r1" and late.introduced_seq > 0
+    assert record.roster_entry(tamsin).source == TAMSIN.at("r1")
+
+    land(store, encode(card(TAMSIN_CARD, mes_example="<START>\n{{char}}: Stamp it twice.")), target=TAMSIN.source)
+    assert voice_line(store, started.chat, tamsin) == "Every crate has a stamp."  # still r1
+    take_all(store, tamsin)
+    assert voice_line(store, started.chat, tamsin) == "Stamp it twice."
+
+
+def test_a_replaced_persona_is_pinned_and_keeps_its_body(store):
+    chats = chat_library(store, owner_handle())
+    started = card_chat(store, chats)
+    record, etag = chats.read_chat(started.chat)
+    body = record.persona.actor
+    land(store, encode(card(ANYA_CARD, description="A harbor pilot, retired.")), target=ANYA.source)
+    chats.set_persona(started.chat, ANYA, expected=etag).commit()  # the same persona chosen again, now at r2
+    record, _ = chats.read_chat(started.chat)
+    assert record.persona.ref == ANYA.at("r2") and record.persona.actor == body
+    assert pinned_at([record.persona], "r2")
+
+
+def test_a_lorebook_attached_by_itself_is_pinned(store):
+    chats = chat_library(store, owner_handle())
+    started = chats.start_chat(Launch("lorebook", LORE)).commit()
+    record, _ = chats.read_chat(started.chat)
+    assert record.launch.ref == LORE.at("r1") and pinned_at(record.active_bindings(), "r1")
+    land(store, encode(UPDATED), target=MARA.source)
+    assert lore_text(store, started.chat)[0] == R1_LORE
+
+
+def test_following_a_head_is_an_explicit_opt_in(store):
+    chats = chat_library(store, owner_handle())
+    following = chats.start_chat(Launch("character", MARA), attach=[(LORE, "lorebook")], follow=True).commit()
+    [actor] = following.actors
+    record, _ = chats.read_chat(following.chat)
+    assert record.launch.ref == MARA and all(not b.ref.pinned for b in record.active_bindings())
+    assert store.read(actor).envelope.payload["source"] == str(MARA)
+    land(store, encode(UPDATED), target=MARA.source)
+    snap = chat_snapshot(store.load(), following.chat).snapshot
+    assert snap.effective(MARA).ref == MARA.at("r2")
+    assert {(n.code, n.detail) for r in snap.sources() for n in r.notices} == {("binding_drift", "r1 -> r2")}
+    review = rebase(store).review(actor)
+    assert review.following == (following.chat,) and review.repinned == ()
+    # an explicitly pinned ref is bound as given, follow or not
+    pinned = chats.start_chat(Launch("character", MARA.at("r1")), follow=True).commit()
+    assert chats.read_chat(pinned.chat)[0].launch.ref == MARA.at("r1")
+
+
+# -- exit-gate kind 2: a migrated V0.2.1 scene chat ---------------------------------------------------
+
+def revise_mara(store, description: str):
+    """A 043 change set giving the world's Mara a new revision (the head moves)."""
+    sets = ChangeSetLibrary(store, owner_handle())
+    _, head, _ = sets.head(SALTMARCH, "character", "mara.default")
+    change = sets.revise(SALTMARCH, "character", "mara.default", {**head.payload, "description": description},
+                         name=head.name, evidence=("session 3",))
+    review = sets.review(ChangeSet("cs-mara", SALTMARCH, "Mara keeps two ledgers", OWNER, (change,)))
+    assert review.applicable
+    return sets.apply(review).revisions[0]
+
+
+def test_a_migrated_v1_chat_holds_its_revision_through_an_applied_change_set_until_rebased(tmp_path):
+    env = Env(tmp_path)
+    env.plan().apply()
+    store = env.store
+    record = chat_snapshot(store.load(), V1_CHAT).chat
+    imported = {b.actor: b.ref for b in record.active_bindings()}
+    assert len(imported) == 3 and all(b.ref.pinned and b.ref.revision == b.resolved_revision
+                                      for b in record.active_bindings())
+    assert record.launch.ref == imported[MARA_V1]
+    assert store.read(MARA_V1).envelope.payload["source"] == str(imported[MARA_V1])
+
+    r2 = revise_mara(store, "A harbor clerk who keeps two ledgers.")
+    assert store.check_definition(r2.unpinned()).ref == r2
+    snap = chat_snapshot(store.load(), V1_CHAT).snapshot
+    assert snap.entity(MARA_V1).resolved_source == imported[MARA_V1]  # the chat stays on its revision
+    assert snap.entity(MARA_V1).description != "A harbor clerk who keeps two ledgers."
+    assert [n for r in snap.sources() for n in r.notices] == []
+
+    review = take_all(store, MARA_V1)
+    assert review.ancestor.ref == imported[MARA_V1] and review.upstream.ref == r2
+    assert review.repinned == (V1_CHAT,) and [row.field for row in review.rows] == ["description"]
+    snap = chat_snapshot(store.load(), V1_CHAT).snapshot
+    assert snap.entity(MARA_V1).resolved_source == r2
+    assert snap.entity(MARA_V1).description == "A harbor clerk who keeps two ledgers."
+    assert [b.ref for b in snap.selection.sources if b.actor == MARA_V1] == [r2]
+
+
+# -- back-compat: libraries an earlier build wrote ---------------------------------------------------
+
+def _unpinned(ref):
+    return ref.unpinned() if isinstance(ref, SourceRef) else ref
+
+
+@pytest.fixture
+def earlier_build(monkeypatch):
+    """The importers as an earlier build ran them (``as_earlier_build``); ``undo()`` restores this build."""
+    return as_earlier_build(monkeypatch)
+
+
+def as_earlier_build(monkeypatch):
+    """Run the importers as the build before pin-by-default did: every binding, launch and actor source
+    as the unpinned (head-following) ref. The campaign files it writes are byte for byte what that
+    build wrote (checked against it once, when this test was written)."""
+
+    def binding(ref, *args, **kwargs):
+        return NewBinding(_unpinned(ref), *args, **kwargs)
+
+    def launch(kind, ref=None, premise=None):
+        return Launch(kind, _unpinned(ref), premise)
+
+    def envelope(address, payload, **kwargs):
+        if isinstance(address, InstanceRef):
+            payload = {**payload, "source": str(SourceRef.parse(payload["source"]).unpinned())}
+            kwargs["derived_from"] = str(SourceRef.parse(kwargs["derived_from"]).unpinned())
+        return RecordEnvelope(address, payload, **kwargs)
+
+    class Following(ChatLibrary):
+        def start_chat(self, launch, **kwargs):  # type: ignore[override]
+            return super().start_chat(launch, follow=True, **kwargs)
+
+    monkeypatch.setattr(v1_plan, "NewBinding", binding)
+    monkeypatch.setattr(v1_plan, "Launch", launch)
+    monkeypatch.setattr(v1_plan, "RecordEnvelope", envelope)
+    monkeypatch.setattr(st_library, "ChatLibrary", Following)
+    return monkeypatch
+
+
+def campaign_bytes(store) -> dict[str, bytes]:
+    return {path: data for path, data in snapshot(store.root).items() if path.startswith("campaigns/")}
+
+
+def test_a_v1_rerun_over_a_library_an_earlier_build_imported_rewrites_nothing_and_reports_it(tmp_path, earlier_build):
+    env = Env(tmp_path)
+    env.plan().apply()
+    earlier_build.undo()
+    store = env.store
+    record = chat_snapshot(store.load(), V1_CHAT).chat
+    assert all(not b.ref.pinned for b in record.active_bindings())  # what the earlier build stored
+    before = campaign_bytes(store)
+
+    plan = env.plan()
+    review = plan.review()
+    assert review["writes"] == [] and plan.preview() == {}
+    follows = sorted(row["detail"] for row in review["unresolved"] if row["reason"] == "binding_follows_head")
+    assert follows == sorted(f"{V1_CHAT} {b.ref}" for b in record.active_bindings())
+    plan.apply()
+    assert campaign_bytes(store) == before  # never rewritten: no duplicate chat, no re-pinned binding
+
+    # it still reads and still follows: a world revision reaches it, flagged as drift
+    r2 = revise_mara(store, "A harbor clerk who keeps two ledgers.")
+    snap = chat_snapshot(store.load(), V1_CHAT).snapshot
+    assert snap.entity(MARA_V1).resolved_source == r2
+    assert ("binding_drift", f"{record.active_bindings()[0].resolved_revision} -> {r2.revision}") in {
+        (n.code, n.detail) for r in snap.sources() for n in r.notices}
+    review = rebase(store).review(MARA_V1)  # the reviewed rebase still sees it, as following
+    assert review.following == (V1_CHAT,) and review.repinned == ()
+
+
+def test_a_sillytavern_rerun_over_an_earlier_builds_import_rewrites_nothing_and_reports_it(tmp_path, earlier_build):
+    data = (json.dumps({"name": "Mara", "is_user": False, "mes": "Welcome aboard.", "original_avatar": "m.png"})
+            + "\n").encode()
+    with LibraryStore.create(tmp_path / "lib") as store:
+        seed_sources(store)
+        mara = SourceRef(CARDS, "character", "mara")  # unpinned, as a caller maps it
+        importer = StImporter(store, owner_handle(), clock=Clock(), owner=OWNER)
+        [speaker] = importer.scan(data).chat.speakers
+        first = importer.plan(data, speakers={speaker.id: mara})
+        first.commit()
+        earlier_build.undo()
+        before = campaign_bytes(store)
+        again = importer.plan(data, speakers={speaker.id: mara})
+        assert again.status == "already_imported" and again.change is None and again.chat == first.chat
+        assert again.following == (mara,)  # reported, never rewritten
+        assert campaign_bytes(store) == before
+
+
+def test_a_sillytavern_import_now_pins_and_its_rerun_reports_nothing_following(tmp_path):
+    data = (json.dumps({"name": "Mara", "is_user": False, "mes": "Welcome aboard.", "original_avatar": "m.png"})
+            + "\n").encode()
+    with LibraryStore.create(tmp_path / "lib") as store:
+        seed_sources(store)
+        mara = SourceRef(CARDS, "character", "mara")
+        importer = StImporter(store, owner_handle(), clock=Clock(), owner=OWNER)
+        [speaker] = importer.scan(data).chat.speakers
+        first = importer.plan(data, speakers={speaker.id: mara})
+        first.commit()
+        record = chat_library(store).read_chat(first.chat)[0]
+        assert record.launch.ref == mara.at("r1") and pinned_at(record.active_bindings(), "r1")
+        again = importer.plan(data, speakers={speaker.id: mara})
+        assert again.status == "already_imported" and again.following == ()
