@@ -360,17 +360,15 @@ def test_a_dropped_connection_mid_resolve_loses_nothing_and_the_devices_converge
 
 
 def test_a_drop_after_the_starting_devices_data_never_leaves_the_winners_copy_dismissable(tmp_path, monkeypatch):
-    """The desktop receives the phone's version; the cable comes out before the phone's archive step.
+    """The desktop receives the phone's version; the cable comes out at the phone's next step.
     The phone's archive and marker still read as the open conflict, and its kept copy of the
     desktop's former version is now that version's only copy beside the desktop's hold: the phone
     cleared its record's deliveries in its first served step, before the desktop's data commit."""
     case = Conflict(tmp_path)
-    commits = []
 
     class Dropping(StepBuffer):
         def commit(self, store, handle, **options):  # type: ignore[no-untyped-def]
-            commits.append(1)
-            if len(commits) == 2:  # the phone's archive step
+            if case.bytes(case.desktop) == case.versions[PHONE]:  # the first served step after the data
                 raise server_module.TransportError("the cable came out")
             return super().commit(store, handle, **options)
 
