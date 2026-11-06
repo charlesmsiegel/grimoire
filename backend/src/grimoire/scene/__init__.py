@@ -1,11 +1,25 @@
-"""Played chat turns (035): posts, generated takes, and who heard what. Pure: no store, provider or clock."""
+"""Played chat turns (035): posts, generated takes, and who heard what. Pure: no store, provider or clock.
+
+The model and codec load alone, so the chat service and storage that read turn files never load 027's
+generation package (or its evals). Who heard what (``transcript``) needs 027's heard-line shape, so its names
+load on first use.
+"""
 
 from .codec import TURN_SCHEMA, turn_from_payload, turn_to_payload
 from .model import (
     CALL_STATES, LINE_STATES, MAX_CHAT_ID, MAX_TAKES, ORIGINS, POST_KINDS, TAKE_STATES, TURN_OUTCOMES, CallRecord,
     Post, SceneLine, SceneRefused, Take, TurnRecord, turn_id, usage_totals,
 )
-from .transcript import NARRATOR, heard_for, render, segments, table_lines
+
+_TRANSCRIPT = frozenset({"NARRATOR", "heard_for", "render", "segments", "table_lines"})
+
+
+def __getattr__(name: str):
+    if name in _TRANSCRIPT:
+        from . import transcript
+        return getattr(transcript, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "CALL_STATES", "CallRecord", "LINE_STATES", "MAX_CHAT_ID", "MAX_TAKES", "NARRATOR", "ORIGINS", "POST_KINDS",

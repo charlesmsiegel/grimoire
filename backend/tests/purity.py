@@ -160,7 +160,7 @@ PURE_PACKAGES = (
                                         "grimoire.context", "grimoire.goals")),
     # Played chat turns (035): posts, takes, who heard what, and their codec; the runner is an adapter.
     PurePackage("grimoire.scene", ("grimoire.scene", "grimoire.core", "grimoire.core.inference",
-                                   "grimoire.generation")),
+                                   "grimoire.comms", "grimoire.generation")),
     # Offline evaluation: of the domain core it uses only the inference contracts (sprint 015);
     # only its loader and CLI read files.
     PurePackage("grimoire.evals", ("grimoire.evals", "grimoire.core.inference"),
