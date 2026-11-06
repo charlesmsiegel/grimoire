@@ -114,6 +114,8 @@ def test_a_damaged_page_is_contained_and_reported(store, chat):
 def test_a_look_alike_transcripts_folder_is_reported(store, chat):
     put(store, page(chat, 1, "First."))
     campaign = store.root / "campaigns" / chat.campaign_id
+    if (campaign / "TRANSCRIPTS").exists():
+        pytest.skip("this file system folds case, so no look-alike folder can exist")
     shutil.copytree(campaign / "transcripts", campaign / "Transcripts")
     found = store.chat_transcript(chat)
     assert any("Transcripts" in problem.path for problem in found.problems)
@@ -179,9 +181,9 @@ def test_sync_never_delivers_a_page_without_its_chat(tmp_path):
         put(desktop, page(chat, 1, "Hi."))
         folder = phone.root / "campaigns" / chat.campaign_id / "chats"
         folder.mkdir(parents=True)
-        (folder / f"{chat.chat_id.upper()}.json").write_bytes(b"{}")  # the chat cannot land on the phone
+        (folder / f"{chat.chat_id}.json").mkdir()  # a folder where the chat goes: it cannot land on the phone
         sync(desktop, phone, handles())
-        assert not (phone.root / "campaigns" / chat.campaign_id / "chats" / f"{chat.chat_id}.json").exists()
+        assert not (phone.root / "campaigns" / chat.campaign_id / "chats" / f"{chat.chat_id}.json").is_file()
         assert not (phone.root / "campaigns" / chat.campaign_id / "transcripts").exists()
     finally:
         desktop.close()
