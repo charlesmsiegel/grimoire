@@ -140,6 +140,6 @@ A release only ends a relation. The member's instance file, its other relations,
 | Who may command an autonomous companion, and reading control from the sovereignty ledger | 003/035 (this slice takes `controlled` from the caller) |
 | Capture, trainer links and storage capacity | [050](roadmap/sprints/capture-and-trainer-links.md) |
 | Which present individuals actually speak, and what a newly present one is told | 027 (each speaker is its own generation call) and 032 |
-| Physical positions within a scene, and who can still reach whom | 041 |
-| An **audience**: individuals who perceive a scene without being on stage | 032 (who receives what) and 041 (who can see and hear); the cast here is only who is present |
+| Physical positions within a scene, and who can still reach whom | 041 ([STAGING](STAGING.md); its first slice checks a stage against a `SceneCast`) |
+| An **audience**: individuals who perceive a scene without being on stage | 032 (who receives what) and 041 (who can see and hear, [STAGING](STAGING.md)); the cast here is only who is present |
 | Cross-device merge of memberships. Relation files sync one at a time as 017's do, so a move's end could land on a device without its add (for example if the new anchor's instance file is refused there), leaving the member in no party on that device until the add follows. Not reproduced in tests | 019/028 |

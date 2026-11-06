@@ -188,6 +188,10 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 | 042 | [Source Rebase And Semantic Merge](sprints/source-rebase-and-semantic-merge.md) | **P1** | [Typed Relationship Graph](sprints/typed-relationship-graph.md), [Native File Store And Revisions](sprints/native-file-store-and-revisions.md), [Effective World Snapshots](sprints/effective-world-snapshots.md), [World Optional Chat Scopes](sprints/world-optional-chat-scopes.md) | sources / reviewed rebase | Review a root-change rebase and propose selected chat-authored canon for a new reusable world without history rewrites |
 | 043 | [World Change Sets](sprints/world-change-sets.md) | **P1** | [Native File Store And Revisions](sprints/native-file-store-and-revisions.md), [Typed Relationship Graph](sprints/typed-relationship-graph.md), [Safe Tool Execution](sprints/safe-tool-execution.md) | world / reviewed batch changes | Preview an atomic two-record world change |
 
+#### Wave 5 status
+
+- **041 first slice:** a scene-local stage of areas, doors and passages, who and what is where and who holds what, changed only through validated moves, exits, entries, takes, drops, gives and door/lock changes (a key in someone's custody), with director corrections and assumed facts kept apart from established ones. Pure questions answer whether an actor can reach a thing, see someone or hear a speaker on a 032 channel; it builds 032 presences so a whisper never passes a shut door, and 012 perceptions only for those who can see the event ([STAGING](../STAGING.md)). Nothing is persisted yet: a stage kept across turns, 021 operations and seeding from 017 and 034 are its next slice.
+
 <a id="wave-6"></a>
 
 ### Wave 6 — Phone play, synchronization and early UX
