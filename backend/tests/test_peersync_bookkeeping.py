@@ -438,7 +438,7 @@ def test_a_hold_over_a_delivered_copy_survives_recovery_that_loses_the_staged_re
 
     def replace(source, target):  # type: ignore[no-untyped-def]
         real(source, target)
-        if str(target).endswith(WREN_PATH) and ".txn" in str(source):
+        if Path(target).as_posix().endswith(WREN_PATH) and ".txn" in Path(source).parts:
             raise _PowerLoss("power lost after the chosen version was published")
     monkeypatch.setattr(ops, "replace", replace)
     chosen = {winner: etag(newer), receiver: etag(delivered)}
@@ -454,7 +454,7 @@ def test_a_hold_over_a_delivered_copy_survives_recovery_that_loses_the_staged_re
     devices[receiver].close()
     staging = devices[receiver].store.root / ".txn"
     for staged in json.loads((staging / "journal.json").read_bytes())["entries"]:
-        if staged["target"].endswith("/keeps.json"):  # a record staged by that commit is lost
+        if Path(staged["target"]).name == "keeps.json":  # a record staged by that commit is lost
             (staging / staged["temp"]).unlink(missing_ok=True)
     held_on = devices[receiver] = Device.reopen(tmp_path, receiver)
     assert (held_on.store.root / WREN_PATH).read_bytes() == newer and delivered in _kept(held_on)
@@ -529,7 +529,7 @@ def test_a_chosen_version_whose_kept_file_cannot_be_read_is_not_admitted(tmp_pat
     ops, real = phone.store._access.ops, phone.store._access.ops.read_bytes
 
     def read_bytes(path):  # type: ignore[no-untyped-def]
-        if str(path).endswith(slot):
+        if Path(path).as_posix().endswith(slot):
             raise OSError(errno.EIO, "simulated I/O error", str(path))
         return real(path)
     monkeypatch.setattr(ops, "read_bytes", read_bytes)
