@@ -47,7 +47,10 @@ There is **no UI, no importer and no image generation**. Nothing is fetched from
 - **`mode`** is one of:
   - `set`: show `image`;
   - `adjust`: keep the inherited picture and override `crop` and/or `focus`. `image` must name that inherited picture;
-  - `hide`: show nothing in this slot. A source placement may only `set`.
+  - `hide`: show nothing in this slot;
+  - `unresolved` ([038](roadmap/sprints/expression-and-art-lineage.md)): a picture belongs in this slot but its bytes are not here, such as a card's remote or packaged picture. It names the slot's `role` (and, for a sprite, its `expression`) and no `image`, `crop` or `focus`. `provenance.note` says why, in the importer's words.
+
+  A source placement may only `set` or mark a picture `unresolved`, never `adjust` or `hide`. A build older than 038 reads an `unresolved` placement as `invalid_placement`, so it shows nothing there either.
 - **The slot decides the role:**
 
   | role | slot |
@@ -103,7 +106,7 @@ A refused rule writes nothing. Reasons are machine-readable: `InvalidImage.reaso
 | W8 | The mode, role, slot and field rules above | `invalid_field`, `mode_not_allowed`, `role_slot_mismatch` |
 | W9 | An `adjust` needs a shown inherited picture in that slot, and it must name that picture | `nothing_to_adjust`, `stale_adjust` |
 | W10 | Compare-and-swap on a placement's expected etag (`None` for a new one) | store `StaleWrite` |
-| W11 | A `set` or `adjust` may not name an instance whose id another kind of its campaign also uses: `load()` leaves both members of such a [pair](IDENTITY.md) out, so the id is no one individual. Only instances on disk count, since the store refuses a `put` that would form a pair. A `hide` stays allowed as the repair that takes art placed before the pair formed off the slot. Adding an image never names a subject, so a campaign image is unaffected. | `instance_id_conflict`; store `StaleWrite` at `preview`/`commit` for a pair formed since |
+| W11 | A `set` or `adjust` may not name an instance whose id another kind of its campaign also uses: `load()` leaves both members of such a [pair](IDENTITY.md) out, so the id is no one individual. Only instances on disk count, since the store refuses a `put` that would form a pair. A `hide` or `unresolved`, which shows no picture, stays allowed; a `hide` is the repair that takes art placed before the pair formed off the slot. Adding an image never names a subject, so a campaign image is unaffected. | `instance_id_conflict`; store `StaleWrite` at `preview`/`commit` for a pair formed since |
 
 ### Blob repair
 
@@ -123,12 +126,14 @@ The result is a `Resolution`. Each slot is exactly one of:
 
 - **`Shown(slot, role, image, blob, crop, focus, layer, provenance)`**, where `layer` is `source`, `campaign` or `campaign_adjusted`.
 - **`Hidden(slot)`.** A campaign `hide` never falls back to the source's picture, or to any picture with the same name.
+- **`Unavailable(slot, "unresolved", note)`** for an `unresolved` placement, with its `provenance.note` (empty when it has none). A campaign's `unresolved` never falls back to the source's picture, and an instance inherits its source's `unresolved` slot as unresolved: another picture of the subject never stands in. An `adjust` over it is refused `nothing_to_adjust`. [Sync](SYNC.md#art) copies it like any placement; it needs no blob.
 - **`Unavailable(slot, reason, text)`.** The reasons are:
   - `missing_image`, `invalid_image`, `wrong_scope`;
   - `missing_blob`, `blob_size_mismatch`;
   - `invalid_placement` (unreadable, malformed, or an unknown mode or role);
   - `unsupported_format`;
-  - `nothing_to_adjust`, `stale_adjust` (the inherited picture changed after the adjust was written).
+  - `nothing_to_adjust`, `stale_adjust` (the inherited picture changed after the adjust was written);
+  - `unresolved` (above).
 
   Nothing is substituted by name, and nothing falls back.
 
