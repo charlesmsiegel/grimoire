@@ -534,6 +534,28 @@ def test_a_foreign_first_page_blocks_the_whole_transcript(env, monkeypatch):
     assert not [path for path in review["writes"] if "/transcripts/" in path]  # not page 2 behind it either
 
 
+def test_a_foreign_page_past_the_planned_split_blocks_the_whole_transcript(env, monkeypatch):
+    from grimoire.import_v1 import _plan
+    from grimoire.core.identity import TranscriptRef
+    from grimoire.store import ScopeRecord
+    from grimoire.transcripts import TRANSCRIPT_SCHEMA, Post, Speaker, TranscriptPage, Variant, page_to_payload
+    planner = _plan.ImportPlan._plan_transcript
+    monkeypatch.setattr(_plan.ImportPlan, "_plan_transcript", lambda self, scene: None)
+    env.plan().apply()  # the chat, imported without pages
+    monkeypatch.setattr(_plan.ImportPlan, "_plan_transcript", planner)
+    ref = TranscriptRef(V1_CHAT.campaign_id, V1_CHAT.chat_id, 2)  # the import plans page 1 only
+    page = TranscriptPage(ref, (Post("p1", Speaker("user"), (Variant("someone else's"),), 0),))
+    txn = env.store.transaction()
+    txn.put(ScopeRecord(ref, TRANSCRIPT_SCHEMA, page_to_payload(page), owner=OWNER), None)
+    txn.commit(owner_handle())
+    plan = env.plan()
+    review = plan.review()
+    assert "transcript_exists" in {row["reason"] for row in review["unresolved"]}
+    assert not [path for path in review["writes"] if "/transcripts/" in path]
+    plan.apply()
+    assert [ref.seq for ref in env.store.chat_transcript(V1_CHAT).records] == [2]
+
+
 def test_a_v1_post_past_the_store_limit_leaves_the_scene_without_a_transcript(env):
     scene = env.v1 / CAMPAIGN / "scenes" / f"{SID}.md"
     text = scene.read_text(encoding="utf-8")

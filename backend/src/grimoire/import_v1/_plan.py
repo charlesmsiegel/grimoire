@@ -525,7 +525,8 @@ class ImportPlan:
         A page is create-only: a V1 scene that gained posts since it was imported is ``v1_changed`` and its
         pages stay as written (none are added). A chat imported before 036 gets its pages on the next run,
         if its scene is still as imported. Pages are decided per chat, all or none: if any page is neither
-        absent nor exactly as this run would write it, none is written (``transcript_exists``)."""
+        absent nor exactly as this run would write it, or the chat already holds a page past this split or one
+        no reader can check, none is written (``transcript_exists``)."""
         marker = scene.extras[MARKER]
         posts = []
         try:
@@ -545,6 +546,16 @@ class ImportPlan:
             groups = paginate(posts, _measure_post, _PAGE_BUDGET)
         except (TranscriptError, InvalidEnvelope) as error:  # a post past what any page could hold
             self._unresolve(scene.legacy_id, "too_large", f"{scene.ref}: {error}")
+            return
+        try:  # a page past this split, or one no reader can check, would join the chat's history unreviewed
+            existing = self.store.chat_transcript(scene.ref)
+        except (StoreError, ValueError, OSError) as error:
+            self._unresolve(scene.legacy_id, "transcript_exists", f"{scene.ref}: {type(error).__name__}")
+            return
+        beyond = [problem.path for problem in existing.problems]
+        beyond += [str(ref) for ref in existing.records if ref.seq > len(groups)]
+        if beyond:
+            self._unresolve(scene.legacy_id, "transcript_exists", min(beyond))
             return
         planned = []
         for seq, group in enumerate(groups, start=1):
