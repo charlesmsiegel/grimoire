@@ -21,6 +21,29 @@ A card is interchange data, not native storage. An import creates (or updates) o
 
 The manifest declares every head. A portrait (`portrait=` bytes) becomes one 018 image object in the card source and a `set` placement in slot **`avatar`** of the imported character or scenario. Its provenance names the card's sha256, format and origin label.
 
+### Card art (038)
+
+A V3 card's `data.assets` become 018 placements on the imported character or scenario too ([038](roadmap/sprints/expression-and-art-lineage.md); `grimoire.cards.card_art` decides the slots from the card alone, `grimoire.cardstore.art` what an import writes there):
+
+| asset | slot |
+|---|---|
+| the caller's `portrait` | `avatar` |
+| the main `icon` (named `main`, else the first icon) | `avatar`; with a `portrait`, a `ccdefault:` main icon *is* that portrait and any other main icon goes to `icon-main` |
+| any other `icon` | `icon-<name>` |
+| `emotion` | `expr.default.<name>`: a sprite of the card's one outfit, `default` |
+| the main `background` (named `main`, else the first) | `background` |
+| any other `background` | `background-<name>` |
+| `user_icon` | none: it pictures the user (`not_applicable` loss) |
+| any other type | `asset-<name>` |
+
+`<name>` is the asset's name as an identity segment, or its place in the array (`emotion-3`) when the name gives none. The first asset to claim a slot wins; a later one is a `duplicate_slot` loss, and assets past the first 64 slots are `too_many`.
+
+- **Bytes come only from the card.** A `data:` URI with base64 content is decoded locally; `ccdefault:` is the given `portrait`. Nothing is fetched and no file is read.
+- **A missing picture keeps its slot.** An `http(s)` address (`not_fetched`), a CHARX `embeded://` path, `ccdefault:` with no portrait, a `data:` URI that cannot be decoded or is not a PNG, JPEG, GIF or WebP picture, and any other address are written as an explicit `unresolved` placement whose `provenance.note` says why, so the slot never shows another picture found by name. Each is also a loss (`not_fetched` for a remote picture, `unavailable` otherwise).
+- **One object per picture.** Identical bytes are one image object per card source (`portrait-<sha256[:16]>` when they are the portrait, `art-<sha256[:16]>` otherwise) and one blob per library, whichever assets carry them. A placement's provenance names its asset (`x-card-asset`: index, type, name), never the card's text.
+- **Individuals inherit it.** Every campaign instance derived from the imported character sees the card's art through 018's inheritance; its own `set`, `adjust` or `hide` changes only that individual, and an updated card moves only the art the individual inherits.
+- `ImportReport.art` lists every slot the import fills: `placed`, `unchanged` or `hand_edited`, with the card's picture or why it is missing, and the asset's index.
+
 ### The character record
 
 A 009 `individual` with `agent` and spoken `communicative` traits.
@@ -69,9 +92,9 @@ Chosen by trusted code, never by card text:
 
 ### Reruns and updates
 
-- The same inputs again: `status == "unchanged"`, nothing to write, `commit()` is a no-op (unless the stored copy of the portrait's bytes is damaged: then the rerun is an `update` that repairs it). The handle must still be allowed to propose in the destination, or `plan` raises `ImportDenied`.
+- The same inputs again: `status == "unchanged"`, nothing to write, `commit()` is a no-op (unless the stored copy of a picture's bytes is damaged: then the rerun is an `update` that repairs it). The handle must still be allowed to propose in the destination, or `plan` raises `ImportDenied`.
 - An explicit `target` naming an earlier card source with changed inputs: `status == "update"`. Each entity whose payload changed gets a new revision `r<n>` and its head moves (payloads are compared as JSON, so `true`, `1` and `1.0` are different values); unchanged entities keep their head. An entity the new card no longer has keeps its head and is listed in `kept`, on every later update too; when a later card has it again it comes back under the same id. That holds when the card's kind changes too (a character imported again `as_scenario`): the old entity is kept as `main:character` and returns when the card is a character again. One entity id is never used under two kinds in a source, and never as `import`: ids are reserved from every revision file in the source, headed or not, and an entity a person wrote there (even an undeclared only revision, which `load()` resolves as its head) is never taken over.
-- **Hand edits stand.** When a person has moved an imported entity's head past the revision the last import wrote, or chose another picture for the `avatar` slot, a rerun or update leaves it as it is and reports a `hand_edited` collision naming it. `plan(..., replace_edits=True)` writes the card's version over it instead.
+- **Hand edits stand.** When a person has moved an imported entity's head past the revision the last import wrote, or chose another picture, a crop or a focus for any slot the card fills, a rerun or update leaves it as it is and reports a `hand_edited` collision naming it. `plan(..., replace_edits=True)` writes the card's version over it instead.
 - An update writes only the card source. **Chats are never rewritten**: a pinned binding keeps its revision, and an unpinned one shows 022's `binding_drift` notice.
 - Every import revision keeps its original bytes, so earlier inputs stay recoverable.
 
@@ -95,15 +118,16 @@ The importer allocates no actor and writes nothing under `campaigns/`. Starting 
 `card-import/import` keeps the evidence of what was imported:
 - `original`: the exact card bytes (base64), their sha256 and size; `lorebook_file` likewise for a separate lorebook; `portrait`: its image ref, sha256, size and slot;
 - `kept_entities` and `kept`: entities this card no longer has, with the revision an import last wrote;
-- `avatars`: for each imported subject, the last picture an import placed in its `avatar` slot, carried by every import so a later one can tell its own picture from a hand-chosen one;
+- `avatars`: for each imported subject, the last picture an import placed in its `avatar` slot (an image ref, or `unresolved`), carried by every import so a later one can tell its own picture from a hand-chosen one;
+- `art` (038): the same for every other slot, per subject (`slot` to an image ref or `unresolved`). A slot the card no longer fills keeps its placement and its entry, so it is still the card's own if the asset comes back;
 - `format`, `origin` (the caller's label, such as a file name), `imported_at`, `imported_by`, `options`, `digest` (of all inputs and options);
 - `entities` (role to `kind/id`: `main`, `lorebook`, `lorebook_file`), `records` (the pinned revisions that make up this import) and `losses`.
 
 ## Reported, not refused
 
 - A known field of the wrong type is left out and reported as a loss (`wrong_type`); unknown fields are kept verbatim; a decimal a double cannot hold is kept as the nearest float and reported by the importer (`rounded_number`, with a `lorebook_file.` prefix for the separate lorebook); a too-deep kept value is `too_deep`; a blank greeting is `blank`; a field the imported kind has no place for (a nickname on a scenario) is `not_applicable`; a lorebook name over 256 characters is `too_long`. Dates may be integers or floats. Greeting ids, loss paths and preview field paths follow the card's own indexes, also past a dropped item (`alt-3` is `alternate_greetings[2]`; a lore entry or asset keeps its place in its array). A field reports at most 20 losses (`tags[0]`… count as one field, `tags[*]`, and a mapping's `{0}`… as `{*}`), then one `more_losses` at that field (`data.tags[*]`), and the report holds at most 200 losses in all, then one `more_losses` at `*`; an imprecise number inside a value that was dropped is not reported again. A known mapping such as `extensions` is checked child by child, so one too-deep value drops only itself. A loss names a field path, never its text: an unknown key that is not a short plain name (letters, digits, `_`, `-`, up to 64) appears as `{n}`, its place among its mapping's keys.
-- Assets are recorded as written (an entry's unknown keys under its `extras`) and never fetched: an `http(s)` URI is `not_fetched`; an embedded, default or data URI is `unavailable`.
-- **Collisions:** a definition elsewhere with the same name (`same_name`), another card source whose latest import had the same card bytes (`same_bytes`), a taken default destination (`destination_taken`, which includes a source that exists but is excluded or unreadable), an entity or portrait a person changed (`hand_edited`). None of them merges anything.
+- Assets are recorded as written (an entry's unknown keys under its `extras`) and never fetched. Their pictures are placed as [above](#card-art-038); a picture that is missing is `not_fetched` (an `http(s)` URI) or `unavailable` (anything else), and an asset that fills no slot is `not_applicable`, `duplicate_slot` or `too_many`.
+- **Collisions:** a definition elsewhere with the same name (`same_name`), another card source whose latest import had the same card bytes (`same_bytes`), a taken default destination (`destination_taken`, which includes a source that exists but is excluded or unreadable), an entity or a slot's picture a person changed (`hand_edited`). None of them merges anything.
 - **Link suggestions:** phrases of one to six words, taken as written (so "Saint-Malo", "St. Ives" and "Order of the Silver Hand" keep their punctuation and small inner words), starting with a word that is not lowercase (or from a script without case), that name existing definitions through `DefinitionIndex.find_by_name`. Text is read in NFC, combining marks belong to their word, and a possessive ("Port Vell's") is also tried without its "'s", and a phrase followed by a full stop also with it ("U.S.A."); Unicode hyphens and dashes join words like `-`, and a phrase written with one is also looked up with `-` (so "Saint‐Malo" finds a library's "Saint-Malo"); scripts written without spaces between words are not segmented. A suggestion lists candidates and the fields that mention them; several candidates make it `ambiguous`. Nothing is linked and no relation is written. Fields are read description, personality, scenario and greetings first, lore entries last; after 20,000 distinct phrases the scan stops and says so (`truncated`, with the fields not read in full in `skipped`); it also stops after 500,000 phrase occurrences, so a long repetitive text stays quick.
 - **Cast:** each scenario cast entry, as written (an entry's other keys are kept under `extras`; with both a `ref` and a `name`, the ref is checked): `resolves`, a 010 reason (`missing_source`, `missing_entity`…), `invalid_ref` (also a ref no portable path can hold), or `name_only` with candidates.
 
@@ -111,7 +135,7 @@ The importer allocates no actor and writes nothing under `campaigns/`. Starting 
 
 - `unsupported_format`, with `detail`: `png`, `charx` (zip), `chara_card_v2`, `chara_card_v1`, `sillytavern_world_info`, `unknown`, and `chara_card_v3_version` for a V3 `spec` whose `spec_version` is not `3.x`.
 - `invalid_json` (not strict UTF-8 JSON: a byte-order mark, lone surrogates, duplicate keys, non-finite numbers, integers over 4,300 digits, nesting deeper than 100), `invalid_card` (not an object; a missing or blank name or title; a scenario with neither premise nor opening; wrong top-level shapes), `too_large` (a card or lorebook file over 2 MiB, or a record the store would refuse as too large), `invalid_options`, `invalid_target`, `not_a_card_source` (also for a target that exists but is excluded or unreadable).
-- 018's `InvalidImage` for a portrait that is not a supported picture; `portrait_unstorable` (`detail` `portrait`) when the library's shared blob store holds a differently spelled copy of the portrait's file name, which no other target avoids, or when the destination's image record for the portrait cannot be read. A damaged stored copy of the portrait's exact bytes is repaired by any import that carries that portrait, a rerun with the same inputs included (the repair is one of the staged paths).
+- 018's `InvalidImage` for a portrait that is not a supported picture; `portrait_unstorable` (`detail` `portrait`, or `assets[<n>]` for an asset's picture) when the library's shared blob store holds a differently spelled copy of the picture's file name, which no other target avoids, or when the destination's image record for it cannot be read. An asset whose bytes are not a supported picture is not refused: its slot is `unresolved`. A damaged stored copy of a picture's exact bytes is repaired by any import that carries that picture, a rerun with the same inputs included (the repair is one of the staged paths). A slot holding a placement this version cannot replace (`unsupported_format`) is `invalid_target`.
 
 Error messages never echo card text.
 
@@ -119,4 +143,4 @@ Error messages never echo card text.
 
 The preview reads the whole library for its collisions, suggestions and cast statuses, like other adapters today: it does not yet filter them by what the handle may `inspect`.
 
-PNG `tEXt`/CHARX containers, Character Card V1/V2, SillyTavern world info, fetching remote assets, decoding embedded assets, the lore settings 031 does not read ([below](#lore-in-play-031)), choosing a suggestion, prompt building from greetings (035) and any UI.
+PNG `tEXt`/CHARX containers, Character Card V1/V2, SillyTavern world info, fetching remote assets, reading pictures packaged in a PNG or CHARX file, outfits other than `default`, the lore settings 031 does not read ([below](#lore-in-play-031)), choosing a suggestion, prompt building from greetings (035) and any UI.

@@ -23,31 +23,31 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from grimoire.cards import (
-    CCV3, CHARACTER, IMPORT_ID, IMPORT_KIND, IMPORT_SCHEMA, LOREBOOK, LOREBOOK_SCHEMA, SCENARIO, SCENARIO_SCHEMA,
+    CHARACTER, IMPORT_ID, IMPORT_KIND, IMPORT_SCHEMA, LOREBOOK, LOREBOOK_SCHEMA, SCENARIO, SCENARIO_SCHEMA,
     CardError, CharacterCard, LorebookCard, Loss, ParsedCard, Piece, ScenarioCard, Suggestions,
     character_payload, lorebook_payload, mention_texts, parse_card, parse_lorebook_document, pieces,
     key_path, scenario_payload, slugify, suggest_links,
 )
+from grimoire.cards.art import ArtPiece, asset_path, card_art
 from grimoire.cards.records import ENTITY_SCHEMA
-from grimoire.core.identity import ImageRef, PlacementRef, SourceRef, validate_source_id
-from grimoire.images.model import Placement
-from grimoire.imagestore import ImageCommit, ImageLibrary, InvalidPlacement
+from grimoire.core.identity import ImageRef, SourceRef, validate_source_id
+from grimoire.imagestore import ImageCommit, ImageLibrary
 from grimoire.security import Permission
 from grimoire.store import (
     InvalidEnvelope, LibraryStore, RecordEnvelope, RecordNotFound, SourceManifest, StoredDefinition, StoredSource,
-    BlobCorrupt, ImageBlob, ImpreciseNumber, InvalidBlob, InvalidSourceState, NameCollision, StoreError,
+    ImpreciseNumber, InvalidSourceState, NameCollision, StoreError,
     UnstorableIdentifier,
 )
 from grimoire.store.envelope import source_document
 from grimoire.store.jsonfmt import JsonError, is_imprecise, parse_strict, render, thaw
 from grimoire.store.layout import definition_parts, manifest_parts
 
+from .art import PORTRAIT_SLOT, ArtSlot, recorded_art, stage_art
+
 #: the largest card or separate lorebook file this slice reads
 MAX_CARD_BYTES = 2 * 1024 * 1024
 #: an origin label (a file name, say) is short display text
 MAX_ORIGIN = 512
-#: the slot a card's picture is placed in on the imported entity (018's slot decides the role)
-PORTRAIT_SLOT = "avatar"
 MAX_LOSSES_PER_FIELD = 20
 MAX_LOSSES = 200
 #: the namespace of a source this importer creates
@@ -56,8 +56,6 @@ _REVISION = re.compile(r"^r([1-9][0-9]{0,8})$")
 _MAX_PROBE = 10_000
 _PNG = b"\x89PNG\r\n\x1a\n"
 _ZIP = (b"PK\x03\x04", b"PK\x05\x06")
-_NOT_FETCHED = ("http://", "https://")
-_UNAVAILABLE = ("embeded://", "embedded://", "ccdefault:", "data:", "file:", "__asset:")
 
 
 class ImportDenied(PermissionError):
@@ -124,6 +122,8 @@ class ImportReport:
     grant_scopes: tuple[str, ...]
     #: what this import turns into an accepted event: nothing, ever
     accepted_events: tuple[()] = ()
+    #: each slot the card's art fills on ``main``, and what this import does there (Sprint 038)
+    art: tuple[ArtSlot, ...] = ()
 
 
 def _now() -> str:
@@ -305,17 +305,6 @@ def _origin(origin: object) -> str | None:
     return origin
 
 
-def _asset_losses(card: ParsedCard) -> tuple[Loss, ...]:
-    if isinstance(card, LorebookCard):
-        return ()
-    prefix = "data.assets" if card.format == CCV3 else "assets"
-    found = []
-    for asset in card.assets:
-        reason = "not_fetched" if asset.uri.lower().startswith(_NOT_FETCHED) else "unavailable"
-        found.append(Loss(f"{prefix}[{asset.index}]", reason))
-    return tuple(found)
-
-
 def _canonical(value: object) -> str:
     """A payload as canonical JSON text, so ``true``, ``1`` and ``1.0`` stay different values."""
     return json.dumps(thaw(value), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
@@ -379,6 +368,8 @@ class _Plan:
     as_scenario: bool
     replace_edits: bool = False
     losses: list[Loss] = field(default_factory=list)
+    #: the slots the card and its portrait fill (Sprint 038)
+    art: tuple[ArtPiece, ...] = ()
 
 
 class CardImporter:
@@ -427,7 +418,8 @@ class CardImporter:
         if separate is not None:
             losses += [Loss(f"lorebook_file.{loss.path}", loss.reason) for loss in separate.losses]
             losses += _rounded(separate.losses, lorebook_bytes, "lorebook_file.")
-        plan.losses.extend(_bounded(losses + list(_asset_losses(card))))
+        plan.art, art_losses = card_art(card, portrait)
+        plan.losses.extend(_bounded(losses + list(art_losses)))
         with self.store.read_pass():
             return self._stage(plan, target)
 
@@ -630,35 +622,22 @@ class CardImporter:
         settle(main)
         main_ref = SourceRef(source_id, main.kind, main.entity_id)
 
-        # ``avatars``: subject -> the last picture an import placed in its slot, carried by every import
-        found = _get(record, "avatars")
-        avatars = {subject: text for subject, text in found.items()
-                   if isinstance(subject, str) and isinstance(text, str)} if isinstance(found, dict) else {}
-        portrait_ref, placement_expected, place = None, None, False
-        shown = _image(avatars.get(str(main_ref)))
-        if plan.portrait is not None:
-            portrait_ref = ImageRef(source_id, f"portrait-{_sha(plan.portrait)[:16]}")
-            placement = PlacementRef(main_ref, PORTRAIT_SLOT)
-            try:
-                existing, placement_expected = self.images.read_placement(placement)
-            except RecordNotFound:
-                existing = None
-            except InvalidPlacement as error:
-                if error.reason == "unsupported_format":
-                    raise CardError("the portrait slot holds a placement this version cannot replace",
-                                    "invalid_target", "portrait") from None
-                existing, placement_expected = None, error.etag  # malformed, but replaceable
-            if existing is not None and _shows(existing, portrait_ref):
-                shown = portrait_ref  # already shows this portrait
-            elif existing is None and placement_expected is None:
-                place = True  # an empty slot
-            elif (existing is not None and _shows(existing, shown)) \
-                    or plan.replace_edits:
-                place = True  # the last import's portrait, or the caller asked to replace a hand edit
-            else:
-                edited.append(str(placement))  # someone chose another picture (or hid it): left as it is
-            if place:
-                shown = portrait_ref
+        # the card's art (Sprint 038; the portrait as Sprint 037 placed it): ``avatars`` and ``art``
+        # say what the last import placed in each slot, so a person's choice is never overwritten
+        avatars = _mapping(_get(record, "avatars"))
+        art_record = _mapping(_get(record, "art"))
+        art = stage_art(self.images, source_id, main_ref, plan.art, recorded_art(avatars, art_record, main_ref),
+                        plan.replace_edits, _provenance(plan), lambda index: asset_path(plan.card, index))
+        plan.losses[:] = _bounded(plan.losses + art.losses)
+        edited.extend(art.edited)
+        avatars_after, art_after = dict(avatars), dict(art_record)
+        if PORTRAIT_SLOT in art.recorded:
+            avatars_after[str(main_ref)] = art.recorded[PORTRAIT_SLOT]
+        others = {slot: text for slot, text in sorted(art.recorded.items()) if slot != PORTRAIT_SLOT}
+        if others:
+            art_after[str(main_ref)] = others
+        portrait_shown = art.portrait is not None and art.recorded.get(PORTRAIT_SLOT) == str(art.portrait) \
+            and any(entry.slot == PORTRAIT_SLOT and entry.status != "hand_edited" for entry in art.slots)
 
         import_key = f"{IMPORT_KIND}/{IMPORT_ID}"
         kept_roles: dict[str, str] = {}
@@ -673,20 +652,19 @@ class CardImporter:
         kept_imported = sorted(str(SourceRef(source_id, *key.split("/", 1), imported[key]))
                                for key in kept_roles.values() if key in imported)
         record_refs = sorted(records.values(), key=str)
-        damaged = _blob_damaged(self.store, plan.portrait)  # repaired by this import, whatever else it does
-        unchanged = (record is not None and not writes and not place and not damaged
+        unchanged = (record is not None and not writes and not art.writes
                      and _get(record, "digest") == digest
                      and _get(record, "records") == [str(ref) for ref in record_refs]
                      and _roles(record, "kept_entities") == kept_roles
-                     and avatars == ({**avatars, str(main_ref): str(shown)} if shown is not None else avatars))
+                     and avatars == avatars_after and art_record == art_after)
         status = "unchanged" if unchanged else ("update" if stored_source is not None else "new")
         if not unchanged:
             import_payload = self._import_payload(plan, digest, entities, record_refs,
-                                                  portrait_ref if shown == portrait_ref else None)
-            if shown is not None:
-                avatars[str(main_ref)] = str(shown)
-            if avatars:
-                import_payload["avatars"] = dict(sorted(avatars.items()))
+                                                  art.portrait if portrait_shown else None)
+            if avatars_after:
+                import_payload["avatars"] = dict(sorted(avatars_after.items()))
+            if art_after:
+                import_payload["art"] = dict(sorted(art_after.items()))
             if kept_roles:
                 import_payload["kept_entities"] = dict(sorted(kept_roles.items()))
                 import_payload["kept"] = kept_imported
@@ -704,23 +682,7 @@ class CardImporter:
                           stored_source.etag if stored_source is not None else None)
                 for envelope in writes:
                     batch.put(envelope, None)
-                if damaged:  # the stored copy of the portrait's exact bytes no longer matches its name
-                    batch.repair_blob(plan.portrait)
-                if place:
-                    if portrait_ref is not None and not _image_present(self.images, portrait_ref):
-                        try:
-                            batch.add_image(source_id, portrait_ref.image_id, plan.portrait, _provenance(plan))
-                        except NameCollision:  # the shared blob store, not the destination: no target helps
-                            raise CardError("the library's picture store holds a differently spelled copy of "
-                                            "this portrait's file", "portrait_unstorable", "portrait") from None
-                    try:
-                        batch.place(main_ref, PORTRAIT_SLOT, Placement("set", PORTRAIT_SLOT, portrait_ref),
-                                    placement_expected)
-                    except InvalidPlacement as error:
-                        if error.reason != "invalid_image":
-                            raise
-                        raise CardError("the destination holds this portrait's image record, but it cannot be "
-                                        "read", "portrait_unstorable", "portrait") from None
+                art.stage(batch, source_id, main_ref)
                 preview = batch.preview()
                 # the commit's own checks on every write (records, image, blob, placement), run
                 # read-only now, so a plan that passes approval is not refused at commit for the
@@ -757,8 +719,8 @@ class CardImporter:
             suggestions=suggest_links(
                 mention_texts(plan.card, plan.separate.lorebook if plan.separate else None),
                 view.index.find_by_name, exclude=lambda ref: ref.source == source_id),
-            cast=self._cast(plan.card, view, source_id), portrait=portrait_ref, paths=tuple(sorted(preview)),
-            grant_scopes=tuple(sorted({_scope(path) for path in preview})))
+            cast=self._cast(plan.card, view, source_id), portrait=art.portrait, paths=tuple(sorted(preview)),
+            grant_scopes=tuple(sorted({_scope(path) for path in preview})), art=tuple(art.slots))
         return CardImport(report, batch, preview)
 
     def _import_payload(self, plan: _Plan, digest: str, entities: Mapping[str, _Entity],
@@ -884,6 +846,10 @@ def _revisions(record: StoredDefinition | None, key: str) -> dict[str, str]:
     return found
 
 
+def _mapping(value: object) -> dict[str, object]:
+    return {key: item for key, item in value.items() if isinstance(key, str)} if isinstance(value, dict) else {}
+
+
 def _image(text: object) -> ImageRef | None:
     if not isinstance(text, str) or "#image/" not in text:
         return None
@@ -894,46 +860,12 @@ def _image(text: object) -> ImageRef | None:
         return None
 
 
-def _shows(placement: Placement, image: ImageRef | None) -> bool:
-    """A plain ``set`` of ``image`` in the portrait slot, as this importer writes it."""
-    return (image is not None and placement.mode == "set" and placement.role == PORTRAIT_SLOT
-            and placement.image == image and placement.crop is None and placement.focus is None
-            and placement.expression is None)
-
-
 def _scope(path: str) -> str:
     parts = path.split("/")
     if parts[:2] == ["assets", "blobs"]:
         return "assets/blobs"
     index = parts.index("_source") if "_source" in parts else len(parts) - 1
     return "/".join(parts[:index + 1])
-
-
-def _blob_damaged(store: LibraryStore, portrait: bytes | None) -> bool:
-    """Whether the library's copy of these exact portrait bytes is there but no longer matches its name."""
-    if portrait is None:
-        return False
-    try:
-        blob = ImageBlob(portrait)
-    except InvalidBlob:
-        return False  # not a picture: 018 refuses it when the batch adds it
-    try:
-        store.read_blob(blob.sha256, blob.ext)
-    except BlobCorrupt:
-        return True
-    except (StoreError, ValueError):
-        return False  # absent, or a look-alike name the batch reports
-    return False
-
-
-def _image_present(images: ImageLibrary, ref: ImageRef) -> bool:
-    try:
-        images.store.read(ref)
-    except RecordNotFound:
-        return False
-    except (StoreError, ValueError):
-        return True
-    return True
 
 
 def _provenance(plan: _Plan) -> dict[str, object]:

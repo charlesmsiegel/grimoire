@@ -3,7 +3,8 @@
 The caller (``grimoire.imagestore``) gathers files; this module decides. There is no network,
 no model call and no name matching. Every slot ends as exactly one of ``Shown``, ``Hidden`` or
 ``Unavailable``, and nothing ever falls back to a different picture: a campaign ``hide`` hides
-even when the source has a picture there, and a broken reference stays broken, verbatim.
+even when the source has a picture there, a broken reference stays broken, verbatim, and an
+``unresolved`` placement (038: a picture that belongs here but is missing) stays unavailable.
 """
 
 from __future__ import annotations
@@ -108,6 +109,12 @@ def _show(slot: str, entry: PlacementEntry, allowed: frozenset[str], facts: Fact
                  layer, placement.provenance)
 
 
+def _unresolved(slot: str, placement: Placement) -> Unavailable:
+    """A missing picture stays missing, verbatim: its note (never a picture found by name) says why."""
+    note = placement.provenance.get("note") if placement.provenance is not None else None
+    return Unavailable(slot, "unresolved", note if isinstance(note, str) else "")
+
+
 def _readable(slot: str, entry: PlacementEntry) -> Unavailable | None:
     if entry.placement is None:
         return Unavailable(slot, entry.reason or "invalid_placement", entry.text)
@@ -125,6 +132,9 @@ def inherited(slot: str, source_layer: Mapping[str, PlacementEntry], source: str
     broken = _readable(slot, entry)
     if broken is not None:
         return broken
+    assert entry.placement is not None
+    if entry.placement.mode == "unresolved":
+        return _unresolved(slot, entry.placement)
     allowed = frozenset({source}) if source is not None else frozenset()
     return _show(slot, entry, allowed, facts, "source")
 
@@ -138,6 +148,8 @@ def _campaign(slot: str, entry: PlacementEntry, base: Shown | Unavailable | None
     assert placement is not None
     if placement.mode == "hide":
         return Hidden(slot)
+    if placement.mode == "unresolved":  # the campaign's own picture is missing: never the source's instead
+        return _unresolved(slot, placement)
     if placement.mode == "set":
         return _show(slot, entry, allowed, facts, "campaign")
     # adjust: re-crop exactly the inherited picture it names, or show nothing

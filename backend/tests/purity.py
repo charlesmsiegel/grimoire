@@ -24,7 +24,7 @@ GRIMOIRE = SRC / "grimoire"
 
 #: Standard-library modules whose purpose is computation.
 PURE_STDLIB = frozenset({
-    "__future__", "abc", "bisect", "collections", "copy", "dataclasses", "decimal", "difflib",
+    "__future__", "abc", "binascii", "bisect", "collections", "copy", "dataclasses", "decimal", "difflib",
     "enum", "fractions", "functools", "hashlib", "heapq", "itertools", "math", "numbers",
     "operator", "re", "string", "textwrap", "types", "typing", "unicodedata",
 })
@@ -106,7 +106,8 @@ PURE_PACKAGES = (
     PurePackage("grimoire.chats", ("grimoire.chats", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Character, scenario and lorebook cards (037): parse decoded documents, map to records; the importer is an adapter.
     # Its lore readers build 031's ``LoreEntry`` values, and 031 imports nothing of 037's: one direction.
-    PurePackage("grimoire.cards", ("grimoire.cards", "grimoire.core", "grimoire.context"),
+    # It reads 018's slot vocabulary (``grimoire.images``) to name the slots card art fills (038).
+    PurePackage("grimoire.cards", ("grimoire.cards", "grimoire.core", "grimoire.context", "grimoire.images"),
                 never_import=("grimoire.core.inference",)),
     # Typed relationship graph (017): values, codec, derived index and actor claims; the service is an adapter.
     PurePackage("grimoire.graph", ("grimoire.graph", "grimoire.core"), never_import=("grimoire.core.inference",)),

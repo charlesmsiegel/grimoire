@@ -633,9 +633,10 @@ def _names_paired(disk: _Disk, subject: SourceRef | InstanceRef, placement: Plac
     A ``hide`` is exempt: it shows nothing, grants nothing, and is the only way 018 takes art off a
     slot (no op deletes a placement), so it is the repair a human needs to undo a ``set`` or
     ``adjust`` written before the pair formed, exactly as 017's ``end`` and 021's revocation stay
-    allowed on a pair. A definition subject is never in a pair: pairs are campaign instances only.
+    allowed on a pair. An ``unresolved`` placement (038) is exempt for the same reason: it names no
+    picture and shows nothing. A definition subject is never in a pair: pairs are campaign instances only.
     """
-    return (isinstance(subject, InstanceRef) and placement.mode != "hide"
+    return (isinstance(subject, InstanceRef) and placement.mode not in ("hide", "unresolved")
             and subject in disk.paired(subject.campaign_id))
 
 
