@@ -6,7 +6,9 @@ of its own versions ``resolve`` held here (028).
 - ``delivered``: the etags of the **peer's** versions a sync wrote here as the first copy of those
   bytes at that path, recorded **in the same commit as the keep** (``Delivery``), so no crash,
   race or dropped connection after it can leave a written keep unrecorded. One stays recorded
-  while a slot holds those bytes, or while it is dismissed;
+  while a slot holds those bytes, or while it is dismissed, and only while that conflict stands: a
+  conflict that ends, or whose base moves, takes its deliveries with it (the slots stay, never
+  dismissable), so nothing delivered in one conflict is taken for a delivery of the next;
 - ``base``: while the path is in conflict (as the last sync that saw it found it), the archive base
   the conflict stands on; ``None`` once it is not. Only a version of a path in conflict can be
   dismissed: once the devices agree again, a kept copy may be the last copy of a version neither
@@ -112,12 +114,14 @@ def with_delivered(view: KeepsView, peer: str, devices: tuple[str, str], first: 
                    bases: Mapping[str, str | None]) -> State | None:
     """The record with ``first`` (from ``first_copies``) delivered, for the commit that writes them,
     each path in conflict on its base in ``bases`` (when known). An ignored record is replaced:
-    nothing in it was honoured."""
+    nothing in it was honoured. A delivery is one of the conflict on its base: none recorded on
+    another base carries over (``_same_conflict``)."""
     entries = _entries(view)
     for path, tag in sorted(first):
         before = entries.get(path) or KeptEntry(None, frozenset())
         base = bases.get(path) or before.base
-        entry = _entry(base, before.delivered | {tag}, before.dismissed if base == before.base else (), before.held)
+        carried = before.delivered if _same_conflict(before.base, base) else frozenset()
+        entry = _entry(base, carried | {tag}, before.dismissed if base == before.base else (), before.held)
         if entry is not None:
             entries[path] = entry
     return _write(view, peer, devices, entries)
@@ -160,30 +164,43 @@ def next_keeps(view: KeepsView, peer: str, devices: tuple[str, str], bases: Mapp
 
     ``bases`` maps every path still in conflict to its archive base token, which the entry takes:
     a dismissal carries over only on its own base, and a path no longer in conflict has none (so
-    nothing of it can be dismissed). A delivered or held etag carries over while ``stands`` finds
-    its slot (a delivered one also while it is dismissed: the person deletes a dismissed copy), and
-    so while its slot cannot be read: only a slot confirmed gone lets a hold's record go."""
+    nothing of it can be dismissed). A held etag carries over while ``stands`` finds its slot, and so
+    while its slot cannot be read: only a slot confirmed gone lets a hold's record go. A delivered
+    one carries over the same way (also while it is dismissed: the person deletes a dismissed copy),
+    but only while the same conflict stands (``_same_conflict``): a path no longer in conflict, or
+    in conflict on another base, keeps none, so its old slots stay and are never dismissable."""
     entries: dict[str, KeptEntry] = {}
     for path, before in _entries(view).items():
         base = bases.get(path)
         dismissed = before.dismissed if base is not None and before.base == base else frozenset()
-        entry = _entry(base, {tag for tag in before.delivered if tag in dismissed or stands(path, tag)},
+        delivered = before.delivered if path in bases and _same_conflict(before.base, base) else frozenset()
+        entry = _entry(base, {tag for tag in delivered if tag in dismissed or stands(path, tag)},
                        dismissed, {tag for tag in before.held if stands(path, tag)})
         if entry is not None:
             entries[path] = entry
     return _write(view, peer, devices, entries)
 
 
+def _same_conflict(before: str | None, base: str | None) -> bool:
+    """Whether deliveries recorded on base ``before`` belong to the conflict now on ``base``: the same
+    base, or none recorded yet (a delivery on an unknown base, as in a first sync, is of the conflict
+    that is open: one that ends takes its deliveries with it, ``without``). A known base that moved
+    or became unknown is another conflict, or may be: its deliveries never carry over."""
+    return before is None or before == base
+
+
 def without(view: KeepsView, peer: str, devices: tuple[str, str], paths: Iterable[str]) -> State | None:
-    """The record with ``paths`` (conflicts ``resolve`` just ended) no longer in conflict, so without
-    their dismissals, or ``None`` if it does not change. Delivered and held etags stay: their slots
-    still stand."""
+    """The record with ``paths`` (conflicts ``resolve`` or a sync just ended) no longer in conflict, so
+    without their deliveries and dismissals, or ``None`` if it does not change. Held etags stay. A
+    delivered version's slot stays too, but it is no longer the peer's version of an open conflict:
+    once the devices agree it may be the last copy of a version neither holds any more, and a later
+    conflict on the same path stands on another base, so it is never dismissable again."""
     paths = set(paths)
     if view.state != "valid" or not paths & set(view.entries):
         return None
     entries = {}
     for path, entry in view.entries.items():
-        kept = _entry(None, entry.delivered, (), entry.held) if path in paths else entry
+        kept = _entry(None, (), (), entry.held) if path in paths else entry
         if kept is not None:
             entries[path] = kept
     return _write(view, peer, devices, entries)

@@ -250,7 +250,7 @@ def test_a_transfer_that_ends_a_conflict_clears_its_record_before_either_archive
     with serving(phone) as server:
         assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
     assert "keeps" in sent and sent.index("keeps") < sent.index("archive")
-    assert parse_keeps((phone.store.root / f".sync/peers/{DESKTOP}/keeps.json").read_bytes(), PAIR).entries[WREN_PATH].base is None
+    assert WREN_PATH not in parse_keeps((phone.store.root / f".sync/peers/{DESKTOP}/keeps.json").read_bytes(), PAIR).entries
     with pytest.raises(DismissRefused):
         dismiss(desktop.store, PHONE, WREN_PATH, etag(former), desktop.handle)
     assert former in _kept(desktop)

@@ -134,15 +134,14 @@ def test_a_dismissal_ends_with_its_conflict_and_never_costs_the_other_devices_re
 def test_a_version_of_a_path_no_longer_in_conflict_is_never_dismissable(tmp_path):
     """The desktop keeps the phone's version; then both devices settle on the same new bytes and the
     conflict ends. The kept copy may now be the last copy of the phone's old version anywhere, so
-    it is not dismissed (the app would delete it): the record says the path is not in conflict."""
+    it is not dismissed (the app would delete it): the conflict that delivered it is over."""
     desktop, phone = _conflict(tmp_path)
     theirs = _theirs(phone)
     edit_instance(desktop, WREN_A, 20)
     (phone.root / PATH).write_bytes((desktop.root / PATH).read_bytes())
     assert sync(desktop, phone, handles()).conflict(PATH) is None
     assert _copies((desktop, phone), theirs) == _slots(desktop, theirs)
-    assert etag(theirs) in _entries(desktop)[PATH]["delivered"] and _entries(desktop)[PATH]["base"] is None
-    with pytest.raises(DismissRefused, match="no longer in conflict"):
+    with pytest.raises(DismissRefused):
         dismiss(desktop, PHONE, PATH, etag(theirs), handle())
     assert theirs in kept(desktop)
 
@@ -560,6 +559,30 @@ def test_a_sync_that_ends_a_conflict_never_leaves_its_kept_copies_dismissable(tm
     with pytest.raises(DismissRefused):
         dismiss(desktop, PHONE, PATH, etag(former), handle())
     assert former in kept(desktop)
+
+
+@pytest.mark.parametrize("ending", ["the desktop takes the phone's version", "resolve"])
+def test_a_version_delivered_in_an_ended_conflict_is_never_dismissable_in_the_next(tmp_path, ending):
+    """The conflict ends on the phone's version (the person copies it into place on the desktop, or
+    resolves to it), and the devices agree on it. Then both edit again: the phone's former version
+    now exists only in the desktop's old kept slot. The next conflict stands on another base, so
+    nothing delivered in the ended one is a delivery of this one: it is never dismissable."""
+    desktop, phone = _conflict(tmp_path)
+    mine, theirs = (desktop.root / PATH).read_bytes(), _theirs(phone)
+    if ending == "resolve":
+        resolve(desktop, phone, PATH, etag(theirs), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
+    else:
+        (desktop.root / PATH).write_bytes(theirs)
+    assert sync_until_quiet(desktop, phone, handles()).conflicts == ()
+    edit_instance(desktop, WREN_A, 7)
+    edit_instance(phone, WREN_A, 2)
+    newer = _theirs(phone)
+    assert sync(desktop, phone, handles()).conflict(PATH).kept == {DESKTOP: True, PHONE: True}
+    assert _copies((desktop, phone), theirs) == _slots(desktop, theirs)
+    with pytest.raises(DismissRefused):
+        dismiss(desktop, PHONE, PATH, etag(theirs), handle())
+    assert dismiss(desktop, PHONE, PATH, etag(newer), handle()).wrote  # this conflict's own delivery still is
+    assert theirs in kept(desktop)
 
 
 def test_a_new_identity_leaves_no_dismissal_behind_and_no_notice(tmp_path):
