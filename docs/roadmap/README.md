@@ -190,6 +190,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 
 #### Wave 5 status
 
+- **039 first slice:** authored NPC agendas (goals, approaches, limits) and a deterministic policy that picks what one director NPC pursues from its own knowledge and the scene's cast, carried into its one ordinary generation call; a planner's wish is recorded and explained, never obeyed ([GOALS](../GOALS.md)). Storing agendas, commitments, ability and holding feasibility, and consequences in time and resources are later 039 slices.
 - **041 first slice:** a scene-local stage of areas, doors and passages, who and what is where and who holds what, changed only through validated moves, exits, entries, takes, drops, gives and door/lock changes (a key in someone's custody), with director corrections and assumed facts kept apart from established ones. Pure questions answer whether an actor can reach a thing, see someone or hear a speaker on a 032 channel; it builds 032 presences so a whisper never passes a shut door, and 012 perceptions only for those who can see the event ([STAGING](../STAGING.md)). Nothing is persisted yet: a stage kept across turns, 021 operations and seeding from 017 and 034 are its next slice.
 
 <a id="wave-6"></a>

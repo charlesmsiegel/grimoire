@@ -67,7 +67,7 @@ Not yet: a V1 record's `voice_anchor.md` (the world actor's or a campaign's own)
 
 A brief is a sealed value: only its builder makes one.
 
-**`npc_brief(view, voice, *, heard=(), secrets, sections=(), names=None, ..., context=None, snapshot=None)`** builds one NPC's brief from its own `ActorView` (`actor_view` or `snapshot_actor_view`):
+**`npc_brief(view, voice, *, heard=(), secrets, sections=(), names=None, ..., context=None, snapshot=None, intention=None)`** builds one NPC's brief from its own `ActorView` (`actor_view` or `snapshot_actor_view`):
 
 - It refuses `view.knowledge is None` (`no_knowledge`), and knowledge that is not this actor's own `ActorKnowledge` (`foreign_knowledge`), such as director knowledge or another actor's projection. The actor's typed ref (a character, or a speaking item) comes from its own projection. A voice for another actor, or resolved for another selected revision than `view.resolved_source`, is `voice_mismatch`.
 - Superseded beliefs keep their stance ("Earlier, you doubted: ...").
@@ -97,6 +97,21 @@ The pack is already within its own token budget, so `sections`, `context_chars` 
 The `basis` ([CONTEXT](CONTEXT.md#the-selection-a-pack-is-built-over)) is the campaign, the actor's own bindings, every `lorebook` and `scenario` binding (as selected, as resolved, and the content etag of each revision read through it) and the captured instance's etag. So a pack from another chat that reuses the same actor and card (107's `reuse_actors`) but binds other lore is refused, and so is a pack from before a lorebook was attached, detached, re-pinned or moved to a new head, or edited by hand in place (same reference, new content), or before the actor's instance record changed. A campaign original, which has no card, is checked the same way. What is **not** checked: that `snapshot` is the chat the caller means to play. It is the caller's word for that, as `heard` is its word for what the actor heard.
 
 **Screening.** Every line the brief shows from the pack counts as exposed to this actor, so a reply quoting common lore it was given is not `unlearned_secret`. Director-only lore is never in an actor's pack (031's audience rule, and the `foreign_context` check above), and a pack read over another selection is `context_mismatch`, so lore the brief's own selection does not give the actor as `common` can never be exposed this way. A pack is not sealed: the caller builds it with `pack_actor_context` from the actor's own binding, as it builds `heard` from what the actor heard.
+
+### Intentions (039)
+
+With `intention`, a `Choice` from 039's `choose` ([GOALS](GOALS.md)) for **this same actor from this very projection of its knowledge**, the brief ends with what the NPC is after ("What you are after right now:", the goal's aim), what it means to do about it ("What you mean to do about it:", the chosen approach's action) and what it will not do here ("What you will not do here, whatever it would gain you:", the rules of the limits it is refusing now). A choice with nothing to pursue and nothing refused adds nothing, byte for byte. A refused or outranked approach's action is never shown. This is the whole cost of an NPC's goals: the same one `npc_generation` call, no `planning` or `decision` call.
+
+| Refusal | When |
+|---|---|
+| `bad_intention` | not a `Choice` (exactly; `Choice` cannot be subclassed) |
+| `foreign_intention` | another actor's choice |
+| `intention_mismatch` | chosen from another `ActorKnowledge` than `view.knowledge` (another moment, or a projection a ledger reload has since changed): it may rest on a belief the actor no longer holds, or miss one that would have stopped it |
+| `intention_leak` | an aim, action or rule shown would state a hidden secret's marker that nothing the actor holds exposes. The agenda is the director's, so its text may name what this NPC has not learned. Gating an approach on `Holds` of that proposition makes **that approach's action** safe (the actor holds it by the time it is chosen). It does not make the goal's aim safe, which is shown whenever any approach of the goal is chosen, nor a limit's rule, which is shown whenever the limit refuses something: keep those free of what the NPC may not know. A disguised actor's real name in an action is caught the same way when its identity is registered as a `SecretFact`, as for labels |
+
+Shown intention text is screened, not added to what the actor holds: it never states a hidden secret, so a reply repeating it is screened as any other reply.
+
+`run_turn` refuses, before any call, a brief whose intention was chosen for another scene than the turn's plan has present (`intention_cast_mismatch`): the choice's `present` and `unrecognised` actors ([GOALS](GOALS.md#choosing)) must be exactly the plan's `present_actor_ids`. Someone the approach needs may have left, or someone a limit watches for may have arrived.
 
 ### The director's brief
 
@@ -137,7 +152,7 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 
 `run_turn(meter, briefs, *, controls, director=None, token=None, cancel=None, scene_voices=()) -> TurnOutcome`:
 
-- **Checked before any call** (`GenerationError`): every planned call is `npc_generation` or `director_generation` (`unsupported_stage`), each `npc_generation` call has exactly one brief (`missing_brief`, `extra_brief`, `duplicate_brief`), a director brief is given exactly when a director reply is planned (`director_mismatch`), no planned call already ran on `meter` (`call_already_run`), every brief's actor is director-controlled **now**, so a hand-built plan cannot voice a player character, and the director brief names the same player characters that the plan and control give now (`director_mismatch`; an unassigned present actor is `unassigned_actor`).
+- **Checked before any call** (`GenerationError`): every planned call is `npc_generation` or `director_generation` (`unsupported_stage`), each `npc_generation` call has exactly one brief (`missing_brief`, `extra_brief`, `duplicate_brief`), a director brief is given exactly when a director reply is planned (`director_mismatch`), no planned call already ran on `meter` (`call_already_run`), every brief's actor is director-controlled **now**, so a hand-built plan cannot voice a player character, the director brief names the same player characters that the plan and control give now (`director_mismatch`; an unassigned present actor is `unassigned_actor`), and every NPC brief's intention was chosen for exactly the actors this plan has present (`intention_cast_mismatch`, 039).
 - **Calls run in plan order**, one `execute` each. Each later call hears the lines accepted before it; a planned director reply runs after the speakers, and a speaker planned after it (a later phase added on the meter) is refused before any call (`director_not_last`).
 - **An exception from the adapter or an approvals callback** ends the call `failed` (reason: the exception type) and the turn `halted`, keeping earlier lines.
 - **Only accepted, screened text becomes a line.** A provider status other than `accepted`, or a screen rejection, ends the turn: later calls are `not_issued`. A rejected call is still billed.
@@ -169,4 +184,5 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 | Detecting player-character authorship in generated text | 035 (`review_narration`) |
 | Richer retrieval behind the same pack seam (recent history, unbound world records, embeddings) | 031 |
 | Building each speaker's pack and the director's lore every turn, with the transcript window as scene text | 035 |
-| Other optional stages in a generation turn (`select`/`decision` phases) | later |
+| Other optional stages in a generation turn (`select`/`decision` phases) | later (045 for decisions) |
+| Choosing an NPC's intention every turn and giving the turn to an NPC that acts on its goals | 035 |
