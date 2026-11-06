@@ -1,4 +1,6 @@
-"""A card import that carries art survives every crash, I/O error and recovery crash (Sprint 038).
+"""A card import that carries art survives every crash and I/O error (Sprint 038); recovery crashes,
+and recovery crashes after an I/O error, are explored only with GRIMOIRE_EXHAUSTIVE_RECOVERY=1, as
+for the other gated writers.
 
 The import writes the card's source, its character and its import record together with a
 portrait, an inline sprite (named in a script with no ASCII letters, so its slot is the name's

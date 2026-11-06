@@ -186,6 +186,7 @@ The [inventory](MIGRATION_INVENTORY.md) rows map as follows. `grimoire.import_v1
 | Campaign layering `overridden` | campaign `set` |
 | An avatar, gallery or live expression placement, or a campaign `overridden` one, whose picture is missing (a `dangling_object`, an `unarrived_blob`, bytes that do not match or are too large to read) | `unresolved` (038) in the same slot, with the role (and a sprite's expression), `provenance.legacy_id` and a `note` saying why; reported too. So a campaign's missing picture never falls back to the world picture it replaced. A campaign `focus_override` of a missing world picture has nothing to re-crop: the actor inherits the world's `unresolved` slot and the override is reported (`layering_base_unresolved`) |
 | A campaign expression layer's hidden outfits and expressions (011's `hides`) | campaign `hide` on each actor over each world sprite it hides, with `provenance.legacy_id` of the layer |
+| A campaign expression layer's own sprite over a world sprite (011's `overrides`) | campaign `unresolved` on each actor over that world sprite (the campaign's sprite is not carried), so the world sprite it replaced never shows; a `hide` of the same sprite wins |
 
 **Unmapped or unrepresentable.** The importer must report each of these as unresolved; 018 defines no fallback:
 - `unarrived_blob` / `hash_mismatch` objects: no intact bytes, so no image object (the slots that name them are `unresolved`, above);

@@ -42,6 +42,8 @@ MISSING_NOTES = {
     "unarrived_blob": "a V1 picture whose bytes did not arrive or do not match",
     "too_large": "a V1 picture too large to read",
 }
+#: the note of the ``unresolved`` slot a V1 campaign's own sprite over a world sprite leaves on its actors
+CAMPAIGN_SPRITE_NOTE = "a V1 campaign sprite this import does not carry"
 
 
 class _Refused(Exception):
@@ -682,10 +684,11 @@ class _Mapper:
                 self.guarded(lambda path=layer["path"]: self.out.not_imported.append(
                     {"legacy_id": self.legacy(path), "family": "expression_settings"}))
             elif owner.get("scope") == "campaign" and owner.get("scope_id") in selected:
-                # a campaign's expression settings are listed like a world's; what it hides is carried
+                # a campaign's expression settings are listed like a world's; what it hides or replaces
+                # is carried
                 self.guarded(lambda path=layer["path"]: self.out.not_imported.append(
                     {"legacy_id": self.legacy(path), "family": "expression_settings"}))
-                self.guarded(self.expression_hides, layer, images.get("expression_layers", ()), world_rows,
+                self.guarded(self.campaign_expressions, layer, images.get("expression_layers", ()), world_rows,
                              images["placements"])
         for row in images.get("legacy_images", ()) + images.get("collections", ()):
             if isinstance(row, Mapping) and "path" in row:
@@ -700,8 +703,11 @@ class _Mapper:
         owner = row["owner"]
         if owner["scope"] != "world":
             if owner["scope"] == "campaign" and owner.get("scope_id") in selected and row["path"] not in layered:
-                # a campaign's own slot over no world art: not carried by this slice, and said so
-                self.unresolved(self.legacy_of(row), "campaign_only_placement", row["path"])
+                if self._campaign_sprite_over_world(row):
+                    # its slot is marked missing on the actors (``campaign_expressions``), never the world's
+                    self.unresolved(self.legacy_of(row), "campaign_sprite_not_carried", row["path"])
+                else:  # a campaign's own slot over no world art: not carried by this slice, and said so
+                    self.unresolved(self.legacy_of(row), "campaign_only_placement", row["path"])
             return
         source = self.sel.worlds.get(owner["scope_id"])
         subject_pinned = self.portrayals.get((owner["scope_id"], owner["base"], owner["record"],
@@ -717,35 +723,65 @@ class _Mapper:
             return
         world_rows[row["path"]] = self.world_placement(row, source, subject_pinned, objects, blobs)
 
-    def expression_hides(self, layer: Mapping, layers: object, world_rows: Mapping, placements: list) -> None:
-        """What a campaign's expression layer hides (011's ``hides``: ``<outfit>/<name>`` or a whole
-        ``<outfit>/*``) becomes a campaign ``hide`` on each actor playing the world portrayal under it,
-        over each world sprite it hides, so V2 never shows a sprite the V1 campaign hid. A hide builds
-        on the world sprite as imported; a hidden sprite the world never placed needs none."""
-        hides = layer.get("hides")
-        if layer.get("status") != "available" or layer.get("over") is None or not isinstance(hides, list):
+    def _campaign_layer(self, owner: object) -> Mapping | None:
+        """011's expression layer of ``owner`` (a campaign's actor version), if it lists one."""
+        return next((layer for layer in self.m["images"].get("expression_layers", ())
+                     if isinstance(layer, Mapping) and layer.get("owner") == owner), None)
+
+    def _campaign_sprite_over_world(self, row: Mapping) -> bool:
+        """Whether ``row`` is a campaign layer's own live sprite over a world sprite (011's ``overrides``)."""
+        if row.get("area") != "expression" or not row.get("live"):
+            return False
+        layer = self._campaign_layer(row.get("owner"))
+        overrides = layer.get("overrides") if layer is not None else None
+        return isinstance(overrides, list) and f"{row.get('outfit')}/{row.get('name')}" in overrides
+
+    def campaign_expressions(self, layer: Mapping, layers: object, world_rows: Mapping, placements: list) -> None:
+        """A campaign expression layer over a world one, on each actor playing the world portrayal under
+        it, over each world sprite it touches: what it hides (011's ``hides``: ``<outfit>/<name>`` or a
+        whole ``<outfit>/*``) becomes a ``hide``, and a sprite it replaces with its own (``overrides``),
+        which this slice does not carry, an ``unresolved`` slot, so V2 never shows a world sprite the V1
+        campaign hid or replaced. A hide wins over a replacement. Both build on the world sprite as
+        imported, and a sprite the world never placed needs neither. 011 fills ``hides`` and
+        ``overrides`` only from a header it validated, so they are carried even from a layer it marks
+        unavailable (one not yet synchronized, say): the layer fails closed."""
+        if layer.get("over") is None:
             return
         campaign = next((c for c in self.out.campaigns if c.v1_id == (layer.get("owner") or {}).get("scope_id")), None)
         world_layer = next((w for w in layers if isinstance(w, Mapping) and w.get("path") == layer["over"]), None)
-        if campaign is None or world_layer is None or not hides:
+        if campaign is None or world_layer is None:
             return
         legacy = self.legacy(layer["path"])
-        hidden = {hide for hide in hides if isinstance(hide, str)}
+        hidden = {hide for hide in layer.get("hides") or () if isinstance(hide, str)}
+        replaced = {sprite for sprite in layer.get("overrides") or () if isinstance(sprite, str)}
+        if not hidden and not replaced:
+            return
+        own = {f"{row.get('outfit')}/{row.get('name')}": row["legacy_id"] for row in placements
+               if row.get("area") == "expression" and row.get("owner") == layer.get("owner") and row.get("live")
+               and isinstance(row.get("legacy_id"), str)}
         for row in placements:
-            if row.get("area") != "expression" or row.get("owner") != world_layer.get("owner") \
-                    or not ({f"{row.get('outfit')}/{row.get('name')}", f"{row.get('outfit')}/*"} & hidden):
+            if row.get("area") != "expression" or row.get("owner") != world_layer.get("owner"):
+                continue
+            sprite = f"{row.get('outfit')}/{row.get('name')}"
+            hide = bool({sprite, f"{row.get('outfit')}/*"} & hidden)
+            if not hide and sprite not in replaced:
                 continue
             placing = (world_rows.get(row["path"]) or (None, None))[0]
-            if placing is None:  # the world sprite was not placed (and was reported): nothing shows to hide
+            if placing is None:  # the world sprite was not placed (and was reported): nothing shows
                 continue
+            if hide:
+                placement, source = Placement("hide", provenance={"legacy_id": legacy}), legacy
+            else:
+                source = own.get(sprite, legacy)
+                placement = Placement("unresolved", "expression", expression=placing.placement.expression,
+                                      provenance={"legacy_id": source, "note": CAMPAIGN_SPRITE_NOTE})
             for actor in campaign.actors:
                 if actor.definition.unpinned() != placing.subject:
                     continue
                 if not storable(PlacementRef(actor.ref, placing.slot)):
-                    self.unresolved(legacy, "unstorable_id", placing.slot)
+                    self.unresolved(source, "unstorable_id", placing.slot)
                     continue
-                self.out.placings.append(Placing(actor.ref, placing.slot, Placement("hide", provenance={
-                    "legacy_id": legacy}), legacy, (actor.ref, placing)))
+                self.out.placings.append(Placing(actor.ref, placing.slot, placement, source, (actor.ref, placing)))
 
     def references(self, rows: object) -> None:
         """Markdown image references inside imported text keep their V1 URLs: reported, never rewritten."""

@@ -32,6 +32,8 @@ MARA_SUBJECT = MARA_DEFAULT_REF.unpinned()
 CAMPAIGN_AVATAR = f"{CAMPAIGN}/characters/mara/assets/default/image-refs/avatar.json"
 WORLD_AVATAR = f"{MARA}/assets/default/image-refs/avatar.json"
 CAMPAIGN_LAYER = f"{CAMPAIGN}/characters/mara/assets/default/expressions/manifest.json"
+CAMPAIGN_SPRITES = f"{CAMPAIGN}/characters/mara/assets/default/expressions/revisions/{REV}"
+NOT_CARRIED = "a V1 campaign sprite this import does not carry"
 DANGLING = "a V1 picture whose image record is not in the V1 library"
 UNARRIVED = "a V1 picture whose bytes did not arrive or do not match"
 #: a picture V1 knows (its sidecar) whose blob never arrived
@@ -144,12 +146,17 @@ def test_a_rerun_over_unresolved_art_writes_nothing(env):
 
 # -- B2: a campaign's expression layer -------------------------------------------------------------
 
-def _sprites(env: Env, campaign_manifest: dict) -> None:
-    """Mara's default portrayal with a casual/neutral sprite, and a campaign layer over it."""
+def _sprites(env: Env, campaign_manifest: dict, own: dict[str, bytes] | None = None,
+             declared: dict[str, bytes] | None = None) -> None:
+    """Mara's default portrayal with a casual/neutral sprite, and a campaign layer over it with
+    ``own`` sprites written; its manifest counts ``declared`` (``own`` by default) as its sprites."""
     write(env.v1, f"{MARA}/assets/default/expressions/revisions/{REV}/casual/image-refs/neutral.json", NEUTRAL)
     write(env.v1, f"{MARA}/assets/default/expressions/manifest.json",
           expression_manifest(EXPRESSIONS, {"casual/image-refs/neutral.json": NEUTRAL}))
-    write(env.v1, CAMPAIGN_LAYER, expression_manifest({**EXPRESSIONS, **campaign_manifest}, {}))
+    for relpath, data in (own or {}).items():
+        write(env.v1, f"{CAMPAIGN_SPRITES}/{relpath}", data)
+    write(env.v1, CAMPAIGN_LAYER, expression_manifest({**EXPRESSIONS, **campaign_manifest},
+                                                      (own or {}) if declared is None else declared))
     env.rescan()
 
 
@@ -195,3 +202,43 @@ def test_a_missing_world_sprite_is_unresolved_and_a_campaign_hide_over_it_still_
     world, _ = images.read_placement(PlacementRef(MARA_SUBJECT, slot))
     assert (world.mode, world.role, world.expression) == ("unresolved", "expression", Expression("casual", "neutral"))
     assert images.effective_placements(CAMPAIGN_MARA).slot(slot) == Hidden(slot)
+
+
+# -- review fixes: a campaign's own sprite, and a layer not yet synchronized --------------------------
+
+@pytest.mark.parametrize("own_id", [BLUE_ID, MISSING_ID], ids=["present", "missing"])
+def test_a_campaign_sprite_over_a_world_sprite_is_unresolved_never_the_world_sprite(env, own_id):
+    _sprites(env, {}, own={"casual/image-refs/neutral.json": placement(own_id).encode()})
+    layer = next(row for row in env.manifest["images"]["expression_layers"] if row["path"] == CAMPAIGN_LAYER)
+    assert (layer["status"], layer["overrides"]) == ("available", ["casual/neutral"])
+    result = env.plan(WITH_CAMPAIGN).apply()
+    reasons = {reason for reason, _ in _reasons(result.review)}
+    assert "campaign_sprite_not_carried" in reasons and "campaign_only_placement" not in reasons
+    images = _images(env)
+    slot = "expr.casual.neutral"
+    assert isinstance(images.effective_placements(MARA_SUBJECT).slot(slot), Shown)  # the world keeps its own
+    assert images.effective_placements(CAMPAIGN_MARA).slot(slot) == Unavailable(slot, "unresolved", NOT_CARRIED)
+    placement_, _ = images.read_placement(PlacementRef(CAMPAIGN_MARA, slot))
+    assert (placement_.mode, placement_.expression) == ("unresolved", Expression("casual", "neutral"))
+    assert placement_.provenance["legacy_id"] == f"v1:{ARCHIVE}:{CAMPAIGN_SPRITES}/casual/image-refs/neutral.json"
+
+
+def test_a_campaign_sprite_it_also_hides_stays_hidden(env):
+    _sprites(env, {"hidden_expressions": {"casual": ["neutral"]}},
+             own={"casual/image-refs/neutral.json": placement(BLUE_ID).encode()})
+    env.plan(WITH_CAMPAIGN).apply()
+    assert _images(env).effective_placements(CAMPAIGN_MARA).slot("expr.casual.neutral") == \
+        Hidden("expr.casual.neutral")
+
+
+def test_a_campaign_layer_not_yet_synchronized_still_hides_what_it_hides(env):
+    # the header declares a sprite whose file has not arrived: 011 marks the layer unavailable
+    _sprites(env, {"hidden_expressions": {"casual": ["neutral"]}},
+             declared={"casual/image-refs/happy.json": NEUTRAL})
+    layer = next(row for row in env.manifest["images"]["expression_layers"] if row["path"] == CAMPAIGN_LAYER)
+    assert layer["status"] == "unavailable" and layer["hides"] == ["casual/neutral"]
+    result = env.plan(WITH_CAMPAIGN).apply()
+    assert {"legacy_id": f"v1:{ARCHIVE}:{CAMPAIGN_LAYER}", "family": "expression_settings"} \
+        in result.review["not_imported"]
+    assert _images(env).effective_placements(CAMPAIGN_MARA).slot("expr.casual.neutral") == \
+        Hidden("expr.casual.neutral")

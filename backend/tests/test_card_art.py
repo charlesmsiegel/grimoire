@@ -426,3 +426,16 @@ def test_a_rerun_over_slots_an_earlier_build_named_by_place_neither_fails_nor_co
     again = importer(store).plan(encode(card(assets=[JA_SMILE, JA_ANGER])), portrait=PORTRAIT,
                                  target="card:mara-vell")
     assert again.report.status == "unchanged" and again.preview() == {}
+
+
+def test_names_that_lose_letters_to_the_ascii_fold_keep_their_own_slots():
+    smile_2, anger_2 = f"{SMILE_JA} 2", f"{ANGER_JA} 2"
+    assets = [{"type": "emotion", "uri": data_uri(SMILE_PNG), "name": smile_2},
+              {"type": "emotion", "uri": data_uri(FROWN_GIF, "image/gif"), "name": anger_2},
+              {"type": "emotion", "uri": data_uri(SMILE_PNG), "name": "Café"},  # an accent alone loses nothing
+              {"type": "emotion", "uri": data_uri(SMILE_PNG), "name": "Smile"}]
+    pieces, losses = card_art(parse_card(json.loads(encode(card(assets=assets)))), None)
+    digest = {name: hashlib.sha256(name.encode("utf-8")).hexdigest()[:8] for name in (smile_2, anger_2)}
+    assert [piece.slot for piece in pieces] == [f"expr.default.2-{digest[smile_2]}", f"expr.default.2-{digest[anger_2]}",
+                                                "expr.default.cafe", SMILE]
+    assert not [loss for loss in losses if loss.reason == "duplicate_slot"]

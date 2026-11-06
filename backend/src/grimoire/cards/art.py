@@ -34,7 +34,10 @@ Slots, in the order the card lists its assets (the first claim on a slot wins; a
 or digit (``笑顔``) gives none, so it is the first 8 hex digits of the sha256 of the name
 (stripped, NFC): ``expr.default.emotion-<hash>``, ``icon-<hash>``. The slot follows the name, so
 reordering the card's assets never moves a picture (or an individual's own picture over it) to
-another sprite. Only an asset with no name at all takes its place in the array (``emotion-3``).
+another sprite. A name whose slug lost a letter or digit the fold to ASCII drops (``笑顔 2``)
+keeps its slug with that hash after it (``2-<hash>``), so it never shares a slot with another such
+name (``怒り 2``); an accent alone (``Café``, ``cafe``) loses nothing. Only an asset with no name at
+all takes its place in the array (``emotion-3``).
 """
 
 from __future__ import annotations
@@ -118,11 +121,19 @@ def _main(assets: list[Asset], kind: str) -> Asset | None:
 
 
 def _name(asset: Asset, prefix: str) -> str:
-    """The asset's name as a slot segment: its slug, else a hash of the name, else (no name) its index."""
+    """The asset's name as a slot segment: its slug, with a hash of the name when the slug lost a
+    letter or digit; a hash alone when the slug is empty; its index when it has no name."""
     name = unicodedata.normalize("NFC", (asset.name or "").strip())
     if not name:
         return f"{prefix}{asset.index}"
-    return slugify(name, f"{prefix}{hashlib.sha256(name.encode('utf-8')).hexdigest()[:8]}")
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+    # a letter or digit the ASCII fold drops (笑顔 in "笑顔 2"); an accent alone (Café) is no loss
+    lost = any(char.isalnum() and not char.isascii() and not unicodedata.combining(char)
+               for char in unicodedata.normalize("NFKD", name))
+    slug = slugify(name, "")
+    if not slug:
+        return f"{prefix}{digest}"
+    return f"{slug}-{digest}" if lost else slug
 
 
 def card_art(card: ParsedCard, portrait: bytes | None) -> tuple[tuple[ArtPiece, ...], tuple[Loss, ...]]:
