@@ -21,7 +21,7 @@ Each speaking NPC gets its own call, with its own voice, its own [031](CONTEXT.m
 `TurnRef(campaign_id, turn_id)` is `campaign:<c>#turn/<t>`, stored at `campaigns/<c>/turns/<t>.json` in the scope-record envelope ([STORAGE](STORAGE.md)). `turn_id` is `<chat_id>.<n:06d>`, numbered from 1 per chat. A chat id over 97 characters cannot be played (`invalid_field`), so the turn id still fits 032's message ids.
 
 A `TurnRecord` holds:
-- `origin`: `post` (a player's post), `prompt` (the table asked the cast to go on), `opening` (a card's greeting or a scenario's opening), or `imported` (reserved for 036);
+- `origin`: `post` (a player's post), `prompt` (the table asked the cast to go on), `opening` (a card's greeting or a scenario's opening), or `imported` (reserved; 036's imported history lives in its own `transcripts/` family);
 - `post`: the player's line, who submitted it, its kind (`speech` or `action`), channel, addressees and **audience**;
 - `takes`: up to 16. A take is `running`, `proposed`, `kept`, `withdrawn`, `stale` or `superseded`. It records its cast, its lines, every planned call with its status and attempts, the policy's declined calls, any unscreened director lore, a redirect's direction, and who chose it;
 - `paused` (and, kept only for `resume`, who paused), and `passed_by`.
@@ -97,4 +97,4 @@ Every method reads the chat afresh (one `LibraryView`, 022's chat snapshot, the 
 | UI, streaming, async, the chat list | 035 M2, 065 |
 | Several human players at one table | 102 |
 | Merging turns across devices | 028 milestone, before 044 |
-| Importing SillyTavern histories as turns (`origin: imported`) | 036 |
+| Continuing a chat from its imported history: 036 stores imported chats in its own immutable `transcripts/` family; the runner does not read it yet, so NPCs have heard none of it (fail closed) | 035 M2, 036 |
