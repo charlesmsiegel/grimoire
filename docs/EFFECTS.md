@@ -7,7 +7,7 @@
 - an additive amendment to [017](GRAPH.md#reopening-an-ending-021): reopening a relation's ending in place;
 - an additive 023 read, `HoldingsLibrary.view(holder)` ([HOLDINGS](HOLDINGS.md#service-grimoireholdingstoreholdingslibrary)).
 
-There is **no app, no runner, no transcript store and no model call**. The scenarios are synthetic. The first playable chat is 035 (Wave 5).
+There is **no app and no model call**, and 035's text runner ([SCENES](SCENES.md)) does not accept effects yet: its kept lines are transcript, and 021 acceptance is its milestone 2. The scenarios are synthetic.
 
 ## What it means
 

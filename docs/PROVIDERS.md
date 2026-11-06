@@ -10,7 +10,7 @@
 
 What it does not include:
 
-- no scene runner;
+- no scene runner of its own (035's [SceneRunner](SCENES.md) calls providers through 027's runtime);
 - no prompt composition (owned by 014 and 027);
 - no prices;
 - no persisted state.

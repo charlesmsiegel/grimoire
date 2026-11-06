@@ -30,6 +30,6 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 - Its apply/reject decisions are the first approval UI: issue `grimoire.security` approvals only from a direct human action, showing `describe()` and the staged content its digest covers (007).
 
 ## Open questions
-- All-or-nothing or recoverable staged edits?
+- ~~All-or-nothing or recoverable staged edits?~~ Answered by the first slice: all or nothing, in one guarded store transaction ([CHANGESETS](../../CHANGESETS.md)).
 - Who may approve auto-apply exceptions?
 - What should undo mean after further outside edits?

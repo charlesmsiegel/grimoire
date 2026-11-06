@@ -27,6 +27,12 @@ Use **022's** pinned composed effective definition and 042's reviewed rebase. De
 
 Extend field provenance to voice anchors (027 owns speaking prompts), scoped art and expressions (018/038), compatible abilities and relationships (017). One world/local instance override must never mutate the core definition or another variant, and a source update must not silently change a pinned chat or cause old incompatible facts to reappear. [Chat model](../CHAT_MODEL.md).
 
+## Inherited from Wave 5
+
+The [Wave 5 audit](../README.md#wave-5-status) records what this sprint inherits from 038 and 042's first slices:
+- **Art (038, [IMAGES](../../IMAGES.md)).** Derived-portrayal art inheritance and revision-pinned card art are 038's later milestone 2, which no wave schedules; this sprint delivers them with field inheritance. Today card art follows the entity, not a pinned revision, so a card update changes the art of a chat pinned to an older revision.
+- **Rebase (042, [REBASE](../../REBASE.md)).** Instance-level text overrides (keeping one of two changed sections), source-level rebase of a derived portrayal onto its base's new revision (Mara's Regency and Modern portrayals over one concept), and whether a campaign may keep its own voice or greeting when the card's changes (042's review shows them as take-only rows today).
+
 ## Open questions
 - Which fields inherit live and which must snapshot?
 - What is the semantics of explicit null?

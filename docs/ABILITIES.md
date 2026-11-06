@@ -5,7 +5,7 @@
 - `ability_use.py`: labelled attempts, provisional rulings and the assessment;
 - `entity_codec.py`: the facet's payload form.
 
-There is no runner, no prompt and no model call. Nothing is adjudicated here: [Fiction-First Adjudication](ADJUDICATION.md) (029) consumes the assessment, persists rulings and authenticates the assessment 021 charges. All scenarios are synthetic.
+There is no prompt and no model call, and 035's runner does not run ability attempts yet (milestone 2). Nothing is adjudicated here: [Fiction-First Adjudication](ADJUDICATION.md) (029) consumes the assessment, persists rulings and authenticates the assessment 021 charges. All scenarios are synthetic.
 
 ## What it is for
 

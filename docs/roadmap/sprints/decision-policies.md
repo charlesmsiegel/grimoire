@@ -24,6 +24,13 @@ An NPC chooses to retreat based on fear, constraints and available exits; retryi
 ## Independence and interfaces
 Can layer over the current Decision model role; mechanical action legality is delegated to the active ruleset if any.
 
+## Inherited from Wave 5
+
+The [Wave 5 audit](../README.md#wave-5-status) records what this sprint builds on.
+- **039 ([GOALS](../../GOALS.md#requirements-on-later-sprints)) is the deterministic default.** A model-selected decision is an optional, capped `decision` call that picks only among approaches `choose` found `chosen` or `outranked`, through a new argument of `choose`; never through `desired` (a planner's wish, never obeyed) and never a hand-built `Choice`.
+- **The recorded choice is 035's.** 039's `Choice` and `explain()` are in-memory values; 035 milestone 2 stores each turn's choice in its turn record. This sprint's "already-recorded choice" proof needs that record, or its own decision record.
+- **Narration is not checked against an intention yet.** A reply that breaks a briefed refusal is kept like any other line; [Narration Continuity Referee](narration-continuity-referee.md) (047) flags such a breach. This sprint never rewrites a recorded intention.
+
 ## Open questions
 - Which decisions require sampled randomness?
 - What justifies expensive inference?

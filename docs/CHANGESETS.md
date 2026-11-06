@@ -8,7 +8,7 @@ There is no app or UI, and no model or worker is involved. The scenarios are syn
 
 ## What it means
 
-- A **change set** is a proposal to edit one world source's definitions together: create new entities, and give existing ones new revisions. It is applied **all or nothing**, in one guarded store transaction.
+- A **change set** is a proposal to edit one source's definitions together (normally a world source; nothing refuses another scheme, and a `card:` source edited this way is then a hand edit to 037's importer): create new entities, and give existing ones new revisions. It is applied **all or nothing**, in one guarded store transaction.
 - A human sees **exactly what will be written** before deciding: each file's bytes, a readable diff, the conflicts that stop it, and how the library's authority decides each file.
 - **Nothing is overwritten silently.** Every record a change set touches, or pins, carries the revision and file etag it was drafted against. If the library changed since, applying is refused and nothing is written.
 - **No unrelated file changes.** The only files written are the new revisions and the source manifest (whose heads move). Old revisions stay on disk, as the store keeps every definition revision.
@@ -20,7 +20,7 @@ There is no app or UI, and no model or worker is involved. The scenarios are syn
 | Field | Meaning |
 |---|---|
 | `changeset_id` | `[a-z0-9][a-z0-9._-]*`, at most 128 characters. |
-| `source` | The one world source every target belongs to. There is no field that can name another source, a campaign or a path. |
+| `source` | The one source (normally a world) every target belongs to. There is no field that can name another source, a campaign or a path. |
 | `title`, `author`, `rationale` | What a reviewer reads. `author` is attribution text, not authority; it becomes the `owner` of a created entity. |
 | `changes` | 1 to 64 `RecordChange`s, at most one per entity and one per entity id. |
 | `preconditions` | Up to 64 `Precondition(kind, entity_id, revision, etag)`: unchanged records the change set relies on. A changed record is never also pinned. |
@@ -86,7 +86,7 @@ The store's own compare-and-swap words (`changed`, `absent`, with a file path as
 2. stages the reviewed envelopes, and verifies the staged bytes equal the reviewed ones;
 3. commits them in one store transaction with the library's handle and `approvals`. The store's guarantees apply: compare-and-swap, journal, crash recovery and authorization of every file over its exact bytes ([STORAGE](STORAGE.md#writing)).
 
-It returns `AppliedChangeSet(changeset_id, revisions, etags)`. A review is applied at most once, and its state is checked and moved under the store lock, so a `reject` and an `apply` never both win. `WriteDenied` writes nothing and leaves the review open, so it can be retried with approvals; any other failure ends it and withdraws its pending approvals, so none outlives it (if the authority is unavailable at that moment, `reject` withdraws them later). The store's pinned residual race (R7: an external edit landing during publication) is still reported as `WriteConflict`. A pinned record, and a revised record's base revision, are not written by the transaction, so the store does not re-hash them before publishing: a hand edit to one in the moment between the check in step 1 and the commit is not caught (the library's writer lock keeps other Grimoire processes out of that moment).
+It returns `AppliedChangeSet(changeset_id, revisions, etags)`. A review is applied at most once, and its state is checked and moved under the store lock, so a `reject` and an `apply` never both win. `WriteDenied` writes nothing and leaves the review open, so it can be retried with approvals; any other failure ends it and withdraws its pending approvals, so none outlives it (if the authority is unavailable at that moment, `reject` withdraws them later). Reviews are not persisted, so a process that ends with a review open (a crash, or a quit before apply or reject) leaves its pending approvals in the authority: they are bound to the reviewed bytes, so a later review of the identical change set can apply with them, and only trusted code holds their ids. Sweeping them when a library opens is later work. The store's pinned residual race (R7: an external edit landing during publication) is still reported as `WriteConflict`. A pinned record, and a revised record's base revision, are not written by the transaction, so the store does not re-hash them before publishing: a hand edit to one in the moment between the check in step 1 and the commit is not caught (the library's writer lock keeps other Grimoire processes out of that moment).
 
 ### Approvals: the first approval UI (007)
 

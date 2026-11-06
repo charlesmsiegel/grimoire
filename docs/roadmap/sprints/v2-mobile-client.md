@@ -20,6 +20,15 @@ The mobile first proof must include a **world-less** chat launched from a charac
 
 Persist and sync the lightweight scope, source associations, actor IDs, transcript, art references and unresolved-source/conflict state. Sync transport must not assume a world manifest exists. Richer library browsing is sprint 065, and one-click launch UI is sprint 052. [Chat model](../CHAT_MODEL.md).
 
+## Inherited from Wave 5
+
+The [Wave 5 audit](../README.md#wave-5-status) records what the phone client depends on:
+- **Turns are held from sync** until 028's merge milestone, recorded in [DEVICE_SYNC](../../DEVICE_SYNC.md) as due before this sprint. Turn ids are device-qualified on an identified library, so two devices playing one chat offline make two distinct turn files for the merge to present.
+- **Kept turns are transcript, not 021-accepted effects** until 035 milestone 2. "Sync an accepted turn" means a kept turn until then.
+- **No text API.** 035's runner is in-process Python; the interface the phone calls is this sprint's to define.
+- **Imported history is not heard** until 035 milestone 2's first item, which is due before this sprint.
+- **Pictures:** 038's `unresolved` placements sync without a blob ([IMAGES](../../IMAGES.md)).
+
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove?
 - Which optional later integrations can stay outside the first slice?

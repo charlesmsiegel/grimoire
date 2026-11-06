@@ -79,7 +79,7 @@ A new actor is `prior_history: not_witnessed`: it saw none of the chat's earlier
 
 - `label` (≤ 200 chars) is display text only. It is never identity, a lookup key or a credential.
 - `seq` is a local change counter. It is **not comparable across devices**; merging belongs to 019.
-- `last_activity` is advanced by every chat write. 035 will also advance it per post.
+- `last_activity` is advanced by every chat write. 035's runner does not advance it per post yet (a later 035 milestone).
 
 ### `PlayScope`
 
