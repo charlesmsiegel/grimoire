@@ -100,6 +100,11 @@ def _assign(meter: TurnMeter, briefs: tuple[NpcBrief, ...], director: DirectorBr
             raise GenerationError("extra_brief", f"{brief.actor} is not in campaign {plan.campaign_id}")
         if brief.actor.instance_id in by_actor:
             raise GenerationError("duplicate_brief", f"{brief.actor} has two briefs")
+        if brief.cast is not None and brief.cast != plan.present_actor_ids:
+            # 039: the intention was chosen for another scene. An approach may need an actor who has left,
+            # and an arrival may switch on a limit that would forbid it: choose again for this turn.
+            raise GenerationError("intention_cast_mismatch", f"the intention for {brief.actor} was chosen for "
+                                  "another set of present actors than this turn's")
         by_actor[brief.actor.instance_id] = brief
     pairs: list[tuple[PlannedCall, NpcBrief | DirectorBrief]] = []
     used: set[str] = set()
@@ -182,7 +187,8 @@ class GenerationRuntime:
 
         Refused before any call: a plan with any other stage, a call without its brief or a brief
         without its call, a director brief without a planned director reply (or the reverse), a call
-        that already ran on ``meter``, and any brief actor that is not director-controlled now.
+        that already ran on ``meter``, any brief actor that is not director-controlled now, and a brief
+        whose 039 intention was chosen for another set of present actors than this plan's.
         ``token`` (from ``RunFence.claim``) makes the run stale when a newer run claims the same key:
         a stale run returns no lines. ``cancel`` cancels the in-flight call; nothing runs after it.
         ``scene_voices`` are the other voices present (silent NPCs): a line reproducing one of their

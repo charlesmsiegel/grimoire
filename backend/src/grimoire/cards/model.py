@@ -53,8 +53,10 @@ class Loss:
 
     ``path`` locates it (``data.tags[2]``); it never echoes the field's text. Reasons:
     ``wrong_type``, ``too_deep``, ``rounded_number``, ``not_fetched`` (a remote asset),
-    ``unavailable`` (an embedded or default asset this slice cannot read), ``not_section`` (kept, but
-    not as a 022 section), ``not_applicable`` (a field the imported kind has no place for),
+    ``unavailable`` (an asset whose picture is not in the card: its slot is ``unresolved``),
+    ``duplicate_slot`` and ``too_many`` (an asset that fills no slot: an earlier one took it, or the
+    import's ``MAX_ART`` slots are full), ``not_section`` (kept, but not as a 022 section),
+    ``not_applicable`` (a field the imported kind has no place for, or a ``user_icon`` asset),
     ``too_long`` (a lorebook name over ``MAX_NAME``), ``blank`` (an empty greeting).
     ``rounded_number`` (a decimal a double cannot hold, imported as the nearest double) is reported
     by the importer, which reads the bytes.

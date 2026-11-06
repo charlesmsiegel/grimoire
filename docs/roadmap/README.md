@@ -188,6 +188,10 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 | 042 | [Source Rebase And Semantic Merge](sprints/source-rebase-and-semantic-merge.md) | **P1** | [Typed Relationship Graph](sprints/typed-relationship-graph.md), [Native File Store And Revisions](sprints/native-file-store-and-revisions.md), [Effective World Snapshots](sprints/effective-world-snapshots.md), [World Optional Chat Scopes](sprints/world-optional-chat-scopes.md) | sources / reviewed rebase | Review a root-change rebase and propose selected chat-authored canon for a new reusable world without history rewrites |
 | 043 | [World Change Sets](sprints/world-change-sets.md) | **P1** | [Native File Store And Revisions](sprints/native-file-store-and-revisions.md), [Typed Relationship Graph](sprints/typed-relationship-graph.md), [Safe Tool Execution](sprints/safe-tool-execution.md) | world / reviewed batch changes | Preview an atomic two-record world change |
 
+#### Wave 5 status
+
+- **039 first slice:** authored NPC agendas (goals, approaches, limits) and a deterministic policy that picks what one director NPC pursues from its own knowledge and the scene's cast, carried into its one ordinary generation call; a planner's wish is recorded and explained, never obeyed ([GOALS](../GOALS.md)). Storing agendas, commitments, ability and holding feasibility, and consequences in time and resources are later 039 slices.
+
 <a id="wave-6"></a>
 
 ### Wave 6 — Phone play, synchronization and early UX

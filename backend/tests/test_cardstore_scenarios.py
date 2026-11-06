@@ -63,7 +63,8 @@ def test_a_character_card_with_lorebook_and_portrait_is_imported_world_less(stor
     assert roles["data.character_book.entries[0]"] == "lorebook_content"
     assert set(report.grant_scopes) == {"sources/card/mara-vell/_source", "assets/blobs"}
     assert Loss("data.assets[1]", "not_fetched") in report.losses
-    assert Loss("data.assets[0]", "unavailable") in report.losses
+    # the main icon is ``ccdefault:``, the card's own picture: the portrait given with it (038)
+    assert not any(loss.path == "data.assets[0]" for loss in report.losses)
 
     gate = Gate("sources", "assets")
     planned = CardImporter(store, gate.handle, owner=OWNER).plan(data, portrait=PORTRAIT, origin="mara.json")
@@ -542,7 +543,7 @@ def test_an_asset_loss_names_its_own_place_in_the_card(store):
 
 @pytest.mark.parametrize("stray", ["Images", "placements"])
 def test_a_source_that_cannot_hold_the_portrait_writes_is_refused_at_plan(store, stray):
-    land(store, encode(V3))
+    land(store, encode(card(assets=[])))  # no art yet: the source has no placements folder
     base = store.root / "sources" / "card" / "mara-vell" / "_source"
     if stray == "Images":  # a differently spelled folder where the image records go
         (base / stray).mkdir()

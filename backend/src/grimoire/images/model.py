@@ -19,7 +19,11 @@ IMAGE_SCHEMA = "grimoire.image/0"
 PLACEMENT_SCHEMA = "grimoire.placement/0"
 #: Blob extension -> media type; equal to ``grimoire.store.media.MEDIA`` (pinned by a test).
 MEDIA_TYPES = {"png": "image/png", "jpg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}
-MODES = ("set", "adjust", "hide")
+#: ``unresolved`` (Sprint 038) is the explicit placement of art that belongs in a slot but whose picture
+#: is not here (a remote or embedded asset never fetched, say): it shows nothing and never falls back.
+MODES = ("set", "adjust", "hide", "unresolved")
+#: the modes a source placement may use: a source shows its own picture, or says one is missing
+SOURCE_MODES = ("set", "unresolved")
 ROLES = ("avatar", "portrait", "gallery", "expression")
 #: Crop and focus are integer basis points of the whole image: 0..10000, never floats.
 BP = 10000
@@ -151,7 +155,8 @@ class ImageObject:
 @dataclass(frozen=True)
 class Placement:
     """One use of a picture in one slot. ``set`` shows ``image``; ``adjust`` re-crops the inherited
-    picture (and names it); ``hide`` shows nothing and never falls back."""
+    picture (and names it); ``hide`` shows nothing and never falls back; ``unresolved`` (038) says a
+    picture belongs here but is missing, shows nothing, and never falls back either."""
 
     mode: str
     role: str | None = None
@@ -180,9 +185,16 @@ class Placement:
         if self.mode == "hide" and any(getattr(self, label) is not None for label in
                                        ("image", "crop", "focus", "expression")):
             raise ImageModelError("a hide placement carries no image, crop, focus or expression")
+        if self.mode == "unresolved":
+            # the missing picture's role (and, for a sprite, its outfit and name) is what is preserved;
+            # there is no picture to name, crop or focus
+            if self.role is None:
+                raise ImageModelError("an unresolved placement needs the role of the missing picture")
+            if any(getattr(self, label) is not None for label in ("image", "crop", "focus")):
+                raise ImageModelError("an unresolved placement carries no image, crop or focus")
         if self.expression is not None and self.role not in (None, "expression"):
             raise ImageModelError("only an expression placement carries an expression")
-        if self.mode == "set" and self.role == "expression" and self.expression is None:
+        if self.mode in ("set", "unresolved") and self.role == "expression" and self.expression is None:
             raise ImageModelError("an expression placement needs its outfit and name")
         if self.provenance is not None:
             object.__setattr__(self, "provenance", validate_provenance(self.provenance))
@@ -231,8 +243,9 @@ def validate_placement(subject: SourceRef | InstanceRef, slot: str, placement: P
     role = slot_role(slot)
     if role is None:
         return "role_slot_mismatch", f"{slot!r} is not expr.<outfit>.<name>"
-    if isinstance(subject, SourceRef) and placement.mode != "set":
-        return "mode_not_allowed", f"a source placement may only set a picture, not {placement.mode}"
+    if isinstance(subject, SourceRef) and placement.mode not in SOURCE_MODES:
+        return "mode_not_allowed", f"a source placement may only set a picture or mark one unresolved, " \
+                                   f"not {placement.mode}"
     if placement.role is not None and placement.role != role:
         return "role_slot_mismatch", f"slot {slot!r} holds a {role}, not a {placement.role}"
     if placement.expression is not None and placement.expression != slot_expression(slot):
