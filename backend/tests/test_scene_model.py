@@ -135,6 +135,9 @@ def test_turn_ids_are_the_chat_and_a_six_digit_number():
     lambda: Post("human:ana", PC, "speech", "Hi", (PC, InstanceRef("other", "character", "x")), "speech"),
     lambda: Post("human:ana", PC, "speech", "Hi", (PC, MARA), "shout"),  # not one of 032's channels
     lambda: Post("human:ana", PC, "speech", "Hi", (PC, MARA), "whisper"),  # private, yet addressed to no one
+    lambda: TurnRecord(CHAT, 1, "prompt", takes=(Take(1, "proposed", "generated", (InstanceRef("zz", "character", "x"),)),)),
+    lambda: TurnRecord(CHAT, 1, "prompt", takes=(Take(1, "proposed", "generated", (PC,), lines=(
+        line(1, 1, 1, audience=(InstanceRef("zz", "character", "x"),)),)),)),
     lambda: SceneLine("chat-1.000001.1.1", MARA, "Mara", "Hi", (PC,), state="struck"),  # struck by no one
     lambda: SceneLine("chat-1.000001.1.1", MARA, "Mara", "Hi", (PC,), by="human:ana"),  # shown, yet by someone
     lambda: SceneLine("chat-1.000001.1.1", MARA, "Mara", "Hi", (PC,), actor_revision=REV.unpinned()),

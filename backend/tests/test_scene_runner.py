@@ -14,7 +14,8 @@ import pytest
 from chat_fixtures import Clock
 from generation_fixtures import Harness
 from scene_fixtures import (
-    ANA, BOB, LIGHTHOUSE, MARA_VELL, POLICY, STORM, VELL_EXAMPLE, Table, Tagged, card_library, say,
+    ANA, BOB, LIGHTHOUSE, MARA_VELL, POLICY, STORM, TAMSIN, VELL_EXAMPLE, Table, Tagged, attach_tamsin, card_library,
+    say,
 )
 from store_helpers import OWNER
 
@@ -156,6 +157,11 @@ def test_an_action_everyone_present_sees(cards):
     ("   ", "auto", "no_content"),
     ('"..."', "auto", "no_content"),  # nothing anyone could hear
     ("*...*", "auto", "no_content"),
+    ('"' + "." * 2100 + ' The real words."', "auto", "no_content"),  # nothing a listener would hear, once clipped
+    # 032 transmits nothing on an Unread: a message it cannot read is refused, never made a public action
+    ('I whisper to Mara, "the vault code is 1234"', "auto", "unknown_addressee"),
+    ("I whisper to Mara Vell: the vault code is 1234", "auto", "unclear_content"),
+    ("*I whisper the vault code under my breath*", "auto", "unresolved_private"),
     ("Could you pause?", "command", "uncertain"),
 ])
 def test_a_post_that_cannot_be_played_writes_nothing(cards, text, mode, reason):
@@ -433,3 +439,76 @@ def test_pause_stops_play_until_the_player_who_paused_or_the_owner_resumes(cards
         table.runner.request(chat, table.player(), "pause")
         table.runner.resume(chat, table.owner)  # the owner may always lift a pause
         assert table.runner.generate(chat, table.player()).state == "proposed"
+
+
+def test_a_take_is_kept_only_by_the_cast_it_was_written_for(cards):
+    folder, chat, _ = cards
+    with Table(folder, [say("She is the informer."), say("Then we wait.")]) as table:
+        seated(table, chat)
+        tamsin = attach_tamsin(table.store, table.owner, chat)
+        table.runner.seat(chat, ANA)
+        table.runner.post(chat, table.player(), '"Who do we trust?"')
+        written = table.runner.generate(chat, table.player(), speakers=[actors_without(table, chat, tamsin)])
+        assert tamsin in written.lines[0].audience
+        chats = ChatLibrary(table.store, table.owner, clock=Clock(), new_id=Tagged("d"), owner=OWNER)
+        _, etag = chats.read_chat(chat)
+        chats.detach_source(chat, TAMSIN, "character", expected=etag).commit()  # she leaves before it is kept
+        refused("cast_changed", table.runner.keep, chat, table.player(), written.take)
+        again = table.runner.generate(chat, table.player())
+        assert tamsin not in again.lines[0].audience
+        table.runner.keep(chat, table.player(), again.take)
+
+
+def actors_without(table: Table, chat, *left_out):
+    scene = table.runner.open(chat)
+    (mara,) = [actor for actor in scene.cast if actor != scene.persona and actor not in left_out]
+    return mara
+
+
+def test_a_pause_written_while_a_post_is_saved_is_never_lost(cards):
+    folder, chat, _ = cards
+    with Table(folder) as table:
+        seated(table, chat)
+        table.runner.begin(chat, table.player())
+        table.runner.keep(chat, table.player(), 1)
+        write = table.runner.scenes.write
+
+        def pause_first(record, base, **kwargs):  # the owner pauses after the post read the chat
+            if base is None and record.number == 2:
+                table.runner.scenes.write = write
+                table.runner.request(chat, table.owner, "pause")
+            return write(record, base, **kwargs)
+
+        table.runner.scenes.write = pause_first
+        refused("turn_changed", table.runner.post, chat, table.player(), '"Onward."')
+        scene = table.runner.open(chat)
+        assert len(scene.records) == 1 and scene.paused
+        refused("paused", table.runner.post, chat, table.player(), '"Onward."')
+
+
+def test_a_pause_stops_keeping_and_passing_too(cards):
+    folder, chat, _ = cards
+    with Table(folder, [say("Not now.")]) as table:
+        (line,) = _played(table, chat).lines
+        table.runner.request(chat, table.player(), "pause")
+        refused("paused", table.runner.keep, chat, table.owner, 1)
+        refused("paused", table.runner.pass_turn, chat, table.owner)
+        table.runner.resume(chat, table.player())
+        assert table.runner.keep(chat, table.player(), 1).kept.lines == (line,)
+
+
+def test_keeping_a_take_while_another_runs_lands_the_other_stale(cards, monkeypatch):
+    folder, chat, _ = cards
+    with Table(folder, [say("First take."), say("Second take.")]) as table:
+        _played(table, chat)
+        run_turn = table.harness.runtime.run_turn
+
+        def keep_first(*args, **kwargs):
+            table.runner.keep(chat, table.player(), 1)  # the table keeps take 1 while take 2 is generating
+            return run_turn(*args, **kwargs)
+
+        monkeypatch.setattr(table.harness.runtime, "run_turn", keep_first)
+        second = table.runner.generate(chat, table.player())
+        assert (second.state, second.lines) == ("stale", ()) and second.calls[0].attempts
+        record = table.runner.open(chat).records[-1]
+        assert not record.open and [t.state for t in record.takes] == ["kept", "stale"]

@@ -9,7 +9,8 @@ or overwrite history it cannot see.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 
 from grimoire.core.identity import ChatRef, InstanceRef
 from grimoire.scene import TURN_SCHEMA, SceneRefused, TurnRecord, turn_from_payload, turn_to_payload
@@ -19,8 +20,13 @@ from grimoire.store.layout import address_parts
 
 @dataclass(frozen=True)
 class StoredTurn:
+    """A turn as stored: its record, the etag it was read at, and its envelope's attribution and unknown
+    fields, which a rewrite keeps."""
+
     record: TurnRecord
     etag: str
+    owner: str | None = None
+    extra: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True)
@@ -78,31 +84,43 @@ class SceneLibrary:
             except SceneRefused as error:
                 problems.append((str(ref), error.reason))
                 continue
-            turns.append(StoredTurn(record, stored.etag))
+            turns.append(StoredTurn(record, stored.etag, stored.record.owner, stored.record.extra))
         turns.sort(key=lambda stored: stored.record.number)
         numbers = [stored.record.number for stored in turns]
         if numbers != list(range(1, len(numbers) + 1)):
             problems.append((str(chat), "turn_gap"))
         return ChatTurns(chat, tuple(turns), tuple(sorted(problems)))
 
-    def write(self, record: TurnRecord, expected: str | None, *,
-              before_commit: Callable[[], None] | None = None) -> str:
-        """Create (``expected=None``) or compare-and-swap one turn; its new etag.
+    def write(self, record: TurnRecord, base: StoredTurn | None, *, after: StoredTurn | None = None,
+              before_commit: Callable[[], None] | None = None) -> StoredTurn:
+        """Create (``base=None``) or compare-and-swap one turn over ``base``, as read; the turn as now stored.
 
+        A rewrite keeps ``base``'s envelope owner and unknown fields. ``after`` is the chat's previous turn as
+        the caller read it: a new turn is created only while that turn is unchanged (a pause written on it
+        meanwhile refuses the create), so no turn is ever played over a change it did not see.
         ``before_commit`` runs under the store lock just before the commit point (the runner re-checks its
         fence there): raising from it writes nothing.
         """
-        envelope = ScopeRecord(record.ref, TURN_SCHEMA, turn_to_payload(record), owner=self.owner)
+        payload = turn_to_payload(record)
+        if base is None:
+            envelope = ScopeRecord(record.ref, TURN_SCHEMA, payload, owner=self.owner)
+        else:
+            envelope = ScopeRecord(record.ref, TURN_SCHEMA, payload, owner=base.owner, extra=base.extra)
         with self.store.lock:
+            if after is not None:
+                current = self.store.campaign_turns(record.chat.campaign_id).records.get(after.record.ref)
+                if current is None or current.etag != after.etag:
+                    raise SceneRefused("turn_changed", "the chat's last turn changed since it was read; read it again")
             if before_commit is not None:
                 before_commit()
             txn = self.store.transaction()
-            txn.put(envelope, expected)
+            txn.put(envelope, None if base is None else base.etag)
             try:
                 result = txn.commit(self.handle)
             except StaleWrite:
                 raise SceneRefused("turn_changed", "the turn changed since it was read; read it again") from None
-        return result.etags["/".join(address_parts(record.ref))]
+        etag = result.etags["/".join(address_parts(record.ref))]
+        return StoredTurn(record, etag, envelope.owner, envelope.extra)
 
 
 def turn_instance_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:

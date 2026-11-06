@@ -53,7 +53,30 @@ def test_turns_read_in_order_and_writes_are_create_only_then_cas(library):
     changed = lib.write(post_turn(CHAT, 1, "Edited."), first)
     with pytest.raises(SceneRefused):
         lib.write(post_turn(CHAT, 1, "Stale."), first)
-    assert lib.turns(CHAT).turns[0].etag == changed
+    assert lib.turns(CHAT).turns[0].etag == changed.etag
+
+
+def test_a_rewrite_keeps_the_envelope_owner_and_unknown_fields(library):
+    lib = scenes(library)
+    first = lib.write(post_turn(CHAT, 1), None)
+    txn = library.transaction()  # a later version wrote an envelope field this one does not know
+    txn.put(ScopeRecord(first.record.ref, "grimoire.scene-turn/1", library.campaign_turns(C).records[
+        first.record.ref].record.payload, owner="human:someone-else", extra={"x-later": {"kept": True}}), first.etag)
+    txn.commit(owner_handle("campaigns"))
+    (stored,) = lib.turns(CHAT).turns
+    lib.write(post_turn(CHAT, 1, "Edited."), stored)
+    envelope = library.campaign_turns(C).records[first.record.ref].record
+    assert envelope.owner == "human:someone-else" and dict(envelope.extra) == {"x-later": {"kept": True}}
+
+
+def test_a_new_turn_waits_for_the_previous_one_as_read(library):
+    lib = scenes(library)
+    first = lib.write(post_turn(CHAT, 1), None)
+    lib.write(post_turn(CHAT, 1, "Paused meanwhile."), first)
+    with pytest.raises(SceneRefused) as error:
+        lib.write(post_turn(CHAT, 2), None, after=first)
+    assert error.value.reason == "turn_changed" and [t.record.number for t in lib.turns(CHAT).turns] == [1]
+    lib.write(post_turn(CHAT, 2), None, after=lib.turns(CHAT).last)
 
 
 def test_before_commit_raising_writes_nothing(library):

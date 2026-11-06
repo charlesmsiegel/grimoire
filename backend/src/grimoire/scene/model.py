@@ -307,7 +307,13 @@ class TurnRecord:
         if self.passed_by is not None and self.kept is not None:
             raise _fail("invalid_field", "a turn is either kept or passed")
         prefix = self.turn_id + "."
+        campaign = self.chat.campaign_id
+        if self.post is not None and any(actor.campaign_id != campaign for actor in self.post.audience):
+            raise _fail("invalid_field", "a post's audience belongs to the turn's campaign")
         for take in self.takes:
+            if any(actor.campaign_id != campaign for actor in take.cast) or any(
+                    actor.campaign_id != campaign for line in take.lines for actor in line.audience):
+                raise _fail("invalid_field", "a take's cast and audiences belong to the turn's campaign")
             if any(a.call_id.campaign_id != self.chat.campaign_id or a.call_id.turn_id != self.plan_turn(take.take)
                    for a in take.attempts()):
                 raise _fail("invalid_field", "a take's calls were planned under <turn_id>.<take>")
