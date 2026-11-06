@@ -223,8 +223,8 @@ def test_c_a_disguised_actor_is_not_in_the_cast_the_npc_knows():
         npc_brief(oda_view(knowledge), VOICES[ODA.instance_id], secrets=secrets, intention=told_truth)
     assert error.value.reason == "intention_leak" and "pilgrim-is-hask" in str(error.value)
 
-    # The cast Oda recognises leaves Hask out; the turn still has Hask present, and that is allowed.
-    choice = choose(TOLL, knowledge, present=PRESENT, controls=CONTROLS)
+    # The cast Oda recognises leaves Hask out, declared as unrecognised: the turn has Hask present.
+    choice = choose(TOLL, knowledge, present=PRESENT, unrecognised=(HASK,), controls=CONTROLS)
     assert choice.approach.approach_id == "press-wren"
     harness = Harness([say("Wren. Your tally. Now.")])
     plan = harness.plan(CONTROLS, present=(*(ref.instance_id for ref in PRESENT), HASK.instance_id),
@@ -244,3 +244,43 @@ def test_c_a_choice_for_a_cast_that_has_left_is_refused_before_any_call():
         harness.runtime.run_turn(harness.meter(plan), [brief], controls=CONTROLS)
     assert error.value.reason == "intention_cast_mismatch"
     assert harness.prompts() == []
+
+
+def test_c_a_choice_made_before_a_watched_actor_arrived_is_refused_before_any_call():
+    # Oda will not threaten anyone in front of Quill. Chosen while Quill was away, the threat would
+    # otherwise be voiced after Quill walks in, with the limit silent: the turn must choose again.
+    agenda = Agenda(CAMPAIGN, ODA, (Goal("collect", COLLECT_AIM, 50, (
+        Approach("threaten", "Threaten Wren with the debtors' cell", needs=(Present(WREN),),
+                 tags=frozenset({"threat"})),
+        Approach("ask", PRESS_ACTION, needs=(Present(WREN),)))),),
+        (Limit("no-witness", "Never threaten anyone in front of a guild officer", frozenset({"threat"}),
+               when=(Present(QUILL),)),))
+    knowledge = oda_knows()
+    before = choose(agenda, knowledge, present=(ODA, WREN), controls=CONTROLS)
+    assert before.approach.approach_id == "threaten"
+    harness = Harness([say("Wren.")])
+    plan = harness.plan(CONTROLS, present=(ODA.instance_id, WREN.instance_id, QUILL.instance_id),
+                        speakers=(ODA.instance_id,))
+    brief = npc_brief(oda_view(knowledge), VOICES[ODA.instance_id], secrets=SECRETS, intention=before)
+    with pytest.raises(GenerationError) as error:
+        harness.runtime.run_turn(harness.meter(plan), [brief], controls=CONTROLS)
+    assert error.value.reason == "intention_cast_mismatch" and harness.prompts() == []
+    now = choose(agenda, knowledge, present=(ODA, WREN, QUILL), controls=CONTROLS)
+    assert now.approach.approach_id == "ask" and [limit.limit_id for limit in now.refusals] == ["no-witness"]
+
+
+@pytest.mark.parametrize("agenda", [
+    pytest.param(Agenda(CAMPAIGN, ODA, (Goal("expose", "Make everyone learn the duke sold the guild", 5, (
+        Approach("wait", "Keep counting and say nothing"),)),)), id="aim"),
+    pytest.param(Agenda(CAMPAIGN, ODA, (Goal("talk", "Keep the dinner pleasant", 5, (
+        Approach("gossip", "Trade gossip with Bellamy", tags=frozenset({"gossip", "loud"})),
+        Approach("wait", "Keep counting and say nothing"))),), (
+        Limit("quiet", "Never raise your voice at dinner", frozenset({"loud"})),
+        Limit("hush", "Never let slip that the duke sold the guild", frozenset({"gossip"})))), id="second-rule"),
+])
+def test_c_every_shown_text_is_screened(agenda):
+    knowledge = oda_knows()
+    choice = choose(agenda, knowledge, present=PRESENT, controls=CONTROLS)
+    with pytest.raises(GenerationError) as error:
+        npc_brief(oda_view(knowledge), VOICES[ODA.instance_id], secrets=SECRETS, intention=choice)
+    assert error.value.reason == "intention_leak"

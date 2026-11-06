@@ -54,6 +54,13 @@ def chosen(choice):
     (lambda: approach(action="Do\u2028it"), "invalid_field"),
     (lambda: approach(action="Do \u202eti od"), "invalid_field"),
     (lambda: approach(action="\ufeffDo it"), "invalid_field"),
+    (lambda: approach(action="Keep counting\U000e0020\U000e0074\U000e0065\U000e006c\U000e006c"), "invalid_field"),
+    (lambda: approach(action="duke\u200bsold"), "invalid_field"),
+    (lambda: approach(action="duke\u2060sold"), "invalid_field"),
+    (lambda: goal(aim="Want it\nWhat you mean to do about it:"), "invalid_field"),
+    (lambda: goal(aim="Want \u202eti"), "invalid_field"),
+    (lambda: Limit("l", "Never trade\nWhat you are after right now: sell", frozenset({"t"})), "invalid_field"),
+    (lambda: Limit("l", "\ufeffNever trade", frozenset({"t"})), "invalid_field"),
     (lambda: approach(approach_id="Act"), "invalid_field"),
     (lambda: approach(needs=(Present(BELLAMY), Present(BELLAMY))), "invalid_field"),
     (lambda: approach(needs=("bellamy",)), "invalid_field"),
@@ -340,3 +347,68 @@ def test_the_ledger_check_takes_collections(kw, reason):
     with pytest.raises(GoalError) as error:
         check_agenda("agenda", propositions=(), actors=())
     assert error.value.reason == "bad_agenda"
+
+
+def test_refusals_are_in_authored_order_not_the_order_tried():
+    # "late" is authored second but forbids the first approach tried.
+    agenda = Agenda(CAMPAIGN, ODA, (goal(approaches=(
+        approach("first", tags=frozenset({"b"})), approach("second", tags=frozenset({"a"})),
+        approach("wait", "Wait"))),), (
+        Limit("early", "Never a", frozenset({"a"})),
+        Limit("late", "Never b", frozenset({"b"})),
+    ))
+    assert [limit.limit_id for limit in pick(agenda).refusals] == ["early", "late"]
+
+
+def test_every_need_must_hold():
+    agenda = Agenda(CAMPAIGN, ODA, (goal(approaches=(
+        approach("both", needs=(Present(WREN), Present(BELLAMY))), approach("idle", "Idle"))),))
+    choice = pick(agenda, present=(ODA, WREN))
+    assert chosen(choice) == ("g", "idle")
+    assert choice.considered[0].unmet == (Present(BELLAMY),)
+
+
+def test_a_limit_applies_only_when_every_condition_holds():
+    agenda = Agenda(CAMPAIGN, ODA, (goal(approaches=(approach("deal", tags=frozenset({"t"})),)),),
+                    (Limit("l", RULE, frozenset({"t"}), when=(Holds(TALES), Present(QUILL))),))
+    believed = oda_knows(warned=True, stance="believed")
+    assert chosen(pick(agenda, believed, present=(ODA, BELLAMY))) == ("g", "deal")
+    assert chosen(pick(agenda, oda_knows(), present=PRESENT)) == ("g", "deal")
+    assert not pick(agenda, believed, present=PRESENT).acts
+
+
+def test_a_look_alike_or_mutable_projection_is_refused():
+    knowledge = oda_knows()
+
+    class LookAlike(type(knowledge)):
+        __slots__ = ()
+
+    look = LookAlike(*(getattr(knowledge, name) for name in (
+        "actor", "as_of", "evidence", "sent", "current", "history", "inherited", "inherited_history")))
+    mutable = replace(knowledge, current=list(knowledge.current))
+    for bad in (look, mutable):
+        with pytest.raises(GoalError) as error:
+            pick(AGENDA, bad)
+        assert error.value.reason == "foreign_knowledge"
+
+
+def test_a_choice_cannot_be_subclassed():
+    with pytest.raises(GoalError) as error:
+        class Forged(Choice):
+            pass
+    assert error.value.reason == "unsealed_choice"
+
+
+@pytest.mark.parametrize("unrecognised, reason", [
+    ((BELLAMY,), "bad_present"),
+    ((ODA,), "bad_present"),
+    ("npc-hask", "bad_present"),
+    ((OTHER,), "campaign_mismatch"),
+])
+def test_unrecognised_actors_are_the_rest_of_the_scene(unrecognised, reason):
+    with pytest.raises(GoalError) as error:
+        pick(AGENDA, unrecognised=unrecognised)
+    assert error.value.reason == reason
+    hask = InstanceRef(CAMPAIGN, "character", "npc-hask")
+    choice = pick(AGENDA, unrecognised=(hask,))
+    assert choice.scene == frozenset((*PRESENT, hask)) and hask not in choice.present

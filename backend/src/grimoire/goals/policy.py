@@ -71,7 +71,8 @@ class Choice:
 
     ``knowledge`` is the very projection the choice was made from: a brief built from another one (a
     later moment, or a reload that quarantined a record) refuses it. ``present`` is the cast it was
-    made for, as the caller gave it: the actors this NPC knows to be in the scene (GOALS.md).
+    made for as this NPC recognises it, and ``unrecognised`` who else is in the scene: together they are
+    the scene the choice is for, and ``run_turn`` refuses it in a turn with any other (GOALS.md).
     """
 
     agenda: Agenda
@@ -79,11 +80,20 @@ class Choice:
     present: frozenset[InstanceRef]
     considered: tuple[Considered, ...]
     desire: Desire | None = None
+    unrecognised: frozenset[InstanceRef] = frozenset()
     _seal: InitVar[object] = None
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        raise GoalError("unsealed_choice", "a Choice cannot be subclassed")
 
     def __post_init__(self, _seal: object) -> None:
         if _seal is not _SEAL:
             raise GoalError("unsealed_choice", "build choices with choose()")
+
+    @property
+    def scene(self) -> frozenset[InstanceRef]:
+        """Everyone in the scene the choice was made for: the cast the NPC recognises and the rest."""
+        return self.present | self.unrecognised
 
     @property
     def actor(self) -> InstanceRef:
@@ -140,18 +150,22 @@ def _holds(condition: Present | Holds, knowledge: ActorKnowledge, present: froze
                for belief in knowledge.current)
 
 
-def _present(present: object, campaign_id: str) -> frozenset[InstanceRef]:
+def _present(present: object, campaign_id: str, label: str = "present") -> frozenset[InstanceRef]:
     if isinstance(present, (str, bytes, Mapping)):
-        raise GoalError("bad_present", "present must be a collection of InstanceRef values")
+        raise GoalError("bad_present", f"{label} must be a collection of InstanceRef values")
     try:
         present = frozenset(present)  # type: ignore[arg-type]
     except TypeError:
-        raise GoalError("bad_present", "present must be a collection of InstanceRef values") from None
+        raise GoalError("bad_present", f"{label} must be a collection of InstanceRef values") from None
     if not all(isinstance(ref, InstanceRef) for ref in present):
-        raise GoalError("bad_present", "present must hold InstanceRef values")
+        raise GoalError("bad_present", f"{label} must hold InstanceRef values")
     if any(ref.campaign_id != campaign_id for ref in present):
-        raise GoalError("campaign_mismatch", f"a present actor is not in campaign {campaign_id}")
+        raise GoalError("campaign_mismatch", f"an actor in {label} is not in campaign {campaign_id}")
     return present
+
+
+#: The projection's sequence fields: tuples, so a choice cannot go stale under the brief's equality check.
+_KNOWLEDGE_FIELDS = ("evidence", "sent", "current", "history", "inherited", "inherited_history")
 
 
 def _check_control(actor: InstanceRef, controls: object) -> None:
@@ -176,11 +190,17 @@ def _check_control(actor: InstanceRef, controls: object) -> None:
 
 
 def choose(agenda: Agenda, knowledge: ActorKnowledge, *, present: Iterable[InstanceRef],
-           controls: Iterable[ControlAssignment], desired: tuple[str, str] | None = None) -> Choice:
+           controls: Iterable[ControlAssignment], desired: tuple[str, str] | None = None,
+           unrecognised: Iterable[InstanceRef] = ()) -> Choice:
     """What ``agenda``'s NPC pursues now, from its own ``knowledge`` and the scene's cast ``present``.
 
+    ``present`` is the cast as this NPC recognises it; ``unrecognised`` the rest of the scene (an actor in
+    disguise, say), which no condition sees. A choice is for one scene: ``run_turn`` refuses it in a turn
+    whose plan has anyone else present, or not everyone (``intention_cast_mismatch``).
+
     Refusals (``GoalError``): ``bad_agenda``; ``foreign_knowledge`` (not exactly an ``ActorKnowledge``,
-    or another actor's); ``bad_present`` and ``campaign_mismatch`` for the cast; ``bad_controls``,
+    or another actor's); ``bad_present`` and ``campaign_mismatch`` for the cast (``bad_present`` too for
+    an ``unrecognised`` actor also in ``present``, or the NPC itself); ``bad_controls``,
     ``ambiguous_control``, ``unassigned_actor`` and ``player_actor`` (only a director-controlled NPC has
     a policy); ``absent_actor`` (the NPC is not in the scene, so it can pursue nothing in it); and
     ``unknown_approach`` for a ``desired`` (goal id, approach id) the agenda does not have.
@@ -193,7 +213,14 @@ def choose(agenda: Agenda, knowledge: ActorKnowledge, *, present: Iterable[Insta
         raise GoalError("foreign_knowledge", f"{actor} must choose from its own ActorKnowledge")
     if knowledge.actor != actor:
         raise GoalError("foreign_knowledge", f"{actor} was given the knowledge of {knowledge.actor}")
+    if not all(type(value) is tuple or (value is None and name.startswith("inherited"))
+               for name in _KNOWLEDGE_FIELDS for value in (getattr(knowledge, name),)):
+        # A list field could change after the choice, and the brief would still find the same object equal.
+        raise GoalError("foreign_knowledge", f"{actor} must choose from an immutable projection")
     cast = _present(present, agenda.campaign_id)
+    unseen = _present(unrecognised, agenda.campaign_id, "unrecognised")
+    if unseen & cast or actor in unseen:
+        raise GoalError("bad_present", "an unrecognised actor cannot also be in the cast, or be the NPC itself")
     _check_control(actor, controls)
     if actor not in cast:
         raise GoalError("absent_actor", f"{actor} is not in the scene")
@@ -228,7 +255,7 @@ def choose(agenda: Agenda, knowledge: ActorKnowledge, *, present: Iterable[Insta
     if desired is not None:
         entry = next(entry for entry in considered if (entry.goal_id, entry.approach_id) == desired)
         desire = Desire(entry.goal_id, entry.approach_id, entry.outcome)
-    return Choice(agenda, knowledge, cast, tuple(considered), desire, _SEAL)
+    return Choice(agenda, knowledge, cast, tuple(considered), desire, unseen, _SEAL)
 
 
 def explain(choice: Choice) -> tuple[str, ...]:
@@ -236,7 +263,7 @@ def explain(choice: Choice) -> tuple[str, ...]:
 
     It names propositions and actors by id, so it is director-side text.
     """
-    if not isinstance(choice, Choice):
+    if type(choice) is not Choice:
         raise GoalError("bad_choice", "explain needs a Choice from choose()")
     lines = []
     goal, approach = choice.goal, choice.approach

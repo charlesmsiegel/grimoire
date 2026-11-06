@@ -38,7 +38,11 @@ MAX_TAGS = 8
 _UNSAFE_CATEGORIES = frozenset({"Cc", "Cs", "Zl", "Zp"})
 #: Bidi embeddings, overrides and isolates, and the byte-order mark, which can disguise what the director
 #: reads. Other format characters (zero-width joiners in emoji, ZWNJ in Persian) are ordinary text.
-_UNSAFE_FORMAT = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\ufeff")
+_UNSAFE_FORMAT = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\ufeff"
+                           # invisible separators that would split a secret's marker past the leak screen
+                           "\u200b\u2060")
+#: Unicode tag characters, which can carry invisible text.
+_TAGS = range(0xE0000, 0xE0080)
 
 
 class GoalError(ValueError):
@@ -76,8 +80,9 @@ def _text(value: object, label: str) -> str:
         raise _invalid(f"{label} must be nonblank text")
     if len(value) > TEXT_CHARS:
         raise _invalid(f"{label} is longer than {TEXT_CHARS} characters")
-    if any(char in _UNSAFE_FORMAT or unicodedata.category(char) in _UNSAFE_CATEGORIES for char in value):
-        raise _invalid(f"{label} may not hold a line break, control, bidi-override or separator character")
+    if any(char in _UNSAFE_FORMAT or ord(char) in _TAGS or unicodedata.category(char) in _UNSAFE_CATEGORIES
+           for char in value):
+        raise _invalid(f"{label} may not hold a line break, control, bidi-override, invisible or separator character")
     return value
 
 
