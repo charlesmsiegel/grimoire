@@ -19,6 +19,7 @@ are never read: they are not how the character sounds, and some are private. Exa
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
@@ -47,23 +48,26 @@ _MACRO = r"\{\{\s*\w+\s*\}\}|<\w+>"
 _NOT_CHAR = r"(?!\{\{\s*char\s*\}\}|<bot>)"
 #: Characters that may wrap a speaker: markup, brackets, quotes and a ``>`` quote mark. Each run of them
 #: is one character class, never ``\s*[*_]*\s*``: adjacent overlapping runs backtrack quadratically.
-_OPEN = r"[\s*_>\[(\"'“”‘’«]*"
-_CLOSE = r"[\s*_\])\"'“”‘’»]*"
+_OPEN = r"[\s*_>\[(\"'“”‘’«【「『〔［]*"
+_CLOSE = r"[\s*_\])\"'“”‘’»】」』〕］]*"
 _ASIDE = r"(?:\([^)\n]{0,200}\)[\s*_]*)?"
 #: Wrapping, a speaker, wrapping, an optional ``(aside)`` and an ASCII or full-width colon. A speaker is
 #: a macro or one to four words ("Captain of the Guard"). Any such label starts a new turn.
 _LABEL = re.compile("^" + _OPEN + "(" + _MACRO + r"|[^\W_][\w'.-]*(?: [^\W_][\w'.-]*){0,3})" + _CLOSE
                     + _ASIDE + r"[:：](?:[*_]+(?=\s|$))?")
 #: Another speaker's macro label inside the labelled line ("Hi. [{{user}}]: ...") ends the turn there.
-_OTHER_INLINE = re.compile(r"[\[(\"'“‘«]?" + _NOT_CHAR + "(?:" + _MACRO + ")" + _CLOSE + _ASIDE + "[:：]",
+_OTHER_INLINE = re.compile(r"[\[(\"'“‘«【「『〔［]?" + _NOT_CHAR + "(?:" + _MACRO + ")" + _CLOSE + _ASIDE + "[:：]",
                            re.IGNORECASE)
-#: Anything in a continuation line that might be someone else's: a macro or an angle tag anywhere, a
-#: colon early in the line, a dash separator early in the line ("User - ...", "Anon — ..."), or a
-#: wrapped token opening the line followed by a separator ("[Anon] - ...").
+#: Anything in a continuation line that might be someone else's: a macro or an angle tag anywhere; a
+#: colon, a lookalike colon (꞉ ˸ ∶), a pipe, a ``>`` or a dash separator early in the line ("User - ...",
+#: "Anon | ..."); a wrapped token opening the line followed by a separator ("[Anon] - ..."); or a
+#: bracketed token opening the line at all ("【Anon】 ...", "[Anon] ..."). Lines are NFKC-normalised for
+#: this decision, so full-width and presentation-form colons (：︓﹕) read as ``:``.
 _ANY_MACRO = re.compile(r"\{\{|\}\}|<\s*/?[A-Za-z]")
 _EARLY = 64
-_EARLY_SEPARATOR = re.compile(r"[:：]|\s[-–—]+\s|[–—]")
-_WRAPPED_OPENING = re.compile(r"^[\s*_>]*[\[(\"'“‘«][^\])\"'”’»\n]{1,80}[\])\"'”’»]" + r"[\s*_]*(?:[:：]|[-–—])")
+_EARLY_SEPARATOR = re.compile(r"[:꞉˸∶|>]|\s[-–—]+\s|[–—]")
+_WRAPPED_OPENING = re.compile(r"^[\s*_>]*(?:[\[(\"'“‘«「『][^\])\"'”’»」』\n]{1,80}[\])\"'”’»」』][\s*_]*(?:[:꞉˸∶|>]|[-–—])"
+                              r"|[\[【〔「『][^\]】〕」』\n]{1,80}[\]】〕」』])")
 #: Lines are cut before matching: no turn keeps more than 600 characters, so nothing past twice that
 #: can change what is kept, and a huge line costs no more than a short one.
 _LINE_CAP = 2 * MAX_EXAMPLE_CHARS
@@ -202,7 +206,9 @@ def example_lines(examples: str, name: str) -> list[str]:
     words, maybe a secret, in this voice: a continuation line is kept only when it holds no macro or
     angle tag at all, no colon or dash separator in its first 64 characters, and does not open with a
     wrapped token and a separator (see ``_continues``). Any other line ends the turn and what follows
-    is dropped, never appended. The labelled line itself is cut at another speaker's macro label. So
+    is dropped, never appended. The labelled line itself is cut at another speaker's macro label. One
+    limit is inherent: another speaker's line with no label and no separator ("I tell you the code is
+    4471") cannot be told from the character's own continuation, and is kept. So
     some of the character's own lines are dropped too ("Remember: the tide waits.", "*{{char}}
     smiles.*"): that is the price. Text before any label is not a turn. ``{{char}}`` becomes the name
     and ``{{user}}`` becomes ``you``.
@@ -240,8 +246,9 @@ def example_lines(examples: str, name: str) -> list[str]:
 
 def _continues(line: str) -> bool:
     """Whether an unlabelled line may join the turn above it: only when nothing in it could be a label."""
-    return not (_ANY_MACRO.search(line) or _EARLY_SEPARATOR.search(line[:_EARLY])
-                or _WRAPPED_OPENING.match(line))
+    probe = unicodedata.normalize("NFKC", line)  # for the decision only: the kept text stays as written
+    return not (_ANY_MACRO.search(probe) or _EARLY_SEPARATOR.search(probe[:_EARLY])
+                or _WRAPPED_OPENING.match(probe))
 
 
 class _Builder:

@@ -337,6 +337,19 @@ def test_a_v1_card_nested_too_deep_to_parse_speaks_from_its_description():
     "<START>\n{{char}}: Hello there.\nshe whispers to {{user}} the secret",
     "<START>\n{{char}}: Hello there. [{{user}}]: and the vault code.",
     '<START>\n{{char}}: Hello there. "{{user}}" (aside): and the vault code.',
+    "<START>\n{{char}}: Hello there.\nAnon\ua789 secret",
+    "<START>\n{{char}}: Hello there.\nAnon\u02f8 secret",
+    "<START>\n{{char}}: Hello there.\nAnon\ufe13 secret",
+    "<START>\n{{char}}: Hello there.\nAnon\ufe55 secret",
+    "<START>\n{{char}}: Hello there.\nAnon\u2236 secret",
+    "<START>\n{{char}}: Hello there.\nAnon | secret",
+    "<START>\n{{char}}: Hello there.\nAnon > secret",
+    "<START>\n{{char}}: Hello there.\n\u3010Anon\u3011 secret",
+    "<START>\n{{char}}: Hello there.\n\u300cAnon\u300d secret",
+    "<START>\n{{char}}: Hello there.\n\uff3bAnon\uff3d secret",
+    "<START>\n{{char}}: Hello there.\n[Anon] secret",
+    "<START>\n{{char}}: Hello there.\n{{User}}: secret",
+    "<START>\n{{char}}: Hello there.\n" + "z " * 40 + "<user> secret",
 ])
 def test_another_speakers_line_never_joins_the_characters_turn(text):
     assert example_lines(text, "Seraphine") == ["Hello there."]
@@ -353,6 +366,10 @@ def test_another_speakers_line_never_joins_the_characters_turn(text):
     # a line of her own shaped like a label is dropped too: the fail-closed price
     ("<START>\n{{char}}: Listen.\nRemember: the tide waits.", ["Listen."]),
     ("<START>\n{{char}}: Go.\n*{{char}} smiles.*", ["Go."]),
+    ("<START>\n{{char}}: Hello.\nThe tide waits for no one.", ["Hello. The tide waits for no one."]),
+    ("<START>\n\u3010{{char}}\u3011\uff1a\u9759\u304b\u306b\u3002", ["\u9759\u304b\u306b\u3002"]),
+    # the inherent limit: an unlabelled line with no separator cannot be told from her own
+    ("<START>\n{{char}}: Hello.\nI tell you the code", ["Hello. I tell you the code"]),
 ])
 def test_the_characters_own_turns_are_kept_with_their_labels_removed(text, expected):
     assert example_lines(text, "Seraphine") == expected
