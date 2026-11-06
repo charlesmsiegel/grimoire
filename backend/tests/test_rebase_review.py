@@ -6,6 +6,7 @@ Synthetic Wren of a synthetic harbor world; no user content.
 from __future__ import annotations
 
 import pickle
+from dataclasses import replace
 
 import pytest
 
@@ -15,7 +16,8 @@ from grimoire.core.entity import (
 )
 from grimoire.core.facets import Agent, Communicative, Durable, FacetBundle, FacetSet, Physical, Portable
 from grimoire.core.identity import InstanceRef, SourceRef
-from grimoire.core.portrayal import compose
+from grimoire.core.json_value import JsonObject
+from grimoire.core.portrayal import ChainNode, compose
 from grimoire.rebase import RebaseError, canon_definition, rebase_instance, review_fields
 
 WORLD = "world:harbor"
@@ -198,6 +200,68 @@ def test_decision_refusals():
                                                               "facet:agent": "take"}, new)) == "unknown_decision"
     error = RebaseError("x", "undecided", ("name",))
     assert pickle.loads(pickle.dumps(error)).fields == ("name",)
+
+
+# -- uncomposed payload keys (a 037 card) ------------------------------------------------------------
+
+def carded(ref=R1, *, prompt="Stay gentle.", greeting="Welcome aboard.", **extra) -> EntityDefinition:
+    definition = wren(ref)
+    card = {"format": "chara_card_v3", "instructions": {"system_prompt": prompt},
+            "greetings": [{"id": "first", "text": greeting}]}
+    return replace(definition, extras=JsonObject({**definition.extras, "card": card, **extra}))
+
+
+def extras_reader(*definitions):
+    by_ref = {definition.ref: definition.extras for definition in definitions}
+    return by_ref.__getitem__
+
+
+def test_a_changed_card_is_an_upstream_row_that_only_take_applies_to():
+    definitions = carded(), carded(R2, prompt="Be curt.")
+    old, new = effective(*definitions)
+    [row] = review_fields(old, new, instance(), read_extras=extras_reader(*definitions))
+    assert (row.field, row.status, row.changed) == ("extra:card", "upstream", ("card.instructions.system_prompt",))
+    assert row.needs_decision and not row.keepable
+    assert row.ancestor[0]["instructions"]["system_prompt"] == "Stay gentle."
+    rows = (row,)
+    assert refused(lambda: rebase_instance(instance(), rows, {}, new)) == "undecided"
+    assert refused(lambda: rebase_instance(instance(), rows, {"extra:card": "keep"}, new)) == "not_overridable"
+    rebased, _ = rebase_instance(instance(), rows, {"extra:card": "take"}, new)
+    assert rebased.source == R2 and rebased.replaced == instance().replaced and rebased.added == instance().added
+
+
+def test_payload_extras_compare_json_types_strictly():
+    definitions = carded(flag=1), carded(R2, flag=True)
+    old, new = effective(*definitions)
+    assert [(row.field, row.changed) for row in
+            review_fields(old, new, instance(), read_extras=extras_reader(*definitions))] == [("extra:flag", ("flag",))]
+
+
+def test_an_unchanged_card_and_unchanged_extras_give_no_row():
+    definitions = carded(), carded(R2)
+    old, new = effective(*definitions)
+    assert review_fields(old, new, instance(), read_extras=extras_reader(*definitions)) == ()
+
+
+def test_uncomposed_keys_cannot_be_reviewed_without_a_reader():
+    old, new = effective(carded(), carded(R2, prompt="Be curt."))
+    with pytest.raises(TypeError):
+        review_fields(old, new, instance())
+    plain_old, plain_new = effective(wren(), wren(R2, name="Wren Tidewater"))
+    assert [row.field for row in review_fields(plain_old, plain_new, instance())] == ["name"]  # nothing to read
+
+
+def test_a_card_change_in_a_base_layer_is_named_by_its_layer():
+    """035's voice reads a base's card too, so a change below the leaf is a row, its path marked ``base1:``."""
+    base = SourceRef("catalog:cards", "character", "wren")
+    base_old, base_new = base.at("r1"), base.at("r2")
+    old, new = effective(carded(), carded(R2))
+    old = replace(old, chain=(*old.chain, ChainNode(base_old)), uncomposed=((base_old, "card"),))
+    new = replace(new, chain=(*new.chain, ChainNode(base_new)), uncomposed=((base_new, "card"),))
+    layers = {base_old: carded().extras, base_new: carded(R2, greeting="Ahoy.").extras}
+    [row] = review_fields(old, new, instance(), read_extras=layers.__getitem__)
+    assert row.field == "extra:card" and row.changed == ("base1:card.greetings",)
+    assert row.ancestor[0] is None and row.ancestor[1]["greetings"][0]["text"] == "Welcome aboard."
 
 
 # -- canon -----------------------------------------------------------------------------------------

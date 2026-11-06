@@ -26,6 +26,7 @@ Prove a small Mara chat becomes associated with a Modern Elderfen world after pr
 
 - Rebasing a derived portrayal onto its base's new revision (source-level rebase).
 - Campaign-local overrides of description and sections, so one of two changed sections can be kept (a 009 payload change). Until then `keep` on authored text is refused and the campaign stays pinned.
+- Keeping a campaign's own voice, greeting or system prompt when a card's uncomposed payload changes (046). The first slice shows each changed payload key as an `extra:` row that needs an explicit `take`.
 - Adopting a different entity (a world portrayal of the actor's card) for an existing actor, which needs a 107 roster change. The first slice proposes the chat's actors as a new world instead.
 - A conflict preview that compares new authored text with established events. The first slice reports `history_review` with the history ids.
 - Promoting relations, lore, places and organizations, not only character adaptations.
