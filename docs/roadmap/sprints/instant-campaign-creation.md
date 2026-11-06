@@ -1,5 +1,7 @@
 # One-Premise Campaign Launch and Organic World Growth
 
+**Status:** milestone 1's **first slice is implemented**, headless: `grimoire.quickstart`'s Start Chat from one character, scenario, character + lorebook bundle or premise to an open world-less 035 chat, every source pinned, the opening chosen by id, Continue, Add Card, a broken source's repair choice and naming the chat a campaign. The contract is in [QUICKSTART.md](../../QUICKSTART.md), proven by `backend/tests/test_quickstart.py`. It needs 042's reviewed rebase as a prerequisite (a pinned chat moves only through it). Not yet: session-zero boundaries at launch (they wait for 035 M2 to execute them), a UI, and milestones 2 and 3.
+
 **Outcome:** Launch a character/scenario chat in one action without worldbuilding, and let the player grow it into a multi-card campaign or authored setting only if desired.
 
 ## Scope and ownership
