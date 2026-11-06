@@ -36,7 +36,9 @@ A V3 card's `data.assets` become 018 placements on the imported character or sce
 | `user_icon` | none: it pictures the user (`not_applicable` loss) |
 | any other type | `asset-<name>` |
 
-`<name>` is the asset's name as an identity segment, or its place in the array (`emotion-3`) when the name gives none. The first asset to claim a slot wins; a later one is a `duplicate_slot` loss, and assets past the first 64 slots are `too_many`.
+`<name>` is the asset's name as an identity segment. A name with no ASCII letter or digit (`笑顔`, `怒り`) gives no segment, so it is the first 8 hex digits of the sha256 of the name, trimmed and in Unicode NFC (`expr.default.emotion-b80c40ec`, `icon-<hash>`, `background-<hash>`, `asset-<hash>`): the slot follows the name, so reordering a card's assets in an update never moves a picture, or an individual's own picture over it, to another sprite. Only an asset with no name, or a blank one, takes its place in the array (`emotion-3`), which a reorder does move. The first asset to claim a slot wins; a later one is a `duplicate_slot` loss, and assets past the first 64 slots are `too_many`.
+
+A card imported before this rule (Wave 5 audit) has such a sprite in its old place-numbered slot (`expr.default.emotion-0`). Importing it again places the sprite in its name's slot, reusing the same image object and blob, and the old slot keeps its last picture, as any slot a card no longer fills does (an earlier build was never released; an individual's own picture over the old slot stays there).
 
 - **Bytes come only from the card.** A `data:` URI with base64 content is decoded locally; `ccdefault:` is the given `portrait`. Nothing is fetched and no file is read.
 - **A missing picture keeps its slot.** An `http(s)` address (`not_fetched`), a CHARX `embeded://` path, `ccdefault:` with no portrait, a `data:` URI that cannot be decoded or is not a PNG, JPEG, GIF or WebP picture, and any other address are written as an explicit `unresolved` placement whose `provenance.note` says why, so the slot never shows another picture found by name. Each is also a loss (`not_fetched` for a remote picture, `unavailable` otherwise).

@@ -30,14 +30,19 @@ Slots, in the order the card lists its assets (the first claim on a slot wins; a
 | ``user_icon`` | none: it pictures the user, not the card (``not_applicable``) |
 | any other type | ``asset-<name>`` |
 
-``<name>`` is the asset's name as an identity segment (``slugify``), or its place in the array
-(``emotion-3``) when the name gives none.
+``<name>`` is the asset's name as an identity segment (``slugify``). A name with no ASCII letter
+or digit (``笑顔``) gives none, so it is the first 8 hex digits of the sha256 of the name
+(stripped, NFC): ``expr.default.emotion-<hash>``, ``icon-<hash>``. The slot follows the name, so
+reordering the card's assets never moves a picture (or an individual's own picture over it) to
+another sprite. Only an asset with no name at all takes its place in the array (``emotion-3``).
 """
 
 from __future__ import annotations
 
 import binascii
+import hashlib
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from grimoire.images.model import expression_slot, slot_role
@@ -112,8 +117,12 @@ def _main(assets: list[Asset], kind: str) -> Asset | None:
     return (named or of_kind or [None])[0]
 
 
-def _name(asset: Asset, fallback: str) -> str:
-    return slugify(asset.name or "", fallback)
+def _name(asset: Asset, prefix: str) -> str:
+    """The asset's name as a slot segment: its slug, else a hash of the name, else (no name) its index."""
+    name = unicodedata.normalize("NFC", (asset.name or "").strip())
+    if not name:
+        return f"{prefix}{asset.index}"
+    return slugify(name, f"{prefix}{hashlib.sha256(name.encode('utf-8')).hexdigest()[:8]}")
 
 
 def card_art(card: ParsedCard, portrait: bytes | None) -> tuple[tuple[ArtPiece, ...], tuple[Loss, ...]]:
@@ -138,17 +147,17 @@ def card_art(card: ParsedCard, portrait: bytes | None) -> tuple[tuple[ArtPiece, 
                 continue  # the main icon is the card's own picture: the portrait already fills avatar
             slot = "avatar" if portrait is None else "icon-main"
         elif asset.type == "icon":
-            name = _name(asset, str(asset.index))
+            name = _name(asset, "")
             # ``icon-main`` is the main icon's alone: another icon named like it takes its place
             slot = f"icon-{str(asset.index) if name == 'main' else name}"
         elif asset.type == "emotion":
-            slot = expression_slot(CARD_OUTFIT, _name(asset, f"emotion-{asset.index}"))
+            slot = expression_slot(CARD_OUTFIT, _name(asset, "emotion-"))
         elif asset is main_background:
             slot = "background"
         elif asset.type == "background":
-            slot = f"background-{_name(asset, str(asset.index))}"
+            slot = f"background-{_name(asset, '')}"
         else:
-            slot = f"asset-{_name(asset, str(asset.index))}"
+            slot = f"asset-{_name(asset, '')}"
         if slot in pieces:
             losses.append(Loss(path, "duplicate_slot"))
             continue

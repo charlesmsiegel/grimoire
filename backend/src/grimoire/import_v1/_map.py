@@ -34,6 +34,14 @@ MARKER = "v1_import"
 ACTOR_FAMILIES = ("characters", "pcs")
 RESERVED_SOURCE = "import"  # first segment of the receipt source, ``import:<archive>``
 NAME_LIMIT = 200
+#: why a V1 picture that belongs in a slot is missing, as its ``unresolved`` placement's note says it
+#: (038: a missing picture stays an explicit missing slot, never the picture it replaced)
+MISSING_NOTES = {
+    "dangling_object": "a V1 picture whose image record is not in the V1 library",
+    "image_bytes_unavailable": "a V1 picture whose bytes did not arrive or do not match",
+    "unarrived_blob": "a V1 picture whose bytes did not arrive or do not match",
+    "too_large": "a V1 picture too large to read",
+}
 
 
 class _Refused(Exception):
@@ -673,6 +681,12 @@ class _Mapper:
             if owner.get("scope") == "world" and self.sel.worlds.get(owner.get("scope_id")) in self.out.sources:
                 self.guarded(lambda path=layer["path"]: self.out.not_imported.append(
                     {"legacy_id": self.legacy(path), "family": "expression_settings"}))
+            elif owner.get("scope") == "campaign" and owner.get("scope_id") in selected:
+                # a campaign's expression settings are listed like a world's; what it hides is carried
+                self.guarded(lambda path=layer["path"]: self.out.not_imported.append(
+                    {"legacy_id": self.legacy(path), "family": "expression_settings"}))
+                self.guarded(self.expression_hides, layer, images.get("expression_layers", ()), world_rows,
+                             images["placements"])
         for row in images.get("legacy_images", ()) + images.get("collections", ()):
             if isinstance(row, Mapping) and "path" in row:
                 self.guarded(lambda path=row["path"]: self.out.not_imported.append(
@@ -703,6 +717,36 @@ class _Mapper:
             return
         world_rows[row["path"]] = self.world_placement(row, source, subject_pinned, objects, blobs)
 
+    def expression_hides(self, layer: Mapping, layers: object, world_rows: Mapping, placements: list) -> None:
+        """What a campaign's expression layer hides (011's ``hides``: ``<outfit>/<name>`` or a whole
+        ``<outfit>/*``) becomes a campaign ``hide`` on each actor playing the world portrayal under it,
+        over each world sprite it hides, so V2 never shows a sprite the V1 campaign hid. A hide builds
+        on the world sprite as imported; a hidden sprite the world never placed needs none."""
+        hides = layer.get("hides")
+        if layer.get("status") != "available" or layer.get("over") is None or not isinstance(hides, list):
+            return
+        campaign = next((c for c in self.out.campaigns if c.v1_id == (layer.get("owner") or {}).get("scope_id")), None)
+        world_layer = next((w for w in layers if isinstance(w, Mapping) and w.get("path") == layer["over"]), None)
+        if campaign is None or world_layer is None or not hides:
+            return
+        legacy = self.legacy(layer["path"])
+        hidden = {hide for hide in hides if isinstance(hide, str)}
+        for row in placements:
+            if row.get("area") != "expression" or row.get("owner") != world_layer.get("owner") \
+                    or not ({f"{row.get('outfit')}/{row.get('name')}", f"{row.get('outfit')}/*"} & hidden):
+                continue
+            placing = (world_rows.get(row["path"]) or (None, None))[0]
+            if placing is None:  # the world sprite was not placed (and was reported): nothing shows to hide
+                continue
+            for actor in campaign.actors:
+                if actor.definition.unpinned() != placing.subject:
+                    continue
+                if not storable(PlacementRef(actor.ref, placing.slot)):
+                    self.unresolved(legacy, "unstorable_id", placing.slot)
+                    continue
+                self.out.placings.append(Placing(actor.ref, placing.slot, Placement("hide", provenance={
+                    "legacy_id": legacy}), legacy, (actor.ref, placing)))
+
     def references(self, rows: object) -> None:
         """Markdown image references inside imported text keep their V1 URLs: reported, never rewritten."""
         counts: dict[str, int] = {}
@@ -714,34 +758,36 @@ class _Mapper:
             self.unresolved(legacy, "image_reference_not_translated", f"{count} reference(s)")
 
     def picture(self, scope: str, object_id: str | None, objects: Mapping, blobs: Mapping,
-                legacy: str) -> ImageRef | None:
-        """The image object this V1 object becomes in ``scope``, staged once; ``None`` (reported) if it cannot."""
+                legacy: str) -> tuple[ImageRef | None, str | None]:
+        """The image object this V1 object becomes in ``scope``, staged once. When it cannot be,
+        ``(None, why)`` (reported): ``why`` is a key of ``MISSING_NOTES`` when the picture is missing,
+        so its slot gets an ``unresolved`` placement, or ``None`` when the reviewer skipped it."""
         obj = objects.get(object_id) if object_id is not None else None
         if obj is None:
             self.unresolved(legacy, "dangling_object", object_id)
-            return None
+            return None, "dangling_object"
         obj_legacy = self.legacy(obj["path"])
         if self.skipped(obj_legacy):
-            return None
+            return None, None
         ref = ImageRef(scope, image_id_of(obj["id"]))
         if ref in self.out.pictures:
-            return ref
+            return ref, None
         blob = blobs.get(obj.get("blob_sha256"))
         if not (obj.get("valid") and obj.get("blob") == "present" and blob is not None and blob.get("intact")):
             self.unresolved(obj_legacy, "image_bytes_unavailable", str(obj.get("blob")))
-            return None
+            return None, "image_bytes_unavailable"
         entry = self.entries.get(blob["path"]) or {}
         if entry.get("sha256") != obj["blob_sha256"]:
             self.unresolved(obj_legacy, "image_bytes_unavailable", "hash_mismatch")
-            return None
+            return None, "image_bytes_unavailable"
         try:
             data = self.read(blob["path"])
         except ValueError as error:
             self.unresolved(obj_legacy, "too_large", type(error).__name__)
-            return None
+            return None, "too_large"
         if _sha(data) != obj["blob_sha256"]:  # the reader verified the walk's digest; this is the object's
             self.unresolved(obj_legacy, "image_bytes_unavailable", "hash_mismatch")
-            return None
+            return None, "image_bytes_unavailable"
         omitted = [name for name, present in (("description", obj.get("has_description")),
                                                ("sources", obj.get("sources")), ("subjects", obj.get("subjects")),
                                                ("unknown_fields", obj.get("unknown_fields"))) if present]
@@ -750,14 +796,17 @@ class _Mapper:
             self.unresolved(obj_legacy, "image_metadata_not_carried", ", ".join(omitted))
         provenance = {"legacy_id": obj_legacy, "v1_object": obj["id"], "v1_blob": self.legacy(blob["path"])}
         self.out.pictures[ref] = Picture(ref, obj_legacy, data, provenance)
-        return ref
+        return ref, None
 
     def world_placement(self, row: Mapping, source: str, pinned: SourceRef, objects: Mapping,
                         blobs: Mapping) -> tuple[Placing | None, ImageRef | None]:
         legacy = self.legacy_of(row)
+        missing = None
         if row.get("status") != "resolved":
             self.unresolved(legacy, str(row.get("status")), row.get("image"))
-            return None, None
+            if row.get("status") not in MISSING_NOTES:  # malformed, or no picture named: nothing to place
+                return None, None
+            missing = row["status"]  # V1 names a picture that is not here: its slot stays missing (038)
         if row["area"] == "expression":
             if not row.get("live"):
                 self.unresolved(legacy, "stale_expression")
@@ -780,12 +829,18 @@ class _Mapper:
             if role != expected_role:
                 self.unresolved(legacy, "role_slot_mismatch", slot)
                 return None, None
-            image = self.picture(source, row.get("image"), objects, blobs, legacy)
-            if image is None:
+            image = None
+            if missing is None:
+                image, missing = self.picture(source, row.get("image"), objects, blobs, legacy)
+            if image is None and missing is None:
                 return None, None
             expression = Expression(row["outfit"], row["name"]) if role == "expression" else None
-            placement = Placement("set", role, image, focus=_focus(row.get("focus")), expression=expression,
-                                  provenance={"legacy_id": legacy})
+            if image is None:  # the picture belongs here but is missing: an explicit missing slot (038)
+                placement = Placement("unresolved", role, expression=expression,
+                                      provenance={"legacy_id": legacy, "note": MISSING_NOTES[missing]})
+            else:
+                placement = Placement("set", role, image, focus=_focus(row.get("focus")), expression=expression,
+                                      provenance={"legacy_id": legacy})
         except (ImageModelError, ValueError) as error:
             self.unresolved(legacy, "invalid_placement", str(error))
             return None, None
@@ -796,7 +851,7 @@ class _Mapper:
         if not storable(PlacementRef(subject, slot)):  # a picture called con, say
             self.unresolved(legacy, "unstorable_id", slot)
             return None, None
-        placing = Placing(subject, slot, placement, legacy, (pinned, image))
+        placing = Placing(subject, slot, placement, legacy, (pinned,) if image is None else (pinned, image))
         self.out.placings.append(placing)
         return placing, image
 
@@ -823,6 +878,11 @@ class _Mapper:
             if layer["state"] == "hidden":  # hides the world's art only while that art is what was reviewed
                 placement = Placement("hide", provenance={"legacy_id": legacy})
                 needs += (placing,)
+            elif layer["state"] == "focus_override" and campaign_row is not None and image is None:
+                # the world's picture is missing, so there is nothing to re-crop: the actor inherits
+                # the world's ``unresolved`` slot, and the campaign's focus is reported, not dropped
+                self.unresolved(legacy, "layering_base_unresolved", layer["state"])
+                continue
             elif layer["state"] == "focus_override" and campaign_row is not None:
                 focus = _focus(campaign_row.get("focus"))
                 if focus is None:
@@ -832,17 +892,26 @@ class _Mapper:
                 needs += (placing.placement.image, placing)
             elif layer["state"] == "overridden" and campaign_row is not None:
                 scope = f"campaign:{campaign.campaign_id}"
-                own = self.picture(scope, campaign_row.get("image"), objects, blobs, legacy)
-                if own is None:
+                own, missing = self.picture(scope, campaign_row.get("image"), objects, blobs, legacy)
+                if own is None and missing is None:
                     continue
                 try:
-                    placement = Placement("set", placing.placement.role, own,
-                                          focus=_focus(campaign_row.get("focus")),
-                                          expression=placing.placement.expression, provenance={"legacy_id": legacy})
+                    if own is None:
+                        # the campaign's own picture is missing: an explicit missing slot, never the
+                        # world's picture it replaced (038)
+                        placement = Placement("unresolved", placing.placement.role,
+                                              expression=placing.placement.expression,
+                                              provenance={"legacy_id": legacy, "note": MISSING_NOTES[missing]})
+                    else:
+                        placement = Placement("set", placing.placement.role, own,
+                                              focus=_focus(campaign_row.get("focus")),
+                                              expression=placing.placement.expression,
+                                              provenance={"legacy_id": legacy})
                 except ImageModelError as error:
                     self.unresolved(legacy, "invalid_placement", str(error))
                     continue
-                needs += (own,)
+                if own is not None:
+                    needs += (own,)
             else:
                 self.unresolved(legacy, f"layering_{layer['state']}")
                 continue

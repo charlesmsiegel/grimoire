@@ -184,12 +184,14 @@ The [inventory](MIGRATION_INVENTORY.md) rows map as follows. `grimoire.import_v1
 | Campaign layering `hidden` | `hide` |
 | Campaign layering `focus_override` (`focus_only`) | `adjust` naming the inherited image, with the new focus |
 | Campaign layering `overridden` | campaign `set` |
+| An avatar, gallery or live expression placement, or a campaign `overridden` one, whose picture is missing (a `dangling_object`, an `unarrived_blob`, bytes that do not match or are too large to read) | `unresolved` (038) in the same slot, with the role (and a sprite's expression), `provenance.legacy_id` and a `note` saying why; reported too. So a campaign's missing picture never falls back to the world picture it replaced. A campaign `focus_override` of a missing world picture has nothing to re-crop: the actor inherits the world's `unresolved` slot and the override is reported (`layering_base_unresolved`) |
+| A campaign expression layer's hidden outfits and expressions (011's `hides`) | campaign `hide` on each actor over each world sprite it hides, with `provenance.legacy_id` of the layer |
 
 **Unmapped or unrepresentable.** The importer must report each of these as unresolved; 018 defines no fallback:
-- `unarrived_blob` / `hash_mismatch` objects: no intact bytes, so no image object;
-- `dangling_object`: refused with `missing_image`;
+- `unarrived_blob` / `hash_mismatch` objects: no intact bytes, so no image object (the slots that name them are `unresolved`, above);
+- `dangling_object`: no image object to name (its slot is `unresolved`, above);
 - a world-level `focus_only` placement: sources may only `set`;
-- hidden outfits and expressions, the default outfit, and stale expression revisions;
+- a world's hidden outfits and expressions, the default outfit, the rest of a campaign expression layer (its own sprites and default outfit), and stale expression revisions;
 - `animated`, width/height, descriptions, associations, reviews, `sources` lists and unknown sidecar fields. These may be carried as preserved `provenance` keys at the importer's choice;
 - the `cover`, `library` and `embed` slots, collections, legacy loose images and Markdown image references;
 - gallery names that are not V2 segments (uppercase, spaces, non-ASCII), names that fold to a collision, and expression slots longer than 123 characters;
