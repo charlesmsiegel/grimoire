@@ -626,8 +626,10 @@ class ChatLibrary:
             if (ref is not None and actor is None and ref.entity_key == current.ref.entity_key
                     and current.actor in self.store.campaign_instances(chat.campaign_id)):
                 actor = current.actor  # the same persona (perhaps another revision) keeps its body
-                if not follow and not ref.pinned and current.ref.pinned:
+                if (not follow and not ref.pinned and current.ref.pinned
+                        and not isinstance(self.store.check_definition(current.ref), str)):
                     ref = current.ref  # and, named without a revision, the revision this chat plays it at
+                    # (unless that revision no longer resolves: then, as detach and attach repair, the head)
             record = record.detach(current.ref, "persona", at)
         envelope = bound = etag = None
         if ref is not None:
@@ -710,14 +712,17 @@ class ChatLibrary:
         An unpinned ``ref`` is pinned to the revision it resolves to now, the very revision whose bytes
         were checked (and a new actor is based on), unless the caller asked to ``follow`` the head. For a
         reused actor it is pinned to the revision that actor plays (``_plays``), never to a newer head
-        nobody reviewed for it; when that cannot be told, to the revision it resolves to now."""
+        nobody reviewed for it; when it plays the head, or the revision it plays no longer resolves (the
+        broken reference that detach and attach repair), to the revision it resolves to now."""
         _check_role(ref, role)
         if role not in ACTOR_ROLES and reuse is not None:
             raise InvalidBinding(f"a {role} binding has no actor", "role_kind")
         if reuse is not None:
             etag, stored = self._check_reuse(campaign, reuse, ref)
             if not follow and not ref.pinned:
-                ref = self._plays(reuse, ref, stored) or ref
+                plays = self._plays(reuse, ref, stored)
+                if plays is not None and not isinstance(self.store.check_definition(plays), str):
+                    ref = plays
             revision, _ = self._resolve(ref, role)
             if not follow and not ref.pinned:
                 ref = ref.at(revision)
@@ -741,14 +746,14 @@ class ChatLibrary:
     def _plays(self, actor: InstanceRef, ref: SourceRef, stored: RecordEnvelope) -> SourceRef | None:
         """The revision of ``ref``'s entity the existing ``actor`` plays, by 042's ancestor rule: the one
         revision its active pinned chat bindings in the campaign agree on (composition follows the
-        binding, so an explicit rebind counts); with none, its pinned ``source``, else, with no source,
-        its pinned ``base``. ``None`` (pin the head as it resolves now) when the bindings disagree or a
-        chat cannot be read (no silent choice), or when the actor's ``source`` follows the head (it plays
-        the head now). ``stored`` is the actor's file as ``_check_reuse`` read it."""
+        binding, so an explicit rebind counts); otherwise (no chat binds it pinned, the bindings disagree,
+        or a chat cannot be read) what its own file says: its pinned ``source``, else, with no source, its
+        pinned ``base``. Never a revision nobody reviewed for it: a damaged chat or a disagreement leaves
+        the new binding at the instance's revision, and 042's review still refuses until it is resolved.
+        ``None`` (it plays the head now) when the actor's ``source`` follows the head. ``stored`` is the
+        actor's file as ``_check_reuse`` read it, the bytes the commit re-checks."""
         bound = campaign_plays(self.store, actor, ref)
-        if bound is None or len(bound) > 1:
-            return None
-        if bound:
+        if bound is not None and len(bound) == 1:
             return next(iter(bound))
         return instance_plays(stored, ref)
 

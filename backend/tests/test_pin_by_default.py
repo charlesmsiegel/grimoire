@@ -236,7 +236,7 @@ def test_a_reused_actor_is_pinned_to_the_revision_an_explicit_rebind_plays_it_at
     assert review.ancestor.ref == MARA.at("r2") and review.upstream.ref == MARA.at("r3")
 
 
-def test_a_reused_actor_whose_chats_disagree_is_pinned_to_the_head_not_to_either_chat(store):
+def test_a_reused_actor_whose_chats_disagree_is_pinned_to_its_own_revision_not_to_the_head(store):
     chats = chat_library(store, owner_handle())
     first = chats.start_chat(Launch("character", MARA)).commit()
     [actor] = first.actors
@@ -253,7 +253,9 @@ def test_a_reused_actor_whose_chats_disagree_is_pinned_to_the_head_not_to_either
     third = chats.start_chat(Launch("character", MARA.at("r1")), scope=first.scope,
                              reuse_actors={key: actor}).commit()  # r1 and r2 now: they disagree
     fourth = chats.start_chat(Launch("character", MARA), scope=first.scope, reuse_actors={key: actor}).commit()
-    assert chats.read_chat(fourth.chat)[0].launch.ref == MARA.at("r3")  # no silent choice of r1 or r2
+    # no silent choice of one chat, and no unreviewed head: the instance's own revision (its file says r1)
+    assert store.read(actor).envelope.payload["source"] == str(MARA.at("r1"))
+    assert chats.read_chat(fourth.chat)[0].launch.ref == MARA.at("r1")
     assert chats.read_chat(third.chat)[0].launch.ref == MARA.at("r1")
     with pytest.raises(RebaseError) as caught:
         rebase(store).review(actor)
@@ -537,3 +539,55 @@ def test_a_sillytavern_import_now_pins_and_its_rerun_reports_nothing_following(t
         assert record.launch.ref == mara.at("r1") and pinned_at(record.active_bindings(), "r1")
         again = importer.plan(data, speakers={speaker.id: mara})
         assert again.status == "already_imported" and again.following == ()
+
+
+def test_a_damaged_chat_elsewhere_in_the_campaign_never_lets_a_reuse_take_the_unreviewed_head(store):
+    chats = chat_library(store, owner_handle())
+    first = chats.start_chat(Launch("character", MARA)).commit()  # r1
+    [actor] = first.actors
+    land(store, encode(UPDATED), target=MARA.source)  # r2, nobody reviewed it
+    other = chats.start_chat(Launch("character", ANYA), scope=first.scope).commit()
+    (store.root / _chat_path(other.chat)).write_text("{ not json", encoding="utf-8")  # hand-damaged
+    _, etag = chats.read_chat(first.chat)
+    etag = chats.detach_source(first.chat, MARA, "character", expected=etag).commit().etags[_chat_path(first.chat)]
+    chats.attach_source(first.chat, MARA, "character", expected=etag, actor=actor).commit()
+    # its bindings cannot all be read, so the instance's own revision, never r2
+    assert [b.ref for b in chats.read_chat(first.chat)[0].active_bindings("character")] == [MARA.at("r1")]
+    with pytest.raises(RebaseError) as caught:
+        rebase(store).review(actor)
+    assert caught.value.reason == "chats_unreadable"
+
+
+def _drop_revision(store, ref: SourceRef) -> None:
+    """Delete one revision file by hand, leaving the source's later revisions: a broken pinned reference."""
+    source = ref.source.split(":", 1)[1]
+    (store.root / "sources" / "card" / source / "_source" / "records" / ref.kind / ref.entity_id
+     / f"{ref.revision}.json").unlink()
+
+
+def test_the_same_persona_chosen_again_repairs_a_pinned_revision_that_no_longer_resolves(store):
+    chats = chat_library(store, owner_handle())
+    started = chats.start_chat(Launch("character", MARA)).commit()
+    _, etag = chats.read_chat(started.chat)
+    etag = chats.set_persona(started.chat, ANYA, expected=etag).commit().etags[_chat_path(started.chat)]  # r1
+    body = chats.read_chat(started.chat)[0].persona.actor
+    land(store, encode(card(ANYA_CARD, description="A harbor pilot, retired.")), target=ANYA.source)  # r2
+    _drop_revision(store, ANYA.at("r1"))
+    assert [b.reason for b in chats.open_chat(started.chat).broken] == ["missing_revision"]
+    chats.set_persona(started.chat, ANYA, expected=etag).commit()  # the documented repair
+    record, _ = chats.read_chat(started.chat)
+    assert record.persona.actor == body and record.persona.ref == ANYA.at("r2")
+    assert not chats.open_chat(started.chat).broken
+
+
+def test_detach_and_attach_of_the_same_actor_repairs_a_pinned_revision_that_no_longer_resolves(store):
+    chats = chat_library(store, owner_handle())
+    first = chats.start_chat(Launch("character", MARA)).commit()  # r1
+    [actor] = first.actors
+    land(store, encode(UPDATED), target=MARA.source)  # r2
+    _drop_revision(store, MARA.at("r1"))
+    _, etag = chats.read_chat(first.chat)
+    etag = chats.detach_source(first.chat, MARA.at("r1"), "character", expected=etag).commit().etags[
+        _chat_path(first.chat)]
+    chats.attach_source(first.chat, MARA, "character", expected=etag, actor=actor).commit()
+    assert [b.ref for b in chats.read_chat(first.chat)[0].active_bindings("character")] == [MARA.at("r2")]

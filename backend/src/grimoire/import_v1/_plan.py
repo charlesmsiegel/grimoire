@@ -480,8 +480,9 @@ class ImportPlan:
         one the campaign plays it at, by 042's ancestor rule (``ChatLibrary`` keeps the same rule): the one
         revision its active pinned chat bindings agree on, so an explicit rebind in a kept chat counts; with
         none, the stored instance's pinned ``source``, else its pinned ``base``. A scene first imported after
-        a reviewed rebase so never pins the actor back to the old revision. When the bindings disagree, a
-        chat cannot be read, or the instance follows its head (an earlier build), the revision the head
+        a reviewed rebase so never pins the actor back to the old revision. When the bindings disagree or a
+        chat cannot be read, the instance's own revision, never an unreviewed head. When the instance follows
+        its head (an earlier build), or the revision it plays no longer resolves, the revision the head
         resolves to now: what such an actor plays today."""
         if self.targets[_path_of(actor.ref)].outcome == WRITE:
             return actor.definition
@@ -491,9 +492,10 @@ class ImportPlan:
 
     def _played_now(self, actor) -> SourceRef:  # type: ignore[no-untyped-def]
         bound = campaign_plays(self.store, actor.ref, actor.definition)
+        plays: SourceRef | None = None
         if bound is not None and len(bound) == 1:
-            return next(iter(bound))
-        if bound is not None and not bound:
+            plays = next(iter(bound))
+        else:
             try:
                 envelope = self.store.read(actor.ref).envelope  # type: ignore[union-attr]
             except (StoreError, ValueError, OSError):
@@ -501,7 +503,9 @@ class ImportPlan:
             payload = envelope.payload if isinstance(envelope.payload, Mapping) else {}
             source = payload.get("source")
             if not (isinstance(source, str) and _follows(source)):
-                return instance_plays(envelope, actor.definition) or actor.definition
+                plays = instance_plays(envelope, actor.definition) or actor.definition
+        if plays is not None and not isinstance(self.store.check_definition(plays), str):
+            return plays
         found = self.store.check_definition(actor.definition.unpinned())
         return actor.definition if isinstance(found, str) else found.ref  # type: ignore[union-attr]
 
