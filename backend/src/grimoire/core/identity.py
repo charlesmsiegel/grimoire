@@ -37,6 +37,7 @@ _CHAT_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#chat/(?P<chat_
 _RELATION_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#relation/(?P<relation_id>{_SEGMENT})")
 _ACCEPTED_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#accepted/(?P<event_id>{_SEGMENT})")
 _WRAPUP_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#wrapup/(?P<wrapup_id>{_SEGMENT})")
+_TURN_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#turn/(?P<turn_id>{_SEGMENT})")
 _HOLDINGS_REF_RE = re.compile(
     rf"campaign:(?P<campaign_id>{_SEGMENT})/(?P<kind>{_SEGMENT})/(?P<instance_id>{_SEGMENT})#holdings"
 )
@@ -383,6 +384,37 @@ class WrapUpRef:
         match = _WRAPUP_REF_RE.fullmatch(_require_text(text))
         if match is None:
             raise ValueError(f"not a wrap-up reference: {text!r}")
+        return cls(**match.groupdict())
+
+
+@dataclass(frozen=True, slots=True)
+class TurnRef:
+    """One played turn of one chat (035): its post, its generated takes and what the table kept.
+
+    ``campaign:<campaign_id>#turn/<turn_id>``. Transcript, never world state. Not returned by ``parse_ref``.
+    """
+
+    campaign_id: str
+    turn_id: str
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.turn_id, "turn_id")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"campaign:{self.campaign_id}#turn/{self.turn_id}"
+
+    @property
+    def scope(self) -> ScopeRef:
+        return ScopeRef(self.campaign_id)
+
+    @classmethod
+    def parse(cls, text: object) -> TurnRef:
+        match = _TURN_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not a turn reference: {text!r}")
         return cls(**match.groupdict())
 
 

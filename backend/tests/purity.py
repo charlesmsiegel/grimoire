@@ -74,7 +74,7 @@ ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.capture", "grimoir
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       "grimoire.import_v1", "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1",
                       "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
-                      "grimoire.runtime",
+                      "grimoire.play", "grimoire.runtime", "grimoire.scenestore",
                       "grimoire.store", "grimoire.sync", "grimoire.testing"})
 
 
@@ -158,6 +158,9 @@ PURE_PACKAGES = (
     PurePackage("grimoire.generation", ("grimoire.generation", "grimoire.core", "grimoire.core.inference",
                                         "grimoire.voice", "grimoire.evals.text", "grimoire.evals.checks",
                                         "grimoire.context", "grimoire.goals")),
+    # Played chat turns (035): posts, takes, who heard what, and their codec; the runner is an adapter.
+    PurePackage("grimoire.scene", ("grimoire.scene", "grimoire.core", "grimoire.core.inference",
+                                   "grimoire.generation")),
     # Offline evaluation: of the domain core it uses only the inference contracts (sprint 015);
     # only its loader and CLI read files.
     PurePackage("grimoire.evals", ("grimoire.evals", "grimoire.core.inference"),

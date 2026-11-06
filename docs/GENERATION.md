@@ -177,12 +177,12 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 
 | Item | Owner |
 |---|---|
-| Persisting generated lines as messages | 035, 032 |
+| Persisting generated lines as turns (035 first slice, [SCENES](SCENES.md)); as 020 delivery records | 035 M2, 032 |
 | Streaming display, async UI | 035 |
 | Cross-process run fencing | 030 |
 | Director ledger knowledge in narration (bound director lore is in) | later |
-| Detecting player-character authorship in generated text | 035 (`review_narration`) |
+| Detecting player-character authorship in generated text (035's first slice reviews each NPC line as that NPC's voluntary speech) | 035 M2 (`review_narration`) |
 | Richer retrieval behind the same pack seam (recent history, unbound world records, embeddings) | 031 |
-| Building each speaker's pack and the director's lore every turn, with the transcript window as scene text | 035 |
+| Building each speaker's pack and the director's lore every turn, with the transcript window as scene text | 035 (done in its first slice, [SCENES](SCENES.md)) |
 | Other optional stages in a generation turn (`select`/`decision` phases) | later (045 for decisions) |
-| Choosing an NPC's intention every turn and giving the turn to an NPC that acts on its goals | 035 |
+| Choosing an NPC's intention every turn and giving the turn to an NPC that acts on its goals | 035 M2 |

@@ -1,0 +1,134 @@
+"""035's turn records over a real store: the scenestore reader and writer, taken ids, and the sync hold.
+
+The store-level guarantees every scope-record family shares (paths, CAS, authorization, collisions, links,
+containment, recovery) are covered with 021's families in ``test_store_effect_records.py``. Synthetic only.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from grimoire.chatstore import campaign_taken_ids
+from grimoire.core.identity import ChatRef, InstanceRef, TurnRef
+from grimoire.scene import Post, SceneRefused, TurnRecord, turn_id
+from grimoire.scenestore import SceneLibrary, turn_instance_ids
+from grimoire.store import LibraryStore, ScopeRecord, TakenIdsUnlisted
+from grimoire.sync import identify, sync
+
+from store_helpers import OWNER, owner_handle, seed
+from sync_helpers import DESKTOP, PHONE, handles
+
+C = "c1"
+CHAT, OTHER = ChatRef(C, "chat-a"), ChatRef(C, "chat-b")
+PC, GHOST = InstanceRef(C, "character", "pc"), InstanceRef(C, "character", "ghost")
+
+
+def post_turn(chat: ChatRef, number: int, text: str = "Hello.", audience=(PC,)) -> TurnRecord:
+    return TurnRecord(chat, number, "post", Post("human:ana", PC, "speech", text, audience, "speech"))
+
+
+def scenes(store) -> SceneLibrary:
+    return SceneLibrary(store, owner_handle("campaigns"), owner=OWNER)
+
+
+@pytest.fixture
+def library(tmp_path):
+    store = LibraryStore.create(tmp_path / "lib")
+    seed(store)
+    yield store
+    store.close()
+
+
+def test_turns_read_in_order_and_writes_are_create_only_then_cas(library):
+    lib = scenes(library)
+    first = lib.write(post_turn(CHAT, 1), None)
+    lib.write(post_turn(CHAT, 2, "Again."), None)
+    lib.write(post_turn(OTHER, 1, "Elsewhere."), None)
+    found = lib.turns(CHAT)
+    assert found.complete and [t.record.number for t in found.turns] == [1, 2]
+    assert found.last.record.post.text == "Again."
+    with pytest.raises(SceneRefused) as error:  # two posts can never both become turn 1
+        lib.write(post_turn(CHAT, 1, "Racing."), None)
+    assert error.value.reason == "turn_changed"
+    changed = lib.write(post_turn(CHAT, 1, "Edited."), first)
+    with pytest.raises(SceneRefused):
+        lib.write(post_turn(CHAT, 1, "Stale."), first)
+    assert lib.turns(CHAT).turns[0].etag == changed
+
+
+def test_before_commit_raising_writes_nothing(library):
+    lib = scenes(library)
+
+    def refuse():
+        raise RuntimeError("fence lost")
+
+    with pytest.raises(RuntimeError):
+        lib.write(post_turn(CHAT, 1), None, before_commit=refuse)
+    assert lib.turns(CHAT).turns == ()
+
+
+def test_a_gap_or_a_damaged_turn_makes_the_chat_incomplete(library):
+    lib = scenes(library)
+    lib.write(post_turn(CHAT, 1), None)
+    lib.write(post_turn(CHAT, 3), None)
+    assert ("campaign:c1#chat/chat-a", "turn_gap") in lib.turns(CHAT).problems
+    folder = library.root / "campaigns" / C / "turns"
+    (folder / f"{turn_id(CHAT, 2)}.json").write_bytes(b"{not json")
+    assert not lib.turns(CHAT).complete
+
+
+def test_a_damaged_turn_of_another_chat_never_blocks_this_one(library):
+    lib = scenes(library)
+    lib.write(post_turn(CHAT, 1), None)
+    folder = library.root / "campaigns" / C / "turns"
+    (folder / f"{turn_id(OTHER, 1)}.json").write_bytes(b"{not json")
+    assert lib.turns(CHAT).complete
+    assert not lib.turns(OTHER).complete
+    (folder / "stray.json").write_bytes(b"{}")  # a name that is no chat's turn counts against every chat
+    assert not lib.turns(CHAT).complete
+
+
+def test_a_payload_this_version_cannot_read_is_a_problem_not_a_turn(library):
+    lib = scenes(library)
+    ref = TurnRef(C, turn_id(CHAT, 1))
+    txn = library.transaction()
+    txn.put(ScopeRecord(ref, "grimoire.scene-turn/9", {"future": True}, owner=OWNER), None)
+    txn.commit(owner_handle("campaigns"))
+    found = lib.turns(CHAT)
+    assert found.turns == () and (str(ref), "unsupported_schema") in found.problems
+
+
+def test_actors_named_only_by_turns_stay_taken(library):
+    scenes(library).write(post_turn(CHAT, 1, audience=(PC, GHOST)), None)
+    assert {"pc", "ghost"} <= turn_instance_ids(library, C)
+    assert "ghost" in campaign_taken_ids(library, C)  # a deleted actor's id never goes to a newcomer
+
+
+def test_taken_ids_fail_closed_on_an_unreadable_turn(library):
+    scenes(library).write(post_turn(CHAT, 1), None)
+    (library.root / "campaigns" / C / "turns" / "broken.json").write_bytes(b"{not json")
+    with pytest.raises(TakenIdsUnlisted):
+        turn_instance_ids(library, C)
+
+
+def test_sync_holds_turns_back_and_never_hides_a_divergence(tmp_path):
+    desktop, phone = LibraryStore.create(tmp_path / DESKTOP), LibraryStore.create(tmp_path / PHONE)
+    try:
+        seed(desktop)
+        identify(desktop, DESKTOP)
+        identify(phone, PHONE)
+        sync(desktop, phone, handles())
+        scenes(desktop).write(post_turn(CHAT, 1, "From the desk."), None)
+        report = sync(desktop, phone, handles())
+        path = f"campaigns/{C}/turns/{turn_id(CHAT, 1)}.json"
+        assert path not in {copied for copied, _ in report.copied}
+        assert path in report.skipped[DESKTOP]
+        assert scenes(phone).turns(CHAT).turns == ()
+        scenes(phone).write(post_turn(CHAT, 1, "From the phone."), None)  # both played turn 1 offline
+        report = sync(desktop, phone, handles())
+        assert [(c.path, c.code) for c in report.conflicts if c.path == path] == [(path, "held")]
+        assert scenes(desktop).turns(CHAT).last.record.post.text == "From the desk."
+        assert scenes(phone).turns(CHAT).last.record.post.text == "From the phone."
+    finally:
+        desktop.close()
+        phone.close()

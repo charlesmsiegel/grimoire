@@ -24,7 +24,7 @@ from types import MappingProxyType
 
 from grimoire.core.identity import (
     AcceptedRef, ChatRef, HoldingsRef, IdentityConflict, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef,
-    WrapUpRef,
+    TurnRef, WrapUpRef,
     paired_instances, validate_segment,
 )
 from grimoire.core.index import DIRECTED_RELATIONS, DefinitionIndex, DefinitionLink, SourceDescriptor
@@ -44,7 +44,7 @@ from .layout import (
     ACCEPTED, CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, HOLDINGS, IMAGES, INSTANCES, PLACEMENTS,
     SCOPE, MANIFEST, MARKER, RECORDS, RELATIONS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS, SOURCE_DIR, SOURCES, SUFFIX,
     SYNC,
-    TXN, WRAPUPS, Parts, classify, is_noise, manifest_parts, name_key,
+    TURNS, TXN, WRAPUPS, Parts, classify, is_noise, manifest_parts, name_key,
 )
 
 EntityKey = tuple[str, str]  # (kind, entity_id) within one source
@@ -148,10 +148,10 @@ class LibraryView:
 
 @dataclass(frozen=True)
 class CampaignRecords:
-    """One campaign's records of one family (relations, accepted events, wrap-ups or chats) and the
+    """One campaign's records of one family (relations, accepted events, wrap-ups, chats or turns) and the
     problems ``load()`` would report under that family's folder."""
 
-    records: Mapping[RelationRef | AcceptedRef | WrapUpRef | ChatRef, StoredScopeRecord]
+    records: Mapping[RelationRef | AcceptedRef | WrapUpRef | ChatRef | TurnRef, StoredScopeRecord]
     problems: tuple[LoadProblem, ...]
 
 
@@ -590,6 +590,7 @@ class _Campaigns:
     relations: dict[RelationRef, StoredScopeRecord] = field(default_factory=dict)
     accepted: dict[AcceptedRef, StoredScopeRecord] = field(default_factory=dict)
     wrapups: dict[WrapUpRef, StoredScopeRecord] = field(default_factory=dict)
+    turns: dict[TurnRef, StoredScopeRecord] = field(default_factory=dict)
     holdings: dict[HoldingsRef, StoredScopeRecord] = field(default_factory=dict)
 
 
@@ -700,9 +701,9 @@ def _discover_chats(access: Access, base: Parts, found: _Campaigns, problems: li
 
 #: campaign-scoped record families stored one file per record: folder -> (classified kind, ``_Campaigns`` field)
 _FAMILIES = {RELATIONS: ("relation", "relations"), ACCEPTED: ("accepted", "accepted"), WRAPUPS: ("wrapup", "wrapups"),
-             CHATS: ("chat", "chats")}  # ``load()`` reads chats itself (``_discover_chats``); listed for ``campaign_family``
-#: families that grow with every played turn (021): like 020's events/evidence, ``load()`` skips them
-_HISTORY = frozenset({ACCEPTED, WRAPUPS})
+             TURNS: ("turn", "turns"), CHATS: ("chat", "chats")}  # ``load()`` reads chats itself (``_discover_chats``); listed for ``campaign_family``
+#: families that grow with every played turn (021, 035): like 020's events/evidence, ``load()`` skips them
+_HISTORY = frozenset({ACCEPTED, WRAPUPS, TURNS})
 
 
 def _discover_family(access: Access, base: Parts, family: str, found: _Campaigns,

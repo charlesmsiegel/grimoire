@@ -38,6 +38,7 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 
 Still owed by this sprint, and due **before Sprint 044**:
 - **Merge rules for 021 accepted events and scene wrap-ups, and for 023 holdings.** Until then they stay `held`: never copied, reported whenever the devices differ.
+- **Merge rules for 035 played turns** (`turns/`, [SCENES](../../SCENES.md)): two devices that played one chat offline both wrote its next turn. Until then turns stay `held` like the families above.
 - **Merging 020 knowledge logs** that both devices appended to offline (today a keep-both `missing_ancestor` conflict on the batch).
 - **Deletion propagation**, and resolving toward a deletion.
 
