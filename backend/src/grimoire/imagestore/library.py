@@ -26,16 +26,18 @@ from grimoire.core.identity import (
 )
 from grimoire.images import (
     IMAGE_SCHEMA, PLACEMENT_SCHEMA, BlobFact, BlobInfo, Facts, ImageEntry, ImageModelError, ImageObject, Placement,
-    PlacementEntry, Problem, Resolution, Shown, image_from_payload, image_to_payload, inherited,
-    placement_from_payload, placement_to_payload, resolve, validate_placement,
+    Layer, PlacementEntry, Problem, Resolution, Shown, Slot, image_from_payload, image_to_payload,
+    placement_from_payload, placement_to_payload, resolve_lineage, validate_placement,
 )
 from grimoire.store import (
     AssetRecord, BlobCorrupt, ImageBlob, InvalidBlob, LibraryStore, LinkRefused, MalformedRecord, NameCollision,
-    RecordEnvelope, RecordNotFound, ScopeRecord, SourceManifest, StaleWrite, StoredAssetRecord, StoredDefinition,
+    LibraryView, RecordEnvelope, RecordNotFound, ScopeRecord, SourceManifest, StaleWrite, StoredAssetRecord, StoredDefinition,
     StoredRecord, SourceFacts, StoredSource, StoreError, TakenIdsUnlisted, UnstorableIdentifier, UnsupportedFormat,
 )
 from grimoire.store.layout import address_parts, blob_parts, classify, manifest_parts
 from grimoire.store.replica import instance_derivation
+
+from .lineage import Lineage, is_derived, lineage
 
 BlobKey = tuple[str, str]  # (sha256, ext)
 
@@ -142,6 +144,13 @@ class _Disk:
 
     def campaign_exists(self, campaign: str) -> bool:
         return self._memo(("campaign", campaign), lambda: self.store.campaign_exists(campaign))
+
+    def view(self) -> LibraryView:
+        """One library load for the pass (046): only a derived head's lineage needs it."""
+        return self._memo(("view",), self.store.load)  # type: ignore[no-any-return]
+
+    def lineage(self, entity: SourceRef) -> Lineage:
+        return self._memo(("lineage", entity), lambda: lineage(entity, self.definition, self.view))
 
     def paired(self, campaign: str) -> frozenset[InstanceRef]:
         """The campaign's instances on disk whose id another kind also uses (``paired_instances``, the
@@ -318,11 +327,13 @@ class _State:
     repairs: dict[BlobKey, tuple[ImageBlob, str]] = field(default_factory=dict)  # blob, actual etag
     placements: dict[PlacementRef, _Placed] = field(default_factory=dict)
     puts: set[tuple] = field(default_factory=set)
+    #: entities with a 022 derived revision put in this batch (046): their placements may clear or reset
+    derived: set[tuple[str, str, str]] = field(default_factory=set)
 
     def copy(self) -> _State:
         return _State(set(self.manifests), set(self.definitions), dict(self.instances), set(self.campaigns),
                       dict(self.images), dict(self.blobs), dict(self.repairs), dict(self.placements),
-                      set(self.puts))
+                      set(self.puts), set(self.derived))
 
 
 class ImageBatch:
@@ -485,6 +496,8 @@ def _apply(library: ImageLibrary, state: _State, disk: _Disk, op: tuple) -> obje
                 state.campaigns.add(envelope.address.campaign_id)
         elif isinstance(envelope.address, SourceRef):
             state.definitions.add(envelope.address.entity_key)
+            if is_derived(envelope):
+                state.derived.add(envelope.address.entity_key)
         else:
             state.instances[envelope.address] = envelope
             state.campaigns.add(envelope.address.campaign_id)
@@ -592,6 +605,26 @@ def _source_layer(state: _State, disk: _Disk, entity: SourceRef) -> dict[str, Pl
     return layer
 
 
+def _lineage(state: _State, disk: _Disk, entity: SourceRef) -> Lineage:
+    """``entity``'s art lineage on disk; a derived revision staged in this batch makes its own layer
+    derived (its staged base chain is not walked: nothing is inherited until it is committed)."""
+    found = disk.lineage(entity)
+    if entity.entity_key in state.derived and not found.derived[-1]:
+        return Lineage((entity,), (True,))
+    return found
+
+
+def _below(state: _State, disk: _Disk, entities: tuple[SourceRef, ...], derived: tuple[bool, ...],
+           slot: str) -> Slot | None:
+    """What ``slot`` shows through ``entities`` (root first), staged placements included: the picture
+    an ``adjust`` layered above them must name (W9)."""
+    if not entities:
+        return None
+    layers = [Layer(entity, _source_layer(state, disk, entity), entity.source, flag)
+              for entity, flag in zip(entities, derived)]
+    return resolve_lineage(entities[-1], layers, _facts(state, disk, [layer.entries for layer in layers])).slot(slot)
+
+
 def _facts(state: _State, disk: _Disk, layers: list[Mapping[str, PlacementEntry]]) -> Facts:
     images, blobs = {}, {}
     for layer in layers:
@@ -614,7 +647,8 @@ def _place(library: ImageLibrary, state: _State, disk: _Disk, subject: SourceRef
     address_parts(ref)  # a slot no portable path can hold (``con``) raises UnstorableIdentifier now
     if not isinstance(placement, Placement):
         raise InvalidPlacement("place takes a Placement", "invalid_field")
-    problem = validate_placement(subject, slot, placement)  # W8
+    derived = isinstance(subject, SourceRef) and _lineage(state, disk, subject).derived[-1]
+    problem = validate_placement(subject, slot, placement, derived=derived)  # W8
     if problem is not None:
         raise InvalidPlacement(problem[1], problem[0])
     if ref in state.placements:
@@ -641,7 +675,7 @@ def _names_paired(disk: _Disk, subject: SourceRef | InstanceRef, placement: Plac
     allowed on a pair. An ``unresolved`` placement (038) is exempt for the same reason: it names no
     picture and shows nothing. A definition subject is never in a pair: pairs are campaign instances only.
     """
-    return (isinstance(subject, InstanceRef) and placement.mode not in ("hide", "unresolved")
+    return (isinstance(subject, InstanceRef) and placement.mode not in ("hide", "unresolved", "inherit")
             and subject in disk.paired(subject.campaign_id))
 
 
@@ -658,6 +692,9 @@ def _check_placement(state: _State, disk: _Disk, ref: PlacementRef, placement: P
         allowed = {f"campaign:{subject.campaign_id}"} | ({entity.source} if entity is not None else set())
     image = placement.image
     if image is not None:
+        if placement.mode == "adjust":  # it names the inherited picture, owned anywhere in the lineage (046)
+            beneath = _lineage(state, disk, entity) if entity is not None else None
+            allowed |= {owner.source for owner in beneath.entities} if beneath is not None else set()
         if image.scope not in allowed:  # W7
             raise InvalidPlacement(f"{image} is not in scope for {subject}", "wrong_scope")
         found = _image_entry(state, disk, image)  # W6
@@ -667,11 +704,14 @@ def _check_placement(state: _State, disk: _Disk, ref: PlacementRef, placement: P
         fact = _blob_fact(state, disk, found.image)
         if fact.presence != "present" or fact.size != found.image.blob.size:
             raise InvalidPlacement(f"the blob of {image} is missing or the wrong size", "missing_blob")
-    if placement.mode == "adjust":  # W9
+    if placement.mode == "adjust":  # W9, through the lineage beneath the subject (046)
         base = None
-        if entity is not None and isinstance(subject, InstanceRef):
-            layer = _source_layer(state, disk, entity)
-            base = inherited(slot, layer, entity.source, _facts(state, disk, [layer]))
+        if isinstance(subject, SourceRef):
+            found = _lineage(state, disk, subject)
+            base = _below(state, disk, found.entities[:-1], found.derived[:-1], slot)
+        elif entity is not None:
+            found = _lineage(state, disk, entity)
+            base = _below(state, disk, found.entities, found.derived, slot)
         if not isinstance(base, Shown):
             raise InvalidPlacement(f"{subject} inherits no picture in {slot!r} to adjust", "nothing_to_adjust")
         if base.image != image:
@@ -771,19 +811,24 @@ class ImageLibrary:
             raise InvalidImage(str(error), "missing_blob") from None
 
     def effective_placements(self, subject: SourceRef | InstanceRef) -> Resolution:
-        """What ``subject`` shows in each slot, failing closed; reads only, no model, no network."""
+        """What ``subject`` shows in each slot, failing closed; reads only, no model, no network.
+
+        A 022 derived portrayal layers its base chain's placements beneath its own (046), live: each
+        ancestor's current art, slot by slot, unless the portrayal sets, hides or re-crops that slot.
+        An instance layers its derivation entity's whole lineage beneath its campaign placements.
+        """
         if isinstance(subject, SourceRef) and subject.pinned:
             raise ValueError(f"placements attach to the entity, not one revision: {subject.unpinned()}")
         with self.store.read_pass():  # the lock: one consistent state for every read below
             disk, state = _Disk(self.store), _State()
+            problems: list[Problem] = []
             if isinstance(subject, SourceRef):
                 found = disk.definition(subject)
                 if not isinstance(found, StoredDefinition):
                     return Resolution(subject, (), (Problem(str(subject), str(found), "no slots are shown"),))
-                layer, problems = disk.placements(subject)
-                return resolve(subject, layer, {}, _facts(state, disk, [layer]), derivation_source=subject.source,
-                               problems=problems)
-            problems_list: list[Problem] = []
+                layers = _lineage_layers(disk, disk.lineage(subject), problems)
+                return resolve_lineage(subject, layers, _facts(state, disk, [layer.entries for layer in layers]),
+                                       problems=problems)
             instance = disk.instance(subject)
             if instance == "missing":
                 return Resolution(subject, (), (Problem(str(subject), "missing_subject", "no such instance"),))
@@ -791,31 +836,52 @@ class ImageLibrary:
             if isinstance(instance, StoredRecord):
                 entity, code = derivation(instance.envelope)
                 if code is not None:
-                    problems_list.append(Problem(str(subject), code, "nothing is inherited"))
+                    problems.append(Problem(str(subject), code, "nothing is inherited"))
             else:
-                problems_list.append(Problem(str(subject), str(instance), "derivation unknown; nothing is inherited"))
-            source_layer: dict[str, PlacementEntry] = {}
-            derivation_source = None
+                problems.append(Problem(str(subject), str(instance), "derivation unknown; nothing is inherited"))
+            layers = []
             if entity is not None:
                 found = disk.definition(entity)
                 if isinstance(found, StoredDefinition):
-                    source_layer, inherited_problems = disk.placements(entity)
-                    problems_list.extend(inherited_problems)
-                    derivation_source = entity.source
+                    layers = _lineage_layers(disk, disk.lineage(entity), problems)
                 else:
-                    problems_list.append(Problem(str(entity), str(found), "nothing is inherited"))
-            own_layer, own_problems, trusted = disk.layer(subject)
-            campaign_layer = dict(own_layer)
-            problems_list.extend(own_problems)
-            if not trusted:  # the campaign layer may hide something: show no source picture at all
-                for slot in source_layer:
-                    entry = campaign_layer.get(slot)
-                    if entry is None or (entry.placement is not None and entry.placement.mode == "adjust"):
-                        campaign_layer[slot] = PlacementEntry(PlacementRef(subject, slot), None,
-                                                              "invalid_placement", "campaign layer damaged")
-            facts = _facts(state, disk, [source_layer, campaign_layer])
-            return resolve(subject, source_layer, campaign_layer, facts, derivation_source=derivation_source,
-                           problems=problems_list)
+                    problems.append(Problem(str(entity), str(found), "nothing is inherited"))
+            own, own_problems, trusted = disk.layer(subject)
+            problems.extend(own_problems)
+            campaign = _guarded(subject, own, trusted, layers)
+            layers.append(Layer(subject, campaign, f"campaign:{subject.campaign_id}",
+                                also=entity.source if entity is not None and len(layers) else None))
+            facts = _facts(state, disk, [layer.entries for layer in layers])
+            return resolve_lineage(subject, layers, facts, problems=problems)
+
+
+def _guarded(subject: SourceRef | InstanceRef, own: Mapping[str, PlacementEntry], trusted: bool,
+             beneath: list[Layer]) -> dict[str, PlacementEntry]:
+    """A damaged layer (a linked, unreadable or look-alike folder or file) might be hiding a ``hide``:
+    every slot it would inherit, and any ``adjust`` of one, shows ``invalid_placement`` instead of the
+    picture beneath it. 018's rule for a campaign layer, and 046's for a derived portrayal's own."""
+    entries = dict(own)
+    if trusted:
+        return entries
+    for slot in sorted({name for layer in beneath for name in layer.entries}):
+        entry = entries.get(slot)
+        if entry is None or (entry.placement is not None and entry.placement.mode in ("adjust", "inherit")):
+            entries[slot] = PlacementEntry(PlacementRef(subject, slot), None, "invalid_placement",
+                                           "campaign layer damaged" if isinstance(subject, InstanceRef)
+                                           else "portrayal layer damaged")
+    return entries
+
+
+def _lineage_layers(disk: _Disk, found: Lineage, problems: list[Problem]) -> list[Layer]:
+    """One ``Layer`` per entity of a lineage, root first; a derived layer's damage is guarded."""
+    problems.extend(found.problems)
+    layers: list[Layer] = []
+    for entity, derived in zip(found.entities, found.derived):
+        own, own_problems, trusted = disk.layer(entity)
+        problems.extend(own_problems)
+        entries = _guarded(entity, own, trusted, layers) if derived else dict(own)
+        layers.append(Layer(entity, entries, entity.source, derived))
+    return layers
 
 
 __all__ = ["ImageBatch", "ImageCommit", "ImageLibrary", "InvalidImage", "InvalidPlacement", "derivation"]

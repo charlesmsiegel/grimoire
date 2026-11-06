@@ -23,7 +23,9 @@ from grimoire.store.jsonfmt import JsonError, parse_strict
 from grimoire.store.layout import (
     classify, definition_parts, image_parts, instance_parts, manifest_parts, placement_parts,
 )
-from grimoire.store.replica import image_blob, instance_derivation_of, parse_exact, placement_target
+from grimoire.store.replica import (
+    definition_is_derived, image_blob, instance_derivation_of, parse_exact, placement_target,
+)
 
 from .documents import syncable
 
@@ -121,11 +123,8 @@ def art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes], blobs:
     mode, image, readable = placement_target(data)
     if not readable:
         return done("its mode or image cannot be read")
-    refused = _placement_refusal(ref, data)
-    if refused is not None:
-        return done(refused)
     subject = ref.subject
-    if isinstance(subject, SourceRef):  # W5 (source admitted, entity exists), W7, W6
+    if isinstance(subject, SourceRef):  # W5 (source admitted, entity exists), W8, W7, W6
         excluded_why = admitted(subject.source)  # before its head: the origin's load() refuses that data
         if excluded_why is not None:
             return done(excluded_why)
@@ -133,12 +132,22 @@ def art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes], blobs:
         head = _entity_head(origin, subject)
         if head is None:
             return done(f"{subject} has no head revision on the origin")
-        identical.add(head)
+        identical.add(head)  # so W8 reads the same head on both sides: a derived one may clear or reset (046)
+        head_data = origin.get(head)
+        refused = _placement_refusal(ref, data, derived=head_data is not None and definition_is_derived(head_data))
+        if refused is not None:
+            return done(refused)
+        if mode == "adjust":  # the picture it re-crops comes through the base chain, which sync does not compare
+            return done(f"{subject} re-crops a picture its base chain shows; a portrayal's adjust is not "
+                        "synced yet (046 later)")
         if image is not None:
             if image.scope != subject.source:
                 return done(f"{image} is not in scope for {subject}")
             return done(art(image))
         return done()
+    refused = _placement_refusal(ref, data)
+    if refused is not None:
+        return done(refused)
     assert isinstance(subject, InstanceRef)
     instance = "/".join(instance_parts(subject))
     present.add(instance)  # W5; a pair-blocked instance is unknown, so the placement is held (A2)
@@ -204,7 +213,7 @@ def _image_refusal(data: bytes, blob: str, blobs: Mapping[str, int]) -> str | No
     return None
 
 
-def _placement_refusal(ref: PlacementRef, data: bytes) -> str | None:
+def _placement_refusal(ref: PlacementRef, data: bytes, *, derived: bool = False) -> str | None:
     """Why 018 refuses this placement where it sits (its schema and codec, then W8's
     ``validate_placement``, which the batch and the resolver both apply: a source placement may only
     ``set``), else ``None``. The resolver reads a placement under another schema as ``invalid_placement``."""
@@ -216,7 +225,7 @@ def _placement_refusal(ref: PlacementRef, data: bytes) -> str | None:
         placement = placement_from_payload(document.get("payload"))  # type: ignore[union-attr]
     except (JsonError, ImageModelError) as error:
         return f"its payload cannot be read ({error})"
-    problem = validate_placement(ref.subject, ref.slot, placement)
+    problem = validate_placement(ref.subject, ref.slot, placement, derived=derived)
     return None if problem is None else f"{problem[0]}: {problem[1]}"
 
 
