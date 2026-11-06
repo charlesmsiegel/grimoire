@@ -26,6 +26,7 @@ from grimoire.peersync.pairing import peer_principal
 from grimoire.peersync.replay import StepBuffer
 from grimoire.peersync.wire import Channel, client_handshake, server_handshake
 from grimoire.store import RecordEnvelope, SourceManifest, etag
+from grimoire.sync import DismissRefused, bookkeeping, dismiss
 from grimoire.sync import session as sync_session
 from grimoire.sync.documents import KeptEntry, keeps_name, parse_keeps, pending_name, render_keeps
 
@@ -299,11 +300,18 @@ def test_unpairing_on_the_starting_device_mid_resolve_sends_nothing_more(tmp_pat
 
 # -- a resolve the connection drops ----------------------------------------------------------------
 
-@pytest.mark.parametrize("step,landed", [(1, False), (1, True), (2, False), (2, True), (3, True), (4, True)])
+def _agreement(case: Conflict):  # type: ignore[no-untyped-def]
+    """What the phone's archive records for the conflict's path."""
+    return bookkeeping.read_document(case.phone.store, "archive", DESKTOP, (DESKTOP, PHONE)).entries.get(case.path)
+
+
+@pytest.mark.parametrize("step,landed", [(1, False), (1, True), (2, False), (2, True), (3, True), (4, True), (5, True)])
 def test_a_dropped_connection_mid_resolve_loses_nothing_and_the_devices_converge(tmp_path, monkeypatch, step, landed):
-    """The phone receives: its commits are the hold's record, the data, its archive and its marker."""
+    """The phone receives: its commits are the hold's record, the data, its kept-version record, its
+    archive and its marker. The desktop clears its own record before the phone's archive step, so a
+    drop between the two archives never leaves the desktop's copy of the phone's version dismissable."""
     case = Conflict(tmp_path)
-    commits = []
+    commits, before = [], _agreement(case)
 
     class Dropping(StepBuffer):
         """The phone's side of the resolve's ``step``-th commit: the cable comes out before or after it lands."""
@@ -332,6 +340,9 @@ def test_a_dropped_connection_mid_resolve_loses_nothing_and_the_devices_converge
     if step <= 2:  # the hold's record lands first: never a hold without it (a record alone fails closed)
         record = parse_keeps(case.phone.store.read_sync_state(keeps_name(DESKTOP)), (DESKTOP, PHONE))
         assert (case.expected[PHONE] in record.entries[case.path].held) == (landed or step == 2)
+    if _agreement(case) != before:  # the phone's archive records the agreement; the desktop's may not yet
+        with pytest.raises(DismissRefused):
+            dismiss(case.desktop.store, PHONE, case.path, case.expected[PHONE], case.desktop.handle)
     with serving(case.phone) as server:  # the same resolve again: done if the data did not land, stale if it did
         retry = case.resolve(server, DESKTOP)
     assert retry.status == ("refused" if data else "resolved"), retry
