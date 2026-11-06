@@ -115,7 +115,9 @@ def reach(stage: Stage, who: InstanceRef, thing: InstanceRef) -> Answer:
     ``untracked``, ``thing_off_stage``, ``held_by_other``, ``elsewhere``). The same rule ``take`` applies."""
     stage = _stage(stage)
     who, thing = _ref(stage, who), _ref(stage, thing)
-    assumed = (_assumed_chain(stage, who), _assumed_chain(stage, thing))
+    inside = [fact for item in stage.custody(thing) if stage.is_actor(item)
+              for fact in _assumed_chain(stage, item)]  # what a holds_actor no rests on
+    assumed = (_assumed_chain(stage, who), _assumed_chain(stage, thing), inside)
     reason = reach_refusal(stage, who, thing)
     if reason is not None:
         return _answer(False, reason, *assumed)
@@ -342,6 +344,16 @@ def perception_id(event_id: str, holder: InstanceRef, *, channel: str, area: str
     Neutral and silent about other witnesses. The same call always gives the same id (a repeat is 012's
     and 020's ``duplicate_id``); another channel, area or percept for the same event gives another id.
     """
+    def shapes() -> None:
+        _label(event_id)
+        if type(holder) is not InstanceRef:
+            raise TypeError("holder")
+        validate_segment(channel, "channel")
+        _label(area)
+        if type(percept) is not str or not percept:
+            raise TypeError("percept")
+        percept.encode("utf-8")
+    checked(shapes)
     key = "\x00".join((str(holder), channel, area, percept)).encode("utf-8")
     return f"{event_id}.w-{hashlib.sha256(key).hexdigest()[:16]}"
 
@@ -350,7 +362,8 @@ def perceptions(stage: Stage, event: Event, *, area: str, percept: str, provenan
                 channel: str = "witnessed", allow_assumed: bool = False) -> tuple[Perception, ...]:
     """012 perceptions of ``event``, which happened openly in ``area``: one per witness, sorted by holder.
 
-    ``percept`` is sensory register only (012's rule). The stage must be the scene at the event's own
+    Witnesses are those who can **see** into ``area`` (the sight rule); ``channel`` names the record and
+    does not change who perceives. ``percept`` is sensory register only (012's rule). The stage must be the scene at the event's own
     sequence (``stale_stage`` otherwise; ``Stage.at`` moves a stage forward when nothing changed), and in
     the event's scene when the event names one (``scene_mismatch``). Witnesses resting on assumed staging
     (an assumed placement of any actor on stage, or an assumed way between them and ``area``) are

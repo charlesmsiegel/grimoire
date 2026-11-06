@@ -336,8 +336,10 @@ class Stage:
     def at(self, sequence: int) -> Stage:
         """The same facts at a later ``sequence``: the caller's word that nothing physical changed between.
 
-        ``perceptions`` and ``deliver`` need a stage whose ``as_of`` is the moment they record, so a stage
-        left behind by a later change can never be used by mistake. Earlier sequences are ``out_of_order``.
+        ``perceptions`` and ``deliver`` need a stage whose ``as_of`` is the moment they record. ``apply``
+        takes one change per sequence, so a stage at a sequence is the scene after everything done at it and
+        a stage left behind by a later change can never be used by mistake. Earlier sequences are
+        ``out_of_order``.
         """
         def shapes() -> None:
             _sequence(sequence)

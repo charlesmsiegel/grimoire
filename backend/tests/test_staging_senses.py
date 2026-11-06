@@ -55,6 +55,9 @@ def test_reach():
     assert reach(s, LETTER, KEY) == Answer(False, "not_actor")
     assert reach(do(stage(), place(LETTER, area="study", basis="assumed")), TOMA, LETTER) == Answer(
         True, "within_reach", (f"placement:{LETTER}",))
+    chest = ref("chest", "item")
+    hidden = do(stage(), place(chest, area="study"), place(EMMA, holder=chest, basis="assumed"))
+    assert reach(hidden, MARA, chest) == Answer(False, "holds_actor", (f"placement:{EMMA}",))
     # a no that rests on a guess says so too
     assert reach(do(stage(), place(LETTER, area="hall", basis="assumed")), TOMA, LETTER) == Answer(
         False, "elsewhere", (f"placement:{LETTER}",))
@@ -150,6 +153,9 @@ def test_perceptions_go_to_witnesses_only():
     assert got[0] == Perception(C, pid, MARA, "e-1", "witnessed",
                                 "smoke curls from the desk", Moment(1, SCENE), P, confirmed=True)
     assert pid.startswith("e-1.w-") and len(pid) == len("e-1.w-") + 16
+    for bad in (dict(channel=None, area="study", percept="x"), dict(channel="seen", area="study", percept="\ud800"),
+                dict(channel="seen", area="", percept="x")):
+        refused("invalid_field", perception_id, "e-1", MARA, **bad)
     # another channel or percept for the same event is another, storable perception
     heard = perceptions(s, event(1), area="study", percept="a crackle", provenance=P, channel="heard")
     assert not {p.evidence_id for p in got} & {p.evidence_id for p in heard}

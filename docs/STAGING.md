@@ -43,14 +43,14 @@ The stage is **scene-local staging and director truth**:
 - A holder is itself placed, or is an absent actor (`orphan_holder`): **what someone carries leaves with them** and stays in their custody. No individual holds itself at any depth (`custody_cycle`).
 - An actor goes off stage only by leaving, never as someone's load: a placed actor's custody chain ends in an area (`carried_off_stage`). So `stage.on_stage()` and every question agree on who is present.
 - Areas and ways named exist (`unknown_area`, `unknown_way`); an absence's `via` leads off stage (`leads_to_area`); no fact is later than `as_of` (`future_fact`); ids are unique (`duplicate_id`); everything is in the stage's campaign (`campaign_mismatch`).
-- Bounds: 1–64 areas, 128 ways, 256 actors (033's cast limit), 1024 placements (`too_large`).
+- Bounds: 1–64 areas (none is `invalid_field`), 128 ways, 256 actors (033's cast limit), 1024 placements (`too_large`).
 - Collections are sorted, so equal facts give equal stages. A stage pickles, copies and converts with `dataclasses.asdict` by its facts alone.
 
 `stage.at(sequence)` is the same facts at a later sequence: the caller's word that nothing physical changed in between. `stage.on_stage()` lists the actors physically present.
 
 ## Changes (`apply(stage, change, *, sequence, provenance)`)
 
-`apply` returns the new stage (its `as_of` is `sequence`) or raises `StagingRefused`, with nothing changed. `sequence` may not be before `as_of` (`out_of_order`). `provenance` is attribution text, validated and not recorded on the stage in this slice.
+`apply` returns the new stage (its `as_of` is `sequence`) or raises `StagingRefused`, with nothing changed. `sequence` must be after `as_of` (`out_of_order`): **one change per sequence**, so a stage at a sequence is the scene after everything done at it, and `perceptions` and `deliver` at that sequence never judge against a later change. A turn of several physical steps (unlock, open, walk through) takes one sequence per step. `provenance` is attribution text, validated and not recorded on the stage in this slice.
 
 **Physical changes** are made by an actor standing in an area. One who is not an actor (`not_actor`), off stage (`not_on_stage`) or carried by someone (`restrained`) cannot act. Every fact a physical change sets is `established`: accepted play establishes its own result, even where it rested on an assumption.
 
@@ -106,10 +106,10 @@ Room scale, no distances:
 ### Perceptions for witnesses (012, 020)
 
 - `witnesses(stage, area)`: the actors who can see what happens openly in `area`: on stage, not inside a thing, and in the area or in one joined to it by an open way.
-- `perceptions(stage, event, *, area, percept, provenance, channel="witnessed", allow_assumed=False)` gives one confirmed 012 `Perception` per witness, sorted by holder, at the event's moment.
+- `perceptions(stage, event, *, area, percept, provenance, channel="witnessed", allow_assumed=False)` gives one confirmed 012 `Perception` per witness, sorted by holder, at the event's moment. Witnesses are those who can see into the area; `channel` names the record only, so a sound heard by someone who cannot see (inside a chest, behind a door) is later work.
   - The stage must be the scene at the event's own sequence (`stale_stage`; `stage.at` moves a stage forward when nothing changed), and in the event's scene when the event names one (`scene_mismatch`).
   - `percept` is sensory register only (012's rule), nonempty, at most 20 000 characters.
-  - Ids are `perception_id(event_id, holder, *, channel, area, percept)`: `<event_id>.w-<16 hex>`, the first 16 hex digits of SHA-256 over the holder's reference text, the channel, the area and the percept. Neutral, deterministic (a repeated call is 012's and 020's `duplicate_id`) and silent about other witnesses; a second channel or percept for the same event (seen, then heard) is a second perception. An event id is at most `EVENT_ID_MAX` (104) characters (`too_long`), so the id plus 020's `.json` fits a store slot.
+  - Ids are `perception_id(event_id, holder, *, channel, area, percept)`: `<event_id>.w-<16 hex>`, the first 16 hex digits of SHA-256 over the holder's reference text, the channel, the area and the percept. Neutral, deterministic (a repeated call is 012's and 020's `duplicate_id`) and silent about other witnesses; a second channel or percept for the same event is a second perception. An event id is at most `EVENT_ID_MAX` (104) characters (`too_long`), so the id plus 020's `.json` fits a store slot.
 - Witnesses are judged on the stage after any change the event itself made: an actor behind a door the event shut, or one the event took off stage, gets nothing of it. Perceiving the change itself is later work.
 - 020 stores the result unchanged.
 

@@ -171,7 +171,8 @@ def test_corrections_need_no_physical_check_but_keep_the_invariants():
 def test_change_shapes_and_order():
     s = stage(as_of=4)
     refused("out_of_order", s, take(TOMA, LETTER), sequence=3)
-    assert apply(s, take(TOMA, LETTER), sequence=4, provenance=P).as_of == 4
+    refused("out_of_order", s, take(TOMA, LETTER), sequence=4)  # one change per sequence
+    assert apply(s, take(TOMA, LETTER), sequence=5, provenance=P).as_of == 5
     refused("campaign_mismatch", s, take(TOMA, InstanceRef("other", "item", "x")))
     for build in (lambda: Change("fly", who=MARA), lambda: Change("move", who=MARA),
                   lambda: Change("move", who=MARA, way=STUDY_DOOR, thing=KEY),

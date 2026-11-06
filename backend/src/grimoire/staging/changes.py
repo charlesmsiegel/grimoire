@@ -283,7 +283,9 @@ def apply(stage: Stage, change: Change, *, sequence: int, provenance: str) -> St
         _sequence(sequence)
         _label(provenance)
     checked(shapes)
-    if sequence < stage.as_of:
+    if sequence <= stage.as_of:
+        # one change per sequence: a stage at a sequence is the scene after everything done at it, so
+        # ``perceptions`` and ``deliver`` at that sequence never judge against a later change
         fail("out_of_order")
     for ref in (change.who, change.thing, change.to, change.holder):
         if ref is not None and ref.campaign_id != stage.campaign_id:
