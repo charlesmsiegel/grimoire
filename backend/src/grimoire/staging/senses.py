@@ -140,7 +140,9 @@ def _between(stage: Stage, first: str, second: str) -> tuple[str, list[str]]:
     ways = stage.ways_between(first, second)
     opened = [way for way in ways if way.state == "open"]
     if opened:
-        return "open", [f"way:{way.way_id}" for way in opened if way.basis == "assumed"]
+        if any(way.basis == "established" for way in opened):
+            return "open", []  # one established open way is enough on its own
+        return "open", [f"way:{way.way_id}" for way in opened]
     if ways:
         return "shut", [f"way:{way.way_id}" for way in ways if way.basis == "assumed"]
     return "none", []

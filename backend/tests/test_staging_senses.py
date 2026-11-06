@@ -145,6 +145,19 @@ def event(sequence, event_id="e-1", scene=SCENE):
     return Event(C, event_id, "a letter is burned", Moment(sequence, scene), "director")
 
 
+def test_an_established_open_way_needs_no_assumed_one():
+    from grimoire.staging import Way
+    s = stage(door="open", ways=(Way(STUDY_DOOR, ("study", "hall"), "open", KEY),
+                                 Way("hatch", ("study", "hall"), "open", basis="assumed"),
+                                 Way(FRONT_DOOR, ("hall", None), "open")))
+    assert sees(s, MARA, EMMA) == Answer(True, "through_open_way")
+    assert deliver(s, Message("m-h", MARA, "speech", "hi"), sequence=s.as_of, provenance=P)
+    only_assumed = stage(ways=(Way(STUDY_DOOR, ("study", "hall"), "locked", KEY),
+                               Way("hatch", ("study", "hall"), "open", basis="assumed"),
+                               Way(FRONT_DOOR, ("hall", None), "open")))
+    assert sees(only_assumed, MARA, EMMA) == Answer(True, "through_open_way", ("way:hatch",))
+
+
 def test_room_speech_never_tells_someone_the_speaker_cannot_see():
     wardrobe = ref("wardrobe", "item")
     s = do(stage(), place(wardrobe, area="study"), place(TOMA, holder=wardrobe))

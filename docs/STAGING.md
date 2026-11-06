@@ -113,7 +113,7 @@ Room scale, no distances:
 - Witnesses are judged on the stage after any change the event itself made: an actor behind a door the event shut, or one the event took off stage, gets nothing of it. Perceiving the change itself is later work.
 - 020 stores the result unchanged.
 
-**Evidence is never invented.** `presence`, `deliver` and `perceptions` decide who receives evidence, which 020 cannot take back. When an answer they use rests on an assumed fact (an assumed position, or an assumed open door), they refuse with `rests_on_assumption` unless the caller passes `allow_assumed=True`: ask, or establish the position, first. That includes an actor left out on a guess (assumed inside a wardrobe, or behind a door assumed shut). For a whisper or telepathy only the addressees' staging counts, since no one else receives it; for speech every listener's does.
+**Evidence is never invented.** `presence`, `deliver` and `perceptions` decide who receives evidence, which 020 cannot take back. When an answer they use rests on an assumed fact (an assumed position, or an assumed open door), they refuse with `rests_on_assumption` unless the caller passes `allow_assumed=True`: ask, or establish the position, first. That includes an actor left out on a guess (assumed inside a wardrobe, or behind a door assumed shut). For a whisper or telepathy only the addressees' staging counts, since no one else receives it; for speech every listener's does. One established open way between two areas is enough on its own; an assumed open way beside it is not relied on.
 
 ### Checks against 033 and 034
 
