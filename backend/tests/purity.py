@@ -155,6 +155,10 @@ PURE_PACKAGES = (
     PurePackage("grimoire.staging", ("grimoire.staging", "grimoire.core", "grimoire.comms", "grimoire.evidence",
                                       "grimoire.party"),
                 never_import=("grimoire.core.inference",)),
+    # Narration continuity referee (047): checks labelled claims against 041, 023, 034, 012, 029 and 040 values.
+    PurePackage("grimoire.referee", ("grimoire.referee", "grimoire.core", "grimoire.staging", "grimoire.comms",
+                                      "grimoire.holdings", "grimoire.possessions", "grimoire.obstacles"),
+                never_import=("grimoire.core.inference",)),
     # Voice evidence: shares the gate's text matcher so screening and scoring agree.
     PurePackage("grimoire.voice", ("grimoire.voice", "grimoire.core", "grimoire.evals.text",
                                    "grimoire.evals.checks"),
