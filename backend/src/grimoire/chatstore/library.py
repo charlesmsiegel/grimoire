@@ -473,13 +473,18 @@ class ChatLibrary:
 
     def start_chat(self, launch: Launch, *, attach: Iterable[tuple[SourceRef, str]] = (),
                    persona: SourceRef | None = None, label: str | None = None, scope: ScopeRef | None = None,
-                   reuse_actors: ReuseMap | None = None) -> ChatChange:
-        """A new chat, by default in a new world-less scope; ``scope`` continues an existing campaign."""
+                   reuse_actors: ReuseMap | None = None, follow: bool = False) -> ChatChange:
+        """A new chat, by default in a new world-less scope; ``scope`` continues an existing campaign.
+
+        Every source is **pinned** to the revision it resolves to now (the launch included), so a later
+        revision reaches the chat only through 042's reviewed rebase. ``follow=True`` is the explicit
+        opt-in to bind unpinned refs as given, following their heads."""
         with self.store.read_pass():  # every binding is validated against one verified exclusion set
-            return self._start_chat(launch, attach, persona, label, scope, reuse_actors)
+            return self._start_chat(launch, attach, persona, label, scope, reuse_actors, follow)
 
     def _start_chat(self, launch: Launch, attach: Iterable[tuple[SourceRef, str]], persona: SourceRef | None,
-                    label: str | None, scope: ScopeRef | None, reuse_actors: ReuseMap | None) -> ChatChange:
+                    label: str | None, scope: ScopeRef | None, reuse_actors: ReuseMap | None,
+                    follow: bool) -> ChatChange:
         at = self._clock()
         reuse = dict(reuse_actors or {})
         if reuse and scope is None:
@@ -511,7 +516,7 @@ class ChatLibrary:
         bindings, actors, reused = [], [], {}
         for ref, role in wanted:
             binding, envelope, etag = self._prepare(scope.campaign_id, ref, role,
-                                                    reuse.pop((role, ref.entity_key), None), taken)
+                                                    reuse.pop((role, ref.entity_key), None), taken, follow)
             bindings.append(binding)
             if envelope is not None:
                 actors.append(binding.actor)
@@ -522,6 +527,8 @@ class ChatLibrary:
         if reuse:
             raise InvalidBinding(f"actors to reuse match no binding: {sorted(map(str, reuse.values()))}",
                                  "reuse_unmatched")
+        if launch.ref is not None:  # the launch names what its binding pins: the revision the chat began with
+            launch = Launch(launch.kind, bindings[0].ref)
         record = ChatRecord.start(chat, launch, at, tuple(bindings), label)
         puts = (*scope_puts, (self._chat_record(record), None), *actor_puts)
         return ChatChange(self, puts, scope, chat, tuple(actors), new_scope, tuple(reused), reused)
@@ -547,10 +554,11 @@ class ChatLibrary:
     # -- chat edits -----------------------------------------------------------------------------
 
     def attach_source(self, chat: ChatRef, ref: SourceRef, role: str, *, expected: str,
-                      actor: InstanceRef | None = None) -> ChatChange:
+                      actor: InstanceRef | None = None, follow: bool = False) -> ChatChange:
+        """Bind ``ref``, pinned to the revision it resolves to now unless ``follow=True`` (see ``start_chat``)."""
         record, base = self._current(chat, expected)
         taken = _LazyTaken(lambda: self._taken(chat, record))
-        binding, envelope, etag = self._prepare(chat.campaign_id, ref, role, actor, taken)
+        binding, envelope, etag = self._prepare(chat.campaign_id, ref, role, actor, taken, follow)
         return self._chat_change(chat, record.attach(binding, self._clock()), base, expected, envelope, binding.actor,
                                  etag)
 
@@ -569,7 +577,8 @@ class ChatLibrary:
         return self._chat_change(chat, record.detach(ref, role, at), base, expected)
 
     def set_persona(self, chat: ChatRef, ref: SourceRef | None, *, expected: str,
-                    actor: InstanceRef | None = None) -> ChatChange:
+                    actor: InstanceRef | None = None, follow: bool = False) -> ChatChange:
+        """Replace the persona; the new one is pinned unless ``follow=True`` (see ``start_chat``)."""
         record, base = self._current(chat, expected)
         at = self._clock()
         current = record.persona
@@ -582,7 +591,7 @@ class ChatLibrary:
         if ref is not None:
             detached = record
             binding, envelope, etag = self._prepare(chat.campaign_id, ref, "persona", actor,
-                                                    _LazyTaken(lambda: self._taken(chat, detached)))
+                                                    _LazyTaken(lambda: self._taken(chat, detached)), follow)
             record, bound = record.attach(binding, at), binding.actor
         return self._chat_change(chat, record, base, expected, envelope, bound, etag)
 
@@ -653,9 +662,15 @@ class ChatLibrary:
         return None
 
     def _prepare(self, campaign: str, ref: SourceRef, role: str, reuse: InstanceRef | None,
-                 taken: set[str] | _LazyTaken) -> tuple[NewBinding, RecordEnvelope | None, str | None]:
-        """The binding, a new actor's envelope (or ``None``) and a reused actor's etag as checked (or ``None``)."""
+                 taken: set[str] | _LazyTaken, follow: bool = False
+                 ) -> tuple[NewBinding, RecordEnvelope | None, str | None]:
+        """The binding, a new actor's envelope (or ``None``) and a reused actor's etag as checked (or ``None``).
+
+        An unpinned ``ref`` is pinned to the revision it resolves to now, the very revision whose bytes
+        were checked (and a new actor is based on), unless the caller asked to ``follow`` the head."""
         revision, definition_etag = self._resolve(ref, role)
+        if not follow and not ref.pinned:
+            ref = ref.at(revision)
         if role not in ACTOR_ROLES:
             if reuse is not None:
                 raise InvalidBinding(f"a {role} binding has no actor", "role_kind")

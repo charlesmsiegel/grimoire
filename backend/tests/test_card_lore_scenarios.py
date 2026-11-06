@@ -249,7 +249,7 @@ def test_a_launched_scenarios_own_lorebook_triggers_in_its_scenes(store, chats):
     land(store, encode(V3))
     started = chats.start_chat(Launch("scenario", STORM)).commit()
     assert started.actors == ()
-    assert _bindings(chats, started.chat) == [("scenario", STORM)]  # selected with it, never bound
+    assert _bindings(chats, started.chat) == [("scenario", STORM.at("r1"))]  # selected with it, never bound
     table = _table(store, started.chat, "The storm worsens.")
     assert [(item.line, item.audience) for item in table.items] == [(STORMS, "common")]
     assert table.problems == ()  # the scenario record itself is read, and holds no lore
@@ -276,8 +276,9 @@ def test_a_scenario_attached_mid_chat_brings_its_lorebook(store, chats):
 
 def test_an_update_that_drops_the_lorebook_takes_its_lore_from_head_following_chats(store, chats):
     land(store, encode(SCENARIO))
-    following = chats.start_chat(Launch("scenario", STORM)).commit()
+    following = chats.start_chat(Launch("scenario", STORM), follow=True).commit()  # the explicit opt-in
     pinned = chats.start_chat(Launch("scenario", STORM.at("r1"))).commit()
+    default = chats.start_chat(Launch("scenario", STORM)).commit()  # pinned by default: r1
     land(store, encode(_scenario(lorebook=None)), target=STORM.source)
     assert "lorebook" not in store.check_definition(STORM).envelope.payload  # r2 names none
     assert not isinstance(store.check_definition(STORM_LORE), str)  # the old book is kept, unnamed
@@ -286,24 +287,27 @@ def test_an_update_that_drops_the_lorebook_takes_its_lore_from_head_following_ch
     assert ("binding_drift", STORM, "r1 -> r2") in {(p.code, p.source, p.detail)
                                                     for p in _table(store, following.chat, scene).problems}
     assert _lore_of(store, pinned.chat, scene) == [STORMS]  # r1 still names its book
+    assert _lore_of(store, default.chat, scene) == [STORMS]  # so does the default chat, until a reviewed rebase
     fresh = chats.start_chat(Launch("scenario", STORM)).commit()
     assert _lore_of(store, fresh.chat, scene) == []
 
 
 def test_an_update_that_renames_the_lorebook_moves_its_lore_with_the_scenario(store, chats):
     land(store, encode(_scenario(lorebook=None)), lorebook=encode(LOREBOOK))
-    started = chats.start_chat(Launch("scenario", STORM)).commit()
+    started = chats.start_chat(Launch("scenario", STORM), follow=True).commit()  # the explicit opt-in
+    default = chats.start_chat(Launch("scenario", STORM)).commit()  # pinned to r1
     scene = "The fish market is shut."
-    assert _lore_of(store, started.chat, scene) == [MARKET]
+    assert _lore_of(store, started.chat, scene) == _lore_of(store, default.chat, scene) == [MARKET]
     almanac = card(LOREBOOK, name="Harbor almanac", entries=[_entry(ALMANAC, "market")])
     land(store, encode(_scenario(lorebook=None)), lorebook=encode(almanac), target=STORM.source)
     assert _lore_of(store, started.chat, scene) == [ALMANAC]
+    assert _lore_of(store, default.chat, scene) == [MARKET]  # r1 names the book it named
 
 
 def test_a_chats_own_binding_of_the_scenarios_lorebook_is_kept(store, chats):
     land(store, encode(SCENARIO))
     started = chats.start_chat(Launch("scenario", STORM), attach=[(STORM_LORE.at("r1"), "lorebook")]).commit()
-    assert _bindings(chats, started.chat) == [("scenario", STORM), ("lorebook", STORM_LORE.at("r1"))]
+    assert _bindings(chats, started.chat) == [("scenario", STORM.at("r1")), ("lorebook", STORM_LORE.at("r1"))]
     assert _lore_of(store, started.chat, "The storm worsens.") == [STORMS]  # selected once
 
 
@@ -341,7 +345,8 @@ def test_a_scenario_naming_something_else_as_its_lorebook_brings_no_lore_and_say
 
 def test_a_player_can_detach_a_scenarios_own_lorebook_and_have_it_back(store, chats):
     land(store, encode(SCENARIO))
-    started = chats.start_chat(Launch("scenario", STORM)).commit()
+    # head-following (the explicit opt-in), so the scenario update below reaches it
+    started = chats.start_chat(Launch("scenario", STORM), follow=True).commit()
     scene = "The storm worsens."
 
     def change(method, *args):

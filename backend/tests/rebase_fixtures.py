@@ -86,8 +86,9 @@ def rebase(store):
     return SourceRebase(store, owner_handle(), clock=Clock())
 
 
-def start(chats, ref=R1):
-    started = chats.start_chat(Launch("character", ref)).commit()
+def start(chats, ref=R1, *, follow=False):
+    """A chat launched from ``ref``: pinned to what it resolves to now, unless ``follow`` opts in to the head."""
+    started = chats.start_chat(Launch("character", ref), follow=follow).commit()
     [actor] = started.actors
     return started, actor
 

@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from grimoire.archaeology import FORMAT, Loss, StChat, StError, StSpeaker, read_st_chat
-from grimoire.chats import ChatRecord, Launch, chat_from_payload
+from grimoire.chats import ChatCodecError, ChatRecord, Launch, chat_from_payload
 from grimoire.chatstore import (
     ChatChange, ChatCommit, ChatLibrary, DeviceIdentityUnusable, InvalidBinding, device_tag,
 )
@@ -104,6 +104,9 @@ class StImport:
 
     #: provider calls this import makes, ever: scanning and applying are text only
     provider_calls: int = 0
+    #: ``already_imported`` only: the earlier import's active bindings that follow their head (an import
+    #: made before chats were pinned by default). Reported, never rewritten: 042's reviewed rebase re-pins.
+    following: tuple[SourceRef, ...] = ()
 
     def preview(self) -> dict[str, bytes]:
         return {} if self.change is None else self.change.preview()
@@ -355,7 +358,7 @@ class StImporter:
             raise ImportRefused(f"campaigns/{chat.campaign_id} exists but cannot be read ({presence})",
                                 "campaign_exists")
         try:
-            self.store.read(chat)
+            stored_chat = self.store.read(chat)
         except RecordNotFound:
             raise ImportRefused(f"campaigns/{chat.campaign_id} exists and is not this export's import",
                                 "campaign_exists") from None
@@ -377,7 +380,8 @@ class StImporter:
                 sid = post.source.get("speaker")
                 if post.speaker.actor is not None and type(sid) is str:
                     actors[sid] = post.speaker.actor
-        return StImport("already_imported", scan, chat, mapping, actors, scan.losses, pages, None)
+        return StImport("already_imported", scan, chat, mapping, actors, scan.losses, pages, None,
+                        following=_following(chat, stored_chat))
 
 
 def _complete(pages: Sequence[TranscriptPage], scan: StScan) -> bool:
@@ -389,6 +393,15 @@ def _complete(pages: Sequence[TranscriptPage], scan: StScan) -> bool:
     if type(count) is not int or type(posts) is not int or not 1 <= count <= len(pages):
         return False
     return posts == len(scan.chat.posts) == sum(len(page.posts) for page in pages[:count])
+
+
+def _following(chat: ChatRef, stored: object) -> tuple[SourceRef, ...]:
+    """The chat's active bindings that follow their head; none for a chat this version cannot interpret."""
+    try:
+        record = chat_from_payload(chat, stored.record.schema, stored.record.payload)  # type: ignore[attr-defined]
+    except (ChatCodecError, AttributeError):
+        return ()
+    return tuple(binding.ref for binding in record.active_bindings() if not binding.ref.pinned)
 
 
 def _chat_record(change: ChatChange) -> ChatRecord:

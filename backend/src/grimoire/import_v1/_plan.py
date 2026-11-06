@@ -438,7 +438,7 @@ class ImportPlan:
             self._unresolve(legacy, "actor_base_not_imported", str(actor.ref))
             return
         base = self.targets[base_path]
-        source = actor.definition.unpinned()
+        source = actor.definition  # pinned: the campaign plays this revision until a reviewed rebase (042)
         instance = EntityInstance(actor.ref, source=source, extras=actor.extras)
         envelope = RecordEnvelope(actor.ref, instance_to_payload(instance), owner=self.owner, derived_from=str(source),
                                   base=str(actor.definition), base_etag=base.etag, extra={"schema": ENTITY_SCHEMA})
@@ -478,7 +478,9 @@ class ImportPlan:
                         dropped.append(str(ref))
                     continue
                 prior = CAMPAIGN_CONTINUITY if ref in seen else NOT_WITNESSED
-                binding = NewBinding(actor.definition.unpinned(), "character", actor.definition.revision, ref, prior)
+                # pinned to the imported revision: a later world revision (a 043 change set, say) reaches
+                # the chat only through 042's reviewed rebase
+                binding = NewBinding(actor.definition, "character", actor.definition.revision, ref, prior)
                 if actor.role == "player":
                     if persona is not None:  # V2 chats have one persona: the chat starts with the first
                         self._unresolve(scene.legacy_id, "second_persona", str(ref))
@@ -618,15 +620,23 @@ class ImportPlan:
         return source is not None and source.entity_key == definition.entity_key
 
     def _cast_bound(self, ref: ChatRef, legacy_id: str, cast: list[InstanceRef]) -> None:
-        """An imported chat keeps the cast it started with: an actor imported since is reported, never bound."""
+        """An imported chat keeps the cast it started with: an actor imported since is reported, never bound.
+
+        A chat an earlier build imported binds its cast unpinned (following the world's head). It is
+        never rewritten here: each such binding is reported (``binding_follows_head``) so a human can
+        re-pin it through 042's reviewed rebase or leave it following."""
         try:
             stored = self.store.read(ref)
-            bound = {b.actor for b in chat_from_payload(ref, stored.record.schema, stored.record.payload).bindings}
+            record = chat_from_payload(ref, stored.record.schema, stored.record.payload)
         except (StoreError, ValueError, ChatModelError):
             return  # a V2 edit that no longer parses is the chat's own business
+        bound = {b.actor for b in record.bindings}
         for actor in cast:
             if actor not in bound:
                 self._unresolve(legacy_id, "cast_not_bound", str(actor))
+        for binding in record.active_bindings():
+            if not binding.ref.pinned:
+                self._unresolve(legacy_id, "binding_follows_head", f"{ref} {binding.ref}")
 
     # -- pictures ---------------------------------------------------------------------------
     def _need_ok(self, need: object) -> bool:
