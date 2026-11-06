@@ -36,6 +36,7 @@ from grimoire.core.entity_codec import ENTITY_SCHEMA, instance_to_payload
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, paired_instances, validate_segment
 from grimoire.effectstore import accepted_instance_ids
 from grimoire.evidencestore import evidence_instance_ids
+from grimoire.scenestore import turn_instance_ids
 from grimoire.graphstore import relation_endpoint_ids
 from grimoire.holdingstore import holdings_holder_ids, holdings_peer_ids
 from grimoire.imagestore import placement_subject_ids
@@ -112,8 +113,9 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str, *,
     folder at an instance path takes only its own id (the store never reads it as a record). Every instance
     allocator (107 here; 024, 026, 037 later) must use this at plan time and again under the store
     lock at commit, and any later record family that names instance ids must extend it. Its cost
-    grows with play history: it reads every instance, relation, chat, transcript page, accepted-event, knowledge
-    and holder file and every sovereignty and adjudication batch of the campaign, and every security batch of the library.
+    grows with play history: it reads every instance, relation, chat, transcript page, accepted-event, knowledge,
+    holder and turn file and every sovereignty and adjudication batch of the campaign, and every security batch of
+    the library.
 
     ``spent`` is ``(approval id, address, payload digest)`` of the approvals a commit supplies for
     its own writes: at that commit's re-check they name its new individuals by design and do not
@@ -137,6 +139,7 @@ def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool,
     taken |= sovereignty_actor_ids(store, campaign_id)
     taken |= possession_party_ids(store, campaign_id)
     taken |= adjudication_actor_ids(store, campaign_id)
+    taken |= turn_instance_ids(store, campaign_id)
     if security:  # skipped only by _fresh_campaign_taken_ids
         taken |= security_instance_ids(store, campaign_id, spent=spent)
     return frozenset(taken)

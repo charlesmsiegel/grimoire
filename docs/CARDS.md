@@ -145,4 +145,4 @@ Error messages never echo card text.
 
 The preview reads the whole library for its collisions, suggestions and cast statuses, like other adapters today: it does not yet filter them by what the handle may `inspect`.
 
-PNG `tEXt`/CHARX containers, Character Card V1/V2, SillyTavern world info, fetching remote assets, reading pictures packaged in a PNG or CHARX file, outfits other than `default`, the lore settings 031 does not read ([below](#lore-in-play-031)), choosing a suggestion, prompt building from greetings (035) and any UI.
+PNG `tEXt`/CHARX containers, Character Card V1/V2, SillyTavern world info, fetching remote assets, reading pictures packaged in a PNG or CHARX file, outfits other than `default`, the lore settings 031 does not read ([below](#lore-in-play-031)), choosing a suggestion and any UI. 035 opens a chat from a card's first greeting or a scenario's first opening ([SCENES](SCENES.md)).

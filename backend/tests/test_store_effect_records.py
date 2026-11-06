@@ -1,7 +1,7 @@
-"""Accepted-event and wrap-up records in the native store (Sprint 021): the same guarded transaction as 017.
+"""Accepted-event, wrap-up and turn records in the native store (Sprints 021, 035): the same guarded transaction as 017.
 
 Covers the additive families ``campaigns/<id>/accepted/<event_id>.json`` and
-``campaigns/<id>/wrapups/<wrapup_id>.json`` on ``grimoire.scope-record/1``: canonical paths, the widened
+``campaigns/<id>/wrapups/<wrapup_id>.json`` (and 035's ``campaigns/<id>/turns/<turn_id>.json``) on ``grimoire.scope-record/1``: canonical paths, the widened
 address union, CAS, authorization, collisions, links, per-file containment in ``campaign_accepted`` /
 ``campaign_wrapups``, ``load()`` never reading them (they grow with every turn), recovery and the
 rollback path. Synthetic fixtures only.
@@ -15,23 +15,24 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.core.identity import AcceptedRef, RelationRef, WrapUpRef
+from grimoire.core.identity import AcceptedRef, RelationRef, TurnRef, WrapUpRef
 from grimoire.library import LibraryPathError
 from grimoire.store import (
     CampaignRecords, LibraryStore, LinkRefused, NameCollision, PendingRecovery, ProcessLocker, RecordNotFound,
     ScopeRecord, StaleWrite, UnstorableIdentifier, WriteDenied,
 )
 from grimoire.store.envelope import EnvelopeError, parse_scope_record, scope_record_document
-from grimoire.store.layout import RESERVED_CAMPAIGN_ENTRIES, accepted_parts, classify, wrapup_parts
+from grimoire.store.layout import RESERVED_CAMPAIGN_ENTRIES, accepted_parts, classify, turn_parts, wrapup_parts
 from grimoire.testing import Crash, RootedFileOps, Target
 from grimoire.testing.fileops import snapshot
 
 from store_helpers import OWNER, make_dir_link, owner_handle, seed
 
-ACC, WRAP = AcceptedRef("c1", "e-1"), WrapUpRef("c1", "w-1")
+ACC, WRAP, TURN = AcceptedRef("c1", "e-1"), WrapUpRef("c1", "w-1"), TurnRef("c1", "t-1")
 FAMILIES = {
     "accepted": (ACC, "campaigns/c1/accepted/e-1.json", lambda s, c: s.campaign_accepted(c), "accepted"),
     "wrapups": (WRAP, "campaigns/c1/wrapups/w-1.json", lambda s, c: s.campaign_wrapups(c), "wrapups"),
+    "turns": (TURN, "campaigns/c1/turns/t-1.json", lambda s, c: s.campaign_turns(c), "turns"),
 }
 
 
@@ -76,13 +77,16 @@ def test_paths_classify_exactly():
     assert wrapup_parts(WRAP) == ("campaigns", "c1", "wrapups", "w-1.json")
     assert classify(accepted_parts(ACC)) == ("accepted", ACC)
     assert classify(wrapup_parts(WRAP)) == ("wrapup", WRAP)
-    assert not {"accepted", "wrapups"} & RESERVED_CAMPAIGN_ENTRIES
+    assert turn_parts(TURN) == ("campaigns", "c1", "turns", "t-1.json")
+    assert classify(turn_parts(TURN)) == ("turn", TURN)
+    assert not {"accepted", "wrapups", "turns"} & RESERVED_CAMPAIGN_ENTRIES
 
 
 @pytest.mark.parametrize("parts", [
     ("campaigns", "c1", "accepted", "e-1.JSON"), ("campaigns", "c1", "Accepted", "e-1.json"),
     ("campaigns", "c1", "accepted", "x", "e.json"), ("campaigns", "c1", "accepted.json"),
     ("campaigns", "c1", "wrapups", "W-1.json"), ("campaigns", "c1", "wrapup", "w-1.json"),
+    ("campaigns", "c1", "turns", "T-1.json"), ("campaigns", "c1", "turn", "t-1.json"),
 ])
 def test_look_alike_paths_are_not_records(parts):
     assert classify(parts) is None
@@ -94,7 +98,7 @@ def test_ids_need_room_for_the_file_suffix():
         wrapup_parts(WrapUpRef("c1", "w" * 124))
 
 
-@pytest.mark.parametrize("ref", [ACC, WRAP])
+@pytest.mark.parametrize("ref", [ACC, WRAP, TURN])
 def test_scope_record_round_trips_and_dispatches_exactly(ref):
     rec = ScopeRecord(ref, "s/1", {"a": 1}, owner=OWNER, extra={"x-note": True})
     document = scope_record_document(rec, None)
@@ -102,7 +106,7 @@ def test_scope_record_round_trips_and_dispatches_exactly(ref):
     assert parse_scope_record(document) == (rec, None)
 
 
-@pytest.mark.parametrize("address", ["campaign:c1#accepted/E1", "campaign:c1#wrapup/", "campaign:c1#accepteds/x"])
+@pytest.mark.parametrize("address", ["campaign:c1#accepted/E1", "campaign:c1#wrapup/", "campaign:c1#accepteds/x", "campaign:c1#turn/T1"])
 def test_a_bad_fragment_is_malformed(address):
     document = {"format": "grimoire.scope-record/1", "address": address, "schema": "s", "payload": {}}
     with pytest.raises(EnvelopeError) as error:
@@ -121,6 +125,7 @@ def test_round_trip_and_load(library, family):
     assert set(lister(library, "c1").records) == {ref}
     view = library.load()  # history families are never walked by load()
     assert view.problems == () and not hasattr(view, "accepted") and not hasattr(view, "wrapups")
+    assert not hasattr(view, "turns")
 
 
 def test_cas_guarded(library, family):
@@ -216,7 +221,7 @@ def test_campaign_listing_contains_per_file_and_never_crosses_campaigns(library,
     assert lister(library, "nowhere") == CampaignRecords({}, ())
 
 
-@pytest.mark.parametrize("name", ["accepted", "wrapups"])
+@pytest.mark.parametrize("name", ["accepted", "turns", "wrapups"])
 def test_look_alike_folder_and_file_not_folder_are_reported(library, name):
     lister = FAMILIES[name][2]
     _write(library.root, f"campaigns/c1/{name.capitalize()}/x.json", b"{}")
@@ -229,6 +234,7 @@ def test_look_alike_folder_and_file_not_folder_are_reported(library, name):
 def test_libraries_without_them_load_as_before(library):
     assert library.load().problems == ()
     assert library.campaign_accepted("c1") == CampaignRecords({}, ())
+    assert library.campaign_turns("c1") == CampaignRecords({}, ())
 
 
 # -- recovery and rollback ----------------------------------------------------------------------

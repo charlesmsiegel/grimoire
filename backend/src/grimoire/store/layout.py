@@ -18,7 +18,7 @@ from typing import Literal
 
 from grimoire.core.identity import (
     KNOWLEDGE_FAMILIES, AcceptedRef, ChatRef, HoldingsRef, ImageRef, InstanceRef, KnowledgeRef, PlacementRef,
-    RelationRef, ScopeRef, SourceRef, TranscriptRef, WrapUpRef, validate_segment, validate_source_id,
+    RelationRef, ScopeRef, SourceRef, TranscriptRef, TurnRef, WrapUpRef, validate_segment, validate_source_id,
 )
 from grimoire.security import InvalidResourcePath, ResourcePath
 
@@ -62,6 +62,7 @@ CHATS = "chats"  # campaigns/<id>/chats/<chat_id>.json: one chat record (107)
 RELATIONS = "relations"  # campaigns/<id>/relations/<relation_id>.json: one relation record (017)
 ACCEPTED = "accepted"  # campaigns/<id>/accepted/<event_id>.json: one accepted fictional event (021)
 WRAPUPS = "wrapups"  # campaigns/<id>/wrapups/<wrapup_id>.json: one scene wrap-up (021)
+TURNS = "turns"  # campaigns/<id>/turns/<turn_id>.json: one played chat turn (035)
 SCOPE = "scope.json"  # campaigns/<id>/scope.json: the play-scope record (107)
 EVENTS = "events"  # campaigns/<id>/events/<event_id>.json: accepted events (020)
 EVIDENCE = "evidence"  # campaigns/<id>/evidence/<family>/<id>.json: everything else, and the batch log (020)
@@ -88,7 +89,7 @@ RESERVED_CAMPAIGN_ENTRIES = frozenset({"scenes", "events", "evidence", HOLDINGS}
 _NOISE = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
 
 Kind = Literal["definition", "manifest", "instance", "ledger", "scope", "chat", "relation", "knowledge", "blob",
-               "image", "placement", "accepted", "wrapup", "holdings", "transcript"]
+               "image", "placement", "accepted", "wrapup", "holdings", "transcript", "turn"]
 
 
 def is_noise(name: str) -> bool:
@@ -159,6 +160,10 @@ def wrapup_parts(ref: WrapUpRef) -> Parts:
     return _checked((CAMPAIGNS, ref.campaign_id, WRAPUPS, ref.wrapup_id + SUFFIX))
 
 
+def turn_parts(ref: TurnRef) -> Parts:
+    return _checked((CAMPAIGNS, ref.campaign_id, TURNS, ref.turn_id + SUFFIX))
+
+
 def image_parts(ref: ImageRef) -> Parts:
     if ref.campaign_id is not None:
         return _checked((CAMPAIGNS, ref.campaign_id, IMAGES, ref.image_id + SUFFIX))
@@ -189,7 +194,7 @@ def holdings_parts(ref: HoldingsRef) -> Parts:
 
 
 Address = (SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef | ImageRef | PlacementRef
-           | AcceptedRef | WrapUpRef | HoldingsRef | TranscriptRef)
+           | AcceptedRef | WrapUpRef | HoldingsRef | TranscriptRef | TurnRef)
 
 
 def address_parts(address: Address) -> Parts:
@@ -215,6 +220,8 @@ def address_parts(address: Address) -> Parts:
         return holdings_parts(address)
     if isinstance(address, TranscriptRef):
         return transcript_parts(address)
+    if isinstance(address, TurnRef):
+        return turn_parts(address)
     return definition_parts(address)
 
 
@@ -323,6 +330,10 @@ def classify(parts: Parts) -> tuple[Kind, object] | None:
             stem = _stem(parts[3])
             if stem is not None:
                 found = ("wrapup", WrapUpRef(parts[1], stem))
+        elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == TURNS:
+            stem = _stem(parts[3])
+            if stem is not None:
+                found = ("turn", TurnRef(parts[1], stem))
         elif len(parts) >= 3 and parts[0] == LEDGERS:
             seq = ledger_seq(parts[-1])
             if seq is not None:

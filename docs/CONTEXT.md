@@ -126,7 +126,7 @@ Packing is greedy and deterministic: lanes in order, each lane in rank order, fi
 
 - **Director knowledge, recursion and other actors' appearance:** the director gets bound lore only (`director_lore`), never the ledger; lore never triggers lore; an actor sees no description of anyone else, and perception of appearance is a later milestone.
 - **World records:** a world's locations and other definitions are read only when bound, and 022 selects only bound sources. Selecting world records by relevance waits for 022's world selection.
-- **Recent history:** transcript windows belong to 027 and 035; this slice takes `scene_text` and `table_text` from the caller. Building every speaker's pack and the director's lore each turn is 035's.
+- **Recent history:** transcript windows belong to 027 and 035; this slice takes `scene_text` and `table_text` from the caller. 035's runner builds every speaker's pack (with that actor's heard window as `scene_text`) and the director's lore (with the table's lines as `table_text`) each turn ([SCENES](SCENES.md)).
 - **Holdings, mechanics and inventory** (an actor's own counted holdings and unique items in its pack: 031's next slice, unscheduled), **superseded beliefs**, **embeddings**, **real tokenizers** and **card-section audience** (a card section is its own actor's; per-section secrecy waits for 037/027).
 - **Binding time vs `as_of`:** the snapshot is the chat's bindings now; a source attached after `as_of` still contributes.
 - **CJK segmentation** (see Triggering).

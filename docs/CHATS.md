@@ -5,7 +5,7 @@
 - `grimoire.chatstore`: a store-backed service;
 - an additive record family in [the native store](STORAGE.md#play-scopes-and-chats-107).
 
-There is **no app and no playable chat yet**. There are no messages, scenes or model calls. The first world-less text chat is Sprint 035 (Wave 5). The design decisions are in [CHAT_MODEL](roadmap/CHAT_MODEL.md).
+There is **no app yet**. Chats are played headlessly by Sprint 035's runner, which stores each turn beside the chat ([SCENES](SCENES.md)). The design decisions are in [CHAT_MODEL](roadmap/CHAT_MODEL.md).
 
 ## What exists
 

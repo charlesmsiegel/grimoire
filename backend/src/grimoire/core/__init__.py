@@ -2,7 +2,7 @@
 
 from .identity import (
     ChatRef, HoldingsRef, IdentityConflict, InstanceRef, KnowledgeRef, LegacyId, RelationRef, ScopeRef, SourceRef,
-    TranscriptRef, parse_ref,
+    TranscriptRef, TurnRef, parse_ref,
 )
 from .index import (
     BrokenReference,
@@ -153,7 +153,8 @@ from .resolve import MissingDefinition, actor_view, snapshot_actor_view
 
 __all__ = [
     "ActorView", "CampaignActor", "CharacterDefinition", "ControlAssignment", "SourceRef",
-    "ChatRef", "HoldingsRef", "TranscriptRef", "IdentityConflict", "InstanceRef", "KnowledgeRef", "LegacyId", "RelationRef",
+    "ChatRef", "HoldingsRef", "TranscriptRef", "TurnRef", "IdentityConflict", "InstanceRef", "KnowledgeRef", "LegacyId",
+    "RelationRef",
     "ScopeRef", "parse_ref",
     "BrokenReference", "DefinitionIndex", "DefinitionLink", "LegacyIdMap",
     "SourceDescriptor", "UnmappedLegacyId",

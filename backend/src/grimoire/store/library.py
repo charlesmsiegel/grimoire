@@ -24,7 +24,7 @@ from types import MappingProxyType
 
 from grimoire.core.identity import (
     AcceptedRef, ChatRef, HoldingsRef, IdentityConflict, ImageRef, InstanceRef, KnowledgeRef, PlacementRef,
-    RelationRef, ScopeRef, SourceRef, TranscriptRef, WrapUpRef,
+    RelationRef, ScopeRef, SourceRef, TranscriptRef, TurnRef, WrapUpRef,
     validate_segment,
 )
 from grimoire.core.index import DefinitionIndex, SourceDescriptor
@@ -52,7 +52,7 @@ from .journal import Entry, Journal, is_staging_name
 from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, reemitted_imprecise, render
 from .layout import (
     ACCEPTED, CAMPAIGN_LEDGERS, CAMPAIGNS, CHATS, CONFLICTS, DISCARD_MARKER, IMAGES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
-    PLACEMENTS, REPAIR_MARKER, SECRETS, SYNC, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify,
+    PLACEMENTS, REPAIR_MARKER, SECRETS, SYNC, TURNS, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify,
     conflict_parts,
     definition_parts, image_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
     SUFFIX, ledger_parts, ledger_seq, logical, manifest_parts, name_key, secret_parts, sync_state_parts,
@@ -481,14 +481,15 @@ class LibraryStore:
 
     # -- reading -----------------------------------------------------------------
     def read(self, ref: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef | ImageRef
-             | PlacementRef | AcceptedRef | WrapUpRef | HoldingsRef | TranscriptRef
+             | PlacementRef | AcceptedRef | WrapUpRef | HoldingsRef | TranscriptRef | TurnRef
              ) -> StoredRecord | StoredScopeRecord | StoredKnowledgeRecord | StoredAssetRecord:
         """One record by exact address (a definition must be pinned)."""
         if isinstance(ref, SourceRef) and not ref.pinned:
             raise ValueError("read a pinned revision; resolve unpinned references with load().index")
         with self.lock:  # reads wait for this process's commits, so they never see one half-done
             self._require_consistent()
-            if isinstance(ref, (ScopeRef, ChatRef, RelationRef, AcceptedRef, WrapUpRef, HoldingsRef, TranscriptRef)):
+            if isinstance(ref, (ScopeRef, ChatRef, RelationRef, AcceptedRef, WrapUpRef, HoldingsRef, TranscriptRef,
+                                TurnRef)):
                 return loader.read_scope_record(self._access, address_parts(ref))
             if isinstance(ref, KnowledgeRef):
                 return loader.read_knowledge_record(self._access, address_parts(ref))
@@ -726,6 +727,10 @@ class LibraryStore:
     def campaign_wrapups(self, campaign_id: str) -> CampaignRecords:
         """One campaign's scene wrap-up records (021) and their problems, as ``load()`` reports them."""
         return self._campaign_family(campaign_id, WRAPUPS)
+
+    def campaign_turns(self, campaign_id: str) -> CampaignRecords:
+        """One campaign's played chat turns (035) and their problems, as ``load()`` would report them."""
+        return self._campaign_family(campaign_id, TURNS)
 
     def _campaign_family(self, campaign_id: str, family: str) -> CampaignRecords:
         validate_segment(campaign_id, "campaign_id")
