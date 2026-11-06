@@ -30,7 +30,7 @@ from grimoire.chatstore import campaign_taken_ids
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import ENTITY_SCHEMA, definition_to_payload, instance_to_payload
 from grimoire.core.identity import (
-    ChatRef, ImageRef, InstanceRef, LegacyId, PlacementRef, ScopeRef, SourceRef, paired_instances,
+    ChatRef, ImageRef, InstanceRef, LegacyId, PlacementRef, ScopeRef, SourceRef, TranscriptRef, paired_instances,
 )
 from grimoire.core.index import LegacyIdMap
 from grimoire.images import placement_to_payload
@@ -42,12 +42,18 @@ from grimoire.store import (
     InvalidEnvelope, LibraryStore, LinkSpec, RecordEnvelope, ScopeRecord, SourceManifest, StaleWrite,
     StoredDefinition, StoreError, TakenIdsUnlisted, UnstorableIdentifier, etag,
 )
-from grimoire.store.jsonfmt import thaw
+from grimoire.store.jsonfmt import MAX_FILE_BYTES, render, thaw
+from grimoire.transcripts import (
+    TRANSCRIPT_SCHEMA, Post, Speaker, TranscriptError, TranscriptPage, Variant, page_to_payload, paginate,
+)
 from grimoire.store.layout import address_parts, manifest_parts
 
-from ._map import MARKER, Campaign, Definition, Desired, ImportRefused, Selection, desired_state
+from ._map import MARKER, Campaign, Definition, Desired, ImportRefused, Scene, Selection, desired_state
 
 RECEIPT_SCHEMA = "grimoire.v1-import-receipt/0"
+#: the ``format`` a V0.2.1 scene's transcript pages name in their origin (036)
+V1_SCENE_FORMAT = "grimoire-v0.2.1-scene"
+_PAGE_BUDGET = MAX_FILE_BYTES // 2
 RECEIPT_KIND, RECEIPT_ENTITY = "receipt", "runs"
 WRITE, PRESENT, KEPT, REMOVED = "write", "present", "kept", "removed"
 _USABLE = frozenset({WRITE, PRESENT, KEPT})
@@ -72,6 +78,11 @@ def _digest(value: object) -> str:
     """A digest of what a target is meant to hold, independent of when it was written."""
     text = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
     return "sha256:" + hashlib.sha256(text.encode("ascii")).hexdigest()
+
+
+def _measure_post(post: Post) -> int:
+    probe = TranscriptPage(TranscriptRef("probe", "probe", 1), (post,))
+    return len(render({"post": page_to_payload(probe)["posts"][0]}))
 
 
 def _render(store: LibraryStore, envelope: object) -> bytes:
@@ -501,6 +512,39 @@ class ImportPlan:
             elif target.outcome == WRITE:
                 self.bound.setdefault(campaign.campaign_id, set()).update(b.actor for b in bindings)
             self._put(target)
+            if target.outcome in _USABLE and scene.texts is not None:
+                self._plan_transcript(scene)
+
+    def _plan_transcript(self, scene: Scene) -> None:
+        """The scene's posts as transcript pages (036): exact V1 text, label-only speakers, no audience.
+
+        A page is create-only: a V1 scene that gained posts since it was imported is ``v1_changed`` and its
+        pages stay as written. A chat imported before 036 gets its pages on the next run."""
+        marker = scene.extras[MARKER]
+        posts = []
+        for number, (row, text) in enumerate(zip(marker["posts"], scene.texts or ()), start=1):
+            role = "system" if row["synthetic"] else "user" if row["role"] == "user" else "assistant"
+            source = {"v1_index": row["index"], "v1_post_id": row["post_id"], "content_sha256": row["content_sha256"]}
+            posts.append(Post(f"p{number:06d}", Speaker(role, None, row["speaker"]),
+                              (Variant(text, None, {"field": "content"}),), 0, source=source))
+        if not posts:
+            return
+        origin = {"format": V1_SCENE_FORMAT, "legacy_id": scene.legacy_id, "sha256": marker["sha256"]}
+        try:
+            groups = paginate(posts, _measure_post, _PAGE_BUDGET)
+        except TranscriptError as error:
+            self._unresolve(scene.legacy_id, "too_large", f"{scene.ref}: {error}")
+            return
+        for seq, group in enumerate(groups, start=1):
+            ref = TranscriptRef(scene.ref.campaign_id, scene.ref.chat_id, seq)
+            envelope = ScopeRecord(ref, TRANSCRIPT_SCHEMA, page_to_payload(TranscriptPage(ref, group, origin)),
+                                   owner=self.owner)
+            path = _path_of(ref)
+            rendered = self._rendered(path, "transcript", scene.legacy_id, envelope)
+            if rendered is None:
+                return
+            desired = _digest({"origin": origin, "seq": seq, "posts": [p.source for p in group]})
+            self._put(self._decide(path, "transcript", scene.legacy_id, rendered, envelope, desired))
 
     def _bindable(self, actor, legacy_id: str) -> bool:  # type: ignore[no-untyped-def]
         """Whether a chat can bind ``actor`` to its V1 definition (a V2 edit may have re-sourced it)."""

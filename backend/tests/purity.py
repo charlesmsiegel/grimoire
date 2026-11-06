@@ -70,7 +70,7 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
                                          "datetime", "uuid", "secrets")
 
 #: grimoire packages that are adapters or test infrastructure, not pure.
-ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.capture", "grimoire.cardstore", "grimoire.chatstore", "grimoire.contextstore", "grimoire.effective", "grimoire.effectstore",
+ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.archaeologystore", "grimoire.capture", "grimoire.cardstore", "grimoire.chatstore", "grimoire.contextstore", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       "grimoire.import_v1", "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1",
                       "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
@@ -147,6 +147,11 @@ PURE_PACKAGES = (
                 never_import=("grimoire.core.inference",)),
     # Per-NPC generation (027): plans, voices, briefs and screens each call; the runtime is an adapter.
     # Briefs render 031's packs (its value types), and 031 imports nothing of 027's: one direction.
+    # Transcripts (036): stored pages of posts and variants; SillyTavern chat reading over decoded lines.
+    PurePackage("grimoire.transcripts", ("grimoire.transcripts", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
+    PurePackage("grimoire.archaeology", ("grimoire.archaeology", "grimoire.transcripts", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
     PurePackage("grimoire.generation", ("grimoire.generation", "grimoire.core", "grimoire.core.inference",
                                         "grimoire.voice", "grimoire.evals.text", "grimoire.evals.checks",
                                         "grimoire.context")),

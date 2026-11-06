@@ -1,5 +1,7 @@
 # Campaign Archaeology and Evidence-Based Transcript Reconstruction
 
+**Status: headless first slice implemented** ([ARCHAEOLOGY](../../ARCHAEOLOGY.md), [TRANSCRIPTS](../../TRANSCRIPTS.md)). A SillyTavern JSONL chat export (single or group) imports as one world-less 107 chat with a create-only transcript: every message, swipe and edit kept, the shown variant active, speakers mapped only by the caller and never by name, audiences unknown, no model calls, idempotent by the export's digest. Each V0.2.1 scene that 026 imports now also keeps its posts as transcript pages with V1 provenance. Milestone 1's V0.2.1 segmentation preview and milestones 2 and 3 remain planned (see "Planned later work" below).
+
 **Outcome:** Faithfully import **SillyTavern chat histories and group-chat exports**, alongside V0.2.1 scenes, without fabricating events, overwriting swipes or leaking actor knowledge.
 
 ## V2 migration contract
@@ -53,3 +55,12 @@ This Wave 5 first slice is the **historical conversation** side of SillyTavern r
 - What can safely be inferred from an unstructured transcript?
 - Which historical observations must stay unknown until manually confirmed?
 - Which old response variants are part of the original accepted continuity?
+
+## Planned later work (after the first slice)
+
+- V0.2.1 transcript **segmentation preview** and response variants (`scene_alts`, reroll runs, `responses.json`); segmenting an ST chat into scenes.
+- Reviewed V0.2.1 speaker mapping (posts bound to the scene's actors after review instead of labels).
+- Binding ST author's notes and chat lorebooks named in `chat_metadata` to library sources; narrator speakers to a director voice; introducing a group member at its first post.
+- ST branch and checkpoint files linked as one history; other export formats.
+- Milestone 2: proposed historical events, relations and memories with evidence and review, reconciled with V2 events and actor ids without duplicate scenes.
+- Milestone 3: multi-file, multi-era reconciliation with versioned historical evidence and verified rollback.

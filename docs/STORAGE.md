@@ -30,6 +30,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   assets/blobs/<sha256[:2]>/<sha256>.<png|jpg|gif|webp>           # content-addressed bytes (018)
   campaigns/<campaign_id>/accepted/<event_id>.json                # one accepted fictional event (021)
   campaigns/<campaign_id>/wrapups/<wrapup_id>.json                # one scene wrap-up (021)
+  campaigns/<campaign_id>/transcripts/<chat_id>/<seq:010d>.json   # one page of a chat's transcript (036)
   .txn/lock, .txn/journal.json, .txn/*.new                        # writer lock, journal, staging
   .txn/discard.json                                               # an unfinished discard_journal
   .conflicts/<hash16>/<name>~<digest12>[.N]                       # preserved versions awaiting a human
@@ -50,7 +51,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   - at the root: `authority`, `config`, `assets`, `secrets`, and `kept` (never a folder: it is the authorization namespace of kept versions, so no record root may alias it);
   - inside a campaign: `scenes`, `events`, `evidence`, `holdings`.
 
-  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), and `relations/` since 017 (see relation records). `accepted/` and `wrapups/` (021) are recognised but read only through `campaign_accepted`/`campaign_wrapups` (see accepted events and wrap-ups). `holdings/` (023) is skipped by `load()` and read only by `campaign_holdings` and `read(HoldingsRef)` (see counted holdings).
+  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), and `relations/` since 017 (see relation records). `accepted/` and `wrapups/` (021) are recognised but read only through `campaign_accepted`/`campaign_wrapups` (see accepted events and wrap-ups). `holdings/` (023) is skipped by `load()` and read only by `campaign_holdings` and `read(HoldingsRef)` (see counted holdings). `transcripts/` (036) is skipped by `load()` and read only by `chat_transcript`, `campaign_transcripts` and `read(TranscriptRef)` (see chat transcripts).
 
   `events/` and `evidence/` belong to 020, and `accepted/` and `wrapups/` to 021; all four stay skipped by `load()`, so `load()`'s cost never grows with campaign history. They are read only by `campaign_knowledge` (020, see [events and evidence](#events-and-evidence-020)) and by `campaign_accepted`/`campaign_wrapups` (021). An `accepted` or `wrapups` entry that is a file, not a folder, is still reported.
 
@@ -213,6 +214,18 @@ Fields:
   - A pre-023 build reports `holdings/` as `unrecognized` and never touches it. Its allocators do not protect holder ids.
   - It **cannot recover a journal naming a holdings path** (`RecoveryFailed`). Recover with a 023+ build, or run `discard_journal` (both tested).
 
+### Chat transcripts (036)
+
+<a id="chat-transcripts-036"></a>Added by [Campaign Archaeology](roadmap/sprints/campaign-archaeology.md) on the same `grimoire.scope-record/1` envelope; interpreted by [`grimoire.transcripts`](TRANSCRIPTS.md), never by the store.
+
+- The address is a `TranscriptRef`: `campaign:<id>#transcript/<chat_id>/<seq:010d>` (`seq` from 1), at `campaigns/<id>/transcripts/<chat_id>/<seq:010d>.json`. `parse_scope_record` picks the family by `#transcript/` and applies its strict grammar, disjoint from the others.
+- **Create-only**, like 020's knowledge records: `put` with an `expected` etag raises `ImmutableRevision`, `put_exact` treats a page like a knowledge record, and journal recovery refuses (`RecoveryFailed`) a transcript target whose `old` is not null.
+- `classify` recognises exactly that path shape; anything else under `transcripts/` (a file directly in it, a page name that is not ten digits from `0000000001`, a deeper folder) is `unrecognized`.
+- **`load()` skips `transcripts/`.** `chat_transcript(chat)` reads one chat's folder and `campaign_transcripts(id)` every chat's, each returning `CampaignRecords(records, problems)` in page order and contained per file (damaged pages, strays, links, look-alike `Transcripts/` and look-alike chat folders are problems).
+- Instance allocators reserve every id a page names through [`campaign_taken_ids`](#instance-ids-are-never-reused); an unreadable page fails closed.
+- **Sync:** a synced, campaign-local, immutable kind; resolving never replaces an existing page.
+- **Rollback:** a pre-036 build reports `transcripts/` as unrecognized and never writes there; it cannot recover a journal naming a transcript path (recover with a 036+ build, or `discard_journal`).
+
 ### Read-only helpers (107)
 
 All of these take the store lock, require a consistent library, and read listings and files only:
@@ -288,7 +301,7 @@ An instance id is unique within a campaign across kinds and never goes to a diff
 
 - the commit refuses a cross-kind pair (`InstanceIdConflict`, step 5) and `load()` leaves an existing pair out (both members);
 - a campaign id stays taken while its sovereignty ledger (`authority/campaigns/<id>`) exists or a grant or approval in the security ledger (`authority/security`) names `campaigns/<id>` or anything under it, even after `campaigns/<id>` is deleted by hand (`campaign_authority_presence`, `security_campaign_ids`, [CHATS](CHATS.md#methods));
-- every instance allocator takes its new id outside `grimoire.chatstore.campaign_taken_ids(store, campaign_id)`, at plan time and again under the store lock at commit ([CHATS](CHATS.md#taken-instance-ids)). It reserves every id an instance file, relation, chat roster, accepted event, holdings file (its name and the move peers in its log), unique item's `possession` record (034), 020 knowledge file, campaign placement folder, campaign sovereignty ledger (`actor_id`s) or security-ledger grant or approval scoped to one individual (its instance, holder or placement address) names. Anything that could name ids but cannot be read or listed raises `TakenIdsUnlisted` (fail closed);
+- every instance allocator takes its new id outside `grimoire.chatstore.campaign_taken_ids(store, campaign_id)`, at plan time and again under the store lock at commit ([CHATS](CHATS.md#taken-instance-ids)). It reserves every id an instance file, relation, chat roster, chat transcript page (036), accepted event, holdings file (its name and the move peers in its log), unique item's `possession` record (034), 020 knowledge file, campaign placement folder, campaign sovereignty ledger (`actor_id`s) or security-ledger grant or approval scoped to one individual (its instance, holder or placement address) names. Anything that could name ids but cannot be read or listed raises `TakenIdsUnlisted` (fail closed);
 - **any later record family that names instance ids must extend `campaign_taken_ids`**, so an allocator never has to know the families.
 
 ## Writing
@@ -340,7 +353,7 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
 
 [`grimoire.sync`](SYNC.md) copies another device's file byte for byte and keeps both versions of a conflict. It does so only through these store operations, all of them riding the same journal, preflight, recovery and crash guarantees as `put`:
 
-- **`Transaction.put_exact(path, data, expected, *, replace_unreferenced=False, regenerable=False, allowed_manifests=frozenset())`** stages exact bytes at a canonical definition, manifest, instance, play-scope, chat, relation, knowledge, accepted-event, wrap-up, holdings, 018 image-object or placement path (`replica.EXACT_KINDS`; knowledge records and image objects are create-only, like revisions: an image `put_exact` with an `expected` raises `ImmutableImage`). Sync copies all but 021's and 023's families, which are held back until their merge rules exist ([SYNC](SYNC.md)). Blobs are not envelopes and go through `put_blob_exact`.
+- **`Transaction.put_exact(path, data, expected, *, replace_unreferenced=False, regenerable=False, allowed_manifests=frozenset())`** stages exact bytes at a canonical definition, manifest, instance, play-scope, chat, relation, knowledge, accepted-event, wrap-up, holdings, 018 image-object or placement, or 036 transcript path (`replica.EXACT_KINDS`; knowledge records, transcript pages and image objects are create-only, like revisions: an image `put_exact` with an `expected` raises `ImmutableImage`). Sync copies all but 021's and 023's families, which are held back until their merge rules exist ([SYNC](SYNC.md)). Blobs are not envelopes and go through `put_blob_exact`.
   - The bytes are validated as the envelope they hold: strict JSON, supported format, address equal to the path, writable values. A failure is `InvalidEnvelope` with a `code`.
   - They are published **verbatim**: `previous` is not rewritten, so two libraries converge on one etag.
   - With `regenerable=True` (sync passes it: the bytes still exist on the other device), the entry's journal kind is `replica`, which an abort or an external edit of the target drops instead of preserving. Without it, the bytes are preserved like any `put`.

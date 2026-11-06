@@ -23,6 +23,7 @@ from ._context import Context
 from ._fs import NotADirectory, Options, Snapshot, SourceChanged, TooLarge
 from ._report import SCHEMA, render_json, render_summary
 from ._identity import definition_candidate, world_source
+from ._scenes import parse_posts, post_row
 from ._text import parse_frontmatter
 
 EXIT_READY, EXIT_USAGE, EXIT_ISOLATION, EXIT_BLOCKED, EXIT_CHANGED = 0, 2, 3, 4, 5
@@ -261,6 +262,7 @@ def _interpret(ctx: Context) -> dict:
 __all__ = [
     "EXIT_BLOCKED", "EXIT_CHANGED", "EXIT_ISOLATION", "EXIT_READY", "EXIT_USAGE", "ManifestMismatch",
     "NotAV1Library", "Options", "SCHEMA", "ScanResult", "SourceChanged", "TooLarge", "VerifiedSource",
-    "definition_candidate", "migration_roots", "open_verified", "parse_frontmatter", "render_json",
+    "definition_candidate", "migration_roots", "open_verified", "parse_frontmatter", "parse_posts", "post_row",
+    "render_json",
     "render_summary", "scan", "world_source",
 ]

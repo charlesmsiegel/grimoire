@@ -24,7 +24,7 @@ from types import MappingProxyType
 
 from grimoire.core.identity import (
     AcceptedRef, ChatRef, HoldingsRef, IdentityConflict, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef,
-    WrapUpRef,
+    TranscriptRef, WrapUpRef,
     paired_instances, validate_segment,
 )
 from grimoire.core.index import DIRECTED_RELATIONS, DefinitionIndex, DefinitionLink, SourceDescriptor
@@ -43,7 +43,7 @@ from .jsonfmt import JsonError, etag, parse_strict
 from .layout import (
     ACCEPTED, CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, HOLDINGS, IMAGES, INSTANCES, PLACEMENTS,
     SCOPE, MANIFEST, MARKER, RECORDS, RELATIONS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS, SOURCE_DIR, SOURCES, SUFFIX,
-    SYNC,
+    SYNC, TRANSCRIPTS,
     TXN, WRAPUPS, Parts, classify, is_noise, manifest_parts, name_key,
 )
 
@@ -148,10 +148,10 @@ class LibraryView:
 
 @dataclass(frozen=True)
 class CampaignRecords:
-    """One campaign's records of one family (relations, accepted events, wrap-ups or chats) and the
+    """One campaign's records of one family (relations, accepted events, wrap-ups, chats or transcript pages) and the
     problems ``load()`` would report under that family's folder."""
 
-    records: Mapping[RelationRef | AcceptedRef | WrapUpRef | ChatRef, StoredScopeRecord]
+    records: Mapping[RelationRef | AcceptedRef | WrapUpRef | ChatRef | TranscriptRef, StoredScopeRecord]
     problems: tuple[LoadProblem, ...]
 
 
@@ -702,7 +702,7 @@ def _discover_chats(access: Access, base: Parts, found: _Campaigns, problems: li
 _FAMILIES = {RELATIONS: ("relation", "relations"), ACCEPTED: ("accepted", "accepted"), WRAPUPS: ("wrapup", "wrapups"),
              CHATS: ("chat", "chats")}  # ``load()`` reads chats itself (``_discover_chats``); listed for ``campaign_family``
 #: families that grow with every played turn (021): like 020's events/evidence, ``load()`` skips them
-_HISTORY = frozenset({ACCEPTED, WRAPUPS})
+_HISTORY = frozenset({ACCEPTED, WRAPUPS, TRANSCRIPTS})  # 036's transcript pages too
 
 
 def _discover_family(access: Access, base: Parts, family: str, found: _Campaigns,
@@ -752,6 +752,92 @@ def campaign_family(access: Access, campaign: str, family: str) -> CampaignRecor
 def campaign_relations(access: Access, campaign: str) -> CampaignRecords:
     """One campaign's relation records (017), contained per file exactly as ``load()`` contains them."""
     return campaign_family(access, campaign, RELATIONS)
+
+
+def _transcript_pages(access: Access, folder: Parts, chat_id: str, found: dict, problems: list[LoadProblem]) -> None:
+    """One chat folder's pages under ``transcripts/``, contained per file; anything else is reported."""
+    for name in _listing(access, folder, problems, None):
+        parts = folder + (name,)
+        hit = classify(parts)
+        if hit is None or hit[0] != "transcript" or hit[1].chat_id != chat_id:  # type: ignore[union-attr]
+            _unrecognized(access, parts, problems, None)
+            continue
+        _read_scoped(access, parts, found, problems)
+
+
+def _transcripts_folder(access: Access, campaign: str, problems: list[LoadProblem]) -> Parts | None:
+    """``campaigns/<campaign>/transcripts`` when it is a real folder to walk; links, stray files and
+    look-alikes (``Transcripts``) are reported as ``campaign_family`` reports them."""
+    base = (CAMPAIGNS, campaign)
+    folder = base + (TRANSCRIPTS,)
+    if is_link(access.path(base)):
+        problems.append(LoadProblem(_text(base), "link", "links are never followed"))
+        return None
+    if access.presence(base) != "present":
+        return None
+    if not _is_dir(access, base):
+        _unrecognized(access, base, problems, None)
+        return None
+    try:
+        names = access.list_dir(base)
+    except OSError as error:
+        problems.append(LoadProblem(_text(base), "unreadable", str(error)))
+        return None
+    for name in names:  # a look-alike could be this campaign's pages on another filesystem
+        if name != TRANSCRIPTS and name_key(name) == TRANSCRIPTS:
+            if is_link(access.path(base + (name,))):
+                problems.append(LoadProblem(_text(base + (name,)), "link", "links are never followed"))
+            else:
+                _unrecognized(access, base + (name,), problems, None)
+    if is_link(access.path(folder)):
+        problems.append(LoadProblem(_text(folder), "link", "links are never followed"))
+        return None
+    if access.presence(folder) != "present":
+        return None
+    if not _is_dir(access, folder):
+        _unrecognized(access, folder, problems, None)
+        return None
+    return folder
+
+
+def _sorted_pages(found: dict) -> MappingProxyType:
+    return MappingProxyType(dict(sorted(found.items(), key=lambda item: (item[0].chat_id, item[0].seq))))
+
+
+def chat_transcript(access: Access, campaign: str, chat_id: str) -> CampaignRecords:
+    """One chat's transcript pages (036) in page order, contained per file as ``load()`` contains records.
+
+    Reads only ``campaigns/<campaign>/transcripts/<chat_id>``. A folder whose name folds to the chat's
+    (``T1`` for ``t1``) is reported, since another filesystem could merge the two."""
+    problems: list[LoadProblem] = []
+    found: dict = {}
+    transcripts = _transcripts_folder(access, campaign, problems)
+    if transcripts is not None:
+        for name in _listing(access, transcripts, problems, None):
+            folder = transcripts + (name,)
+            if name == chat_id:
+                if _is_dir(access, folder):
+                    _transcript_pages(access, folder, chat_id, found, problems)
+                else:
+                    _unrecognized(access, folder, problems, None)
+            elif name_key(name) == name_key(chat_id):
+                _unrecognized(access, folder, problems, None)
+    return CampaignRecords(_sorted_pages(found), tuple(problems))
+
+
+def campaign_transcripts(access: Access, campaign: str) -> CampaignRecords:
+    """Every chat's transcript pages (036) of one campaign, contained per file; reads every page."""
+    problems: list[LoadProblem] = []
+    found: dict = {}
+    transcripts = _transcripts_folder(access, campaign, problems)
+    if transcripts is not None:
+        for name in _listing(access, transcripts, problems, None):
+            folder = transcripts + (name,)
+            if not _is_dir(access, folder) or not _valid_segment(name):
+                _unrecognized(access, folder, problems, None)
+                continue
+            _transcript_pages(access, folder, name, found, problems)
+    return CampaignRecords(_sorted_pages(found), tuple(problems))
 
 
 def campaign_holdings(access: Access, campaign: str) -> CampaignHoldingRecords:

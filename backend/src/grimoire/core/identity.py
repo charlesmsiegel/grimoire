@@ -37,6 +37,9 @@ _CHAT_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#chat/(?P<chat_
 _RELATION_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#relation/(?P<relation_id>{_SEGMENT})")
 _ACCEPTED_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#accepted/(?P<event_id>{_SEGMENT})")
 _WRAPUP_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#wrapup/(?P<wrapup_id>{_SEGMENT})")
+_TRANSCRIPT_REF_RE = re.compile(
+    rf"campaign:(?P<campaign_id>{_SEGMENT})#transcript/(?P<chat_id>{_SEGMENT})/(?P<seq>[0-9]{{10}})"
+)
 _HOLDINGS_REF_RE = re.compile(
     rf"campaign:(?P<campaign_id>{_SEGMENT})/(?P<kind>{_SEGMENT})/(?P<instance_id>{_SEGMENT})#holdings"
 )
@@ -384,6 +387,46 @@ class WrapUpRef:
         if match is None:
             raise ValueError(f"not a wrap-up reference: {text!r}")
         return cls(**match.groupdict())
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptRef:
+    """One page of one chat's transcript (036): an append-only, create-only page of posts.
+
+    ``campaign:<campaign_id>#transcript/<chat_id>/<seq>``, ``seq`` written as exactly ten digits
+    (``0000000001``), so the text form and the file name sort in page order. Pages of a chat are
+    numbered from 1. Not returned by ``parse_ref``.
+    """
+
+    campaign_id: str
+    chat_id: str
+    seq: int
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.chat_id, "chat_id")
+        if type(self.seq) is not int or not 1 <= self.seq < 10 ** 10:
+            raise ValueError(f"transcript page out of range: {self.seq!r}")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"campaign:{self.campaign_id}#transcript/{self.chat_id}/{self.seq:010d}"
+
+    @property
+    def scope(self) -> ScopeRef:
+        return ScopeRef(self.campaign_id)
+
+    @property
+    def chat(self) -> ChatRef:
+        return ChatRef(self.campaign_id, self.chat_id)
+
+    @classmethod
+    def parse(cls, text: object) -> TranscriptRef:
+        match = _TRANSCRIPT_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not a transcript reference: {text!r}")
+        return cls(match["campaign_id"], match["chat_id"], int(match["seq"]))
 
 
 @dataclass(frozen=True, slots=True)

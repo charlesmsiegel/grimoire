@@ -12,14 +12,14 @@ Action = Literal["agreed", "copy", "conflict"]
 #: The record kinds sync owns (the store's ``classify`` kinds); later families extend this set,
 #: and archive and pending documents accept exactly these paths. ``scope`` and ``chat`` are
 #: 107's campaign-local play-scope and chat records; ``relation`` is 017's typed relation record;
-#: ``blob``, ``image`` and ``placement`` are 018's art.
+#: ``blob``, ``image`` and ``placement`` are 018's art; ``transcript`` is 036's chat transcript pages.
 SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge",
-                          "blob", "image", "placement"})
+                          "blob", "image", "placement", "transcript"})
 #: 018's art: own units, never source-coarse, never grouped with a definition. A blob is binary and
 #: content-addressed (listed by name and size, hashed only when copied or first seen).
 ASSET_KINDS = frozenset({"blob", "image", "placement"})
 #: Campaign-local kinds: independent of sources and of each other at commit time.
-CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge"})
+CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge", "transcript"})
 #: Families whose own stores commit several files as one unit and whose cross-device merge rule is
 #: a later milestone (docs/EFFECTS.md, docs/HOLDINGS.md): never copied file by file, always reported
 #: as skipped. 021's accepted events and wrap-ups, 023's holdings.
@@ -29,8 +29,9 @@ HELD_BACK_KINDS = frozenset({"accepted", "wrapup", "holdings"})
 #: without the event that changed it.
 HOLDS_RELATIONS = "accepted"
 #: Create-only kinds: copied only onto an absent file, and a changed one is a conflict, never a copy.
-#: ``knowledge`` is 020's events, evidence and knowledge-log batches; ``image`` and ``blob`` are 018's.
-IMMUTABLE_KINDS = frozenset({"definition", "knowledge", "image", "blob"})
+#: ``knowledge`` is 020's events, evidence and knowledge-log batches; ``image`` and ``blob`` are 018's;
+#: ``transcript`` is 036's append-only transcript pages.
+IMMUTABLE_KINDS = frozenset({"definition", "knowledge", "image", "blob", "transcript"})
 
 #: Conflict codes, each named in docs/SYNC.md. ``held``: a held-back path whose two devices hold
 #: different bytes (nothing is copied or kept for it; it ends only when both hold identical bytes).

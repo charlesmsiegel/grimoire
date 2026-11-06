@@ -117,6 +117,11 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             raise ResolveRefused(f"{path} is a create-only image object both devices hold differently: a "
                                  "different picture is a new image object")
         txn.put_exact(path, data, None, regenerable=True)  # type: ignore[arg-type]
+    elif kind == "transcript":
+        if mine is not None:
+            raise ResolveRefused(f"{path} is a create-only transcript page both devices hold differently: "
+                                 "neither replaces the other")
+        txn.put_exact(path, data, None, regenerable=True)  # type: ignore[arg-type]
     elif kind != "blob":
         txn.put_exact(path, data, None if mine is None else etag(mine), regenerable=True)  # type: ignore[arg-type]
     if kind in ("image", "placement"):  # sync's dependency rule for art, on the receiver
