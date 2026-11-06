@@ -19,7 +19,7 @@ from grimoire.core.inference import CallId, InferenceStage, PlannedCall
 from grimoire.core.model import ControlAssignment
 from grimoire.generation import (
     DirectorBrief, GenerationError, HeardLine, NpcBrief, checked_controls, controller, director_messages,
-    npc_messages, require_director, screen_reply,
+    decision_messages, decision_options, npc_messages, read_pick, require_director, screen_reply,
 )
 from grimoire.providers.adapter import Approvals, CallResult, ProviderAdapter
 from grimoire.providers.cancel import CancelToken
@@ -38,6 +38,8 @@ TurnStatus = Literal["complete", "halted", "cancelled", "stale"]
 #: The display name of the scene-level reply in later speakers' transcripts.
 NARRATOR = "Narrator"
 DEFAULT_MAX_OUTPUT_TOKENS = 400
+#: A pick is one number: a decision call never needs room to write.
+DECISION_MAX_OUTPUT_TOKENS = 8
 _SUPPORTED = frozenset({InferenceStage.NPC_GENERATION, InferenceStage.DIRECTOR_GENERATION})
 
 
@@ -78,6 +80,24 @@ class TurnOutcome:
     meter_token: str | None = field(default=None, repr=False, compare=False)
 
 
+@dataclass(frozen=True, slots=True)
+class DecisionOutcome:
+    """What one planned ``decision`` call came to (045).
+
+    ``pick`` is the (goal id, approach id) the call chose among the brief's possible approaches, or
+    ``None`` when it ended without a usable pick: then the policy's own order decides, and ``reason``
+    says why (``unreadable_pick``, a provider refusal, an error kind, ``cancelled`` or ``stale``). The
+    call is billed either way.
+    """
+
+    call_id: CallId
+    actor: InstanceRef
+    status: CallStatusLabel
+    pick: tuple[str, str] | None = None
+    reason: str | None = None
+    meter_token: str | None = field(default=None, repr=False, compare=False)
+
+
 def _briefs(briefs: object) -> tuple[NpcBrief, ...]:
     if isinstance(briefs, (str, bytes)):
         raise GenerationError("bad_brief", "briefs must be a sequence of NpcBrief values")
@@ -91,8 +111,14 @@ def _briefs(briefs: object) -> tuple[NpcBrief, ...]:
 
 
 def _assign(meter: TurnMeter, briefs: tuple[NpcBrief, ...], director: DirectorBrief | None,
-            controls: tuple[ControlAssignment, ...]) -> list[tuple[PlannedCall, NpcBrief | DirectorBrief]]:
-    """Each planned call with its brief, or a refusal before any call is issued."""
+            controls: tuple[ControlAssignment, ...],
+            decided: dict[CallId, DecisionOutcome]) -> list[tuple[PlannedCall, NpcBrief | DirectorBrief]]:
+    """Each planned call with its brief, or a refusal before any call is issued.
+
+    A ``decision`` call must already have run on this meter through ``decide`` (``decision_not_run``),
+    and the NPC's brief must then carry what it decided: its pick as the choice's ``selection``, or no
+    selection when it fell back to the policy (``decision_ignored``). Narration never re-decides.
+    """
     plan = meter.ledger.plan
     by_actor: dict[str, NpcBrief] = {}
     for brief in briefs:
@@ -110,6 +136,15 @@ def _assign(meter: TurnMeter, briefs: tuple[NpcBrief, ...], director: DirectorBr
     used: set[str] = set()
     directed = False
     for call in plan.calls:
+        if call.stage is InferenceStage.DECISION:
+            outcome = decided.get(call.call_id)
+            if outcome is None or outcome.meter_token != meter.token or meter.status(call.call_id) is None:
+                raise GenerationError("decision_not_run", f"{call.call_id} must be decided before the turn runs")
+            brief = by_actor.get(call.actor_id)  # type: ignore[arg-type]
+            if brief is not None and (brief.intention is None or brief.intention.selection != outcome.pick):
+                raise GenerationError("decision_ignored", f"the brief for {brief.actor} does not carry what its "
+                                      "decision call picked")
+            continue
         if call.stage not in _SUPPORTED:
             raise GenerationError("unsupported_stage", f"{call.call_id} is a {call.stage} call; this "
                                   "runtime issues only npc_generation and director_generation")
@@ -175,17 +210,76 @@ class GenerationRuntime:
         self._approvals = approvals
         self._max_output_tokens = max_output_tokens
         self._temperature = temperature
+        self._decided: dict[CallId, DecisionOutcome] = {}
 
-    def _request(self, messages: tuple[tuple[str, str], ...]) -> ModelRequest:
+    def _request(self, messages: tuple[tuple[str, str], ...], max_output_tokens: int | None = None) -> ModelRequest:
         return ModelRequest(tuple(ChatMessage(role, content) for role, content in messages),
-                            max_output_tokens=self._max_output_tokens, temperature=self._temperature)
+                            max_output_tokens=max_output_tokens or self._max_output_tokens,
+                            temperature=self._temperature)
+
+    def decide(self, meter: TurnMeter, call: PlannedCall, brief: NpcBrief, *, controls: Iterable[ControlAssignment],
+               token: FenceToken | None = None, cancel: CancelToken | None = None) -> DecisionOutcome:
+        """Issue one planned ``decision`` call (045): the NPC picks among its brief's possible approaches.
+
+        Refused before the call: a call that is not a planned ``decision`` about ``brief``'s actor
+        (``decision_mismatch``) or that already ran on ``meter`` (``call_already_run``), an actor that is
+        not director-controlled now, and ``decision_messages``' refusals (``no_intention``,
+        ``nothing_to_decide``, ``option_leak``, ...). Otherwise the call is billed to ``meter`` and the
+        outcome's ``pick`` is the option it named, or ``None`` (the policy's order decides) when the reply
+        names none, the call failed or was cancelled, or the run went stale. Build the NPC's generation
+        brief with ``choose(..., selected=pick)`` when there is a pick; ``run_turn`` then checks it does.
+        """
+        if not isinstance(meter, TurnMeter):
+            raise GenerationError("bad_meter", "decide needs the turn's TurnMeter")
+        if not isinstance(brief, NpcBrief):
+            raise GenerationError("bad_brief", "decide needs the NPC's NpcBrief")
+        if token is not None and not isinstance(token, FenceToken):
+            raise GenerationError("bad_token", "token must be a FenceToken from RunFence.claim")
+        if cancel is not None and not isinstance(cancel, CancelToken):
+            raise GenerationError("bad_cancel", "cancel must be a CancelToken")
+        plan = meter.ledger.plan
+        if (not isinstance(call, PlannedCall) or call not in plan.calls or call.stage is not InferenceStage.DECISION
+                or call.actor_id != brief.actor.instance_id or plan.campaign_id != brief.actor.campaign_id):
+            raise GenerationError("decision_mismatch", f"no planned decision call about {brief.actor} on this meter")
+        if meter.status(call.call_id) is not None:
+            raise GenerationError("call_already_run", f"{call.call_id} already ran on this meter")
+        require_director(plan.campaign_id, brief.actor.instance_id, checked_controls(controls))
+        options = decision_options(brief)
+        messages = decision_messages(brief)
+        cancel = cancel if cancel is not None else CancelToken()
+        unwatch = cancel_when_stale(token, cancel)
+
+        def ended(status: CallStatusLabel, pick: tuple[str, str] | None = None,
+                  reason: str | None = None) -> DecisionOutcome:
+            if token is not None and token.stale:
+                status, pick, reason = "cancelled", None, "stale"
+            outcome = DecisionOutcome(call.call_id, brief.actor, status, pick, reason, meter_token=meter.token)
+            self._decided[call.call_id] = outcome
+            return outcome
+
+        try:
+            try:
+                result = self._adapter.execute(meter, call, self._request(messages, DECISION_MAX_OUTPUT_TOKENS),
+                                               self._routes, self._handle, approvals=self._approvals, cancel=cancel)
+            except Exception as error:  # an approvals callback or adapter bug: the policy decides
+                return ended("failed", reason=type(error).__name__)
+            if result.status != "accepted":
+                return ended(result.status, reason=_reason(result))
+            pick = read_pick(result.reply, options)
+            if pick is None:
+                return ended("rejected", reason="unreadable_pick")
+            return ended("accepted", pick)
+        finally:
+            unwatch()
 
     def run_turn(self, meter: TurnMeter, briefs: Iterable[NpcBrief], *, controls: Iterable[ControlAssignment],
                  director: DirectorBrief | None = None, token: FenceToken | None = None,
                  cancel: CancelToken | None = None, scene_voices: Iterable[ResolvedVoice] = ()) -> TurnOutcome:
         """Issue every planned call in order; see the module docstring and docs/GENERATION.md.
 
-        Refused before any call: a plan with any other stage, a call without its brief or a brief
+        Refused before any call: a ``decision`` call ``decide`` has not run on ``meter``
+        (``decision_not_run``) or whose pick the NPC's brief does not carry (``decision_ignored``), a plan
+        with any other stage, a call without its brief or a brief
         without its call, a director brief without a planned director reply (or the reverse), a call
         that already ran on ``meter``, any brief actor that is not director-controlled now, and a brief
         whose 039 intention was chosen for another set of present actors than this plan's.
@@ -203,7 +297,7 @@ class GenerationRuntime:
         if cancel is not None and not isinstance(cancel, CancelToken):
             raise GenerationError("bad_cancel", "cancel must be a CancelToken")
         briefs = _briefs(briefs)
-        pairs = _assign(meter, briefs, director, checked_controls(controls))
+        pairs = _assign(meter, briefs, director, checked_controls(controls), self._decided)
         scene_voices = tuple(scene_voices)
         if not all(isinstance(voice, ResolvedVoice) for voice in scene_voices):
             raise GenerationError("bad_voice", "scene_voices must be ResolvedVoice values")

@@ -146,6 +146,8 @@ class NpcBrief:
     #: with an intention, the actor ids of the whole scene it was chosen for: ``run_turn`` refuses the brief
     #: in a turn whose plan has other actors present (someone left, or someone arrived a limit watches for)
     cast: frozenset[str] | None = None
+    #: 039's choice the brief carries, if any: 045's decision call offers its possible approaches
+    intention: Choice | None = None
     _seal: InitVar[object] = None
 
     __hash__ = None  # type: ignore[assignment]  # holds a ResolvedVoice
@@ -210,7 +212,7 @@ def _who(ref: InstanceRef | None, names: Mapping[InstanceRef, str], hidden: tupl
     if not (isinstance(name, str) and has_words(name)):
         return "Someone"
     name = _one_line(name)
-    return "Someone" if _leaks(name, hidden, exposed) is not None else name
+    return "Someone" if leaks(name, hidden, exposed) is not None else name
 
 
 def _contents(knowledge: ActorKnowledge) -> tuple[str, ...]:
@@ -365,7 +367,7 @@ def _intention(intention: Choice, actor: InstanceRef, hidden: tuple[SecretFact, 
         parts.append(("What you will not do here, whatever it would gain you:", rules))
     for _heading, texts in parts:
         for text in texts:
-            leak = _leaks(text, hidden, exposed)
+            leak = leaks(text, hidden, exposed)
             if leak is not None:
                 raise GenerationError("intention_leak", f"the intention for {actor} states secret {leak}, "
                                       "which it has not learned")
@@ -382,7 +384,7 @@ def _listed(heading: str, lines: Sequence[str]) -> str:
     return heading + "\n" + "\n".join(f"- {line}" for line in lines)
 
 
-def _leaks(text: str, hidden: tuple[SecretFact, ...], exposed: Sequence[str]) -> str | None:
+def leaks(text: str, hidden: tuple[SecretFact, ...], exposed: Sequence[str]) -> str | None:
     """The id of a hidden secret whose marker ``text`` states and nothing in ``exposed`` does."""
     for secret in hidden:
         for marker in secret.markers:
@@ -396,7 +398,7 @@ def _label(line: HeardLine, names: Mapping[InstanceRef, str], hidden: tuple[Secr
     """Who spoke, as this listener labels them; "Someone" when the label would state a hidden secret."""
     label = names.get(line.actor) if line.actor is not None else None
     label = _one_line(label) if isinstance(label, str) and has_words(label) else _one_line(line.speaker)
-    return "Someone" if _leaks(label, hidden, exposed) is not None else label
+    return "Someone" if leaks(label, hidden, exposed) is not None else label
 
 
 def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLine] = (),
@@ -505,7 +507,7 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
     names[actor] = name
     cast = frozenset(ref.instance_id for ref in intention.scene) if intention is not None else None
     return NpcBrief(actor, name, voice, fragment, "\n\n".join(parts), heard, hidden,
-                    own + (name,) + tuple(line.text for line in heard), tuple(names.items()), cast, _SEAL)
+                    own + (name,) + tuple(line.text for line in heard), tuple(names.items()), cast, intention, _SEAL)
 
 
 def _check_lore(lore: object, campaign_id: str, snapshot: object) -> None:
