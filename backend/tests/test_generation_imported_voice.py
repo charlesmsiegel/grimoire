@@ -468,3 +468,19 @@ def test_a_descendant_of_a_silent_portrayal_never_reaches_past_it(store):
             with pytest.raises(MissingVoice) as missing:
                 resolve(actor)
             assert missing.value.reason == NO_VOICE_TEXT
+
+
+def test_a_renamed_portrayal_keeps_the_examples_its_base_labelled_by_name(store):
+    """Its own personality gives it its own voice; the base's turns are still the base's, so they stay."""
+    land(store, encode(card(V3, mes_example="<START>\nMara Vell: Mind the wick, {{user}}.\n"
+                                            "Maria: Not mine.\n{{char}}: I am {{char}} now.")))
+    renamed = SourceRef("world:modern-harbor", "character", "maria", "r1")
+    txn = store.transaction()
+    txn.put(manifest("world:modern-harbor", derives(renamed, MARA_VELL.at("r1"))), None)
+    txn.put(envelope(derived(renamed, MARA_VELL.at("r1"), name="Maria",
+                             sections={"personality": "Cold and curt."})), None)
+    txn.commit(owner_handle())
+    snap, actor = card_chat(store, renamed)
+    voice = SnapshotVoices(snap).resolve(actor)
+    assert voice.portrayal == renamed
+    assert [e.text for e in voice.examples] == ["Mind the wick, you.", "I am Maria now."]

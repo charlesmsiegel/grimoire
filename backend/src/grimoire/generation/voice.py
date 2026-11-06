@@ -204,7 +204,8 @@ def _rederive(snapshot: EffectiveSnapshot, chain: tuple[SourceRef, ...], authore
     texts = VoiceTexts(
         examples=base.examples,
         personality=(effective.section("personality") or "") if "personality" in touched else base.personality,
-        description=effective.description if "description" in touched else base.description)
+        description=effective.description if "description" in touched else base.description,
+        speaker=base.speaker)  # the base's examples still label the base's turns with its name
     derived[chain[0]] = derive_profile(chain[0], effective.name, texts)
 
 

@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from grimoire.core.entity import EntityDefinition
 from grimoire.core.identity import LegacyId, SourceRef
@@ -127,6 +127,10 @@ class VoiceTexts:
     description: str = ""
     imported: ImportedVoiceSource | None = None
     notes: tuple[VoiceNote, ...] = ()
+    #: The name ``examples`` label the character's own turns with: the revision they were authored
+    #: for. ``None`` is the speaking name; a derived portrayal re-reading its base's examples keeps
+    #: the base's, so a rename never drops its base's turns nor keeps another speaker's.
+    speaker: str | None = None
 
 
 #: Reads one revision's ``VoiceTexts``, or ``None`` when the revision is not of its shape.
@@ -197,12 +201,12 @@ def _aspect(text: str, default: str) -> str:
     return next((aspect for aspect, rule in _ASPECTS if rule.search(text)), default)
 
 
-def example_lines(examples: str, name: str) -> list[str]:
+def example_lines(examples: str, name: str, speaker: str | None = None) -> list[str]:
     """The character's own turns in a ``mes_example``, in order, with macros filled in.
 
     Blocks are split on ``<START>``. A turn begins at a speaker label (see ``_LABEL``) and runs over the
     unlabelled lines after it; only turns labelled ``{{char}}``, ``<BOT>`` or the character's own name
-    are kept. The rule fails closed by construction, because a line wrongly kept puts someone else's
+    are kept (``speaker``'s name when given, else ``name``). The rule fails closed by construction, because a line wrongly kept puts someone else's
     words, maybe a secret, in this voice: a continuation line is kept only when it holds no macro or
     angle tag at all, no colon or dash separator in its first 64 characters, and does not open with a
     wrapped token and a separator (see ``_continues``). Any other line ends the turn and what follows
@@ -213,7 +217,7 @@ def example_lines(examples: str, name: str) -> list[str]:
     smiles.*"): that is the price. Text before any label is not a turn. ``{{char}}`` becomes the name
     and ``{{user}}`` becomes ``you``.
     """
-    own = normalize(name)
+    own = normalize(name if speaker is None else speaker)
     turns: list[str] = []
     for block in _START.split(examples.replace("\r\n", "\n").replace("\r", "\n")):
         current: list[str] | None = None
@@ -315,7 +319,8 @@ def derive_profile(ref: SourceRef, name: str, texts: VoiceTexts) -> DerivedVoice
     for index, sentence in enumerate(described, 1):
         if _SPEECH.search(sentence):
             build.anchor("description", index, sentence, "habit")
-    for index, line in enumerate(example_lines(texts.examples, name), 1):
+    texts = texts if texts.speaker is not None else replace(texts, speaker=name)
+    for index, line in enumerate(example_lines(texts.examples, name, texts.speaker), 1):
         build.example(index, line)
     if not build.anchors and not build.examples and described:
         opening = _packed(described, MAX_ANCHOR_CHARS)[0]
