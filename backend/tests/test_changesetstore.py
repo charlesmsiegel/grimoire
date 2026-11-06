@@ -428,3 +428,16 @@ def test_a_withdrawal_an_unusable_authority_cannot_confirm_never_counts(store):
         with pytest.raises((OSError, AuthorityUnavailable)):
             lib.reject(review)
     assert review.state == "open"
+
+
+def test_approving_again_replaces_the_earlier_approvals(store):
+    authority = worker_authority()
+    lib = library(store, authority.handle_for(WORKER))
+    review = lib.review(move_the_guild(lib))
+    first = lib.approve(review, authority, approved_by=OWNER, new_id=ids())
+    second = lib.approve(review, authority, approved_by=OWNER, new_id=lambda: f"again-{len(authority.pending_approvals())}")
+    assert {a.approval_id for a in authority.pending_approvals()} == set(second.values())
+    with pytest.raises(WriteDenied):
+        lib.apply(review, first)  # withdrawn: no longer authorizes anything
+    lib.apply(review, second)
+    assert review.state == "applied" and authority.pending_approvals() == ()

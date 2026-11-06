@@ -94,7 +94,7 @@ A trusted `human:` handle with a covering grant applies directly. An untrusted h
 
 `approve` registers, for each file in `needs_approval`, `Approval(new_id(), <the library handle's principal>, apply, path, digest of the reviewed bytes, approved_by)`, and returns the `{path: approval_id}` mapping `apply` takes. A handle that needs no approval gets none, and a file the handle may not write at all (`not_granted`) makes the review `not_applicable`.
 - **Call it only from a human's direct action on this review**, after showing its files' bytes and `describe_approvals` (the `Approval.describe()` sentences, including the non-ASCII flag). This is 007's obligation on this sprint. It is trusted code; a worker handle cannot reach the authority.
-- `approved_by` must be a human with an active grant covering every file. Registration is all or nothing. `reject` revokes the ones still pending before it ends the review, so a failing authority leaves the review open.
+- `approved_by` must be a human with an active grant covering every file. Registration is all or nothing. Approving the same review again withdraws the earlier set first, so a review never has two usable sets. An approval the library cannot confirm as withdrawn (the authority failed or cannot be trusted) stays tracked, and `reject` keeps failing until it can be withdrawn. `reject` revokes the ones still pending before it ends the review, so a failing authority leaves the review open.
 - A review with conflicts or blocks is not approved (`not_applicable`).
 - The approvals cover those exact bytes: they do not authorize another review of the same paths with other content.
 

@@ -266,7 +266,9 @@ class ChangeSetLibrary:
         bytes and ``describe_approvals`` (007): it is the approval UI's trusted half, never
         reachable from a worker. ``authority`` is the library's ``DurableAuthority`` (or a bare
         ``Authorizer``); ``approved_by`` must hold an active grant covering every file. All or
-        nothing: if one registration fails, those already made are revoked. Returns the
+        nothing: if one registration fails, those already made are revoked. Approving a review
+        again first withdraws the approvals issued for it before (an apply that succeeds consumes
+        its one set, so none is left behind). Returns the
         ``approvals`` mapping ``apply`` takes; empty when the handle needs none."""
         with self.store.lock:  # one decision at a time: never approve a review being applied
             return self._approve(review, authority, approved_by, new_id)
@@ -280,6 +282,7 @@ class ChangeSetLibrary:
                    if not check.allowed and check.reason != "approval_required"]
         if refused or not review.permissions:
             raise ChangeSetError("not_applicable", f"the handle may not write {', '.join(refused) or 'these files'}")
+        self._withdraw(review)  # approving again replaces the earlier set: never two usable sets
         principal = self.handle.principal  # type: ignore[attr-defined]
         needed = [item for item in review.files if item.path in review.needs_approval]
         made: list[str] = []
