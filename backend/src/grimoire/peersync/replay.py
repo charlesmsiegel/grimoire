@@ -20,6 +20,7 @@ from pathlib import Path
 from grimoire.store import LibraryStore, StaleWrite, StoreError, WriteConflict, WriteDenied, etag
 from grimoire.store.layout import conflict_parts
 from grimoire.sync import Step, device_of
+from grimoire.sync import keeps as kept_record
 from grimoire.sync.bookkeeping import is_shard, listed_shards, root_name
 from grimoire.sync.bookkeeping import parse as parse_document
 from grimoire.sync.bookkeeping import stage as stage_states
@@ -296,6 +297,10 @@ class StepBuffer:
     def _state_expected(self, store: LibraryStore, name: str, body: bytes, expected: str | None, roots: dict,  # type: ignore[type-arg]
                         first: set[tuple[str, str]], recordable: set[tuple[str, str]]) -> str | None:
         """The etag a state write of the pair must replace, after checking the write is one a sync makes."""
+        if name == keeps_name(self.peer) and len(body) > kept_record.RECORD_LIMIT:
+            # this device writes no record past the cap (``keeps.fit`` leaves excess deliveries
+            # unrecorded): one it accepted from a peer would stop its own next sync or dismissal
+            raise PeerRefused("invalid", f"a kept-version record past {kept_record.RECORD_LIMIT} bytes")
         if name == keeps_name(self.peer) and not peer_may_write(
                 store.read_sync_state(name), body, tuple(sorted((device_of(store), self.peer))),  # type: ignore[arg-type]
                 lambda path, tag: (path, tag) in first, lambda path, tag: slot_stands(store, path, tag),

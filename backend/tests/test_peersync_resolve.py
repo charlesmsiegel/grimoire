@@ -26,7 +26,7 @@ from grimoire.peersync.pairing import peer_principal
 from grimoire.peersync.replay import StepBuffer
 from grimoire.peersync.wire import Channel, client_handshake, server_handshake
 from grimoire.store import RecordEnvelope, SourceManifest, etag
-from grimoire.sync import DismissRefused, bookkeeping, dismiss
+from grimoire.sync import DismissRefused, dismiss
 from grimoire.sync import session as sync_session
 from grimoire.sync.documents import KeptEntry, keeps_name, parse_keeps, pending_name, render_keeps
 
@@ -36,6 +36,11 @@ from store_helpers import OWNER
 
 BACKEND = Path(__file__).resolve().parents[1]
 DESKTOP_LABEL, PHONE_LABEL = "Saltmarch docks", "The night crossing"
+
+
+def _unkept(tree: dict[str, bytes]) -> dict[str, bytes]:
+    """``tree`` without the kept-version records, which a resolve clears before its data (028)."""
+    return {path: data for path, data in tree.items() if not path.endswith("/keeps.json")}
 
 
 def _tree(root: Path) -> dict[str, bytes]:
@@ -300,18 +305,16 @@ def test_unpairing_on_the_starting_device_mid_resolve_sends_nothing_more(tmp_pat
 
 # -- a resolve the connection drops ----------------------------------------------------------------
 
-def _agreement(case: Conflict):  # type: ignore[no-untyped-def]
-    """What the phone's archive records for the conflict's path."""
-    return bookkeeping.read_document(case.phone.store, "archive", DESKTOP, (DESKTOP, PHONE)).entries.get(case.path)
 
-
-@pytest.mark.parametrize("step,landed", [(1, False), (1, True), (2, False), (2, True), (3, True), (4, True), (5, True)])
+@pytest.mark.parametrize("step,landed", [(1, False), (1, True), (2, False), (2, True), (3, False), (3, True),
+                                         (4, True), (5, True)])
 def test_a_dropped_connection_mid_resolve_loses_nothing_and_the_devices_converge(tmp_path, monkeypatch, step, landed):
-    """The phone receives: its commits are the hold's record, the data, its kept-version record, its
-    archive and its marker. The desktop clears its own record before the phone's archive step, so a
-    drop between the two archives never leaves the desktop's copy of the phone's version dismissable."""
+    """The phone receives: its commits are its kept-version record with the conflict's deliveries
+    cleared, that record holding its own version, the data, its archive and its marker. The desktop
+    clears its own record before anything is sent, so a drop after the data (between the two
+    archives included) never leaves the desktop's copy of the phone's version dismissable."""
     case = Conflict(tmp_path)
-    commits, before = [], _agreement(case)
+    commits = []
 
     class Dropping(StepBuffer):
         """The phone's side of the resolve's ``step``-th commit: the cable comes out before or after it lands."""
@@ -330,17 +333,21 @@ def test_a_dropped_connection_mid_resolve_loses_nothing_and_the_devices_converge
         report = case.resolve(server, DESKTOP)
     monkeypatch.undo()
     assert report.status == "incomplete" and report.reason.startswith("disconnected"), report
-    phone_now, data = case.bytes(case.phone), landed and step >= 2
+    phone_now, data = case.bytes(case.phone), landed and step >= 3
     if data:  # as a local resolve leaves the phone after a crash past its data commit
         assert phone_now == case.versions[DESKTOP] and case.versions[PHONE] in _kept(case.phone.store.root)
-        if step == 2:  # the agreement is not recorded yet, but the copy is marked
+        if step == 3:  # the agreement is not recorded yet, but the copy is marked
             assert case.path.encode() in case.phone.store.read_sync_state(pending_name(DESKTOP))
     else:
         assert phone_now == case.versions[PHONE]
-    if step <= 2:  # the hold's record lands first: never a hold without it (a record alone fails closed)
+    if step <= 3:  # the hold's record lands before the data: never a hold without it (a record alone fails closed)
         record = parse_keeps(case.phone.store.read_sync_state(keeps_name(DESKTOP)), (DESKTOP, PHONE))
-        assert (case.expected[PHONE] in record.entries[case.path].held) == (landed or step == 2)
-    if _agreement(case) != before:  # the phone's archive records the agreement; the desktop's may not yet
+        entry = record.entries.get(case.path)
+        held = entry is not None and case.expected[PHONE] in entry.held
+        assert held == (step == 3 or (step == 2 and landed))
+        if landed or step > 1:  # its first commit cleared the conflict's deliveries
+            assert entry is None or not entry.delivered
+    if data:  # the phone holds the desktop's version; the desktop's archive may still show the old base
         with pytest.raises(DismissRefused):
             dismiss(case.desktop.store, PHONE, case.path, case.expected[PHONE], case.desktop.handle)
     with serving(case.phone) as server:  # the same resolve again: done if the data did not land, stale if it did
@@ -352,17 +359,48 @@ def test_a_dropped_connection_mid_resolve_loses_nothing_and_the_devices_converge
     assert case.versions[PHONE] in _kept(case.phone.store.root)
 
 
-def test_a_data_step_refused_after_the_holds_record_committed_is_incomplete(tmp_path, monkeypatch):
-    """The phone receives: its first commit, the hold's record, lands; then its chat changes before the
-    data step, which is refused as stale. The record stays (it holds bytes the phone still has, which
-    only fails closed), so the resolve did write something: never ``refused``, which promises nothing."""
+def test_a_drop_after_the_starting_devices_data_never_leaves_the_winners_copy_dismissable(tmp_path, monkeypatch):
+    """The desktop receives the phone's version; the cable comes out before the phone's archive step.
+    The phone's archive and marker still read as the open conflict, and its kept copy of the
+    desktop's former version is now that version's only copy beside the desktop's hold: the phone
+    cleared its record's deliveries in its first served step, before the desktop's data commit."""
+    case = Conflict(tmp_path)
+    commits = []
+
+    class Dropping(StepBuffer):
+        def commit(self, store, handle, **options):  # type: ignore[no-untyped-def]
+            commits.append(1)
+            if len(commits) == 2:  # the phone's archive step
+                raise server_module.TransportError("the cable came out")
+            return super().commit(store, handle, **options)
+
+    monkeypatch.setattr(server_module, "StepBuffer", Dropping)
+    with serving(case.phone) as server:
+        report = case.resolve(server, PHONE)
+    monkeypatch.undo()
+    assert report.status == "incomplete" and report.reason.startswith("disconnected"), report
+    assert case.bytes(case.desktop) == case.versions[PHONE]
+    with pytest.raises(DismissRefused):
+        dismiss(case.phone.store, DESKTOP, case.path, case.expected[DESKTOP], case.phone.handle)
+    again = case.sync_again()
+    assert again.status == "synced" and again.conflicts == (), again
+    with pytest.raises(DismissRefused):
+        dismiss(case.phone.store, DESKTOP, case.path, case.expected[DESKTOP], case.phone.handle)
+    assert case.versions[DESKTOP] in _kept(case.phone.store.root)
+
+
+def test_a_data_step_refused_after_the_holds_record_committed_leaves_only_bookkeeping(tmp_path, monkeypatch):
+    """The phone receives: its record steps (the conflict's deliveries cleared, then its own version
+    held) land; then its chat changes before the data step, which is refused as stale. ``refused``:
+    the chosen version landed nowhere, and what stays is bookkeeping a local resolve also commits
+    before its data, which only fails closed (the hold names bytes the phone still has)."""
     case = Conflict(tmp_path)
     commits, raced = [], case.versions[PHONE] + b"\n"
 
     class Racing(StepBuffer):
         def commit(self, store, handle, **options):  # type: ignore[no-untyped-def]
             commits.append(1)
-            if len(commits) == 2:  # an edit on the phone itself, just before the data step
+            if len(commits) == 3:  # an edit on the phone itself, just before the data step
                 (case.phone.store.root / case.path).write_bytes(raced)
             return super().commit(store, handle, **options)
 
@@ -370,7 +408,7 @@ def test_a_data_step_refused_after_the_holds_record_committed_is_incomplete(tmp_
     with serving(case.phone) as server:
         report = case.resolve(server, DESKTOP)
     monkeypatch.undo()
-    assert report.status == "incomplete" and report.reason.startswith("stale"), report
+    assert report.status == "refused" and report.reason.startswith("stale"), report
     assert case.bytes(case.phone) == raced and case.bytes(case.desktop) == case.versions[DESKTOP]
     record = parse_keeps(case.phone.store.read_sync_state(keeps_name(DESKTOP)), (DESKTOP, PHONE))
     assert case.expected[PHONE] in record.entries[case.path].held
@@ -626,12 +664,13 @@ def test_two_devices_resolving_against_each_other_at_once_neither_hangs_nor_half
             lined_up.wait()
             return real_dial(*args, **kwargs)
         monkeypatch.setattr(resolving_module, "dial", dial_together)
-    else:  # both requests were accepted, and each device's data step waits on the other's library
+    else:  # both requests were accepted, and each device's first served step waits on the other's library
         monkeypatch.setattr(server_module, "resolving_out", lambda store: False)
         real_relay = resolving_module._Relay.__call__
 
         def relay_together(self, ops):  # type: ignore[no-untyped-def]
-            if any(kind != "state" for kind, _ in ops):
+            if not getattr(self, "lined_up", False):  # each resolve's first mirror commit
+                self.lined_up = True
                 lined_up.wait()
             return real_relay(self, ops)
         monkeypatch.setattr(resolving_module._Relay, "__call__", relay_together)
@@ -653,15 +692,17 @@ def test_two_devices_resolving_against_each_other_at_once_neither_hangs_nor_half
     monkeypatch.undo()
     # neither waits for the other's connection to time out: both end, on the busy wait
     assert not any(thread.is_alive() for thread in threads)
-    # Each one is refused whole (busy), or at most one of them ends the conflict whole: one whose
+    # Each one is refused with no data written (busy), or at most one of them ends the conflict whole: one whose
     # server took its library just as the other gave up (the busy wait is bounded, not a turn).
     resolved = [device for device, report in reports.items() if report.status == "resolved"]
     assert len(reports) == 2 and len(resolved) <= 1, reports
     for device, report in reports.items():
         if device not in resolved:
-            assert report.status == "refused" and report.reason.startswith("busy"), report
-    if not resolved:
-        assert (_tree(case.desktop.store.root), _tree(case.phone.store.root)) == before
+            # busy; or stale, when the other resolve gave up only after its own records changed
+            assert report.status == "refused" and report.reason.startswith(("busy", "stale")), report
+    if not resolved:  # no data anywhere; each device's own record may have ended the conflict's deliveries
+        assert (_unkept(_tree(case.desktop.store.root)), _unkept(_tree(case.phone.store.root))) == tuple(
+            _unkept(tree) for tree in before)
         assert case.sync_again().status == "conflicts"  # still the one conflict, on both devices
         with serving(case.phone) as server:  # and one resolve on its own then ends it
             assert case.resolve(server, DESKTOP).status == "resolved"

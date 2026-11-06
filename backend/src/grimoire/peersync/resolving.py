@@ -61,9 +61,11 @@ class ResolveReport:
 
     ``status`` is ``resolved`` (``receiver`` now holds the chosen version, its own kept under
     ``.conflicts``, and both archives record the agreement), ``refused`` (nothing was written on
-    either device; ``reason`` says why) or ``incomplete`` (the connection or pairing ended, or a
-    step was refused after another had committed, the hold's record included: each device is as a
-    crash at that point of a local resolve leaves it, and the next transfer converges).
+    either device but the kept-version bookkeeping a local resolve also commits before its data:
+    the ended conflict's deliveries and dismissals cleared, and the receiver's hold recorded,
+    which only fails closed; ``reason`` says why) or ``incomplete`` (the connection or pairing
+    ended, or a step was refused after the chosen version landed: each device is as a crash at
+    that point of a local resolve leaves it, and the next transfer converges).
     """
 
     peer: str
@@ -159,19 +161,20 @@ def _resolve(store: LibraryStore, channel: Channel, local: str, local_handle: ob
         try:
             receiver = resolve(store, mirror.store, path, keep, expected, {local: local_handle, peer: mirror.handle})
             relay.flush()
-        except ResolveRefused as error:  # 019 refused before its first commit
+        except ResolveRefused as error:  # 019 refused before its data commit (its bookkeeping may stand)
             return ResolveReport(peer, path, "refused", f"ResolveRefused: {error}")
         except PeerRefused as error:
             if error.code == "not_paired":
                 return ResolveReport(peer, path, "incomplete", "not_paired")
-            # ``refused`` promises nothing was written on either device, so it is reported only when
-            # no step committed on the serving device and this device wrote nothing of its own: the
-            # serving device receives and refused its first step (the hold's record or the data). A
-            # refused data step after a committed record leaves that record (it holds bytes the
-            # resolve did not take, which fails closed), and a refused later step leaves the data
-            # landed with the agreement unrecorded, as a crash between them would: both
-            # ``incomplete``. When this device receives, its own data commit came first.
-            first = expected[local] == keep and not relay.landed and error.code != "verification"
+            # ``refused`` promises that the chosen version landed on neither device: a refused step
+            # up to and including the receiver's data leaves only the bookkeeping resolve commits
+            # first (the ended conflict's deliveries cleared, the hold recorded), which fails closed,
+            # as a local resolve refused at its data commit does. A refused later step left the data
+            # landed and the agreement unrecorded, as a crash between them would: ``incomplete``.
+            # When this device receives, the serving device's first step (its record's cleared
+            # deliveries) comes before this device's own data commit.
+            first = not relay.landed and error.code != "verification" and (
+                expected[local] == keep or not _holds(store, path, keep))
             return ResolveReport(peer, path, "refused" if first else "incomplete", str(error))
         except (SyncInterrupted, MirrorMismatch) as error:  # the data may have landed; the next sync records it
             return ResolveReport(peer, path, "incomplete", f"{type(error).__name__}: {error}")
@@ -186,38 +189,43 @@ class _Relay:
     """Sends one mirror commit to the serving device and waits for it to commit and confirm it.
 
     ``hold_record`` is this pair's kept-version record on the mirror when the serving device
-    receives. ``resolve`` commits the hold's record there on its own, just before its data commit
-    (028), and the mirror then checks the data commit against the serving device's grants: a
-    denied write is refused there, before anything is relayed. So the record's step is held back
-    until the next step goes (the data's): a resolve the mirror refuses writes nothing on the
-    serving device, not even a record holding bytes it never took. The serving device still
-    commits the record on its own, before the data, so no recovery of that commit can lose it.
+    receives. ``resolve`` commits that record on its own before its data commit, first with the
+    ended conflict's deliveries cleared, then with the hold recorded (028), and the mirror then
+    checks the data commit against the serving device's grants: a denied write is refused there,
+    before anything is relayed. So those record steps are held back until the next step goes (the
+    data's), then sent in order, each a commit of its own: a resolve the mirror refuses writes
+    nothing on the serving device. The serving device still commits the hold's record before the
+    data, so no recovery of that commit can lose it. Its own cleared deliveries need not come
+    sooner: once it receives, it holds the winner's version live, so its kept copy of that version
+    is never the last one. When this device receives, the serving device is the winner and its
+    record is relayed at once, before this device's data commit: its kept copy of this device's
+    version may become that version's last copy, and must never be dismissable by then.
     """
 
     def __init__(self, channel: Channel, store: LibraryStore, key: bytes, hold_record: str | None) -> None:
         self.channel, self.store, self.key, self.hold_record = channel, store, key, hold_record
-        self.landed = False  # whether any step, ``.sync`` only or not, committed on the serving device
-        self._held_back: list[tuple[str, Callable[[], Op]]] | None = None
+        self.landed = False  # whether a step that wrote more than .sync state (the data) committed there
+        self._held_back: list[list[tuple[str, Callable[[], Op]]]] = []
 
     def __call__(self, ops: list[tuple[str, Callable[[], Op]]]) -> None:
-        if (self.hold_record is not None and not self.landed and self._held_back is None and ops
+        if (self.hold_record is not None and not self.landed and ops
                 and all(kind == "state" and make()[0].get("name") == self.hold_record for kind, make in ops)):
-            self._held_back = ops
+            self._held_back.append(ops)
             return
         self.flush()
         self._send(ops)
+        self.landed = self.landed or any(kind != "state" for kind, _ in ops)
 
     def flush(self) -> None:
-        """Send the step held back, if any."""
-        if self._held_back is not None:
-            ops, self._held_back = self._held_back, None
+        """Send the steps held back, if any, in order."""
+        held, self._held_back = self._held_back, []
+        for ops in held:
             self._send(ops)
 
     def _send(self, ops: list[tuple[str, Callable[[], Op]]]) -> None:
         # An owner who unpairs mid-resolve must not have anything more sent (as a transfer checks).
         _check_paired(self.store, self.channel.peer, self.key)
         send_ops(self.channel, "resolve", (make() for _, make in ops))
-        self.landed = True
 
 
 class RelayingMirror(MirrorStore):
@@ -440,13 +448,15 @@ class ResolveRequest:
         other step this device's own version is still its live record, and a hold of those bytes
         (with a record calling them held) would only keep a version from ever being dismissed.
 
-        When this device receives, the one step before the data may be the hold's record (028):
-        resolve commits the pair's kept-version record holding this device's own version on its
-        own, before the data commit, so no recovery of that commit can lose it
-        (``grimoire.sync.resolution``). That step writes this pair's ``keeps.json`` and nothing
-        else, while the path still holds the etag the user saw here; what it may add as held is
-        exactly that version (``peer_may_write``), and a sync drops the entry if the data never
-        lands and no slot holds those bytes.
+        When this device receives, the steps before the data are resolve's kept-version
+        bookkeeping (028), each a commit of its own: the pair's record with the ended conflict's
+        deliveries cleared, then the record holding this device's own version, before the data
+        commit so that no recovery of that commit can lose it (``grimoire.sync.resolution``).
+        Each writes this pair's ``keeps.json`` and nothing else, while the path still holds the
+        etag the user saw here; what one may add as held is exactly that version
+        (``peer_may_write``), and a sync drops the entry if the data never lands and no slot holds
+        those bytes. When this device is the winner, its record's step (deliveries cleared) finds
+        the chosen version already here, as every later step does.
         """
         writes = [(header, body) for header, body in ops if header.get("path") == self.path]
         found = _current(store, self.path)
@@ -475,6 +485,14 @@ class ResolveRequest:
         if found is not None and not held:
             raise PeerRefused("invalid", f"replacing {self.path} must hold this device's own version beside it")
         return None
+
+
+def _holds(store: LibraryStore, path: str, keep: str) -> bool:
+    """Whether this library holds ``keep`` at ``path``; when that cannot be read, it might."""
+    try:
+        return _current(store, path) == keep
+    except (StoreError, OSError, ValueError):
+        return True
 
 
 def _current(store: LibraryStore, path: str) -> str | None:
