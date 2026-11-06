@@ -5,7 +5,7 @@
 - `changes.py`: physical changes checked against the staging, and corrections (`apply`);
 - `senses.py`: the questions (`where`, `reach`, `sees`, `hears`, `audience`, `witnesses`), a 032 presence and delivery within earshot, 012 perceptions for witnesses, and checks against 033's cast and 034's holders.
 
-Nothing here touches files or calls a model, and **nothing is stored in this slice**. There is no runner and no app; nothing turns narration or a player's words into a change (the caller builds the `Change`). The scenarios are synthetic.
+Nothing here touches files or calls a model, and **nothing is stored in this slice**. 035's runner ([`SceneRunner`](SCENES.md)) does not use a stage yet, and there is no app; nothing turns narration or a player's words into a change (the caller builds the `Change`). The scenarios are synthetic.
 
 ## What it does
 
