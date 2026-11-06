@@ -34,7 +34,7 @@ The chat launches from the first mapped character to speak, attaches the other c
 
 The plan is one 107 `ChatChange`: the play scope, the chat with its bindings, the new actors and every transcript page, previewed and committed in one transaction with 107's re-checks. The campaign id and the chat id are both `st-`, 16 hex digits of the export's SHA-256 and this library's [device tag](DEVICE_SYNC.md#per-device-ids) (none in a library never given a device identity), so:
 
-- importing the same export again on this device finds the earlier import: `status == "already_imported"`, nothing to write, the same chat and actors. Page 1 records how many pages and posts the import wrote, and the earlier import counts only when exactly those are there (a live runner may append later pages);
+- importing the same export again on this device finds the earlier import: `status == "already_imported"`, nothing to write, the same chat and actors. Page 1 records how many pages and posts the import wrote, and the earlier import counts only when exactly those are there (a later writer may append pages);
 - the same export with a different speaker mapping, lorebooks or label is refused (`imported_differently`), as is a campaign folder of that id that this importer did not write completely, or a ledger that still names the campaign after its folder was deleted (`campaign_exists`);
 - two paired devices that each import the export offline make two chats, one per device, and sync carries both; neither is a version of the other;
 - two plans of one export committed one after the other: the second is `StaleWrite`.

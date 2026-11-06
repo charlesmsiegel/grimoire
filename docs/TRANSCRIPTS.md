@@ -1,6 +1,6 @@
 # Chat transcripts
 
-**Status: implemented headless store family and model (Sprint 036's first slice).** A chat's transcript is the text that was posted in it: every post in order, who wrote it as the source says, and every variant it held. It is stored beside the chat as numbered, create-only pages. [ARCHAEOLOGY](ARCHAEOLOGY.md) describes the two importers that write pages today (SillyTavern chat exports and V0.2.1 scenes through 026). The live runner (035) can append to the same family.
+**Status: implemented headless store family and model (Sprint 036's first slice).** A chat's transcript is the text that was posted in it: every post in order, who wrote it as the source says, and every variant it held. It is stored beside the chat as numbered, create-only pages. [ARCHAEOLOGY](ARCHAEOLOGY.md) describes the two importers that write pages today (SillyTavern chat exports and V0.2.1 scenes through 026). What is played in V2 afterwards is 035's turns, a separate family (below).
 
 A transcript is **evidence that something was written, never of who heard it.** Nothing in this family creates an event, a belief, evidence or a relation, and nothing reads a page as a grant of knowledge to anyone.
 
@@ -53,6 +53,8 @@ Pure values in `grimoire.transcripts` (`Post`, `Speaker`, `Variant`, `Transcript
 
 The codec refuses, with a machine-readable `reason`: another schema (`unsupported_schema`), a payload that repeats the envelope's identity (`identity_in_payload`), unknown fields in a post, speaker or variant (`unknown_field`), a missing required field (`missing_field`), an actor of another campaign (`foreign_actor`), an audience other than `unknown` (`audience`), a repeated post id on one page (`duplicate_post`) and a header on a later page (`header_not_first`). Unknown top-level fields are kept as `extras`.
 
-## For the live runner (035)
+## Imported history and live play (035)
 
-The family is generic: a runner appends page `seq + 1` of its chat as one create-only write, so two writers racing for the same page collide (`StaleWrite`) instead of overwriting each other. Accepted state (events, holdings, beliefs) stays in its own families; a page records only the text. A runner that needs another payload (a scene segment, reviewed narration status, a known audience) adds a new schema version rather than reinterpreting `/0`.
+A chat's transcript is its **imported history**: text written before V2 (a SillyTavern export, a V0.2.1 scene), immutable and with audience unknown. What is played in V2 afterwards is 035's scene turns (`campaigns/<id>/turns/`, documented in 035's SCENES.md), a separate family: turns change in place (a take kept, struck or withdrawn), carry fixed audiences and are held back from sync until 028's merge milestone. The runner never writes transcript pages, and nothing here writes turns.
+
+Until 035's milestone 2 reads a chat's imported pages as the history before its first turn, and decides then who heard them, the runner does not read them: an imported chat plays on with NPCs who heard none of the imported lines (fail closed). Accepted state (events, holdings, beliefs) stays in its own families; a page records only the text. A later writer that needs another payload (a scene segment, reviewed narration status, a known audience) adds a new schema version rather than reinterpreting `/0`.

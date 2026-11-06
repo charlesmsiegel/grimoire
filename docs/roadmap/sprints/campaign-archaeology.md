@@ -62,5 +62,6 @@ This Wave 5 first slice is the **historical conversation** side of SillyTavern r
 - Reviewed V0.2.1 speaker mapping (posts bound to the scene's actors after review instead of labels).
 - Binding ST author's notes and chat lorebooks named in `chat_metadata` to library sources; narrator speakers to a director voice; introducing a group member at its first post.
 - ST branch and checkpoint files linked as one history; other export formats.
+- Continuing an imported chat: 035's milestone 2 reads its transcript as the history before turn 1 and decides who heard it (until then NPCs hear none of it). Live play is 035's `turns/`, never transcript pages.
 - Milestone 2: proposed historical events, relations and memories with evidence and review, reconciled with V2 events and actor ids without duplicate scenes.
 - Milestone 3: multi-file, multi-era reconciliation with versioned historical evidence and verified rollback.
