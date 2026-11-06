@@ -961,7 +961,7 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
     marker_keys: dict[str, str] = {}  # every file of the marker, so a denial can still rewrite any of them
     if _marker_needed(plan, device, entries, files):
         marker_keys = bookkeeping.stage(txn, bookkeeping.changes(store, files, old, every=True))
-    delivery = kept_record.Delivery(store, plan.kept_records[device], plan.other(device), plan.devices, keeps)
+    delivery = kept_record.Delivery(plan, device, keeps)
     delivery.stage(txn)  # 028: a keep's delivery is recorded in the commit that writes it
     dropped: set[str] = set()
 

@@ -272,10 +272,11 @@ def render_pending(devices: tuple[str, str], entries: Mapping[str, Mapping[str, 
 
 @dataclass(frozen=True)
 class KeptEntry:
-    """One path's kept versions on this device. ``base`` scopes the dismissals: the archive base the
-    path's conflict stood on when they were made (``none``, ``agreed:<etag>`` or ``deleted:<etag>``),
-    ``None`` exactly when nothing is dismissed. The same bytes under another base belong to another
-    conflict, so a dismissal is honoured only on its own base."""
+    """One path's kept versions on this device. ``base`` is the archive base the path's conflict
+    stands on (``none``, ``agreed:<etag>`` or ``deleted:<etag>``) while the last sync that saw it
+    found it in conflict, ``None`` once it is not (or nothing is delivered): only then can a version
+    be dismissed. The same bytes under another base belong to another conflict, so a dismissal is
+    honoured only on its own base."""
 
     base: str | None
     #: the peer's versions a sync wrote here as the first copy of those bytes at this path, recorded in
@@ -328,10 +329,11 @@ def parse_keeps(data: bytes | None, devices: tuple[str, str]) -> KeepsView:
         valid = (_syncable(path) and isinstance(entry, Mapping)
                  and set(entry) == {"base", "delivered", "dismissed", "held"}
                  and all(_etag_list(entry[key]) for key in ("delivered", "dismissed", "held")))
-        if valid:  # one spelling: a base exactly when something is dismissed, and never an empty entry
+        if valid:  # one spelling: a base only beside a delivered version, a dismissal only on a base
             delivered, dismissed, held = (set(entry[key]) for key in ("delivered", "dismissed", "held"))  # type: ignore[index]
-            valid = ((is_base_token(entry["base"]) if dismissed else entry["base"] is None)  # type: ignore[index]
-                     and dismissed <= delivered and not held & delivered and bool(delivered or held))
+            base = entry["base"]  # type: ignore[index]
+            valid = ((base is None and not dismissed) or (is_base_token(base) and bool(delivered))) and (
+                dismissed <= delivered and not held & delivered and bool(delivered or held))
         if not valid:
             return KeepsView("ignored", MappingProxyType({}), f"bad entry for {path!r}", data)
         parsed[path] = KeptEntry(entry["base"], frozenset(entry["delivered"]), frozenset(entry["dismissed"]),  # type: ignore[index]
@@ -340,7 +342,7 @@ def parse_keeps(data: bytes | None, devices: tuple[str, str]) -> KeepsView:
 
 
 def render_keeps(devices: tuple[str, str], entries: Mapping[str, KeptEntry]) -> bytes:
-    body = {path: {"base": entry.base if entry.dismissed & entry.delivered else None,
+    body = {path: {"base": entry.base if entry.delivered else None,
                    "delivered": sorted(entry.delivered), "dismissed": sorted(entry.dismissed & entry.delivered),
                    "held": sorted(entry.held)}
             for path, entry in sorted(entries.items()) if entry.delivered or entry.held}

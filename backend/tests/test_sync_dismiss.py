@@ -123,6 +123,23 @@ def test_a_dismissal_ends_with_its_conflict_and_never_costs_the_other_devices_re
     assert conflict.code == "deleted" and conflict.dismissed == () and theirs in kept(desktop)
 
 
+def test_a_version_of_a_path_no_longer_in_conflict_is_never_dismissable(tmp_path):
+    """The desktop keeps the phone's version; then both devices settle on the same new bytes and the
+    conflict ends. The kept copy may now be the last copy of the phone's old version anywhere, so
+    it is not dismissed (the app would delete it): the record says the path is not in conflict."""
+    desktop, phone = _conflict(tmp_path)
+    theirs = _theirs(phone)
+    edit_instance(desktop, WREN_A, 20)
+    (phone.root / PATH).write_bytes((desktop.root / PATH).read_bytes())
+    assert sync(desktop, phone, handles()).conflict(PATH) is None
+    assert _copies((desktop, phone), theirs) == [str(slot) for slot in (desktop.root / ".conflicts").rglob("*")
+                                                 if slot.is_file() and slot.read_bytes() == theirs]
+    assert etag(theirs) in _entries(desktop)[PATH]["delivered"] and _entries(desktop)[PATH]["base"] is None
+    with pytest.raises(DismissRefused, match="no longer in conflict"):
+        dismiss(desktop, PHONE, PATH, etag(theirs), handle())
+    assert theirs in kept(desktop)
+
+
 def test_dismissing_twice_records_once(tmp_path):
     desktop, phone = _conflict(tmp_path)
     tag = etag(_theirs(phone))
