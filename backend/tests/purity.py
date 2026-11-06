@@ -74,7 +74,7 @@ ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.archaeologystore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       "grimoire.import_v1", "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1",
                       "grimoire.obstaclestore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
-                      "grimoire.play", "grimoire.runtime", "grimoire.scenestore",
+                      "grimoire.play", "grimoire.rebasestore", "grimoire.runtime", "grimoire.scenestore",
                       "grimoire.store", "grimoire.sync", "grimoire.testing"})
 
 
@@ -104,6 +104,8 @@ PURE_PACKAGES = (
     PurePackage("grimoire.intent", ("grimoire.intent",)),
     # World-optional chats (107): values, codec and navigation; the store-backed service is an adapter.
     PurePackage("grimoire.chats", ("grimoire.chats", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # Reviewed source rebase and chat-canon definitions (042): field review only; the store-backed service is an adapter.
+    PurePackage("grimoire.rebase", ("grimoire.rebase", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Character, scenario and lorebook cards (037): parse decoded documents, map to records; the importer is an adapter.
     # Its lore readers build 031's ``LoreEntry`` values, and 031 imports nothing of 037's: one direction.
     # It reads 018's slot vocabulary (``grimoire.images``) to name the slots card art fills (038).
