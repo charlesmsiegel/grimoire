@@ -21,10 +21,13 @@ made from bytes, never from timestamps:
   dismissal is dropped, so the same bytes in a later conflict are kept again. A record whose base
   is not the one this device's archive and marker now give the path is never trusted alone.
 
-The record is written in one 010 transaction, authorized like a keep: ``APPLY`` on the kept
-version's own address (``kept/<hash16>/<digest12>/<name>``), so a handle that may not write a
-kept version may not dismiss one either, and an approval policy applies as it does to any write.
-It is journaled as ``.sync`` state, so a crash leaves it either written or not. The kept files
+The record is written in one 010 transaction, authorized like a keep: ``APPLY`` on the address of
+the slot that holds the version (``kept/<hash16>/<digest12>[-N]/<name>``, one-to-one with the
+slot; slot 0's when none does), so a handle that may not write a kept version may not dismiss one
+either, and an approval policy applies as it does to any write. Every other slot it names safe to
+delete is authorized on its own address first, by a commit that keeps the bytes the slot already
+holds (rewriting nothing); a denial of any slot, even for a version already dismissed, refuses the
+whole dismissal before the record is written. It is journaled as ``.sync`` state, so a crash leaves it either written or not. The kept files
 themselves are not deleted (010 commits never delete); ``Dismissal.slots`` lists the ones holding
 those bytes: bytes a peer's sync delivered, held by no ``resolve`` here, so deleting them loses
 nothing the peer did not send.
@@ -37,7 +40,8 @@ from dataclasses import dataclass
 
 from grimoire.store import LibraryStore, NameCollision, StaleWrite, StoreError, WriteConflict, WriteDenied, etag
 from grimoire.store.jsonfmt import MAX_FILE_BYTES, is_etag
-from grimoire.store.layout import kept_address
+from grimoire.store.engine import MAX_CONFLICT_ATTEMPTS
+from grimoire.store.layout import conflict_parts, kept_address
 
 from . import bookkeeping
 from .documents import KeptEntry, check_device_id, keeps_name, render_keeps, syncable
@@ -73,6 +77,31 @@ def _persisted_base(store: LibraryStore, peer: str, devices: tuple[str, str], pa
         return None
     found = archive.entries.get(path)
     return archived_token(found, found)
+
+
+def _attempt(parts: tuple[str, ...], kept: str, slot: str) -> int:
+    """The slot number of ``slot``, one of ``kept_slots``' slots of the record at ``parts``."""
+    return next(attempt for attempt in range(MAX_CONFLICT_ATTEMPTS) if "/".join(conflict_parts(parts, kept, attempt)) == slot)
+
+
+def _authorize_slot(store: LibraryStore, path: str, slot: str, kept: str, handle: object,
+                    approvals: Mapping[str, str] | None) -> None:
+    """Authorize ``slot`` as ``APPLY`` on its own ``kept/...`` address by keeping, in that slot, the bytes
+    it already holds: a commit that rewrites nothing and fails if the slot changed meanwhile."""
+    try:
+        data = store.read_exact(slot)
+    except (NameCollision, StoreError, OSError) as error:
+        raise DismissRefused(f"a kept-version file of {path} cannot be read here ({slot}): {error}") from error
+    if data is None or etag(data) != kept:
+        raise SyncInterrupted(f"{slot} changed while {path} was dismissed; try again")
+    txn = store.transaction()
+    txn.keep_version(path, data, slot=_attempt(tuple(path.split("/")), kept, slot))
+    try:
+        txn.commit(handle, dict(approvals or {}))
+    except WriteDenied as error:
+        raise DismissRefused(f"dismissing {path} was not authorized for {slot}: {error}") from error
+    except (StaleWrite, WriteConflict) as error:
+        raise SyncInterrupted(f"{slot} changed while {path} was dismissed; try again: {error}") from error
 
 
 def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object,
@@ -126,7 +155,14 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
     if unreadable:  # it might hold anything, a hold even: never name the others safe to delete beside it
         raise DismissRefused(f"a kept-version file of {path} cannot be read here ({', '.join(unreadable)}); "
                              "dismiss it once every one reads again")
-    if kept in entry.dismissed:
+    # Each slot named safe to delete is authorized on its own address (one-to-one with the slot, as a keep
+    # is): a grant on one slot never makes another slot's file deletable. The record's own write takes
+    # the first slot's address (slot 0's when none stands); each other slot is authorized first by a
+    # commit that rewrites nothing (its bytes, compared at commit), so a denial leaves nothing recorded.
+    already = kept in entry.dismissed
+    for slot in slots[0 if already else 1:]:
+        _authorize_slot(store, path, slot, kept, handle, approvals)
+    if already:
         return Dismissal(peer, path, kept, slots, False)
     entries = {**view.entries, path: KeptEntry(entry.base, entry.delivered, entry.dismissed | {kept}, entry.held)}
     try:
@@ -137,7 +173,7 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
         raise DismissRefused("the kept-version record would exceed the file size limit")
     txn = store.transaction()
     txn.put_sync_state(keeps_name(peer), data, None if view.data is None else etag(view.data),
-                       authorize=kept_address(parts, kept))
+                       authorize=kept_address(parts, kept, _attempt(parts, kept, slots[0]) if slots else 0))
     try:
         txn.commit(handle, dict(approvals or {}))
     except WriteDenied as error:

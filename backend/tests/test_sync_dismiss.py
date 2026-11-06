@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from grimoire.store import LibraryStore, ProcessLocker, etag
+from grimoire.store.layout import conflict_parts, kept_address
 from grimoire.sync import (
     DismissRefused, SyncInterrupted, apply_sync, dismiss, identify, plan_sync, resolve, sync, sync_until_quiet,
 )
@@ -181,6 +182,53 @@ def test_a_handle_that_may_not_write_kept_versions_may_not_dismiss_one(tmp_path)
     with pytest.raises(DismissRefused, match="not authorized"):
         dismiss(desktop, PHONE, PATH, etag(_theirs(phone)), owner_handle("sources", "campaigns"))
     assert (desktop.root / RECORD).read_bytes() == record
+
+
+def _slot(number: int, data: bytes) -> str:
+    return "/".join(conflict_parts(tuple(PATH.split("/")), etag(data), number))
+
+
+def _granted(number: int, data: bytes):  # type: ignore[no-untyped-def]
+    """A handle that may write records and exactly one kept-version slot of ``data``: slot ``number``."""
+    return owner_handle("sources", "campaigns", str(kept_address(tuple(PATH.split("/")), etag(data), number)))
+
+
+@pytest.mark.parametrize("grant", [1, 0])
+def test_a_dismissal_is_authorized_on_the_slot_that_holds_the_version(tmp_path, grant):
+    """The person edited the desktop's kept copy in slot 0 by hand, so the next sync kept the phone's
+    version in slot 1. Dismissing it, and so naming slot 1's file safe to delete, takes a grant on slot
+    1's own address: a grant on slot 0 alone is refused and writes nothing."""
+    desktop, phone = _conflict(tmp_path)
+    theirs = _theirs(phone)
+    (desktop.root / _slot(0, theirs)).write_bytes(theirs.replace(b"4", b"5"))
+    sync(desktop, phone, handles())
+    assert (desktop.root / _slot(1, theirs)).read_bytes() == theirs
+    record = (desktop.root / RECORD).read_bytes()
+    if grant == 1:
+        assert dismiss(desktop, PHONE, PATH, etag(theirs), _granted(1, theirs)).slots == (_slot(1, theirs),)
+    else:
+        with pytest.raises(DismissRefused, match="not authorized"):
+            dismiss(desktop, PHONE, PATH, etag(theirs), _granted(0, theirs))
+        assert (desktop.root / RECORD).read_bytes() == record
+
+
+def test_every_slot_named_safe_to_delete_is_authorized(tmp_path):
+    """The person copied the kept file into a second slot: dismissing names both, so a grant on one slot
+    alone is refused, before and after the version is dismissed, and nothing is rewritten."""
+    desktop, phone = _conflict(tmp_path)
+    theirs = _theirs(phone)
+    (desktop.root / _slot(1, theirs)).write_bytes(theirs)
+    record = (desktop.root / RECORD).read_bytes()
+    with pytest.raises(DismissRefused, match="not authorized"):
+        dismiss(desktop, PHONE, PATH, etag(theirs), _granted(0, theirs))
+    assert (desktop.root / RECORD).read_bytes() == record
+    done = dismiss(desktop, PHONE, PATH, etag(theirs), handle())
+    assert done.wrote and sorted(done.slots) == sorted([_slot(0, theirs), _slot(1, theirs)])
+    for number in (0, 1):
+        with pytest.raises(DismissRefused, match="not authorized"):
+            dismiss(desktop, PHONE, PATH, etag(theirs), _granted(number, theirs))
+    assert not dismiss(desktop, PHONE, PATH, etag(theirs), handle()).wrote
+    assert [(desktop.root / slot).read_bytes() for slot in done.slots] == [theirs, theirs]
 
 
 def test_a_version_resolve_held_is_never_dismissable(tmp_path):
