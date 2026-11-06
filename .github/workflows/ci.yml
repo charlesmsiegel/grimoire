@@ -32,8 +32,9 @@ jobs:
     name: compat (${{ matrix.os }}, py${{ matrix.python }}${{ matrix.shard && format(', {0}', matrix.shard) || '' }})
     runs-on: ${{ matrix.os }}
     # Windows file I/O makes the crash-exploration tests several times slower (the whole suite took
-    # 23-27 minutes there, ~4 on Ubuntu), so Windows runs in three shards that together cover every
-    # test file: the crash and fault explorations, the replica-sync files, and the rest
+    # 23-27 minutes there, ~4 on Ubuntu), so Windows runs in four shards that together cover every
+    # test file: the store-backed crash explorations, the other crash and fault explorations, the
+    # replica-sync files, and the rest
     # (tests/conftest.py; docs/TESTING.md#ci-gate).
     timeout-minutes: 30
     strategy:
@@ -44,6 +45,9 @@ jobs:
         include:
           - os: macos-latest
             python: "3.11"
+          - os: windows-latest
+            python: "3.11"
+            shard: store-explorations
           - os: windows-latest
             python: "3.11"
             shard: explorations

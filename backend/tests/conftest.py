@@ -7,11 +7,12 @@ import pytest
 
 pytest_plugins = ["pytester"]
 
-#: CI shards (docs/TESTING.md#ci-gate): ``GRIMOIRE_TEST_SHARD=explorations`` runs only the crash and
-#: fault explorations (files named ``*recovery*`` or ``*faults*``), ``sync`` runs the other
+#: CI shards (docs/TESTING.md#ci-gate): the crash and fault explorations (files named ``*recovery*``
+#: or ``*faults*``) run in two shards, ``GRIMOIRE_TEST_SHARD=store-explorations`` for the store-backed
+#: ones (also named ``*store*``) and ``explorations`` for the others; ``sync`` runs the other
 #: replica-sync files (named ``*sync*``), and ``rest`` runs every other file. Each file belongs to
 #: exactly one shard by its name, so together they always run the whole suite; unset runs everything.
-SHARDS = ("explorations", "sync", "rest")
+SHARDS = ("store-explorations", "explorations", "sync", "rest")
 
 
 def is_exploration(name: str) -> bool:
@@ -19,9 +20,10 @@ def is_exploration(name: str) -> bool:
 
 
 def shard_of(name: str) -> str:
-    """The one shard a test file runs in; explorations win, so ``test_sync_faults.py`` is one."""
+    """The one shard a test file runs in; explorations win, so ``test_sync_faults.py`` is one, and a
+    store-backed exploration such as ``test_store_recovery.py`` runs in ``store-explorations``."""
     if is_exploration(name):
-        return "explorations"
+        return "store-explorations" if "store" in name else "explorations"
     return "sync" if "sync" in name else "rest"
 
 
