@@ -146,11 +146,15 @@ PURE_PACKAGES = (
     PurePackage("grimoire.voice", ("grimoire.voice", "grimoire.core", "grimoire.evals.text",
                                    "grimoire.evals.checks"),
                 never_import=("grimoire.core.inference",)),
+    # NPC goals (039): authored agendas and the deterministic policy that chooses from the NPC's own
+    # knowledge. It calls no model, so it never touches the inference contracts.
+    PurePackage("grimoire.goals", ("grimoire.goals", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Per-NPC generation (027): plans, voices, briefs and screens each call; the runtime is an adapter.
-    # Briefs render 031's packs (its value types), and 031 imports nothing of 027's: one direction.
+    # Briefs render 031's packs and 039's choices (their value types), and neither imports anything of
+    # 027's: one direction.
     PurePackage("grimoire.generation", ("grimoire.generation", "grimoire.core", "grimoire.core.inference",
                                         "grimoire.voice", "grimoire.evals.text", "grimoire.evals.checks",
-                                        "grimoire.context")),
+                                        "grimoire.context", "grimoire.goals")),
     # Offline evaluation: of the domain core it uses only the inference contracts (sprint 015);
     # only its loader and CLI read files.
     PurePackage("grimoire.evals", ("grimoire.evals", "grimoire.core.inference"),

@@ -3,6 +3,10 @@
 > **V2 scope correction:** An NPC may have durable goals, but mere presence never launches paid background planning. Local/periodic thought is optional and requires a visible budget. See the [V2 ordered roadmap](../README.md) for hard prerequisites and delivery wave; older references to existing V1 systems are porting targets, not the V2 starting baseline.
 
 
+**Status:** first slice implemented ([GOALS](../../GOALS.md)): an authored, campaign-scoped `Agenda` (goals with priorities, approaches with typed conditions, limits) and a deterministic policy, `choose`, that picks what one director NPC pursues from its own knowledge projection and the scene's cast, with no model call. The choice reaches the NPC's one ordinary generation call through `npc_brief(..., intention=)` ([GENERATION](../../GENERATION.md#intentions-039)). Milestone 1 is proven, and so is milestone 2's recorded and explained choice against a planner's wish (`desired`, `explain`); milestone 2's temporal and resource consequences are not.
+
+**Planned later work:** storing agendas as a campaign record family (and in `syncable()`), editing them and tracking goal progress; commitments and deadlines; feasibility from abilities (025), holdings (023), possessions (034) and location and sight (041); consequences of autonomous actions in time and resources; milestone 3's longer plans and self-initiated hooks. Model-assisted planning or decisions are 045's, optional and capped.
+
 **Outcome:** NPCs choose credible behavior from motives, knowledge and immediate circumstances instead of following a scene script.
 
 ## Scope
