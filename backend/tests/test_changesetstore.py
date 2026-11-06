@@ -11,6 +11,7 @@ from grimoire.changesets import ChangeSet, ChangeSetError
 from grimoire.changesetstore import ChangeSetConflict
 from grimoire.security import Authorizer, Grant, Permission, ResourcePath
 from grimoire.store import LibraryStore, RecordEnvelope, WriteDenied
+from grimoire.store.errors import AuthorityUnavailable
 from grimoire.testing.fileops import snapshot
 
 from changeset_fixtures import (
@@ -396,3 +397,34 @@ def test_an_approval_whose_rollback_fails_is_still_withdrawn_before_reject_succe
     flaky.broken = False
     lib.reject(review)
     assert review.state == "rejected" and inner.pending_approvals() == ()
+
+
+class PoisonedOnRevoke:
+    """Like a durable authority whose ledger write fails while revoking: memory says revoked,
+    the durable ledger does not, and from then on it is not usable."""
+
+    def __init__(self, inner: Authorizer) -> None:
+        self.inner, self.usable = inner, True
+
+    def register_approval(self, approval) -> None:
+        self.inner.register_approval(approval)
+
+    def pending_approvals(self):
+        return self.inner.pending_approvals()
+
+    def revoke_approval(self, approval_id: str) -> None:
+        self.inner.revoke_approval(approval_id)  # in memory only
+        self.usable = False
+        raise OSError("ledger append failed")
+
+
+def test_a_withdrawal_an_unusable_authority_cannot_confirm_never_counts(store):
+    inner = worker_authority()
+    lib = library(store, inner.handle_for(WORKER))
+    review = lib.review(move_the_guild(lib))
+    authority = PoisonedOnRevoke(inner)
+    lib.approve(review, authority, approved_by=OWNER, new_id=ids())
+    for _ in range(2):  # its pending list no longer shows the approval, but nothing durable says so
+        with pytest.raises((OSError, AuthorityUnavailable)):
+            lib.reject(review)
+    assert review.state == "open"

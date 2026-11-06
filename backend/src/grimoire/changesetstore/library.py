@@ -29,6 +29,7 @@ from grimoire.store import (
     ImpreciseNumber, InstanceIdConflict, InvalidEnvelope, InvalidSourceState, LibraryStore, NameCollision, RecordEnvelope, RecordNotFound,
     SourceManifest, StaleWrite, StoreError, StoredSource, UnstorableIdentifier, WriteDenied,
 )
+from grimoire.store.errors import AuthorityUnavailable
 from grimoire.store.layout import definition_parts, manifest_parts
 
 _REVISION = re.compile(r"r([0-9]{1,9})")
@@ -494,7 +495,13 @@ def _head_of(manifest: SourceManifest, entities: Mapping[tuple[str, str], tuple[
 
 def _revoke(authority: object, approval_id: str) -> None:
     """Withdraw an approval still pending; one already consumed or revoked has nothing to withdraw.
-    A failure of the authority itself (``AuthorityUnavailable``) propagates."""
+    A failure of the authority itself (``AuthorityUnavailable``) propagates.
+
+    A durable authority that failed to persist (``usable`` is False) may already show an approval
+    as revoked in memory while its ledger still holds it pending, so its pending list is not
+    trusted: nothing counts as withdrawn until it can be reopened and asked again."""
+    if getattr(authority, "usable", True) is False:
+        raise AuthorityUnavailable("the authority cannot confirm a withdrawal; reopen it and reject again")
     pending = {approval.approval_id for approval in authority.pending_approvals()}  # type: ignore[attr-defined]
     if approval_id in pending:
         authority.revoke_approval(approval_id)  # type: ignore[attr-defined]
