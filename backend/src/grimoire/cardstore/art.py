@@ -16,8 +16,8 @@ slot, Sprint 038). A slot an import no longer fills keeps its placement and its 
 the slot is still the card's own if the asset comes back.
 
 Identical bytes are one image object per source (and one blob per library), whichever assets
-carry them: the portrait's id is ``portrait-<sha256[:16]>`` (as Sprint 037 named it), any other
-picture's ``art-<sha256[:16]>``.
+carry them: an import reuses the object already stored for them, else names the portrait's
+``portrait-<sha256[:16]>`` (as Sprint 037 did) and any other picture's ``art-<sha256[:16]>``.
 """
 
 from __future__ import annotations
@@ -169,12 +169,16 @@ def _damaged(store: LibraryStore, blob: ImageBlob) -> bool:
     return False
 
 
-def _provenance(piece: ArtPiece) -> dict[str, object] | None:
+def _provenance(piece: ArtPiece, sha: str | None) -> dict[str, object] | None:
+    """An asset placement's provenance: its asset and, when it shows a picture, that picture's
+    sha256, the slot's own evidence of what an import placed there (``_owned``)."""
     if piece.from_portrait:
         return None  # Sprint 037's portrait placement, exactly as it was written
     asset: dict[str, object] = {"index": piece.index, "type": piece.asset_type}
     if piece.name is not None:
         asset["name"] = piece.name
+    if sha is not None:
+        asset["sha256"] = sha
     found: dict[str, object] = {"origin": ASSET_ORIGIN, "x-card-asset": asset}
     if piece.reason is not None:
         found["note"] = NOTES[piece.reason]
@@ -189,7 +193,7 @@ def stage_art(images: ImageLibrary, source_id: str, subject: SourceRef, pieces: 
     portrait = next((piece for piece in pieces if piece.from_portrait), None)
     portrait_sha = _sha(portrait.data) if portrait is not None and portrait.data is not None else None
     if portrait_sha is not None:
-        stage.portrait = ImageRef(source_id, f"portrait-{portrait_sha[:16]}")
+        stage.portrait = _image_for(images.store, source_id, portrait_sha, portrait_sha)
     for piece in pieces:
         reason, ref, blob = piece.reason, None, None
         if piece.data is not None:
@@ -203,7 +207,8 @@ def stage_art(images: ImageLibrary, source_id: str, subject: SourceRef, pieces: 
         if blob is not None:
             ref = _image_for(images.store, source_id, blob.sha256, portrait_sha)
         role, expression = slot_role(piece.slot), slot_expression(piece.slot)
-        provenance = _provenance(piece if reason == piece.reason else _with_reason(piece, reason))
+        provenance = _provenance(piece if reason == piece.reason else _with_reason(piece, reason),
+                                 blob.sha256 if blob is not None else None)
         if ref is not None:
             desired = Placement("set", role, ref, expression=expression, provenance=provenance)
             text = str(ref)
@@ -252,20 +257,26 @@ def stage_art(images: ImageLibrary, source_id: str, subject: SourceRef, pieces: 
 
 
 def _image_for(store: LibraryStore, source_id: str, sha: str, portrait_sha: str | None) -> ImageRef:
-    """The one image object for these bytes in the card source: the portrait's when they are the
-    portrait's, or already stored as it; else ``art-<sha16>``. So a rerun with or without the
-    portrait never mints a second object for the same bytes."""
-    as_portrait = ImageRef(source_id, f"portrait-{sha[:16]}")
-    if sha == portrait_sha or _image_present(store, as_portrait):
+    """The one image object for these bytes in the card source: the one already stored for them
+    (``portrait-<sha16>`` first, then ``art-<sha16>``), else ``portrait-<sha16>`` for the
+    portrait's bytes and ``art-<sha16>`` for any other. So the same bytes never get a second
+    object, whichever import order makes them the portrait or an asset, and a placement showing
+    them (an individual's ``adjust`` of it included) keeps its picture."""
+    as_portrait, as_art = ImageRef(source_id, f"portrait-{sha[:16]}"), ImageRef(source_id, f"art-{sha[:16]}")
+    if _image_present(store, as_portrait):
         return as_portrait
-    return ImageRef(source_id, f"art-{sha[:16]}")
+    if _image_present(store, as_art):
+        return as_art
+    return as_portrait if sha == portrait_sha else as_art
 
 
 def _owned(existing: Placement, slot: str, last: str | None, source_id: str) -> bool:
     """Whether ``existing`` is still the card's own: what the last import recorded for the slot or,
     when the record has no entry (an older build rewrote it), a placement this module writes for a
-    card asset (its provenance, its shape and one of the card source's own picture ids). A crop,
-    a focus or another picture is a person's choice."""
+    card asset: its provenance, its shape, and a picture of the card source whose id is the one
+    for the sha256 that same provenance says the import placed (so a person's other picture,
+    even another imported one under the old provenance, is not). A crop, a focus or another
+    picture is a person's choice."""
     if last is not None:
         return _matches(existing, slot, last)
     provenance = existing.provenance
@@ -274,9 +285,11 @@ def _owned(existing: Placement, slot: str, last: str | None, source_id: str) -> 
         return False
     if existing.mode == UNRESOLVED:
         return _matches(existing, slot, UNRESOLVED)
-    image = existing.image
-    return image is not None and image.scope == source_id and _CARD_IMAGE_ID.fullmatch(image.image_id) is not None \
-        and _matches(existing, slot, str(image))
+    image, sha = existing.image, provenance["x-card-asset"].get("sha256")
+    if image is None or image.scope != source_id or not isinstance(sha, str) \
+            or _CARD_IMAGE_ID.fullmatch(image.image_id) is None or image.image_id.split("-", 1)[1] != sha[:16]:
+        return False
+    return _matches(existing, slot, str(image))
 
 
 def _with_reason(piece: ArtPiece, reason: str | None) -> ArtPiece:

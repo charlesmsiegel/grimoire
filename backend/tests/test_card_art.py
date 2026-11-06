@@ -8,6 +8,7 @@ a valid magic header, and nothing is fetched from anywhere.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from dataclasses import replace
 
@@ -97,7 +98,8 @@ def test_card_art_becomes_qualified_placements_and_missing_pictures_stay_unresol
     assert images.read_image_bytes(avatar.image) == PORTRAIT
     assert (smile.role, smile.layer) == ("expression", "source") and images.read_image_bytes(smile.image) == SMILE_PNG
     assert smile.provenance == {"origin": "character card asset",
-                                "x-card-asset": {"index": 1, "type": "emotion", "name": "Smile"}}
+                                "x-card-asset": {"index": 1, "type": "emotion", "name": "Smile",
+                                                 "sha256": hashlib.sha256(SMILE_PNG).hexdigest()}}
     assert grin.image == smile.image  # identical bytes: one image object, one blob
     assert shown.slot("background").role == "gallery"
     assert images.read_image_bytes(shown.slot(FROWN).image) == FROWN_GIF
@@ -320,3 +322,28 @@ def test_art_an_older_build_left_unrecorded_is_still_the_cards_and_a_crop_is_sti
     statuses = {entry.slot: entry.status for entry in stage.slots}
     assert statuses[SMILE] == "placed" and statuses[FROWN] == "hand_edited"
     assert etag in {expected for slot, _, expected in stage.places if slot == SMILE}
+
+
+def test_bytes_that_later_become_the_portrait_keep_their_picture_and_an_individuals_crop(store):
+    same = [{"type": "emotion", "uri": data_uri(PORTRAIT), "name": "smile"}]
+    land(store, encode(card(assets=same)))  # no portrait yet: the sprite's bytes get an object
+    _individuals(store)
+    images = _images(store)
+    sprite = images.effective_placements(MARA).slot(SMILE).image
+    images.place(FIRST, SMILE, Placement("adjust", image=sprite, crop=Crop(0, 0, 5000, 5000)), None).commit()
+    planned = land(store, encode(card(assets=same)), portrait=PORTRAIT, target="card:mara-vell")
+    assert {entry.slot: entry.status for entry in planned.report.art}[SMILE] == "unchanged"
+    assert planned.report.portrait == sprite  # one object for the bytes, in either order
+    assert images.effective_placements(MARA).slot(PORTRAIT_SLOT).image == sprite
+    assert images.effective_placements(FIRST).slot(SMILE).layer == "campaign_adjusted"
+
+
+def test_without_a_record_another_imported_picture_in_a_slot_is_a_persons_choice(store):
+    land(store, encode(card(assets=ASSETS)), portrait=PORTRAIT)
+    images = _images(store)
+    smile, etag = images.read_placement(PlacementRef(MARA, SMILE))
+    frown = images.effective_placements(MARA).slot(FROWN).image
+    images.place(MARA, SMILE, replace(smile, image=frown), etag).commit()  # its provenance kept as it was
+    pieces, _ = card_art(parse_card(json.loads(encode(card(assets=ASSETS)))), PORTRAIT)
+    stage = stage_art(images, "card:mara-vell", MARA, pieces, {}, False, {}, str)
+    assert {entry.slot: entry.status for entry in stage.slots}[SMILE] == "hand_edited"
