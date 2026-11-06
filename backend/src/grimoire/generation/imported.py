@@ -37,23 +37,36 @@ USER_STAND_IN = "you"
 #: Why an imported revision has no profile at all.
 NO_VOICE_TEXT = "no_voice_text"
 #: Reasons a ``VoiceNote`` records.
-NOTE_REASONS = ("truncated", "blank", "duplicate", "over_cap", "description_fallback", "extensions_not_carried")
+NOTE_REASONS = ("truncated", "blank", "duplicate", "over_cap", "description_fallback", "extensions_not_carried",
+                "card_unreadable")
 
 _START = re.compile(r"<start>", re.IGNORECASE)
 _CHAR_MACRO = re.compile(r"\{\{\s*char\s*\}\}|<bot>", re.IGNORECASE)
 _USER_MACRO = re.compile(r"\{\{\s*user\s*\}\}|<user>", re.IGNORECASE)
 _MACRO = r"\{\{\s*\w+\s*\}\}|<\w+>"
 _NOT_CHAR = r"(?!\{\{\s*char\s*\}\}|<bot>)"
-#: Markup, a speaker, markup, an optional ``(aside)``, markup and an ASCII or full-width colon. A speaker
-#: is a macro or one to four words starting with a letter ("Captain of the Guard"). Any such label
-#: starts a new turn, so a line that might be someone else's never joins this character's: fail closed.
-_LABEL = re.compile(r"^\s*[*_]*\s*(" + _MACRO + r"|[^\W\d_][\w'.-]*(?: [^\W\d_][\w'.-]*){0,3})[*_]*\s*"
-                    r"(?:\([^)\n]*\)\s*)?[*_]*\s*[:：](?:[*_]+(?=\s|$))?")
-#: A line that opens with any macro but ``{{char}}``/``<BOT>`` (``{{user}} nods.``) is not this turn's.
-_OTHER_OPENING = re.compile(r"^\s*[*_]*\s*" + _NOT_CHAR + "(?:" + _MACRO + ")", re.IGNORECASE)
-#: Another speaker's macro label inside a line ("Hi. {{user}}: ...") ends the turn where it starts.
-_OTHER_INLINE = re.compile(_NOT_CHAR + "(?:" + _MACRO + r")[*_]*\s*(?:\([^)\n]*\)\s*)?[*_]*\s*[:：]",
+#: Characters that may wrap a speaker: markup, brackets, quotes and a ``>`` quote mark. Each run of them
+#: is one character class, never ``\s*[*_]*\s*``: adjacent overlapping runs backtrack quadratically.
+_OPEN = r"[\s*_>\[(\"'“”‘’«]*"
+_CLOSE = r"[\s*_\])\"'“”‘’»]*"
+_ASIDE = r"(?:\([^)\n]{0,200}\)[\s*_]*)?"
+#: Wrapping, a speaker, wrapping, an optional ``(aside)`` and an ASCII or full-width colon. A speaker is
+#: a macro or one to four words ("Captain of the Guard"). Any such label starts a new turn.
+_LABEL = re.compile("^" + _OPEN + "(" + _MACRO + r"|[^\W_][\w'.-]*(?: [^\W_][\w'.-]*){0,3})" + _CLOSE
+                    + _ASIDE + r"[:：](?:[*_]+(?=\s|$))?")
+#: Another speaker's macro label inside the labelled line ("Hi. [{{user}}]: ...") ends the turn there.
+_OTHER_INLINE = re.compile(r"[\[(\"'“‘«]?" + _NOT_CHAR + "(?:" + _MACRO + ")" + _CLOSE + _ASIDE + "[:：]",
                            re.IGNORECASE)
+#: Anything in a continuation line that might be someone else's: a macro or an angle tag anywhere, a
+#: colon early in the line, a dash separator early in the line ("User - ...", "Anon — ..."), or a
+#: wrapped token opening the line followed by a separator ("[Anon] - ...").
+_ANY_MACRO = re.compile(r"\{\{|\}\}|<\s*/?[A-Za-z]")
+_EARLY = 64
+_EARLY_SEPARATOR = re.compile(r"[:：]|\s[-–—]+\s|[–—]")
+_WRAPPED_OPENING = re.compile(r"^[\s*_>]*[\[(\"'“‘«][^\])\"'”’»\n]{1,80}[\])\"'”’»]" + r"[\s*_]*(?:[:：]|[-–—])")
+#: Lines are cut before matching: no turn keeps more than 600 characters, so nothing past twice that
+#: can change what is kept, and a huge line costs no more than a short one.
+_LINE_CAP = 2 * MAX_EXAMPLE_CHARS
 _SENTENCE_END = re.compile(r"(?<=[.!?…])([\"'”’)\]]*)\s+")  # group 1: closing quotes, kept
 #: Description sentences that say something about speech; the rest of a description is biography,
 #: which the brief already shows as context. Only words that are about talking count, so a "quiet
@@ -78,7 +91,7 @@ _ASPECTS = (
 class VoiceNote:
     """Why one piece of imported text was cut, skipped or used as a fallback; never the text itself.
 
-    ``field`` is ``mes_example``, ``personality``, ``description`` or ``extensions``; ``index`` is the
+    ``field`` is ``mes_example``, ``personality``, ``description``, ``extensions`` or ``card``; ``index`` is the
     1-based position of the turn or sentence in that field (0: the whole field).
     """
 
@@ -183,39 +196,52 @@ def _aspect(text: str, default: str) -> str:
 def example_lines(examples: str, name: str) -> list[str]:
     """The character's own turns in a ``mes_example``, in order, with macros filled in.
 
-    Blocks are split on ``<START>``. A turn begins at a speaker label (see ``_LABEL``) and runs to the
-    next one; only turns labelled ``{{char}}``, ``<BOT>`` or the character's own name are kept. The
-    rules fail closed, because a line wrongly kept puts someone else's words, maybe a secret, in this
-    voice: any label, a line opening with another macro (``{{user}} nods.``) or another speaker's macro
-    label inside a line ends the turn, and what follows is dropped, never appended. So a line of the
-    character's own that looks like a label ("Remember: the tide waits.") is dropped too. Text before
-    any label is not a turn. ``{{char}}`` becomes the name and ``{{user}}`` becomes ``you``.
+    Blocks are split on ``<START>``. A turn begins at a speaker label (see ``_LABEL``) and runs over the
+    unlabelled lines after it; only turns labelled ``{{char}}``, ``<BOT>`` or the character's own name
+    are kept. The rule fails closed by construction, because a line wrongly kept puts someone else's
+    words, maybe a secret, in this voice: a continuation line is kept only when it holds no macro or
+    angle tag at all, no colon or dash separator in its first 64 characters, and does not open with a
+    wrapped token and a separator (see ``_continues``). Any other line ends the turn and what follows
+    is dropped, never appended. The labelled line itself is cut at another speaker's macro label. So
+    some of the character's own lines are dropped too ("Remember: the tide waits.", "*{{char}}
+    smiles.*"): that is the price. Text before any label is not a turn. ``{{char}}`` becomes the name
+    and ``{{user}}`` becomes ``you``.
     """
     own = normalize(name)
     turns: list[str] = []
     for block in _START.split(examples.replace("\r\n", "\n").replace("\r", "\n")):
         current: list[str] | None = None
         for line in block.split("\n"):
+            line = line[:_LINE_CAP]
             label = _LABEL.match(line)
             if label is not None:
                 if current is not None:
                     turns.append(" ".join(current))
                 speaker = label.group(1)
                 mine = bool(_CHAR_MACRO.fullmatch(speaker)) or normalize(speaker) == own
-                current, line = ([], line[label.end():]) if mine else (None, "")
-            elif current is not None and _OTHER_OPENING.match(line):
-                turns.append(" ".join(current))
                 current = None
-            if current is None:
-                continue
-            other = _OTHER_INLINE.search(line)
-            current.append(line[:other.start()].strip() if other else line.strip())
-            if other:
-                turns.append(" ".join(current))
-                current = None
+                if mine:
+                    rest = line[label.end():]
+                    other = _OTHER_INLINE.search(rest)
+                    current = [rest[:other.start()].strip() if other else rest.strip()]
+                    if other:
+                        turns.append(" ".join(current))
+                        current = None
+            elif current is not None:
+                if _continues(line):
+                    current.append(line.strip())
+                else:
+                    turns.append(" ".join(current))
+                    current = None
         if current is not None:
             turns.append(" ".join(current))
     return [_one_line(_USER_MACRO.sub(USER_STAND_IN, _CHAR_MACRO.sub(name, turn))) for turn in turns]
+
+
+def _continues(line: str) -> bool:
+    """Whether an unlabelled line may join the turn above it: only when nothing in it could be a label."""
+    return not (_ANY_MACRO.search(line) or _EARLY_SEPARATOR.search(line[:_EARLY])
+                or _WRAPPED_OPENING.match(line))
 
 
 class _Builder:

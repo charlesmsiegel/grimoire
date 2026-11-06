@@ -9,6 +9,7 @@ is authored by hand. Every card and V1 library is synthetic. No paid model is ca
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import replace
 
 import pytest
@@ -303,6 +304,14 @@ def test_only_imported_character_revisions_derive_a_voice():
     assert derive_voice(v1_style, (v1_voice_texts,)).reason == NO_VOICE_TEXT
 
 
+def test_a_v1_card_nested_too_deep_to_parse_speaks_from_its_description():
+    deep = '{"data": {"mes_example": "{{char}}: Hi.", "extensions": ' + "[" * 100000 + "]" * 100000 + "}}"
+    v1_style = replace(definition_of(V3), extras={"v1": {"legacy_id": "v1:a:x.json", "text": deep}})
+    derived = derive_voice(v1_style, (v1_voice_texts,))
+    assert VoiceNote("card", 0, "card_unreadable") in derived.notes
+    assert [a.anchor_id for a in derived.profile.anchors] == ["description-0"] and not derived.profile.examples
+
+
 # -- example lines fail closed --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("text", [
@@ -315,6 +324,19 @@ def test_only_imported_character_revisions_derive_a_voice():
     "<START>\n{{char}}: Hello there.\n{{user}} leans in and names the king.",
     "<START>\n{{char}}: Hello there. {{user}}: and the vault code.",
     "<START>\n{{char}}: Hello there.\n<USER>: the vault code.",
+    "<START>\n{{char}}: Hello there.\n[{{user}}]: The vault code is 4471.",
+    '<START>\n{{char}}: Hello there.\n"{{user}}": The vault code is 4471.',
+    "<START>\n{{char}}: Hello there.\n[Anon]: my secret",
+    "<START>\n{{char}}: Hello there.\n2B: I am an android.",
+    "<START>\n{{char}}: Hello there.\n\U0001f5e1\ufe0f Guard: Drop it.",
+    "<START>\n{{char}}: Hello there.\nThe Captain of the Guard: Arrest them all.",
+    "<START>\n{{char}}: Hello there.\nUser - my secret plan",
+    "<START>\n{{char}}: Hello there.\nAnon \u2014 my secret",
+    "<START>\n{{char}}: Hello there.\n[Anon] - my secret",
+    "<START>\n{{char}}: Hello there.\n> {{user}}: quoted secret",
+    "<START>\n{{char}}: Hello there.\nshe whispers to {{user}} the secret",
+    "<START>\n{{char}}: Hello there. [{{user}}]: and the vault code.",
+    '<START>\n{{char}}: Hello there. "{{user}}" (aside): and the vault code.',
 ])
 def test_another_speakers_line_never_joins_the_characters_turn(text):
     assert example_lines(text, "Seraphine") == ["Hello there."]
@@ -323,13 +345,35 @@ def test_another_speakers_line_never_joins_the_characters_turn(text):
 @pytest.mark.parametrize("text, expected", [
     ("<START>\n{{user}}: Hm?\n{{char}}:answer without a space", ["answer without a space"]),
     ("<START>\n**{{char}}:** Bold label.", ["Bold label."]),
-    ("<START>\n{{char}} (quietly): Go.\n*{{char}} smiles.*", ["Go. *Seraphine smiles.*"]),
+    ("<START>\n{{char}} (quietly): Go.\n*She smiles.*", ["Go. *She smiles.*"]),
+    ('<START>\n[{{char}}]: Bracketed.\n"Seraphine": Quoted.', ["Bracketed.", "Quoted."]),
+    ("<START>\n{{char}}: A long thought runs on, past the first sixty-four characters: still mine.",
+     ["A long thought runs on, past the first sixty-four characters: still mine."]),
     ("<START>\n**Seraphine:** By name.\n{{char}}\uff1aFull width.", ["By name.", "Full width."]),
     # a line of her own shaped like a label is dropped too: the fail-closed price
     ("<START>\n{{char}}: Listen.\nRemember: the tide waits.", ["Listen."]),
+    ("<START>\n{{char}}: Go.\n*{{char}} smiles.*", ["Go."]),
 ])
 def test_the_characters_own_turns_are_kept_with_their_labels_removed(text, expected):
     assert example_lines(text, "Seraphine") == expected
+
+
+@pytest.mark.parametrize("text", [
+    "<START>\n" + " " * 65536 + "x",
+    "<START>\n{{char}}: hi\n<a>" + " " * 65536 + "x",
+    "<START>\n{{char}}: hi {{user}}" + " " * 65536 + ": x",
+    "<START>\n" + "*" * 65536 + "{{char}}" + " " * 65536 + ":",
+])
+def test_a_huge_line_costs_no_more_than_a_short_one(text):
+    started = time.perf_counter()
+    lines = example_lines(text, "S")
+    assert time.perf_counter() - started < 0.5
+    assert all(len(line) <= 2 * 600 for line in lines)
+    long = definition_of(card(V3, mes_example=text, personality=" " * 65536 + "Wry.",
+                              description="A " + " " * 65536 + "voice."))
+    started = time.perf_counter()
+    derive_voice(long)
+    assert time.perf_counter() - started < 0.5
 
 
 # -- derived portrayals over a derived card voice -------------------------------------------------------

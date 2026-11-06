@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from grimoire.core.entity import EntityDefinition
 from grimoire.core.identity import LegacyId
 from grimoire.core.snapshot import EffectiveSnapshot
-from grimoire.generation import SnapshotVoices, VoiceTexts, imported_source, text_of
+from grimoire.generation import SnapshotVoices, VoiceNote, VoiceTexts, imported_source, text_of
 from grimoire.voice import VoiceCatalog
 
 PERSONA_FORMAT = "persona_md"
@@ -26,7 +26,7 @@ def v1_voice_texts(definition: EntityDefinition) -> VoiceTexts | None:
 
     A persona (``persona_md``) has only its description, which 026 already took from its body. A card
     that does not parse as a JSON object speaks from its description alone, like a card with no
-    example messages.
+    example messages; one nested too deep to parse does too, noted ``card_unreadable``.
     """
     v1 = definition.extras.get("v1")
     if not (isinstance(v1, Mapping) and isinstance(v1.get("legacy_id"), str) and isinstance(v1.get("text"), str)):
@@ -38,6 +38,8 @@ def v1_voice_texts(definition: EntityDefinition) -> VoiceTexts | None:
         data = json.loads(v1["text"]).get("data")
     except (ValueError, AttributeError):
         data = None
+    except RecursionError:  # nested past what json can parse: one bad card must not stop the catalog
+        return VoiceTexts(description=definition.description, notes=(VoiceNote("card", 0, "card_unreadable"),))
     if not isinstance(data, Mapping):
         return VoiceTexts(description=definition.description)
     try:
@@ -45,7 +47,11 @@ def v1_voice_texts(definition: EntityDefinition) -> VoiceTexts | None:
     except ValueError:
         card_version = None
     examples = text_of(data.get("mes_example"))
-    imported, notes = imported_source(fmt, card_version, examples, data.get("extensions"))
+    try:
+        imported, notes = imported_source(fmt, card_version, examples, data.get("extensions"))
+    except RecursionError:  # extensions that parsed but nest too deep to copy: the verbatim text keeps them
+        imported, notes = imported_source(fmt, card_version, examples, {})
+        notes = (*notes, VoiceNote("extensions", 0, "extensions_not_carried"))
     return VoiceTexts(examples, text_of(data.get("personality")), definition.description, imported, notes)
 
 
