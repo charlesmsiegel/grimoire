@@ -14,6 +14,8 @@ All scenarios are synthetic and every model call is scripted.
 - **A world-less card chat.** [037](CARDS.md)'s Mara Vell card with its lorebook, and Anya Rook as the persona. The card's first greeting opens the chat; asking about the lighthouse triggers the card's lore in Mara's prompt. After a whisper, a second card (Tamsin Hale) is attached mid-chat. Tamsin's first prompt holds what was said since she arrived, and nothing before.
 - **A scenario-only chat** (Storm over Port Vell) with no NPC: the only generation is a director reply the player asks for, and the policy allows.
 
+**Across real restarts** (`backend/tests/test_scene_restart.py`). The same three chats, with every phase in a new Python process that ends with `os._exit` (nothing closed, as when the app is killed), one of them killed inside `generate` after its `running` take was written: each chat goes on exactly where it stopped, the killed run is reported `interrupted` and superseded, and the scenario-only chat gets a new director reply.
+
 Each speaking NPC gets its own call, with its own voice, its own [031](CONTEXT.md) pack and only the lines it heard. Every call's attempts and token usage are stored with its take, even when the turn halted or went stale.
 
 ## A turn
