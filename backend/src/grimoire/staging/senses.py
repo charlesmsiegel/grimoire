@@ -383,7 +383,8 @@ def perceptions(stage: Stage, event: Event, *, area: str, percept: str, provenan
     does not change who perceives. ``percept`` is sensory register only (012's rule). The stage must be the scene at the event's own
     sequence (``stale_stage`` otherwise; ``Stage.at`` moves a stage forward when nothing changed), and in
     the event's scene when the event names one (``scene_mismatch``). Witnesses resting on assumed staging
-    (an assumed placement of any actor on stage, or an assumed way between them and ``area``) are
+    (an assumed placement of any actor on stage, an assumed way between them and ``area``, or the
+    assumed absence of an actor off stage) are
     ``rests_on_assumption`` unless ``allow_assumed``. 020 stores the result unchanged. An actor who had
     left, stood behind a shut door or was inside a thing gets nothing, and so holds no evidence of the
     event. Witnesses are judged on the stage at the event's sequence, after any change the event made.
@@ -418,14 +419,15 @@ def custody_divergence(stage: Stage, holders: Mapping[InstanceRef, InstanceRef],
                        here: tuple[InstanceRef, ...] = ()) -> tuple[InstanceRef, ...]:
     """The unique items whose staging disagrees with their canonical holder, sorted by reference text.
 
-    ``holders`` maps each 034 unique item to its possession record's holder (034 is the authority for
-    that). ``here`` lists the canonical holders that stand for this scene's own ground (the place the scene
+    ``holders`` maps each 034 unique item the runner means to have on this stage (the ones play or
+    narration needs, not every item the cast owns) to its possession record's holder (034 is the
+    authority for that). ``here`` lists the canonical holders that stand for this scene's own ground (the place the scene
     is set in), which the stage shows as resting in an area. An item the stage tracks agrees when its stage
     holder is that holder, or when it rests in an area and its holder is in ``here``. Any other canonical
     holder the stage does not track (a chest in another town, someone not in the scene) disagrees with an
     item on this stage. An item the stage does not track disagrees when its canonical holder is on the
-    stage (an actor, placed or absent, or a thing it places): the stage would deny that holder its own
-    item (a door its key cannot unlock). The stage is a scene projection: a runner checks this when it
+    stage (an actor, placed or absent, or a thing it places) or in ``here``: the stage would deny it to
+    its holder (a door its key cannot unlock) or to everyone in the room. The stage is a scene projection: a runner checks this when it
     builds a stage and before it proposes a 034 move.
     """
     stage = _stage(stage)
@@ -439,8 +441,8 @@ def custody_divergence(stage: Stage, holders: Mapping[InstanceRef, InstanceRef],
         _ref(stage, holder)
         placement = stage.placement(item)
         if placement is None:
-            if stage.placement(holder) is not None or stage.absence(holder) is not None:
-                diverging.append(item)  # its holder is here, and the stage has lost the item
+            if stage.placement(holder) is not None or stage.absence(holder) is not None or holder in ground:
+                diverging.append(item)  # its holder is in this scene, and the stage has lost the item
             continue
         if placement.holder is not None:
             agrees = placement.holder == holder

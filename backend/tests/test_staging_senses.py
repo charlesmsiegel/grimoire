@@ -232,9 +232,11 @@ def test_an_untracked_item_whose_holder_is_on_stage_diverges():
     refused("no_key", lambda: apply(seeded, unlock_way(MARA, STUDY_DOOR), sequence=2, provenance=P))
     assert custody_divergence(seeded, {KEY: ODD}) == (KEY,)  # an absent actor's own pocket is on this stage too
     assert custody_divergence(seeded, {KEY: SATCHEL}) == (KEY,)  # and so is a thing the stage places
-    # a holder the stage does not track (elsewhere, or this scene's own ground) needs no staged copy
+    # an item 034 rests on this scene's own ground is lost from the room too
     study = ref("the-study-room", "location")
-    assert custody_divergence(seeded, {KEY: ref("bob"), ref("cup", "item"): study}, here=(study,)) == ()
+    assert custody_divergence(seeded, {ref("cup", "item"): study}, here=(study,)) == (ref("cup", "item"),)
+    # a holder the stage does not track (someone elsewhere) needs no staged copy
+    assert custody_divergence(seeded, {KEY: ref("bob")}, here=(study,)) == ()
 
 
 def test_reaching_what_an_absent_actor_carries_is_thing_off_stage():
