@@ -178,6 +178,10 @@ class SceneRunner:
         except (RecordNotFound, ChatCodecError) as error:
             raise _refuse("no_chat", f"{chat} cannot be read ({type(error).__name__})") from None
         problems: list[tuple[str, str]] = [("snapshot", problem) for problem in captured.problems]
+        # A bound source that is gone (a card deleted while the app was closed, its lorebook, a scenario) is
+        # reported by its exact ref; the story stays, and nothing similarly named is bound in its place.
+        problems += [("broken_source", str(resolution.source.ref)) for resolution in captured.snapshot.sources()
+                     if resolution.broken is not None]
         turns = self.scenes.turns(chat)
         problems += [("turns", f"{path}:{code}") for path, code in turns.problems]
         controls = tuple(self.sovereignty.load(chat.campaign_id).controls)

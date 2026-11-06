@@ -52,7 +52,7 @@ Every method reads the chat afresh (one `LibraryView`, 022's chat snapshot, the 
 
 | Method | What it does |
 |---|---|
-| `open(chat)` | The `Scene` as it stands: turns, cast, persona, names, controls and problems (a damaged turn, an `interrupted` run, a cast member with `no_voice`, a party member left out, a persona the director controls: `persona_not_player`). Writes nothing. |
+| `open(chat)` | The `Scene` as it stands: turns, cast, persona, names, controls and problems (a damaged turn, an `interrupted` run, a bound source that is gone: `broken_source` with its exact ref, a cast member with `no_voice`, a party member left out, a persona the director controls: `persona_not_player`). Writes nothing. |
 | `seat(chat, player)` | Records control for actors with none: the persona to `player`, every other bound character to the director. A recorded controller is never changed. |
 | `begin(chat, by)` | The opening turn, as a proposed take: a scenario's first opening (narrated to the table), else the launch card's first greeting spoken by its character, else the chat's premise. `{{char}}` and `{{user}}` are filled. While that opening is not yet kept, `begin` again adds a fresh opening take for the cast as it is now. |
 | `post(chat, by, text, *, mode="auto")` | The player's line (it needs words: `"..."` alone is `no_content`), routed by 008, checked by 003's `submit_contribution`, read by 032's `read_message`, and saved as a new turn before anything is generated. The same post retried onto its own untouched turn returns that turn. |
@@ -85,6 +85,7 @@ While play is paused nothing is begun, posted, generated, kept or passed (`pause
 - **No control history.** `seat` records control for the chat's current actors; reassigning a character mid-chat is 003's.
 - **Party.** The cast is the chat's active bindings minus 033's reserved members. A member whose party state cannot be read is left out and reported (fail closed); any party problem refuses generation.
 - **No `last_activity` update** per post (107's chat record would need a second write in the commit).
+- **A missing source.** A bound card, lorebook or scenario that is gone (deleted while the app was closed) is reported as `("broken_source", <ref>)`, the exact ref the chat bound, alongside what follows from it (the character's `unnamed_actor` and `no_voice`). The turns are kept as they were, the chat still opens and takes posts, and nothing similarly named is bound in its place: a character without its card is silent (`nothing_to_generate`), a chat without its scenario has no director text (`no_scenario`).
 - **The director reply's scenario text** is the scenario's premise, setting and instructions, or the chat's premise.
 
 ## Later milestones (named owners)
