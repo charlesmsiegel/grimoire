@@ -25,7 +25,7 @@ that the instance overrides get a row:
 campaign's value as an instance override: the ancestor value on an ``upstream`` row, the override
 on a ``conflict`` row. Only what an instance can carry can be kept (a name as ``local_name``, a
 facet as ``replaced`` or ``added``). Description and sections have no instance override in this
-slice, an instance carries no payload extras (a campaign keeping its own voice or greeting is 046's
+slice, an instance has no override of payload extras (a campaign keeping its own voice or greeting is 046's
 design), and an instance cannot suppress a trait its source adds, so ``keep`` there is
 ``not_overridable``: the campaign stays pinned instead.
 """
@@ -174,7 +174,7 @@ def review_fields(ancestor: EffectiveDefinition, upstream: EffectiveDefinition,
 
     ``read_extras`` gives one chain layer's payload extras; it is needed (``TypeError`` otherwise)
     when either side has uncomposed keys, which get an ``extra:<key>`` row when they differ. An
-    instance carries no extras, so such a row is always ``upstream`` and only ``take`` applies.
+    instance has no override of extras, so such a row is always ``upstream`` and only ``take`` applies.
 
     Refuses (``RebaseError``): ``campaign_original`` (an instance with no source has nothing to
     rebase), ``other_entity`` (the two definitions or the instance's source are not one entity),

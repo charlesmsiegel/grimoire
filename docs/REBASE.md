@@ -46,7 +46,7 @@ The recorded `base_etag` must still match the ancestor's bytes. If it doesn't, t
 **Uncomposed payload keys** get an `extra:<key>` row too. 022 does not compose them (`EffectiveDefinition.uncomposed`), but other sprints read them. The main one is 037's `card`, which holds a card's example dialogue, greetings and system prompt; 035 reads it for the actor's voice and its opening line.
 - The row compares the key's value in every layer of the chain, leaf first, because 035's voice reads a base's card too. `ancestor` and `upstream` hold those values (`None` where a layer lacks the key).
 - `FieldReview.changed` lists the paths that differ, such as `card.texts.example-messages` or `card.instructions.system_prompt`. A path in a base layer starts `base<n>:` (`base1:` is the leaf's base).
-- An instance carries no payload extras, so the row is always `upstream`, and only `take` applies. A changed card therefore needs an explicit decision like any other changed field: `apply` without one refuses with `undecided`.
+- An instance has no override of payload extras, so the row is always `upstream`, and only `take` applies. A changed card therefore needs an explicit decision like any other changed field: `apply` without one refuses with `undecided`.
 
 The rebased instance must compose over the upstream (009 `compose_instance`), and its reasons propagate. For example, taking the removal of `durable` while the instance holds `Integrity` raises `state_without_facet`.
 

@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from chat_fixtures import Clock, Ids
 from rebase_fixtures import R1, R2, SALTMARCH, SECTIONS, WORLD, envelope, publish, put, wren
-from store_helpers import EXHAUSTIVE_RECOVERY, FAIL_RECOVERY, OWNER, drop_empty_dirs, explore_mode, owner_handle
+from store_helpers import FAIL_RECOVERY, OWNER, drop_empty_dirs, explore_mode, owner_handle
 
 from grimoire.chats import Launch
 from grimoire.chatstore import ChatLibrary
@@ -92,7 +92,7 @@ def scenario(action):
 # Split by mode as in test_chatstore_recovery so no test nears the 120 s watchdog on slower runners.
 @pytest.mark.parametrize("action, mode", [
     (rebase, "errors"), (rebase, "recovery-crashes"), (canon, "errors"), (canon, "recovery-crashes"),
-    *(pytest.param(action, FAIL_RECOVERY, marks=EXHAUSTIVE_RECOVERY) for action in (rebase, canon)),
+    (rebase, FAIL_RECOVERY), (canon, FAIL_RECOVERY),
 ], ids=["rebase-errors", "rebase-recovery-crashes", "canon-errors", "canon-recovery-crashes",
         "rebase-fail-recovery-crashes", "canon-fail-recovery-crashes"])
 def test_rebase_and_canon_commits_survive_every_crash_error_and_recovery_crash(tmp_path, action, mode):
