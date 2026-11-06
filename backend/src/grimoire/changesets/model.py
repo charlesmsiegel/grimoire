@@ -14,6 +14,7 @@ it was drafted for (the store re-checks every target's address and authorization
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from grimoire.core.identity import SourceRef, validate_segment, validate_source_id
@@ -105,6 +106,8 @@ class RecordChange:
         _segment(self.kind, "kind")
         _segment(self.entity_id, "entity_id")
         _segment(self.revision, "revision")
+        if not isinstance(self.payload, Mapping):  # freeze_object would turn None into {}
+            raise ChangeSetError("invalid_field", "payload must be a JSON object")
         try:
             object.__setattr__(self, "payload", freeze_object(self.payload))
         except JsonValueError as error:

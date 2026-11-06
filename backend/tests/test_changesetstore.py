@@ -358,3 +358,41 @@ def test_content_the_store_cannot_encode_is_refused_at_review(store):
     with pytest.raises(ChangeSetError) as caught:
         lib.review(ChangeSet("cs-vault", HARBOR, "A vault", "human:owner", (huge,)))
     assert caught.value.reason == "unstorable"
+
+
+class FlakyAuthority:
+    """An authority whose ledger breaks on its second registration and stays broken until healed."""
+
+    def __init__(self, inner: Authorizer) -> None:
+        self.inner, self.registered, self.broken = inner, 0, False
+
+    def register_approval(self, approval) -> None:
+        self.registered += 1
+        if self.registered == 2:
+            self.broken = True
+            raise OSError("ledger append failed")
+        self.inner.register_approval(approval)
+
+    def pending_approvals(self):
+        if self.broken:
+            raise OSError("authority unavailable")
+        return self.inner.pending_approvals()
+
+    def revoke_approval(self, approval_id: str) -> None:
+        self.inner.revoke_approval(approval_id)
+
+
+def test_an_approval_whose_rollback_fails_is_still_withdrawn_before_reject_succeeds(store):
+    inner = worker_authority()
+    lib = library(store, inner.handle_for(WORKER))
+    review = lib.review(move_the_guild(lib))
+    flaky = FlakyAuthority(inner)
+    with pytest.raises(OSError):
+        lib.approve(review, flaky, approved_by=OWNER, new_id=ids())
+    assert len(inner.pending_approvals()) == 1  # registered, and the rollback could not reach the authority
+    with pytest.raises(OSError):
+        lib.reject(review)  # cannot report success while that approval is still usable
+    assert review.state == "open"
+    flaky.broken = False
+    lib.reject(review)
+    assert review.state == "rejected" and inner.pending_approvals() == ()

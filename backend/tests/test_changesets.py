@@ -83,6 +83,7 @@ def test_decoding_is_strict(edit, reason):
     (lambda: docks(entity_id="../escape"), "invalid_field"),
     (lambda: docks(payload={"x": float("nan")}), "invalid_field"),
     (lambda: docks(evidence="one string"), "invalid_field"),
+    (lambda: docks(payload=None), "invalid_field"),  # null is not an empty object, as in decode
     (lambda: changeset(changeset_id="CS 1"), "invalid_field"),
     (lambda: changeset(author=" "), "invalid_field"),
 ])

@@ -286,12 +286,16 @@ class ChangeSetLibrary:
             for item in needed:
                 approval = _approval(new_id(), principal, item, approved_by)
                 authority.register_approval(approval)  # type: ignore[attr-defined]
+                review._approvals.append((authority, approval.approval_id))  # tracked as soon as it exists
                 made.append(approval.approval_id)
         except BaseException:
             for approval_id in made:
-                _revoke(authority, approval_id)
+                try:
+                    _revoke(authority, approval_id)
+                except Exception:  # noqa: BLE001 - it stays tracked; reject withdraws it or fails
+                    continue
+                review._approvals.remove((authority, approval_id))
             raise
-        review._approvals.extend((authority, approval_id) for approval_id in made)
         return {item.path: approval_id for item, approval_id in zip(needed, made)}
 
     def apply(self, review: ChangeSetReview, approvals: Mapping[str, str] | None = None) -> AppliedChangeSet:
