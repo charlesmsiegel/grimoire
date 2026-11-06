@@ -41,8 +41,9 @@ Planned, not in the first slice:
 
 1. **V1 art (026).** Carry the V1 expression settings the import still drops (outfit metadata, the default outfit, hidden outfits and expressions), campaign expression layers (overrides and hides), campaign-only slots, and write `unresolved` placements for V1 art whose bytes did not arrive instead of only reporting it.
 2. **Derived portrayals.** Art inheritance through 022's derived variants (a portrayal's own art over its base's), and art pinned to a revision or release (042/056); today art follows the entity, not an instance's pinned revision.
-3. **More card art.** Pictures packaged in a PNG or CHARX file (037's later containers), outfits other than `default`, and a crop, scale, review and reset workflow (milestone 2).
+3. **More card art.** Pictures packaged in a PNG or CHARX file (037's later containers), outfits other than `default`, and a crop, scale, review and reset workflow (milestone 2). A slot an updated card no longer fills (an asset renamed or removed) keeps its last picture, which a source cannot hide and 018 cannot delete: the importer should report such slots and offer to mark them `unresolved`.
 4. **Large sets and devices.** Large expressive sets, alternate portrayals and Android format and size budgets (milestone 3).
+5. **Older builds.** A build older than 038 reads an `unresolved` placement as malformed (`invalid_placement`), so its own repair or `replace_edits` may overwrite it; a format marker that older builds refuse as newer would protect it.
 
 ## Open questions
 - Which variants are inherited by default?

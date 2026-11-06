@@ -76,7 +76,7 @@ class Collision:
     ``kind``: ``same_name`` (a definition elsewhere has the imported entity's name),
     ``same_bytes`` (another card source's latest import has these exact bytes),
     ``destination_taken`` (the default destination existed, so a suffixed one was chosen) or
-    ``hand_edited`` (a head or the portrait slot was changed since the last import; it is left as it
+    ``hand_edited`` (a head or an art slot was changed since the last import; it is left as it
     is unless the plan passes ``replace_edits=True``).
     """
 

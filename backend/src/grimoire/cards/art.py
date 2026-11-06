@@ -23,7 +23,7 @@ Slots, in the order the card lists its assets (the first claim on a slot wins; a
 |---|---|
 | the caller's ``portrait`` | ``avatar`` |
 | the card's main ``icon`` (named ``main``, else its first icon) | ``avatar``, unless a ``portrait`` fills it: then a main icon that is ``ccdefault:`` *is* that portrait, and any other main icon goes to ``icon-main`` |
-| any other ``icon`` | ``icon-<name>`` |
+| any other ``icon`` | ``icon-<name>`` (``icon-<index>`` when its name is ``main`` too) |
 | ``emotion`` | ``expr.default.<name>``: a sprite of the card's one outfit, ``default`` |
 | the main ``background`` (named ``main``, else the first) | ``background`` |
 | any other ``background`` | ``background-<name>`` |
@@ -138,7 +138,9 @@ def card_art(card: ParsedCard, portrait: bytes | None) -> tuple[tuple[ArtPiece, 
                 continue  # the main icon is the card's own picture: the portrait already fills avatar
             slot = "avatar" if portrait is None else "icon-main"
         elif asset.type == "icon":
-            slot = f"icon-{_name(asset, str(asset.index))}"
+            name = _name(asset, str(asset.index))
+            # ``icon-main`` is the main icon's alone: another icon named like it takes its place
+            slot = f"icon-{str(asset.index) if name == 'main' else name}"
         elif asset.type == "emotion":
             slot = expression_slot(CARD_OUTFIT, _name(asset, f"emotion-{asset.index}"))
         elif asset is main_background:

@@ -23,8 +23,9 @@ picture's ``art-<sha256[:16]>``.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from grimoire.cards import CardError, Loss
 from grimoire.cards.art import ArtPiece
@@ -37,6 +38,10 @@ from grimoire.store import BlobCorrupt, ImageBlob, InvalidBlob, LibraryStore, Na
 PORTRAIT_SLOT = "avatar"
 #: what an import record says an import left in a slot whose picture is missing
 UNRESOLVED = "unresolved"
+#: the ``origin`` an asset's placement names in its provenance
+ASSET_ORIGIN = "character card asset"
+#: the ids this module gives a card's pictures
+_CARD_IMAGE_ID = re.compile(r"(?:portrait|art)-[0-9a-f]{16}")
 #: why a picture is missing, as an ``unresolved`` placement's note says it (never the card's text)
 NOTES = {
     "not_fetched": "a remote picture; nothing is fetched",
@@ -52,8 +57,10 @@ NOTES = {
 class ArtSlot:
     """What one import does with one slot of the imported entity, for the report.
 
-    ``status``: ``placed`` (written by this commit), ``unchanged`` (already there) or
-    ``hand_edited`` (a person's choice stands). ``image`` is the card's picture for the slot and
+    ``status``: ``placed`` (written by this commit), ``unchanged`` (already there), ``kept`` (the
+    card's picture is missing now, so the picture an earlier import placed stands rather than an
+    ``unresolved`` placement over it; ``image`` is that picture) or ``hand_edited`` (a person's
+    choice stands). ``image`` is the card's picture for the slot and
     ``unresolved`` why it is missing (one of ``NOTES``); ``asset`` is the card asset's place in
     ``assets`` (``None`` for the caller's portrait)."""
 
@@ -168,7 +175,7 @@ def _provenance(piece: ArtPiece) -> dict[str, object] | None:
     asset: dict[str, object] = {"index": piece.index, "type": piece.asset_type}
     if piece.name is not None:
         asset["name"] = piece.name
-    found: dict[str, object] = {"origin": "character card asset", "x-card-asset": asset}
+    found: dict[str, object] = {"origin": ASSET_ORIGIN, "x-card-asset": asset}
     if piece.reason is not None:
         found["note"] = NOTES[piece.reason]
     return found
@@ -194,8 +201,7 @@ def stage_art(images: ImageLibrary, source_id: str, subject: SourceRef, pieces: 
                 reason = "unsupported_media"
                 stage.losses.append(Loss(asset_path(piece.index), "unavailable"))
         if blob is not None:
-            sha = blob.sha256
-            ref = stage.portrait if sha == portrait_sha else ImageRef(source_id, f"art-{sha[:16]}")
+            ref = _image_for(images.store, source_id, blob.sha256, portrait_sha)
         role, expression = slot_role(piece.slot), slot_expression(piece.slot)
         provenance = _provenance(piece if reason == piece.reason else _with_reason(piece, reason))
         if ref is not None:
@@ -218,9 +224,19 @@ def stage_art(images: ImageLibrary, source_id: str, subject: SourceRef, pieces: 
             # the stored copy of these exact bytes no longer matches its name: repaired by this
             # import, whatever else it does (a hand edit of the slot included)
             stage.repairs.setdefault(blob.sha256, blob.data)
-        if existing is not None and _matches(existing, piece.slot, text):
+        if existing is not None:
+            desired = replace(desired, extras=existing.extras)  # a rewrite keeps unknown fields
+        owned = existing is not None and _owned(existing, piece.slot, last.get(piece.slot), source_id)
+        if existing is not None and _matches(existing, piece.slot, text) and existing == desired:
             status = "unchanged"
-        elif (existing is None and expected is None) or plan_replaces(existing, piece.slot, last, replace_edits):
+        elif ref is None and owned and existing is not None and existing.mode == "set":
+            # the card's picture is missing this time: the one an earlier import placed stands, so
+            # a card re-read without its portrait or remote art never blanks a shown picture
+            stage.recorded[piece.slot] = str(existing.image)
+            stage.slots.append(ArtSlot(piece.slot, "kept", existing.image, reason, piece.index))
+            continue
+        elif (existing is None and expected is None) or owned or replace_edits:
+            # an empty slot, the card's own (its provenance refreshed too), or edits replaced
             status = "placed"
             stage.places.append((piece.slot, desired, expected))
         else:
@@ -235,11 +251,32 @@ def stage_art(images: ImageLibrary, source_id: str, subject: SourceRef, pieces: 
     return stage
 
 
-def plan_replaces(existing: Placement | None, slot: str, last: Mapping[str, str], replace_edits: bool) -> bool:
-    """Whether a slot that does not hold this import's picture is still the card's to write: it
-    holds exactly what the last import placed, or the plan replaces edits (an unreadable
-    placement is replaced only then, as Sprint 037 did for the portrait)."""
-    return replace_edits or (existing is not None and _matches(existing, slot, last.get(slot)))
+def _image_for(store: LibraryStore, source_id: str, sha: str, portrait_sha: str | None) -> ImageRef:
+    """The one image object for these bytes in the card source: the portrait's when they are the
+    portrait's, or already stored as it; else ``art-<sha16>``. So a rerun with or without the
+    portrait never mints a second object for the same bytes."""
+    as_portrait = ImageRef(source_id, f"portrait-{sha[:16]}")
+    if sha == portrait_sha or _image_present(store, as_portrait):
+        return as_portrait
+    return ImageRef(source_id, f"art-{sha[:16]}")
+
+
+def _owned(existing: Placement, slot: str, last: str | None, source_id: str) -> bool:
+    """Whether ``existing`` is still the card's own: what the last import recorded for the slot or,
+    when the record has no entry (an older build rewrote it), a placement this module writes for a
+    card asset (its provenance, its shape and one of the card source's own picture ids). A crop,
+    a focus or another picture is a person's choice."""
+    if last is not None:
+        return _matches(existing, slot, last)
+    provenance = existing.provenance
+    if provenance is None or provenance.get("origin") != ASSET_ORIGIN \
+            or not isinstance(provenance.get("x-card-asset"), Mapping):
+        return False
+    if existing.mode == UNRESOLVED:
+        return _matches(existing, slot, UNRESOLVED)
+    image = existing.image
+    return image is not None and image.scope == source_id and _CARD_IMAGE_ID.fullmatch(image.image_id) is not None \
+        and _matches(existing, slot, str(image))
 
 
 def _with_reason(piece: ArtPiece, reason: str | None) -> ArtPiece:

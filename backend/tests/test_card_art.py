@@ -8,11 +8,15 @@ a valid magic header, and nothing is fetched from anywhere.
 from __future__ import annotations
 
 import base64
+import json
+from dataclasses import replace
 
 import pytest
 
-from grimoire.cards import Loss
+from grimoire.cards import Loss, parse_card
+from grimoire.cards.art import card_art
 from grimoire.cardstore import PORTRAIT_SLOT
+from grimoire.cardstore.art import stage_art
 from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef
 from grimoire.images import Crop, Expression, Hidden, Placement, Shown, Unavailable
 from grimoire.imagestore import ImageLibrary
@@ -247,3 +251,72 @@ def test_the_portrait_record_key_keeps_its_meaning_for_an_older_reader(store):
         "card:mara-vell#image/art-")
     assert record["portrait"]["image"] == str(portrait)
     assert ImageRef.parse(record["art"][str(MARA)][GRIN]) == _images(store).effective_placements(MARA).slot(GRIN).image
+
+
+# -- a later import never loses what an earlier one placed (038 review) --------------------------------
+
+def test_a_card_read_again_without_its_pictures_keeps_the_ones_it_placed(store):
+    land(store, encode(card(assets=ASSETS)), portrait=PORTRAIT)  # say, read from the card's PNG
+    remote = [dict(asset) for asset in ASSETS]
+    remote[1]["uri"] = "https://example.invalid/smile.png"  # the smile is remote in this copy
+    later = land(store, encode(card(assets=remote)), target="card:mara-vell")  # its JSON alone
+    statuses = {entry.slot: entry.status for entry in later.report.art}
+    assert statuses[PORTRAIT_SLOT] == statuses[SMILE] == "kept"
+    assert "hand_edited" not in {collision.kind for collision in later.report.collisions}
+    images = _images(store)
+    shown = images.effective_placements(MARA)
+    assert images.read_image_bytes(shown.slot(PORTRAIT_SLOT).image) == PORTRAIT
+    assert images.read_image_bytes(shown.slot(SMILE).image) == SMILE_PNG
+    again = importer(store).plan(encode(card(assets=remote)), target="card:mara-vell")
+    assert again.report.status == "unchanged" and again.preview() == {}
+
+
+def test_an_update_says_where_each_picture_now_comes_from(store):
+    land(store, encode(card(assets=[ASSETS[1], ASSETS[5]])))  # smile inline, shy remote
+    update = land(store, encode(card(assets=[ASSETS[4] | {"name": "shy"}, ASSETS[1]])), target="card:mara-vell")
+    assert {entry.slot: entry.status for entry in update.report.art} == {SHY: "placed", SMILE: "placed"}
+    images = _images(store)
+    shy, _ = images.read_placement(PlacementRef(MARA, SHY))
+    smile, _ = images.read_placement(PlacementRef(MARA, SMILE))
+    assert shy.provenance["note"] == "a picture packaged with the card file, which this import does not read"
+    assert (shy.provenance["x-card-asset"]["index"], smile.provenance["x-card-asset"]["index"]) == (0, 1)
+    assert images.effective_placements(MARA).slot(SHY).text == shy.provenance["note"]
+
+
+def test_the_same_bytes_stay_one_picture_with_or_without_the_portrait(store):
+    same = [{"type": "emotion", "uri": data_uri(PORTRAIT), "name": "smile"}]
+    land(store, encode(card(assets=same)), portrait=PORTRAIT)
+    before = _blob_count(store), _images(store).effective_placements(MARA).slot(SMILE).image
+    for portrait in (None, PORTRAIT):
+        planned = land(store, encode(card(assets=same)), portrait=portrait, target="card:mara-vell")
+        assert {entry.slot: entry.status for entry in planned.report.art}[SMILE] == "unchanged"
+    assert (_blob_count(store), _images(store).effective_placements(MARA).slot(SMILE).image) == before
+    assert before[1].image_id.startswith("portrait-")
+
+
+def test_an_icon_named_like_the_main_one_never_takes_its_slot(store):
+    icons = [{"type": "icon", "uri": data_uri(FROWN_GIF, "image/gif"), "name": "Main!"},
+             {"type": "icon", "uri": data_uri(SMILE_PNG), "name": "main"}]
+    planned = land(store, encode(card(assets=icons)), portrait=PORTRAIT)
+    assert {entry.slot: entry.asset for entry in planned.report.art} == {PORTRAIT_SLOT: None, "icon-0": 0,
+                                                                         "icon-main": 1}
+
+
+def test_art_an_older_build_left_unrecorded_is_still_the_cards_and_a_crop_is_still_a_persons(store):
+    land(store, encode(card(assets=ASSETS)), portrait=PORTRAIT)
+    images = _images(store)
+    _, etag = images.read_placement(PlacementRef(MARA, SMILE))
+    chosen, _ = images.read_placement(PlacementRef(MARA, FROWN))
+    batch = images.change()
+    batch.place(MARA, FROWN, replace(chosen, crop=Crop(0, 0, 5000, 5000)), images.read_placement(
+        PlacementRef(MARA, FROWN))[1])
+    batch.commit()
+    redrawn = [dict(asset) for asset in ASSETS]
+    redrawn[1]["uri"] = data_uri(DOCKS_JPEG, "image/jpeg")
+    redrawn[3]["uri"] = data_uri(SMILE_PNG)
+    pieces, _ = card_art(parse_card(json.loads(encode(card(assets=redrawn)))), PORTRAIT)
+    # an import record an older build rewrote has no ``art``: the placements still say whose they are
+    stage = stage_art(images, "card:mara-vell", MARA, pieces, {}, False, {}, str)
+    statuses = {entry.slot: entry.status for entry in stage.slots}
+    assert statuses[SMILE] == "placed" and statuses[FROWN] == "hand_edited"
+    assert etag in {expected for slot, _, expected in stage.places if slot == SMILE}

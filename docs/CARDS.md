@@ -29,7 +29,7 @@ A V3 card's `data.assets` become 018 placements on the imported character or sce
 |---|---|
 | the caller's `portrait` | `avatar` |
 | the main `icon` (named `main`, else the first icon) | `avatar`; with a `portrait`, a `ccdefault:` main icon *is* that portrait and any other main icon goes to `icon-main` |
-| any other `icon` | `icon-<name>` |
+| any other `icon` | `icon-<name>` (`icon-<index>` when its name is `main` too, so it never takes the main icon's slot) |
 | `emotion` | `expr.default.<name>`: a sprite of the card's one outfit, `default` |
 | the main `background` (named `main`, else the first) | `background` |
 | any other `background` | `background-<name>` |
@@ -40,9 +40,11 @@ A V3 card's `data.assets` become 018 placements on the imported character or sce
 
 - **Bytes come only from the card.** A `data:` URI with base64 content is decoded locally; `ccdefault:` is the given `portrait`. Nothing is fetched and no file is read.
 - **A missing picture keeps its slot.** An `http(s)` address (`not_fetched`), a CHARX `embeded://` path, `ccdefault:` with no portrait, a `data:` URI that cannot be decoded or is not a PNG, JPEG, GIF or WebP picture, and any other address are written as an explicit `unresolved` placement whose `provenance.note` says why, so the slot never shows another picture found by name. Each is also a loss (`not_fetched` for a remote picture, `unavailable` otherwise).
-- **One object per picture.** Identical bytes are one image object per card source (`portrait-<sha256[:16]>` when they are the portrait, `art-<sha256[:16]>` otherwise) and one blob per library, whichever assets carry them. A placement's provenance names its asset (`x-card-asset`: index, type, name), never the card's text.
+- **A later copy without the picture keeps it.** When a slot still holds the picture an earlier import of the card placed and this import has no bytes for it (the card read again without its portrait, or with that asset now remote), the picture stands: the slot is reported `kept`, never blanked to `unresolved`.
+- **One object per picture.** Identical bytes are one image object per card source (`portrait-<sha256[:16]>` when they are, or once were, the portrait; `art-<sha256[:16]>` otherwise) and one blob per library, whichever assets carry them. A placement's provenance names its asset (`x-card-asset`: index, type, name), never the card's text.
 - **Individuals inherit it.** Every campaign instance derived from the imported character sees the card's art through 018's inheritance; its own `set`, `adjust` or `hide` changes only that individual, and an updated card moves only the art the individual inherits.
-- `ImportReport.art` lists every slot the import fills: `placed`, `unchanged` or `hand_edited`, with the card's picture or why it is missing, and the asset's index.
+- **Whose slot it is.** A slot is the card's to rewrite when it holds what the import record says the last import placed there; when the record has no entry for it (an older build rewrote the record), when the placement itself is one an import writes (its provenance names a card asset, it shows one of the card source's own pictures or is `unresolved`, with no crop or focus). Anything else is a person's choice. An update also rewrites a slot whose picture is unchanged but whose asset moved or whose reason for missing changed, so the provenance stays true.
+- `ImportReport.art` lists every slot the import fills: `placed`, `unchanged`, `kept` or `hand_edited`, with the card's picture or why it is missing, and the asset's index.
 
 ### The character record
 
