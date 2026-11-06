@@ -100,10 +100,16 @@ While play is paused nothing is begun, posted, generated, kept or passed (`pause
 | **First:** reading a chat's imported history (026's V0.2.1 scene pages, 036's SillyTavern pages, in 036's immutable `transcripts/` family) as the history before turn 1, and deciding who heard it. Until then the runner reads none of it, so no NPC has heard any imported line (fail closed), and `open` reports `imported_history_unread` | 035 M2, 036; due before 044 (phone play) |
 | Labelling kept narration into proposals; 029 framing and decision; `check_effect`; 021 acceptance; 030 recovery at open before the next acceptance | 035 M2, 029, 021, 030 |
 | Writing 032's delivery records to 020 in the turn's commit, so NPC memory of a scene is knowledge, not only a window | 035 M2 |
+| Choosing 039's intentions each turn, and storing the `Choice` in the turn record | 035 M2, 039 |
+| Framing 040's approaches, and applying `due()` through 021 | 035 M2, 040, 021 |
+| A persisted 041 stage, with 032's presences taken from it and the cast re-checked against it each sequence (`check_cast` over `Scene.staged`) | 041 M2, 035 M2 |
+| Packing context for a player character's controller | 035 M2, 031 |
+| 016's skip and redirect lanes in the intent router | 035 M2, 016 |
 | Executing a session-zero configuration (016 has no codec yet; a scope with one refuses generation) | 035 M2, 016 |
 | Sending a redirect's or rephrase's direction to the model | 035 M2, 027 |
 | UI commands, director instructions and interiority in play | 035 M2 |
 | Detecting player-character authorship in NPC and narrator text | 035 M2, Narration Continuity Referee |
 | UI, streaming, async, the chat list | 035 M2, 065 |
 | Several human players at one table | 102 |
-| Merging turns across devices | 028 milestone, before 044 |
+| Merging forked turns across devices (two devices' turn *n*, `turn_fork`) | 028 milestone, before 044 |
+| Choosing a greeting at launch (`begin` opens with a card's first greeting) | 052 |
