@@ -503,11 +503,13 @@ def derive(obstacle: Obstacle, revision: int, attempts: Iterable[Attempt],
     the escalations of earlier failures), using the frame its outcome decided. A failure that made an
     escalating stake come true adds that fact; a success or a partial success overcomes the obstacle
     with the approach's costs. An attempt that does not check, or any record out of the order the
-    service keeps (an attempt after a pending or a successful one), diverges.
+    service keeps (an attempt after a successful one), diverges.
 
     The service links an attempt before 029 frames it, so a link with no frame is an attempt whose frame
-    was never written (a crash, or a write the store refused): the latest is ``pending`` until framed,
-    and an earlier one is ``void``, superseded by the attempt after it.
+    was never written (a crash): the latest is ``pending`` until framed. An undecided attempt with a
+    later attempt after it was superseded (its frame was never written, or 029 can no longer decide it
+    because its actor changed hands) and is ``void``. Decided afterwards anyway, it counts in link order,
+    and the attempts after it must agree with what it changed, or the obstacle diverges.
     """
     attempts = list(attempts)
     facts = list(obstacle.facts)
@@ -515,17 +517,18 @@ def derive(obstacle: Obstacle, revision: int, attempts: Iterable[Attempt],
     status: Status = "open"
     overcome_by = problem = None
     after: int | None = None
-    blocked = False
     for index, attempt in enumerate(attempts):
         outcome = outcomes.get(attempt.attempt_id)
         frame = outcome.frame if outcome is not None else frames.get(attempt.attempt_id)
         reason = None
-        if status != "open" or blocked:
-            reason = "attempt_out_of_turn"  # the service links nothing after a pending or decisive attempt
+        last = index == len(attempts) - 1
+        if status != "open":
+            reason = "attempt_out_of_turn"  # the service links nothing after a decisive attempt
+        elif outcome is None and not last:
+            states.append(AttemptState(attempt, frame, "void"))  # superseded by the attempt after it
+            continue
         elif frame is None:
-            last = index == len(attempts) - 1
-            states.append(AttemptState(attempt, None, "pending" if last else "void"))
-            blocked = last
+            states.append(AttemptState(attempt, None, "pending"))  # the latest: nothing comes after it
             continue
         else:
             try:
@@ -540,7 +543,6 @@ def derive(obstacle: Obstacle, revision: int, attempts: Iterable[Attempt],
         after = frame.moment.sequence
         if outcome is None:
             states.append(AttemptState(attempt, frame, "pending"))
-            blocked = True
             continue
         decision = outcome.decision
         stakes = {stake.stake_id: stake for stake in frame.stakes}

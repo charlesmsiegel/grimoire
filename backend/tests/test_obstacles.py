@@ -110,7 +110,7 @@ def _bribe_frame(cid="c10", at=None, extra=()):
                    stakes_of(BRIBE), cid=cid, at=at)
 
 
-def test_a_stake_escalates_once_and_records_out_of_turn_diverge():
+def test_a_stake_escalates_once_and_superseded_or_out_of_turn_links_do_not_count():
     obstacle = archive()
     first = _bribe_frame()
     reported = derive(obstacle, 1, [Attempt("c10", BRIBE, True)], {}, {"c10": _outcome(first, "failure", {"loyal"},
@@ -122,6 +122,7 @@ def test_a_stake_escalates_once_and_records_out_of_turn_diverge():
     superseded = derive(obstacle, 1, [Attempt("c10", BRIBE, True), Attempt("c11", BRIBE, True)],
                         {"c11": _bribe_frame("c11", moment(11, "t11"))}, {})
     assert [a.status for a in superseded.attempts] == ["void", "pending"]
-    # A link after a pending attempt is not the order the service keeps.
-    pending = derive(obstacle, 1, [Attempt("c10", BRIBE, True), Attempt("c11", SNEAK, True)], {"c10": first}, {})
-    assert (pending.status, pending.problem) == ("diverged", "attempt_out_of_turn")
+    # A link after a success is not the order the service keeps.
+    won = derive(obstacle, 1, [Attempt("c10", BRIBE, True), Attempt("c11", SNEAK, True)], {},
+                 {"c10": _outcome(first, "success", {"greedy"})})
+    assert (won.status, won.problem) == ("diverged", "attempt_out_of_turn")

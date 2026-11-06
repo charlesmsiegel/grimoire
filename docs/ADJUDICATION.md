@@ -67,7 +67,8 @@ An `Outcome` is a recorded decision. `Outcome.resolution()` is the 003 `Resoluti
 | Call | Does |
 |---|---|
 | `frame(frame, contribution=None, author=None)` | Records a new attempt, or a revision of an undecided one (`FrameEntry.revision` counts from 1). A revision is the same action: same actor, chat, moment, contribution and ability attempt (`frame_moved`), so it cannot admit facts established after the attempt, and it cannot worsen the action (`frame_worsened`). |
-| `check(frame, contribution=None, author=None)` | Runs every check `frame` would, and returns the revision it would record, writing nothing: for a caller that writes its own record first, under the authority's lock (040 links an attempt to its obstacle before framing it). |
+| `check(frame, contribution=None, author=None)` | Runs every check `frame` would, rendering the entry too (`invalid_field`, `too_large`), and returns the revision it would record, writing nothing: for a caller that writes its own record first, under the authority's lock (040 links an attempt to its obstacle before framing it). |
+| `undecidable(campaign, attempt_id)` | Why a recorded, undecided attempt can never be decided as it stands (`control_changed`, `non_human_controller`), or `None`. |
 | `rule(ruling, supersedes=())` | Records a 025 `AbilityRuling` on a recorded frame's exact ability attempt, after 025's `check_ruling`. `supersedes` names live rulings on the same attempt that this one replaces. |
 | `decide(campaign, attempt_id, decision, consent=None)` | Assesses the latest frame revision now and records the decision. Deciding the same again returns the recorded outcome; a different one is `already_decided`. |
 | `assess`, `outcome`, `resolutions`, `state` | Read. |

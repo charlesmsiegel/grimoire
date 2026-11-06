@@ -222,7 +222,9 @@ class ObstacleLibrary:
         (a player character's action is backed by the player's own contribution, given through
         ``author``). The attempt is then linked, and only then framed through 029: a link always comes
         before its frame, so no frame decided in 029 can lose the obstacle it was made against. One
-        attempt is undecided at a time (``attempt_pending``): the next one meets what this one changes.
+        attempt is undecided at a time (``attempt_pending``): the next one meets what this one changes,
+        unless the pending one can never be decided (its actor changed hands, or its frame was never
+        written), when the next one supersedes it.
         A frame for the pending attempt is a 029 revision and keeps its approach (``approach_changed``);
         it may also bring a diverged pending attempt back into agreement. Refused too:
         ``unknown_obstacle``, ``obstacle_diverged``, ``already_overcome``, ``attempt_linked`` (another
@@ -264,10 +266,12 @@ class ObstacleLibrary:
             if state.status == "overcome":
                 raise _refused(f"obstacle {obstacle_id!r} is already overcome", "already_overcome")
             pending = state.pending
-            if pending is not None and pending.frame is not None:
+            if (pending is not None and pending.frame is not None
+                    and self._adjudication.undecidable(campaign_id, pending.attempt.attempt_id) is None):
                 raise _refused(f"attempt {pending.attempt.attempt_id!r} against {obstacle_id!r} is undecided",
                                "attempt_pending")
-            # A pending attempt with no frame is a link whose frame was never written: this one supersedes it.
+            # This one supersedes a pending attempt that can never be decided: a link whose frame was never
+            # written, or a frame whose actor changed hands (029 makes the new controller's action a new one).
             if self._adjudication.outcome(campaign_id, frame.attempt_id) is not None:
                 # Linking a known result would let a success be pinned to an obstacle after the fact.
                 raise _refused(f"attempt {frame.attempt_id!r} is already decided", "already_decided")

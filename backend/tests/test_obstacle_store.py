@@ -13,7 +13,7 @@ from grimoire.obstaclestore import ObstacleLibrary, obstacle_actor_ids
 from grimoire.store import LibraryStore, ProcessLocker, TakenIdsUnlisted
 from grimoire.store.ledger import render_batches
 
-from adjudication_fixtures import IRIS, Q, SOLA, build_library, moment
+from adjudication_fixtures import BOB, IRIS, Q, SOLA, build_library, moment
 from obstacle_fixtures import (
     ALARM, ARMED, BRIBE, FORCE, FORGE, GREEDY, LANTERN, LOYAL, REPORTED, SEALS, SILVER, SPENT, TRAINING, WATCH,
     WINDOWLESS, ArchiveTable, archive, attempt, offer, stakes_of,
@@ -371,3 +371,27 @@ def test_an_attempt_whose_frame_was_never_written_is_superseded_by_the_next(tabl
     state = library.state(Q, "archive")
     assert ([a.status for a in state.attempts], state.pending.attempt.attempt_id) == (["void", "pending"], "c11")
     assert _reason(_bribe, table, library) == "already_decided"  # the void link is not reopened
+
+
+def test_an_attempt_whose_actor_changed_hands_gives_way_to_the_new_controllers(table):
+    library = table.obstacles()
+    library.record(archive())
+    _bribe(table, library)
+    assert _reason(_bribe, table, library, cid="c11", at=moment(11, "t11")) == "attempt_pending"
+    table.control("mara-1", BOB)  # 029 can no longer decide Ana's bribe; Bob's action is a new attempt
+    frame = attempt(library.required(Q, "archive", "sneak", 11) + (TRAINING,), (ALARM.stake,), cid="c11",
+                    at=moment(11, "t11"))
+    library.frame("archive", frame, approach="sneak", contribution=offer(cid="c11", turn="t11", by=BOB),
+                  author=table.player(BOB))
+    state = library.state(Q, "archive")
+    assert ([a.status for a in state.attempts], state.pending.attempt.attempt_id) == (["void", "pending"], "c11")
+
+
+def test_text_the_store_cannot_hold_is_refused_before_the_link(table):
+    library = table.obstacles()
+    library.record(archive())
+    frame = attempt(library.required(Q, "archive", "bribe", 10) + (SILVER,), stakes_of(BRIBE))
+    assert _reason(library.frame, "archive", frame, approach="bribe", contribution=offer("I offer \ud800 crowns."),
+                   author=table.player()) == "invalid_field"
+    _nothing_written(table, library)
+    assert library.record(archive(goal="Reach the sealed ledger before dawn.")).revision == 2

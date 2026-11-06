@@ -41,7 +41,7 @@ from grimoire.ledgers.codec import envelope, exact
 from grimoire.security import is_human, is_valid_principal
 from grimoire.store import LibraryStore, RecordNotFound
 from grimoire.store.errors import InvalidEnvelope, LedgerInvalid, TakenIdsUnlisted
-from grimoire.store.ledger import Head
+from grimoire.store.ledger import Head, entry_cost
 
 _KINDS = frozenset({"frame", "ruling", "decision"})
 
@@ -395,10 +395,27 @@ class AdjudicationLibrary:
         """The revision ``frame`` would record now, or the refusal ``frame`` would raise. Writes nothing.
 
         For a caller that must write its own record first and then the frame, under the authority's
-        lock (040 links an attempt to its obstacle before framing it).
+        lock (040 links an attempt to its obstacle before framing it). The entry is rendered too, so
+        text the store cannot hold (``invalid_field``) or an entry too large for a batch (``too_large``)
+        is refused here, not when ``frame`` writes it.
         """
         with self._authority.lock:
             return self._prepare(frame, contribution, author)[1]
+
+    def undecidable(self, campaign_id: str, attempt_id: str) -> str | None:
+        """Why the recorded attempt can no longer be decided, whatever is decided: its actor's control
+        changed since it was framed (``control_changed``, ``non_human_controller``). ``None`` when it can be,
+        or when there is no such frame or it is already decided."""
+        with self._authority.lock:
+            state = self._builder(campaign_id).state()
+            entry = state.frame(attempt_id)
+            if entry is None or attempt_id in state.decisions:
+                return None
+            try:
+                self._check_control(entry)
+            except AdjudicationError as error:
+                return error.reason
+            return None
 
     def _prepare(self, frame: ActionFrame, contribution: PlayerContribution | None, author: object
                  ) -> tuple[_Builder, int, dict[str, object]]:
@@ -426,7 +443,14 @@ class AdjudicationLibrary:
                            "not_controller")
         self._entity(frame)
         builder = self._builder(campaign_id)
-        return builder, builder.check_frame(frame, contribution), payload
+        revision = builder.check_frame(frame, contribution)
+        try:  # what _append would refuse, refused before anything is written
+            entry_cost(envelope("frame", self._authority.now(), recorded_by=self._principal, value=payload))
+        except InvalidEnvelope as error:
+            raise _refused(str(error), "invalid_field") from None
+        except ValueError as error:
+            raise _refused(str(error), "too_large") from None
+        return builder, revision, payload
 
     def rule(self, ruling: AbilityRuling, *, supersedes: Iterable[str] = ()) -> RulingEntry:
         """Record a director's 025 ruling on a recorded frame's ability use, before its decision.
