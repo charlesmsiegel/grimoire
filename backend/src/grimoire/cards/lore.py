@@ -28,7 +28,8 @@ naming the entry and the reason, never its text): a ``use_regex`` entry that is 
 (``use_regex``: 031 matches words, not patterns); content that is blank, unsafe or over
 ``MAX_ENTRY_TEXT`` after ``\\r\\n`` and ``\\r`` become ``\\n`` (``content``); a non-constant entry
 left with no usable key (``keys``); and a selective entry with any secondary key 031 cannot use, or
-more than ``MAX_KEYS`` of them (``secondary_keys``): secondary keys are all or nothing, since dropping
+more than ``MAX_KEYS`` of them, or one the importer could not read and dropped (the entry's
+``secondary_keys_lost``) (``secondary_keys``): secondary keys are all or nothing, since dropping
 one would make an AND ALL or NOT ANY entry fire where its author's logic would not. A disabled entry
 is left out silently. A bad primary key is dropped, which can only make its entry fire less, a
 repeated one kept once, and only the first ``MAX_KEYS`` kept. Entries past ``MAX_ENTRIES``, skips
@@ -75,9 +76,13 @@ def _all_keys(value: object) -> tuple[str, ...] | None:
 
 
 def _order(value: object) -> int:
-    if type(value) not in (int, float) or not math.isfinite(value):  # type: ignore[arg-type]
+    # an int is clamped exactly: one of hundreds of digits, which JSON allows, would overflow the
+    # float that ``math.isfinite`` converts it to
+    if type(value) is int:
+        return max(-MAX_ORDER, min(MAX_ORDER, value))
+    if type(value) is not float or not math.isfinite(value):
         return 0
-    return max(-MAX_ORDER, min(MAX_ORDER, round(value)))  # type: ignore[arg-type]
+    return max(-MAX_ORDER, min(MAX_ORDER, round(value)))
 
 
 def _entry(position: int, raw: object) -> LoreEntry | SkippedEntry | None:
@@ -108,7 +113,9 @@ def _entry(position: int, raw: object) -> LoreEntry | SkippedEntry | None:
     secondary: tuple[str, ...] | None = ()
     logic = "and_any"
     if settings.get("selective") is True:
-        secondary = _all_keys(raw.get("secondary_keys"))
+        # the importer drops a secondary key it cannot read and marks the entry, so a dropped key
+        # is skipped here rather than letting the entry fire on fewer conditions than written
+        secondary = None if raw.get("secondary_keys_lost") is True else _all_keys(raw.get("secondary_keys"))
         if secondary is None:
             return skip("secondary_keys")
         extensions = raw.get("extensions")

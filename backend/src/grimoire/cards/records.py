@@ -202,6 +202,8 @@ def lorebook_payload(book: Lorebook, *, extras: Mapping[str, object] | None = No
         if not entry.enabled:
             found["enabled"] = False
         _put(found, "secondary_keys", list(entry.secondary_keys))
+        if entry.secondary_keys_lost:
+            found["secondary_keys_lost"] = True
         _put(found, "settings", entry.settings)
         _put(found, "extensions", entry.extensions)
         _put(found, "extras", entry.extras)

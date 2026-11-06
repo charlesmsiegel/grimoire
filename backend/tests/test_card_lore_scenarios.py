@@ -198,6 +198,8 @@ def test_secondary_keys_selective_logic_and_insertion_order(store, chats):
     (2, ["x" * 101]),  # NOT ANY whose exclusion is too long a key
     (3, ["storm", "dark\tnight"]),  # AND ALL that would need only the storm
     (0, [f"word{n}" for n in range(65)]),  # more secondary keys than 031 holds
+    (3, "storm"),  # not a list: the importer drops it, which would leave the captain needing nothing
+    (3, ["storm", 7]),  # a member that is not text: dropping it would leave AND ALL needing only the storm
 ])
 def test_a_selective_entry_with_an_unusable_secondary_key_never_fires_and_is_named(store, chats, logic, secondary):
     book = {"spec": "lorebook_v3", "data": {"name": "Strict rules", "extensions": {}, "entries": [
@@ -211,6 +213,16 @@ def test_a_selective_entry_with_an_unusable_secondary_key_never_fires_and_is_nam
         assert _lore(pack) == [TIDES]  # the rest of the book still plays
         assert _problems(pack) == {("skipped_entry", strict.at("r1"), "entry-0:secondary_keys")}
         assert CAPTAIN not in pack.render()
+
+
+def test_an_insertion_order_too_large_for_a_float_is_clamped(store, chats):
+    book = {"spec": "lorebook_v3", "data": {"name": "Huge orders", "extensions": {}, "entries": [
+        _entry(LATE, "inn", order=10**400), _entry(EARLY, "inn", order=-(10**400)), _entry(FAIR, "inn")]}}
+    huge = land(store, encode(book)).report.main
+    land(store, encode(V3))
+    started = chats.start_chat(Launch("character", MARA), attach=[(huge, "lorebook")]).commit()
+    [pack] = _packs(store, started, "The inn is warm.").values()
+    assert _lore(pack) == [EARLY, FAIR, LATE] and not pack.problems
 
 
 def test_card_lore_sheds_under_the_lore_budget_in_rank_order(store, chats):

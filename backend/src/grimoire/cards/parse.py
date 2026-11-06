@@ -237,9 +237,12 @@ def parse_lorebook(book: object, path: str, reader: _Reader) -> Lorebook | None:
         if type(enabled) is not bool:
             reader.lose(f"{here}.enabled", "wrong_type")
             enabled = True
+        keys = reader.texts(entry, "keys", here)
+        before = len(reader.losses)
+        secondary = reader.texts(entry, "secondary_keys", here)
         entries.append(LoreEntry(
-            keys=reader.texts(entry, "keys", here), content=entry["content"], enabled=enabled,
-            secondary_keys=reader.texts(entry, "secondary_keys", here),
+            keys=keys, content=entry["content"], enabled=enabled,
+            secondary_keys=secondary, secondary_keys_lost=len(reader.losses) > before,
             settings=MappingProxyType(_settings(entry, _ENTRY_SETTINGS, here, reader)),
             extensions=reader.mapping(entry, "extensions", here),
             extras=MappingProxyType(reader.unknown(entry, _ENTRY, here)), index=index))
