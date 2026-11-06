@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 
+from grimoire.comms import CHANNELS
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TurnRef, validate_segment
 from grimoire.core.inference import TOKEN_FIELDS, CallAttempt, CallId, InferenceStage, TokenUsage
 
@@ -30,6 +31,8 @@ CALL_STATES = ("planned", "accepted", "rejected", "incomplete", "failed", "cance
 TURN_OUTCOMES = ("complete", "halted", "cancelled", "stale")
 #: Takes per turn: rerolls are cheap to ask for, and each one is stored for good.
 MAX_TAKES = 16
+#: 032's channels that reach only their addressees.
+_PRIVATE = frozenset({"whisper", "telepathy"})
 #: A turn id is ``<chat_id>.<number:06d>``, and the post's message id is the turn id, which 032 caps at 104.
 MAX_CHAT_ID = 97
 MAX_TEXT = 20_000
@@ -106,19 +109,22 @@ class Post:
         if self.kind not in POST_KINDS:
             raise _fail("invalid_field", f"a post is one of {POST_KINDS}")
         _text(self.text, "text")
-        _optional(self.channel, "channel", 40)
+        if self.channel is not None and self.channel not in CHANNELS:
+            raise _fail("invalid_field", f"a message's channel is one of {CHANNELS}")
         if self.channel is None and (self.kind == "speech" or self.addressees):
             raise _fail("invalid_field", "a message has a channel; only a visible action has none")
         campaign = self.actor.campaign_id
         object.__setattr__(self, "audience", _actors(self.audience, "audience", campaign))
         object.__setattr__(self, "addressees", _actors(self.addressees, "addressees", campaign))
+        if self.channel in _PRIVATE and not self.addressees:
+            raise _fail("invalid_field", "a whisper or a telepathic message names who it is for")
         if self.actor not in self.audience:
             raise _fail("invalid_field", "a post's speaker hears it")
 
     @property
     def private(self) -> bool:
         """A message for its addressees only: never in the table's transcript."""
-        return bool(self.addressees)
+        return self.channel in _PRIVATE
 
 
 @dataclass(frozen=True, slots=True)

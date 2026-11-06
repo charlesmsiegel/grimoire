@@ -30,6 +30,7 @@ from grimoire.core.identity import ChatRef, InstanceRef
 from grimoire.core.inference import InferencePolicy, InferenceStage, TurnUsageLedger
 from grimoire.core.perspective import actor_knowledge
 from grimoire.effective import chat_snapshot
+from grimoire.evals.text import has_words
 from grimoire.evidencestore import EvidenceLibrary
 from grimoire.generation import GenerationError, director_brief, npc_brief, plan_generation_turn
 from grimoire.import_v1 import imported_voices
@@ -212,6 +213,8 @@ class SceneRunner:
                 voices.resolve(actor)
             except Exception as error:  # 014/022's refusals: it stays silent, and says why
                 problems.append(("no_voice", f"{actor}:{getattr(error, 'reason', type(error).__name__)}"))
+        if persona is not None and persona in scene.cast and scene.controller(persona) == DIRECTOR:
+            problems.append(("persona_not_player", str(persona)))  # 003 must give it back to a player
         if scene.interrupted:
             problems.append(("interrupted", scene.pending.turn_id))
         return _Context(replace(scene, problems=tuple(problems)), view, captured, voices, party_problems)
@@ -340,6 +343,8 @@ class SceneRunner:
         else:
             post = Post(principal, persona, kind, read.text, _audience(read, scene, chat, tid, number),
                         read.channel, read.addressees)
+        if not has_words(post.text):
+            raise _refuse("no_content", "a post needs words someone could hear")
         if last is not None and last.open:
             if last.post == post and not last.takes:
                 return last  # the same post retried: it is already saved
@@ -534,12 +539,12 @@ class SceneRunner:
             try:
                 self.scenes.write(record.with_take(take), etag, before_commit=fence)
                 return take
-            except _Stale:
+            except _Stale:  # a newer run of this chat started: keep the usage, drop the lines
                 take = replace(take, state="stale", lines=(), outcome="stale")
             except SceneRefused as error:
                 if error.reason != "turn_changed":
                     raise
-                take = replace(take, state="stale", lines=(), outcome="stale")
+            # someone else wrote the turn (an older run's usage, a pass, a newer run): read it again
             current = self.scenes.turns(chat)
             found = next((stored for stored in current.turns if stored.record.number == record.number), None)
             if found is None:
@@ -548,6 +553,8 @@ class SceneRunner:
             existing = next((t for t in record.takes if t.take == take.take), None)
             if existing is None or existing.state not in ("running", "superseded"):
                 break
+            if existing.state == "superseded":  # passed, or replaced by a newer run: this one lost
+                take = replace(take, state="stale", lines=(), outcome="stale")
         raise _refuse("turn_changed", "another run changed this turn; its usage could not be saved")
 
     # -- the table's choices ------------------------------------------------------------------------
@@ -574,6 +581,7 @@ class SceneRunner:
         """Strike one kept line from the transcript: no one hears it from now on."""
         scene = self._context(chat).scene
         principal = self._principal(scene, by)
+        _readable(scene)
         stored, take, line = _find_line(scene, line_id)
         if take.state != "kept" or not line.shown:
             raise _refuse("not_kept", "only a shown line of a kept take can be struck")
@@ -599,6 +607,7 @@ class SceneRunner:
         the named lines (``redirect``/``rephrase`` record the direction on their take)."""
         scene = self._context(chat).scene
         principal = self._principal(scene, by)
+        _readable(scene)
         targets = tuple(targets)
         if kind in ("skip", "redirect", "rephrase") and not targets:
             raise _refuse("no_targets", f"a {kind} names the lines it is about")
@@ -641,14 +650,16 @@ class SceneRunner:
         return record
 
     def resume(self, chat: ChatRef, by) -> TurnRecord:
-        """Lift a pause; only the player who paused may."""
+        """Lift a pause: the player who paused, or the library's owner (so a pauser who has left the table
+        never locks the chat)."""
         scene = self._context(chat).scene
         principal = self._principal(scene, by)
+        _readable(scene)
         stored = scene.turns.last
         if stored is None or not stored.record.paused:
             raise _refuse("not_paused", "play is not paused")
-        if stored.record.paused_by != principal:
-            raise _refuse("not_yours", "only the player who paused may resume")
+        if stored.record.paused_by != principal and principal not in self.authority.owners:
+            raise _refuse("not_yours", "only the player who paused, or the owner, may resume")
         record = replace(stored.record, paused=False, paused_by=None)
         self.scenes.write(record, stored.etag)
         return record
@@ -656,18 +667,24 @@ class SceneRunner:
     # -- checks -----------------------------------------------------------------------------------
 
     def _ready(self, scene: Scene) -> None:
-        if not scene.turns.complete:
-            raise _refuse("turns_unreadable", "a turn file of this chat cannot be read; nothing is written")
+        _readable(scene)
         if scene.paused:
             raise _refuse("paused", "play is paused")
+        if scene.persona is not None and scene.persona in scene.cast and scene.controller(scene.persona) == DIRECTOR:
+            raise _refuse("persona_not_player", "the director controls this chat's persona; a player must take it back")
 
     def _open(self, scene: Scene) -> StoredTurn:
-        if not scene.turns.complete:
-            raise _refuse("turns_unreadable", "a turn file of this chat cannot be read; nothing is written")
+        _readable(scene)
         stored = scene.turns.last
         if stored is None or not stored.record.open:
             raise _refuse("no_open_turn", "no turn is open")
         return stored
+
+
+def _readable(scene: Scene) -> None:
+    """Every write needs the chat's whole history: one unreadable turn file stops them all."""
+    if not scene.turns.complete:
+        raise _refuse("turns_unreadable", "a turn file of this chat cannot be read; nothing is written")
 
 
 class _Stale(Exception):

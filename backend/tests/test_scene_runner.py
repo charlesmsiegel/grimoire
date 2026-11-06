@@ -7,17 +7,21 @@ persona, and the Storm over Port Vell scenario chat. Every model call is a scrip
 from __future__ import annotations
 
 import shutil
+import threading
 
 import pytest
 
 from chat_fixtures import Clock
-from scene_fixtures import ANA, ANYA, BOB, LIGHTHOUSE, MARA_VELL, VELL_EXAMPLE, Table, Tagged, card_library, say
+from generation_fixtures import Harness
+from scene_fixtures import (
+    ANA, BOB, LIGHTHOUSE, MARA_VELL, POLICY, STORM, VELL_EXAMPLE, Table, Tagged, card_library, say,
+)
 from store_helpers import OWNER
 
 from grimoire.chats import Launch
 from grimoire.chatstore import ChatLibrary
 from grimoire.core import DIRECTOR
-from grimoire.core.identity import InstanceRef
+from grimoire.core.identity import InstanceRef, ScopeRef
 from grimoire.core.inference import InferencePolicy
 from grimoire.runtime import RunFence
 from grimoire.play import SceneRunner
@@ -150,6 +154,8 @@ def test_an_action_everyone_present_sees(cards):
 
 @pytest.mark.parametrize(("text", "mode", "reason"), [
     ("   ", "auto", "no_content"),
+    ('"..."', "auto", "no_content"),  # nothing anyone could hear
+    ("*...*", "auto", "no_content"),
     ("Could you pause?", "command", "uncertain"),
 ])
 def test_a_post_that_cannot_be_played_writes_nothing(cards, text, mode, reason):
@@ -277,6 +283,66 @@ def test_a_run_made_stale_after_the_call_never_writes_its_lines(cards, monkeypat
         assert table.runner.open(chat).pending.takes[0].state == "stale"
 
 
+def test_a_reroll_that_supersedes_a_running_take_keeps_its_lines_when_the_old_run_lands_first(cards):
+    folder, chat, _ = cards
+    fence = RunFence()
+    with Table(folder, [say("Old words.")], fence=fence) as table:
+        seated(table, chat)
+        table.runner.post(chat, table.player(), '"Is the cargo safe?"')
+        newer = Harness([say("New words.")])
+        reroll = SceneRunner(table.store, table.authority, table.owner, owner=OWNER, runtime=newer.runtime,
+                             policy=POLICY, fence=fence)
+        old_in_call, old_may_return, old_landed = threading.Event(), threading.Event(), threading.Event()
+        old_run, new_run = table.harness.runtime.run_turn, newer.runtime.run_turn
+
+        def slow_old(*args, **kwargs):
+            outcome = old_run(*args, **kwargs)
+            old_in_call.set()
+            old_may_return.wait(10)
+            return outcome
+
+        def new_after_the_old_lands(*args, **kwargs):
+            old_may_return.set()
+            old_landed.wait(10)  # the old run, now stale, writes its turn while this call is in flight
+            return new_run(*args, **kwargs)
+
+        table.harness.runtime.run_turn, newer.runtime.run_turn = slow_old, new_after_the_old_lands
+        results = {}
+
+        def old():
+            try:
+                results["old"] = table.runner.generate(chat, table.player())
+            finally:
+                old_landed.set()
+
+        thread = threading.Thread(target=old)
+        thread.start()
+        assert old_in_call.wait(10)
+        results["new"] = reroll.generate(chat, table.player())
+        thread.join(10)
+        assert (results["old"].state, results["old"].lines) == ("stale", ())
+        assert results["new"].state == "proposed" and [l.text for l in results["new"].lines] == ["New words."]
+        assert [t.state for t in table.runner.open(chat).pending.takes] == ["stale", "proposed"]
+
+
+def test_a_persona_the_director_controls_is_reported_and_never_played(cards):
+    folder, chat, _ = cards
+    with Table(folder) as table:
+        seated(table, chat)
+        _, mara = actors(table, chat)
+        chats = ChatLibrary(table.store, table.owner, clock=Clock(), new_id=Tagged("p"), owner=OWNER)
+        taken = chats.start_chat(Launch("scenario", STORM), persona=MARA_VELL, scope=ScopeRef(chat.campaign_id),
+                                 reuse_actors={("persona", MARA_VELL.entity_key): mara}).commit().chat
+        table.runner.seat(taken, ANA)  # Mara is already the director's: seating never changes that
+        scene = table.runner.open(taken)
+        assert scene.persona == mara and ("persona_not_player", str(mara)) in scene.problems
+        assert scene.players == () and mara in scene.npcs
+        refused("persona_not_player", table.runner.begin, taken, table.owner)
+        refused("persona_not_player", table.runner.post, taken, table.owner, '"Hello."')
+        refused("persona_not_player", table.runner.generate, taken, table.owner)
+        assert table.runner.open(taken).records == ()
+
+
 def test_an_interrupted_run_is_reported_and_superseded_by_the_next(cards):
     folder, chat, _ = cards
     with Table(folder, [say("Back again.")]) as table:
@@ -299,6 +365,12 @@ def test_an_unreadable_turn_of_this_chat_stops_every_write(cards):
         broken.write_bytes(b"{not json")
         refused("turns_unreadable", table.runner.post, chat, table.player(), '"Hello."')
         refused("turns_unreadable", table.runner.keep, chat, table.player(), 1)
+        line = f"{chat.chat_id}.000001.1.1"
+        refused("turns_unreadable", table.runner.request, chat, table.player(), "skip", [line])
+        refused("turns_unreadable", table.runner.request, chat, table.player(), "pause")
+        refused("turns_unreadable", table.runner.strike, chat, table.player(), line)
+        refused("turns_unreadable", table.runner.resume, chat, table.player())
+        assert broken.read_bytes() == b"{not json"
 
 
 # -- the table's choices -----------------------------------------------------------------------------
@@ -343,7 +415,7 @@ def test_skip_withdraws_a_kept_line_too(cards):
         refused("unknown_line", table.runner.request, chat, table.player(), "skip", ["nope"])
 
 
-def test_pause_stops_play_until_the_player_who_paused_resumes(cards):
+def test_pause_stops_play_until_the_player_who_paused_or_the_owner_resumes(cards):
     folder, chat, _ = cards
     with Table(folder, [say("Paused talk.")]) as table:
         seated(table, chat)
@@ -353,7 +425,11 @@ def test_pause_stops_play_until_the_player_who_paused_resumes(cards):
         assert paused.paused and paused.paused_by == ANA
         refused("already_paused", table.runner.request, chat, table.player(), "pause")
         refused("paused", table.runner.generate, chat, table.player())
-        refused("not_yours", table.runner.resume, chat, table.owner)
         table.runner.resume(chat, table.player())
         refused("not_paused", table.runner.resume, chat, table.player())
+        table.runner.request(chat, table.owner, "pause")
+        refused("not_yours", table.runner.resume, chat, table.player())  # the owner paused it
+        table.runner.resume(chat, table.owner)
+        table.runner.request(chat, table.player(), "pause")
+        table.runner.resume(chat, table.owner)  # the owner may always lift a pause
         assert table.runner.generate(chat, table.player()).state == "proposed"

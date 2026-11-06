@@ -133,6 +133,8 @@ def test_turn_ids_are_the_chat_and_a_six_digit_number():
     lambda: Post("human:ana", PC, "shout", "Hi", (PC,), "speech"),
     lambda: Post("human:ana", PC, "speech", "  ", (PC,), "speech"),
     lambda: Post("human:ana", PC, "speech", "Hi", (PC, InstanceRef("other", "character", "x")), "speech"),
+    lambda: Post("human:ana", PC, "speech", "Hi", (PC, MARA), "shout"),  # not one of 032's channels
+    lambda: Post("human:ana", PC, "speech", "Hi", (PC, MARA), "whisper"),  # private, yet addressed to no one
     lambda: SceneLine("chat-1.000001.1.1", MARA, "Mara", "Hi", (PC,), state="struck"),  # struck by no one
     lambda: SceneLine("chat-1.000001.1.1", MARA, "Mara", "Hi", (PC,), by="human:ana"),  # shown, yet by someone
     lambda: SceneLine("chat-1.000001.1.1", MARA, "Mara", "Hi", (PC,), actor_revision=REV.unpinned()),
@@ -192,3 +194,10 @@ def test_the_heard_window_keeps_the_newest_lines_each_clipped():
     assert len(heard) == MAX_HEARD and heard[0].text.startswith("line 6 ") and heard[-1].text.startswith(
         f"line {MAX_HEARD + 5} ")
     assert all(len(h.text) == MAX_LINE_CHARS and h.text.endswith("…") for h in heard)
+
+
+def test_a_wordless_line_is_heard_by_no_one_and_never_crowds_out_the_window():
+    turns = [kept(1, line(1, 1, 1, text="Words first.")), kept(2, line(2, 1, 1, text="...")),
+             kept(3, line(3, 1, 1, text="*—*"), post=spoken(3, "?!"))]
+    assert [h.text for h in heard_for(turns, PC, NAMES)] == ["Words first."]
+    assert [h.text for h in table_lines(turns, NAMES)] == ["Words first."]

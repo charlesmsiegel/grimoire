@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 
 from card_fixtures import SCENARIO, V3, card, encode, land
-from chat_fixtures import Clock, Ids
+from chat_fixtures import Clock
 from generation_fixtures import Harness, say
 from import_fixtures import ARCHIVE, CAMPAIGN_ID, MARA_DEFAULT_REF, Env
 from ledger_helpers import fixed_clock

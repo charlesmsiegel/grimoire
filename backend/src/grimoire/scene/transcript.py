@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping
 
 from grimoire.core.boundaries import NarrationSegment
 from grimoire.core.identity import InstanceRef
-from grimoire.generation import MAX_HEARD, MAX_LINE_CHARS, HeardLine
+from grimoire.generation import MAX_HEARD, MAX_LINE_CHARS, GenerationError, HeardLine
 
 from .model import Post, TurnRecord
 
@@ -28,9 +28,17 @@ def _speaker(actor: InstanceRef, names: Mapping[InstanceRef, str]) -> str:
     return _clip(names.get(actor) or actor.instance_id)
 
 
-def _post_line(post: Post, names: Mapping[InstanceRef, str]) -> HeardLine:
+def _heard(speaker: str, text: str, actor: InstanceRef | None) -> HeardLine | None:
+    """A heard line, or ``None`` for one that says nothing a listener could hear (027 needs words)."""
+    try:
+        return HeardLine(_clip(speaker), _clip(text), actor)
+    except GenerationError:
+        return None
+
+
+def _post_line(post: Post, names: Mapping[InstanceRef, str]) -> HeardLine | None:
     text = post.text if post.channel is not None else f"*{post.text.strip('*').strip() or post.text}*"
-    return HeardLine(_speaker(post.actor, names), _clip(text), post.actor)
+    return _heard(_speaker(post.actor, names), text, post.actor)
 
 
 def _ordered(turns: Iterable[TurnRecord]) -> list[TurnRecord]:
@@ -40,25 +48,25 @@ def _ordered(turns: Iterable[TurnRecord]) -> list[TurnRecord]:
 def heard_for(turns: Iterable[TurnRecord], actor: InstanceRef, names: Mapping[InstanceRef, str], *,
               limit: int = MAX_HEARD) -> tuple[HeardLine, ...]:
     """What ``actor`` heard, oldest first: posts in its audience and kept lines it heard (the last ``limit``)."""
-    heard: list[HeardLine] = []
+    heard: list[HeardLine | None] = []
     for turn in _ordered(turns):
         if turn.post is not None and actor in turn.post.audience:
             heard.append(_post_line(turn.post, names))
-        for line in turn.visible(actor):
-            heard.append(HeardLine(_clip(line.speaker), _clip(line.text), line.actor))
-    return tuple(heard[-limit:]) if limit else ()
+        heard.extend(_heard(line.speaker, line.text, line.actor) for line in turn.visible(actor))
+    found = [line for line in heard if line is not None]
+    return tuple(found[-limit:]) if limit else ()
 
 
 def table_lines(turns: Iterable[TurnRecord], names: Mapping[InstanceRef, str], *,
                 limit: int = MAX_HEARD) -> tuple[HeardLine, ...]:
     """What the whole table saw (the director's view): every post but a private one, and every kept line."""
-    seen: list[HeardLine] = []
+    seen: list[HeardLine | None] = []
     for turn in _ordered(turns):
         if turn.post is not None and not turn.post.private:
             seen.append(_post_line(turn.post, names))
-        for line in turn.visible(None):
-            seen.append(HeardLine(_clip(line.speaker), _clip(line.text), line.actor))
-    return tuple(seen[-limit:]) if limit else ()
+        seen.extend(_heard(line.speaker, line.text, line.actor) for line in turn.visible(None))
+    found = [line for line in seen if line is not None]
+    return tuple(found[-limit:]) if limit else ()
 
 
 def render(lines: Iterable[HeardLine]) -> str:

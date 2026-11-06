@@ -18,11 +18,11 @@ Each speaking NPC gets its own call, with its own voice, its own [031](CONTEXT.m
 
 ## A turn
 
-`TurnRef(campaign_id, turn_id)` is `campaign:<c>#turn/<t>`, stored at `campaigns/<c>/turns/<t>.json` in the scope-record envelope ([STORAGE](STORAGE.md)). `turn_id` is `<chat_id>.<n:06d>`, numbered from 1 per chat. A chat id over 97 characters cannot be played (`invalid_field`), so the turn id still fits 032's message ids.
+`TurnRef(campaign_id, turn_id)` is `campaign:<c>#turn/<t>`, stored at `campaigns/<c>/turns/<t>.json` in the scope-record envelope ([STORAGE](STORAGE.md)). `turn_id` is `<chat_id>.<n:06d>`, numbered from 1 per chat. A chat id over 97 characters cannot be played (`chat_id_too_long`), so the turn id still fits 032's message ids; a chat holds at most 999,999 turns (`too_many_turns`).
 
 A `TurnRecord` holds:
 - `origin`: `post` (a player's post), `prompt` (the table asked the cast to go on), `opening` (a card's greeting or a scenario's opening), or `imported` (reserved; 036's imported history lives in its own `transcripts/` family);
-- `post`: the player's line, who submitted it, its kind (`speech` or `action`), channel, addressees and **audience**;
+- `post`: the player's line, who submitted it, its kind (`speech` or `action`), channel (one of 032's: `speech`, `whisper`, `telepathy`), addressees (a private channel needs at least one) and **audience**;
 - `takes`: up to 16. A take is `running`, `proposed`, `kept`, `withdrawn`, `stale` or `superseded`. It records its cast, its lines, every planned call with its status and attempts, the policy's declined calls, any unscreened director lore, a redirect's direction, and who chose it;
 - `paused` (and, kept only for `resume`, who paused), and `passed_by`.
 
@@ -35,7 +35,7 @@ A turn is open until one take is kept or somebody passes it. Lines are `<turn_id
 - A post's audience is 032's `transmit` receivers plus the sender. Room speech with nobody else present is heard by the speaker alone. An action that is not a private message is seen by everyone present.
 - An NPC line is heard by everyone present. A narrator line is heard by the table (the present player characters), never by an NPC.
 - **Audience is fixed when a line is spoken.** An actor attached later was in no earlier audience, so it hears nothing that came before.
-- Proposals, withdrawn lines and struck lines are heard by no one. A reroll never hears the take it replaces.
+- Proposals, withdrawn lines and struck lines are heard by no one. A reroll never hears the take it replaces. A line with no words (`...`) is heard by no one either, and does not take a place in the window.
 - `heard_for` gives an NPC's window (the last `MAX_HEARD` lines, each capped at 027's `MAX_LINE_CHARS`); it is both its brief's `heard` and its pack's `scene_text`. `table_lines` is the director's view: every post but a private one, and every kept line.
 
 ## The runner
@@ -52,27 +52,27 @@ Every method reads the chat afresh (one `LibraryView`, 022's chat snapshot, the 
 
 | Method | What it does |
 |---|---|
-| `open(chat)` | The `Scene` as it stands: turns, cast, persona, names, controls and problems. Writes nothing. |
+| `open(chat)` | The `Scene` as it stands: turns, cast, persona, names, controls and problems (a damaged turn, an `interrupted` run, a cast member with `no_voice`, a party member left out, a persona the director controls: `persona_not_player`). Writes nothing. |
 | `seat(chat, player)` | Records control for actors with none: the persona to `player`, every other bound character to the director. A recorded controller is never changed. |
 | `begin(chat, by)` | The opening turn, as a proposed take: a scenario's first opening (narrated to the table), else the launch card's first greeting spoken by its character, else the chat's premise. `{{char}}` and `{{user}}` are filled. |
-| `post(chat, by, text, *, mode="auto")` | The player's line, routed by 008, checked by 003's `submit_contribution`, read by 032's `read_message`, and saved as a new turn before anything is generated. The same post retried onto its own untouched turn returns that turn. |
+| `post(chat, by, text, *, mode="auto")` | The player's line (it needs words: `"..."` alone is `no_content`), routed by 008, checked by 003's `submit_contribution`, read by 032's `read_message`, and saved as a new turn before anything is generated. The same post retried onto its own untouched turn returns that turn. |
 | `generate(chat, by, *, speakers=None, director=False)` | One new proposed take for the open turn (a `prompt` turn is opened when none is). Writes a `running` take with its planned calls first, then the result. |
 | `keep(chat, by, take, *, acknowledge_unscreened=False)` | Keeps one proposed take with a shown line; the turn closes. A take written with unscreened director lore needs the acknowledgement. |
 | `strike(chat, by, line_id)` | Takes a shown line of a kept take out of the transcript. |
 | `pass_turn(chat, by)` | Closes the open turn with nothing kept. |
 | `request(chat, by, kind, targets=(), *, direction=None)` | 016's mid-session request with no session-zero configuration: `pause`, or `skip`, `redirect` and `rephrase` naming lines, which are withdrawn (kept or proposed). A direction is recorded on the take. |
-| `resume(chat, by)` | Lifts a pause; only the player who paused may. |
+| `resume(chat, by)` | Lifts a pause; only the player who paused, or the library owner, may. |
 
-**Who may act.** `by` is a handle the same authority issued, trusted and human. Its principal must be the library owner or the controller of a present player character (`not_at_table`). Only the persona's controller may post for it (`not_your_character`). The principal is stored as `submitted_by` or `by`.
+**Who may act.** `by` is a handle the same authority issued, trusted and human. Its principal must be the library owner or the controller of a present player character (`not_at_table`). Only the persona's controller may post for it (`not_your_character`). A persona whose recorded controller is the director (an actor reused from an NPC) is never played: `begin`, `post` and `generate` refuse `persona_not_player` until a player takes it back through 003. The principal is stored as `submitted_by` or `by`.
 
-**Generating.** Speakers default to every present, director-controlled NPC with a voice; named speakers must be present (`not_present`), NPCs (`not_an_npc`) and voiced (`no_voice`). Each is briefed from its own knowledge (020, as of the newest sequence), its own pack built from this turn's snapshot, and only what it heard; silent present NPCs' voices go to the screen as `scene_voices`. A director reply is asked for explicitly, needs a bound scenario or a premise (`no_scenario`), and sees only what the table saw plus triggered lore. Every NPC line passes `review_narration` as voluntary speech by that NPC; a rejected line is dropped and its call marked `rejected`. The run re-checks its fence inside the commit: a run made stale keeps its usage and drops its lines. A take found `running` when the chat opens is reported `interrupted` and superseded by the next.
+**Generating.** Speakers default to every present, director-controlled NPC with a voice; named speakers must be present (`not_present`), NPCs (`not_an_npc`) and voiced (`no_voice`). Each is briefed from its own knowledge (020, as of the newest sequence), its own pack built from this turn's snapshot, and only what it heard; silent present NPCs' voices go to the screen as `scene_voices`. A director reply is asked for explicitly, needs a bound scenario or a premise (`no_scenario`), and sees only what the table saw plus triggered lore. Every NPC line passes `review_narration` as voluntary speech by that NPC; a rejected line is dropped and its call marked `rejected`. The run re-checks its fence inside the commit: a run made stale keeps its usage and drops its lines. When a reroll supersedes a take still running and the older run lands first, the reroll reads the turn again and still writes its own take; a take that was itself superseded meanwhile is written stale. A take found `running` when the chat opens is reported `interrupted` and superseded by the next.
 
-**Refusals** (`SceneRefused(reason)`), none of which writes anything: `bad_handle`, `bad_runtime`, `invalid_field`, `no_chat`, `not_seated`, `not_authenticated`, `not_at_table`, `not_your_character`, `already_begun`, `no_opening`, `no_persona`, `persona_absent`, `no_content`, `uncertain` (with the router's feedback), `not_in_this_slice` (commands, direction, interiority), 032's unread reasons, `turn_open`, `no_runtime`, `session_zero_unreadable`, `party_unreadable`, `unassigned_actor`, `nothing_to_generate`, `too_many_takes`, `director_declined`, `no_scenario`, `not_present`, `not_an_npc`, `no_voice`, `not_proposed`, `empty_take`, `unscreened_lore`, `not_kept`, `unknown_line`, `no_targets`, `nothing_to_pause`, `already_paused`, `not_paused`, `not_yours`, `paused`, `no_open_turn`, `turns_unreadable`, `turn_changed`.
+**Refusals** (`SceneRefused(reason)`). None writes anything, except that `generate` has already written its `running` take when its result is refused `turn_changed` (the next run supersedes that take, as an interrupted one). The reasons: `bad_handle`, `bad_runtime`, `invalid_field`, `chat_id_too_long`, `too_many_turns`, `no_chat`, `not_seated`, `not_authenticated`, `not_at_table`, `not_your_character`, `already_begun`, `no_opening`, `no_persona`, `persona_absent`, `persona_not_player`, `no_content`, `uncertain` (with the router's feedback), `not_in_this_slice` (commands, direction, interiority), 032's unread reasons, `turn_open`, `no_runtime`, `session_zero_unreadable`, `party_unreadable`, `unassigned_actor`, `nothing_to_generate`, `too_many_takes`, `director_declined`, `no_scenario`, `not_present`, `not_an_npc`, `no_voice`, `not_proposed`, `empty_take`, `unscreened_lore`, `not_kept`, `unknown_line`, `no_targets`, `nothing_to_pause`, `already_paused`, `not_paused`, `not_yours`, `paused`, `no_open_turn`, `turns_unreadable`, `turn_changed`; and 027's planning and briefing reasons, passed on unchanged.
 
 ## Storage and sync
 
 - `turns/` is a history family: `load()` never reads it, and `store.campaign_turns(campaign)` lists it with per-file problems. A turn is created once (create-only, so two posts can never both become turn *n*) and then changed only by compare-and-swap.
-- A turn file of this chat that cannot be read stops every write to the chat (`turns_unreadable`), as does a gap in the numbering; a damaged turn of another chat does not.
+- A turn file of this chat that cannot be read stops every write to the chat, marks and pauses included (`turns_unreadable`), as does a gap in the numbering; a damaged turn of another chat does not.
 - Every actor id a turn names stays taken for 107's allocators (`turn_instance_ids`), so a deleted actor's id never goes to a newcomer who would inherit what it heard.
 - **Sync holds turns back** (`turn` is a held kind, [SYNC](SYNC.md)): two devices playing one chat offline would both write its next turn. Devices that differ get a `held` conflict, never a silent drop. Turn merges are 028's milestone, due before 044.
 
