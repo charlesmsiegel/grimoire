@@ -148,6 +148,24 @@ def test_a_version_of_a_path_no_longer_in_conflict_is_never_dismissable(tmp_path
     assert theirs in kept(desktop)
 
 
+def test_a_dismissal_between_plan_and_apply_is_never_undone_by_the_older_plan(tmp_path):
+    """The person deletes the desktop's copy of the phone's version, a sync plans to keep it again,
+    and the person dismisses that version before the plan is applied. The plan read the record
+    before the dismissal, so applying it stops instead of writing the copy back (the record would
+    not change, yet it is no longer the one the plan read), and the next sync honours it."""
+    desktop, phone = _conflict(tmp_path)
+    theirs = _theirs(phone)
+    _delete(desktop, _slots(desktop, theirs))
+    plan = plan_sync(desktop, phone, handles())
+    assert dismiss(desktop, PHONE, PATH, etag(theirs), handle()).wrote
+    with pytest.raises(SyncInterrupted):
+        apply_sync(plan, handles())
+    assert theirs not in kept(desktop)
+    for _ in range(2):
+        conflict = sync(desktop, phone, handles()).conflict(PATH)
+        assert conflict.dismissed == (DESKTOP,) and theirs not in kept(desktop)
+
+
 def test_dismissing_twice_records_once(tmp_path):
     desktop, phone = _conflict(tmp_path)
     tag = etag(_theirs(phone))

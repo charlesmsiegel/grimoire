@@ -19,11 +19,12 @@ its old shards or the new root with its new ones. The root's etag list binds the
 is missing, damaged, edited or left over from another commit makes the **whole document ignored**,
 exactly as a damaged single-file archive is (every path it names becomes uncertain, never trusted
 and never forgotten). Shards of another width left by an earlier commit are not listed, so they
-are never trusted and **never read**: only the shards a root lists are read, so a stale or planted
-file costs nothing on later syncs and never travels (028's snapshot sends what ``pair_files``
+are never trusted and **never read** while the root is valid: only the shards it lists are read, so a stale or planted
+file costs nothing on later syncs and never travels (028's snapshot sends what ``read_document``
 reads). A later write of such a name takes its etag for the compare-and-swap then, lazily
-(``changes``). Where the root itself is missing, the folder is only listed: shard names without
-their root make the document ignored, never a first sync.
+(``changes``). Where the root and its listed shards give no valid document (the root missing,
+damaged or cut short), every shard in the folder is read for the paths it names: shards without a
+usable root make the document ignored, never a first sync, and forget none of their paths.
 """
 
 from __future__ import annotations
@@ -142,18 +143,28 @@ def pair_files(store: LibraryStore, kind: str, peer: str) -> dict[str, bytes]:
 
 
 def orphan_shards(store: LibraryStore, kind: str, peer: str) -> dict[str, bytes]:
-    """The shards of ``kind`` standing in the pair's folder, by name: asked only when the root is
-    missing, where any of them means the document was sharded and lost its root. They are read only
-    for the paths they name (``named_paths``), never as bases: the document stays ignored, and those
-    paths uncertain, so an archive rebuilt without its root never forgets a tombstone a shard holds.
-    One that vanished since the listing is empty, still marking the document as lost; an unreadable
-    one stops the sync, as any unreadable ``.sync`` file does."""
+    """The shards of ``kind`` standing in the pair's folder, by name: asked only when the root and the
+    shards it lists give no document (``read_document``). They are read only for the paths they name
+    (``named_paths``), never as bases: the document stays ignored, and those paths uncertain, so an
+    archive rebuilt without a usable root never forgets a tombstone a shard holds. One that vanished
+    since the listing is empty, still marking the document as lost; an unreadable one stops the sync,
+    as any unreadable ``.sync`` file does."""
     return {name: read_state(store, name) or b"" for name in state_names(store, peer) if is_shard(name, kind, peer)}
 
 
 def read_document(store: LibraryStore, kind: str, peer: str, devices: tuple[str, str]) -> ArchiveView | PendingView:
-    """The pair's archive or marker on this device, as ``parse`` reads ``pair_files``."""
-    return parse(kind, pair_files(store, kind, peer) or orphan_shards(store, kind, peer), peer, devices)
+    """The pair's archive or marker on this device, as ``parse`` reads ``pair_files``.
+
+    Whenever those give no valid document, for any reason (a root that is missing, not JSON, cut
+    short or listing junk, or a listed shard that does not match), every shard of ``kind`` on disk
+    is read too: a root that no longer names its shards must not make the paths they hold drop
+    out of the plan. Only then: a valid document reads nothing it does not list."""
+    files = pair_files(store, kind, peer)
+    view = parse(kind, files, peer, devices)
+    if view.state == "valid":
+        return view
+    others = orphan_shards(store, kind, peer)
+    return view if not set(others) - set(files) else parse(kind, {**others, **files}, peer, devices)
 
 
 def _digest(document: Mapping[str, object]) -> str:

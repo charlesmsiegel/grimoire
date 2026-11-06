@@ -102,6 +102,29 @@ def test_a_dismissal_on_the_serving_device_is_honoured_and_forgotten_with_its_co
     assert record["entries"] == {}
 
 
+def test_a_dismissal_on_the_serving_device_after_its_snapshot_is_never_undone(tmp_path, monkeypatch):
+    """The phone's copy of the desktop's version is gone, so a transfer plans to keep it again; the
+    person dismisses it on the phone after the snapshot went out. The phone's record is no longer
+    the one the plan read, so its data step is refused instead of writing the copy back, and the
+    transfer's next pass plans from the dismissal."""
+    desktop, phone = _conflict(tmp_path)
+    mine = (desktop.store.root / WREN_PATH).read_bytes()
+    for slot in (phone.store.root / ".conflicts").rglob("*"):
+        if slot.is_file() and slot.read_bytes() == mine:
+            slot.unlink()
+    real, dismissed = session_module.send_step, []
+
+    def dismiss_first(channel, step, reader):  # type: ignore[no-untyped-def]
+        if step.kind == "data" and not dismissed:
+            dismissed.append(dismiss(phone.store, DESKTOP, WREN_PATH, etag(mine), phone.handle).wrote)
+        return real(channel, step, reader)
+    monkeypatch.setattr(session_module, "send_step", dismiss_first)
+    with serving(phone) as server:
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert dismissed == [True] and mine not in _kept(phone)
+    assert report.passes[-1].conflict(WREN_PATH).dismissed == (PHONE,)  # the next pass read the dismissal
+
+
 def _raw_step(desktop, server, *ops: tuple[str, bytes]) -> None:  # type: ignore[no-untyped-def]
     """Send one step of ``.sync`` writes as a hostile but authenticated desktop would; it must be refused."""
     pairing = read_pairing(desktop.store, PHONE)

@@ -76,12 +76,16 @@ def _keeps_after(data: bytes, existing: str, device_id: str, peer: str) -> bytes
 
 
 def _retire(txn, store: LibraryStore, existing: str, kind: str, peer: str) -> None:  # type: ignore[no-untyped-def]
-    """Retire a pair's archive or marker: its root and the shards it lists, each keeping what it named.
-    Shards it does not list are never read (stale or planted files), and stay unlisted."""
+    """Retire a pair's archive or marker: its root and the shards a sync would read with it, each
+    keeping what it named. Those are the shards it lists, or every shard on disk when the root and
+    its listed shards are no valid document (a damaged root would otherwise retire naming nothing,
+    leaving the paths its shards hold to be found only by listing the folder). Shards a valid root
+    does not list are never read (stale or planted files), and stay unlisted."""
     root = store.read_sync_state(bookkeeping.root_name(kind, peer))
     if root is None or is_retired(root):
         return
-    shards = tuple(bookkeeping.listed_shards(kind, peer, root))
+    files = bookkeeping.read_document(store, kind, peer, tuple(sorted((existing, peer)))).files  # type: ignore[arg-type]
+    shards = tuple(sorted(name for name in files if name != bookkeeping.root_name(kind, peer)))
     for name in shards:
         data = store.read_sync_state(name)
         if data is not None and not is_retired(data):

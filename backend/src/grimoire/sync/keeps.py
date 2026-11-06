@@ -192,25 +192,39 @@ def with_delivered(view: KeepsView, peer: str, devices: tuple[str, str], first: 
 
 class Delivery:
     """The record a sync's data commit writes beside its keeps (``with_delivered``), as the commit
-    stages it, shrinks it when a keep is denied, and finally writes it."""
+    stages it, shrinks it when a keep is denied, and finally writes it.
+
+    Every commit that keeps a version also guards the record by compare-and-swap against the one
+    the plan read, even when it adds no delivery (the same bytes again, as a no-op write): the plan
+    keeps a version only because that record did not dismiss it, so a dismissal committed after the
+    plan read it stops the commit instead of letting the older plan write the dismissed copy back."""
 
     def __init__(self, plan, device: str, keeps) -> None:  # type: ignore[no-untyped-def]
         self.view, self.peer, self.devices = plan.kept_records[device], plan.other(device), plan.devices
+        self.keeps = {(keep.path, etag(keep.data)) for keep in keeps}
         self.first = first_copies(plan.stores[device], [(keep.path, keep.data) for keep in keeps])
         candidates = {keep.path: archive_candidate(keep.path, *plan.archives.values()) for keep in keeps}
         # the conflict's base as the archives hold it, unless a pending marker moved it (another conflict)
         self.bases = {path: base_token(base) if plan.bases[path] == base else None for path, base in candidates.items()}
-        self.state = with_delivered(self.view, self.peer, self.devices, self.first, self.bases)
+        self.state = self._guarded(self.first, self.keeps)
         self.keys: dict[str, str] = {}
+
+    def _guarded(self, first: set[tuple[str, str]], keeps: set[tuple[str, str]]) -> State | None:
+        state = with_delivered(self.view, self.peer, self.devices, first, self.bases)
+        if state is not None or not keeps:
+            return state
+        # unchanged (``_write`` returns None only for a valid record or a missing one with nothing to add)
+        data = self.view.data if self.view.data is not None else _render(self.devices, {})
+        return keeps_name(self.peer), data, None if self.view.data is None else etag(self.view.data)
 
     def stage(self, txn) -> None:  # type: ignore[no-untyped-def]
         if self.state is not None:
             self.keys = stage_states(txn, [self.state])
 
     def deny(self, keeps) -> dict[str, bytes | None]:  # type: ignore[no-untyped-def]
-        """The record's new bytes once ``keeps`` were denied (``None``: it no longer changes)."""
-        self.state = with_delivered(self.view, self.peer, self.devices,
-                                    self.first - {(keep.path, etag(keep.data)) for keep in keeps}, self.bases)
+        """The record's new bytes once ``keeps`` were denied (``None``: no keep is left to record or guard)."""
+        refused = {(keep.path, etag(keep.data)) for keep in keeps}
+        self.state = self._guarded(self.first - refused, self.keeps - refused)
         return {key: None if self.state is None else self.state[1] for key in self.keys}
 
     def committed(self, written: Iterable[object]) -> tuple[KeepsView, tuple[State, ...]]:

@@ -29,7 +29,7 @@ from grimoire.store.jsonfmt import MAX_FILE_BYTES
 from grimoire.store.layout import name_key
 from grimoire.store.media import MAX_BLOB_BYTES
 from grimoire.store.replica import CanonicalScan
-from grimoire.sync.bookkeeping import orphan_shards, pair_files
+from grimoire.sync.bookkeeping import pair_files, read_document
 from grimoire.sync.documents import DEVICE_FILE, keeps_name, pair_state, parse_device
 
 from .errors import MirrorMismatch, TransportError
@@ -257,17 +257,20 @@ def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -
         {"scope": str(grant.scope), "permissions": sorted(permission.value for permission in grant.permissions)}
         for grant in authority.active_grants() if grant.principal == principal]})
     # the pair's own files as 019 reads them (028): its archive and marker, each a root and the shards it
-    # lists and never another shard (a stale or planted file is not read here, nor sent), and its
+    # lists and, while those form a valid document, never another shard (a stale or planted file is not
+    # read here, nor sent), and its
     # kept-version record. A read error stops the snapshot: unreadable is never absent.
     states: dict[str, bytes] = {}
     for name in (DEVICE_FILE, keeps_name(peer)):
         data = store.read_sync_state(name)
         if data is not None:
             states[name] = data
+    device = parse_device(states.get(DEVICE_FILE))
     for kind in ("archive", "pending"):
-        # a root lost while its shards stand: they are sent as they stand, so the mirror's document is
-        # ignored with the same paths uncertain as this device's own
-        states.update(pair_files(store, kind, peer) or orphan_shards(store, kind, peer))
+        # what this device's own plan reads: with a root lost or damaged while shards stand, they are
+        # sent as they stand, so the mirror's document is ignored with the same paths uncertain
+        states.update(pair_files(store, kind, peer) if device is None  # the mirror refuses it anyway
+                      else read_document(store, kind, peer, tuple(sorted((device, peer)))).files)  # type: ignore[arg-type]
     for name, data in states.items():
         channel.send({"t": "state", "name": name}, data)
     summary = scan_summary(store)  # before the walk: a file changed after it fails the client's check

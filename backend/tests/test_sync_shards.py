@@ -186,23 +186,37 @@ def test_a_tombstone_in_a_damaged_shard_is_not_forgotten(tmp_path, small_cap):
     assert report.conflict(gone).code == "missing_ancestor" and not (desktop.root / gone).exists()
 
 
-def test_a_tombstone_whose_roots_are_lost_on_both_devices_is_not_forgotten(tmp_path, small_cap):
-    """Both devices lose their archive's root while its shards stand. The next sync reads the shards
-    for the paths they name (never as bases) and keeps those paths uncertain, so the archive it
-    rebuilds forgets no deletion: a restore of the deleted bytes on one device is a conflict, never
-    a silent copy back."""
+def _lose_root(store: LibraryStore, peer: str, how: str, kind: str = "archive") -> None:
+    root = store.root / ".sync" / "peers" / peer / f"{kind}.json"
+    if how == "deleted":
+        root.unlink()
+    elif how == "not JSON":
+        root.write_bytes(b"{")
+    elif how == "truncated":  # cut inside its shard list: nothing names the shards any more
+        root.write_bytes(root.read_bytes()[:60])
+
+
+@pytest.mark.parametrize("devices", ["both", "one"])
+@pytest.mark.parametrize("how", ["deleted", "not JSON", "truncated"])
+def test_a_tombstone_whose_roots_are_lost_is_not_forgotten(tmp_path, small_cap, how, devices):
+    """A device's archive root is lost (deleted, or unreadable as a root) while its shards stand. The
+    next sync reads every shard on disk for the paths they name (never as bases) and keeps those paths
+    uncertain, so the archive it rebuilds forgets no deletion: a restore of the deleted bytes on one
+    device is a conflict, never a silent copy back."""
     desktop, phone, paths = _sharded_pair(tmp_path)
     gone = paths[7]
     deleted = (desktop.root / gone).read_bytes()
     for store in (desktop, phone):
         (store.root / gone).unlink()
     sync(desktop, phone, handles())
-    for store, peer in ((desktop, PHONE), (phone, DESKTOP)):
-        (store.root / ".sync" / "peers" / peer / "archive.json").unlink()
+    for store, peer in ((desktop, PHONE), (phone, DESKTOP))[: 2 if devices == "both" else 1]:
+        _lose_root(store, peer, how)
     sync(desktop, phone, handles())
     (phone.root / gone).write_bytes(deleted)  # restored on one device only
     report = sync(desktop, phone, handles())
-    assert report.conflict(gone) is not None and report.conflict(gone).code == "missing_ancestor"
+    # with one root lost the phone's own archive still records the deletion; with both, the shards do
+    assert report.conflict(gone) is not None
+    assert report.conflict(gone).code == ("missing_ancestor" if devices == "both" else "resurrected")
     assert not (desktop.root / gone).exists()
 
 
@@ -227,8 +241,11 @@ def test_shards_left_from_another_width_are_never_trusted_and_are_overwritten_sa
     assert _archive(desktop, PHONE).state == "valid" and json.loads(stale.read_bytes())["shard"] == "0"
 
 
-def test_a_pending_marker_past_one_file_is_sharded_and_carries_an_interrupted_sync(tmp_path, small_cap, monkeypatch):
-    """A crash after both data commits: only the (sharded) markers record what landed."""
+@pytest.mark.parametrize("root", ["intact", "not JSON", "truncated"])
+def test_a_pending_marker_past_one_file_is_sharded_and_carries_an_interrupted_sync(tmp_path, small_cap, monkeypatch,
+                                                                                    root):
+    """A crash after both data commits: only the (sharded) markers record what landed. A marker whose
+    root is then damaged still has its shards read for the paths they name."""
     desktop, phone = make_pair(tmp_path)
     paths = _many(desktop)
 
@@ -241,6 +258,7 @@ def test_a_pending_marker_past_one_file_is_sharded_and_carries_an_interrupted_sy
     monkeypatch.setattr(sync_session, "ARCHIVE_LIMIT", LIMIT)
     marker = json.loads((phone.root / ".sync/peers/desktop/pending.json").read_bytes())
     assert marker["format"] == "grimoire.sync.pending/2"
+    _lose_root(phone, DESKTOP, root, "pending")  # only the phone received copies, so only it has one
     # the copy landed and the marker says so: a revert on the phone is a conflict, never undone silently
     (phone.root / paths[0]).unlink()
     report = sync_until_quiet(desktop, phone, handles())
@@ -253,9 +271,11 @@ def test_a_pending_marker_past_one_file_is_sharded_and_carries_an_interrupted_sy
         assert json.loads((store.root / f".sync/peers/{peer}/pending.json").read_bytes())["format"].endswith("/1")
 
 
-def test_a_new_identity_retires_every_shard_and_forgets_no_deletion(tmp_path, small_cap):
+@pytest.mark.parametrize("how", ["intact", "not JSON", "truncated"])
+def test_a_new_identity_retires_every_shard_and_forgets_no_deletion(tmp_path, small_cap, how):
     desktop, phone, paths = _sharded_pair(tmp_path)
     (desktop.root / paths[9]).unlink()
+    _lose_root(desktop, PHONE, how)  # a damaged root lists no shard: every shard on disk is retired
     identify(desktop, "tablet", replace=True)
     for path in (desktop.root / ".sync/peers/phone").iterdir():
         assert json.loads(path.read_bytes())["format"] == "grimoire.sync.retired/1"
