@@ -560,3 +560,42 @@ def test_a_take_is_not_kept_once_a_listener_changed_hands(cards):
         table.runner.sovereignty.record(storm.campaign_id, ControlChange(storm.campaign_id, tamsin.instance_id,
                                                                          DIRECTOR), table.owner)
         refused("cast_changed", table.runner.keep, storm, table.player(), take.take)  # she is an NPC now
+
+
+def test_a_take_is_not_kept_once_its_speaker_is_a_player_character(cards):
+    folder, chat, _ = cards
+    with Table(folder, [say("Mara's own words.")]) as table:
+        take = _played(table, chat)
+        _, mara = actors(table, chat)
+        table.runner.sovereignty.record(chat.campaign_id, ControlChange(chat.campaign_id, mara.instance_id, BOB),
+                                        table.owner)
+        refused("cast_changed", table.runner.keep, chat, table.player(), take.take)  # Bob speaks for Mara now
+
+
+def test_a_run_claims_its_fence_as_its_running_take_is_published(cards, monkeypatch):
+    folder, chat, _ = cards
+    fence = RunFence()
+    with Table(folder, [say("Claimed in step.")], fence=fence) as table:
+        seated(table, chat)
+        table.runner.post(chat, table.player(), '"Now?"')
+        claim, seen = fence.claim, []
+
+        def watched(key):
+            held = []
+
+            def try_lock():
+                got = table.store.lock.acquire(blocking=False)
+                if got:
+                    table.store.lock.release()
+                held.append(not got)
+
+            probe = threading.Thread(target=try_lock)
+            probe.start()
+            probe.join()
+            running = table.runner.scenes.turns(chat).last.record.running
+            seen.append((held[0], running is not None))
+            return claim(key)
+
+        monkeypatch.setattr(fence, "claim", watched)
+        assert table.runner.generate(chat, table.player()).state == "proposed"
+        assert seen == [(True, True)]  # under the store's lock, with the running take already stored

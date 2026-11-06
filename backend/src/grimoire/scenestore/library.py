@@ -93,7 +93,8 @@ class SceneLibrary:
         return ChatTurns(chat, tuple(turns), tuple(sorted(problems)))
 
     def write(self, record: TurnRecord, base: StoredTurn | None, *, after: StoredTurn | None = None,
-              last: bool = False, before_commit: Callable[[], None] | None = None) -> StoredTurn:
+              last: bool = False, before_commit: Callable[[], None] | None = None,
+              on_commit: Callable[[], None] | None = None) -> StoredTurn:
         """Create (``base=None``) or compare-and-swap one turn over ``base``, as read; the turn as now stored.
 
         A rewrite keeps ``base``'s envelope owner and unknown fields. ``after`` is the chat's previous turn as
@@ -101,7 +102,8 @@ class SceneLibrary:
         meanwhile refuses the create), so no turn is ever played over a change it did not see. ``last`` writes
         only while no later turn of the chat exists (a pause belongs on the turn play would go on from).
         ``before_commit`` runs under the store lock just before the commit point (the runner re-checks its
-        fence there): raising from it writes nothing.
+        fence there): raising from it writes nothing. ``on_commit`` runs under the same lock once the write
+        has committed (the runner claims its fence there, so publishing a run and claiming are one step).
         """
         payload = turn_to_payload(record)
         if base is None:
@@ -124,6 +126,8 @@ class SceneLibrary:
                 result = txn.commit(self.handle)
             except StaleWrite:
                 raise SceneRefused("turn_changed", "the turn changed since it was read; read it again") from None
+            if on_commit is not None:
+                on_commit()
         etag = result.etags["/".join(address_parts(record.ref))]
         return StoredTurn(record, etag, envelope.owner, envelope.extra)
 

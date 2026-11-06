@@ -422,9 +422,12 @@ class SceneRunner:
         if superseded is not None:
             record = record.with_take(replace(superseded, state="superseded"))
         record = record.with_take(running)
-        stored = self.scenes.write(record, stored, after=scene.turns.last if stored is None else None)
+        claimed = []  # the fence is claimed as the running take is published, never after: an older run
+        # resuming between the two would otherwise cancel the reroll that superseded it
+        stored = self.scenes.write(record, stored, after=scene.turns.last if stored is None else None,
+                                   on_commit=lambda: claimed.append(self.fence.claim(str(chat))))
+        (token,) = claimed
         meter = TurnMeter(TurnUsageLedger(plan))
-        token = self.fence.claim(str(chat))
         silent = tuple(voice for actor, voice in self._voices(context) if actor not in {a for a, _ in chosen})
         try:
             outcome = self.runtime.run_turn(meter, briefs, controls=scene.controls,
@@ -590,6 +593,7 @@ class SceneRunner:
                                             "keep it only after reading it")
         if set(found.cast) != set(scene.cast) or any(
                 set(line.audience) != set(scene.players if line.actor is None else scene.cast)
+                or (line.actor is not None and line.actor not in scene.npcs)  # a player's character now
                 for line in found.shown()):
             raise _refuse("cast_changed", "who is present, or who plays them, changed since this take was written; "
                                           "ask again")
