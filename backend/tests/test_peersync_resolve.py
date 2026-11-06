@@ -352,6 +352,30 @@ def test_a_dropped_connection_mid_resolve_loses_nothing_and_the_devices_converge
     assert case.versions[PHONE] in _kept(case.phone.store.root)
 
 
+def test_a_data_step_refused_after_the_holds_record_committed_is_incomplete(tmp_path, monkeypatch):
+    """The phone receives: its first commit, the hold's record, lands; then its chat changes before the
+    data step, which is refused as stale. The record stays (it holds bytes the phone still has, which
+    only fails closed), so the resolve did write something: never ``refused``, which promises nothing."""
+    case = Conflict(tmp_path)
+    commits, raced = [], case.versions[PHONE] + b"\n"
+
+    class Racing(StepBuffer):
+        def commit(self, store, handle, **options):  # type: ignore[no-untyped-def]
+            commits.append(1)
+            if len(commits) == 2:  # an edit on the phone itself, just before the data step
+                (case.phone.store.root / case.path).write_bytes(raced)
+            return super().commit(store, handle, **options)
+
+    monkeypatch.setattr(server_module, "StepBuffer", Racing)
+    with serving(case.phone) as server:
+        report = case.resolve(server, DESKTOP)
+    monkeypatch.undo()
+    assert report.status == "incomplete" and report.reason.startswith("stale"), report
+    assert case.bytes(case.phone) == raced and case.bytes(case.desktop) == case.versions[DESKTOP]
+    record = parse_keeps(case.phone.store.read_sync_state(keeps_name(DESKTOP)), (DESKTOP, PHONE))
+    assert case.expected[PHONE] in record.entries[case.path].held
+
+
 # -- the wire: what the serving device itself refuses ---------------------------------------------
 
 def _connect(device: Device, server) -> Channel:  # type: ignore[no-untyped-def]

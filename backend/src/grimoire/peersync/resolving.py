@@ -62,8 +62,8 @@ class ResolveReport:
     ``status`` is ``resolved`` (``receiver`` now holds the chosen version, its own kept under
     ``.conflicts``, and both archives record the agreement), ``refused`` (nothing was written on
     either device; ``reason`` says why) or ``incomplete`` (the connection or pairing ended, or a
-    step after the receiver's data was refused: each device is as a crash at that point of a
-    local resolve leaves it, and the next transfer converges).
+    step was refused after another had committed, the hold's record included: each device is as a
+    crash at that point of a local resolve leaves it, and the next transfer converges).
     """
 
     peer: str
@@ -164,12 +164,13 @@ def _resolve(store: LibraryStore, channel: Channel, local: str, local_handle: ob
         except PeerRefused as error:
             if error.code == "not_paired":
                 return ResolveReport(peer, path, "incomplete", "not_paired")
-            # When the serving device receives, its data is resolve's first commit there but for the
-            # hold's record just before it (028). A refused step up to and including the data wrote
-            # nothing on either device (the store commits a step whole; a landed record only holds
-            # bytes resolve did not take, which fails closed); a refused later step left the data
-            # landed and the agreement unrecorded, as a crash between them would. When this device
-            # receives, its own data commit came first, so every relayed step comes after it.
+            # ``refused`` promises nothing was written on either device, so it is reported only when
+            # no step committed on the serving device and this device wrote nothing of its own: the
+            # serving device receives and refused its first step (the hold's record or the data). A
+            # refused data step after a committed record leaves that record (it holds bytes the
+            # resolve did not take, which fails closed), and a refused later step leaves the data
+            # landed with the agreement unrecorded, as a crash between them would: both
+            # ``incomplete``. When this device receives, its own data commit came first.
             first = expected[local] == keep and not relay.landed and error.code != "verification"
             return ResolveReport(peer, path, "refused" if first else "incomplete", str(error))
         except (SyncInterrupted, MirrorMismatch) as error:  # the data may have landed; the next sync records it
@@ -195,7 +196,7 @@ class _Relay:
 
     def __init__(self, channel: Channel, store: LibraryStore, key: bytes, hold_record: str | None) -> None:
         self.channel, self.store, self.key, self.hold_record = channel, store, key, hold_record
-        self.landed = False  # whether a step that wrote a record or kept version (not only .sync) committed
+        self.landed = False  # whether any step, ``.sync`` only or not, committed on the serving device
         self._held_back: list[tuple[str, Callable[[], Op]]] | None = None
 
     def __call__(self, ops: list[tuple[str, Callable[[], Op]]]) -> None:
@@ -205,7 +206,6 @@ class _Relay:
             return
         self.flush()
         self._send(ops)
-        self.landed = self.landed or any(kind != "state" for kind, _ in ops)
 
     def flush(self) -> None:
         """Send the step held back, if any."""
@@ -217,6 +217,7 @@ class _Relay:
         # An owner who unpairs mid-resolve must not have anything more sent (as a transfer checks).
         _check_paired(self.store, self.channel.peer, self.key)
         send_ops(self.channel, "resolve", (make() for _, make in ops))
+        self.landed = True
 
 
 class RelayingMirror(MirrorStore):
