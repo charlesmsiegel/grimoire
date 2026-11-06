@@ -30,6 +30,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   assets/blobs/<sha256[:2]>/<sha256>.<png|jpg|gif|webp>           # content-addressed bytes (018)
   campaigns/<campaign_id>/accepted/<event_id>.json                # one accepted fictional event (021)
   campaigns/<campaign_id>/wrapups/<wrapup_id>.json                # one scene wrap-up (021)
+  campaigns/<campaign_id>/turns/<turn_id>.json                    # one played chat turn (035)
   .txn/lock, .txn/journal.json, .txn/*.new                        # writer lock, journal, staging
   .txn/discard.json                                               # an unfinished discard_journal
   .conflicts/<hash16>/<name>~<digest12>[.N]                       # preserved versions awaiting a human
@@ -50,7 +51,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   - at the root: `authority`, `config`, `assets`, `secrets`, and `kept` (never a folder: it is the authorization namespace of kept versions, so no record root may alias it);
   - inside a campaign: `scenes`, `events`, `evidence`, `holdings`.
 
-  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), and `relations/` since 017 (see relation records). `accepted/` and `wrapups/` (021) are recognised but read only through `campaign_accepted`/`campaign_wrapups` (see accepted events and wrap-ups). `holdings/` (023) is skipped by `load()` and read only by `campaign_holdings` and `read(HoldingsRef)` (see counted holdings).
+  `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), and `relations/` since 017 (see relation records). `accepted/` and `wrapups/` (021) are recognised but read only through `campaign_accepted`/`campaign_wrapups` (see accepted events and wrap-ups). `turns/` (035) likewise, only through `campaign_turns` (see played turns). `holdings/` (023) is skipped by `load()` and read only by `campaign_holdings` and `read(HoldingsRef)` (see counted holdings).
 
   `events/` and `evidence/` belong to 020, and `accepted/` and `wrapups/` to 021; all four stay skipped by `load()`, so `load()`'s cost never grows with campaign history. They are read only by `campaign_knowledge` (020, see [events and evidence](#events-and-evidence-020)) and by `campaign_accepted`/`campaign_wrapups` (021). An `accepted` or `wrapups` entry that is a file, not a folder, is still reported.
 
@@ -157,6 +158,17 @@ Fields:
 
 **Rollback:** a pre-021 build reports `accepted/` and `wrapups/` as `unrecognized` load problems (no crash) and never writes them. Its allocators do not protect the instance ids accepted events name. It **cannot recover a journal that names them**: recover with a 021+ build, or run `LibraryStore.discard_journal` (tested).
 
+### Played turns (035)
+
+<a id="played-turns-035"></a>Added by [Minimal Text Scene Runner](roadmap/sprints/minimal-text-scene-runner.md). Interpreted by [`grimoire.scene`](SCENES.md), never by the store.
+
+- **Another additive 010 envelope amendment:** the scope-record address union adds `TurnRef`, `campaign:<id>#turn/<turn_id>`, at `campaigns/<id>/turns/<turn_id>.json`. `parse_scope_record` dispatches by the exact fragment; `parse_ref` does not return it. The payload schema is `grimoire.scene-turn/1`.
+- `classify` recognises exactly the new path, so recovery accepts journals that name it, and the replica treats it as an exact kind.
+- **`load()` skips `turns/`**, as it skips `accepted/`: one file is written per played turn. It is read through `campaign_turns(id)` (`CampaignRecords`, contained per file) and `read(TurnRef)`.
+- 107's allocators treat every actor id a turn names as taken (`grimoire.scenestore.turn_instance_ids`, fail closed on an unreadable file).
+
+**Rollback:** a pre-035 build reports `turns/` as an `unrecognized` load problem (no crash) and never writes it. Its allocators do not protect the actor ids turns name. It **cannot recover a journal that names a turn**: recover with a 035+ build, or run `LibraryStore.discard_journal`.
+
 ### Images and blobs (018)
 
 <a id="images-and-blobs-018"></a>Added by [Image Identity And Placements](roadmap/sprints/image-identity-and-placements.md) as an additive family. Interpreted by [`grimoire.images`](IMAGES.md), never by the store; `record/1`, `source/1` and `scope-record/1` are unchanged.
@@ -217,7 +229,7 @@ Fields:
 
 All of these take the store lock, require a consistent library, and read listings and files only:
 
-- `read(ScopeRef | ChatRef)` returns a `StoredScopeRecord` (and since 017/021/023, `read(RelationRef | AcceptedRef | WrapUpRef | HoldingsRef)` too).
+- `read(ScopeRef | ChatRef)` returns a `StoredScopeRecord` (and since 017/021/023/035, `read(RelationRef | AcceptedRef | WrapUpRef | HoldingsRef | TurnRef)` too).
 - `campaign_presence(id)` returns `absent`, `present`, or `mismatch` when only a look-alike folder exists.
 - `campaign_authority_presence(id)` returns the same for the campaign's authority ledger folder (`authority/campaigns/<id>`), which a campaign id allocator must also find `absent`. It must also find the id outside `grimoire.ledgers.security_campaign_ids(store)`: every campaign a security-ledger grant or approval names.
 - `campaign_instances(id)` returns canonically named instance files across kinds. It reads names only and refuses links. Both members of a [cross-kind pair](#instance-ids-are-never-reused) are listed.

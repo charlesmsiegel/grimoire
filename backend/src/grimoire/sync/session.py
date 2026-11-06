@@ -40,8 +40,8 @@ from .identity import device_of, identify
 from .model import ASSET_KINDS, CAMPAIGN_LOCAL, HELD_BACK_KINDS, HOLDS_RELATIONS, Base, Side
 
 _SLOT = re.compile(r"~[0-9a-f]{12}(?:\.([1-9][0-9]*))?$")
-#: Folders of the held-back families (021 accepted events and wrap-ups, 023 holdings).
-_HELD_FOLDERS = frozenset({"accepted", "wrapups", "holdings"})
+#: Folders of the held-back families (021 accepted events and wrap-ups, 023 holdings, 035 turns).
+_HELD_FOLDERS = frozenset({"accepted", "wrapups", "holdings", "turns"})
 _HELD = "held back until 028's merge rules exist"
 
 #: Store refusals that concern one path or unit: that unit becomes ``unapplicable``.
@@ -362,7 +362,7 @@ def _ungranted(store: LibraryStore, handle: object, path: str) -> bool:
 
 
 def _held_families(plan: SyncPlan) -> None:
-    """021 accepted events and wrap-ups and 023 holdings are never copied (their merge rules are 028's),
+    """021 accepted events and wrap-ups, 023 holdings and 035 turns are never copied (their merge rules are 028's),
     but a path the two devices hold differently is a ``held`` conflict, never silent (C1). A held-family
     folder that cannot be listed (in any spelling, or a campaign folder, ``campaigns`` or the root) is a
     ``held`` conflict on that folder: what diverged there is unknowable. Nothing is decided, copied, kept
@@ -372,7 +372,8 @@ def _held_families(plan: SyncPlan) -> None:
                      if _kind(path) in HELD_BACK_KINDS})
     for path in family:
         if not _identical(_side(scan, path) for scan in scans):
-            plan.conflicts[path] = Conflict(path, "held", f"{_HELD}: 021/023 commit several files as one unit")
+            plan.conflicts[path] = Conflict(path, "held", f"{_HELD}: 021/023 commit several files as one "
+                                                                 "unit, and 035 turns of one chat need a merge rule")
     for scan in scans:
         for path in scan.blocked:
             parts = path.split("/")

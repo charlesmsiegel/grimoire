@@ -15,7 +15,7 @@ from types import MappingProxyType
 
 from grimoire.core.identity import (
     AcceptedRef, ChatRef, HoldingsRef, ImageRef, InstanceRef, KnowledgeRef, PlacementRef, RelationRef, ScopeRef,
-    SourceRef, WrapUpRef, parse_ref, validate_segment, validate_source_id,
+    SourceRef, TurnRef, WrapUpRef, parse_ref, validate_segment, validate_source_id,
 )
 from grimoire.core.index import DIRECTED_RELATIONS, SYMMETRIC_RELATIONS
 
@@ -134,15 +134,16 @@ def _parse_source_ref(text: str, label: str) -> SourceRef:
         raise InvalidEnvelope(f"{label}: {error}") from None
 
 
-ScopeAddress = ScopeRef | ChatRef | RelationRef | AcceptedRef | WrapUpRef | HoldingsRef
-_SCOPE_ADDRESSES = (ScopeRef, ChatRef, RelationRef, AcceptedRef, WrapUpRef, HoldingsRef)
+ScopeAddress = ScopeRef | ChatRef | RelationRef | AcceptedRef | WrapUpRef | HoldingsRef | TurnRef
+_SCOPE_ADDRESSES = (ScopeRef, ChatRef, RelationRef, AcceptedRef, WrapUpRef, HoldingsRef, TurnRef)
 
 
 @dataclass(frozen=True)
 class ScopeRecord:
     """A campaign-scoped record with an opaque payload: the play scope (``ScopeRef``), a chat
     (``ChatRef``, 107), a relation (``RelationRef``, 017), an accepted event (``AcceptedRef``, 021), a
-    scene wrap-up (``WrapUpRef``, 021) or one holder's holdings (``HoldingsRef``, 023).
+    scene wrap-up (``WrapUpRef``, 021), one holder's holdings (``HoldingsRef``, 023) or one played chat turn
+    (``TurnRef``, 035).
 
     The envelope owns the address and the payload's schema id; the store never
     interprets either payload. Unknown top-level fields are preserved in ``extra``.
@@ -157,7 +158,7 @@ class ScopeRecord:
     def __post_init__(self) -> None:
         if not isinstance(self.address, _SCOPE_ADDRESSES):
             raise InvalidEnvelope("a scope record's address must be a ScopeRef, ChatRef, RelationRef, AcceptedRef, "
-                                  "WrapUpRef or HoldingsRef")
+                                  "WrapUpRef, HoldingsRef or TurnRef")
         if type(self.schema) is not str or not self.schema.strip() or len(self.schema) > SCHEMA_MAX:
             raise InvalidEnvelope(f"schema must be nonempty text of at most {SCHEMA_MAX} characters")
         _optional_text(self.owner, "owner", nonempty=True)
@@ -459,7 +460,7 @@ def _scope_address(text: object) -> ScopeAddress:
     if not isinstance(text, str):
         raise EnvelopeError("malformed", f"address: a reference must be text, not {type(text).__name__}")
     family: (type[ScopeRef] | type[ChatRef] | type[RelationRef] | type[AcceptedRef] | type[WrapUpRef]
-             | type[HoldingsRef])
+             | type[HoldingsRef] | type[TurnRef])
     if text.endswith("#holdings"):
         family = HoldingsRef
     elif "#relation/" in text:
@@ -468,6 +469,8 @@ def _scope_address(text: object) -> ScopeAddress:
         family = AcceptedRef
     elif "#wrapup/" in text:
         family = WrapUpRef
+    elif "#turn/" in text:
+        family = TurnRef
     elif "#" in text:
         family = ChatRef
     else:

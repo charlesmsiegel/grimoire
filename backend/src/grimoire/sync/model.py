@@ -22,8 +22,9 @@ ASSET_KINDS = frozenset({"blob", "image", "placement"})
 CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge"})
 #: Families whose own stores commit several files as one unit and whose cross-device merge rule is
 #: a later milestone (docs/EFFECTS.md, docs/HOLDINGS.md): never copied file by file, always reported
-#: as skipped. 021's accepted events and wrap-ups, 023's holdings.
-HELD_BACK_KINDS = frozenset({"accepted", "wrapup", "holdings"})
+#: as skipped. 021's accepted events and wrap-ups, 023's holdings, and 035's played chat turns (two devices
+#: playing one chat offline would both write its next turn; turn merges are 028's milestone before 044).
+HELD_BACK_KINDS = frozenset({"accepted", "wrapup", "holdings", "turn"})
 #: A campaign holding any record of this kind on either device has its 017 relations held back too,
 #: because 021 changes relations in the same commit as an event: a relation must never arrive
 #: without the event that changed it.
