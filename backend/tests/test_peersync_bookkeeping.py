@@ -22,6 +22,7 @@ from grimoire.store import RecordEnvelope, etag
 from grimoire.store.jsonfmt import render
 from grimoire.store.layout import conflict_parts
 from grimoire.sync import DismissRefused, bookkeeping, dismiss, identify, resolve
+from grimoire.sync import keeps as sync_keeps
 from grimoire.sync import session as sync_session
 from grimoire.sync.documents import KeptEntry, parse_keeps, render_keeps
 
@@ -515,6 +516,28 @@ def test_a_hold_the_grants_deny_leaves_the_serving_devices_other_pairs_untouched
         assert isinstance(refused, PeerRefused) and refused.code == "denied", refused
         channel.close()
     assert other.read_bytes() == laptop and (phone.store.root / WREN_PATH).read_bytes() == theirs
+
+
+def test_the_serving_device_takes_no_kept_version_record_past_the_cap(tmp_path, monkeypatch):
+    """This device never writes a record past ``keeps.RECORD_LIMIT`` (``keeps.fit`` leaves excess
+    deliveries unrecorded), so it takes none from a peer either: the hold's record step is refused
+    whole and the record stays as it was. Under the cap the same step is taken."""
+    desktop, phone = _conflict(tmp_path)
+    mine, theirs = (desktop.store.root / WREN_PATH).read_bytes(), (phone.store.root / WREN_PATH).read_bytes()
+    name = f"peers/{DESKTOP}/keeps.json"
+    before = phone.store.read_sync_state(name)
+    entry = parse_keeps(before, PAIR).entries[WREN_PATH]
+    record = ({"op": "state", "name": name, "expected": etag(before)},
+              render_keeps(PAIR, {WREN_PATH: KeptEntry(entry.base, entry.delivered, frozenset(), frozenset({etag(theirs)}))}))
+    monkeypatch.setattr(sync_keeps, "RECORD_LIMIT", len(record[1]) - 1)
+    with serving(phone) as server:
+        channel = _resolving(desktop, server, WREN_PATH, mine, {DESKTOP: mine, PHONE: theirs})
+        refused = _send(channel, record)
+        assert isinstance(refused, PeerRefused) and refused.code == "invalid", refused
+        assert phone.store.read_sync_state(name) == before
+        monkeypatch.setattr(sync_keeps, "RECORD_LIMIT", len(record[1]))
+        assert _send(channel, record)["t"] == "committed"
+        channel.close()
 
 
 def test_a_chosen_version_whose_kept_file_cannot_be_read_is_not_admitted(tmp_path, monkeypatch):
