@@ -149,6 +149,10 @@ PURE_PACKAGES = (
     # and 020's storage limits.
     PurePackage("grimoire.comms", ("grimoire.comms", "grimoire.core", "grimoire.intent", "grimoire.evidence"),
                 never_import=("grimoire.core.inference",)),
+    # Scene staging (041): who and what is where in one scene; builds 032 presences and 012 perceptions.
+    PurePackage("grimoire.staging", ("grimoire.staging", "grimoire.core", "grimoire.comms", "grimoire.evidence",
+                                      "grimoire.party"),
+                never_import=("grimoire.core.inference",)),
     # Voice evidence: shares the gate's text matcher so screening and scoring agree.
     PurePackage("grimoire.voice", ("grimoire.voice", "grimoire.core", "grimoire.evals.text",
                                    "grimoire.evals.checks"),
