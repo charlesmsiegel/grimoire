@@ -577,6 +577,16 @@ def test_a_page_added_between_plan_and_apply_makes_the_apply_stale(env, monkeypa
     assert [found.seq for found in env.store.chat_transcript(V1_CHAT).records] == [2]
 
 
+def test_a_v1_scene_saved_with_crlf_line_ends_gets_its_transcript(env):
+    scene = env.v1 / CAMPAIGN / "scenes" / f"{SID}.md"
+    scene.write_bytes(scene.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))  # V1 on Windows
+    plan = env.plan(manifest=env.rescan())
+    assert "transcript_unverified" not in {row["reason"] for row in plan.review()["unresolved"]}
+    plan.apply()
+    texts = [post.variants[0].text for page in read_transcript(env.store, V1_CHAT)[0] for post in page.posts]
+    assert texts and not any("\r" in text for text in texts)  # as V1 read it: universal newlines
+
+
 def test_a_v1_post_past_the_store_limit_leaves_the_scene_without_a_transcript(env):
     scene = env.v1 / CAMPAIGN / "scenes" / f"{SID}.md"
     text = scene.read_text(encoding="utf-8")

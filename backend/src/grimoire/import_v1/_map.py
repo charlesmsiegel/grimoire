@@ -24,7 +24,7 @@ from grimoire.core.identity import (
     ChatRef, ImageRef, InstanceRef, LegacyId, PlacementRef, ScopeRef, SourceRef, validate_segment, validate_source_id,
 )
 from grimoire.images import Expression, Focus, ImageModelError, Placement, slot_role, validate_placement
-from grimoire.migrate_v1 import definition_candidate, parse_frontmatter, parse_posts, post_row, world_source
+from grimoire.migrate_v1 import decode_v1_text, definition_candidate, parse_frontmatter, parse_posts, post_row, world_source
 from grimoire.store.errors import UnstorableIdentifier
 from grimoire.store.layout import address_parts, manifest_parts
 
@@ -638,7 +638,7 @@ class _Mapper:
             data = self.read(row["path"])
             if entry.get("sha256") is None or _sha(data) != entry["sha256"]:
                 raise ValueError("changed since the scan")
-            body = parse_frontmatter(data.decode("utf-8"))[1]
+            body = parse_frontmatter(decode_v1_text(data))[1]  # as 011 read it: universal newlines
         except (ValueError, KeyError) as error:
             self.unresolved(legacy, "transcript_unverified", type(error).__name__)
             return None
