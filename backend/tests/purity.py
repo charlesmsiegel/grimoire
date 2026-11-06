@@ -73,7 +73,7 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
 ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.capture", "grimoire.cardstore", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.contextstore", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       "grimoire.import_v1", "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1",
-                      "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
+                      "grimoire.obstaclestore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
                       "grimoire.play", "grimoire.runtime", "grimoire.scenestore",
                       "grimoire.store", "grimoire.sync", "grimoire.testing"})
 
@@ -132,6 +132,10 @@ PURE_PACKAGES = (
                 never_import=("grimoire.core.inference",)),
     # Fiction-first adjudication (029): frames, assessment, decisions and codecs; the service is an adapter.
     PurePackage("grimoire.adjudication", ("grimoire.adjudication", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
+    # Open obstacles (040): obstacles, the frame rules, codecs and derivation over 029's values;
+    # the service is an adapter.
+    PurePackage("grimoire.obstacles", ("grimoire.obstacles", "grimoire.adjudication", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
     PurePackage("grimoire.security", ("grimoire.security",)),
     # World Change Sets (043): values, codec and diffs; reviewing and applying is an adapter.
