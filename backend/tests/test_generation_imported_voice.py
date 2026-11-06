@@ -147,7 +147,7 @@ def test_an_imported_v1_npc_with_no_text_at_all_stays_missing_with_a_clear_reaso
         voices.resolve(mara)
     assert missing.value.reason == NO_VOICE_TEXT
     assert set(voices.gaps.values()) == {NO_VOICE_TEXT}
-    with pytest.raises(MissingVoice, match="no_profile"):  # 027's own resolver, over the same catalog
+    with pytest.raises(MissingVoice, match=NO_VOICE_TEXT):  # 027's own resolver, over the same catalog
         resolve_snapshot_voice(mara, snap, voices.catalog)
 
 
@@ -375,6 +375,11 @@ def test_the_characters_own_turns_are_kept_with_their_labels_removed(text, expec
     assert example_lines(text, "Seraphine") == expected
 
 
+@pytest.mark.parametrize("name", [r"Unit \1", r"C:\new", r"\g<0>", "Back\\slash"])
+def test_a_name_with_backslashes_is_spoken_exactly_as_written(name):
+    assert example_lines("<START>\n{{char}}: I am {{char}}, {{user}}.", name) == [f"I am {name}, you."]
+
+
 @pytest.mark.parametrize("text", [
     "<START>\n" + " " * 65536 + "x",
     "<START>\n{{char}}: hi\n<a>" + " " * 65536 + "x",
@@ -423,3 +428,43 @@ def test_a_layer_that_replaces_the_description_derives_from_its_own(store):
     modern, voice = derived_chat(store, description="A ferry pilot. She talks in clipped radio code.")
     assert voice.portrayal == modern
     assert ("description-2", "She talks in clipped radio code.") in [(a.anchor_id, a.text) for a in voice.anchors]
+
+
+# -- a cleared voice stays cleared on every path ---------------------------------------------------------
+
+MODERN = SourceRef("world:modern-harbor", "character", "mara", "r1")
+COURIER = SourceRef("world:modern-harbor", "character", "courier", "r1")
+PERSONALITY_ONLY = card(V3, mes_example=None, description=None)
+
+
+def cleared_cast(store, *attached: SourceRef):
+    """A card with only a personality, a portrayal that clears it, and a courier derived from that one."""
+    land(store, encode(PERSONALITY_ONLY))
+    txn = store.transaction()
+    txn.put(manifest("world:modern-harbor", derives(MODERN, MARA_VELL.at("r1")), derives(COURIER, MODERN)), None)
+    txn.put(envelope(derived(MODERN, MARA_VELL.at("r1"), name="Mara Vell", clear_sections=["personality"])), None)
+    txn.put(envelope(derived(COURIER, MODERN, name="Mara Vell", sections={"occupation": "Runs parcels."})), None)
+    txn.commit(owner_handle())
+    started = chat_library(store, owner_handle()).start_chat(
+        Launch("character", MODERN), attach=[(ref, "character") for ref in attached]).commit()
+    return chat_snapshot(store.load(), started.chat).snapshot, started.actors
+
+
+def test_a_portrayal_that_clears_its_only_text_is_silent_through_the_catalog_too(store):
+    snap, (actor,) = cleared_cast(store)
+    voices = SnapshotVoices(snap)
+    assert dict(voices.gaps) == {MODERN: NO_VOICE_TEXT}
+    for resolve in (voices.resolve, lambda ref: resolve_snapshot_voice(ref, snap, voices.catalog)):
+        with pytest.raises(MissingVoice) as missing:
+            resolve(actor)  # the base's cleared personality never comes back as its voice
+        assert missing.value.reason == NO_VOICE_TEXT and str(MODERN) in str(missing.value)
+
+
+def test_a_descendant_of_a_silent_portrayal_never_reaches_past_it(store):
+    snap, (modern, courier) = cleared_cast(store, COURIER)
+    voices = SnapshotVoices(snap)
+    for resolve in (voices.resolve, lambda ref: resolve_snapshot_voice(ref, snap, voices.catalog)):
+        for actor in (modern, courier):
+            with pytest.raises(MissingVoice) as missing:
+                resolve(actor)
+            assert missing.value.reason == NO_VOICE_TEXT

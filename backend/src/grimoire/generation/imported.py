@@ -241,7 +241,7 @@ def example_lines(examples: str, name: str) -> list[str]:
                     current = None
         if current is not None:
             turns.append(" ".join(current))
-    return [_one_line(_USER_MACRO.sub(USER_STAND_IN, _CHAR_MACRO.sub(name, turn))) for turn in turns]
+    return [_one_line(_USER_MACRO.sub(USER_STAND_IN, _CHAR_MACRO.sub(lambda _: name, turn))) for turn in turns]
 
 
 def _continues(line: str) -> bool:

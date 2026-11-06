@@ -38,8 +38,8 @@ An imported character has no hand-authored profile, so the catalog for play is b
 
 Where the text comes from is a `VoiceReader`: a function from a revision's definition to its `VoiceTexts(examples, personality, description, imported, notes)` of plain strings, or `None` when the revision is not its kind. 027 is pure and parses nothing, so it reads only the 037 card shape itself (`card_voice_texts`). A V1 portrayal keeps its card verbatim in `extras.v1.text`, so its reader is the adapter `grimoire.import_v1.v1_voice_texts`, and the play catalog of a V1 import is `grimoire.import_v1.imported_voices(snapshot, authored=None)` (`SnapshotVoices` with that reader). Without it a V1 portrayal derives nothing and stays `no_profile`. A stored V1 text nested too deep for the JSON parser speaks from its description, noted `card_unreadable`; it never stops the rest of the catalog.
 
-- `catalog` is the 014 `VoiceCatalog` (authored plus derived) that `resolve_snapshot_voice` and `run_turn(..., scene_voices=)` take.
-- `resolve(ref, binding=None)` is `resolve_snapshot_voice` over that catalog. When the actor's leaf, or a revision its chain would inherit from, is an imported revision with no usable text, the bare `no_profile` becomes **`MissingVoice("no_voice_text")`**, naming the revision; `gaps` lists those revisions.
+- `catalog` is a `SnapshotCatalog`: the 014 `VoiceCatalog` (authored plus derived) that `resolve_snapshot_voice` takes, plus `silent`, the revisions imported with no usable text (`gaps`). A profile cannot be empty, so a silent revision is a barrier instead: wherever it sits on an actor's chain, leaf or base, the walk stops there with **`MissingVoice("no_voice_text")`**, naming it, and never reaches a base's voice. Copying the profiles into a plain `VoiceCatalog` drops the barrier.
+- `resolve(ref, binding=None)` is `resolve_snapshot_voice` over that catalog.
 - `derived` maps each derived revision to its `DerivedVoice(portrayal, profile, notes, texts)`: `notes` are `VoiceNote(field, index, reason)` values, never text.
 
 What is read, by payload shape (any other revision derives nothing):
