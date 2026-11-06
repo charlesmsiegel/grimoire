@@ -36,6 +36,7 @@ from grimoire.import_v1 import imported_voices
 from grimoire.intent import RoutingContext, Utterance, route
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import ControlChange
+from grimoire.party import PartyRefused, SceneCast, stage
 from grimoire.partystore import PartyLibrary
 from grimoire.providers.meter import TurnMeter
 from grimoire.runtime import GenerationRuntime, RunFence
@@ -70,6 +71,8 @@ class Scene:
     still here after a restart). ``interrupted`` is true when that turn holds a ``running`` take: a run
     that never finished, whose usage is unknown; the next generation supersedes it. ``problems`` are
     ``(code, detail)`` pairs from the snapshot, the turn files, the party and the voices, never hidden.
+    ``staged`` is 033's ``SceneCast`` the cast was staged as (``cast`` is its ``present``), or ``None`` when
+    no cast could be staged (membership unreadable): then nobody is present and play waits.
     """
 
     chat: ChatRef
@@ -79,6 +82,7 @@ class Scene:
     persona: InstanceRef | None
     names: Mapping[InstanceRef, str]
     problems: tuple[tuple[str, str], ...]
+    staged: SceneCast | None = None
 
     @property
     def records(self) -> tuple[TurnRecord, ...]:
@@ -178,22 +182,35 @@ class SceneRunner:
         except (RecordNotFound, ChatCodecError) as error:
             raise _refuse("no_chat", f"{chat} cannot be read ({type(error).__name__})") from None
         problems: list[tuple[str, str]] = [("snapshot", problem) for problem in captured.problems]
+        # A bound source that is gone (a card deleted while the app was closed, its lorebook, a scenario) is
+        # reported by its exact ref; the story stays, and nothing similarly named is bound in its place.
+        problems += [("broken_source", str(resolution.source.ref)) for resolution in captured.snapshot.sources()
+                     if resolution.broken is not None]
         turns = self.scenes.turns(chat)
         problems += [("turns", f"{path}:{code}") for path, code in turns.problems]
+        imported = self.store.chat_transcript(chat)
+        if imported.records or imported.problems:
+            # 036/026's imported pages are not read as history yet (milestone 2): no NPC heard any of them.
+            # Say so rather than play on as if the chat began here. Nothing is read from the pages.
+            unreadable = f", {len(imported.problems)} unreadable" if imported.problems else ""
+            count = len(imported.records)
+            problems.append(("imported_history_unread", f"{count} page{'' if count == 1 else 's'}{unreadable}"))
         controls = tuple(self.sovereignty.load(chat.campaign_id).controls)
         party = PartyLibrary(self.store, self.handle, clock=_no_clock, new_id=_no_id).view(chat.campaign_id, as_of=NOW)
         party_problems = tuple(f"{problem.path}:{problem.code}" for problem in party.problems)
         problems += [("party", problem) for problem in party_problems]
-        cast = []
+        candidates = []
         for binding in captured.chat.active_bindings():
             actor = binding.actor
             if actor is None:
                 continue
             if party.state.uncertain(actor):
                 problems.append(("party_uncertain", str(actor)))  # fail closed: it may be stored away
-            elif not party.state.reserved(actor):
-                cast.append(actor)
-        cast_t = tuple(sorted(set(cast), key=str))
+            elif not party.state.reserved(actor):  # a reserved member is stored away: never on stage
+                candidates.append(actor)
+        staged, unstaged = _stage(party, chat, candidates)
+        problems += unstaged
+        cast_t = staged.present if staged is not None else ()
         persona_binding = captured.chat.persona
         persona = persona_binding.actor if persona_binding is not None else None
         snap = captured.snapshot
@@ -204,7 +221,7 @@ class SceneRunner:
             except Exception as error:  # 022's refusals: the actor stays nameless, and says why
                 problems.append(("unnamed_actor", f"{actor}:{type(error).__name__}"))
         voices = imported_voices(snap, self.authored)
-        scene = Scene(chat, turns, controls, cast_t, persona, names, ())
+        scene = Scene(chat, turns, controls, cast_t, persona, names, (), staged)
         for actor in scene.cast:
             if actor == persona or _human_of(scene, actor) is not None:
                 continue  # a player character speaks through its player
@@ -261,7 +278,7 @@ class SceneRunner:
         self._ready(scene)
         stored = scene.turns.last
         if stored is None:
-            record = TurnRecord(chat, 1, "opening")
+            record = TurnRecord(chat, 1, "opening", device=self.scenes.device())
         elif len(scene.turns.turns) == 1 and stored.record.origin == "opening" and stored.record.open:
             record = stored.record  # the opening again, for the cast as it is now (an earlier one went stale)
             if len(record.takes) >= MAX_TAKES:
@@ -320,7 +337,8 @@ class SceneRunner:
             raise _refuse("persona_absent", "the player character is not present in this scene")
         last = scene.last
         number = 1 if last is None else last.number + 1
-        tid = turn_id(chat, number)
+        device = self.scenes.device()
+        tid = turn_id(chat, number, device)
         if not isinstance(text, str) or not text.strip():
             raise _refuse("no_content", "a post needs text")
         try:
@@ -362,7 +380,7 @@ class SceneRunner:
             if last.post == post and not last.takes:
                 return last  # the same post retried: it is already saved
             raise _refuse("turn_open", "the last turn is still open: keep a take, or pass it")
-        record = TurnRecord(chat, number, "post", post)
+        record = TurnRecord(chat, number, "post", post, device=device)
         self.scenes.write(record, None, after=scene.turns.last)
         return record
 
@@ -395,7 +413,7 @@ class SceneRunner:
         pending = scene.pending
         stored = scene.turns.last if pending is not None else None
         record = pending if pending is not None else TurnRecord(
-            chat, 1 if scene.last is None else scene.last.number + 1, "prompt")
+            chat, 1 if scene.last is None else scene.last.number + 1, "prompt", device=self.scenes.device())
         number = len(record.takes) + 1
         if number > MAX_TAKES:
             raise _refuse("too_many_takes", f"a turn holds at most {MAX_TAKES} takes")
@@ -562,7 +580,7 @@ class SceneRunner:
                     raise
             # someone else wrote the turn (an older run's usage, a pass, a newer run): read it again
             current = self.scenes.turns(chat)
-            found = next((s for s in current.turns if s.record.number == stored.record.number), None)
+            found = next((s for s in current.turns if s.record.ref == stored.record.ref), None)
             if found is None:
                 break
             stored = found
@@ -696,6 +714,8 @@ class SceneRunner:
 
     def _ready(self, scene: Scene) -> None:
         _readable(scene)
+        if scene.staged is None:
+            raise _refuse("party_unreadable", "who is present cannot be staged; nobody is on stage")
         if scene.paused:
             raise _refuse("paused", "play is paused")
         if scene.persona is not None and scene.persona in scene.cast and scene.controller(scene.persona) == DIRECTOR:
@@ -710,13 +730,38 @@ class SceneRunner:
 
 
 def _readable(scene: Scene) -> None:
-    """Every write needs the chat's whole history: one unreadable turn file stops them all."""
-    if not scene.turns.complete:
-        raise _refuse("turns_unreadable", "a turn file of this chat cannot be read; nothing is written")
+    """Every write needs the chat's whole history: one unreadable turn file stops them all, and so does a fork
+    (two turns of one number, every file readable), which only 028's turn merge can settle."""
+    if scene.turns.complete:
+        return
+    if set(scene.turns.problems) == {(str(scene.chat), "turn_fork")}:
+        raise _refuse("turn_fork", "this chat holds two devices' turns of one number; nothing is written until "
+                                   "they are merged")
+    raise _refuse("turns_unreadable", "a turn file of this chat cannot be read; nothing is written")
 
 
 class _Stale(Exception):
     """The run's fence went stale before its take was written."""
+
+
+def _stage(party, chat: ChatRef, candidates: Sequence[InstanceRef]
+           ) -> tuple[SceneCast | None, list[tuple[str, str]]]:
+    """033's staged cast of ``candidates`` (the chat's bound actors that are neither reserved nor uncertain),
+    with each member ``stage`` refuses (``missing_actor``, ``instance_id_conflict``...) left out and reported by
+    its reason. ``None`` (reported ``cast_unstaged``) when the cast as a whole cannot be staged, such as while a
+    relation file cannot be read: then nobody is present."""
+    chosen = sorted(set(candidates), key=str)
+    problems: list[tuple[str, str]] = []
+    while True:
+        try:
+            return stage(party.state, chat.chat_id, chosen, instances=party.instances), problems
+        except PartyRefused as refused:
+            members = [member for member in refused.members if member in chosen]
+            if not members:
+                problems.append(("cast_unstaged", refused.reason))
+                return None, problems
+            problems += [(refused.reason, str(member)) for member in members]
+            chosen = [actor for actor in chosen if actor not in members]
 
 
 def _no_clock() -> str:

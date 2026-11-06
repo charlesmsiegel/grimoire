@@ -5,12 +5,13 @@
 **Status:** **first slice implemented**, headless: `grimoire.scene` (pure), `grimoire.scenestore` and `grimoire.play`'s `SceneRunner`, on an additive `turns/` record family that sync holds back. The contract is in [SCENES.md](../../SCENES.md). Both proofs are executable in `backend/tests/test_scene_proof.py`: a migrated V1 campaign and a world-less card chat (with its lorebook, and a second card attached mid-chat) are played, closed and reopened with a new store, authority and runtime, with each NPC in its own voice and hearing only what it was present for; a scenario-only chat plays with an explicit director reply. Pause, skip, redirect, rephrase, keep, strike and pass are authorized text operations; every call's usage is stored with its take.
 
 **What the first slice leaves (milestone 2):**
+- **First, due before 044 (phone play):** read a chat's imported history (026's V0.2.1 scene pages, 036's SillyTavern pages) as the history before turn 1, and decide who heard it. Until then the runner reads none of it, so NPCs have heard none of it (fail closed), and `open` reports `imported_history_unread`.
 - Kept lines are transcript, not canon. The labeller, 029 framing and decision, `check_effect`, 021 acceptance and 030 open-time recovery before the next acceptance (the Wave 4 obligations of 029, 030 and 021) are milestone 2; nothing in this slice accepts an effect.
 - 032's delivery records are not written to 020 yet: an NPC's memory of a scene is the window of lines it heard.
 - A session-zero configuration is not executed (016 has no codec yet): a scope with one refuses generation. Mid-session requests run with an empty configuration.
 - A redirect's or rephrase's direction is recorded on its take but not sent to the model.
 - UI commands, director instructions and interiority are refused (`not_in_this_slice`); PC-authorship detection in generated text, the UI, streaming, the chat list and `last_activity` per post are later.
-- Merging turns across devices is 028's milestone before 044.
+- Turn ids carry the device's tag on a library with a device identity, so two offline devices' turn *n* are two turns; a chat holding both is forked and waits. Merging forked turns is 028's merge milestone before 044.
 
 ## Scope and first proof
 Open scene, post as player, run an independent NPC reply, accept/save, reopen and resume from persisted state.

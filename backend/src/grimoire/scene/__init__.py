@@ -7,8 +7,9 @@ load on first use.
 
 from .codec import TURN_SCHEMA, turn_from_payload, turn_to_payload
 from .model import (
-    CALL_STATES, LINE_STATES, MAX_CHAT_ID, MAX_TAKES, ORIGINS, POST_KINDS, TAKE_STATES, TURN_OUTCOMES, CallRecord,
-    Post, SceneLine, SceneRefused, Take, TurnRecord, turn_id, usage_totals,
+    CALL_STATES, LINE_STATES, MAX_CHAT_ID, MAX_TAGGED_CHAT_ID, MAX_TAKES, ORIGINS, POST_KINDS, TAKE_STATES,
+    TURN_OUTCOMES, CallRecord,
+    Post, SceneLine, SceneRefused, Take, TurnRecord, parse_turn_id, turn_id, usage_totals,
 )
 
 _TRANSCRIPT = frozenset({"NARRATOR", "audible", "heard_for", "render", "segments", "table_lines"})
@@ -22,9 +23,11 @@ def __getattr__(name: str):
 
 
 __all__ = [
-    "CALL_STATES", "CallRecord", "LINE_STATES", "MAX_CHAT_ID", "MAX_TAKES", "NARRATOR", "ORIGINS", "POST_KINDS",
+    "CALL_STATES", "CallRecord", "LINE_STATES", "MAX_CHAT_ID", "MAX_TAGGED_CHAT_ID", "MAX_TAKES", "NARRATOR",
+    "ORIGINS", "POST_KINDS",
     "audible",
     "Post", "SceneLine", "SceneRefused", "TAKE_STATES", "TURN_OUTCOMES", "TURN_SCHEMA", "Take", "TurnRecord",
-    "heard_for", "render", "segments", "table_lines", "turn_from_payload", "turn_id", "turn_to_payload",
+    "heard_for", "parse_turn_id", "render", "segments", "table_lines", "turn_from_payload", "turn_id",
+    "turn_to_payload",
     "usage_totals",
 ]

@@ -13,8 +13,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from grimoire.core.identity import ChatRef, InstanceRef, TurnRef
-from grimoire.scene import TURN_SCHEMA, SceneRefused, TurnRecord, turn_from_payload, turn_id, turn_to_payload
-from grimoire.scene.model import MAX_NUMBER
+from grimoire.scene import TURN_SCHEMA, SceneRefused, TurnRecord, parse_turn_id, turn_from_payload, turn_to_payload
 from grimoire.store import LibraryStore, ScopeRecord, StaleWrite, TakenIdsUnlisted
 from grimoire.store.layout import address_parts
 
@@ -55,14 +54,23 @@ def _chat_of(turn_id: str) -> str:
 
 
 def _other_chat(path: str, chat: ChatRef) -> bool:
-    """Whether an unreadable file is plainly another chat's turn (``<other chat>.<6 digits>.json``). Anything
-    else (the folder itself, a name that does not parse) counts against every chat: fail closed."""
+    """Whether an unreadable file is plainly another chat's turn (``<other chat>.<6 digits>[-<device>].json``).
+    Anything else (the folder itself, a name that does not parse) counts against every chat: fail closed."""
     name = path.rsplit("/", 1)[-1]
     if "/turns/" not in path or not name.endswith(".json"):
         return False
-    stem = name[:-len(".json")]
-    other, _, number = stem.rpartition(".")
-    return bool(other) and len(number) == 6 and number.isdigit() and other != chat.chat_id
+    parsed = parse_turn_id(name[:-len(".json")])
+    return parsed is not None and parsed[0] != chat.chat_id
+
+
+def _numbered(records: Mapping[TurnRef, object], chat: ChatRef) -> list[tuple[int, TurnRef]]:
+    """The number of every turn file of ``chat`` among a campaign's listed turns, whatever device made it."""
+    found = []
+    for ref in records:
+        parsed = parse_turn_id(ref.turn_id)
+        if parsed is not None and parsed[0] == chat.chat_id:
+            found.append((parsed[1], ref))
+    return found
 
 
 class SceneLibrary:
@@ -86,11 +94,27 @@ class SceneLibrary:
                 problems.append((str(ref), error.reason))
                 continue
             turns.append(StoredTurn(record, stored.etag, stored.record.owner, stored.record.extra))
-        turns.sort(key=lambda stored: stored.record.number)
+        # one order on every device: by number, then an untagged turn before tagged ones, then by device tag
+        turns.sort(key=lambda stored: (stored.record.number, stored.record.device or ""))
         numbers = [stored.record.number for stored in turns]
-        if numbers != list(range(1, len(numbers) + 1)):
+        if len(set(numbers)) != len(numbers):
+            # two devices' turn n in one library (a hand copy, or 028's future merge; sync copies no turn
+            # file): both are kept and read, never one silently dropped, and play waits for 028's turn merge.
+            problems.append((str(chat), "turn_fork"))
+        if sorted(set(numbers)) != list(range(1, len(set(numbers)) + 1)):
             problems.append((str(chat), "turn_gap"))
         return ChatTurns(chat, tuple(turns), tuple(sorted(problems)))
+
+    def device(self) -> str | None:
+        """This library's device tag for new turns (028's ``device_tag``, without its ``-``), or ``None`` for a
+        library that was never given a device identity. A damaged identity refuses (``device_identity``), so it
+        never quietly brings back ids that collide across devices."""
+        from grimoire.chatstore import DeviceIdentityUnusable, device_tag  # chatstore imports this package
+        try:
+            tag = device_tag(self.store)
+        except DeviceIdentityUnusable as error:
+            raise SceneRefused("device_identity", str(error)[:200]) from None
+        return tag[1:] or None
 
     def write(self, record: TurnRecord, base: StoredTurn | None, *, after: StoredTurn | None = None,
               last: bool = False, before_commit: Callable[[], None] | None = None,
@@ -111,11 +135,18 @@ class SceneLibrary:
         else:
             envelope = ScopeRecord(record.ref, TURN_SCHEMA, payload, owner=base.owner, extra=base.extra)
         with self.store.lock:
-            if last and record.number < MAX_NUMBER and TurnRef(record.chat.campaign_id, turn_id(
-                    record.chat, record.number + 1)) in self.store.campaign_turns(record.chat.campaign_id).records:
+            listed = (self.store.campaign_turns(record.chat.campaign_id).records
+                      if base is None or last or after is not None else {})  # one read for every check
+            if base is None:
+                if record.device != self.device():  # identified (or re-identified) since the turn was planned
+                    raise SceneRefused("turn_changed", "this library's device identity changed; read it again")
+                if any(number == record.number for number, _ in _numbered(listed, record.chat)):
+                    # this library already holds turn n under another device's tag (made before identify)
+                    raise SceneRefused("turn_changed", "this turn was played since it was read; read it again")
+            if last and any(number > record.number for number, _ in _numbered(listed, record.chat)):
                 raise SceneRefused("turn_changed", "a later turn was played since this one was read; read it again")
             if after is not None:
-                current = self.store.campaign_turns(record.chat.campaign_id).records.get(after.record.ref)
+                current = listed.get(after.record.ref)
                 if current is None or current.etag != after.etag:
                     raise SceneRefused("turn_changed", "the chat's last turn changed since it was read; read it again")
             if before_commit is not None:

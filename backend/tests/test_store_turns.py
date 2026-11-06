@@ -6,6 +6,8 @@ containment, recovery) are covered with 021's families in ``test_store_effect_re
 
 from __future__ import annotations
 
+from hashlib import sha256
+
 import pytest
 
 from grimoire.chatstore import campaign_taken_ids
@@ -23,8 +25,13 @@ CHAT, OTHER = ChatRef(C, "chat-a"), ChatRef(C, "chat-b")
 PC, GHOST = InstanceRef(C, "character", "pc"), InstanceRef(C, "character", "ghost")
 
 
-def post_turn(chat: ChatRef, number: int, text: str = "Hello.", audience=(PC,)) -> TurnRecord:
-    return TurnRecord(chat, number, "post", Post("human:ana", PC, "speech", text, audience, "speech"))
+def post_turn(chat: ChatRef, number: int, text: str = "Hello.", audience=(PC,), device=None) -> TurnRecord:
+    return TurnRecord(chat, number, "post", Post("human:ana", PC, "speech", text, audience, "speech"), device=device)
+
+
+def tag(device: str) -> str:
+    """028's documented tag: the first eight hex digits of the SHA-256 of the device ID."""
+    return sha256(device.encode()).hexdigest()[:8]
 
 
 def scenes(store) -> SceneLibrary:
@@ -141,15 +148,20 @@ def test_sync_holds_turns_back_and_never_hides_a_divergence(tmp_path):
         identify(desktop, DESKTOP)
         identify(phone, PHONE)
         sync(desktop, phone, handles())
-        scenes(desktop).write(post_turn(CHAT, 1, "From the desk."), None)
+        scenes(desktop).write(post_turn(CHAT, 1, "From the desk.", device=tag(DESKTOP)), None)
         report = sync(desktop, phone, handles())
-        path = f"campaigns/{C}/turns/{turn_id(CHAT, 1)}.json"
+        path = f"campaigns/{C}/turns/{turn_id(CHAT, 1, tag(DESKTOP))}.json"
         assert path not in {copied for copied, _ in report.copied}
         assert path in report.skipped[DESKTOP]
-        assert scenes(phone).turns(CHAT).turns == ()
-        scenes(phone).write(post_turn(CHAT, 1, "From the phone."), None)  # both played turn 1 offline
-        report = sync(desktop, phone, handles())
         assert [(c.path, c.code) for c in report.conflicts if c.path == path] == [(path, "held")]
+        assert scenes(phone).turns(CHAT).turns == ()
+        # both played turn 1 offline: two turn files with two ids, never one id with two contents; sync copies
+        # neither (both are held), so if both are ever in one library it is by a hand copy or 028's future merge
+        scenes(phone).write(post_turn(CHAT, 1, "From the phone.", device=tag(PHONE)), None)
+        other = f"campaigns/{C}/turns/{turn_id(CHAT, 1, tag(PHONE))}.json"
+        report = sync(desktop, phone, handles())
+        assert sorted((c.path, c.code) for c in report.conflicts if "/turns/" in c.path) == sorted(
+            [(path, "held"), (other, "held")])
         assert scenes(desktop).turns(CHAT).last.record.post.text == "From the desk."
         assert scenes(phone).turns(CHAT).last.record.post.text == "From the phone."
     finally:
