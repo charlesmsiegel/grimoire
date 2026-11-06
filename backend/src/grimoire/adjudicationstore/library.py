@@ -383,35 +383,50 @@ class AdjudicationLibrary:
         handle from this authority (``not_controller`` otherwise): the adjudication key labels actions,
         it never speaks for a player. An actor no human controls takes neither (``unexpected_backing``).
         """
+        with self._authority.lock:  # control is read and the entry appended as one step
+            builder, revision, payload = self._prepare(frame, contribution, author)
+            entry = FrameEntry(frame, contribution, revision, self._principal)
+            self._append(builder, "frame", payload)
+            builder.add_frame(entry)
+            return entry
+
+    def check(self, frame: ActionFrame, *, contribution: PlayerContribution | None = None,
+              author: object = None) -> int:
+        """The revision ``frame`` would record now, or the refusal ``frame`` would raise. Writes nothing.
+
+        For a caller that must write its own record first and then the frame, under the authority's
+        lock (040 links an attempt to its obstacle before framing it).
+        """
+        with self._authority.lock:
+            return self._prepare(frame, contribution, author)[1]
+
+    def _prepare(self, frame: ActionFrame, contribution: PlayerContribution | None, author: object
+                 ) -> tuple[_Builder, int, dict[str, object]]:
+        """Every check ``frame`` makes before it writes: the ledger, the revision and the payload."""
         if type(frame) is not ActionFrame:
             raise TypeError("expected an ActionFrame")
         campaign_id = frame.campaign_id
         if contribution is not None:
             _check_backing(frame, contribution)
         payload = frame_to_payload(frame, contribution)
-        with self._authority.lock:  # control is read and the entry appended as one step
-            controller = self._controller(campaign_id, frame.actor.instance_id)
-            if controller is None or controller == DIRECTOR:
-                if contribution is not None or author is not None:
-                    raise _refused("an actor no player controls has no contribution to back it",
-                                   "unexpected_backing")
-            elif not is_human(controller):
-                raise _refused(f"{frame.actor} is controlled by {controller!r}, not a human", "non_human_controller")
-            elif contribution is None:
-                raise _refused("a player character's action is backed by the player's own contribution",
-                               "pc_authorship")
-            elif contribution.submitted_by != controller:
-                raise _refused("the contribution is not the current controller's", "invalid_expression")
-            elif not self._is_own(author, controller):
-                raise _refused("only the controller's own trusted handle gives their contribution",
-                               "not_controller")
-            self._entity(frame)
-            builder = self._builder(campaign_id)
-            revision = builder.check_frame(frame, contribution)
-            entry = FrameEntry(frame, contribution, revision, self._principal)
-            self._append(builder, "frame", payload)
-            builder.add_frame(entry)
-            return entry
+        controller = self._controller(campaign_id, frame.actor.instance_id)
+        if controller is None or controller == DIRECTOR:
+            if contribution is not None or author is not None:
+                raise _refused("an actor no player controls has no contribution to back it",
+                               "unexpected_backing")
+        elif not is_human(controller):
+            raise _refused(f"{frame.actor} is controlled by {controller!r}, not a human", "non_human_controller")
+        elif contribution is None:
+            raise _refused("a player character's action is backed by the player's own contribution",
+                           "pc_authorship")
+        elif contribution.submitted_by != controller:
+            raise _refused("the contribution is not the current controller's", "invalid_expression")
+        elif not self._is_own(author, controller):
+            raise _refused("only the controller's own trusted handle gives their contribution",
+                           "not_controller")
+        self._entity(frame)
+        builder = self._builder(campaign_id)
+        return builder, builder.check_frame(frame, contribution), payload
 
     def rule(self, ruling: AbilityRuling, *, supersedes: Iterable[str] = ()) -> RulingEntry:
         """Record a director's 025 ruling on a recorded frame's ability use, before its decision.
