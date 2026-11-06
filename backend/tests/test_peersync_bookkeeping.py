@@ -489,6 +489,34 @@ def test_a_hold_on_the_serving_device_takes_its_bytes_out_of_its_other_pairs_del
     assert theirs in _kept(phone)
 
 
+def test_a_hold_the_grants_deny_leaves_the_serving_devices_other_pairs_untouched(tmp_path):
+    """As above, but the phone's owner withdraws campaigns from the desktop once its hold is recorded. The
+    hold's step is denied before the phone touches its laptop record: otherwise a peer the path denies
+    could, request after request, leave the phone's copies another pair delivered never dismissable."""
+    desktop, phone = _conflict(tmp_path)
+    mine, theirs = (desktop.store.root / WREN_PATH).read_bytes(), (phone.store.root / WREN_PATH).read_bytes()
+    other = phone.store.root / ".sync/peers/laptop/keeps.json"
+    other.parent.mkdir()
+    other.write_bytes(render_keeps(("laptop", PHONE), {WREN_PATH: KeptEntry(None, frozenset({etag(theirs)}))}))
+    laptop = other.read_bytes()
+    name = f"peers/{DESKTOP}/keeps.json"
+    before = phone.store.read_sync_state(name)
+    entry = parse_keeps(before, PAIR).entries[WREN_PATH]
+    record = ({"op": "state", "name": name, "expected": etag(before)},
+              render_keeps(PAIR, {WREN_PATH: KeptEntry(entry.base, entry.delivered, frozenset(), frozenset({etag(theirs)}))}))
+    with serving(phone) as server:
+        channel = _resolving(desktop, server, WREN_PATH, mine, {DESKTOP: mine, PHONE: theirs})
+        assert _send(channel, record)["t"] == "committed"
+        for grant in phone.authority.active_grants():
+            if grant.principal == peer_principal(DESKTOP) and str(grant.scope) == "campaigns":
+                phone.authority.revoke_grant(grant.grant_id)
+        refused = _send(channel, ({"op": "put", "path": WREN_PATH, "expected": etag(theirs)}, mine),
+                        ({"op": "keep", "path": WREN_PATH, "slot": 0, "hold": True}, theirs))
+        assert isinstance(refused, PeerRefused) and refused.code == "denied", refused
+        channel.close()
+    assert other.read_bytes() == laptop and (phone.store.root / WREN_PATH).read_bytes() == theirs
+
+
 def test_a_chosen_version_whose_kept_file_cannot_be_read_is_not_admitted(tmp_path, monkeypatch):
     """The phone keeps the desktop's version beside wren, and that file fails with an I/O error when the
     desktop asks the phone to resolve keeping it. A file that cannot be read is unknown, never proof that

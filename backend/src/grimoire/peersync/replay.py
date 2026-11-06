@@ -229,7 +229,10 @@ class StepBuffer:
                     raise PeerRefused("invalid", f"a write this device does not accept: {op!r}")
             elsewhere = self._held_beforehand(store, ops, holds)
             if elsewhere:  # this device's own records of its other pairs, committed before the hold
-                txn.check()  # a step that cannot commit writes nothing
+                # a step that cannot commit writes nothing, its grants included: otherwise a peer the
+                # hold's path denies could still have this device's own bytes taken out of its other
+                # pairs' delivered versions, request after request, leaving those copies undismissable
+                txn.check(handle if records else None)
                 early = store.transaction()
                 stage_states(early, elsewhere)
                 early.commit(None)
