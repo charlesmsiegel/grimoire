@@ -425,7 +425,8 @@ def _admit_deletes(plan: SyncPlan, dest: str, paths: list[str]) -> None:
     """Row 9's deletions on ``dest`` (028): ``deletion.admit`` decides them over what ``dest`` will hold."""
     files, blobs = _final_files(plan, dest, plan.copies[dest])
     plan.deletes[dest], refused = deletion.admit(plan.stores[dest], plan.scans[dest].files, files, blobs,  # type: ignore[attr-defined]
-                                                 plan.scans[dest].blocked, paths, _preflight)
+                                                 plan.scans[dest].blocked, paths, _preflight,
+                                                 functools.partial(_stage, copies=plan.copies[dest], keeps=[]))
     for path, (code, why) in refused.items():
         plan.conflicts[path] = Conflict(path, code, why)
 

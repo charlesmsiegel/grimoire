@@ -414,15 +414,21 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
 
     def removals_kept() -> set[str]:
         # 028: a source deleted as a whole loses nothing of it unless all of it goes. Sources any removal
-        # of which cannot happen (its target holds other bytes, or its temp vanished while the target
-        # still holds what it removes) keep every removal of theirs. Read after every other entry is
-        # settled, so an external edit is seen up to the removals themselves (then 010's R7 window).
+        # of which cannot happen (its target holds other bytes, its staged document is damaged, or its
+        # temp vanished while the target still holds what it removes) keep every removal of theirs.
+        # Read after every other entry is settled, so an external edit is seen up to the removals
+        # themselves (then 010's R7 window).
         kept: set[str] = set()
         for entry in journal.entries:
-            if entry.kind == "remove":
-                current = access.etag_of(entry.target)
-                if current not in (entry.old, None) if entry.temp in staged else current == entry.old:
-                    kept |= {_removal_source(entry)} - {None}
+            if entry.kind != "remove":
+                continue
+            current = access.etag_of(entry.target)
+            if entry.temp in staged:
+                cannot = current not in (entry.old, None) or temp_digest(entry) != entry.new
+            else:
+                cannot = current == entry.old
+            if cannot:
+                kept |= {_removal_source(entry)} - {None}
         return kept
 
     def hold_back(entry: Entry, digest: str | None) -> None:

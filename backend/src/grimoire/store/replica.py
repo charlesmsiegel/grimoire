@@ -432,7 +432,7 @@ def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str
             if any(head == SourceRef(ref.source, ref.kind, ref.entity_id) and revision == ref.revision
                    for head, revision in heads.items()):
                 raise RevisionReferenced(f"{path} names {ref} as its head")
-            if envelope.source == ref.source and ref.unpinned() not in heads and _sole_revision(found, ref):
+            if envelope.source == ref.source and ref.unpinned() not in heads and _sole_revision(found, ref, ignore):
                 raise RevisionReferenced(f"{path} has {ref} as its implicit head (its entity's only revision)")
             for link in envelope.links:
                 if ref in {_pinned(link.subject), _pinned(link.object)} | _payload_refs(link.extra):
@@ -451,11 +451,14 @@ def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str
             raise RevisionReferenced(f"{path} pins {ref} in its payload")
 
 
-def _sole_revision(found: CanonicalScan, ref: SourceRef) -> bool:
+def _sole_revision(found: CanonicalScan, ref: SourceRef, ignore: frozenset[str] = frozenset()) -> bool:
     """Whether ``ref`` is the only revision of its entity on this library: then it is the head even
-    with no head declared (the loader resolves it so), and an unpinned reference follows it."""
+    with no head declared (the loader resolves it so), and an unpinned reference follows it. Revisions
+    in ``ignore`` are being deleted (028): deleting an entity's last revision leaves no head to pin."""
     revisions = set()
     for path in (*found.files, *found.blocked):
+        if path in ignore:
+            continue
         kind = classify(tuple(path.split("/")))
         if kind is not None and kind[0] == "definition" and kind[1].unpinned() == ref.unpinned():  # type: ignore[union-attr]
             revisions.add(kind[1].revision)  # type: ignore[union-attr]

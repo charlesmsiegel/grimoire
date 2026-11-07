@@ -687,3 +687,29 @@ def test_a_device_that_keeps_its_own_version_never_holds_its_live_bytes(tmp_path
             assert isinstance(refused, PeerRefused) and refused.code == "invalid", refused
         channel.close()
     assert (_kept(phone), phone.store.read_sync_state(name), (phone.store.root / WREN_PATH).read_bytes()) == untouched
+
+
+@pytest.mark.parametrize("step", ["keeps", "holds"])
+def test_only_a_step_named_holds_may_hold_this_devices_own_version(tmp_path, step):
+    """028: a sync's holds step (its record alone, before the data commit that deletes) may record this
+    device's own current version as held; any other keeps-only step may not, though it looks the same."""
+    desktop, phone, _ = paired(tmp_path)
+    _put(desktop, WREN, {"hp": 1})
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+    own = etag((phone.store.root / WREN_PATH).read_bytes())
+    record = phone.store.root / f".sync/peers/{DESKTOP}/keeps.json"
+    before = record.read_bytes() if record.exists() else None
+    buffer = StepBuffer(DESKTOP)
+    buffer.add({"t": "op", "op": "state", "name": f"peers/{DESKTOP}/keeps.json",
+                "expected": None if before is None else etag(before)},
+               render_keeps(PAIR, {WREN_PATH: KeptEntry(None, frozenset(), held=frozenset({own}))}))
+    handle = phone.authority.handle_for(peer_principal(DESKTOP), trusted=True)
+    if step == "keeps":
+        with pytest.raises(PeerRefused) as refused:
+            buffer.commit(phone.store, handle, step=step)
+        assert refused.value.code == "invalid"
+        assert (record.read_bytes() if record.exists() else None) == before
+    else:
+        buffer.commit(phone.store, handle, step=step)
+        assert parse_keeps(record.read_bytes(), PAIR).entries[WREN_PATH].held == {own}

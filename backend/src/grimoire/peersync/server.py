@@ -131,7 +131,7 @@ class PeerServer:
                         may_hold = None
                         if resolving is not None and buffer.poisoned is None:
                             may_hold = resolving.check_step(self.store, buffer.ops)
-                        etags = buffer.commit(self.store, handle, may_hold=may_hold)
+                        etags = buffer.commit(self.store, handle, may_hold=may_hold, step=header.get("step"))
                     channel.send({"t": "committed", "count": len(etags), "digest": confirmation(etags)})
                     continue
                 if kind in ("snapshot", "resolve") and not self._still_paired(peer, channel_key):

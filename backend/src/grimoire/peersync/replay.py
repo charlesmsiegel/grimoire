@@ -19,7 +19,7 @@ from pathlib import Path
 
 from grimoire.store import LibraryStore, StaleWrite, StoreError, WriteConflict, WriteDenied, etag
 from grimoire.store.layout import conflict_parts
-from grimoire.sync import Step, device_of, syncable
+from grimoire.sync import Step, deletion, device_of, syncable
 from grimoire.sync import keeps as kept_record
 from grimoire.sync.bookkeeping import is_shard, listed_shards, root_name
 from grimoire.sync.bookkeeping import parse as parse_document
@@ -161,21 +161,23 @@ class StepBuffer:
         self.reset()
         self.poisoned = refusal
 
-    def commit(self, store: LibraryStore, handle: object, *, may_hold: str | None = None) -> dict[str, str | None]:
+    def commit(self, store: LibraryStore, handle: object, *, may_hold: str | None = None,
+               step: object = None) -> dict[str, str | None]:
         """Commit every write as one transaction; return each written file's etag as re-read.
 
         ``may_hold`` is the etag of the one version this step's record may newly hold at the resolving
         path: this device's own current version, in the step a resolve makes to record its hold
         before the data commit (``ResolveRequest.check_step`` decides it). In every other step a
-        record may add no hold."""
+        record may add no hold, but a sync's ``holds`` step (``step``, as the commit names it, 028)."""
         try:
             if self.poisoned is not None:
                 raise self.poisoned
-            return self._commit(store, handle, may_hold)
+            return self._commit(store, handle, may_hold, step == "holds")
         finally:
             self.reset()
 
-    def _commit(self, store: LibraryStore, handle: object, may_hold: str | None) -> dict[str, str | None]:
+    def _commit(self, store: LibraryStore, handle: object, may_hold: str | None,
+                holds_named: bool = False) -> dict[str, str | None]:
         ops = self.ops
         if not ops:
             raise PeerRefused("empty", "a step with no writes")
@@ -194,8 +196,9 @@ class StepBuffer:
             # version a resolve's record step may add as held
             recordable = set() if may_hold is None or self.resolving is None else {(self.resolving, may_hold)}
             # 028: a sync's holds step, a commit of this pair's record alone before the data commit that
-            # deletes, may hold this device's own current version of a record a deletion removes
-            holds_step = self.resolving is None and all(
+            # deletes, may hold this device's own current version of a record a deletion removes; only
+            # the step the commit names so, never a sync's other keeps-only steps
+            holds_step = holds_named and self.resolving is None and all(
                 header.get("op") == "state" and header.get("name") == keeps_name(self.peer) for header, _ in ops)
             holds = {(header["path"], etag(body)) for header, body in ops if header.get("op") == "keep"
                      and header.get("hold") is True and header.get("path") == self.resolving
@@ -230,8 +233,7 @@ class StepBuffer:
                         raise PeerRefused("invalid", "a resolve over the transport never deletes on this device")
                     # 028: the peer deleted the agreed version; this device removes it too, holding it
                     # beside the path (it may exist nowhere else), recorded held beforehand (``holds``)
-                    txn.keep_version(path, body, slot=header["slot"], regenerable=False)
-                    txn.delete_exact(path, header["expected"])
+                    deletion.stage(txn, [deletion.Delete(path, body, header["slot"])])
                     removals.append((path, header["expected"], kept_target(path, body, header["slot"])))
                     records = True
                 elif op == "keep" and type(path) is str and type(header.get("slot")) is int:
@@ -319,12 +321,11 @@ class StepBuffer:
         standing = store.read_sync_state(name)
         device = device_of(store)
         devices: tuple[str, str] = tuple(sorted((device, self.peer)))  # type: ignore[assignment]
-        states: list[State] = []
         for path, tag in sorted(holds):
             if not all(records_hold(record, devices, path, tag) for record in (standing, *written)):
                 raise PeerRefused("invalid", f"a resolve's hold of {path} is recorded as held in a commit before "
                                              "the one that writes it")
-        return [*states, *not_delivered_elsewhere_many(store, device, self.peer, holds)]
+        return not_delivered_elsewhere_many(store, device, self.peer, holds)
 
     def _state_expected(self, store: LibraryStore, name: str, body: bytes, expected: str | None, roots: dict,  # type: ignore[type-arg]
                         first: set[tuple[str, str]], recordable: set[tuple[str, str]],

@@ -97,12 +97,16 @@ def final_files(files: Mapping[str, bytes], blobs: Mapping[str, int],
 
 
 def admit(store: LibraryStore, current: Mapping[str, bytes], files: Mapping[str, bytes], blobs: Mapping[str, int],
-          blocked: Iterable[str], paths: Iterable[str],
-          preflight: Callable[[object, str], BaseException | None]) -> tuple[list[Delete], dict[str, tuple[str, str]]]:
+          blocked: Iterable[str], paths: Iterable[str], preflight: Callable[[object, str], BaseException | None],
+          context: Callable[[object], None] | None = None) -> tuple[list[Delete], dict[str, tuple[str, str]]]:
     """Row 9's deletions on a device (028): those it can make, and ``{path: (code, why)}`` for the
     rest. Held back as ``delete_dependency`` while anything left there needs them (``orphaned``), or
     ``unapplicable`` when the store refuses one (no slot for its hold, or a refused check), to a
-    fixpoint: a deletion held back keeps a record whose own needs then count."""
+    fixpoint: a deletion held back keeps a record whose own needs then count.
+
+    ``context`` stages what the same commit also writes (the device's copies), so the store judges
+    each deletion over what that commit leaves: a manifest copy that drops a head no longer pins the
+    revision deleted with it. Ignored if it is refused alone (the plan's combined check reports it)."""
     refused: dict[str, tuple[str, str]] = {}
     candidates: dict[str, Delete] = {}
     paths = list(paths)
@@ -114,25 +118,47 @@ def admit(store: LibraryStore, current: Mapping[str, bytes], files: Mapping[str,
             candidates[path] = Delete(path, data, hold_slot(store, path, data))
         except (StoreError, OSError) as error:  # no slot can take the hold: the record stays
             refused[path] = ("unapplicable", f"its version cannot be kept here: {error}")
+    if context is not None:
+        txn = store.transaction()
+        context(txn)
+        if not txn.staged() or preflight(txn, "the planned copies") is not None:
+            context = None
+
+    def check(deletes: list[Delete], what: str) -> BaseException | None:
+        txn = store.transaction()
+        if context is not None:
+            context(txn)
+        stage(txn, deletes)
+        return preflight(txn, what)
+
     blocked = list(blocked)
     while True:
         for path, why in orphaned(files, blobs, blocked, candidates).items():
             refused[path] = ("delete_dependency", why)
             del candidates[path]
-        txn = store.transaction()
-        stage(txn, candidates.values())
-        if not candidates or preflight(txn, "the deletions") is None:
+        if not candidates or check(list(candidates.values()), "the deletions") is None:
             break
-        before = len(candidates)
-        for path, delete in sorted(candidates.items()):  # split only on failure
-            single = store.transaction()
-            stage(single, [delete])
-            error = preflight(single, path)
-            if error is not None:
-                refused[path] = ("unapplicable", str(error))
-                del candidates[path]
-        if len(candidates) == before:
-            break  # each stands alone; the plan's combined check catches what they refuse together
+        # Split only on failure, greedily and in passes: each deletion joins those already admitted
+        # if the store takes them together. Never one at a time alone: a source deleted as a whole
+        # (its manifest, its revisions, the records that used them) is refused piece by piece.
+        admitted: list[Delete] = []
+        waiting = sorted(candidates)
+        errors: dict[str, BaseException] = {}
+        progress = True
+        while waiting and progress:
+            progress = False
+            for path in list(waiting):
+                error = check([*admitted, candidates[path]], path)
+                if error is None:
+                    admitted.append(candidates[path])
+                    waiting.remove(path)
+                    progress = True
+                else:
+                    errors[path] = error
+        for path in waiting:
+            refused[path] = ("unapplicable", str(errors[path]))
+            del candidates[path]
+        # again: what was refused stays, and its needs may hold back more (or all admitted pass together)
     return [candidates[path] for path in sorted(candidates)], refused
 
 

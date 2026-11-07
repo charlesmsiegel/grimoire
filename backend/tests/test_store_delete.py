@@ -256,3 +256,23 @@ def test_an_edit_racing_a_source_deletion_keeps_all_of_that_source(tmp_path):
     run = window.runs[1]
     assert run.recovered[f"lib/{MANIFEST_PATH}"] == human and f"lib/{R1_PATH}" not in run.recovered
     assert template[R1_PATH] in [value for key, value in run.recovered.items() if key.startswith("lib/.conflicts/")]
+
+
+def test_a_damaged_removal_keeps_all_of_its_source(tmp_path):
+    """A manifest's removal whose staged document is damaged once the holds are published (past the
+    all-or-nothing check) is dropped, and so is every removal of that source: never its revisions
+    gone while its manifest stays."""
+    paths = (R1_PATH, MANIFEST_PATH, WREN_A_PATH, WREN_B_PATH)
+    scenario, template = _scenario(tmp_path / "setup", paths, (idempotent_recovery(),))
+    trace = run_plans(scenario, [], tmp_path / "base").runs[0].action_trace
+    removal = next(op.index for op in trace if op.kind == "remove" and op.path == f"lib/{MANIFEST_PATH}")
+    published = max(op.index for op in trace if op.kind == "replace" and op.target.startswith("lib/.conflicts/"))
+    temp = next(op.path for op in reversed(trace) if op.index < removal and op.kind == "read_bytes"
+                and op.path.startswith("lib/.txn/rec~"))
+
+    def damage(ops, root):
+        ops.write_bytes(root / temp, b"{}")
+    report = run_plans(scenario, [[Interleave(published + 1, damage)]], tmp_path / "damaged")
+    report.assert_ok()
+    run = report.runs[1]
+    assert all(run.recovered[f"lib/{path}"] == template[path] for path in (R1_PATH, MANIFEST_PATH))

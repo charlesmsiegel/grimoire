@@ -1791,6 +1791,10 @@ class _Commit:
                      if hit is not None and hit[0] == "definition"]
         if revisions:  # 028: a deleted revision is never one a record staying here pins, checked under the lock
             found = replica.scan(self.access)
+            # judged over what this commit leaves: a record it writes counts with its new bytes (a
+            # manifest dropping the head it deletes, in the same commit, no longer pins it)
+            staged = {"/".join(put.parts): put.data for put in self.puts if put.kind == "record" and put.data is not None}
+            found = replace(found, files={**found.files, **staged})
             for ref in revisions:
                 replica.check_unreferenced(self.access, ref, ignore=removed, found=found)  # type: ignore[arg-type]
         for put in self.puts:
