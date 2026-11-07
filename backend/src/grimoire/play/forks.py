@@ -18,13 +18,15 @@ def choose_branch(runner, chat: ChatRef, by, turn: str):  # type: ignore[no-unty
     """Set aside every branch of ``chat``'s fork but the one ``turn`` heads; the ``Scene`` afterwards."""
     if type(chat) is not ChatRef:
         raise SceneRefused("invalid_field", "chat must be a ChatRef")
+    if not (runner.authority.issued(by) and getattr(by, "trusted", False) is True):  # before anything is read
+        raise SceneRefused("not_authenticated", "a choice is made with a trusted handle this library issued")
     scene = runner.open(chat)  # an unknown chat is refused before anything is written
     principal = runner._principal(scene, by)  # the same authentication as every other act at the table
     if principal not in runner.authority.owners:
         raise SceneRefused("not_owner", "only the library's owner chooses which branch of a forked chat goes on")
     if not isinstance(turn, str):
         raise SceneRefused("not_a_branch", "a branch is named by its first turn's id")
-    turns = runner.scenes.turns(chat)
+    turns = scene.turns  # what the choice is checked against again under the store lock
     other = [code for _, code in turns.problems if code != "turn_fork"]
     if other:
         raise SceneRefused("turns_unreadable", f"this chat's turns are incomplete "

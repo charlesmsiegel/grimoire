@@ -7,25 +7,23 @@ campaign's play scope (a turn is history of one chat, and a later chat given tha
 turn it was played after (``follows``), and the turn a set-aside mark names as going on instead (``chosen``):
 without them the receiver could not place it, and would read a gap or a choice that names nothing. These are
 needed on the receiver whether or not the origin still holds them. A turn written before ``follows`` existed
-is placed by the turn before it of its own device, else the untagged one (``branches.parent``): those, when the
-origin holds them, are needed too (``turn_named``), so it never lands after another device's turn of that
-number. Read structurally from the payload, without decoding the turn (an unreadable payload is never copied:
-the scan blocks it).
+is placed by the turn before it of its own device, else the untagged one, else the only one
+(``branches.parent``): the one the origin places it after is needed too (``turn_named``), so it never lands
+alone beside another device's turn of that number. Read structurally from the payload, without decoding the
+turn (an unreadable payload is never copied: the scan blocks it).
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 
 from grimoire.core.identity import ChatRef, ScopeRef, TurnRef
+from grimoire.scene.model import parse_turn_id
 from grimoire.store import UnstorableIdentifier
 from grimoire.store.layout import chat_parts, scope_parts, turn_parts
 from grimoire.store.replica import parse_exact
 
 from .documents import syncable
-
-_TURN_NAME = re.compile(r"(?P<chat>.+)\.(?P<number>[0-9]{6})(?:-(?P<device>[0-9a-f]{8}))?\.json")
 
 
 def _payload(path: str, data: bytes | None) -> Mapping | None:  # type: ignore[type-arg]
@@ -54,16 +52,34 @@ def turn_needs(path: str, data: bytes | None) -> list[str]:
     return [need for need in needs if need is not None and need != path]
 
 
-def turn_named(path: str, data: bytes | None) -> list[str]:
-    """For a turn written before ``follows`` existed, the turns it would be placed after on the receiver: the
-    one before it of its own device tag and the untagged one, needed there when the origin holds them."""
+def turn_named(path: str, data: bytes | None, origin) -> list[str]:  # type: ignore[no-untyped-def]
+    """For a turn written before ``follows`` existed, the turn the origin places it after (``origin``: its
+    ``replica`` scan), by ``branches.parent``'s rule over file names: the one before it of its own device,
+    else the untagged one, else the only one. A blocked file there counts as present (never "absent on
+    both"), so the turn waits; nothing when the origin itself cannot tell (it reads a gap there too)."""
     payload = _payload(path, data)
-    found = _TURN_NAME.fullmatch(path.rsplit("/", 1)[-1])
-    if payload is None or found is None or payload.get("follows") is not None or int(found["number"]) < 2:
+    folder, _, name = path.rpartition("/")
+    found = parse_turn_id(name[:-len(".json")]) if name.endswith(".json") else None
+    if payload is None or found is None or payload.get("follows") is not None or found[1] < 2:
         return []
-    folder = path.rsplit("/", 1)[0]
-    before = f"{folder}/{found['chat']}.{int(found['number']) - 1:06d}"
-    return sorted({f"{before}.json", f"{before}{'' if found['device'] is None else '-' + found['device']}.json"})
+    chat, number, device = found
+
+    def there(candidate: str) -> bool:
+        return candidate in origin.files or origin.blocked_reason(candidate) is not None
+    for tag in (device, None):
+        candidate = f"{folder}/{chat}.{number - 1:06d}{'' if tag is None else '-' + tag}.json"
+        if there(candidate):
+            return [candidate]
+    prefix = f"{folder}/{chat}.{number - 1:06d}"
+    others = sorted({other for other in (*origin.files, *origin.blocked) if other.startswith(prefix)
+                     and _same_number(other, chat, number - 1)})
+    return others if len(others) == 1 else []
+
+
+def _same_number(path: str, chat: str, number: int) -> bool:
+    name = path.rpartition("/")[2]
+    found = parse_turn_id(name[:-len(".json")]) if name.endswith(".json") else None
+    return found is not None and found[:2] == (chat, number)
 
 
 def _spell(parts) -> str | None:  # type: ignore[no-untyped-def]

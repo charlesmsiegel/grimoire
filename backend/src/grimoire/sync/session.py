@@ -476,7 +476,8 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
             missing = sorted(path for path in pins | heads if final(path) != origin_files.get(path) or blocked(path)
                              or (path in heads and origin_files.get(path) is None))
             # needed on the receiver even when the origin lost it (a turn's chain and chat too: ``sync.turns``)
-            owner = {*_owning_chat(copy.path), *turn_needs(copy.path, copy.data)}
+            owner = {*_owning_chat(copy.path), *turn_needs(copy.path, copy.data),
+                     *turn_named(copy.path, copy.data, origin_scan)}
             actors = sorted(path for path in {*_named_paths(parts, copy.data), *_home_scope(copy.path), *owner}
                             if ((path in origin_files or path in owner) and final(path) is None) or blocked(path))
             campaign = _knowledge_campaign(copy.path)
@@ -494,11 +495,9 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
 
 
 def _named_paths(parts: tuple[str, ...], data: bytes) -> list[str]:
-    """The instance and chat files a record names (``replica.instances_named``/``chats_named``), and the turns
-    a turn written before ``follows`` existed is placed after (``sync.turns.turn_named``)."""
+    """The instance and chat files a record names (``replica.instances_named``/``chats_named``)."""
     return sorted({*("/".join(instance_parts(ref)) for ref in instances_named(parts, data)),
-                   *("/".join(chat_parts(ref)) for ref in chats_named(parts, data)),
-                   *turn_named("/".join(parts), data)})
+                   *("/".join(chat_parts(ref)) for ref in chats_named(parts, data))})
 
 
 def _home_scope(path: str) -> list[str]:

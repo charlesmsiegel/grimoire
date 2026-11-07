@@ -162,7 +162,7 @@ def arrange(records: Iterable[TurnRecord]) -> Lineage:
         branches = {head.turn_id: live(head) for head in going}
         fork = Fork(level[0].number, after, "open" if valid else "conflict", tuple(
             Branch(head.turn_id, head.device,
-                   tuple(turn.turn_id for turn in branches.get(head.turn_id) or subtree(head)),
+                   tuple(turn.turn_id for turn in (branches[head.turn_id] if head.turn_id in branches else live(head))),
                    head.turn_id not in branches) for head in level))
         for found in branches.values():
             line.extend(found)
