@@ -38,7 +38,7 @@ from grimoire.evidencestore import EvidenceLibrary
 from grimoire.generation import GenerationError, director_brief, npc_brief, plan_generation_turn, unrecognised
 from grimoire.goals import Agenda, Choice, GoalError, check_agenda, choose, explain
 from grimoire.import_v1 import imported_voices
-from grimoire.intent import RoutingContext, Utterance, route
+from grimoire.intent import Command, RoutingContext, Utterance, route
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import ControlChange
 from grimoire.partystore import PartyLibrary
@@ -405,10 +405,21 @@ class SceneRunner:
         Speech is read with 032 and heard by whoever ``transmit`` says; an action that is not a private
         message is a visible action everyone present sees. A retry of the same post onto its own turn, before
         anything was generated, returns that turn.
+
+        Text the router reads as one of the table's request commands (``pause``, ``resume``, ``skip``,
+        ``redirect``: "Grimoire, skip", "redirect: kinder") is no post: it is run as ``request`` (or ``resume``)
+        would run it for the same player, and the turn it wrote is returned. A typed skip or redirect is about
+        the lines on show (``_on_show``); to name other lines, call ``request``.
         """
         context = self._context(chat)
         scene = context.scene
         principal = self._principal(scene, by)
+        command = _table_command(scene, text, mode)
+        if command is not None:  # 016's text request lanes: the same path as the equivalent click
+            if command.name == "resume":
+                return self._resume(scene, principal)
+            targets = () if command.name == "pause" else None  # None: the lines on show
+            return self._request(scene, principal, command.name, targets, command.argument)
         self._ready(scene)
         persona = scene.persona
         if persona is None:
@@ -893,6 +904,9 @@ class SceneRunner:
         stored, take, line = _find_line(scene, line_id)
         if take.state != "kept" or not line.shown:
             raise _refuse("not_kept", "only a shown line of a kept take can be struck")
+        if principal not in self.authority.owners and not _heard(scene, take, line, principal):
+            raise _refuse("not_heard", "no character of yours heard that line; only its listeners or the owner "
+                                       "may strike it")
         record = stored.record.with_take(_mark(take, {line_id}, "struck", principal))
         self._write(record, stored)
         return record
@@ -916,19 +930,40 @@ class SceneRunner:
     def request(self, chat: ChatRef, by, kind: str, targets: Iterable[str] = (), *,
                 direction: str | None = None) -> TurnRecord:
         """016's mid-session request: ``pause`` stops play; ``skip``, ``redirect`` and ``rephrase`` withdraw
-        the named lines (``redirect``/``rephrase`` record the direction on their take)."""
+        the named lines (``redirect``/``rephrase`` record the direction on their take).
+
+        A line of a kept take whose turn holds an accepted 021 effect depicts accepted canon (``segments``): a
+        skip passes over its depiction (the line is withdrawn) and the effect, its event and the turn's outcome
+        stay exactly as accepted; a redirect leaves it alone, and one that would withdraw nothing is refused
+        ``accepted_canon``."""
         scene = self._context(chat).scene
         principal = self._principal(scene, by)
+        return self._request(scene, principal, kind, tuple(targets), direction)
+
+    def _request(self, scene: Scene, principal: str, kind: str, targets: tuple[str, ...] | None,
+                 direction: str | None) -> TurnRecord:
+        """``request`` for an authenticated ``principal``; ``targets=None`` is a typed request: the lines on show."""
+        chat = scene.chat
         _readable(scene, pausing=kind == "pause")
-        targets = tuple(targets)
+        owner = principal in self.authority.owners
+        if targets is None:
+            targets = _on_show(scene, principal, owner)
+            if not targets:
+                raise _refuse("no_targets", f"no line you heard is on show to {kind}; name the lines it is about")
         if kind in ("skip", "redirect", "rephrase") and not targets:
             raise _refuse("no_targets", f"a {kind} names the lines it is about")
+        if kind != "pause" and not owner:  # a player withdraws only what their own character heard
+            heard = {line.line_id: _heard(scene, take, line, principal) for stored in scene.turns.turns
+                     for take in stored.record.takes for line in take.lines}
+            if any(heard.get(target) is False for target in targets):
+                raise _refuse("not_heard", "no character of yours heard that line; only its listeners or the owner "
+                                           "may withdraw it")
         try:
             request = BoundaryRequest(chat.campaign_id, f"{chat.chat_id}.request", principal, kind, targets,
                                       direction or "")
         except ValueError as error:
             raise _refuse("invalid_field", str(error)[:200]) from None
-        boundary = BoundaryContext(chat.campaign_id, frozenset({principal}))
+        boundary = BoundaryContext(chat.campaign_id, _table_audience(scene, principal))
         if kind == "pause":
             if targets:
                 raise _refuse("invalid_field", "a pause names no lines")
@@ -948,7 +983,12 @@ class SceneRunner:
         if decision.status != "accepted":
             raise _refuse("unknown_line" if decision.reason == "unknown_segment" else decision.reason,
                           "the request was refused")
-        withdrawn = set(decision.withdrawn_proposals) | set(decision.rerender)
+        # A skip passes over accepted canon's depiction (``skip_presentation``) as it withdraws a proposal; the
+        # effect and its event are not on the turn's takes, so nothing here can touch them.
+        withdrawn = set(decision.withdrawn_proposals) | set(decision.skip_presentation) | set(decision.rerender)
+        if not withdrawn:  # a redirect of accepted canon only: it withdraws proposals, and there are none
+            raise _refuse("accepted_canon", "those lines depict an accepted effect: a redirect leaves them; "
+                                            "skip them, or rephrase them")
         record = stored.record
         for take in record.takes:
             hit = withdrawn & {line.line_id for line in take.shown()}
@@ -967,7 +1007,9 @@ class SceneRunner:
         left the table never locks the chat). A pause on a turn a fork choice set aside is lifted the same way;
         play goes on once no pause stands. Returns the chat's last turn."""
         scene = self._context(chat).scene
-        principal = self._principal(scene, by)
+        return self._resume(scene, self._principal(scene, by))
+
+    def _resume(self, scene: Scene, principal: str) -> TurnRecord:
         _readable(scene)
         with span("write.turn"):
             after = self.scenes.resume(scene.turns, principal, owner=principal in self.authority.owners)
@@ -1001,6 +1043,63 @@ class SceneRunner:
 
 
 __all__ = ["DEFAULT_BUDGET", "Scene", "SceneRunner"]
+
+
+#: The router's commands ``post`` runs as the table's requests (016): each by the path its click takes.
+TABLE_COMMANDS = frozenset({"pause", "resume", "skip", "redirect"})
+
+
+def _table_command(scene: Scene, text: object, mode: str) -> Command | None:
+    """The table request ``text`` routes to (008), if any; anything else is left to the post's own routing,
+    which refuses what it cannot play (``invalid_field``, ``uncertain``, ``not_in_this_slice``)."""
+    if not isinstance(text, str) or not text.strip():
+        return None
+    persona = scene.persona.instance_id if scene.persona is not None else None
+    try:
+        intent = route(Utterance(text, mode), RoutingContext(active_pc=persona, can_direct=False))
+    except ValueError:
+        return None
+    if intent.kind == "ui_command" and intent.command is not None and intent.command.name in TABLE_COMMANDS:
+        return intent.command
+    return None
+
+
+def _on_show(scene: Scene, principal: str, owner: bool) -> tuple[str, ...]:
+    """The lines a typed skip or redirect is about: on the chat's last turn, while it is open, its newest take by
+    number, only while that take is still proposed; once the turn is closed, its kept take. Of that take, the shown
+    lines the requester heard (``_heard``; the owner, every shown line). None otherwise (``no_targets``): a typed
+    request never walks back to an older take or turn, so a retried one withdraws nothing more."""
+    stored = scene.turns.last
+    if stored is None:
+        return ()
+    record = stored.record
+    if record.open:
+        take = max(record.takes, key=lambda t: t.take, default=None)
+        take = take if take is not None and take.state == "proposed" else None
+    else:
+        take = record.kept
+    if take is None:
+        return ()
+    return tuple(line.line_id for line in take.shown() if owner or _heard(scene, take, line, principal))
+
+
+def _heard(scene: Scene, take: Take, line: SceneLine, principal: str) -> bool:
+    """Whether ``principal`` heard the line: a character they control (003, as recorded now) is among its listeners.
+    On a staged take the listeners are only its audience's player characters as of that take (``Take.players``,
+    as ``table_lines(as_heard=True)`` reads them), so an NPC handed to a player later brings none of what it heard;
+    a staged take that recorded no players has none (fail closed). An unstaged take counts its whole audience."""
+    listeners: Iterable[InstanceRef] = line.audience
+    if take.on_stage is not None:
+        listeners = set(line.audience) & set(take.players or ())
+    return any(scene.controller(actor) == principal for actor in listeners)
+
+
+def _table_audience(scene: Scene, principal: str) -> frozenset[str]:
+    """016's ``BoundaryContext.audience``, authenticated: every human 003's ledger records as controlling a present
+    player character (on stage or not: the table, not the room), and the requester, whom ``_principal``
+    authenticated as one of them or the library owner. Never a name from a post, a reply or the caller."""
+    controllers = {scene.controller(pc) for pc in scene.players}
+    return frozenset(each for each in controllers if isinstance(each, str) and is_human(each)) | {principal}
 
 
 def _agendas(agendas: object) -> dict[InstanceRef, Agenda]:

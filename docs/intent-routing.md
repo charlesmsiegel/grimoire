@@ -83,6 +83,8 @@ derived property, so a caller can't construct a weaker one.
 | `reroll` | authorized | reroll, regenerate, try again |
 | `choose_option` | authorized | choose/pick/select [the] option N, option N, [choose] the Nth option (1–9) |
 | `edit_draft` | authorized | edit [the] draft, edit my reply |
+| `skip` | authorized | skip [that/this/it] |
+| `redirect` | authorized | redirect [that/this/it]; redirect [that/this/it]`:` DIRECTION (the direction is the argument, in the player's own words) |
 | `delete_scene` | confirm | delete/remove/erase [the/this] scene |
 
 - **instant**: view or playback only; never discards user-authored text. `stop` halts audio and
@@ -91,6 +93,14 @@ derived property, so a caller can't construct a weaker one.
 - **authorized**: changes draft or game state; the caller applies the same authorization a
   mouse or keyboard action would.
 - **confirm**: destructive; needs the confirmation step below, then the authorized path.
+
+`skip` and `redirect` are 016's mid-session requests ([session zero](SESSION_ZERO.md#mid-session-requests)); the
+[scene runner](SCENES.md#pause-skip-and-redirect-016) runs them, with `pause` and `resume`, through the same path
+as the click. They are `authorized`, not safe stops: changing what the table sees is game state, so a misheard
+one is offered as a candidate, never acted on. A redirect's direction needs a `:` before it: "Redirect, you fool!"
+and "redirect the guards" are command-like, so `uncertain`, as "Stop, you fool!" is, and so is "redirect: ...",
+whose direction has no word in it. The direction is the player's own text after the colon, without leading colons
+or trailing whitespace and `.!?`, also when the command is repeated.
 
 ## Voice uncertainty
 
@@ -182,6 +192,7 @@ submission) and [Local multi-PC](roadmap/sprints/local-multi-pc.md) (who is spea
 - Auto-mode misreads, each fixed by quoting or by using an explicit mode:
   - "Stop!" as dialogue reads as the app `stop`.
   - "Continue" reads as resume.
+  - "Skip" and "Redirect" alone read as commands; "Skip the formalities" reads as uncertain.
   - "I love you, Mara" reads as an action.
   - "Director, you're late." typed with a comma reads as direction.
   - "I read the grimoire, open on the table" reads as mixed.
