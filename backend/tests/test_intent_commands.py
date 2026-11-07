@@ -11,11 +11,11 @@ from intent_phrases import CHARACTER_CASES, CHOOSE_CASES, NAV_CASES, SIMPLE_CASE
 def test_catalog_gates():
     assert set(COMMANDS) == {
         "navigate", "open_character", "pause", "resume", "stop", "cancel", "review",
-        "undo", "reroll", "choose_option", "edit_draft", "delete_scene",
+        "undo", "reroll", "choose_option", "edit_draft", "delete_scene", "skip", "redirect",
     }
     assert COMMANDS["delete_scene"].gate == "confirm"
     assert {n for n, s in COMMANDS.items() if s.gate == "authorized"} == {
-        "undo", "reroll", "choose_option", "edit_draft"}
+        "undo", "reroll", "choose_option", "edit_draft", "skip", "redirect"}
     assert {n for n, s in COMMANDS.items() if s.gate == "confirm"} == {"delete_scene"}
     assert SAFE_STOP_COMMANDS == {"stop", "pause", "cancel"}
     assert NAV_TARGETS == {"inventory", "map", "journal", "settings", "scenes", "characters"}
@@ -42,6 +42,7 @@ def test_gate_is_derived_not_forgeable():
     ("frobnicate", None), ("navigate", None), ("navigate", "attic"), ("pause", "x"),
     ("choose_option", "0"), ("choose_option", "10"), ("choose_option", None),
     ("open_character", ""), ("open_character", "  "), ("delete_scene", "s1"),
+    ("skip", "x"), ("redirect", ""), ("redirect", "   "), ("redirect", 3),
 ])
 def test_command_validation(name, argument):
     with pytest.raises(ValueError):
@@ -82,3 +83,34 @@ def test_parse_choose_option_out_of_range(text):
 @pytest.mark.parametrize("text", ["delete everything", "open the door", "hello", ""])
 def test_parse_rejects_non_commands(text):
     assert parse_command(text) is None
+
+
+# -- 016's request lanes: skip and redirect ---------------------------------------------------------
+
+@pytest.mark.parametrize("text", ["skip", "Skip that.", "skip this", "please skip it", "SKIP!"])
+def test_parse_skip(text):
+    assert parse_command(text) == Command("skip")
+
+
+@pytest.mark.parametrize("text, direction", [
+    ("redirect", None), ("Redirect that.", None), ("Please, redirect", None),
+    ("Redirect: kinder, please.", "kinder, please"), ("redirect this: Less Gore", "Less Gore"),
+    ("please redirect: cut to the morning", "cut to the morning"), ("redirect:: :  Softer!?", "Softer"),
+    ("Redirect:  Make Mara Kinder ...", "Make Mara Kinder"),
+])
+def test_parse_redirect_keeps_the_players_own_direction(text, direction):
+    assert parse_command(text) == Command("redirect", direction)
+
+
+@pytest.mark.parametrize("text", ["skip the formalities", "skip town", "redirect the guards", "redirecting",
+                                  "Redirect, you fool!", "Redirect, Mara, the ships are coming!",
+                                  "redirect:", "redirect: ...", "Redirect: !?", "redirect itself: x"])
+def test_skip_and_redirect_need_their_whole_grammar(text):
+    assert parse_command(text) is None
+
+
+def test_skip_and_redirect_are_authorized_never_safe_stops():
+    # what the table sees is game state: a misheard skip or redirect never acts below the voice threshold
+    assert Command("skip").gate == Command("redirect", "kinder").gate == "authorized"
+    assert not {"skip", "redirect"} & SAFE_STOP_COMMANDS
+    assert {"skip", "redirect"} <= CATALOG_VERBS

@@ -28,6 +28,8 @@ _TRAILING = ".!?,;: "
 
 def _command_label(command: Command) -> str:
     label = COMMANDS[command.name].label
+    if command.name == "redirect" and command.argument:
+        return f"{label}: {command.argument}"
     return f"{label} {command.argument}" if command.argument else label
 
 
@@ -131,7 +133,11 @@ def _repeated(text: str, sentences: list[str]) -> Intent | None:
             continue
         commands = {parse_command(unit) for unit in units}
         if len(commands) == 1 and None not in commands:
-            return _command(commands.pop(), _first_units(text, units[0]), "bare_command")
+            phrase = _first_units(text, units[0])
+            command = commands.pop()
+            said = parse_command(phrase)  # the player's own words, never the normalised unit (a redirect's case)
+            return _command(said if said is not None and said.name == command.name else command, phrase,
+                            "bare_command")
     return None
 
 

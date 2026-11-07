@@ -1,6 +1,6 @@
 # Session zero — first-slice boundary contract
 
-**Status:** first slice of [Session Zero Boundaries](roadmap/sprints/session-zero-boundaries.md) (Wave 2, #016). It is a pure policy in `backend/src/grimoire/core/boundaries.py`. Field names are a first-slice contract, not a frozen file schema, and nothing is persisted. The policy makes **decisions**, not play: no runner, UI, model call or player interaction executes them yet. The [first text runner](roadmap/sprints/minimal-text-scene-runner.md) (#035) is the first execution owner. Don't describe this as playable skip support.
+**Status:** first slice of [Session Zero Boundaries](roadmap/sprints/session-zero-boundaries.md) (Wave 2, #016). It is a pure policy in `backend/src/grimoire/core/boundaries.py`. Field names are a first-slice contract, not a frozen file schema, and nothing is persisted. The policy makes **decisions**, not play. The [first text runner](roadmap/sprints/minimal-text-scene-runner.md) (#035) executes its mid-session requests (pause, skip, redirect, rephrase), clicked or typed, headless ([SCENES](SCENES.md#pause-skip-and-redirect-016)); a session-zero configuration is still not executed (a scope with one refuses generation), and there is no UI.
 
 Boundaries control how the fiction is **depicted** and which **proposals** may go ahead. They are separate from [player sovereignty](PLAYER_SOVEREIGNTY.md), which decides who may author a PC's choices and thoughts, and from adjudication, which decides what happened. A boundary or request can never create, edit or delete an accepted event, outcome or resolution.
 
@@ -8,7 +8,7 @@ Boundaries control how the fiction is **depicted** and which **proposals** may g
 
 - **Player-input channel only:** `Boundary` (through `BoundaryChange`), `BoundaryRequest` and `CheckInConsent`. Model output must never be turned into any of these. `set_by`, `requested_by` and `given_by` name the authenticated speaker, and none of them may be `DIRECTOR`.
 - **Caller duties (035):**
-  - `BoundaryContext.audience` must be the authenticated scene audience.
+  - `BoundaryContext.audience` must be the authenticated scene audience. 035 passes every human the sovereignty ledger records as controlling a present player character, plus the authenticated requester.
   - The viewer passed to `owner_boundaries` must be the authenticated user.
   - Boundary ids must be opaque.
 
@@ -119,7 +119,7 @@ Nothing caches the result. Callers recompute it on every review, so a tightened 
 | Persistence of configuration | Stored verbatim as the play scope's opaque `session_zero` object by [World-Optional Chat Scopes](CHATS.md) (#107). The store does not interpret it. A JSON codec for `SessionZero` and authenticating its setter belong to #035. |
 | Carrying over only genuine V1 preferences; missing ones stay unset | [V1 import](roadmap/sprints/v1-to-v2-import-apply.md) (#026) |
 | Rendering visible rulings into prompts, never `SessionZero` directly | #027 |
-| Authenticated audience and speakers, consent collection, request execution, extending the [intent router](intent-routing.md) with skip/redirect lanes, a visible correction | #035 |
+| ~~Authenticated audience and speakers, request execution, extending the [intent router](intent-routing.md) with skip/redirect lanes~~ **done by 035 milestone 2** ([SCENES](SCENES.md#pause-skip-and-redirect-016)): the audience is every human the sovereignty ledger records as controlling a present player character, plus the authenticated requester; a kept line over an accepted effect is an `accepted` segment. Consent collection and a visible correction (the UI) remain | #035 (consent), #065 (UI) |
 | A participant's view of the group boundaries they agreed to (only the setter's owner view shows `agreed_by`) | #035 |
 | Group governance of shared scopes (who may author or withdraw a campaign, world or setting boundary beyond its recorder) | [Collaborative Multiplayer](roadmap/sprints/collaborative-multiplayer.md) |
 | Theme synonyms or taxonomies, audio/visual staging, confidential multi-player negotiation | Later milestones |

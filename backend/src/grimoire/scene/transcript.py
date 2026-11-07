@@ -197,13 +197,16 @@ def render(lines: Iterable[HeardLine]) -> str:
 def segments(turn: TurnRecord) -> tuple[NarrationSegment, ...]:
     """016 segments for every line still shown on a turn's proposed or kept takes.
 
-    No line is accepted canon yet (there are no events), so every one is a ``proposed``, unlabelled
-    segment: a request may withdraw any of them, and a kept one is then struck.
+    A kept take's lines on a turn whose 021 effect is accepted (or being accepted: fail closed) depict accepted
+    canon, so each is an ``accepted`` segment naming that effect's event: a skip passes over its depiction and a
+    redirect leaves it alone (016). Every other line is a ``proposed``, unlabelled segment a request may withdraw.
     """
+    canon = next((effect.event_id for effect in turn.effects if effect.state in ("accepting", "accepted")), None)
     found = []
     for take in turn.takes:
         if take.state in ("proposed", "kept"):
-            found.extend(NarrationSegment(turn.chat.campaign_id, line.line_id, line.text, None, "proposed")
+            status, event = ("accepted", canon) if take.state == "kept" and canon is not None else ("proposed", None)
+            found.extend(NarrationSegment(turn.chat.campaign_id, line.line_id, line.text, None, status, event)
                          for line in take.shown())
     return tuple(found)
 

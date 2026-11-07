@@ -35,6 +35,8 @@ COMMANDS = MappingProxyType({spec.name: spec for spec in (
     CommandSpec("reroll", "authorized", "reroll"),
     CommandSpec("choose_option", "authorized", "choose option"),
     CommandSpec("edit_draft", "authorized", "edit draft"),
+    CommandSpec("skip", "authorized", "skip"),
+    CommandSpec("redirect", "authorized", "redirect"),
     CommandSpec("delete_scene", "confirm", "delete the scene"),
 )})
 
@@ -44,7 +46,7 @@ SAFE_STOP_COMMANDS = frozenset({"stop", "pause", "cancel"})
 CATALOG_VERBS = frozenset({
     "open", "show", "go", "navigate", "pause", "resume", "unpause", "continue", "stop",
     "cancel", "undo", "reroll", "regenerate", "choose", "pick", "select", "edit", "review",
-    "delete", "remove", "erase", "option",
+    "delete", "remove", "erase", "option", "skip", "redirect",
 })
 
 _NAV_SYNONYMS = {
@@ -55,6 +57,7 @@ _NAV_SYNONYMS = {
 NAV_TARGETS = frozenset(_NAV_SYNONYMS.values())
 _RESERVED_NAMES = frozenset(_NAV_SYNONYMS) | {"list", "sheet", "sheets"}
 _ARGUMENT_REQUIRED = frozenset({"navigate", "open_character", "choose_option"})
+_ARGUMENT_OPTIONAL = frozenset({"redirect"})  # a redirect may carry the player's direction
 
 _NUMBERS = {word: str(n) for n, word in enumerate(
     ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine"), start=1)}
@@ -74,7 +77,10 @@ class Command:
     def __post_init__(self) -> None:
         if self.name not in COMMANDS:
             raise ValueError(f"unknown command: {self.name!r}")
-        if (self.argument is not None) != (self.name in _ARGUMENT_REQUIRED):
+        if self.name in _ARGUMENT_OPTIONAL:
+            if self.argument is not None and not (isinstance(self.argument, str) and self.argument.strip()):
+                raise ValueError(f"{self.name} argument, when given, is nonempty text")
+        elif (self.argument is not None) != (self.name in _ARGUMENT_REQUIRED):
             raise ValueError(f"{self.name} argument is {'required' if self.argument is None else 'forbidden'}")
         if self.name == "navigate" and self.argument not in NAV_TARGETS:
             raise ValueError(f"unknown navigation target: {self.argument!r}")
@@ -105,10 +111,17 @@ _FIXED = [(re.compile(pattern), name) for pattern, name in (
     (r"undo|undo that", "undo"),
     (r"reroll|regenerate|try again", "reroll"),
     (r"edit(?: the)? draft|edit my reply", "edit_draft"),
+    (r"skip(?: that| this| it)?", "skip"),
+    (r"redirect(?: that| this| it)?", "redirect"),
     (r"(?:delete|remove|erase)(?: the| this)? scene", "delete_scene"),
     (rf"(?:(?:choose|pick|select) )?(?:the )?option {_NUMBER}", "choose_option"),
     (rf"(?:(?:choose|pick|select) )?the {_ORDINAL} option", "choose_option"),
 )]
+# A redirect's direction follows a ``:`` and keeps the player's own words. A comma introduces none ("Redirect, you
+# fool!" may be speech), and "redirect the guards" is no command either: both read as command-like, so uncertain.
+# Only the head is a pattern; the direction is cut in Python, so a long post routes in linear time.
+_REDIRECT_HEAD = re.compile(r"(?:please[\s,]+)?redirect(?:\s+(?:that|this|it))?(?![\w'])", re.IGNORECASE)
+_NOT_A_REDIRECT = object()
 _CHARACTER = re.compile(r"(?P<prefix>(?:open|show)(?: the)? character) .+")
 _SHEET = re.compile(r"(?:open|show) .+'s sheet")
 _TRAILING = ".!?,;: "
@@ -134,8 +147,27 @@ def _character(text: str, form: str) -> Command | None:
     return Command("open_character", name)
 
 
+def _redirect(text: str):
+    """``redirect: <direction>`` as a command; ``None`` when its direction is empty after its punctuation and
+    whitespace ("redirect: ..."), which reads as command-like; ``_NOT_A_REDIRECT`` when no colon follows the head
+    (the catalog grammar then decides, as for "redirect that.")."""
+    trimmed = straighten(text).strip()
+    head = _REDIRECT_HEAD.match(trimmed)
+    if head is None:
+        return _NOT_A_REDIRECT
+    rest = trimmed[head.end():].lstrip()
+    if not rest.startswith(":"):
+        return _NOT_A_REDIRECT
+    direction = rest.lstrip(": \t\r\n\f\v").rstrip(" \t\r\n\f\v.!?")
+    if not any(char.isalnum() for char in direction):
+        return None
+    return Command("redirect", direction)
+
+
 def parse_command(text: str) -> Command | None:
     """Match one whole utterance against the catalog grammar, or return None."""
+    if (redirect := _redirect(text)) is not _NOT_A_REDIRECT:
+        return redirect
     form = grammar_form(text)
     for pattern, name in _FIXED:
         match = pattern.fullmatch(form)

@@ -1,5 +1,7 @@
 """Typed-utterance routing into command, in-character and director lanes."""
 
+import time
+
 import pytest
 
 from grimoire.intent.commands import Command
@@ -250,3 +252,72 @@ def test_lone_unseparated_marker_offers_no_empty_director_note(text):
     for candidate in intent.candidates:
         again = r(candidate.text, MODE[candidate.kind])
         assert (again.kind, again.command) == (candidate.kind, candidate.command)
+
+
+# -- 016's request lanes: skip and redirect ---------------------------------------------------------
+
+@pytest.mark.parametrize("text, command", [
+    ("skip", Command("skip")), ("Grimoire, skip that", Command("skip")),
+    ("Redirect: kinder, please.", Command("redirect", "kinder, please")),
+    ("Grimoire, redirect: less gore", Command("redirect", "less gore")),
+])
+def test_skip_and_redirect_are_their_own_lanes(text, command):
+    intent = r(text)
+    assert intent.kind == "ui_command" and intent.command == command
+    assert intent.feedback == "Command: " + ("skip" if command.argument is None else f"redirect: {command.argument}")
+
+
+@pytest.mark.parametrize("text, mode, kind", [
+    ('"Skip it, Mara."', "auto", "pc_speech"), ("skip", "speech", "pc_speech"),
+    ("redirect: kinder", "action", "pc_action"), ("I skip the stone", "auto", "pc_action"),
+])
+def test_quoting_or_an_explicit_mode_keeps_the_words_in_the_fiction(text, mode, kind):
+    assert r(text, mode).kind == kind
+
+
+def test_a_skip_or_redirect_in_words_is_never_executed_on_a_guess():
+    for text in ("Skip the formalities, Mara", "redirect the guards", "could you skip that"):
+        intent = r(text)
+        assert intent.kind == "uncertain"
+        for candidate in intent.candidates:  # each re-enters as itself, in its explicit mode
+            again = r(candidate.text, MODE[candidate.kind])
+            assert (again.kind, again.command) == (candidate.kind, candidate.command)
+    assert r("redirect: kinder. Skip.").kind == "uncertain"  # two requests in one line: mixed
+
+
+@pytest.mark.parametrize("text", ["Stop, you fool!", "Redirect, you fool!", "Redirect, Mara, the ships are coming!"])
+def test_a_comma_after_redirect_is_speech_until_asked_as_stop_is(text):
+    # only a colon introduces a direction: "Redirect, ..." reads as a command-like line, the same as "Stop, ..."
+    intent = r(text)
+    assert (intent.kind, intent.reason) == ("uncertain", "command_like")
+    assert [(c.kind, c.text) for c in intent.candidates] == [("pc_speech", text)]
+    assert r("Redirect: you fool").command == Command("redirect", "you fool")
+
+
+def test_a_direction_empty_but_for_punctuation_is_uncertain_as_the_comma_form_is():
+    intent = r("redirect: ...")
+    assert (intent.kind, intent.reason) == ("uncertain", "command_like")
+
+
+def test_a_repeated_redirect_keeps_the_players_own_words():
+    intent = r("Redirect: Make Mara Kinder. Redirect: Make Mara Kinder.")
+    assert intent.command == Command("redirect", "Make Mara Kinder")
+
+
+@pytest.mark.parametrize("filler", [" ", "."])
+def test_routing_a_long_redirect_is_linear(filler):
+    # the direction is cut in Python, never by a backtracking pattern: 40,000 characters route at once
+    start = time.perf_counter()
+    intent = r("redirect: a" + filler * 40_000 + "b")
+    took = time.perf_counter() - start
+    assert intent.command is not None and intent.command.name == "redirect"
+    assert took < 0.5, f"a 40,000-character redirect took {took:.2f}s to route"
+
+
+def test_a_misheard_skip_waits_for_a_confident_reading():
+    heard = route(Utterance("skip that", origin="voice", confidence=0.5), CTX)
+    assert heard.kind == "uncertain" and [c.command for c in heard.candidates] == [Command("skip")]
+    sure = route(Utterance("Redirect: kinder", origin="voice", confidence=0.9), CTX)
+    assert sure.command == Command("redirect", "kinder")
+    split = route(Utterance("skip that", origin="voice", confidence=0.9, alternatives=("sit back",)), CTX)
+    assert split.kind == "uncertain" and split.reason == "asr_disagreement"
