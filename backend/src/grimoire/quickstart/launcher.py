@@ -68,7 +68,7 @@ class QuickStart:
 
     # -- Start Chat ---------------------------------------------------------------------------------
 
-    def start(self, selection: Selection, by, *, persona: SourceRef | None = None, opening: str | None = None,
+    def start(self, selection: Selection, by, *, persona: SourceRef, opening: str | None = None,
               label: str | None = None) -> Started:
         """A new world-less chat from ``selection``, opened and ready for the player's first post.
 
@@ -76,22 +76,23 @@ class QuickStart:
         the persona with the player behind ``by`` and every other character with the director, and opens
         with ``opening`` (an id from ``options``; by default the card's first greeting or the scenario's
         first opening, else the premise), which is kept: it is the player's chosen text, not a generation.
-        A selection with nothing to open with starts empty. Each call is a new chat: Continue is
+        A selection with nothing to open with starts empty. A persona is required (the owner's Nov 6 call),
+        so every chat Start Chat makes can take the player's posts. Each call is a new chat: Continue is
         ``continue_chat`` on one of ``options(...).related``."""
         if not isinstance(selection, Selection):
             raise QuickStartRefused("invalid_selection", "Start Chat needs a Selection")
         player = self._player(by)
         _check_opening(opening)
-        if persona is None and player not in self.runner.authority.owners:
-            # with no persona, only the library owner is at this table (035): refuse before writing
-            raise QuickStartRefused("not_at_table", "pick a persona to play, or start as the library owner")
+        if persona is None:
+            # a chat with no player character cannot take a post (035's no_persona): never start one
+            raise QuickStartRefused("no_persona", "pick a persona to play as before starting")
         sources, payload = self._sources(selection, strict=True)
         offered = _offered(selection, payload)
         if opening is None:
             opening = _default(offered)  # the first one that is not group-only; none: the premise, or empty
         elif opening not in {o.opening_id for o in offered}:
             raise QuickStartRefused("unknown_opening", "that greeting or opening is not offered here")
-        pinned_persona = self._pin(persona, "persona") if persona is not None else None
+        pinned_persona = self._pin(persona, "persona")
         if selection.kind == "premise":
             launch = Launch("premise", premise=selection.premise)
         else:

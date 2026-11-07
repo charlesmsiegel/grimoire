@@ -211,8 +211,8 @@ def test_a_refused_start_writes_nothing(folder):
             qs.start(Selection.bundle(TAMSIN), ana, persona=ANYA)  # Tamsin's card embeds no lorebook
         assert refused.value.reason == "no_lorebook"
         with pytest.raises(QuickStartRefused) as refused:
-            qs.start(Selection.from_premise(PREMISE), table.player(BOB))  # no persona: only the owner is at table
-        assert refused.value.reason == "not_at_table"
+            qs.start(Selection.from_premise(PREMISE), table.owner, persona=None)  # even the owner picks one
+        assert refused.value.reason == "no_persona"
         with pytest.raises(QuickStartRefused) as refused:
             qs.start(Selection.from_premise(PREMISE), table.authority.handle_for(ANA, trusted=False), persona=ANYA)
         assert refused.value.reason == "not_authenticated"
