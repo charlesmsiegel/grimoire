@@ -511,6 +511,7 @@ class SceneRunner:
             if take.state != "stale" and token.stale:
                 raise _Stale
 
+        published = next(t for t in stored.record.takes if t.take == take.take)  # the running take, as written
         for _ in range(WRITE_RETRIES):
             try:
                 self.scenes.write(stored.record.with_take(take), stored, landing=True, before_commit=fence)
@@ -527,9 +528,15 @@ class SceneRunner:
                 break
             stored = found
             existing = next((t for t in stored.record.takes if t.take == take.take), None)
-            if existing is None or existing.state not in ("running", "superseded"):
-                break
-            if existing.state == "superseded":  # passed, or replaced by a newer run: this one lost
+            if existing is None and len(stored.record.takes) + 1 == take.take:
+                # its turn now holds another version (a sync conflict resolved to the peer's meanwhile), with no
+                # take of this number: that version stands as chosen, and this run's usage joins it as a stale
+                # take under the number its calls were billed under (``<turn_id>.<take>``)
+                take = replace(take, state="stale", lines=(), outcome="stale")
+            elif (existing is None or existing.state not in ("running", "superseded")
+                  or replace(published, state=existing.state) != existing):
+                break  # another version's own take of this number (or a gap before it): nowhere to record it
+            elif existing.state == "superseded":  # passed, or replaced by a newer run: this one lost
                 take = replace(take, state="stale", lines=(), outcome="stale")
         raise _refuse("turn_changed", "another run changed this turn; its usage could not be saved")
 

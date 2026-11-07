@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import replace
 
 import pytest
 
@@ -91,6 +92,36 @@ def test_a_run_in_flight_lands_its_take_when_sync_brings_a_conflict_on_its_turn_
         assert all(attempt.usage is not None for call in take.calls for attempt in call.attempts)
 
 
+def test_a_run_in_flight_keeps_its_usage_when_its_turn_is_resolved_to_the_peers_version_mid_run(built, tmp_path):
+    chat = devices(built, tmp_path)
+    with Table(tmp_path / DESKTOP, [say("Desk two.")]) as desk, Table(tmp_path / PHONE) as phone:
+        synced(desk, phone)
+        desk.runner.post(chat, desk.player(), '"The desk asks."')
+        synced(desk, phone)  # the phone holds the desktop's open turn 2
+        two = turn_id(chat, 2, tag(DESKTOP))
+        path = f"campaigns/{chat.campaign_id}/turns/{two}.json"
+        real = desk.runner.runtime.run_turn
+
+        def run_turn(*args, **kwargs):  # meanwhile the phone pauses that turn, and the owner keeps the phone's
+            result = real(*args, **kwargs)
+            phone.runner.request(chat, phone.player(), "pause")
+            assert synced(desk, phone).conflict(path).code == "concurrent"
+            theirs = etag((tmp_path / PHONE / path).read_bytes())
+            resolve(desk.store, phone.store, path, theirs, {DESKTOP: etag((tmp_path / DESKTOP / path).read_bytes()),
+                                                            PHONE: theirs}, {DESKTOP: desk.owner, PHONE: phone.owner})
+            return result
+        desk.runner.runtime.run_turn = run_turn
+        take = desk.runner.generate(chat, desk.player())
+        chosen = phone.runner.scenes.turns(chat).last.record
+        assert take.state == "stale" and take.lines == () and take.attempts()
+        assert all(attempt.usage is not None for attempt in take.attempts())
+        mine = desk.runner.scenes.turns(chat).last.record
+        assert mine.takes == (take,) and mine.paused  # the phone's version, as the owner chose it, plus the usage
+        assert chosen.takes == () and replace(mine, takes=()) == chosen
+        assert synced(desk, phone).conflicts == ()  # an ordinary change of the agreed version: the phone takes it
+        assert phone.runner.scenes.turns(chat).last.record == mine
+
+
 def test_a_run_never_starts_on_a_turn_a_fork_choice_set_aside_after_it_was_read(built, tmp_path):
     chat = devices(built, tmp_path)
     with Table(tmp_path / DESKTOP, [say("Desk two."), say("Desk three.")]) as desk, \
@@ -156,6 +187,36 @@ def test_a_labelling_in_flight_lands_with_its_usage_when_sync_brings_a_conflict_
         (written,) = desk.runner.scenes.turns(chat).last.record.labels
         assert written == landed
         assert all(attempt.usage is not None for attempt in written.attempts()) and written.attempts()
+
+
+def test_a_labelling_in_flight_keeps_its_usage_when_its_turn_is_resolved_to_the_peers_version(built, tmp_path):
+    chat = devices(built, tmp_path)
+    with Table(tmp_path / DESKTOP, policy=LABEL_POLICY, labels=[say(LABELS)]) as desk, \
+            Table(tmp_path / PHONE) as phone:
+        synced(desk, phone)
+        desk.runner.post(chat, desk.player(), "*I climb the rigging*")
+        synced(desk, phone)
+        two = turn_id(chat, 2, tag(DESKTOP))
+        path = f"campaigns/{chat.campaign_id}/turns/{two}.json"
+        real = desk.runner.labeller.label
+
+        def label(*args, **kwargs):  # meanwhile the phone pauses that turn, and the owner keeps the phone's
+            reply = real(*args, **kwargs)
+            phone.runner.request(chat, phone.player(), "pause")
+            assert synced(desk, phone).conflict(path).code == "concurrent"
+            theirs = etag((tmp_path / PHONE / path).read_bytes())
+            resolve(desk.store, phone.store, path, theirs, {DESKTOP: etag((tmp_path / DESKTOP / path).read_bytes()),
+                                                            PHONE: theirs}, {DESKTOP: desk.owner, PHONE: phone.owner})
+            return reply
+        desk.runner.labeller.label = label
+        landed = desk.runner.label(chat, desk.player())
+        chosen = phone.runner.scenes.turns(chat).last.record
+        assert landed.state == "superseded" and (landed.factors, landed.stakes) == ((), ()) and landed.attempts()
+        assert all(attempt.usage is not None for attempt in landed.attempts())
+        mine = desk.runner.scenes.turns(chat).last.record
+        assert mine.labels == (landed,) and mine.paused and replace(mine, labels=()) == chosen
+        assert synced(desk, phone).conflicts == ()
+        assert phone.runner.scenes.turns(chat).last.record == mine
 
 
 def test_a_labelling_never_starts_on_a_turn_a_fork_choice_set_aside_after_it_was_read(built, tmp_path):

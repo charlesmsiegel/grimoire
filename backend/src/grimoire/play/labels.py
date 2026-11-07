@@ -139,11 +139,18 @@ def _proposed(runner, record: TurnRecord) -> bool:
 
 def _land(runner, chat: ChatRef, stored: StoredTurn, label: Label) -> Label:
     """Write the finished labelling over its running one, re-reading the turn if it changed meanwhile."""
+    published = next(each for each in stored.record.labels if each.label == label.label)  # as written, running
     for _ in range(WRITE_RETRIES):
         existing = next((each for each in stored.record.labels if each.label == label.label), None)
-        if existing is None:
-            break
-        if existing.state != "running":  # a newer labelling superseded this one: keep the usage only
+        if existing is None and len(stored.record.labels) + 1 == label.label:
+            # its turn now holds another version (a sync conflict resolved to the peer's meanwhile) with no
+            # labelling of this number: that version stands as chosen, and only this call's usage joins it,
+            # under the number it was billed under (``<turn_id>.l<n>``)
+            label = replace(label, state="superseded", factors=(), stakes=())
+        elif existing is None or existing.state not in ("running", "superseded") or \
+                replace(published, state=existing.state) != existing:
+            break  # another version's own labelling of this number (or a gap before it): nowhere to record it
+        elif existing.state != "running":  # a newer labelling superseded this one: keep the usage only
             label = replace(label, state="superseded", factors=(), stakes=())
         record = stored.record.with_label(label)
         if label.state == "proposed" and not _proposed(runner, record):
