@@ -32,7 +32,8 @@ def is_derived(envelope: RecordEnvelope) -> bool:
 @dataclass(frozen=True)
 class Lineage:
     """An entity's art lineage: ``entities`` root first, ending in the entity itself; ``derived[i]``
-    says whether ``entities[i]``'s placements may ``hide``, ``adjust`` or ``inherit``."""
+    says whether ``entities[i]``'s placements may ``hide``, ``adjust`` or ``inherit``: whether that
+    entity's own current head is derived, exactly as resolving it alone decides."""
 
     entities: tuple[SourceRef, ...]
     derived: tuple[bool, ...]
@@ -57,7 +58,14 @@ def lineage(entity: SourceRef, definition: Callable[[SourceRef], StoredDefinitio
         return Lineage((entity,), (True,), (Problem(str(entity), error.reason,
                                                     "its base's art is not inherited"),))
     entities = tuple(node.ref.unpinned() for node in reversed(chain))
-    return Lineage(entities, tuple(index > 0 for index in range(len(entities))))
+    # each layer's modes follow its own entity's current head, never the revision a descendant pinned:
+    # an ancestor whose head is standalone now may not clear, re-crop or reset, whoever derives from it
+    return Lineage(entities, tuple(_head_is_derived(member, definition) for member in entities[:-1]) + (True,))
+
+
+def _head_is_derived(entity: SourceRef, definition: Callable[[SourceRef], StoredDefinition | str]) -> bool:
+    found = definition(entity)
+    return isinstance(found, StoredDefinition) and is_derived(found.envelope)
 
 
 __all__ = ["Lineage", "is_derived", "lineage"]

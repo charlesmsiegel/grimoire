@@ -247,3 +247,22 @@ def test_an_adjust_through_a_damaged_portrayal_layer_is_refused(store, images):
     with pytest.raises(InvalidPlacement) as caught:
         images.place(FAN, "portrait", Placement("adjust", image=PORTRAIT, crop=CROP), None)
     assert caught.value.reason == "nothing_to_adjust"
+
+
+def test_an_ancestor_whose_head_is_now_standalone_cannot_clear_for_its_descendants(store, images):
+    """A child pins Vampire r1 (derived); Vampire's head is now a standalone r2. Vampire's own reset
+    reads as broken, and the child sees it the same way, never the catalog picture behind it."""
+    child = derived(SourceRef("world:elderfen-regency", "character", "mara", "r1"), VAMPIRE_MARA)
+    txn = store.transaction()
+    txn.put(manifest("world:elderfen-regency", derives(child.ref, VAMPIRE_MARA)), None)
+    txn.put(envelope(child), None)
+    txn.commit(handle())
+    _set(images, VAMPIRE_ENTITY, "portrait", Placement("hide"))
+    standalone = EntityDefinition(VAMPIRE_ENTITY.at("r2"), "Mara", "individual", base({}).traits, "Alone now")
+    txn = store.transaction()
+    txn.put(manifest(VAMPIRE, derives(VAMPIRE_MARA), heads={"character/mara": "r2"}), store.check_source(VAMPIRE).etag)
+    txn.put(envelope(standalone), None)
+    txn.commit(handle())
+    own = images.effective_placements(VAMPIRE_ENTITY).slot("portrait")
+    seen = images.effective_placements(child.ref.unpinned()).slot("portrait")
+    assert own.reason == seen.reason == "invalid_placement"
