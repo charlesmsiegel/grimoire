@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import pickle
 import random
 from dataclasses import replace
@@ -10,12 +11,12 @@ import pytest
 
 from grimoire.core import Knowledge, Moment, Proposition, Subject
 from grimoire.core.authority import Correction, Resolution
-from grimoire.referee import ContinuityClaim, Evidence, Facts, RefereeError, flag_mislabel, referee
+from grimoire.referee import SOURCES, ContinuityClaim, Evidence, Facts, RefereeError, flag_mislabel, referee
 from grimoire.staging import Placement
 
 from referee_fixtures import (
     ANA, C, CARRIED, CASK, DAGGER, DRAUGHT, HIDING, KEY, MARA, MUG, NOW, ODA, PELL, SATCHEL, TOMA, authority,
-    claim, dagger, facts, holdings, satchel, knowledge, labelled, ref, stage, stairs_state,
+    claim, dagger, facts, holdings, intention, satchel, knowledge, labelled, ref, stage, stairs_state,
 )
 
 TEXT = "Oda does it."
@@ -110,6 +111,7 @@ def test_one_narration_cannot_spend_the_same_stack_twice():
         (finding,) = report.material
         assert (finding.claim_id, finding.reason) == ("s-2", "insufficient")
         assert Evidence("holdings", f"{ODA}#{DRAUGHT}", "count=1:needs=2") in finding.evidence
+        assert all(e.source in SOURCES for e in finding.evidence)
     figurative = replace(first, mode="figurative")  # a turn of phrase spends nothing
     assert referee(text, facts=f, claims=(figurative, second)).clean == ("s-1", "s-2")
     unsure = referee(text, facts=f, claims=(replace(first, certain=False), second))
@@ -222,6 +224,73 @@ def test_an_obstacle_overcome_by_someone_else_is_not_the_actors_win():
     assert Evidence("obstacle", "attempt:a-2", f"actor={TOMA}") in finding.evidence
     unframed = facts(obstacles=(stairs_state(status="overcome", overcome_by="a-2", framed=False),))
     assert one("overcomes", obstacle_id="stairs", actor=MARA, f=unframed) == "no_winning_frame"
+
+
+# -- intentions -------------------------------------------------------------------------------------------
+
+def test_an_npc_that_does_what_its_briefed_refusal_forbids_is_flagged():
+    briefed = facts(intentions=(intention(),))
+    assert {limit.limit_id for limit in intention().refusals} == {"no-sale", "no-threats"}
+    finding = one("acts", tags={"trade"}, f=briefed)
+    assert (finding.category, finding.reason, finding.classification) == ("intention", "breaks_refusal", "contradiction")
+    assert Evidence("intention", "limit:no-sale", "briefed:forbids=trade") in finding.evidence
+    assert Evidence("intention", f"choice:{ODA}", f"as_of={NOW}") in finding.evidence
+    assert one("acts", tags={"hospitality"}, f=briefed) is None  # what she chose to do
+    threat = one("acts", tags=("threat", "trade"), f=briefed)
+    assert {e.ref: e.detail for e in threat.evidence if e.ref.startswith("limit:")} == {
+        "limit:no-sale": "briefed:forbids=trade", "limit:no-threats": "briefed:forbids=threat"}
+
+
+def test_a_rule_active_but_not_briefed_is_still_kept():
+    # Chosen for a scene without Toma (no stage to hold it to): she could threaten no one, so that rule is
+    # not briefed, but it still applies this turn.
+    without_toma = facts(stage=None, intentions=(intention(present=(ODA, MARA)),))
+    threat = one("acts", tags={"threat"}, f=without_toma)
+    assert threat.reason == "breaks_refusal"
+    assert Evidence("intention", "limit:no-threats", "active:forbids=threat") in threat.evidence
+
+
+def test_a_limit_that_does_not_apply_now_is_not_broken():
+    without_mara = facts(stage=None, intentions=(intention(present=(ODA, TOMA)),))  # no-sale holds only with Mara
+    assert one("acts", tags={"trade"}, f=without_mara) is None
+
+
+def test_a_kind_of_act_the_agenda_never_names_is_unchecked():
+    briefed = facts(intentions=(intention(),))
+    assert one("acts", tags={"sale"}, f=briefed) == "unknown_tag"  # the labeller's word, not the author's
+    assert one("acts", tags={"sale", "trade"}, f=briefed).reason == "breaks_refusal"
+
+
+def test_a_choice_for_another_scene_or_knowledge_is_refused():
+    with pytest.raises(RefereeError, match="intention_cast_mismatch"):
+        facts(intentions=(intention(present=(ODA, MARA)),))
+    with pytest.raises(RefereeError, match="intention_mismatch"):
+        facts(intentions=(intention(source=Knowledge(C)),))
+    assert facts(stage=None, knowledge=None, intentions=(intention(source=Knowledge(C)),)).intention(ODA)
+
+
+def test_intentions_are_one_per_actor_and_for_this_turn():
+    assert one("acts", tags={"trade"}) == "no_intention"
+    assert one("acts", actor=MARA, tags={"trade"}, f=facts(intentions=(intention(),))) == "no_intention"
+    with pytest.raises(RefereeError, match="stale_intention"):
+        facts(intentions=(intention(as_of=NOW - 1),))
+    with pytest.raises(RefereeError, match="duplicate_id"):
+        facts(intentions=(intention(), intention()))
+    with pytest.raises(RefereeError, match="invalid_field"):
+        facts(intentions=(object(),))
+    for tags in ((), "trade", ("not an id",), tuple(f"t{i}" for i in range(9)), (1 // 0 for _ in "x")):
+        with pytest.raises(RefereeError, match="invalid_field"):
+            claim(TEXT, "does it", "k-1", "acts", tags=tags)
+    with pytest.raises(RefereeError, match="invalid_field"):
+        facts(intentions=(1 // 0 for _ in "x"))
+    with pytest.raises(RefereeError, match="invalid_field"):  # read no further than the limit
+        claim(TEXT, "does it", "k-1", "acts", tags=itertools.repeat("trade"))
+
+    class Lookalike(str):  # a str that would compare equal to an allowed tag
+        __hash__ = lambda self: hash("hospitality")  # noqa: E731
+        __eq__ = lambda self, other: other == "hospitality"  # noqa: E731
+    with pytest.raises(RefereeError, match="invalid_field"):
+        claim(TEXT, "does it", "k-1", "acts", tags=(Lookalike("trade"),))
 
 
 # -- classification ---------------------------------------------------------------------------------------

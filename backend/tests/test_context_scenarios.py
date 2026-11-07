@@ -225,7 +225,8 @@ def test_the_adapter_refuses_mismatched_inputs(store, chats):
 
 
 def test_a_head_following_lorebook_that_moves_reports_drift_and_still_packs(store, chats):
-    started = chats.start_chat(Launch("character", card("mara")), attach=[(LORE.unpinned(), "lorebook")]).commit()
+    started = chats.start_chat(Launch("character", card("mara")), attach=[(LORE.unpinned(), "lorebook")],
+                               follow=True).commit()  # the explicit opt-in: the default pins (042 rebase)
     mara = started.actors[0]
     evidence = EvidenceLibrary(store, owner_handle(), owner=OWNER)
     first = actor_context(store.load(), started.chat, evidence.read(started.chat.campaign_id, requested_by=DIRECTOR),

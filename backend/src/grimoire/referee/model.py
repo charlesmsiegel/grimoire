@@ -2,8 +2,9 @@
 
 A ``ContinuityClaim`` is one atomic, labelled statement a proposed narration makes about the fiction, anchored
 to the exact characters of the prose it reads. ``Facts`` are the immutable records other sprints own, at one
-campaign sequence: 041's stage, 023's holdings, 034's possessions, 012's knowledge, 029's resolutions and
-040's obstacle states. A ``Finding`` is what the referee reports about one claim, with the records it rests on.
+campaign sequence: 041's stage, 023's holdings, 034's possessions, 012's knowledge, 029's resolutions,
+040's obstacle states and 039's choices. A ``Finding`` is what the referee reports about one claim, with the
+records it rests on.
 
 Nothing here reads prose by itself, calls a model, writes anything or changes the narration: the labels come
 from a labeller that is not the narrator, and a finding is a report, never a repair.
@@ -12,9 +13,11 @@ from a labeller that is not the narrator, and a finding is a report, never a rep
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from itertools import islice
 from dataclasses import dataclass, field
 
 from ..core import InstanceRef, Knowledge
+from ..core.perspective import actor_knowledge
 from ..core.authority import (
     ControlAssignment, Delegation, ImposedCondition, NarrationClaim, NarrationContext, NarrationReview,
     PlayerContribution, Resolution, Revocation,
@@ -24,10 +27,11 @@ from ..holdings import Holdings
 from ..obstacles import ObstacleState
 from ..possessions import Possession
 from ..comms import CHANNELS
+from ..goals import MAX_TAGS, Choice
 from ..staging import Stage
 
-#: The five categories of continuity this slice checks, and the claim kinds of each.
-CATEGORIES = ("presence", "staging", "possession", "knowledge", "outcome")
+#: The categories of continuity the referee checks, and the claim kinds of each.
+CATEGORIES = ("presence", "staging", "possession", "knowledge", "outcome", "intention")
 KINDS = {
     "present": "presence",     # the actor is in the scene, doing or saying something there
     "reaches": "staging",      # the actor gets a thing into hand: takes, touches, handles it
@@ -38,23 +42,24 @@ KINDS = {
     "knows": "knowledge",      # the actor's words or acts reveal a 012 proposition
     "resolves": "outcome",     # a 029 attempt came out a given way
     "overcomes": "outcome",    # a 040 obstacle is overcome (by a given approach)
+    "acts": "intention",       # the actor does an act of the given 039 kinds (approach tags: trade, threat...)
 }
 #: How the labeller read the claim. Only a ``literal`` claim can be a contradiction.
 MODES = ("literal", "figurative", "unreliable")
 #: What a finding says about a claim. Only a contradiction is material.
 CLASSIFICATIONS = ("contradiction", "uncertain", "metaphor", "unreliable")
 #: Where a finding's evidence comes from.
-SOURCES = ("stage", "holdings", "possession", "knowledge", "resolution", "obstacle")
+SOURCES = ("stage", "holdings", "possession", "knowledge", "resolution", "obstacle", "intention", "narration")
 #: The longest narration one review reads, and the most claims it takes.
 MAX_TEXT = 200_000
 MAX_CLAIMS = 256
 MAX_COUNT = 10 ** 12
 _FIELDS = ("target", "item", "count", "channel", "proposition_id", "attempt_id", "result", "obstacle_id",
-           "approach_id")
+           "approach_id", "tags")
 _NEEDS = {
     "present": (), "reaches": ("target",), "sees": ("target",), "hears": ("target", "channel"),
     "spends": ("item", "count"), "wields": ("target",), "knows": ("proposition_id",),
-    "resolves": ("attempt_id", "result"), "overcomes": ("obstacle_id",),
+    "resolves": ("attempt_id", "result"), "overcomes": ("obstacle_id",), "acts": ("tags",),
 }
 _OPTIONAL = {"overcomes": ("approach_id",)}
 
@@ -75,6 +80,8 @@ def _fail(reason: str) -> RefereeError:
 
 
 def _segment(value: object) -> None:
+    if type(value) is not str:  # a str subclass could redefine equality and slip past a match (as 039 refuses)
+        raise _fail("invalid_field")
     try:
         validate_segment(value, "id")
     except (TypeError, ValueError):
@@ -91,7 +98,10 @@ def _ref(value: object, campaign_id: str) -> None:
 def _tuple(value: object, kind: type) -> tuple:
     if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Iterable):
         raise _fail("invalid_field")
-    items = tuple(value)
+    try:
+        items = tuple(value)
+    except Exception:  # an iterator that fails part-way is a bad field, not a crash
+        raise _fail("invalid_field") from None
     if not all(type(item) is kind for item in items):
         raise _fail("invalid_field")
     return items
@@ -120,8 +130,8 @@ class ContinuityClaim:
     who the claim is about. The other fields are the kind's (see ``KINDS``): ``target`` is the thing reached
     or wielded, the individual seen or the speaker heard; ``item`` and ``count`` a counted stack spent;
     ``channel`` a 032 channel; ``proposition_id`` a 012 proposition revealed; ``attempt_id`` and ``result`` a
-    029 outcome; ``obstacle_id`` and ``approach_id`` a 040 obstacle overcome. A field a kind does not take
-    must be ``None``.
+    029 outcome; ``obstacle_id`` and ``approach_id`` a 040 obstacle overcome; ``tags`` the 039 kinds of act an
+    ``acts`` claim narrates (``trade``, ``threat``...). A field a kind does not take must be ``None``.
 
     ``mode`` is how the labeller read it: ``literal`` (the narration states it as so), ``figurative`` (a
     metaphor or turn of phrase: "the news hit her like a locked door") or ``unreliable`` (deliberately false
@@ -145,6 +155,7 @@ class ContinuityClaim:
     result: str | None = None
     obstacle_id: str | None = None
     approach_id: str | None = None
+    tags: frozenset[str] | None = None
     mode: str = "literal"
     certain: bool = True
 
@@ -176,6 +187,18 @@ class ContinuityClaim:
             elif name == "channel":
                 if type(value) is not str or value not in CHANNELS:
                     raise _fail("invalid_field")
+            elif name == "tags":  # 039's approach tags, by the same rule an agenda's are
+                if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Iterable):
+                    raise _fail("invalid_field")
+                try:
+                    tags = tuple(islice(value, MAX_TAGS + 1))  # never read past the limit
+                except Exception:
+                    raise _fail("invalid_field") from None
+                if not 1 <= len(tags) <= MAX_TAGS:
+                    raise _fail("invalid_field")
+                for tag in tags:
+                    _segment(tag)
+                object.__setattr__(self, "tags", frozenset(tags))
             elif name in ("result", "attempt_id"):  # 003's and 029's opaque tokens, not id segments
                 if type(value) is not str or not value.strip() or len(value) > 512 or not value.isprintable():
                     raise _fail("invalid_field")
@@ -252,6 +275,10 @@ class Facts:
     the latest one (041 milestone 2) and moves it on with ``Stage.at`` only when nothing physical changed.
     ``heard`` lists ``(actor, proposition_id)`` pairs said aloud in that actor's hearing this turn that 012
     has not admitted as its evidence yet, so the actor's answering them is not taken for knowing a secret.
+    ``intentions`` are the 039 ``Choice`` each NPC was briefed with for this turn, one per actor, chosen from its
+    knowledge as of ``as_of`` itself (``stale_intention`` otherwise: a choice is for one turn). With a ``stage``,
+    each must be for the cast on it (``intention_cast_mismatch``); with ``knowledge``, from the very projection
+    ``actor_knowledge`` gives that NPC at ``as_of`` (``intention_mismatch``), as 039's brief requires.
     """
 
     campaign_id: str
@@ -263,6 +290,7 @@ class Facts:
     heard: tuple[tuple[InstanceRef, str], ...] = ()
     resolutions: tuple[Resolution, ...] = ()
     obstacles: tuple[ObstacleState, ...] = ()
+    intentions: tuple[Choice, ...] = ()
     _by: Mapping[str, Mapping] = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -286,6 +314,7 @@ class Facts:
         possessions = _tuple(self.possessions, Possession)
         resolutions = _tuple(self.resolutions, Resolution)
         obstacles = _tuple(self.obstacles, ObstacleState)
+        intentions = _tuple(self.intentions, Choice)
         heard = _tuple(self.heard, tuple)
         for pair in heard:
             if len(pair) != 2:
@@ -295,9 +324,22 @@ class Facts:
         by_holder = {h.holder: h for h in holdings}
         by_item = {p.item: p for p in possessions}
         by_obstacle = {o.obstacle.obstacle_id: o for o in obstacles}
+        by_actor = {choice.actor: choice for choice in intentions}
         if len(by_holder) != len(holdings) or len(by_item) != len(possessions) \
-                or len(by_obstacle) != len(obstacles):
+                or len(by_obstacle) != len(obstacles) or len(by_actor) != len(intentions):
             raise _fail("duplicate_id")
+        if any(choice.actor.campaign_id != campaign for choice in intentions):
+            raise _fail("campaign_mismatch")
+        if any(choice.as_of != self.as_of for choice in intentions):
+            raise _fail("stale_intention")
+        if self.stage is not None:  # a choice is for one scene: which limits apply hangs on who is in it
+            cast = frozenset(self.stage.on_stage())
+            if any(choice.scene != cast for choice in intentions):
+                raise _fail("intention_cast_mismatch")
+        if self.knowledge is not None:  # and for the very projection of the NPC's knowledge it was made from
+            if any(choice.knowledge != actor_knowledge(self.knowledge, choice.actor, as_of=self.as_of)
+                   for choice in intentions):
+                raise _fail("intention_mismatch")
         if any(ref.campaign_id != campaign for ref in (*by_holder, *by_item)) \
                 or any(r.campaign_id != campaign for r in resolutions) \
                 or any(o.obstacle.campaign_id != campaign for o in obstacles):
@@ -306,10 +348,11 @@ class Facts:
         for resolution in resolutions:
             results.setdefault(resolution.attempt_id, set()).add(resolution.result)
         for name, value in (("holdings", holdings), ("possessions", possessions), ("resolutions", resolutions),
-                            ("obstacles", obstacles), ("heard", frozenset(heard))):
+                            ("obstacles", obstacles), ("heard", frozenset(heard)),
+                            ("intentions", tuple(sorted(intentions, key=lambda c: str(c.actor))))):
             object.__setattr__(self, name, value)
         object.__setattr__(self, "_by", {
-            "holdings": by_holder, "possessions": by_item, "obstacles": by_obstacle,
+            "holdings": by_holder, "possessions": by_item, "obstacles": by_obstacle, "intentions": by_actor,
             "results": {key: frozenset(value) for key, value in results.items()},
         })
 
@@ -324,6 +367,9 @@ class Facts:
 
     def results(self, attempt_id: str) -> frozenset[str] | None:
         return self._by["results"].get(attempt_id)
+
+    def intention(self, actor: InstanceRef) -> Choice | None:
+        return self._by["intentions"].get(actor)
 
 
 @dataclass(frozen=True, slots=True)

@@ -122,7 +122,7 @@ def test_an_individualized_template_actor_keeps_its_sections_as_a_standalone_ind
 
 def test_a_new_head_since_the_review_of_a_following_instance_is_stale(store, chats, rebase):
     publish(store, wren(R2, facets=(Physical(), Agent(), Durable(5))))
-    started, actor = start(chats, WREN)  # follows the head
+    started, actor = start(chats, WREN, follow=True)  # follows the head (the explicit opt-in)
     edit_instance(store, actor, added=[{"facet": "portable", "bulk": "light"}])
     publish(store, wren(WREN.at("r3"), facets=(Physical(), Agent(), Durable(5), Portable("heavy"))))
     change = rebase.apply(rebase.review(actor), {"facet:portable": "keep"})  # kept as a replaced trait
@@ -216,7 +216,7 @@ def test_a_chat_following_the_head_guards_the_head_of_a_pinned_instance(store, c
     _, etag = chats.read_chat(started.chat)
     chats.detach_source(started.chat, R1, "character", expected=etag).commit()
     _, etag = chats.read_chat(started.chat)
-    chats.attach_source(started.chat, WREN, "character", expected=etag, actor=actor).commit()
+    chats.attach_source(started.chat, WREN, "character", expected=etag, actor=actor, follow=True).commit()
     edit_instance(store, actor, added=[{"facet": "portable", "bulk": "light"}])
     publish(store, wren(R2, facets=(Physical(), Agent(), VOICE, Portable("heavy"))))
     review = rebase.review(actor)

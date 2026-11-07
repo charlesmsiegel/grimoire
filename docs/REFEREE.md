@@ -30,6 +30,7 @@ A `ContinuityClaim(campaign_id, claim_id, kind, actor, span, quote, …, mode="l
 | `knows` | knowledge | `proposition_id` | 012: the actor holds the proposition, by 027's `known_ids` rule |
 | `resolves` | outcome | `attempt_id`, `result` | 029/003: the recorded resolution |
 | `overcomes` | outcome | `obstacle_id`, optional `approach_id` | 040: the derived `ObstacleState`, the winning attempt's actor and approach, and its escalations |
+| `acts` | intention | `tags` (1 to 8 039 approach tags: `trade`, `threat`…) | 039: no limit active for the NPC this turn forbids one of them |
 
 A field a kind does not take must be absent. `mode` is how the labeller read the words: `literal`, `figurative` (a metaphor or turn of phrase) or `unreliable` (deliberately false narration, such as a lying narrator's). `certain` is false when the labeller was unsure. **Neither hides a claim:** it is still checked.
 
@@ -37,19 +38,22 @@ Spends are read in narration order: two draughts uncorked from a stack of one le
 
 Speech **content** is not a physical claim: an NPC saying "the potion is gone" may be lying or wrong. The labeller labels what the narration states as so, and an actor's words only as a `knows` of what they reveal.
 
+An `acts` claim gives the kinds of act an NPC is narrated doing, in 039's approach tags. It breaks a limit that is active for the NPC this turn (its `when` holds in the `Choice`) and forbids one of those tags: a briefed refusal, or a rule that was active but not briefed because the NPC could not have broken it by any approach it had. The finding cites limit ids, never a rule's text. A player character has no `Choice`, so its acts are `no_intention`. A tag the agenda's approaches never use is `unknown_tag` when no limit is broken: the labeller's word for the act is not the author's, so nothing says it is allowed.
+
 ## Facts
 
-`Facts(campaign_id, as_of, stage=None, holdings=(), possessions=(), knowledge=None, heard=(), resolutions=(), obstacles=())` are the records one review reads, all of one campaign, at campaign sequence `as_of`. Each family is optional, and **a claim whose facts are missing is `unchecked`, never passed** (`no_stage`, `no_holdings`, `no_possession`, `no_knowledge`, `no_resolution`, `no_obstacle`).
+`Facts(campaign_id, as_of, stage=None, holdings=(), possessions=(), knowledge=None, heard=(), resolutions=(), obstacles=(), intentions=())` are the records one review reads, all of one campaign, at campaign sequence `as_of`. Each family is optional, and **a claim whose facts are missing is `unchecked`, never passed** (`no_stage`, `no_holdings`, `no_possession`, `no_knowledge`, `no_resolution`, `no_obstacle`, `no_intention`).
 
 - `stage` must be the 041 stage at `as_of` itself (`stale_stage`). A stage has no lineage: the caller keeps the latest one across turns (041 milestone 2) and moves it on with `Stage.at` only when nothing physical changed.
 - `heard` lists `(actor, proposition_id)` pairs said aloud in the actor's hearing this turn that 012 has not admitted as its evidence yet (039's rule: a line heard is not yet knowledge). Answering one is `uncertain`, not a secret.
-- `holdings` (one per holder), `possessions` (one per item) and `obstacles` (one per obstacle id) are unique (`duplicate_id`).
+- `intentions` are the 039 `Choice` each NPC was briefed with this turn, chosen from its knowledge as of `as_of` itself (`stale_intention`: a choice is for one turn). With a `stage`, each must be for the cast on it, everyone the NPC recognises and the rest (`intention_cast_mismatch`), since which limits apply hangs on who is there; with `knowledge`, from the very projection `actor_knowledge` gives that NPC at `as_of` (`intention_mismatch`), as 039's brief requires.
+- `holdings` (one per holder), `possessions` (one per item), `obstacles` (one per obstacle id) and `intentions` (one per actor) are unique (`duplicate_id`).
 
 ## Findings
 
 `referee(text, *, facts, claims=(), authorship=(), authority=None)` returns a `RefereeReport(text_sha256, findings, clean, unchecked, authorship, mislabels)`: findings sorted by position, the claims that checked clean, and the claims it could not check with why. The same inputs in any order give an equal report.
 
-A `Finding(claim_id, category, kind, classification, reason, span, quote, evidence, assumed)` cites `Evidence(source, ref, detail)` records: `stage` (`placement:<ref>`, `absence:<ref>`, `way:<way_id>` with its state and basis), `holdings` (the stack, and the last operation that spent from it), `possession` (the item's holder and revision, the containers followed, its last operation), `knowledge` (the proposition and its standing, what the actor holds), `resolution` and `obstacle` (status, attempts and the facts that prevent the approach).
+A `Finding(claim_id, category, kind, classification, reason, span, quote, evidence, assumed)` cites `Evidence(source, ref, detail)` records: `stage` (`placement:<ref>`, `absence:<ref>`, `way:<way_id>` with its state and basis), `holdings` (the stack, and the last operation that spent from it), `possession` (the item's holder and revision, the containers followed, its last operation), `knowledge` (the proposition and its standing, what the actor holds), `resolution` and `obstacle` (status, attempts and the facts that prevent the approach), and `intention` (the choice's moment, and each limit broken, `briefed` or `active`, with the tags it forbids) and `narration` (what the narration's earlier spends of a stack took).
 
 | Classification | When | Material |
 |---|---|---|
@@ -57,7 +61,7 @@ A `Finding(claim_id, category, kind, classification, reason, span, quote, eviden
 | `uncertain` | the answer rests on an assumed staging fact (`assumed` lists them, as 041 names them), on evidence about the same subject the actor could have reasoned from (`related_evidence`), on a line heard and not yet admitted or on unconfirmed 012 evidence of the proposition (`unconfirmed_evidence`), on conflicting resolutions, on a diverged obstacle, or on a labeller unsure of its reading | no |
 | `metaphor`, `unreliable` | the labeller read the words as figurative or deliberately false, and their literal reading would not hold: shown so the table can see it, never material | no |
 
-Reasons are 041's own (`off_stage`, `not_cast`, `elsewhere`, `door_shut`, `held_by_other`, `out_of_earshot`, `restrained`, …), `insufficient`, `not_holder`, `never_told`, `heard_unadmitted`, `unconfirmed_evidence`, `related_evidence`, `contradicts_resolution`, `conflicting_resolutions`, `not_overcome`, `prevented`, `other_approach`, `other_actor` and `diverged`. A 041 answer that means the label is wrong (`is_self`, `is_actor`, `holds_actor`, a speaker who is not an actor) is `unchecked` as `bad_label:<reason>`; a thing the stage does not track is `untracked`. Other `unchecked` reasons: `unknown_proposition`, `custody_unreadable` (a custody chain that loops, runs past 16 containers or stops at an item with no possession record), `no_winning_frame` (an overcome obstacle whose winning attempt has no frame), and `unreadable` (a reference the stage or 012 refuses).
+Reasons are 041's own (`off_stage`, `not_cast`, `elsewhere`, `door_shut`, `held_by_other`, `out_of_earshot`, `restrained`, …), `insufficient`, `not_holder`, `never_told`, `heard_unadmitted`, `unconfirmed_evidence`, `related_evidence`, `contradicts_resolution`, `conflicting_resolutions`, `not_overcome`, `prevented`, `other_approach`, `other_actor`, `diverged` and `breaks_refusal`. A 041 answer that means the label is wrong (`is_self`, `is_actor`, `holds_actor`, a speaker who is not an actor) is `unchecked` as `bad_label:<reason>`; a thing the stage does not track is `untracked`. Other `unchecked` reasons: `unknown_proposition`, `custody_unreadable` (a custody chain that loops, runs past 16 containers or stops at an item with no possession record), `unknown_tag`, `no_winning_frame` (an overcome obstacle whose winning attempt has no frame), and `unreadable` (a reference the stage or 012 refuses).
 
 **A finding is a report**, not a ruling, a repair or a block. What follows from one (repair, player review, an accepted exception, blocking) is milestone 2's.
 
@@ -75,7 +79,7 @@ Ambiguous control of the voice routes too. `flag_mislabel(report, corrections, c
 
 ## Errors
 
-`RefereeError(reason)` carries a machine reason and no text, label or reference, and pickles with its reason only: `invalid_field`, `unknown_kind`, `missing_field`, `campaign_mismatch`, `duplicate_id`, `stale_stage`, `invalid_text` (empty, or over 200 000 characters), `too_many_claims` (over 256) `needs_authority` and `invalid_authority` (003 refused the `Authority`, for instance ambiguous control).
+`RefereeError(reason)` carries a machine reason and no text, label or reference, and pickles with its reason only: `invalid_field`, `unknown_kind`, `missing_field`, `campaign_mismatch`, `duplicate_id`, `stale_stage`, `stale_intention`, `intention_cast_mismatch`, `intention_mismatch`, `invalid_text` (empty, or over 200 000 characters), `too_many_claims` (over 256), `needs_authority` and `invalid_authority` (003 refused the `Authority`, for instance ambiguous control).
 
 ## Boundaries and later work
 

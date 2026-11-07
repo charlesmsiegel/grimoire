@@ -179,7 +179,8 @@ def test_an_update_writes_new_revisions_and_never_touches_chats(store):
     land(store, encode(V3), portrait=PORTRAIT)
     chats = chat_library(store, owner_handle())
     pinned = chats.start_chat(Launch("character", MARA.at("r1"))).commit()
-    following = chats.start_chat(Launch("character", MARA)).commit()
+    default = chats.start_chat(Launch("character", MARA)).commit()  # pinned by default to the head, r1
+    following = chats.start_chat(Launch("character", MARA), follow=True).commit()  # the explicit opt-in
     before = snapshot(store.root)
 
     changed = card(personality="Sharper now; trusts no one.")
@@ -199,6 +200,10 @@ def test_an_update_writes_new_revisions_and_never_touches_chats(store):
     view = store.load()
     held = chat_snapshot(view, pinned.chat).snapshot
     assert held.effective(MARA.at("r1")).section("personality") == V3["data"]["personality"]
+    captured = chat_snapshot(view, default.chat)
+    kept = captured.snapshot
+    assert captured.chat.launch.ref == MARA.at("r1") and kept.effective(MARA).ref == MARA.at("r1")
+    assert [n.code for r in kept.sources() for n in r.notices] == []  # no drift: the update waits for 042
     moved = chat_snapshot(view, following.chat).snapshot
     assert moved.effective(MARA).ref == MARA.at("r2")
     [resolution] = moved.sources()
@@ -293,7 +298,7 @@ def test_a_card_added_mid_chat_gets_a_new_actor_that_witnessed_nothing(store):
     added = chats.attach_source(started.chat, MARA, "character", expected=etag).commit()
     [actor] = added.actors
     entry = chats.open_chat(started.chat).record.roster_entry(actor)
-    assert entry.prior_history == NOT_WITNESSED and entry.source == MARA
+    assert entry.prior_history == NOT_WITNESSED and entry.source == MARA.at("r1")  # pinned to the head it joined at
 
 
 def test_a_hand_written_source_of_the_same_name_is_never_merged(store):

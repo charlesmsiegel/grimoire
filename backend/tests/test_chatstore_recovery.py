@@ -67,14 +67,15 @@ def start_chat(ops, root, locker):
     with LibraryStore.open(root / LIB, ops=ops, locker=locker) as store:
         library = _library(store)
         library._new_id.counts["q"] = 1  # q-1 exists in the template
-        library.start_chat(Launch("character", ANYA), attach=[(LORE, "lorebook")]).commit()
+        # unpinned, the default product path: the writes pin each to the revision it resolves to now
+        library.start_chat(Launch("character", ANYA.unpinned()), attach=[(LORE.unpinned(), "lorebook")]).commit()
 
 
 def attach_character(ops, root, locker):
     with LibraryStore.open(root / LIB, ops=ops, locker=locker) as store:
         library = _library(store)
         _, etag = library.read_chat(EXISTING)
-        library.attach_source(EXISTING, ANYA, "character", expected=etag).commit()
+        library.attach_source(EXISTING, ANYA.unpinned(), "character", expected=etag).commit()  # pinned when bound
 
 
 def scenario(action):
