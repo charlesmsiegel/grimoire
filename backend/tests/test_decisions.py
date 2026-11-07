@@ -462,3 +462,19 @@ def test_d_a_fallback_leaves_no_room_for_a_selection():
     with pytest.raises(GenerationError) as error:
         harness.runtime.run_turn(meter, [brief(oda_choice(selected=("survive", "bar-door")))], controls=CONTROLS)
     assert error.value.reason == "decision_ignored"
+
+
+def test_d_an_npc_with_no_choice_skips_its_decision_and_still_speaks():
+    harness, plan, meter = decision_turn([say("Forty-one, forty-two...")])
+    (call, _speech) = plan.calls
+    plain = npc_brief(oda_view(oda_knows()), VOICES[ODA.instance_id], secrets=SECRETS)
+    outcome = harness.runtime.decide(meter, call, plain, controls=CONTROLS)
+    assert (outcome.status, outcome.reason) == ("skipped", "no_intention")
+    assert harness.runtime.run_turn(meter, [plain], controls=CONTROLS).status == "complete"
+    # After a real call that fell back, the brief must still carry the authored order's choice.
+    harness, plan, meter = decision_turn([say("perhaps"), say("Stair!")])
+    (call, _speech) = plan.calls
+    harness.runtime.decide(meter, call, brief(oda_choice()), controls=CONTROLS)
+    with pytest.raises(GenerationError) as error:
+        harness.runtime.run_turn(meter, [plain], controls=CONTROLS)
+    assert error.value.reason == "decision_ignored"

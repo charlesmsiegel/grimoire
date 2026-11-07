@@ -139,7 +139,7 @@ def _assign(meter: TurnMeter, briefs: tuple[NpcBrief, ...], director: DirectorBr
     pairs: list[tuple[PlannedCall, NpcBrief | DirectorBrief]] = []
     used: set[str] = set()
     directed = False
-    picks: dict[str, tuple[str, str] | None] = {}
+    picks: dict[str, DecisionOutcome] = {}
     for call in plan.calls:
         if call.stage is InferenceStage.DECISION:
             if call.actor_id in picks:
@@ -148,7 +148,7 @@ def _assign(meter: TurnMeter, briefs: tuple[NpcBrief, ...], director: DirectorBr
             ran = outcome is not None and (outcome.status == "skipped") == (meter.status(call.call_id) is None)
             if outcome is None or outcome.meter_token != meter.token or not ran:
                 raise GenerationError("decision_not_run", f"{call.call_id} must be decided before the turn runs")
-            picks[call.actor_id] = outcome.pick  # type: ignore[index]
+            picks[call.actor_id] = outcome  # type: ignore[index]
             continue
         if call.stage not in _SUPPORTED:
             raise GenerationError("unsupported_stage", f"{call.call_id} is a {call.stage} call; this "
@@ -183,7 +183,10 @@ def _assign(meter: TurnMeter, briefs: tuple[NpcBrief, ...], director: DirectorBr
         selection = brief.intention.selection if brief.intention is not None else None
         # Without a decision call on this meter a selection is a reroll's replayed record (045), which
         # ``choose`` held to what is possible and permitted, as it holds any selection.
-        if actor_id in picks and (brief.intention is None or selection != picks[actor_id]):
+        decided = picks.get(actor_id)
+        # A brief with no choice is fine only when there was none to decide on (``no_intention``).
+        if decided is not None and (selection != decided.pick or (
+                brief.intention is None and decided.reason != "no_intention")):
             raise GenerationError("decision_ignored", f"the brief for {brief.actor} does not carry what a "
                                   "decision call on this meter picked")
     extra = sorted(set(by_actor) - used)
