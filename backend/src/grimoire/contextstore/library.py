@@ -2,7 +2,8 @@
 
 An adapter, not part of the pure package: it knows the store's ``StoredDefinition`` and
 ``LibraryView`` and 020's ``CampaignKnowledge``. Everything comes from **one** ``LibraryView`` and
-**one** director ledger read, which the caller holds for the whole turn. Nothing here writes, reads
+**one** director ledger read, which the caller holds for the whole turn. ``actor_context`` packs for an
+NPC, ``player_context`` for a player character's present controller. Nothing here writes, reads
 files itself, or calls a model.
 
 The library's own lore formats are read by ``DEFAULT_READERS``: 037's card lorebooks and scenarios,
@@ -17,14 +18,17 @@ from dataclasses import dataclass, replace
 from grimoire.cards import LORE_READERS
 from grimoire.context import (
     DEFAULT_EXCLUDED_SECTIONS, Budget, ContextError, ContextPack, EntryReader, LorePack, TokenCounter,
-    director_lore, estimate_tokens, pack_actor_context,
+    director_lore, estimate_tokens, pack_actor_context, pack_player_context,
 )
 from grimoire.core.identity import ChatRef, InstanceRef
+from grimoire.core.model import ControlAssignment
 from grimoire.effective import chat_snapshot
 from grimoire.evidencestore import CampaignKnowledge
 from grimoire.store import LibraryView, StoredDefinition
 
-__all__ = ["DEFAULT_READERS", "ChatContext", "ChatLore", "actor_context", "chat_lore", "stored_record"]
+__all__ = [
+    "DEFAULT_READERS", "ChatContext", "ChatLore", "actor_context", "chat_lore", "player_context", "stored_record",
+]
 
 #: The lore readers a store-backed pack uses when its caller passes none: every stored lore format the
 #: library itself writes. A caller with its own formats passes ``{**DEFAULT_READERS, **its_own}``.
@@ -57,6 +61,22 @@ class ChatContext:
     problems: tuple[str, ...]
 
 
+def _captured(view: LibraryView, chat: ChatRef, ledger: CampaignKnowledge):
+    if not isinstance(ledger, CampaignKnowledge):
+        raise TypeError(f"expected a CampaignKnowledge read, not {type(ledger).__name__}")
+    if not isinstance(chat, ChatRef):
+        raise TypeError(f"expected a ChatRef, not {type(chat).__name__}")
+    if ledger.knowledge.campaign_id != chat.campaign_id:
+        raise ContextError("the ledger belongs to another campaign than the chat", "campaign_mismatch")
+    return chat_snapshot(view, chat)
+
+
+def _context(pack: ContextPack, ledger: CampaignKnowledge, chat: ChatRef, captured) -> ChatContext:
+    if ledger.quarantined:
+        pack = replace(pack, notes=(*pack.notes, "knowledge_quarantined"))
+    return ChatContext(pack, chat, captured.chat_etag, captured.scope_etag, captured.problems)
+
+
 def actor_context(view: LibraryView, chat: ChatRef, ledger: CampaignKnowledge, actor: InstanceRef, *, as_of: int,
                   budget: Budget, present: Iterable[InstanceRef] = (), scene_text: str = "",
                   readers: Mapping[str, EntryReader] | None = None, count: TokenCounter = estimate_tokens,
@@ -71,23 +91,37 @@ def actor_context(view: LibraryView, chat: ChatRef, ledger: CampaignKnowledge, a
     ``RecordNotFound`` and ``ChatCodecError`` propagate from 022's ``chat_snapshot``.
 
     ``readers`` defaults to ``DEFAULT_READERS``, so a bound card lorebook reaches the pack without
-    the caller knowing its format; ``{}`` reads no lore format at all.
+    the caller knowing its format; ``{}`` reads no lore format at all. An NPC's pack: a player
+    character's is ``player_context``'s.
     """
-    if not isinstance(ledger, CampaignKnowledge):
-        raise TypeError(f"expected a CampaignKnowledge read, not {type(ledger).__name__}")
-    if not isinstance(chat, ChatRef):
-        raise TypeError(f"expected a ChatRef, not {type(chat).__name__}")
-    if ledger.knowledge.campaign_id != chat.campaign_id:
-        raise ContextError("the ledger belongs to another campaign than the chat", "campaign_mismatch")
-    captured = chat_snapshot(view, chat)
+    captured = _captured(view, chat, ledger)
     pack = pack_actor_context(captured.snapshot, ledger.knowledge, actor, as_of=as_of, budget=budget,
                               present=present, scene_text=scene_text, claims=ledger.claims,
                               readers=DEFAULT_READERS if readers is None else readers,
                               unpack=stored_record, count=count, measurement=measurement,
                               exclude_sections=exclude_sections)
-    if ledger.quarantined:
-        pack = replace(pack, notes=(*pack.notes, "knowledge_quarantined"))
-    return ChatContext(pack, chat, captured.chat_etag, captured.scope_etag, captured.problems)
+    return _context(pack, ledger, chat, captured)
+
+
+def player_context(view: LibraryView, chat: ChatRef, ledger: CampaignKnowledge, actor: InstanceRef, *,
+                   controller: str, controls: Iterable[ControlAssignment], as_of: int, budget: Budget,
+                   present: Iterable[InstanceRef] = (), scene_text: str = "",
+                   readers: Mapping[str, EntryReader] | None = None, count: TokenCounter = estimate_tokens,
+                   measurement: str = "estimated",
+                   exclude_sections: Iterable[str] = DEFAULT_EXCLUDED_SECTIONS) -> ChatContext:
+    """``pack_player_context`` for player character ``actor`` of ``chat``, packed for its present
+    ``controller``, over ``view`` and a director ``ledger`` read, as ``actor_context`` is for an NPC.
+
+    ``controls`` are 003's control assignments of the campaign as read for this call (the sovereignty
+    ledger's), the same the caller decided ``controller`` from. Everything else is ``actor_context``'s.
+    """
+    captured = _captured(view, chat, ledger)
+    pack = pack_player_context(captured.snapshot, ledger.knowledge, actor, controller=controller, controls=controls,
+                               as_of=as_of, budget=budget, present=present, scene_text=scene_text,
+                               claims=ledger.claims, readers=DEFAULT_READERS if readers is None else readers,
+                               unpack=stored_record, count=count, measurement=measurement,
+                               exclude_sections=exclude_sections)
+    return _context(pack, ledger, chat, captured)
 
 
 @dataclass(frozen=True)

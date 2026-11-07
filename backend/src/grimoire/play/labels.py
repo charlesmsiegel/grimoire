@@ -14,13 +14,11 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
-from grimoire.contextstore import actor_context
+from grimoire.context import ContextError, controller_projection
+from grimoire.contextstore import player_context
 from grimoire.core import DIRECTOR
 from grimoire.core.identity import ChatRef
 from grimoire.core.inference import InferencePlanError, InferenceStage, OptionalRequest, TurnUsageLedger, plan_turn
-from grimoire.core.authority import AuthorityError
-from grimoire.core.knowledge import KnowledgeError
-from grimoire.core.perspective import player_knowledge
 from grimoire.labelling import LabelRefused, facts, label_messages, parse_labels
 from grimoire.play.accept import next_sequence
 from grimoire.play.adjudicate import outcome_lines
@@ -38,16 +36,14 @@ PURPOSE = "frame a player action"
 
 
 def own_propositions(knowledge, controller: str, controls, actor, as_of: int) -> frozenset[str]:
-    """The propositions ``actor`` believes on ``controller``'s own authority (020's ``player_knowledge``): a
-    belief authored by anyone else (an NPC-era conclusion the player inherited) is not the player's. Control
-    that is ambiguous, or knowledge that cannot be projected, offers none (fail closed)."""
-    try:
-        projected = player_knowledge(knowledge, controller, controls, as_of=as_of)
-    except (AuthorityError, KnowledgeError):
+    """The propositions ``actor`` believes on ``controller``'s own authority (020's ``controller_knowledge``, the
+    projection 031's controller pack is built from): a belief authored by anyone else (an NPC-era conclusion the
+    player inherited) is not the player's. Control that is ambiguous, or knowledge that cannot be projected,
+    offers none (fail closed)."""
+    projected = controller_projection(knowledge, actor, controller, controls, as_of=as_of)
+    if projected is None:
         return frozenset()
-    return frozenset(belief.proposition_id for known in projected.actors
-                     if known.actor.instance_id == actor.instance_id
-                     for belief in known.current if belief.stance == "believed")
+    return frozenset(belief.proposition_id for belief in projected.current if belief.stance == "believed")
 
 
 def label_action(runner, chat: ChatRef, by) -> Label:
@@ -95,8 +91,17 @@ def label_action(runner, chat: ChatRef, by) -> Label:
     _, bare = outcome_lines(runner, scene.records, scene.names)  # a settled action's result, where it was
     heard = heard_for(scene.records, post.actor, scene.names, before=scene.imported, narration=False,
                       outcomes=bare)
-    built = actor_context(context.view, chat, ledger, post.actor, as_of=as_of, budget=runner.budget,
-                          present=_perceived(scene, post.actor), scene_text=render(heard))
+    try:  # 031: packed for the character's present controller, never as an NPC's (only what that player may see)
+        built = player_context(context.view, chat, ledger, post.actor, controller=controller, controls=scene.controls,
+                               as_of=as_of, budget=runner.budget, present=_perceived(scene, post.actor),
+                               scene_text=render(heard))
+    except ContextError as error:
+        if error.reason != "uncontrolled_audience":
+            raise
+        raise _refuse("not_a_player_action", "only a present player character's action is labelled") from None
+    if "knowledge_unprojected" in built.pack.notes:  # fail closed: never a labelling over a memory-less pack
+        raise _refuse("knowledge_unprojected", "the acting character's knowledge cannot be projected for its player")
+    # every believed proposition of the pack is its controller's own already; checked again, fail closed
     offered = facts(built.pack.items, own=own_propositions(ledger.knowledge, controller, scene.controls, post.actor,
                                                            as_of))
     messages = label_messages(scene.names.get(post.actor) or post.actor.instance_id, post.text, offered,
