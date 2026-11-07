@@ -22,7 +22,7 @@ Effective-definition composition must:
 
 - combine explicit named authored fields/sections and supported facets in a deterministic, bounded order; distinguish **absent** (inherit), **replaced**, **explicitly cleared/suppressed**, and **local-only** values, with field-level provenance;
 - reject derivation cycles and ambiguous simultaneous bases; do not silently equate `alternate_portrayal` with inheritance or infer inheritance from matching names;
-- preserve exact pinned source revisions, authored origin, and future reviewed source rebase; one update must not rewrite another world portrayal or campaign history;
+- preserve exact pinned source revisions, authored origin, and future reviewed source rebase; one update must not rewrite another world portrayal or campaign history. Chats and imported scenes pin their sources by default (owner's decision, Wave 5 audit), so an update reaches a campaign only through 042's reviewed rebase ([REBASE](../REBASE.md#pin-by-default));
 - allow world-local substitutions of species, occupation, biography, relationships, voice anchors and art placements **without leaking source-incompatible facts**. Relationship remapping is explicit and belongs to the graph/portrayal consumers, not a name-based rewrite; art/voice merging is provided by their owners;
 - support **no common base at all**: a world-local or imported standalone card remains fully valid.
 
@@ -43,7 +43,7 @@ play_scope:
 chat:
   id: thread-1                       # stable id independent of display title
   scope: quick-123
-  launched_from:                     # optional, pinned or explicitly following source
+  launched_from:                     # optional; pinned by default, or an explicitly following source
     type: character_or_scenario
     ref: catalog:elderfen-cast/character/mara@r1
   attached_sources:                  # references, not full materialized copies

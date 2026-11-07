@@ -88,7 +88,8 @@ def label_action(runner, chat: ChatRef, by) -> Label:
     (call,) = plan.calls
 
     ledger, as_of = runner._knowledge(chat)
-    heard = heard_for(scene.records, post.actor, scene.names, before=scene.imported)
+    # the character's own window: narration reaches the table, not what the character perceived
+    heard = heard_for(scene.records, post.actor, scene.names, before=scene.imported, narration=False)
     built = actor_context(context.view, chat, ledger, post.actor, as_of=as_of, budget=runner.budget,
                           present=scene.cast, scene_text=render(heard))
     offered = facts(built.pack.items, own=own_propositions(ledger.knowledge, controller, scene.controls, post.actor,

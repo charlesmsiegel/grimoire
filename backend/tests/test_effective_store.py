@@ -177,7 +177,9 @@ def test_an_absent_chat_is_record_not_found(store, chats):
 
 
 def test_a_chat_snapshot_is_frozen_for_the_whole_turn(store, chats):
-    started = chats.start_chat(Launch("lorebook", NOTES), attach=[(MODERN_MARA.unpinned(), "character")]).commit()
+    # an explicitly head-following binding (the default pins): the head may move between turns
+    started = chats.start_chat(Launch("lorebook", NOTES), attach=[(MODERN_MARA.unpinned(), "character")],
+                               follow=True).commit()
     [actor] = started.actors
     first = store.load()
     turn = chat_snapshot(first, started.chat).snapshot
@@ -218,7 +220,7 @@ def test_a_reused_actor_rebound_at_another_revision(store, chats):
     _, etag = chats.read_chat(started.chat)
     chats.attach_source(started.chat, MODERN_MARA.at("r2"), "character", expected=etag, actor=actor).commit()
     captured = chat_snapshot(store.load(), started.chat)
-    assert captured.snapshot.instance(actor).source == MODERN_MARA.unpinned()  # never rewritten on reuse
+    assert captured.snapshot.instance(actor).source == MODERN_MARA  # pinned at r1 when made; never rewritten on reuse
     assert captured.snapshot.entity(actor).resolved_source == MODERN_MARA.at("r2")
 
 

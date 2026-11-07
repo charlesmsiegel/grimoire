@@ -57,7 +57,8 @@ def test_a_deleted_launch_card_and_its_lorebook_are_reported_by_ref_and_the_stor
         runner, ana = table.runner, table.player()
         scene = runner.open(chat)
         broken = [detail for code, detail in scene.problems if code == "broken_source"]
-        assert broken == [str(MARA_VELL), str(MARA_LORE)]  # the card and the lorebook bound with it, exactly
+        # the card and the lorebook bound with it, exactly, at the revisions the chat pins (pin by default)
+        assert broken == [str(MARA_VELL.at("r1")), str(MARA_LORE.at("r1"))]
         assert _story(table, chat) == before  # the story is kept as it was
         # it still opens and plays: the post is saved, and with nobody left to speak, generation says so
         runner.post(chat, ana, '"Are you still there?"')
@@ -85,7 +86,7 @@ def test_a_deleted_scenario_is_reported_by_ref_and_its_chat_keeps_its_story(card
     with Table(folder, [say("Unreachable.")]) as table:
         runner, ana = table.runner, table.player()
         scene = runner.open(storm)
-        assert ("broken_source", str(STORM)) in scene.problems
+        assert ("broken_source", str(STORM.at("r1"))) in scene.problems  # pinned by default
         assert _story(table, storm) == before
         runner.post(storm, ana, '"Whose ship is that?"')
         with pytest.raises(SceneRefused) as error:  # no scenario text to direct from, and no guess at one

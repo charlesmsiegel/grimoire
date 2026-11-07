@@ -2,7 +2,7 @@
 
 **Outcome:** Catch factual contradictions in proposed narration before they propagate into canon, without making the narrator rigid or repetitive.
 
-**Status:** **first slice implemented**, headless and pure: `grimoire.referee` (no labeller call, no runner). The contract is in [REFEREE.md](../../REFEREE.md). Milestone 1 and the proving scenario are met on synthetic fixtures: five categories (presence, staging, possessions, knowledge, outcomes) checked against 041, 023/034, 012 and 029/040 records, with cited evidence and the prose unchanged, plus 003 authorship review and mislabel routing. The labeller and milestone 2 (one narration workflow in 035's runner) are next.
+**Status:** **first slice implemented**, headless and pure: `grimoire.referee` (no labeller call, no runner). The contract is in [REFEREE.md](../../REFEREE.md). Milestone 1 and the proving scenario are met on synthetic fixtures: five categories (presence, staging, possessions, knowledge, outcomes) checked against 041, 023/034, 012 and 029/040 records, and a sixth, intentions, against 039's briefed choice, with cited evidence and the prose unchanged, plus 003 authorship review and mislabel routing. The labeller and milestone 2 (one narration workflow in 035's runner) are next.
 
 ## Scope and ownership
 - Check generated text against currently authoritative presence, possessions, identity, capabilities, knowledge, scene staging and resolved outcomes.
@@ -45,7 +45,7 @@ The [Wave 5 audit](../README.md#wave-5-status) found these inputs this referee r
 In the first slice ([REFEREE](../../REFEREE.md)):
 - 041: a stage at any sequence other than the review's own is refused (`stale_stage`), and staging claims are reported `unchecked` without one.
 - 040: `overcomes` checks the derived `ObstacleState` and cites a fact that `prevents` the narrated approach.
-- 039: not yet checked. A claim kind that compares an NPC's reply with its briefed refusal waits on the requester's call on whether 047 or 045 owns it.
+- 039: the requester gave this check to 047, not 045. An `acts` claim is checked against the NPC's `Choice` for the turn, and an act a limit active for it forbids is a `breaks_refusal` finding citing the limit; 045 only makes and records the choice.
 
 ## Open questions
 - When may a repair be automatic?

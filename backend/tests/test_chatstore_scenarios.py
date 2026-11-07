@@ -518,7 +518,7 @@ def test_a_second_scenario_is_another_binding_not_a_new_chat(store, chats):
         f"campaigns/{first.scope.campaign_id}/chats/{first.chat.chat_id}.json"]
     chats.attach_source(first.chat, FOG, "scenario", expected=etag).commit()
     record = chats.read_chat(first.chat)[0]
-    assert {b.ref for b in record.active_bindings("scenario")} == {STORM, FOG}
+    assert {b.ref for b in record.active_bindings("scenario")} == {STORM.at("r2"), FOG}  # pinned to its head
     nav = chats.navigation()
     assert nav.by_source(STORM.unpinned()) == nav.by_source(FOG.unpinned()) == (first.chat,)
     assert nav.by_source(FOG.unpinned(), role="scenario") == (first.chat,)

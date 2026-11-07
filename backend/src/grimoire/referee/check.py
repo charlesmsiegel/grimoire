@@ -15,6 +15,8 @@ The checks are deterministic and director-side:
   its own), as 027's ``known_ids`` reads it.
 - **outcome** (029, 040): narration agrees with a recorded resolution, and an obstacle is overcome only when
   its derived state says so; an escalation that prevents the approach narrated is cited.
+- **intention** (039): an NPC does not do a kind of act that a limit active for it this turn forbids, above
+  all a refusal it was briefed on; a kind of act its agenda never names is unchecked.
 """
 
 from __future__ import annotations
@@ -293,10 +295,33 @@ def _check_overcomes(claim: ContinuityClaim, facts: Facts):
     return _Problem("not_overcome", cited)
 
 
+# -- intentions ---------------------------------------------------------------------------------------------
+
+def _check_acts(claim: ContinuityClaim, facts: Facts):
+    """039: an NPC does not do what a limit active for it this turn forbids, briefed refusals above all."""
+    choice = facts.intention(claim.actor)
+    if choice is None:
+        return _Unchecked("no_intention")
+    # Every active limit forbids some approach (039 refuses an unused limit), so they are exactly these.
+    active = {limit_id for entry in choice.considered for limit_id in entry.forbidden_by}
+    briefed = {limit.limit_id for limit in choice.refusals}
+    broken = [limit for limit in choice.agenda.limits if limit.limit_id in active and limit.forbids & claim.tags]
+    if not broken:
+        # A kind of act the agenda never names cannot be matched against its limits: the labeller's word for
+        # it is not the author's, so nothing says it is allowed.
+        known = {tag for goal in choice.agenda.goals for approach in goal.approaches for tag in approach.tags}
+        return _Unchecked("unknown_tag") if claim.tags - known else None
+    return _Problem("breaks_refusal", [Evidence("intention", f"choice:{claim.actor}", f"as_of={choice.as_of}")] + [
+        Evidence("intention", f"limit:{limit.limit_id}",
+                 f"{'briefed' if limit.limit_id in briefed else 'active'}:forbids={','.join(sorted(limit.forbids & claim.tags))}")
+        for limit in broken])
+
+
 _CHECKS = {
     "present": ("stage", _check_present), "reaches": ("stage", _check_staging), "sees": ("stage", _check_staging),
     "hears": ("stage", _check_staging), "spends": (None, _check_spends), "wields": (None, _check_wields),
     "knows": (None, _check_knows), "resolves": (None, _check_resolves), "overcomes": (None, _check_overcomes),
+    "acts": (None, _check_acts),
 }
 
 

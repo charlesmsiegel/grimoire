@@ -13,7 +13,7 @@ from __future__ import annotations
 from grimoire.core.authority import Correction
 from grimoire.referee import Evidence, flag_mislabel, referee
 
-from referee_fixtures import ANA, C, CASK, DRAUGHT, HIDING, MUG, authority, claim, facts, labelled
+from referee_fixtures import ANA, C, CASK, DRAUGHT, HIDING, MUG, authority, claim, facts, intention, labelled
 
 NARRATION = (
     "Oda's laugh rolls through the taproom like a cart over cobbles. She reaches through the cellar door and "
@@ -96,3 +96,13 @@ def test_the_same_narration_after_the_errors_are_fixed_checks_clean():
     ))
     assert report.findings == () and report.clean == ("k-here", "k-mug")
 
+
+
+def test_an_npc_briefed_to_refuse_a_sale_that_sells_anyway_is_flagged_for_review():
+    """039's open limit, which the requester gave this referee: the reply is kept, and the breach is flagged."""
+    text = "Oda sighs, takes Mara's coin and sells her the cask after all."
+    report = referee(text, facts=facts(intentions=(intention(),)), claims=(
+        claim(text, "takes Mara's coin and sells her the cask", "k-sale", "acts", tags={"trade"}),))
+    (finding,) = report.material
+    assert (finding.claim_id, finding.category, finding.reason) == ("k-sale", "intention", "breaks_refusal")
+    assert text[finding.span[0]:finding.span[1]] == finding.quote
