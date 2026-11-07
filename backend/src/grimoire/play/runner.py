@@ -37,15 +37,16 @@ from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import ControlChange
 from grimoire.partystore import PartyLibrary
 from grimoire.play.history import chat_history
+from grimoire.play.labels import label_action
 from grimoire.play.scene import (
     DEFAULT_BUDGET, NOW, WRITE_RETRIES, Scene, _assigned, _audience, _Context, _declined, _find_line, _first_text,
     _has_imported, _human_of, _latest, _macros, _mark, _name_index, _no_clock, _no_id, _payload, _readable,
     _refuse, _scenario_text, _stage, _Stale,
 )
 from grimoire.providers.meter import TurnMeter
-from grimoire.runtime import GenerationRuntime, RunFence
+from grimoire.runtime import GenerationRuntime, LabelRuntime, RunFence
 from grimoire.scene import (
-    MAX_TAKES, NARRATOR, CallRecord, Post, SceneLine, SceneRefused, Take, TurnRecord, audible, heard_for, render,
+    MAX_TAKES, NARRATOR, CallRecord, Label, Post, SceneLine, SceneRefused, Take, TurnRecord, audible, heard_for, render,
     segments, table_lines, turn_id,
 )
 from grimoire.scenestore import SceneLibrary, StoredTurn
@@ -63,17 +64,26 @@ class SceneRunner:
     plan (a director reply needs ``director_generation``). ``secrets`` are screened in every brief; with
     none, only 031's director-lore markers are screened. ``voices`` are authored profiles; imported
     characters derive their own (027/026). ``fence`` makes an older run of the same chat stale.
+    ``labeller`` frames player characters' actions (``label``) on its own untrusted provider handle, and
+    ``label_handle`` is the untrusted handle this library's authority issued it, which must be allowed to
+    propose each labelling before it is written; without both nothing is labelled.
     """
 
     def __init__(self, store: LibraryStore, authority, handle, *, owner: str,
                  runtime: GenerationRuntime | None = None, policy: InferencePolicy | None = None,
                  secrets: Iterable[object] = (), voices: VoiceCatalog | None = None,
-                 fence: RunFence | None = None, budget: Budget = DEFAULT_BUDGET) -> None:
+                 fence: RunFence | None = None, budget: Budget = DEFAULT_BUDGET,
+                 labeller: LabelRuntime | None = None, label_handle=None) -> None:
         if not (authority.issued(handle) and getattr(handle, "trusted", False) is True
                 and is_human(getattr(handle, "principal", ""))):
             raise _refuse("bad_handle", "the runner writes with a trusted human handle this library's authority issued")
         if runtime is not None and not isinstance(runtime, GenerationRuntime):
             raise _refuse("bad_runtime", "runtime must be a GenerationRuntime")
+        if labeller is not None and not isinstance(labeller, LabelRuntime):
+            raise _refuse("bad_labeller", "labeller must be a LabelRuntime")
+        if label_handle is not None and not (authority.issued(label_handle)
+                                             and getattr(label_handle, "trusted", None) is False):
+            raise _refuse("bad_handle", "the label handle is an untrusted handle this library's authority issued")
         self.store = store
         self.authority = authority
         self.handle = handle
@@ -84,6 +94,8 @@ class SceneRunner:
         self.authored = voices
         self.fence = fence if fence is not None else RunFence()
         self.budget = budget
+        self.labeller = labeller
+        self.label_handle = label_handle
         self.scenes = SceneLibrary(store, handle, owner=owner)
         self.sovereignty = SovereigntyLedger(authority)
 
@@ -507,6 +519,19 @@ class SceneRunner:
             if existing.state == "superseded":  # passed, or replaced by a newer run: this one lost
                 take = replace(take, state="stale", lines=(), outcome="stale")
         raise _refuse("turn_changed", "another run changed this turn; its usage could not be saved")
+
+    # -- labelling ---------------------------------------------------------------------------------
+
+    def label(self, chat: ChatRef, by) -> Label:
+        """Propose 029 labels for the open turn's action: which offered facts bear on it, what is at stake.
+
+        Asked by the acting character's player or the owner. One ``labelling`` call on the labeller's
+        untrusted handle; its reply may cite only facts from that character's own context pack. The
+        labelling is written ``running`` before the call, so a crash leaves its usage on record, then
+        ``proposed`` (labels to confirm) or ``refused`` (why). An earlier unconfirmed labelling of the turn
+        is superseded. Nothing is framed, decided or accepted here.
+        """
+        return label_action(self, chat, by)
 
     # -- the table's choices ------------------------------------------------------------------------
 
