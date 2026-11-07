@@ -371,6 +371,38 @@ def test_resolve_toward_the_deletion_judges_again_under_its_lock(pair, monkeypat
     assert sync(desktop, phone, handles()).conflict(path).code == "edit_delete"
 
 
+def test_resolve_toward_the_deletion_refuses_once_the_record_is_back_on_the_other_device(pair, monkeypatch):
+    """The device that deleted writes the record again after resolve read it, before the resolve holds
+    both libraries: checked again under the pair's locks, nothing is deleted and no tombstone is
+    archived. The restore is the agreed version again, so the next sync carries the edit across,
+    never a ``resurrected`` record."""
+    desktop, phone = pair
+    path = PATHS["wren_a"]
+    data = (desktop.root / path).read_bytes()
+    (desktop.root / path).unlink()
+    edit_instance(phone, WREN_A, 7)
+    edited = (phone.root / path).read_bytes()
+    assert sync(desktop, phone, handles()).conflict(path).code == "edit_delete"
+    expected = _expected(desktop, phone, path)
+    stage = deletion.stage
+
+    def then_restored(txn, deletes):  # the person puts the record back on the desktop meanwhile
+        stage(txn, deletes)
+        restore = desktop.transaction()
+        restore.put_exact(path, data, None)
+        restore.commit(handle())
+    monkeypatch.setattr(deletion, "stage", then_restored)
+    with pytest.raises(ResolveRefused, match=f"{path} changed on {DESKTOP}"):
+        resolve(desktop, phone, path, None, expected, handles())
+    monkeypatch.undo()
+    assert (phone.root / path).read_bytes() == edited and edited not in kept(phone)
+    assert all(_archive(store, peer).get(path) != {"deleted": etag(edited)}
+               for store, peer in ((desktop, PHONE), (phone, DESKTOP)))
+    report = sync(desktop, phone, handles())
+    assert report.conflicts == () and report.deleted == () and report.copied == ((path, DESKTOP),)
+    assert (desktop.root / path).read_bytes() == edited
+
+
 def test_resolve_toward_the_deletion_of_a_manifest_takes_its_agreed_revisions_along(pair):
     desktop, phone = pair
     for path in (PATHS["manifest"], PATHS["r1"], PATHS["wren_a"], PATHS["wren_b"]):

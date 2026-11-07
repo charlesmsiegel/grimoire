@@ -224,6 +224,7 @@ class Settlement:
     vanished: bool = False  # some staged file was gone (not only kept aside)
     dropped: list[str] = field(default_factory=list)  # keep/state targets set aside unpublished
     removed: list[str] = field(default_factory=list)  # targets a ``remove`` entry deleted (028)
+    restored: list[str] = field(default_factory=list)  # removed targets put back from their holds (028)
     aborted: bool = False
 
 
@@ -342,6 +343,34 @@ def _remove(access: Access, entry: Entry, settlement: Settlement) -> None:
     settlement.removed.append(_text(entry.target))
 
 
+def _restore(access: Access, entry: Entry, journal: Journal, settlement: Settlement) -> None:
+    """Put a removed record back from its hold, only while its path is still absent (028).
+
+    The hold is the journal's own hold of those bytes, or (an earlier recovery kept it in the next
+    free slot) any file of that record's kept-version folder holding exactly them. A path written
+    since is the human's file and stays; a hold gone too leaves the target listed as incomplete.
+    """
+    folder = conflict_parts(entry.target, entry.old)[:-1]  # type: ignore[arg-type]  # a removal names its old bytes
+    slots = [hold.target for hold in journal.entries if hold.kind == "hold" and hold.target[:-1] == folder]
+    if access.presence(folder) == "present":
+        slots += [folder + (name,) for name in sorted(access.ops.list_dir(access.path(folder)))]
+    data = next((found for found in map(access.read, slots) if found is not None and etag(found) == entry.old), None)
+    if data is None:
+        settlement.incomplete.append(_text(entry.target))
+        return
+    staging = lstat_or_none(access.path((TXN,)))
+    access.guard.check_write(entry.target, staging_device=staging.st_dev if staging else None)
+    if access.presence(entry.target[:-1]) == "absent":
+        access.make_parent(entry.target)
+    temp = access.ops.make_temp(access.path((TXN,)), prefix="rec", suffix=".new")
+    access.ops.write_bytes(temp, data)
+    if access.presence(entry.target) == "absent":  # per-entry guard, immediately before acting (R7)
+        access.ops.replace(temp, access.path(entry.target))
+        settlement.restored.append(_text(entry.target))
+    else:
+        access.ops.remove(temp)
+
+
 def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlement:
     """Finish or preserve a committed journal, then remove it and any leftover staging.
 
@@ -451,6 +480,14 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
         if entry.kind == "remove":
             if removals_go is None:
                 removals_go = journal.state == "commit" and all_removals_go()
+                if not removals_go and not live:
+                    # All or none holds across a crash: an earlier run of this commit may have removed
+                    # some of them already. Recovery cannot tell its own unlink from another program's,
+                    # so every removed target comes back from its hold (keeping is never a loss),
+                    # before the remaining removals are dropped. Live, nothing is removed yet.
+                    for removal in journal.entries:
+                        if removal.kind == "remove" and access.presence(removal.target) == "absent":
+                            _restore(access, removal, journal, settlement)
             if not removals_go or digest != entry.new:
                 _preserve(access, entry, settlement, digest)  # dropped: nothing is removed
                 continue

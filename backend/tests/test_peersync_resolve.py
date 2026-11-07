@@ -27,7 +27,7 @@ from grimoire.peersync.replay import StepBuffer
 from grimoire.peersync.wire import Channel, client_handshake, server_handshake
 from grimoire.store import RecordEnvelope, SourceManifest, etag
 from grimoire.sync import DismissRefused, dismiss
-from grimoire.sync import session as sync_session
+from grimoire.sync import resolution, session as sync_session
 from grimoire.sync.documents import KeptEntry, keeps_name, parse_keeps, pending_name, render_keeps
 
 from chat_fixtures import CARDS
@@ -264,6 +264,37 @@ def test_the_deletion_is_chosen_only_on_the_device_that_holds_the_record(tmp_pat
     assert case.versions[PHONE] in _kept(case.phone.store.root)
     again = case.sync_again()
     assert again.status == "synced" and again.conflicts == () and again.copied == () and again.deleted == (), again
+
+
+def test_a_deletion_is_refused_once_the_serving_device_holds_the_record_again(tmp_path, monkeypatch):
+    """The serving device (the winner, without the record) gets the record back after it sent its
+    snapshot and took the resolve's last step before the deletion: the device that deletes asks it
+    again, under both devices' locks, just before deleting, and the resolve is refused with nothing
+    deleted and no tombstone archived on either device."""
+    case = Conflict(tmp_path)
+    data = case.versions[DESKTOP]
+    (case.desktop.store.root / case.path).unlink()
+    expected = {DESKTOP: None, PHONE: case.expected[PHONE]}
+    commit_holds = resolution._commit_holds
+
+    def then_restored(*args):  # the desktop's user puts the chat back, once every step there has gone
+        commit_holds(*args)
+        restore = case.desktop.store.transaction()
+        restore.put_exact(case.path, data, None)
+        restore.commit(case.desktop.handle)
+    with serving(case.desktop) as server:
+        assert transfer(case.phone.store, case.phone.authority, DESKTOP, server.address).passes[-1].conflict(
+            case.path) is not None
+        monkeypatch.setattr(resolution, "_commit_holds", then_restored)
+        report = case.resolve(server, None, start=case.phone, expected=expected)  # type: ignore[arg-type]
+        monkeypatch.undo()
+    assert report.status == "refused" and f"{case.path} changed" in report.reason, report
+    assert case.bytes(case.phone) == case.versions[PHONE] and case.bytes(case.desktop) == data
+    for device in (case.desktop, case.phone):
+        archive = json.loads((device.store.root / ".sync").joinpath(
+            *next(path for path in _tree(device.store.root) if path.endswith("/archive.json")).split("/")[1:]
+        ).read_bytes())
+        assert "deleted" not in json.dumps(archive.get("entries", {}).get(case.path)), archive
 
 
 def test_a_serving_device_never_deletes_its_own_record_for_a_peer(tmp_path):

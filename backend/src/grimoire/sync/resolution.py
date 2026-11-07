@@ -257,6 +257,7 @@ def _resolve_deletion(stores: Mapping[str, LibraryStore], scans: Mapping[str, Ca
         raise ResolveRefused(f"{path} cannot be deleted on {receiver}: {error}") from error
     try:
         with _locked(*stores.values()):
+            _unchanged_since_scan(stores, receiver, winner, {gone.path: gone.expected for gone in deletes})
             again = deletion.still_needed(store, {}, {}, paths)  # anything written there since the scan
             if again:
                 what, why = min(again.items())
@@ -265,6 +266,9 @@ def _resolve_deletion(stores: Mapping[str, LibraryStore], scans: Mapping[str, Ca
             _end_deliveries(stores, other, pair, paths)
             _commit_holds(store, receiver, deletion.holds_state(
                 store, kept_record.read_keeps(store, winner, pair), receiver, winner, pair, deletes))
+            confirm = getattr(stores[winner], "confirm_absent", None)
+            if confirm is not None:  # a mirror of the winner: that device answers, as late as it can
+                confirm(sorted(gone.path for gone in deletes))
             txn.commit(handles[receiver], dict(approvals.get(receiver, {})))
     except WriteDenied as error:  # nothing was written: the grant refuses it, like any other refusal
         raise ResolveRefused(f"{path} cannot be deleted on {receiver}: {error}") from error
@@ -279,6 +283,26 @@ def _resolve_deletion(stores: Mapping[str, LibraryStore], scans: Mapping[str, Ca
                                       "deletion left")
     _settle(stores, other, pair, {gone.path: ("deleted", gone.expected) for gone in deletes})
     return receiver
+
+
+def _unchanged_since_scan(stores: Mapping[str, LibraryStore], receiver: str, winner: str,
+                          held: Mapping[str, str]) -> None:
+    """Under the pair's locks, before anything of a deletion is written (028): the receiver still
+    holds each version it deletes and the winner still lacks each path. A record written again on
+    the winner since the scan is a new version there: deleting it here and archiving the tombstone
+    would make it ``resurrected`` at the next sync, so the resolve is refused and the conflict stays.
+
+    A mirror of a device on the other end of a connection (``peersync``) reads as its snapshot, so
+    that device confirms itself, under its own lock, just before the deletion commits
+    (``confirm_absent``)."""
+    for device, wanted in ((receiver, dict(held)), (winner, dict.fromkeys(held))):
+        for path, tag in wanted.items():
+            try:
+                found = stores[device].read_exact(path)
+            except NameCollision:  # a look-alike where the record was (or was not) is a change
+                found = b""
+            if (None if found is None else etag(found)) != tag:
+                raise ResolveRefused(f"{path} changed on {device} since the conflict was reported")
 
 
 def _settle(stores: Mapping[str, LibraryStore], other: Mapping[str, str], pair: tuple[str, str],

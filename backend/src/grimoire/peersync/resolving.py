@@ -54,7 +54,7 @@ from grimoire.sync.documents import keeps_name
 from grimoire.sync.keeps import kept_slots
 
 from .errors import MirrorMismatch, PeerRefused, TransportError
-from .replay import Op, kept_target, send_ops
+from .replay import MAX_STEP_OPS, Op, kept_target, send_ops
 from .session import _check_paired, dial, hang_up, pairing_for
 from .snapshot import Limits, MirrorStore, receive_mirror
 from .wire import Channel, client_handshake
@@ -228,6 +228,15 @@ class _Relay:
         for ops in held:
             self._send(ops)
 
+    def confirm_absent(self, paths: list[str]) -> None:
+        """Have the serving device confirm, under its own lock, that it still lacks each path a
+        deletion removes (028); a refusal (``stale``) ends the resolve before the deletion."""
+        _check_paired(self.store, self.channel.peer, self.key)
+        self.channel.send({"t": "check", "absent": list(paths)})
+        header, _ = self.channel.recv()
+        if header.get("t") != "confirmed":
+            raise PeerRefused("verification", "the peer did not confirm the deletion's paths")
+
     def _send(self, ops: list[tuple[str, Callable[[], Op]]]) -> None:
         # An owner who unpairs mid-resolve must not have anything more sent (as a transfer checks).
         _check_paired(self.store, self.channel.peer, self.key)
@@ -237,7 +246,14 @@ class _Relay:
 class RelayingMirror(MirrorStore):
     """The mirror for a resolve: every transaction it commits is replayed on the serving device."""
 
-    relay: Callable[[list[tuple[str, Callable[[], Op]]]], None] | None = None
+    relay: _Relay | None = None
+
+    def confirm_absent(self, paths: list[str]) -> None:
+        """019's ``resolve`` rechecks the winner under the pair's locks before a deletion; this mirror
+        is a snapshot, so the device it mirrors answers instead (``ResolveRequest.confirm_absent``)."""
+        if self.relay is None:
+            raise StoreError("this mirror has no peer to confirm with")
+        self.relay.confirm_absent(paths)
 
     def transaction(self) -> Transaction:
         super().transaction()  # its checks: an open, writable library
@@ -452,6 +468,19 @@ class ResolveRequest:
         except (StoreError, OSError, ValueError, SyncInterrupted):
             return False  # unreadable is never an agreement
         return archive.state == "valid" and archive.entries.get(self.path) == ("agreed", self.keep)
+
+    def confirm_absent(self, store: LibraryStore, absent: object) -> None:
+        """A deletion's last check before the requester deletes (028), under this library's lock:
+        this device, the winner, still lacks the path and every revision the deletion takes along.
+        A record written here since the snapshot is refused ``stale``, so no tombstone is archived
+        for a version this device holds."""
+        if (self.keep is not None or not isinstance(absent, list) or self.path not in absent
+                or len(absent) > MAX_STEP_OPS
+                or not all(type(path) is str and syncable(path) for path in absent)):
+            raise PeerRefused("invalid", "a check confirms that the paths a deletion removes are absent here")
+        for path in absent:
+            if _current(store, path) is not None:
+                raise PeerRefused("stale", f"{path} changed on this device since the conflict was reported")
 
     def check_step(self, store: LibraryStore, ops: list[tuple[dict, bytes | Path]]) -> str | None:  # type: ignore[type-arg]
         """Refuse a step of this resolve that does not do what the request said; return the etag of

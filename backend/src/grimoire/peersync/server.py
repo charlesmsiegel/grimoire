@@ -151,6 +151,15 @@ class PeerServer:
                     request.admit(self.store)  # before anything is sent
                     buffer.resolving, resolving = request.path, request
                     send_snapshot(channel, self.store, self.authority, peer)
+                elif kind == "check":  # a deletion's last check before the requester deletes (028)
+                    if resolving is None:
+                        raise PeerRefused("invalid", "a check belongs to a resolve")
+                    with committing(self.store):
+                        if not self._still_paired(peer, channel_key):
+                            channel.refuse("not_paired", "this device is no longer paired with yours")
+                            return
+                        resolving.confirm_absent(self.store, header.get("absent"))
+                    channel.send({"t": "confirmed"})
                 elif kind == "op":
                     buffer.add(header, body)  # a refusal here is held and answered at "commit"
                 else:  # a client this confused cannot be kept in step: refuse and end the session

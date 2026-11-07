@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from grimoire.security import Approval, Authorizer, Grant, Permission, ResourcePath, payload_digest
@@ -11,8 +13,8 @@ from grimoire.store import (
 from grimoire.store.journal import Entry, Journal, parse
 from grimoire.store.errors import RecoveryFailed
 from grimoire.testing import (
-    CrashScenario, Interleave, Invariant, Target, atomic_outcome, completes_after, explore_crashes, idempotent_recovery,
-    no_residue, preserves_interleave, run_plans,
+    Crash, CrashScenario, Interleave, Invariant, Target, atomic_outcome, completes_after, explore_crashes,
+    idempotent_recovery, no_residue, preserves_interleave, preserves_meddle, run_plans,
 )
 from grimoire.testing.fileops import snapshot
 
@@ -292,3 +294,38 @@ def test_a_removal_never_outlives_a_hold_that_did_not_land(tmp_path):
     report.assert_ok()
     run = report.runs[1]
     assert all(run.recovered[f"lib/{path}"] == template[path] for path in paths)
+
+
+def test_a_removal_recovery_cannot_finish_is_restored_from_its_hold(tmp_path):
+    """All or none across a crash: the app dies after some of a source's records are unlinked, and the
+    manifest is edited while it is down. Recovery can no longer remove the rest, so it puts back each
+    record it removed, from its hold, and keeps the human's edit: never instances pinning a revision
+    that is gone. Crashed at every unlink of the batch, and recovery crashed in turn after each."""
+    paths = (R1_PATH, MANIFEST_PATH, WREN_A_PATH, WREN_B_PATH)
+    probe, template = _scenario(tmp_path / "setup", paths, ())
+    human = template[MANIFEST_PATH].replace(b'"Harbor"', b'"Harbour"')
+
+    def edit(ops, root):
+        if (root / "lib" / MANIFEST_PATH).exists():
+            ops.write_bytes(root / "lib" / MANIFEST_PATH, human)
+
+    def all_or_none(outcome):
+        present = {path: outcome.recovered.get(f"lib/{path}") for path in paths}
+        if all(data is None for data in present.values()):
+            return None  # the whole batch removed: crashed after its last unlink, nothing left to edit
+        wanted = {**{path: template[path] for path in paths}, MANIFEST_PATH: human}
+        if present != wanted:
+            return f"part of the batch is gone: {sorted(path for path in paths if present[path] != wanted[path])}"
+        kept = [value for key, value in outcome.recovered.items() if key.startswith("lib/.conflicts/")]
+        return None if all(template[path] in kept for path in paths) else "a hold is gone"
+
+    scenario = replace(probe, meddle=edit, invariants=(
+        preserves_meddle(), idempotent_recovery(), Invariant("all_or_none", all_or_none)))
+    trace = run_plans(probe, [], tmp_path / "base").runs[0].action_trace
+    first = min(op.index for op in trace if op.kind == "remove" and op.path in {f"lib/{path}" for path in paths})
+    unlinks = [op.index for op in trace if op.kind == "remove" and op.index >= first]
+    report = run_plans(scenario, [[Crash(index, "after")] for index in unlinks], tmp_path / "crashed")
+    report.assert_ok()
+    assert sum(run.recovered.get(f"lib/{MANIFEST_PATH}") == human for run in report.runs[1:]) >= 3
+    explore_crashes(scenario, tmp_path / "recovery", torn=False, recovery_crashes=True,
+                    select=lambda op: {"after"} if op.kind == "remove" and op.index >= first else False).assert_ok()
