@@ -59,7 +59,7 @@ def art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes], blobs:
     that admits the source would show what the origin does not; the source's own identity is what
     the origin's exclusion contests (a record claiming to be another source's, two sources claiming
     one identity), so the head revision and scope read below for it come from data ``load()``
-    refused; and an image object is create-only and sync never propagates a deletion, so a copy
+    refused; and an image object is create-only, so sync never propagates its deletion (028) and a copy
     could never be withdrawn if the origin's repair removes the art instead of the damage. The hold
     lifts by itself once the origin admits the source again, and the next sync copies the art.
     """

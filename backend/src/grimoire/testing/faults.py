@@ -444,9 +444,9 @@ class RootedFileOps:
             raise ValueError("the harness does not support replacing directories")
         self._op("replace", source, target=destination, execute=lambda: self._os.replace(source, destination))
 
-    def remove(self, path: PathArg) -> None:
+    def remove(self, path: PathArg, *, durable: bool = False) -> None:
         resolved = self._resolve(path, mutating=True)
-        self._op("remove", resolved, execute=lambda: self._os.remove(resolved))
+        self._op("remove", resolved, execute=lambda: self._os.remove(resolved, durable=durable))
 
     def make_dirs(self, path: PathArg) -> None:
         resolved = self._resolve(path, mutating=True, allow_root=True)  # makedirs(root) is a no-op

@@ -5,6 +5,11 @@ The device that does not hold the chosen version receives it, keeps its replaced
 its pending marker; both archives then record the agreement. Moved out of ``session`` unchanged
 in behaviour; it shares the plan's private helpers so that a resolve and a sync judge a record by
 the same rules.
+
+Choosing the deletion (``keep=None``, 028) is the same step the other way round: the device that
+still holds the record is the receiver; it keeps that version as a hold, removes the record in a
+010 transaction (``delete_exact``) and marks ``{"from": E, "to": null}``; both archives then record
+the tombstone. It is refused wherever a sync would hold that deletion back (``sync.deletion``).
 """
 
 from __future__ import annotations
@@ -17,12 +22,12 @@ from grimoire.store import LibraryStore, NameCollision, StaleWrite, StoreError, 
 from grimoire.store.layout import definition_parts, manifest_parts
 from grimoire.store.replica import CanonicalScan, pinned_by
 
-from . import bookkeeping, keeps as kept_record, knowledge as merge, session
+from . import bookkeeping, deletion, keeps as kept_record, knowledge as merge, session
 from .art import art_needs, art_unmet
-from .decide import archive_candidate
+from .decide import archive_candidate, derive_base
 from .documents import ArchiveView, PendingView, syncable
 from .errors import ResolveRefused, SameDevice, SyncInterrupted
-from .model import ASSET_KINDS, HELD_BACK_KINDS
+from .model import ASSET_KINDS, HELD_BACK_KINDS, PROPAGATED_DELETIONS, Base, Side
 from .turns import turn_named, turn_needs
 from .session import (
     _HELD, PER_PATH_ERRORS, Copy, _archived, _blob_etag, _campaigns_with_state, _current, _held_campaigns,
@@ -39,12 +44,14 @@ def _pending(store: LibraryStore, peer: str, pair: tuple[str, str]) -> PendingVi
     return cast(PendingView, bookkeeping.read_document(store, "pending", peer, pair))
 
 
-def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expected: Mapping[str, str | None],
+def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str | None, expected: Mapping[str, str | None],
             handles: Mapping[str, object], approvals: Mapping[str, Mapping[str, str]] | None = None) -> str:
     """End one conflict by choosing the version whose etag is ``keep``; returns the device that changed.
 
     The other device receives those bytes and keeps its replaced version under ``.conflicts``,
-    in one transaction; both archives then record the agreement. See docs/SYNC.md for refusals.
+    in one transaction; both archives then record the agreement. ``keep=None`` chooses the
+    deletion (028): the device still holding the record deletes it, keeping it as a hold. See
+    docs/SYNC.md for refusals.
     """
     if _kind(path) in HELD_BACK_KINDS:  # before anything else: these paths are never synced at all
         raise ResolveRefused(f"{path} is {_HELD} (021/023 commit several files as one unit); the conflict "
@@ -78,11 +85,12 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             if state == "ignored" or (what == "archive" and state != "valid"):
                 raise ResolveRefused(f"the {what} on {device} for this pair is {state}; sync the devices "
                                      "once first, so their uncertainty is recorded")
-    # An absent side's current etag is None, so keep=None would otherwise "match" the device that
-    # lacks the record and crown it the winner; choosing a deletion is refused (docs/SYNC.md).
-    winners = [device for device in pair if keep is not None and _current(sides[device]) == keep]
+    if keep is None:  # an absent side's etag is None too, so the deletion is its own branch (028)
+        return _resolve_deletion(stores, scans, sides, pair, other, pendings, archived, path, kind, handles,
+                                 approvals or {})
+    winners = [device for device in pair if _current(sides[device]) == keep]
     if not winners:
-        raise ResolveRefused("keep must be the current etag of one device's version (deletions cannot be chosen)")
+        raise ResolveRefused("keep must be the current etag of one device's version, or None for the deletion")
     if len(winners) == 2:
         raise ResolveRefused(f"{path} is already identical on both devices")
     winner = winners[0]
@@ -189,14 +197,125 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         found = None
     if found is None or etag(found) != keep:
         raise SyncInterrupted(f"verification failed on {receiver}: {path} does not hold the chosen bytes")
+    _settle(stores, other, pair, {done: ("agreed", tags[done]) for done in resolved})
+    return receiver
+
+
+def _resolve_deletion(stores: Mapping[str, LibraryStore], scans: Mapping[str, CanonicalScan], sides: Mapping[str, Side],
+                      pair: tuple[str, str], other: Mapping[str, str], pendings: Mapping[str, PendingView],
+                      archived: list[ArchiveView], path: str, kind: str, handles: Mapping[str, object],
+                      approvals: Mapping[str, Mapping[str, str]]) -> str:
+    """``resolve(..., keep=None)`` (028): the device still holding ``path`` deletes it as row 9's propagated
+    deletion would, and returns that device. A manifest takes along each revision of its source that
+    both archives agree on and the other device deleted too (a source is deleted as a whole: alone,
+    the manifest pins its heads and each revision needs its manifest). Refused for families sync
+    never deletes, and wherever anything left on that device still needs what goes
+    (``delete_dependency``)."""
+    holders = [device for device in pair if sides[device].state == "present"]
+    if len(holders) != 1:
+        raise ResolveRefused(f"{path} is already absent on both devices" if not holders else
+                             f"{path} is held by both devices: choosing the deletion needs one device without it")
+    if kind not in PROPAGATED_DELETIONS:
+        raise ResolveRefused(f"{path} is a {kind} record, which sync never deletes (create-only or content-"
+                             "addressed: a missing one is damage, never a choice); keep its version instead")
+    receiver = holders[0]
+    winner = other[receiver]
+    mine = scans[receiver].files
+    paths = [path]
+    if kind == "manifest":
+        source = _source_of(path)
+        for candidate in sorted(mine):
+            if candidate == path or syncable(candidate) != "definition" or _source_of(candidate) != source:
+                continue
+            current = tuple(None if device != receiver else etag(mine[candidate]) for device in pair)
+            if (candidate not in scans[winner].files and scans[winner].blocked_reason(candidate) is None
+                    and derive_base(candidate, (archived[0], archived[1]), (pendings[pair[0]], pendings[pair[1]]),
+                                    current) == Base("agreed", etag(mine[candidate]))):  # type: ignore[arg-type]
+                paths.append(candidate)
+    held = deletion.orphaned(mine, scans[receiver].blobs, scans[receiver].blocked, paths)  # type: ignore[attr-defined]
+    if held:
+        what, why = sorted(held.items())[0]
+        raise ResolveRefused(f"{what} cannot be deleted on {receiver} (delete_dependency): {why}; "
+                             "resolve or delete that first")
+    store = stores[receiver]
+    try:
+        deletes = [deletion.Delete(done, mine[done], deletion.hold_slot(store, done, mine[done]))
+                   for done in paths]
+    except (StoreError, OSError) as error:  # no slot can take the hold: the record stays
+        raise ResolveRefused(f"{path} cannot be deleted on {receiver}: its version cannot be kept: {error}") from error
+    txn = store.transaction()
+    try:
+        deletion.stage(txn, deletes)
+    except StaleWrite as error:  # its hold's slot was taken meanwhile: nothing was written
+        raise ResolveRefused(f"{path} cannot be deleted on {receiver}: {error}") from error
+    marked = dict(pendings[receiver].entries)
+    for gone in deletes:  # marked in the same commit, as a copy is: a restore before the archives is a conflict
+        marked[gone.path] = {"from": gone.expected, "to": None, "base": _archived(archive_candidate(gone.path, *archived))}
+    files, _ = bookkeeping.render_files("pending", winner, pair, marked, session.ARCHIVE_LIMIT)
+    bookkeeping.stage(txn, bookkeeping.changes(store, files, pendings[receiver].files))
+    try:
+        txn.check()
+    except (StaleWrite, *PER_PATH_ERRORS) as error:
+        raise ResolveRefused(f"{path} cannot be deleted on {receiver}: {error}") from error
+    try:
+        with _locked(*stores.values()):
+            _unchanged_since_scan(stores, receiver, winner, {gone.path: gone.expected for gone in deletes})
+            again = deletion.still_needed(store, {}, {}, paths)  # anything written there since the scan
+            if again:
+                what, why = min(again.items())
+                raise ResolveRefused(f"{what} cannot be deleted on {receiver} (delete_dependency): {why}; "
+                                     "resolve or delete that first")
+            _end_deliveries(stores, other, pair, paths)
+            _commit_holds(store, receiver, deletion.holds_state(
+                store, kept_record.read_keeps(store, winner, pair), receiver, winner, pair, deletes))
+            deletion.confirm_with_peer(stores[winner], [gone.path for gone in deletes])
+            txn.commit(handles[receiver], dict(approvals.get(receiver, {})))
+    except WriteDenied as error:  # nothing was written: the grant refuses it, like any other refusal
+        raise ResolveRefused(f"{path} cannot be deleted on {receiver}: {error}") from error
+    for gone in deletes:
+        for where, tag in ((gone.hold, gone.expected), (gone.path, None)):
+            try:
+                found = store.read_exact(where)
+            except NameCollision:  # a look-alike where the record was is not "gone"
+                found = b"" if tag is None else None
+            if (None if found is None else etag(found)) != tag:
+                raise SyncInterrupted(f"verification failed on {receiver}: {where} does not hold what the "
+                                      "deletion left")
+    _settle(stores, other, pair, {gone.path: ("deleted", gone.expected) for gone in deletes})
+    return receiver
+
+
+def _unchanged_since_scan(stores: Mapping[str, LibraryStore], receiver: str, winner: str,
+                          held: Mapping[str, str]) -> None:
+    """Under the pair's locks, before anything of a deletion is written (028): the receiver still
+    holds each version it deletes and the winner still lacks each path. A record written again on
+    the winner since the scan is a new version there: deleting it here and archiving the tombstone
+    would make it ``resurrected`` at the next sync, so the resolve is refused and the conflict stays.
+
+    A mirror of a device on the other end of a connection (``peersync``) reads as its snapshot, so
+    that device confirms itself, under its own lock, just before the deletion commits
+    (``confirm_absent``)."""
+    for device, wanted in ((receiver, dict(held)), (winner, dict.fromkeys(held))):
+        for path, tag in wanted.items():
+            try:
+                found = stores[device].read_exact(path)
+            except NameCollision:  # a look-alike where the record was (or was not) is a change
+                found = b""
+            if (None if found is None else etag(found)) != tag:
+                raise ResolveRefused(f"{path} changed on {device} since the conflict was reported")
+
+
+def _settle(stores: Mapping[str, LibraryStore], other: Mapping[str, str], pair: tuple[str, str],
+            settled: Mapping[str, tuple[str, str]]) -> None:
+    """After the receiver's verified data commit: both archives record ``settled`` (an agreement or a
+    tombstone), each kept-version record forgets the conflicts it ended, and each marker drops them."""
+    resolved = list(settled)
     for device in reversed(pair):
         store = stores[device]
         archive = _archive(store, other[device], pair)
         if archive.state != "valid":  # damaged since the check: never rebuild it from nothing
             raise SyncInterrupted(f"the archive on {device} changed during resolve")
-        entries = dict(archive.entries)
-        for done in resolved:
-            entries[done] = ("agreed", tags[done])
+        entries = {**archive.entries, **settled}
         files, _ = bookkeeping.render_files("archive", other[device], pair, entries, session.ARCHIVE_LIMIT)
         states = bookkeeping.changes(store, files, archive.files)
         # the conflicts this resolve ended take their kept-version entries with them (028): a dismissal
@@ -219,7 +338,6 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         writes = store.transaction()
         bookkeeping.stage(writes, bookkeeping.changes(store, files, pending.files))
         _commit_state(writes, device)
-    return receiver
 
 
 def _end_deliveries(stores: Mapping[str, LibraryStore], other: Mapping[str, str], pair: tuple[str, str],
@@ -261,8 +379,12 @@ def _record_hold(store: LibraryStore, receiver: str, peer: str, pair: tuple[str,
     # the hold may reuse another pair's slot. Over the transport the mirror holds this pair's record
     # alone, so the serving device drops the bytes from its other pairs' records itself, likewise
     # in a commit before its data commit (``peersync.replay``): a peer may write none of them
-    states = [*([] if held is None else [held]),
-              *kept_record.not_delivered_elsewhere(store, receiver, peer, path, tag)]
+    _commit_holds(store, receiver, [*([] if held is None else [held]),
+                                    *kept_record.not_delivered_elsewhere(store, receiver, peer, path, tag)])
+
+
+def _commit_holds(store: LibraryStore, receiver: str, states: list[kept_record.State]) -> None:
+    """``_record_hold``'s commit of its own, before the data commit; a race stops the resolve unwritten."""
     if states:
         writes = store.transaction()
         bookkeeping.stage(writes, states)

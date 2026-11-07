@@ -356,27 +356,53 @@ def with_held(view: KeepsView, peer: str, devices: tuple[str, str], path: str, t
                     lambda before: _entry(before.base, before.delivered, before.dismissed, {*before.held, tag}, before.open))
 
 
-def not_delivered(view: KeepsView, peer: str, devices: tuple[str, str], path: str, tag: str) -> State | None:
-    """Another pair's record without ``tag`` delivered: ``resolve`` held those bytes here (in a slot
-    that pair's sync may have written), so no pair may ever have them dismissed."""
-    if view.state != "valid" or tag not in getattr(view.entries.get(path), "delivered", ()):
-        return None
-    return _changed(view, peer, devices, path,
-                    lambda before: _entry(before.base, before.delivered - {tag}, before.dismissed, before.held, before.open))
+def with_holds(view: KeepsView, peer: str, devices: tuple[str, str], items: Iterable[tuple[str, str]]) -> State | None:
+    """``with_held`` for several ``(path, etag)`` at once, in one write (028: the versions a sync's
+    deletions hold, recorded just before the data commit that deletes them)."""
+    entries = _entries(view)
+    for path, tag in sorted(items):
+        before = entries.get(path) or KeptEntry(None, frozenset())
+        entry = _entry(before.base, before.delivered, before.dismissed, {*before.held, tag}, before.open)
+        if entry is not None:
+            entries[path] = entry
+    return _write(view, peer, devices, entries)
 
 
 def not_delivered_elsewhere(store: LibraryStore, device: str, peer: str, path: str, tag: str) -> list[State]:
-    """Every other pair's record on ``device`` without ``tag`` delivered for ``path`` (``not_delivered``):
-    what a hold of those bytes for the pair with ``peer`` commits beside its own record, before the
-    commit that writes the hold. Written by the device that holds, whichever device started the
-    resolve: a peer never sees, and may never write, this device's records of its other pairs."""
+    """Every other pair's record on ``device`` without ``tag`` delivered for ``path``, so no pair may
+    ever have those bytes dismissed: what a hold of those bytes for the pair with ``peer`` commits
+    beside its own record, before the commit that writes the hold. Written by the device that holds,
+    whichever device started the resolve: a peer never sees, and may never write, this device's
+    records of its other pairs."""
+    return not_delivered_elsewhere_many(store, device, peer, [(path, tag)])
+
+
+def not_delivered_elsewhere_many(store: LibraryStore, device: str, peer: str,
+                                 items: Iterable[tuple[str, str]]) -> list[State]:
+    """``not_delivered_elsewhere`` for several ``(path, etag)`` at once: one write per other pair's record."""
+    items = sorted(set(items))
     states = []
     for other in other_peers(store, device):
-        if other != peer:
-            devices: tuple[str, str] = tuple(sorted((device, other)))  # type: ignore[assignment]
-            state = not_delivered(read_keeps(store, other, devices), other, devices, path, tag)
-            if state is not None:
-                states.append(state)
+        if other == peer:
+            continue
+        devices: tuple[str, str] = tuple(sorted((device, other)))  # type: ignore[assignment]
+        view = read_keeps(store, other, devices)
+        if view.state != "valid":
+            continue
+        entries, changed = _entries(view), False
+        for path, tag in items:
+            before = entries.get(path)
+            if before is None or tag not in before.delivered:
+                continue
+            changed = True
+            entry = _entry(before.base, before.delivered - {tag}, before.dismissed, before.held, before.open)
+            if entry is None:
+                entries.pop(path)
+            else:
+                entries[path] = entry
+        state = _write(view, other, devices, entries) if changed else None
+        if state is not None:
+            states.append(state)
     return states
 
 
@@ -454,7 +480,8 @@ def peer_may_write(old: bytes | None, new: bytes, devices: tuple[str, str],
     record that dismisses nothing ``old`` did not on the same base (dismissing is this device's own
     decision, authorized by ``dismiss``), whose newly delivered etags are first copies its own
     (non-hold) keep ops write in the same step (``first``), whose newly held etags are the one
-    version a resolve's own record step may hold here (``held``: never in a sync step, never in
+    version a resolve's own record step, or a sync's holds step (028: this device's own current
+    version of a record a deletion removes), may hold here (``held``: never in another sync step, never in
     the step that writes the hold, which 010's recovery could finish without its staged record,
     and never a version the resolve does not replace here, which would keep a delivered version
     from ever being dismissed), and which drops a held etag only once no slot holds those bytes

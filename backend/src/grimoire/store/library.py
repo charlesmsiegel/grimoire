@@ -48,7 +48,7 @@ from .errors import (
 )
 from .replica import CanonicalScan
 from .guard import Guard, Limits, RootIdentity
-from .journal import Entry, Journal, is_staging_name
+from .journal import DELETABLE_KINDS, Entry, Journal, is_staging_name
 from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, reemitted_imprecise, render
 from .layout import (
     ACCEPTED, CAMPAIGN_LEDGERS, CAMPAIGNS, CHATS, CONFLICTS, DISCARD_MARKER, IMAGES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
@@ -68,6 +68,8 @@ from .lock import Locker, OsLocker
 #: Authorization outcomes that concern one path; a partial commit drops those puts (019).
 _PATH_DENIALS = frozenset({"not_granted", "approval_required", "reserved_resource"})
 DISCARD_FORMAT = "grimoire.discard/1"
+#: What a deletion is authorized over and staged as (028): the path and the etag it removes.
+DELETION_FORMAT = "grimoire.deletion/1"
 DISCARD_PREFIX = "discard"  # staging names the store gives a marker before it is committed
 REPAIR_FORMAT = "grimoire.repair/1"
 REPAIR_PREFIX = "repair"
@@ -80,11 +82,12 @@ class RecoveryReport:
     incomplete: tuple[str, ...] = ()
     aborted: bool = False
     dropped: tuple[str, ...] = ()  # kept versions and sync state set aside unpublished
+    removed: tuple[str, ...] = ()  # records a deletion removed (028)
 
     @classmethod
     def of(cls, settlement: Settlement) -> RecoveryReport:
         return cls(tuple(settlement.published), tuple(settlement.preserved), tuple(settlement.incomplete),
-                   settlement.aborted, tuple(settlement.dropped))
+                   settlement.aborted, tuple(settlement.dropped), tuple(settlement.removed))
 
 
 @dataclass(frozen=True)
@@ -470,7 +473,7 @@ class LibraryStore:
             raise StoreError("a read-only store cannot recover")
         with self.lock:  # waits for this process's commits; it would clean their staging
             try:
-                report = RecoveryReport.of(engine.recover(self._access))
+                report = RecoveryReport.of(engine.recover(self._access, replica.removal_blocker))
             except OSError as error:
                 raise RecoveryBlocked(f"recovery could not finish: {error}") from error
             finally:
@@ -1116,7 +1119,7 @@ class _Put:
     expected: str | None
     #: records only; None for ledger batches, kept versions and sync state
     envelope: RecordEnvelope | SourceManifest | ScopeRecord | KnowledgeRecord | AssetRecord | ImageBlob | None
-    kind: str = "record"  # record | ledger | keep (a kept version) | state (``.sync``)
+    kind: str = "record"  # record | ledger | keep (a kept version) | state (``.sync``) | remove (028)
     key: str = ""  # the preview / approval / result key
     replace_unreferenced: bool = False
     regenerable: bool = False  # exact bytes another library still holds: dropped, never preserved
@@ -1154,7 +1157,7 @@ class _Put:
             return "replica"
         if self.kind == "keep":
             return "keep" if self.regenerable else "hold"
-        return {"state": "state"}.get(self.kind, "publish")
+        return {"state": "state", "remove": "remove"}.get(self.kind, "publish")
 
 
 class LedgerWriter:
@@ -1317,6 +1320,30 @@ class Transaction:
                        allowed=frozenset(allowed_manifests) if replace_unreferenced else frozenset()))
         return str(address)
 
+    def delete_exact(self, path: str, expected: str) -> str:
+        """Stage the deletion of canonical ``path``, which must still hold ``expected`` (028's propagated
+        deletion and ``resolve`` toward one); returns its key.
+
+        Only ``journal.DELETABLE_KINDS`` (never a create-only knowledge record, transcript page or
+        image object, nor a blob). The same transaction must keep exactly those bytes as a ``hold``
+        (``keep_version(..., regenerable=False)``), so the removed version stays recoverable under
+        ``.conflicts`` and is never just unlinked. Authorized as ``APPLY`` on the record's own address
+        over a deletion document (``preview`` shows it), so an approval to write the record never
+        approves removing it. References are the caller's rule (sync's ``delete_dependency``).
+        """
+        if type(path) is not str:
+            raise InvalidEnvelope("path must be text")
+        if not is_etag(expected):
+            raise InvalidEnvelope("a deletion names the etag it removes")
+        parts = tuple(path.split("/"))
+        found = classify(parts)
+        if found is None or found[0] not in DELETABLE_KINDS:
+            raise InvalidEnvelope(f"{path} is not a record that can be deleted")
+        address = logical(parts)
+        document = render({"format": DELETION_FORMAT, "path": path, "etag": expected})
+        self._add(_Put(parts, address, document, expected, None, "remove", str(address), record=parts))
+        return str(address)
+
     def put_blob_exact(self, path: str, read: Callable[[], bytes | None], *, size: int) -> str:
         """Stage another library's blob at canonical ``path`` (sync, 019/C2): create-only, loaded on demand.
 
@@ -1452,6 +1479,7 @@ class Transaction:
         with store.lock:
             puts = tuple(self._puts.values())
             self._check_replaces(puts)
+            self._check_deletes(puts)
             if any(put.kind != "state" or put.address is not None for put in puts) or not puts:
                 self._require_writable_records(handle, check_handle=handle is not None)
             commit = _Commit(store, puts, handle, {})
@@ -1469,6 +1497,18 @@ class Transaction:
                               (), ())
         if authority is None and store._access.presence(ledger_parts("security", 1)) != "absent":
             raise StoreError("this library has a security ledger: open its durable authority before writing")
+
+    def _check_deletes(self, puts: tuple[_Put, ...]) -> None:
+        """A deletion commits with the kept copy of the bytes it removes, as a ``hold`` (028): it may be
+        the only copy left anywhere, so the store enforces the pairing rather than trusting the caller."""
+        for put in puts:
+            if put.kind != "remove":
+                continue
+            if self._kept.get(put.parts) != put.expected:
+                raise InvalidEnvelope(f"deleting {'/'.join(put.parts)} needs its current bytes kept in the same "
+                                      "transaction (keep_version)")
+            if not any(other.kind == "keep" and other.record == put.parts and not other.regenerable for other in puts):
+                raise InvalidEnvelope(f"the kept copy of {'/'.join(put.parts)} must be a hold (regenerable=False)")
 
     def _check_replaces(self, puts: tuple[_Put, ...]) -> None:
         """A revision replace commits alone with the kept copy of the bytes it replaces.
@@ -1511,6 +1551,7 @@ class Transaction:
                                  "see stale listings")
             puts = tuple(self._puts.values())
             self._check_replaces(puts)
+            self._check_deletes(puts)
             if any(put.kind != "state" or put.address is not None for put in puts):  # bookkeeping is trusted
                 self._require_writable_records(handle)
             self._committed = True
@@ -1651,8 +1692,8 @@ class _Commit:
             remaining.append(put)
         held = {put.record for put in remaining if put.kind == "keep"}
         staged = {put.record for put in self.puts if put.kind == "keep"}
-        for put in list(remaining):  # a replace never outlives the kept copy of what it replaces
-            if put.replace_unreferenced and put.parts in staged and put.parts not in held:
+        for put in list(remaining):  # a replace or deletion never outlives the kept copy of what it replaces
+            if (put.replace_unreferenced or put.kind == "remove") and put.parts in staged and put.parts not in held:
                 remaining.remove(put)
                 dropped.add(put.key)
         self.puts, self.denied, self.dropped = tuple(remaining), keys, frozenset(dropped - keys)
@@ -1751,6 +1792,17 @@ class _Commit:
     def _check_sources(self) -> None:
         touched: dict[str, tuple[SourceManifest | None, list[SourceRef]]] = {}
         art: set[str] = set()  # sources receiving images or placements
+        removed = frozenset("/".join(put.parts) for put in self.puts if put.kind == "remove")
+        revisions = [hit[1] for hit in (classify(tuple(path.split("/"))) for path in sorted(removed))
+                     if hit is not None and hit[0] == "definition"]
+        if revisions:  # 028: a deleted revision is never one a record staying here pins, checked under the lock
+            found = replica.scan(self.access)
+            # judged over what this commit leaves: a record it writes counts with its new bytes (a
+            # manifest dropping the head it deletes, in the same commit, no longer pins it)
+            staged = {"/".join(put.parts): put.data for put in self.puts if put.kind == "record" and put.data is not None}
+            found = replace(found, files={**found.files, **staged})
+            for ref in revisions:
+                replica.check_unreferenced(self.access, ref, ignore=removed, found=found)  # type: ignore[arg-type]
         for put in self.puts:
             if put.kind != "record":
                 continue

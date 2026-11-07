@@ -20,6 +20,9 @@ SIDES = [Side.absent(), Side.present(E), Side.present(X), Side.present(Y), Side.
          Side.present(E, previous=X), Side.present(Y, previous=X), Side.blocked("link")]
 KINDS = ["definition", "manifest", "instance", "scope", "chat", "relation", "knowledge"]
 COMBOS = list(itertools.product(KINDS, BASES, SIDES, SIDES))
+#: Written out here rather than imported: the families whose agreed version, deleted on one side, is
+#: deleted on the other (docs/SYNC.md row 9); 020 knowledge stays a conflict.
+PROPAGATING = {"definition", "manifest", "instance", "scope", "chat", "relation", "placement"}
 
 
 def _oracle(kind, base, left, right):
@@ -47,8 +50,8 @@ def _oracle(kind, base, left, right):
         if left.etag == base.etag or right.etag == base.etag:
             changed = right if left.etag == base.etag else left
             origin = "right" if left.etag == base.etag else "left"
-            if changed.state == "absent":
-                return Decision("conflict", "deleted")
+            if changed.state == "absent":  # row 9: a propagated deletion where the store can delete (028)
+                return Decision("delete", origin=absent[0]) if kind in PROPAGATING else Decision("conflict", "deleted")
             return Decision("conflict", "revision_modified") if kind in ("definition", "knowledge") else Decision("copy", origin=origin)
         return Decision("conflict", "edit_delete" if absent else "concurrent")
     if absent:
@@ -140,6 +143,23 @@ def test_pending_markers_make_an_unfinished_copy_agreed_or_uncertain():
     assert derive_base(P, archives, (_pending(), NO_PENDING), (E, X)) == Base("agreed", E)
 
 
+def test_a_deletion_marker_makes_an_unfinished_deletion_a_tombstone_or_uncertain():
+    """028: ``{"from": E, "to": null}`` says a sync deleted E here while the peer was absent."""
+    archives = (_archive(("agreed", E)), _archive(("agreed", E)))
+    removed = _pending({"from": E, "to": None, "base": E})
+    assert derive_base(P, archives, (removed, NO_PENDING), (None, None)) == Base("deleted", E)
+    assert derive_base(P, archives, (NO_PENDING, removed), (None, None)) == Base("deleted", E)
+    assert derive_base(P, archives, (removed, NO_PENDING), (E, None)) == UNCERTAIN  # restored since
+    assert derive_base(P, archives, (removed, NO_PENDING), (X, None)) == UNCERTAIN  # created anew
+    assert derive_base(P, archives, (removed, _pending({"from": E, "to": X})), (None, X)) == UNCERTAIN
+    assert derive_base(P, archives, (removed, _pending({"from": X, "to": None})), (None, None)) == UNCERTAIN
+    tombstones = (_archive(("deleted", E)), _archive(("deleted", E)))
+    assert derive_base(P, tombstones, (removed, NO_PENDING), (E, None)) == Base("deleted", E)  # stale marker
+    for other in ({"from": X, "to": None}, {"from": E, "to": X}):  # disagreeing markers: never a stale one
+        for pair in ((removed, _pending(other)), (_pending(other), removed)):
+            assert derive_base(P, tombstones, pair, (None, None)) == UNCERTAIN
+
+
 # -- documents ---------------------------------------------------------------------------
 
 PAIR = ("desktop", "phone")
@@ -161,7 +181,10 @@ def test_archive_and_pending_round_trip_and_damage_is_ignored():
         assert view.state == "ignored" and view.reason and view.entries == {}
     pending = render_pending(PAIR, {P: {"from": None, "to": E}})
     assert parse_pending(pending, PAIR).entries[P] == {"from": None, "to": E}
+    removal = render_pending(PAIR, {P: {"from": E, "to": None}})
+    assert parse_pending(removal, PAIR).entries[P] == {"from": E, "to": None}
     for bad in (render_pending(PAIR, {P: {"to": E}}), render_pending(PAIR, {P: {"uncertain": False}}),
+                render_pending(PAIR, {P: {"from": None, "to": None}}),  # deleting nothing means nothing
                 pending.replace(b"null", b'"x"')):
         assert parse_pending(bad, PAIR).state == "ignored"
 
