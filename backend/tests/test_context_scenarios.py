@@ -23,8 +23,8 @@ from store_helpers import OWNER, owner_handle
 
 from grimoire.chats import Launch
 from grimoire.chatstore import ChatLibrary
-from grimoire.context import Budget, ContextError, director_lore, pack_actor_context
-from grimoire.contextstore import ChatContext, actor_context, stored_record
+from grimoire.context import Budget, ContextError, director_lore, pack_actor_context, pack_player_context
+from grimoire.contextstore import ChatContext, actor_context, player_context, stored_record
 from grimoire.core import DIRECTOR, ChatRef, ControlAssignment, InstanceRef, SourceRef, snapshot_actor_view
 from grimoire.core.perspective import actor_knowledge
 from grimoire.effective import chat_snapshot
@@ -139,6 +139,24 @@ def test_the_store_pack_is_the_pure_pack_over_the_same_inputs(store, chats):
                               budget=BUDGET, scene_text=SCENE, claims=ledger.claims, readers=f.READERS,
                               unpack=stored_record)
     assert built.pack == pure
+
+
+def test_the_store_pack_for_a_players_character_is_the_pure_one_and_holds_no_npc_era_conclusion(store, chats):
+    started, cast = start(chats)
+    evidence = record(store, started, cast)  # every actor an NPC then: Mara's suspicion is the director's
+    view = store.load()
+    ledger = evidence.read(started.chat.campaign_id, requested_by=DIRECTOR)
+    campaign = started.chat.campaign_id
+    controls = [ControlAssignment(campaign, ref.instance_id, "human:ana" if name == "mara" else DIRECTOR)
+                for name, ref in cast.items()]  # Ana takes Mara over
+    built = player_context(view, started.chat, ledger, cast["mara"], controller="human:ana", controls=controls,
+                           as_of=9, budget=BUDGET, scene_text=SCENE, readers=f.READERS)
+    pure = pack_player_context(chat_snapshot(view, started.chat).snapshot, ledger.knowledge, cast["mara"],
+                               controller="human:ana", controls=controls, as_of=9, budget=BUDGET, scene_text=SCENE,
+                               claims=ledger.claims, readers=f.READERS, unpack=stored_record)
+    assert built.pack == pure and built.pack.controller == "human:ana"
+    assert "You suspect: the duke paid off the harbor watch" not in built.pack.lines()  # the director's
+    assert "You were told: the duke paid off the harbor watch" in built.pack.lines()  # what she was told stays
 
 
 def test_only_the_absent_duke_reads_his_own_secret(store, chats):

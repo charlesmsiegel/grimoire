@@ -338,6 +338,48 @@ def player_knowledge(knowledge: Knowledge, player_id: str,
     return PlayerKnowledge(player_id, as_of, tuple(actors), tuple(table))
 
 
+def controller_knowledge(knowledge: Knowledge, actor: InstanceRef, controller: str,
+                         controls: Iterable[ControlAssignment], *, as_of: int) -> ActorKnowledge:
+    """What ``actor``'s present ``controller`` may see of that one actor, as of ``as_of`` (031's controller pack).
+
+    Like ``player_knowledge`` for this actor alone: control is confirmed for ``actor`` only (another actor's
+    ambiguous control does not touch it), its confirmed evidence and sent reports are kept, and its beliefs are
+    split by author. One difference: in a belief chain whose current head someone else authored (the director
+    revised the controller's conclusion while the character was an NPC), the controller's latest own belief in
+    that chain stays ``current``, as any own belief is; the head goes to ``inherited``, and nothing of it is in
+    ``current`` or ``history``. Raises ``AuthorityError`` unless ``controller`` alone controls ``actor``, and
+    ``KnowledgeError`` for a holder kind 020 does not project for a player (only ``character``).
+    """
+    actor, as_of = _check_actor(knowledge, actor), _check_as_of(as_of)
+    if controller == DIRECTOR:
+        raise AuthorityError("the director is not a player")
+    controls = tuple(controls)
+    if not all(isinstance(c, ControlAssignment) for c in controls):
+        raise KnowledgeError("invalid_record")
+    if actor.kind != "character":
+        raise KnowledgeError("unsupported_holder_kind")
+    if controller_of(knowledge.campaign_id, actor.instance_id, controls) != controller:
+        raise AuthorityError("this player does not control the actor")
+    evidence, sent = _received_and_sent(knowledge, actor, as_of)
+    current, history = _beliefs_as_of(knowledge, actor, as_of, _keep_all)
+    by_id = {belief.belief_id: belief for belief in knowledge.beliefs_held_by(actor)}
+    own = [belief for belief in current if belief.authored_by == controller]
+    heads = [belief for belief in current if belief.authored_by != controller]
+    restored: set[str] = set()
+    for head in heads:  # the controller's latest own conclusion in a chain someone else revised
+        link = head
+        while link.supersedes is not None and link.supersedes in by_id:
+            link = by_id[link.supersedes]
+            if link.authored_by == controller:
+                own.append(link)
+                restored.add(link.belief_id)
+                break
+    past = [belief for belief in history if belief.belief_id not in restored]
+    own_history, inherited_history = _split_by_author(knowledge, past, controller)
+    return ActorKnowledge(actor, as_of, evidence, sent, _known_beliefs(knowledge, own), own_history,
+                          _known_beliefs(knowledge, heads), inherited_history)
+
+
 # --- authoring-time PC sovereignty --------------------------------------------------
 
 class BeliefAuthorityError(AuthorityError):

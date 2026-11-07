@@ -19,18 +19,25 @@ from store_helpers import OWNER
 
 from types import SimpleNamespace
 
+import grimoire.context.actor as packer
 from grimoire.adjudication import AdjudicationError
+from grimoire.core import DIRECTOR, ControlAssignment
+from grimoire.core.authority import PlayerContribution
+from grimoire.core.knowledge import Belief, Event, Moment, Perception, Proposition, Subject
 from grimoire.core.identity import InstanceRef
 from grimoire.adjudicationstore import AdjudicationLibrary
+from grimoire.evidencestore import EvidenceLibrary
 from grimoire.core.inference import InferenceStage
 from grimoire.generation import MAX_LINE_CHARS
 from grimoire.play.adjudicate import outcome_line
 from grimoire.store.errors import AuthorityUnavailable, LedgerInvalid
 from grimoire.ledgers.codec import ControlChange
 from grimoire.play import SceneRunner
+from grimoire.play.stages import StageBook
 from grimoire.providers import RouteChoice
 from grimoire.runtime import LabelRuntime
 from grimoire.scene import MAX_LABELS, SceneRefused
+from grimoire.staging import Area, Placement, Stage, Way
 from grimoire.testing.providers import ConnectFail, Status
 
 REPLY = json.dumps({"factors": [{"fact": "f1", "bearing": "favours"}], "stakes": ["She falls to the deck"]})
@@ -128,6 +135,135 @@ def test_narration_reaches_the_table_but_never_the_labeller(built, tmp_path):
         table.runner.label(storm, table.player())
         (prompt,) = table.labels.prompts()
     assert "Hello?" in prompt and unseen not in prompt  # the character's window: its player saw it, it did not
+
+
+# -- packed for the character's player (031) -------------------------------------------------------
+
+GUILD = "The guild meets above the fish market."
+#: Anya's three conclusions, each resting on her seeing the lamps go out: one the director drew while she
+#: was an NPC, one Bob drew while he played her, and one Ana drew. Only Ana's is Ana's to cite.
+INHERITED, PREVIOUS, OWN = ("the guild paid the lamplighter", "the lighthouse keeper took a bribe",
+                            "the lamps were put out on purpose")
+
+
+def remembers(table: Table, chat, *, controller: str = ANA) -> None:
+    """Anya saw the harbor lamps go out (sequence 1), and holds the three conclusions (sequence 2)."""
+    scene = table.runner.open(chat)
+    anya, campaign = scene.persona, chat.campaign_id
+    evidence = EvidenceLibrary(table.store, table.owner, owner=OWNER)
+    lamps = (Subject("event", "e-lamps"),)
+    evidence.append(campaign, [
+        Event(campaign, "e-lamps", "the harbor lamps go out", Moment(1), "director"),
+        Perception(campaign, "v-lamps", anya, "e-lamps", "witnessed", "the harbor lamps going dark", Moment(1),
+                   "director", confirmed=True),
+        *[Proposition(campaign, f"p-{n}", text, Moment(1), "director", about=lamps)
+          for n, text in enumerate((INHERITED, PREVIOUS, OWN))],
+    ]).commit()
+
+    def concluded(n: int, author: str) -> None:
+        moment = Moment(2, "scene-quay", f"t-{n}")
+        held = Belief(campaign, f"b-{n}", anya, f"p-{n}", "believed", moment, author, ("v-lamps",),
+                      contribution_id=None if author == DIRECTOR else f"k-{n}")
+        contributions = {} if author == DIRECTOR else {held.belief_id: PlayerContribution(
+            campaign, f"k-{n}", "scene-quay", f"t-{n}", anya.instance_id, author, "interiority",
+            (INHERITED, PREVIOUS, OWN)[n])}
+        evidence.append(campaign, [held], controls=[ControlAssignment(campaign, anya.instance_id, author)],
+                        contributions=contributions).commit()
+
+    concluded(0, DIRECTOR)  # while she was an NPC
+    concluded(1, BOB)  # while Bob played her
+    concluded(2, controller)
+
+
+def offered(table: Table) -> list[str]:
+    (prompt,) = table.labels.prompts()
+    return prompt.split("Facts:\n", 1)[1].splitlines()
+
+
+def test_the_labeller_is_offered_only_what_the_characters_player_may_see(cards):
+    folder, chat = cards
+    with labelled(folder, REPLY) as table:
+        remembers(table, chat)
+        acting(table, chat)  # Ana takes Anya: nothing in the scene names the guild or the lighthouse
+        table.runner.label(chat, table.player())
+        facts = offered(table)
+    assert any("the harbor lamps going dark" in line for line in facts)  # what Anya witnessed
+    assert any(OWN in line for line in facts)  # what Ana concluded for her
+    assert not any(INHERITED in line or PREVIOUS in line for line in facts)
+    # neither conclusion that is not Ana's triggers lore through her character's pack
+    assert not any(GUILD in line or LIGHTHOUSE in line for line in facts)
+
+
+def test_another_players_conclusion_for_the_same_character_stays_theirs(cards):
+    folder, chat = cards
+    with labelled(folder, REPLY) as table:
+        remembers(table, chat, controller=BOB)  # Bob drew two of the three; Ana plays Anya now
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        facts = offered(table)
+    assert not any(OWN in line or PREVIOUS in line or LIGHTHOUSE in line for line in facts)
+    assert any("the harbor lamps going dark" in line for line in facts)
+
+
+def test_a_players_conclusion_the_director_revised_meanwhile_is_still_offered(cards):
+    folder, chat = cards
+    with labelled(folder, REPLY) as table:
+        remembers(table, chat)
+        anya, campaign = table.runner.open(chat).persona, chat.campaign_id
+        # while Anya was the director's again, the director revised Ana's conclusion into a doubt
+        EvidenceLibrary(table.store, table.owner, owner=OWNER).append(campaign, [
+            Belief(campaign, "b-revised", anya, "p-2", "suspected", Moment(3), DIRECTOR, ("v-lamps",),
+                   supersedes="b-2")], controls=[ControlAssignment(campaign, anya.instance_id, DIRECTOR)]).commit()
+        acting(table, chat)  # Ana plays her again
+        table.runner.label(chat, table.player())
+        facts = offered(table)
+    assert any(f"You believe: {OWN}" in line for line in facts)  # Ana's own latest conclusion, as her own
+
+
+def test_knowledge_that_cannot_be_projected_is_not_labelled(cards, monkeypatch):
+    folder, chat = cards
+    with labelled(folder, REPLY) as table:
+        acting(table, chat)
+        monkeypatch.setattr(packer, "controller_projection", lambda *args, **kwargs: None)  # 020 refuses it
+        refused("knowledge_unprojected", table.runner.label, chat, table.player())
+        assert table.runner.open(chat).pending.labels == () and table.labels.transport.sends == []
+
+
+def test_a_withdrawn_line_is_never_in_the_labellers_window_or_lore(cards):
+    folder, chat = cards
+    with Table(folder, [say("The lighthouse key hangs by the door.")], policy=LABEL_POLICY,
+               labels=[say(REPLY)]) as table:
+        table.runner.seat(chat, ANA)
+        table.runner.post(chat, table.player(), '"Where is the key?"')
+        take = table.runner.generate(chat, table.player())
+        table.runner.keep(chat, table.player(), take.take)
+        table.runner.post(chat, table.player(), "skip")  # 016: the kept line is withdrawn
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        (prompt,) = table.labels.prompts()
+    assert "Where is the key?" in prompt and "lighthouse key" not in prompt and LIGHTHOUSE not in prompt
+
+
+def test_a_line_spoken_behind_a_shut_door_is_never_in_the_labellers_window(cards):
+    folder, chat = cards
+    book = StageBook()
+    with Table(folder, [say("The lighthouse key hangs by the door.")], policy=LABEL_POLICY, labels=[say(REPLY)],
+               stages=book) as table:
+        table.runner.seat(chat, ANA)
+        scene = table.runner.open(chat)
+        anya = scene.persona
+        (mara,) = [actor for actor in scene.cast if actor != anya]
+        book.put(chat, Stage(chat.campaign_id, chat.chat_id, 1, (Area("study"), Area("hall")),
+                             (Way("study-door", ("study", "hall"), "closed"),), (anya, mara),
+                             (Placement(anya, area="hall"), Placement(mara, area="study"))))
+        table.runner.post(chat, table.player(), '"Hello?"')
+        take = table.runner.generate(chat, table.player())
+        assert take.lines[0].audience == (mara,)
+        table.runner.keep(chat, table.player(), take.take)
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        (prompt,) = table.labels.prompts()
+    assert "Hello?" in prompt and "lighthouse key" not in prompt and LIGHTHOUSE not in prompt
 
 
 # -- what is never labelled -----------------------------------------------------------------------

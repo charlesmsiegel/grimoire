@@ -17,7 +17,7 @@ from voice_fixtures import CAMPAIGN, PC
 
 import context_fixtures as f
 from context_fixtures import LORE, LORE_SCHEMA, LoreRecord, actor, card, entry, instance, knowledge, snapshot
-from grimoire.context import Budget, ContextPack, director_lore, pack_actor_context
+from grimoire.context import Budget, ContextPack, director_lore, pack_actor_context, pack_player_context
 from grimoire.core import (
     ControlAssignment, DefinitionIndex, SourceDescriptor, actor_knowledge, snapshot_actor_view,
 )
@@ -139,6 +139,12 @@ def test_a_pack_built_for_anyone_or_anything_else_is_refused():
     assert refused(lambda: mara(replace(own, items=(*own.items, secret_lore)), snap=snap)) == "foreign_context"
     assert refused(lambda: mara(replace(own, items=own.items[1:]), snap=snap)) == "bad_context"
     assert refused(lambda: mara(own.render(), snap=snap)) == "bad_context"
+    # a pack packed for a player character's controller is that player's view, never an NPC's brief
+    played = pack_player_context(snap, knowledge(), actor("mara"), controller="human:ana",
+                                 controls=[ControlAssignment(f.C, actor("mara").instance_id, "human:ana")], as_of=9,
+                                 budget=Budget(2000), scene_text=SCENE, readers=f.READERS, unpack=f.unpack)
+    assert refused(lambda: mara(played, snap=snap)) == "foreign_context"
+    assert refused(lambda: mara(replace(own, controller="human:ana"), snap=snap)) == "foreign_context"
     assert refused(lambda: mara(own, snap=snap, sections=[("age", "Forty.")])) == "bad_sections"
     assert refused(lambda: mara(own, snap=snap, snapshot=None)) == "bad_context"  # no selection to check against
     # The view must be the given snapshot's: here Mara is not even captured in it.

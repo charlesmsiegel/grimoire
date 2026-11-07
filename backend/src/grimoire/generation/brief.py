@@ -307,6 +307,9 @@ def _check_context(context: object, actor: InstanceRef, knowledge: ActorKnowledg
         raise GenerationError("bad_context", "a context pack needs the EffectiveSnapshot the view came from")
     if context.actor != actor:
         raise GenerationError("foreign_context", f"the context pack was built for {context.actor}, not {actor}")
+    if context.controller is not None:
+        # 031's pack for a player character's controller: an NPC's brief is never built from a player's view.
+        raise GenerationError("foreign_context", f"the context pack for {actor} was packed for its player")
     identity = context.items[0].origin if context.items else None
     if identity is None or identity.kind != "identity" or identity.actor != actor:
         raise GenerationError("bad_context", f"the context pack for {actor} does not open with its name")

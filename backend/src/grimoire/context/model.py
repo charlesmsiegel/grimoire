@@ -362,6 +362,9 @@ class ContextPack:
     digest of the actor's 012 projection it read (``knowledge_digest``): a ledger reload that
     quarantines a record shrinks the projection at the same ``as_of`` and binding, so only this tells
     a pack still holding the lost record from a current one.
+    ``controller`` is ``None`` for an NPC's pack (``pack_actor_context``), and the human controller a
+    player character's pack was packed for (``pack_player_context``), whose ``knowledge`` digests the
+    controller's projection, never the NPC-style one.
     It is a provisional in-memory value (``FORMAT``), not a persisted schema.
     """
 
@@ -376,6 +379,7 @@ class ContextPack:
     basis: SelectionBasis
     knowledge: str
     notes: tuple[str, ...] = ()
+    controller: str | None = None
 
     @property
     def tokens(self) -> int:

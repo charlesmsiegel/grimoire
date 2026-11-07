@@ -30,12 +30,15 @@ that is the director's.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 
+from grimoire.core.authority import DIRECTOR, AuthorityError, controller_of
 from grimoire.core.entity import EntityError
 from grimoire.core.identity import InstanceRef
 from grimoire.core.index import MissingDefinition
-from grimoire.core.knowledge import Knowledge, Subject
-from grimoire.core.perspective import ActorKnowledge, actor_knowledge
+from grimoire.core.knowledge import Knowledge, KnowledgeError, Subject
+from grimoire.core.model import ControlAssignment
+from grimoire.core.perspective import ActorKnowledge, actor_knowledge, controller_knowledge
 from grimoire.core.portrayal import PortrayalError
 from grimoire.core.snapshot import EffectiveSnapshot, Resolution
 from grimoire.graph import PREDICATES, ClaimSet
@@ -239,6 +242,44 @@ def _sources(snapshot: EffectiveSnapshot, actor: InstanceRef) -> list[SourceProb
     return found + lore_problems(snapshot)
 
 
+def _prepare(snapshot: object, knowledge: object, actor: object, as_of: object, budget: object, present: object,
+             scene_text: object, readers: Mapping[str, EntryReader] | None, unpack: object, count: object,
+             measurement: object, claims: object,
+             excluded: object) -> tuple[Mapping[str, EntryReader], tuple[InstanceRef, ...], frozenset[str]]:
+    if not isinstance(snapshot, EffectiveSnapshot):
+        raise TypeError(f"expected an EffectiveSnapshot, not {type(snapshot).__name__}")
+    readers = {} if readers is None else readers
+    if not callable(count):
+        raise _fail("count must be a token counter", "invalid_count")
+    if unpack is not None and not callable(unpack):
+        raise _fail("unpack must be callable", "invalid_unpack")
+    cast, names = _check(knowledge, actor, as_of, budget, present, scene_text, readers, measurement, claims, excluded)
+    return readers, cast, names
+
+
+def _build(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor: InstanceRef, held: ActorKnowledge,
+           cast: tuple[InstanceRef, ...], excluded: frozenset[str], *, as_of: int, budget: Budget, scene_text: str,
+           claims: ClaimSet | None, readers: Mapping[str, EntryReader], unpack: Unpack | None, count: TokenCounter,
+           measurement: str, controller: str | None = None, notes: tuple[str, ...] = ()) -> ContextPack:
+    """The pack over ``held``: the one projection its memory shows, ranks and triggers lore from."""
+    candidates = _portrayal(snapshot, actor, excluded)
+    nodes = tuple(dict.fromkeys((actor, *sorted(cast, key=str))))
+    focus, readings = _focus(knowledge, held, claims, nodes)
+    candidates += _memory(held, focus, readings)
+    found, untriggered, problems = lore(snapshot, SceneWords([scene_text, *_perceived(held)]), readers, unpack,
+                                        ACTOR_AUDIENCES)
+    candidates += found
+    items, omitted = pack(candidates, budget, count)
+    if not items or items[0].origin.kind != "identity":
+        raise _fail("the budget cannot hold even the actor's name", "budget_too_small")
+    problems += _sources(snapshot, actor)
+    return ContextPack(actor, as_of, budget, measurement, items, omitted,
+                       tuple(sorted(untriggered, key=lambda pair: str(pair[0]))),
+                       tuple(sorted(set(problems), key=lambda p: (str(p.source), p.code, p.detail or ""))),
+                       selection_basis(snapshot, actor.campaign_id, actor), knowledge_digest(held), notes,
+                       controller)
+
+
 def pack_actor_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor: InstanceRef, *, as_of: int,
                        budget: Budget, present: Iterable[InstanceRef] = (), scene_text: str = "",
                        claims: ClaimSet | None = None, readers: Mapping[str, EntryReader] | None = None,
@@ -266,34 +307,91 @@ def pack_actor_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor:
     even the actor's name does not fit: a pack never leaves the actor nameless.
 
     **An NPC's pack.** Memory is 012's ``actor_knowledge``, so every current belief reads as the
-    actor's own. A player-controlled actor's NPC-era beliefs are ``inherited`` under
-    ``player_knowledge``; packing for a PC's controller is not this slice's (027/035).
+    actor's own. A player character's pack is ``pack_player_context``'s, which leaves out every belief
+    its present controller did not author.
     """
-    if not isinstance(snapshot, EffectiveSnapshot):
-        raise TypeError(f"expected an EffectiveSnapshot, not {type(snapshot).__name__}")
-    readers = {} if readers is None else readers
-    if not callable(count):
-        raise _fail("count must be a token counter", "invalid_count")
-    if unpack is not None and not callable(unpack):
-        raise _fail("unpack must be callable", "invalid_unpack")
-    cast, excluded = _check(knowledge, actor, as_of, budget, present, scene_text, readers, measurement, claims,
-                            exclude_sections)
-    candidates = _portrayal(snapshot, actor, excluded)
+    readers, cast, excluded = _prepare(snapshot, knowledge, actor, as_of, budget, present, scene_text, readers,
+                                       unpack, count, measurement, claims, exclude_sections)
     held = actor_knowledge(knowledge, actor, as_of=as_of)
-    nodes = tuple(dict.fromkeys((actor, *sorted(cast, key=str))))
-    focus, readings = _focus(knowledge, held, claims, nodes)
-    candidates += _memory(held, focus, readings)
-    found, untriggered, problems = lore(snapshot, SceneWords([scene_text, *_perceived(held)]), readers, unpack,
-                                        ACTOR_AUDIENCES)
-    candidates += found
-    items, omitted = pack(candidates, budget, count)
-    if not items or items[0].origin.kind != "identity":
-        raise _fail("the budget cannot hold even the actor's name", "budget_too_small")
-    problems += _sources(snapshot, actor)
-    return ContextPack(actor, as_of, budget, measurement, items, omitted,
-                       tuple(sorted(untriggered, key=lambda pair: str(pair[0]))),
-                       tuple(sorted(set(problems), key=lambda p: (str(p.source), p.code, p.detail or ""))),
-                       selection_basis(snapshot, actor.campaign_id, actor), knowledge_digest(held))
+    return _build(snapshot, knowledge, actor, held, cast, excluded, as_of=as_of, budget=budget, scene_text=scene_text,
+                  claims=claims, readers=readers, unpack=unpack, count=count, measurement=measurement)
 
 
-__all__ = ["DEFAULT_EXCLUDED_SECTIONS", "MEASUREMENTS", "pack_actor_context"]
+def _controls(controls: object) -> tuple[ControlAssignment, ...]:
+    if isinstance(controls, (str, bytes)) or not isinstance(controls, Iterable):
+        raise _fail("controls must be a collection of ControlAssignments", "invalid_controls")
+    found = tuple(controls)
+    if not all(isinstance(control, ControlAssignment) for control in found):
+        raise _fail("controls must be a collection of ControlAssignments", "invalid_controls")
+    return found
+
+
+def controller_projection(knowledge: Knowledge, actor: InstanceRef, controller: str,
+                          controls: Iterable[ControlAssignment], *, as_of: int) -> ActorKnowledge | None:
+    """What ``actor``'s present ``controller`` may see of the actor's own knowledge, as of ``as_of``.
+
+    020's ``controller_knowledge``, the player's projection of this one actor: its confirmed perceptions and
+    reports, the reports it sent, and only the beliefs the controller authored (in a chain someone else revised
+    since, the controller's latest own belief), with every belief anyone else authored (``inherited``: an
+    NPC-era conclusion, or one another player drew while controlling the character) left out entirely. Only
+    this actor's control is checked, so another actor's ambiguous control does not erase it. ``None`` when it
+    cannot be projected, which offers nothing (fail closed): the controller does not alone control this actor,
+    or the actor is not a ``character`` instance, the one kind 020 projects for a player.
+    """
+    try:
+        found = controller_knowledge(knowledge, actor, controller, controls, as_of=as_of)
+    except (AuthorityError, KnowledgeError):
+        return None
+    return replace(found, inherited=None, inherited_history=None)
+
+
+def pack_player_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor: InstanceRef, *, controller: str,
+                        controls: Iterable[ControlAssignment], as_of: int, budget: Budget,
+                        present: Iterable[InstanceRef] = (), scene_text: str = "", claims: ClaimSet | None = None,
+                        readers: Mapping[str, EntryReader] | None = None, unpack: Unpack | None = None,
+                        count: TokenCounter = estimate_tokens, measurement: str = "estimated",
+                        exclude_sections: Iterable[str] = DEFAULT_EXCLUDED_SECTIONS) -> ContextPack:
+    """``pack_actor_context`` for a player character, packed for its present ``controller``: only what that
+    controller may see (docs/CONTEXT.md, *Packing for a player character's controller*).
+
+    - ``controller`` must be the one recorded controller of ``actor`` in ``controls`` (003's assignments) and
+      not the director (``invalid_controller``). An actor nobody, somebody else or more than one controller
+      holds is refused ``uncontrolled_audience``: nothing at all is packed, its own card included.
+    - Memory is ``controller_projection``: the character's confirmed perceptions and reports, the reports it
+      sent, and only the beliefs its controller authored (where someone else revised one since, the
+      controller's latest own belief in that chain, shown as any own belief). An inherited belief is never
+      shown, never ranks, never triggers lore and is not in the pack's ``knowledge`` digest. Knowledge that
+      cannot be projected packs no memory at all, and the pack carries the note ``knowledge_unprojected``
+      (035's labelling refuses such a pack).
+    - 020's table events (``PlayerKnowledge.table_events``) are out of character: the player's, not the
+      character's, so none is packed.
+
+    ``present`` and ``scene_text`` carry ``pack_actor_context``'s caller obligations for the character: whom
+    it perceives, and its own window of what it heard and saw (never narration, a whisper it was not in the
+    audience of, a withdrawn line or another player's interiority). The pack records its ``controller``, and
+    027's ``npc_brief`` refuses it.
+    """
+    readers, cast, excluded = _prepare(snapshot, knowledge, actor, as_of, budget, present, scene_text, readers,
+                                       unpack, count, measurement, claims, exclude_sections)
+    if type(controller) is not str or not controller or controller == DIRECTOR:
+        raise _fail("a player character's pack is for its human controller", "invalid_controller")
+    controls = _controls(controls)
+    try:
+        recorded = controller_of(actor.campaign_id, actor.instance_id, controls)
+    except AuthorityError:
+        recorded = None  # ambiguous control is nobody's
+    if recorded != controller:
+        raise _fail(f"{actor} is not controlled by this player alone", "uncontrolled_audience")
+    held = controller_projection(knowledge, actor, controller, controls, as_of=as_of)
+    notes: tuple[str, ...] = ()
+    if held is None:
+        held, notes = ActorKnowledge(actor, as_of, (), (), (), ()), ("knowledge_unprojected",)
+    return _build(snapshot, knowledge, actor, held, cast, excluded, as_of=as_of, budget=budget, scene_text=scene_text,
+                  claims=claims, readers=readers, unpack=unpack, count=count, measurement=measurement,
+                  controller=controller, notes=notes)
+
+
+__all__ = [
+    "DEFAULT_EXCLUDED_SECTIONS", "MEASUREMENTS", "controller_projection", "pack_actor_context",
+    "pack_player_context",
+]
