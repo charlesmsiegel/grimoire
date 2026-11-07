@@ -71,7 +71,7 @@ def merge_ledger(base: Ledger, sides: Mapping[str, Ledger], *, instances: Iterab
     by_id = {ref.event_id: event for ref, event in merged.items()}
     relation_values = _events.relation_values(relations, base, sides)
     items += _events.replay(base.campaign_id, by_id, (ref.event_id for ref in found.order), relation_values,
-                            instances)
+                            instances, found.numbering)
     wrapup_values = [(base.wrapups if out.source == "base" else sides[out.source].wrapups)[ref].value  # type: ignore[union-attr]
                      for ref, out in wrapups.items()]
     after = problems(base.campaign_id, merged.values(), relation_values, wrapup_values, held.values, instances)

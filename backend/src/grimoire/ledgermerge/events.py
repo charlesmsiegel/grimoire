@@ -304,16 +304,20 @@ def _policy(base: Ledger, sides: Mapping[str, Ledger], found: EventOrder, device
 
 def _descendants(event_id: str, events: list[AcceptedEvent], among: set[str]) -> set[str]:
     """The events of ``among`` accepted after ``event_id``, directly or through others, in ``events``."""
-    before = predecessors(events)
-    memo: dict[str, bool] = {}
-
-    def after(current: str) -> bool:
-        if current not in memo:
-            memo[current] = False  # a cycle (a hand edit) reaches nothing
-            memo[current] = any(p == event_id or after(p) for p in before.get(current, ()))
-        return memo[current]
-
-    return {other for other in among if after(other)}
+    following: dict[str, list[str]] = {}
+    for later, earlier in predecessors(events).items():
+        for previous in earlier:
+            following.setdefault(previous, []).append(later)
+    # forward from the event, with a worklist: a history may be thousands of events long, one after another,
+    # so nothing here recurses per event; a cycle (a hand edit) is walked once
+    reached: set[str] = set()
+    pending = list(following.get(event_id, ()))
+    while pending:
+        current = pending.pop()
+        if current not in reached:
+            reached.add(current)
+            pending.extend(following.get(current, ()))
+    return reached & among
 
 
 def rewrite(found: EventOrder, holder_seqs: Mapping[tuple[InstanceRef, str], int]) -> dict[AcceptedRef, AcceptedEvent]:
@@ -423,9 +427,19 @@ def _proposal(event: AcceptedEvent) -> EffectProposal | None:
 
 
 def replay(campaign_id: str, events: Mapping[str, AcceptedEvent], order: Iterable[str],
-           relations: Iterable[Relation], instances: frozenset[InstanceRef]) -> list[ReviewItem]:
-    """Replay each new event, in merged order, with 021's planner; every one must reproduce its receipts."""
+           relations: Iterable[Relation], instances: frozenset[InstanceRef],
+           numbering: Mapping[str, int] | None = None) -> list[ReviewItem]:
+    """Replay each new event, in merged order, with 021's planner; every one must reproduce its receipts.
+
+    ``events`` are every merged event, by id, and ``numbering`` their merged ordinals (by default, ``order``'s
+    positions). Each new event is planned against the relations as they stood before it in that one order:
+    every active event numbered after it is rolled back, agreed ones too. With three or more devices an
+    event this pair agreed on can still go after a new one (the order is global), and leaving it applied
+    would plan the new event against a later state of the world (028).
+    """
     order, relations = list(order), list(relations)
+    if numbering is None:
+        numbering = {event_id: number for number, event_id in enumerate(order, start=1)}
     items: list[ReviewItem] = []
     undone = frozenset(event_id for event_id in order if not events[event_id].active)
     for event_id in sorted(undone):
@@ -439,11 +453,12 @@ def replay(campaign_id: str, events: Mapping[str, AcceptedEvent], order: Iterabl
         final = GraphIndex.build(campaign_id, relations, instances)
     except GraphError as error:
         return items + [ReviewItem("receipt_mismatch", campaign_id, f"the merged relations: {error.reason}")]
-    for number, event_id in enumerate(order):
+    for event_id in order:
         event = events[event_id]
         if not event.active:
             continue
-        later = frozenset(other for other in order[number:] if events[other].active)
+        later = frozenset(other for other, place in numbering.items()
+                          if place >= numbering[event_id] and other in events and events[other].active)
         try:  # the graph as it stood before this event; rolling a hand-edited relation back can break it
             index = GraphIndex.build(campaign_id, _before(relations, later, undone), instances)
         except GraphError as error:

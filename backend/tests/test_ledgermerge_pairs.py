@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.effects import accepted_from_payload, accepted_schema, accepted_to_payload
+from grimoire.core import Moment
+from grimoire.effects import EffectProposal, Op, accepted_from_payload, accepted_schema, accepted_to_payload
 from grimoire.holdings import Line, Operation
 from grimoire.ledgermerge import Merged, Review, ReviewItem
 from grimoire.store import LibraryStore, ScopeRecord
@@ -23,9 +24,9 @@ from grimoire.store.envelope import scope_record_document
 from grimoire.store.jsonfmt import render
 from grimoire.sync import identify
 
-from effects_fixtures import C, GUILD, INES, KEY1, KEY2, TAM, WREN, give
+from effects_fixtures import C, CHAT, GUILD, INES, KEY1, KEY2, TAM, WREN, give
 from ledger_fixtures import (
-    CHAT, COIN, OTHER, THIRD, Device, build_base, file_bytes, merge, pay, path_of, read_ledger, write_back,
+    COIN, OTHER, THIRD, Device, build_base, file_bytes, merge, pay, path_of, read_ledger, write_back,
 )
 from test_ledgermerge import ledger_bytes, tag_of as tag
 
@@ -455,5 +456,37 @@ def test_a_new_event_each_device_revoked_itself_is_changed_on_both(tmp_path):
         result = merge(pairs.bases[pair], {name: pairs.devices[name].store for name in pair})
         assert isinstance(result, Review) and "id_collision" not in result.reasons
         assert ReviewItem("both_changed", str(ref), "a new event revoked on both devices") in result.items
+    finally:
+        pairs.close()
+
+
+# -- replay rolls back every event the merged order puts later, agreed ones too ------------------
+
+def membership(kind: str, sequence: int, chat) -> EffectProposal:
+    """A director effect: Tam joins (``begin``) or leaves (``end``) the guild."""
+    return EffectProposal(C, chat, Moment(sequence, "s1", f"t{sequence}"), f"Tam {kind}s the guild.",
+                          (Op(kind, "member_of", TAM, GUILD, None, None),), "director")
+
+
+def test_an_agreed_event_the_merged_order_puts_later_is_rolled_back_before_an_earlier_one_replays(tmp_path):
+    # the tablet's Tam joins the guild at 7 and leaves at 9; the desktop, on its own, has him join at 11. The
+    # desktop and the phone agree on the join at 11 first. When the tablet's two events then reach that pair,
+    # the join at 11 is agreed there but goes after them: the join at 7 must be replayed without it
+    pairs = Pairs(tmp_path)
+    try:
+        tablet, desktop = pairs.devices["a-tablet"], pairs.devices["desktop"]
+        tablet.accept(membership("begin", 7, CHAT))
+        tablet.accept(membership("end", 9, CHAT))
+        desktop.accept(membership("begin", 11, OTHER))
+        pairs.sync("desktop", "phone")
+        pairs.sync("a-tablet", "desktop")
+        pairs.sync("desktop", "phone")  # the tablet's events reach the phone; the join at 11 is agreed here
+        pairs.round()
+        pairs.round()
+        held = {name: ledger_bytes(device.store) for name, device in pairs.devices.items()}
+        assert held["a-tablet"] == held["desktop"] == held["phone"]
+        for device in pairs.devices.values():
+            assert causally_numbered(device.store)
+            assert device.effects.continuity(C, as_of=100, requested_by="director").problems == ()
     finally:
         pairs.close()

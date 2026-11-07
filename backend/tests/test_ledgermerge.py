@@ -15,8 +15,8 @@ from pathlib import Path
 import pytest
 
 from grimoire.core.identity import AcceptedRef
-from grimoire.holdings import Line, Operation
-from grimoire.ledgermerge import Kept, LedgerReview, Merged, Review, ReviewItem, merge_ledger
+from grimoire.holdings import Holdings, Line, Operation
+from grimoire.ledgermerge import Kept, LedgerReview, Merged, Review, ReviewItem, Version, merge_holdings, merge_ledger
 from grimoire.store import LibraryStore
 
 from effects_fixtures import C, CHAT, INES, KEY1, TAM, WREN, give, moment
@@ -434,3 +434,33 @@ def test_a_third_devices_events_keep_their_place_however_many_sides_hold_them(ba
         for device in made.values():
             device.close()
         base.close()
+
+
+def test_a_holder_file_rewritten_for_hand_edits_alone_is_sized_and_evicts_or_is_too_large(base, devices):
+    devices["desktop"].hand_edit(WREN, "apple", 1)  # no operation on either device: only the residuals rewrite it
+    devices["phone"].hand_edit(WREN, "pear", 1)
+    roomy = file_bytes(merge(base, stores(devices)), base, stores(devices))
+    path = next(path for path in roomy if path.endswith("wren.json"))
+    result = merge(base, stores(devices), max_file=len(roomy[path]) - 1)  # only the agreed seed entry makes room
+    assert isinstance(result, Merged), result
+    files = file_bytes(result, base, stores(devices))
+    assert len(files[path]) < len(roomy[path])
+    assert reasons(merge(base, stores(devices), max_file=len(files[path]) - 1)) == {"too_large"}  # nothing left
+    for device in devices.values():
+        write_back(device.store, files)
+    wren = read_ledger(devices["desktop"].store).holdings[WREN].value
+    assert wren.log == () and wren.evicted_through == 1 and dict(wren.stacks) == {COIN: 10, "apple": 1, "pear": 1}
+    again = merge(base, stores(devices), max_file=len(roomy[path]) - 1)
+    assert isinstance(again, Merged) and file_bytes(again, base, stores(devices)) == files
+
+
+def test_an_empty_agreed_holder_hand_edited_on_both_devices_past_the_bound_is_too_large():
+    empty = Holdings.empty(WREN)
+    sides = {name: {WREN: Version(replace(empty, stacks={item: 1}), f"sha256:{name}", "human:owner")}
+             for name, item in (("desktop", "apple"), ("phone", "pear"))}
+    agreed = {WREN: Version(empty, "sha256:agreed", "human:owner")}
+    roomy = merge_holdings(agreed, sides, exists=lambda holder: True, sizer=StoreSizer())
+    size = StoreSizer().document(roomy.values[WREN], "human:owner", {}, "sha256:agreed")
+    assert dict(roomy.values[WREN].stacks) == {"apple": 1, "pear": 1}
+    refused = merge_holdings(agreed, sides, exists=lambda holder: True, sizer=StoreSizer(), max_file=size - 1)
+    assert isinstance(refused, Review) and refused.reasons == {"too_large"}

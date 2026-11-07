@@ -195,6 +195,12 @@ def merge_holdings(base: Mapping[InstanceRef, Version], sides: Mapping[str, Mapp
                                             items)
         except HoldingsError as error:
             items.append(ReviewItem(error.reason, _ref(holder), error.detail[:_DETAIL]))
+            continue
+        fitted = _fit(state[holder], starts[holder], bound, max_file)
+        if isinstance(fitted, ReviewItem):
+            items.append(fitted)
+        else:
+            state[holder] = fitted
     if items:
         return Review(tuple(items))
     files: dict[HoldingsRef, Output] = {
@@ -386,6 +392,37 @@ def _with_residuals(holder: InstanceRef, start: Holdings, replayed: Holdings,
     if len(stacks) > MAX_STACKS:
         raise HoldingsRefused("stack_limit", f"{holder} would hold more than {MAX_STACKS} stacks")
     return replace(replayed, stacks=stacks)
+
+
+def _fit(value: Holdings, start: Holdings, size: _Bound, max_file: int) -> Holdings | ReviewItem:
+    """The final file (hand edits included) evicted as 023 would, or ``too_large`` when it cannot fit.
+
+    Replay sized each file as it logged, but a residual changes the stacks afterwards, and a holder that only
+    hand edits rewrite never goes through ``plan`` at all. As in 023, the oldest entries go first and the
+    entry the write logged never does: here the newest entry this merge logged, if any (an agreed entry,
+    logged before, may go). The smallest eviction that fits is kept.
+    """
+    total = size.document(value)
+    if total <= max_file:
+        return value
+    log = value.log
+    stop = len(log) - 1 if log and log[-1].seq > start.seq else len(log)  # how many entries may go
+
+    def candidate(k: int) -> Holdings:
+        return replace(value, log=log[k:], evicted_through=log[k - 1].seq if k else value.evicted_through)
+
+    if stop == 0 or size.document(candidate(stop)) > max_file:
+        floor = size.document(candidate(stop)) if stop else total
+        return ReviewItem("too_large", _ref(value.holder), f"the merged file would be {floor} bytes even with "
+                          f"every entry it may evict evicted, above {max_file}")
+    low, high = 0, stop  # candidate(low) is over, candidate(high) fits
+    while high - low > 1:
+        middle = (low + high) // 2
+        if size.document(candidate(middle)) <= max_file:
+            high = middle
+        else:
+            low = middle
+    return candidate(high)
 
 
 def _output(holder: InstanceRef, value: Holdings, envelope: tuple, base: Mapping[InstanceRef, Version],

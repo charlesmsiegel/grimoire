@@ -259,3 +259,32 @@ def test_three_devices_never_collide_on_tagged_ids_and_settle_when_nothing_is_re
                 assert device.effects.continuity(C, as_of=1000, requested_by="director").problems == ()
     finally:
         pairs.close()
+
+
+# -- long histories: nothing in the merge recurses once per event ----------------------------------------------
+
+def test_a_revocation_against_a_five_thousand_event_chain_is_reviewed_without_recursing():
+    """One device took back an agreed event; the other accepted 5,000 events after it, one after another. The
+    merge must find them ``revoked_vs_extended`` by walking the chain, not by recursing once per event."""
+    from grimoire.effects import Revocation
+    from grimoire.ledgermerge import Ledger, Version, order_events
+
+    director = give(backed=None, agent=None, proposed_by="director")
+    template = model_event(proposed_by="director", contributions=(), endorsements=(), controls=(),
+                           operations=tuple(AcceptedOperation(op, "director") for op in director.operations))
+
+    def event(number: int, device: str, after: tuple[str, ...], **changes) -> AcceptedEvent:
+        return replace(template, ref=AcceptedRef(C, f"e-{number}-{device_tag(device)}"), ordinal=number,
+                       moment=Moment(8, "s1", "t1"), after=after, **changes)
+
+    def ledger(events: list[AcceptedEvent]) -> Ledger:
+        return Ledger(C, {e.ref: Version(e, f"sha256:{index:064x}") for index, e in enumerate(events)})
+
+    agreed = event(1, "desktop", ())
+    revoked = replace(agreed, revocation=Revocation("revised", "t2", "human:owner"))
+    chain, previous = [], agreed.event_id
+    for number in range(2, 5002):
+        chain.append(event(number, "phone", (previous,)))
+        previous = chain[-1].event_id
+    found = order_events(ledger([agreed]), {"desktop": ledger([revoked]), "phone": ledger([agreed, *chain])})
+    assert [(item.reason, item.subject) for item in found.items] == [("revoked_vs_extended", str(agreed.ref))]

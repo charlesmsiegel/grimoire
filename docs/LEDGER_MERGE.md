@@ -43,7 +43,7 @@ The merge is idempotent. Merging a merged ledger with itself gives the same byte
 
    A first merge may renumber a library's earlier events. Ids are kept.
 3. **Rewrite.** Only `ordinal`, `holdings.seqs` and `revocation.holdings_seqs` are rewritten (`REWRITTEN`). The fingerprint covers none of them, so every endorsement stays valid. Two versions that differ only there are one event, so a hand edit of only those fields of an agreed event is discarded: the agreed record is kept, renumbered as above.
-4. **Replay.** Each new event is replayed, in merged order, with 021's planner against the merged relations as they stood just before it. It must reproduce the relation receipts it recorded (`receipt_mismatch`). A planner refusal comes back under the planner's reason, such as `precondition_failed`. An ability's actor must exist (`missing_agent`).
+4. **Replay.** Each new event is replayed, in merged order, with 021's planner against the merged relations as they stood just before it: every event the merged order puts later is rolled back first, agreed events included, since the merged order can put an agreed event after a new one. It must reproduce the relation receipts it recorded (`receipt_mismatch`). A planner refusal comes back under the planner's reason, such as `precondition_failed`. An ability's actor must exist (`missing_agent`).
    - A new event revoked on its device must have been undone in full: no relation change skipped and no holdings change left in force (`partial_revocation`).
 5. **Policy.** These are checked across the two devices:
    - one chat took new events on both (`same_chat`);
@@ -77,6 +77,7 @@ After all of that, the merged ledger is checked with 021's ledger checks: the pr
    - It is kept on top of the replay when the other device neither edited that count nor changed it by an operation only it logged.
    - Two equal edits of a count that no one-sided operation touched count as one edit.
    - Anything else is `hand_edit_overlap`.
+   - The final file, hand edits included, is sized again and evicted as a write would: oldest entries first, never the newest entry this merge logged (agreed entries may go). If it still does not fit, the merge is `too_large`.
 7. **Receipts.** The events' holdings receipts are rewritten from the replayed seqs.
 
 ## Not settled here
