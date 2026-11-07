@@ -212,6 +212,10 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 | 047 | [Narration Continuity Referee](sprints/narration-continuity-referee.md) | **P1** | [Scene Physical Continuity](sprints/scene-physical-continuity.md), [Knowledge And Perspective](sprints/knowledge-and-perspective.md), [Fiction First Adjudication](sprints/fiction-first-adjudication.md) | generation / contradiction review | Check five continuity errors plus a separately labelled PC-authorship claim before a narration can become canonical |
 | 048 | [Performance And Tracing](sprints/performance-and-tracing.md) | **P1** | [Minimal Text Scene Runner](sprints/minimal-text-scene-runner.md), [Turn Costs And Feature Flags](sprints/turn-costs-and-feature-flags.md) | runtime / tracing | Measure cold and warm end-to-end cost and latency |
 
+#### Wave 6 status
+
+- **045 first slice:** one NPC's tactics decision is recorded per scene turn with its evidence and replayed, never re-decided, when narration is retried; an optional, capped `decision` call may pick only among the approaches 039's policy allows, and only when the mode enables it ([DECISIONS](../DECISIONS.md)).
+
 <a id="wave-7"></a>
 
 ### Wave 7 — Reliable long-term use and independent enhancements

@@ -5,7 +5,10 @@ the planned calls through the provider adapter. See docs/GENERATION.md for the c
 """
 
 from .errors import GenerationError
-from .plan import DIRECTOR_PURPOSE, checked_controls, controller, plan_generation_turn, require_director
+from .plan import (
+    DECISION_PHASE, DECISION_PURPOSE, DIRECTOR_PURPOSE, checked_controls, controller, plan_generation_turn,
+    require_director,
+)
 from .imported import (
     NO_VOICE_TEXT, DerivedVoice, VoiceNote, VoiceReader, VoiceTexts, card_voice_texts, derive_profile, derive_voice,
     example_lines, imported_source, text_of,
@@ -16,10 +19,12 @@ from .brief import (
     DirectorBrief, HeardLine, NpcBrief, director_brief, director_messages, known_ids, npc_brief, npc_messages,
 )
 from .screen import REJECTIONS, screen_reply
+from .decision import MAX_OPTIONS, decision_messages, decision_options, read_pick
 
 __all__ = [
     "GenerationError",
-    "DIRECTOR_PURPOSE", "checked_controls", "controller", "plan_generation_turn", "require_director",
+    "DECISION_PHASE", "DECISION_PURPOSE", "DIRECTOR_PURPOSE", "checked_controls", "controller",
+    "plan_generation_turn", "require_director",
     "NO_VOICE_TEXT", "DerivedVoice", "VoiceNote", "VoiceReader", "VoiceTexts", "card_voice_texts", "derive_profile",
     "derive_voice", "example_lines", "imported_source", "text_of",
     "VOICE_SECTION", "SnapshotVoices", "resolve_snapshot_voice",
@@ -27,4 +32,5 @@ __all__ = [
     "DirectorBrief", "HeardLine", "NpcBrief", "director_brief", "director_messages", "known_ids", "npc_brief",
     "npc_messages",
     "REJECTIONS", "screen_reply",
+    "MAX_OPTIONS", "decision_messages", "decision_options", "read_pick",
 ]
