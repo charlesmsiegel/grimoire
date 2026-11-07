@@ -18,9 +18,10 @@ from grimoire.adjudication import PROSE_MAX, ActionFrame, AdjudicationError, Dec
 from grimoire.core.authority import PlayerContribution
 from grimoire.core.identity import ChatRef
 from grimoire.core.knowledge import Moment
-from grimoire.generation import MAX_HEARD, HeardLine
+from grimoire.generation import MAX_HEARD, MAX_LINE_CHARS, HeardLine
 from grimoire.play.scene import WRITE_RETRIES, _refuse
 from grimoire.scene import SceneRefused, TurnRecord
+from grimoire.store.errors import LedgerInvalid, StoreError
 
 #: How the runner names what a frame came from (attribution only).
 PROVENANCE = "035 labelling {label}, confirmed by the acting player"
@@ -38,6 +39,18 @@ def _library(runner):
     return runner.adjudication
 
 
+def _029(call, *args, **kwargs):
+    """Run one 029 library call; every refusal or ledger failure comes back as a ``SceneRefused``."""
+    try:
+        return call(*args, **kwargs)
+    except AdjudicationError as error:
+        raise _refuse(error.reason, str(error)[:200]) from None
+    except LedgerInvalid:
+        raise _refuse("adjudication_unreadable", "the adjudication ledger cannot be trusted") from None
+    except StoreError as error:
+        raise _refuse("adjudication_unavailable", type(error).__name__) from None
+
+
 def _action(runner, chat: ChatRef, by):
     """The open turn's framable action, its scene and the asking principal; refusals name what is missing."""
     context = runner._context(chat)
@@ -48,11 +61,9 @@ def _action(runner, chat: ChatRef, by):
     post = record.post if record is not None else None
     if post is None or post.kind != "action":
         raise _refuse("not_an_action", "only the open turn's action post is framed")
+    if post.private:
+        raise _refuse("private_action", "a withheld action is not framed: the table never saw it")
     return scene, principal, record, post
-
-
-def _adjudication_error(error: AdjudicationError) -> SceneRefused:
-    return _refuse(error.reason, str(error)[:200])
 
 
 def frame_of(record: TurnRecord, label) -> tuple[ActionFrame, PlayerContribution]:
@@ -66,28 +77,35 @@ def frame_of(record: TurnRecord, label) -> tuple[ActionFrame, PlayerContribution
 
 
 def confirm_action(runner, chat: ChatRef, by) -> Outcome | None:
-    """See ``SceneRunner.confirm``."""
+    """See ``SceneRunner.confirm``.
+
+    The labelling is written ``framed`` on the turn first (compare-and-swap, so a relabel racing it wins or
+    loses whole), and only then recorded in 029: once framed, the turn can no longer be relabelled, so a
+    confirm interrupted at any step finishes on the next confirm, with the same frame.
+    """
     library = _library(runner)
     scene, principal, record, post = _action(runner, chat, by)
-    if record.framed is not None:
-        raise _refuse("already_framed", "this action is framed already")
-    label = record.labels[-1] if record.labels else None
-    if label is None or label.state != "proposed":
-        raise _refuse("not_proposed", "only the latest labelling, while proposed, is confirmed")
     controller = scene.controller(post.actor)
     if principal != controller:
         raise _refuse("not_controller", "only the acting character's player confirms its labels")
     if post.submitted_by != controller:
         raise _refuse("control_changed", "the character changed hands since this action was posted")
+    label = record.framed
+    if label is None:
+        label = record.labels[-1] if record.labels else None
+        if label is None or label.state != "proposed":
+            raise _refuse("not_proposed", "only the latest labelling, while proposed, is confirmed")
+        record = _mark_framed(runner, chat, record, label.label)
+        label = record.framed
+    elif _029(library.outcome, chat.campaign_id, record.turn_id) is not None:
+        raise _refuse("already_framed", "this action is framed and decided already")
     frame, contribution = frame_of(record, label)
-    existing = library.state(chat.campaign_id).frame(record.turn_id)
-    if existing is None or existing.frame != frame:  # a confirm interrupted after 029 recorded it resumes here
-        try:
-            library.frame(frame, contribution=contribution, author=by)
-        except AdjudicationError as error:
-            raise _adjudication_error(error) from None
-    _mark_framed(runner, chat, record, label.label)
-    assessment = library.assess(chat.campaign_id, record.turn_id)
+    existing = _029(library.state, chat.campaign_id).frame(record.turn_id)
+    if existing is None:
+        _029(library.frame, frame, contribution=contribution, author=by)
+    elif existing.frame != frame:
+        raise _refuse("frame_mismatch", "029 holds another frame for this action")
+    assessment = _029(library.assess, chat.campaign_id, record.turn_id)
     result = _BY_RULE.get(assessment.classification)
     if result is None:
         # uncertain: the director adjudicates, or the player consents to a setback. (``clarify`` comes only
@@ -95,26 +113,26 @@ def confirm_action(runner, chat: ChatRef, by) -> Outcome | None:
         return None
     cites = {factor_id for factor_id, factor in assessment.factors.items()
              if factor.bearing == ("prevents" if result == "failure" else "favours")}
-    try:
-        return library.decide(chat.campaign_id, record.turn_id, Decision(result, "rule", frozenset(cites)))
-    except AdjudicationError as error:
-        raise _adjudication_error(error) from None
+    return _029(library.decide, chat.campaign_id, record.turn_id, Decision(result, "rule", frozenset(cites)))
 
 
-def _mark_framed(runner, chat: ChatRef, record: TurnRecord, number: int) -> None:
-    """Write the labelling ``framed`` on the turn, re-reading it if it changed meanwhile."""
+def _mark_framed(runner, chat: ChatRef, record: TurnRecord, number: int) -> TurnRecord:
+    """Write labelling ``number`` ``framed`` on the turn while it is still the latest and proposed; the turn."""
     for _ in range(WRITE_RETRIES):
         stored = next((s for s in runner.scenes.turns(chat).turns if s.record.ref == record.ref), None)
         if stored is None:
             break
-        label = next((each for each in stored.record.labels if each.label == number), None)
-        if label is None or label.state not in ("proposed", "framed"):
+        labels = stored.record.labels
+        if stored.record.framed is not None:
+            if stored.record.framed.label == number:  # a concurrent confirm framed it
+                return stored.record
             break
-        if label.state == "framed":
-            return
+        if not labels or labels[-1].label != number or labels[-1].state != "proposed":
+            break  # relabelled meanwhile: the player confirms what they saw, or nothing
         try:
-            runner.scenes.write(stored.record.with_label(replace(label, state="framed")), stored)
-            return
+            framed = stored.record.with_label(replace(labels[-1], state="framed"))
+            runner.scenes.write(framed, stored)
+            return framed
         except SceneRefused as error:
             if error.reason != "turn_changed":
                 raise
@@ -138,52 +156,76 @@ def decide_action(runner, chat: ChatRef, by, result: str, *, basis: str = "adjud
         consent = by
     else:
         raise _refuse("invalid_field", "basis is adjudicated or consent; the rules decide the rest at confirm")
+    decision = _029(Decision, result, basis, _ids(cites, "cites"), _ids(consequences, "consequences"))
+    return _029(library.decide, chat.campaign_id, record.turn_id, decision, consent=consent)
+
+
+def _ids(values, field: str) -> frozenset[str]:
+    """A set of factor or stake ids; a bare string is one id's letters, so it is refused."""
+    if isinstance(values, (str, bytes)) or not all(isinstance(each, str) for each in _iterable(values, field)):
+        raise _refuse("invalid_field", f"{field} is a collection of ids")
+    return frozenset(values)
+
+
+def _iterable(values, field: str):
     try:
-        decision = Decision(result, basis, frozenset(cites), frozenset(consequences))
-        return library.decide(chat.campaign_id, record.turn_id, decision, consent=consent)
-    except AdjudicationError as error:
-        raise _adjudication_error(error) from None
+        return tuple(values)
+    except TypeError:
+        raise _refuse("invalid_field", f"{field} is a collection of ids") from None
 
 
 def outcome_of(runner, record: TurnRecord | None) -> Outcome | None:
     """The recorded outcome of ``record``'s framed action; ``None`` when there is none (or nothing framed)."""
     if record is None or record.framed is None or runner.adjudication is None:
         return None
-    return runner.adjudication.outcome(record.chat.campaign_id, record.turn_id)
+    return _029(runner.adjudication.outcome, record.chat.campaign_id, record.turn_id)
 
 
 def check_decided(runner, record: TurnRecord | None) -> Outcome | None:
     """Refuse narration for a framed, undecided action (``undecided_attempt``); its outcome otherwise."""
     if record is None or record.framed is None:
         return None
+    _library(runner)  # a framed turn is read only with the key it was framed under
     outcome = outcome_of(runner, record)
     if outcome is None:
         raise _refuse("undecided_attempt", "this action is framed and not yet decided; decide it before narrating")
     return outcome
 
 
-def with_outcome(heard, outcome: Outcome | None, names) -> tuple[HeardLine, ...]:
-    """``heard`` with the outcome after it, still within ``MAX_HEARD`` lines."""
+def with_outcome(heard, outcome: Outcome | None, names, *, table: bool) -> tuple[HeardLine, ...]:
+    """``heard`` with the outcome after it, still within ``MAX_HEARD`` lines: the table's full line for the
+    director (``table``), the bare result for an NPC."""
     if outcome is None:
         return tuple(heard)
-    return (*heard, outcome_line(outcome, names))[-MAX_HEARD:]
+    line = outcome_line(outcome, names) if table else heard_outcome(outcome)
+    return (*heard, line)[-MAX_HEARD:]
+
+
+def heard_outcome(outcome: Outcome) -> HeardLine:
+    """The outcome as an NPC who saw the action knows it: the result alone. Its causes and stakes are the
+    acting character's own facts and the labeller's words, never an NPC's; the action's own line says who."""
+    return HeardLine(OUTCOME_SPEAKER, f"The action {_SAYS[outcome.decision.result]}.")
 
 
 def outcome_line(outcome: Outcome, names) -> HeardLine:
-    """The outcome as the table saw it: the result, what caused it and what came true, in the frame's words."""
+    """The outcome as the table saw it at confirm: the result, what caused it and what came true, in the
+    frame's words, cut to one heard line."""
     frame, decision = outcome.frame, outcome.decision
     who = names.get(frame.actor) or frame.actor.instance_id
     texts = {factor.factor_id: factor.text for factor in frame.factors}
     stakes = {stake.stake_id: stake.text for stake in frame.stakes}
     parts = [f"{who}'s action ({frame.intent[:200]}) {_SAYS[decision.result]}."]
-    because = [texts[each] for each in sorted(decision.cites) if each in texts]
-    if because:
-        parts.append("Because: " + " ".join(because))
     came = [stakes[each] for each in sorted(decision.consequences) if each in stakes]
     if came:
         parts.append("What comes of it: " + " ".join(came))
-    return HeardLine(OUTCOME_SPEAKER, " ".join(parts))
+    because = [texts[each] for each in sorted(decision.cites) if each in texts]
+    if because:
+        parts.append("Because: " + " ".join(because))
+    text = " ".join(parts)
+    if len(text) > MAX_LINE_CHARS:
+        text = text[:MAX_LINE_CHARS - 1].rstrip() + "…"
+    return HeardLine(OUTCOME_SPEAKER, text)
 
 
 __all__ = ["OUTCOME_SPEAKER", "PROVENANCE", "check_decided", "confirm_action", "decide_action", "frame_of",
-           "outcome_line", "outcome_of", "with_outcome"]
+           "heard_outcome", "outcome_line", "outcome_of", "with_outcome"]

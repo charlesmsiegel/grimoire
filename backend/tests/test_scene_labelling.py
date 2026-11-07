@@ -17,7 +17,14 @@ from generation_fixtures import say
 from scene_fixtures import ADJUDICATOR, ANA, BOB, LABEL_POLICY, LABELLER, LIGHTHOUSE, POLICY, Table, card_library
 from store_helpers import OWNER
 
+from types import SimpleNamespace
+
+from grimoire.adjudication import AdjudicationError
+from grimoire.core.identity import InstanceRef
 from grimoire.core.inference import InferenceStage
+from grimoire.generation import MAX_LINE_CHARS
+from grimoire.play.adjudicate import outcome_line
+from grimoire.store.errors import AuthorityUnavailable, LedgerInvalid
 from grimoire.ledgers.codec import ControlChange
 from grimoire.play import SceneRunner
 from grimoire.providers import RouteChoice
@@ -314,8 +321,10 @@ def test_an_uncertain_action_waits_and_no_narration_is_written_or_kept_until_it_
         assert (outcome.decision.basis, outcome.decision.result) == ("adjudicated", "partial")
         take = table.runner.generate(chat, table.player())
         prompt = table.harness.prompts()[-1]
-        assert "Outcome: Anya Rook's action (I climb the rigging) succeeds at a cost." in prompt
-        assert "She falls to the deck" in prompt
+        # An NPC who saw the action hears the bare result: its causes are Anya's own facts, its stakes the
+        # labeller's words, and her name is the action's own line's to give.
+        assert "Anya Rook: *I climb the rigging*\nOutcome: The action succeeds at a cost.\n" in prompt
+        assert "She falls to the deck" not in prompt and "Because" not in prompt
         table.runner.keep(chat, table.player(), take.take)
 
 
@@ -343,3 +352,80 @@ def test_the_adjudication_key_must_be_this_librarys(cards, tmp_path):
     with judged(folder) as table:
         refused("bad_adjudication", SceneRunner, table.store, table.authority, table.owner, owner=OWNER,
                 adjudication=object())
+
+
+def failing_once(owner, name: str, error: Exception) -> None:
+    """``owner.name`` raises ``error`` on its next call, then works as before."""
+    original = getattr(owner, name)
+
+    def call(*args, **kwargs):
+        setattr(owner, name, original)
+        raise error
+    setattr(owner, name, call)
+
+
+def test_a_confirm_cut_short_after_framing_finishes_on_the_next_confirm(cards):
+    folder, chat = cards
+    with judged(folder, UNOPPOSED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        failing_once(table.adjudication, "frame", LedgerInvalid("poisoned"))
+        refused("adjudication_unreadable", table.runner.confirm, chat, table.player())
+        assert table.runner.open(chat).pending.framed.label == 1  # framed on the turn first, so never relabelled
+        refused("already_framed", table.runner.label, chat, table.player())
+        refused("undecided_attempt", table.runner.generate, chat, table.player())
+        failing_once(table.adjudication, "decide", AuthorityUnavailable("gone"))
+        refused("adjudication_unavailable", table.runner.confirm, chat, table.player())
+        failing_once(table.adjudication, "assess", AdjudicationError("refused", "not_in_chat"))
+        refused("not_in_chat", table.runner.confirm, chat, table.player())
+        outcome = table.runner.confirm(chat, table.player())  # the frame is 029's already; the rules decide it
+        assert (outcome.decision.result, outcome.decision.basis) == ("success", "rule")
+        turn_id = table.runner.open(chat).pending.turn_id
+        assert len(table.adjudication.state(chat.campaign_id).frames[turn_id]) == 1  # one revision, never two
+        refused("already_framed", table.runner.confirm, chat, table.player())
+
+
+def test_a_relabel_landing_while_a_confirm_writes_is_never_framed_by_it(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED, UNOPPOSED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        write, relabelled = table.runner.scenes.write, []
+
+        def racing(record, base, **kwargs):
+            if not relabelled:
+                relabelled.append(None)
+                relabelled.append(table.runner.label(chat, table.owner))  # the owner relabels meanwhile
+            return write(record, base, **kwargs)
+        table.runner.scenes.write = racing
+        refused("turn_changed", table.runner.confirm, chat, table.player())
+        table.runner.scenes.write = write
+        record = table.runner.open(chat).pending
+        assert record.framed is None and table.adjudication.state(chat.campaign_id).frame(record.turn_id) is None
+        outcome = table.runner.confirm(chat, table.player())  # the player confirms what they now see
+        assert outcome.frame.provenance.startswith("035 labelling 2")
+
+
+def test_a_framed_turn_is_read_only_with_its_key_and_ids_are_collections(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        table.runner.confirm(chat, table.player())
+        for cites in ("f1", [1], 7):
+            refused("invalid_field", table.runner.decide, chat, table.owner, "partial", cites=cites,
+                    consequences=("s1",))
+        table.runner.adjudication = None
+        refused("no_adjudication", table.runner.generate, chat, table.player())
+
+
+def test_the_tables_outcome_line_names_what_came_of_it_and_fits_one_heard_line():
+    actor = InstanceRef("c1", "character", "anya")
+    factors = tuple(SimpleNamespace(factor_id=f"f{n}", text="x" * 300) for n in range(1, 9))
+    stakes = (SimpleNamespace(stake_id="s1", text="She falls to the deck"),)
+    frame = SimpleNamespace(actor=actor, intent="I climb", factors=factors, stakes=stakes)
+    decision = SimpleNamespace(result="partial", cites=frozenset(f.factor_id for f in factors),
+                               consequences=frozenset({"s1"}))
+    line = outcome_line(SimpleNamespace(frame=frame, decision=decision), {actor: "Anya Rook"})
+    assert line.text.startswith("Anya Rook's action (I climb) succeeds at a cost. What comes of it: She falls")
+    assert len(line.text) <= MAX_LINE_CHARS and line.text.endswith("…")

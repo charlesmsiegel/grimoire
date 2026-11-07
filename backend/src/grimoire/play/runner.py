@@ -442,7 +442,7 @@ class SceneRunner:
         for actor, voice in chosen:
             heard = heard_for(turns, actor, scene.names, before=scene.imported)
             if turns and turns[-1].post is not None and actor in turns[-1].post.audience:  # it saw the action
-                heard = with_outcome(heard, outcome, scene.names)
+                heard = with_outcome(heard, outcome, scene.names, table=False)
             built = actor_context(context.view, chat, ledger, actor, as_of=as_of, budget=self.budget,
                                   present=scene.cast, scene_text=render(heard))
             knowledge = actor_knowledge(ledger.knowledge, actor, as_of=as_of)
@@ -456,7 +456,8 @@ class SceneRunner:
         scenario = _scenario_text(context)
         if not scenario:
             raise _refuse("no_scenario", "a director reply needs a bound scenario or a premise")
-        table = with_outcome(table_lines(turns, scene.names, before=scene.imported), outcome, scene.names)
+        table = with_outcome(table_lines(turns, scene.names, before=scene.imported), outcome, scene.names,
+                             table=True)
         lore = chat_lore(context.view, chat, table_text=render(table), budget=self.budget).lore
         names = {actor.instance_id: name for actor, name in scene.names.items()}
         brief = director_brief(scenario, campaign_id=chat.campaign_id, present=[a.instance_id for a in scene.cast],
