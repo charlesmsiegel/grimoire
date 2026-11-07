@@ -29,7 +29,7 @@ from grimoire.core.authority import (
     AuthorityError, ControlAssignment, NarrationClaim, NarrationContext, PlayerContribution, review_narration,
     submit_contribution,
 )
-from grimoire.core.boundaries import BoundaryContext, BoundaryRequest, decide_request
+from grimoire.core.boundaries import BoundaryChange, BoundaryContext, BoundaryRequest, decide_request
 from grimoire.core.identity import ChatRef, InstanceRef
 from grimoire.core.inference import InferencePolicy, InferenceStage, TurnUsageLedger
 from grimoire.core.perspective import actor_knowledge
@@ -46,6 +46,8 @@ from grimoire.partystore import PartyLibrary
 from grimoire.play.accept import (
     approve_effect, effect_problems, endorse_effect, propose_effect, recover_effects,
 )
+from grimoire.play.boundaries import HELD, Boundaries, change as change_boundary, check_presented, in_force
+from grimoire.play.boundaries import view as boundary_view
 from grimoire.play.adjudicate import (
     FramedAction, check_decided, confirm_action, decide_action, framed_of, outcome_lines, outcome_of,
 )
@@ -56,7 +58,8 @@ from grimoire.play.obstacles import pass_attempt
 from grimoire.play.scene import (
     DEFAULT_BUDGET, NOW, WRITE_RETRIES, Scene, _assigned, _audience, _Context, _declined, _find_line, _first_text,
     _follows, _has_imported, _human_of, _latest, _macros, _mark, _name_index, _no_clock, _no_id, _payload,
-    _perceived, _readable, _refuse, _room, _scenario_text, _seen, _stage, _stage_ok, _Stale,
+    _perceived, _readable, _refuse, _room, _scenario_text, _seen, _stage, _stage_ok, _Stale, _table_audience,
+    _table_known,
 )
 from grimoire.play.stages import StageSource, stage_key, succession
 from grimoire.providers.meter import TurnMeter
@@ -185,6 +188,10 @@ class SceneRunner:
         word (``effect_untagged``, ``<turn id>:<event id>``)."""
         scene = self._context(chat).scene
         found = effect_problems(self, scene)
+        try:  # 016: a configuration that cannot be read holds every narration; said, never hidden
+            in_force(self, chat)
+        except SceneRefused as refused:
+            found = [*found, ("session_zero", refused.reason)]
         return replace(scene, problems=scene.problems + tuple(found)) if found else scene
 
     def _context(self, chat: ChatRef) -> _Context:
@@ -328,6 +335,24 @@ class SceneRunner:
                 raise _refuse("not_seated", str(error)[:200]) from None
         return tuple(self.sovereignty.load(chat.campaign_id).controls)
 
+    def _table_now(self, chat: ChatRef, principal: str) -> tuple[frozenset[str], bool]:
+        """016's audience as the table stands now, read again from the store (a fence calls it under the store
+        lock, so a player seated while a call was in flight is in it), and whether who may be present could be
+        read in full (``_table_known``: no cast staged, membership that cannot be told, two controllers of one
+        character are not)."""
+        with span("read.table"):
+            context = self._context(chat)
+        return _table_audience(context.scene, principal), not context.party_problems and _table_known(context.scene)
+
+    def _check_now(self, chat: ChatRef, principal: str, lines=None) -> None:
+        """``check_presented`` for the table as it stands now (``_table_now``). A table that cannot be read in full,
+        or at all, is never judged by the part of it that could be: every player with a boundary counts as seated."""
+        try:
+            audience, complete = self._table_now(chat, principal)
+        except Exception:  # the chat, its ledger or its party cannot be read now: who is seated is unknown
+            audience, complete = frozenset({principal}), False
+        check_presented(self, chat, audience, lines, complete=complete)
+
     def _write(self, *args, **kwargs) -> StoredTurn:
         with span("write.turn"):
             return self.scenes.write(*args, **kwargs)
@@ -377,7 +402,8 @@ class SceneRunner:
         take = Take(number, "proposed", "opening", scene.cast, lines=(line,), by=principal, on_stage=_here(scene),
                     players=_table(scene))
         record = record.with_take(take)
-        self._write(record, stored, unpaused=True)
+        # 016, under the store lock as the opening is shown, for the table as it stands then
+        self._write(record, stored, unpaused=True, before_commit=lambda: self._check_now(chat, principal, (line,)))
         return record
 
     def _opening(self, context: _Context, record: TurnRecord, take: int, chosen: str | None) -> SceneLine:
@@ -507,9 +533,8 @@ class SceneRunner:
         self._ready(scene)
         if self.runtime is None:
             raise _refuse("no_runtime", "no model is configured")
-        scope = context.captured.scope
-        if scope is not None and scope.session_zero is not None:
-            raise _refuse("session_zero_unreadable", "this slice cannot read a session zero yet; generation waits")
+        # 016, before any call is billed: a held table gets no narration
+        check_presented(self, chat, _table_audience(scene, principal), complete=_table_known(scene))
         if context.party_problems:
             raise _refuse("party_unreadable", "who is present cannot be read in full")
         unseated = [str(actor) for actor in scene.cast if scene.controller(actor) is None]
@@ -580,7 +605,7 @@ class SceneRunner:
         with span("review"):
             take = self._finished(record, running, plan, meter, outcome, failure, scene,
                                   director_view[1] if director_view else (), rooms)
-        return self._land(chat, stored, take, token, intentions)
+        return self._land(chat, stored, take, token, intentions, principal)
 
     # -- generation helpers -----------------------------------------------------------------------
 
@@ -745,17 +770,28 @@ class SceneRunner:
                        outcome=status, unscreened=unscreened)
 
     def _land(self, chat: ChatRef, stored: StoredTurn, take: Take, token,
-              intentions: tuple[Intention, ...] = ()) -> Take:
+              intentions: tuple[Intention, ...] = (), principal: str | None = None) -> Take:
         """Write the finished take over its running one; a run gone stale keeps its usage and no lines. The run's
         intentions go with it, onto another version of its turn too (a sync conflict resolved meanwhile).
 
         A take that would make its turn file too large (``turn_too_large``) still lands its usage: first without
         its lines (``_unlined``), then without this take's intentions as well; only a turn too large even for
         that is refused, as the store refuses it. Shrinking spends none of the re-reads a changed turn gets.
+
+        Its lines are shown only if 016 still presents them to the table as it stands when the take commits (read
+        again, under the store lock: a boundary set, or a player seated, while the run was in flight holds them):
+        otherwise it lands without them (``_held_back``), its usage kept, as a take without room does.
         """
         def fence() -> None:
             if take.state != "stale" and token.stale:
                 raise _Stale
+            if take.lines:
+                try:
+                    if principal is None:  # no requester to judge it for: shown to nobody
+                        raise _refuse(HELD, "no table to present this take to")
+                    self._check_now(chat, principal, take.lines)
+                except SceneRefused as refused:
+                    raise _Held(refused.reason) from None
 
         published = next(t for t in stored.record.takes if t.take == take.take)  # the running take, as written
         bare = False  # this take's intentions are left out: with them its turn file would be too large
@@ -770,6 +806,9 @@ class SceneRunner:
                     try:
                         self._write(landed, stored, landing=True, before_commit=fence)
                         return take
+                    except _Held as held:  # shown to nobody: the usage lands, the lines do not
+                        take = _held_back(take, held.reason)
+                        continue
                     except SceneRefused as error:
                         if error.reason != "turn_too_large" or bare:
                             raise
@@ -921,7 +960,10 @@ class SceneRunner:
         if record.running is not None:  # a run still in flight loses: its take lands stale
             record = record.with_take(replace(record.running, state="superseded"))
         record = record.with_take(replace(found, state="kept", by=principal))
-        self._write(record, stored, unpaused=True)
+        # 016 again, as the lines become transcript, for the table read again under the store lock: a boundary
+        # set since they were proposed (or a player who sat down since) holds them; nothing caches a presentation
+        self._write(record, stored, unpaused=True,
+                    before_commit=lambda: self._check_now(chat, principal, found.shown()))
         return record
 
     @traced("strike")
@@ -1057,6 +1099,28 @@ class SceneRunner:
         Only the library's owner may choose (``play.forks``)."""
         return choose_branch(self, chat, by, turn)
 
+    # -- session zero (016) ---------------------------------------------------------------------------
+
+    @traced("boundaries")
+    def boundaries(self, chat: ChatRef, by) -> Boundaries:
+        """The chat's session zero as one table member may see it: every boundary in force for the table,
+        anonymised, the member's own in full, its revision, and whether narration is held now. Nothing is written."""
+        scene = self._context(chat).scene
+        principal = self._principal(scene, by)
+        return boundary_view(self, chat, principal, _table_audience(scene, principal), _table_known(scene))
+
+    @traced("change_boundaries")
+    def change_boundaries(self, chat: ChatRef, by, change: BoundaryChange) -> Boundaries:
+        """One table member's 016 change to the chat's session zero (``set``/``withdraw`` their own boundary,
+        ``agree``/``unagree`` to a group one), from the player-input channel only: ``change.requested_by`` must be
+        the principal ``by`` authenticates (a player of a present character, or the owner). 016's ownership rules
+        decide; the scope is written by compare-and-swap with the next revision. It goes on while play is paused
+        (a limit is never kept waiting), and applies from the next narration shown: a take in flight, or proposed
+        and not yet kept, is checked again as it lands and as it is kept."""
+        scene = self._context(chat).scene
+        principal = self._principal(scene, by)
+        return change_boundary(self, chat, principal, lambda: self._table_now(chat, principal), change)
+
     # -- checks -----------------------------------------------------------------------------------
 
     def _ready(self, scene: Scene) -> None:
@@ -1077,7 +1141,7 @@ class SceneRunner:
         return stored
 
 
-__all__ = ["DEFAULT_BUDGET", "Scene", "SceneRunner"]
+__all__ = ["DEFAULT_BUDGET", "Boundaries", "Scene", "SceneRunner"]
 
 
 #: The router's commands ``post`` runs as the table's requests (016): each by the path its click takes.
@@ -1127,14 +1191,6 @@ def _heard(scene: Scene, take: Take, line: SceneLine, principal: str) -> bool:
     if take.on_stage is not None:
         listeners = set(line.audience) & set(take.players or ())
     return any(scene.controller(actor) == principal for actor in listeners)
-
-
-def _table_audience(scene: Scene, principal: str) -> frozenset[str]:
-    """016's ``BoundaryContext.audience``, authenticated: every human 003's ledger records as controlling a present
-    player character (on stage or not: the table, not the room), and the requester, whom ``_principal``
-    authenticated as one of them or the library owner. Never a name from a post, a reply or the caller."""
-    controllers = {scene.controller(pc) for pc in scene.players}
-    return frozenset(each for each in controllers if isinstance(each, str) and is_human(each)) | {principal}
 
 
 def _agendas(agendas: object) -> dict[InstanceRef, Agenda]:
@@ -1222,6 +1278,23 @@ def _heard_now(scene: Scene, speaker: InstanceRef) -> tuple[InstanceRef, ...]:
         return _room(scene, speaker)
     except SceneRefused:
         return ()
+
+
+class _Held(Exception):
+    """016 no longer presents a finished take's lines as it commits (``held_by_boundary``, or a configuration that
+    cannot be read now): it lands without them."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _held_back(take: Take, reason: str) -> Take:
+    """``take`` without the lines 016 holds: its calls keep their attempts and usage, and each call that gave a line
+    is ``rejected`` with why (``held_by_boundary``), so the table sees why and nothing it holds is shown."""
+    calls = tuple(replace(call, status="rejected", reason=reason) if call.status == "accepted" else call
+                  for call in take.calls)
+    return replace(take, lines=(), calls=calls, outcome="halted" if take.state == "proposed" else take.outcome)
 
 
 def _unlined(take: Take) -> Take:

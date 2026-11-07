@@ -26,7 +26,8 @@ from grimoire.play.accept import next_sequence
 from grimoire.play.adjudicate import frame_of, outcome_lines
 from grimoire.play.obstacles import attempt_labels, check_moment, fixed_attempt, open_obstacle, refuse_live_link
 from grimoire.play.obstacles import offered as obstacle_offer
-from grimoire.play.scene import WRITE_RETRIES, _perceived, _refuse
+from grimoire.play.boundaries import HELD, UNREADABLE, check_presented
+from grimoire.play.scene import WRITE_RETRIES, _perceived, _refuse, _table_audience, _table_known
 from grimoire.play.tracing import record_calls, span
 from grimoire.providers.meter import TurnMeter
 from grimoire.scene import MAX_LABELS, Against, CallRecord, Label, SceneRefused, TurnRecord, heard_for, render
@@ -58,9 +59,8 @@ def label_action(runner, chat: ChatRef, by, obstacle: str | None = None) -> Labe
     runner._ready(scene)
     if runner.labeller is None or runner.label_handle is None:
         raise _refuse("no_labeller", "no labeller is configured")
-    scope = context.captured.scope
-    if scope is not None and scope.session_zero is not None:  # as for generation: its boundaries are unread
-        raise _refuse("session_zero_unreadable", "this slice cannot read a session zero yet; labelling waits")
+    # 016, as for generation and before any call: the labeller's stakes are model text the table reads
+    check_presented(runner, chat, _table_audience(scene, principal), complete=_table_known(scene))
     record = scene.pending
     post = record.post if record is not None else None
     if post is None or post.kind != "action":
@@ -162,7 +162,7 @@ def label_action(runner, chat: ChatRef, by, obstacle: str | None = None) -> Labe
     attempts = tuple(attempt for attempt in meter.ledger.attempts if attempt.call_id == call.call_id)
     finished = replace(finished, calls=(CallRecord(planned.phase, planned.stage, planned.actor_id, planned.ordinal,
                                                    status, reason, attempts),))
-    return _land(runner, chat, stored, finished)
+    return _land(runner, chat, stored, finished, principal)
 
 
 def _against(state, record: TurnRecord, running: Label, decoded, offered, fixed: Attempt | None = None):
@@ -199,8 +199,15 @@ def _proposed(runner, record: TurnRecord) -> bool:
     return runner.label_handle.authorize(Permission.PROPOSE, address, payload).allowed
 
 
-def _land(runner, chat: ChatRef, stored: StoredTurn, label: Label) -> Label:
-    """Write the finished labelling over its running one, re-reading the turn if it changed meanwhile."""
+def _land(runner, chat: ChatRef, stored: StoredTurn, label: Label, principal: str) -> Label:
+    """Write the finished labelling over its running one, re-reading the turn if it changed meanwhile. A proposed
+    labelling lands only while 016 still presents narration to the table as it stands when it commits (read
+    again, under the store lock): a boundary set, or a player seated, while the call was in flight lands it
+    ``refused`` with why, its usage kept."""
+    def fence() -> None:
+        if label.state == "proposed":
+            runner._check_now(chat, principal)
+
     published = next(each for each in stored.record.labels if each.label == label.label)  # as written, running
     for _ in range(WRITE_RETRIES):
         existing = next((each for each in stored.record.labels if each.label == label.label), None)
@@ -219,7 +226,13 @@ def _land(runner, chat: ChatRef, stored: StoredTurn, label: Label) -> Label:
             label = replace(label, state="refused", factors=(), stakes=(), reason="not_authorized")
             record = stored.record.with_label(label)
         try:  # like a finished take: a labelling in flight always lands, so its call's usage is never lost (028)
-            runner._write(record, stored, landing=True)
+            try:
+                runner._write(record, stored, landing=True, before_commit=fence)
+            except SceneRefused as error:
+                if error.reason not in (HELD, UNREADABLE):
+                    raise
+                label = replace(label, state="refused", factors=(), stakes=(), reason=error.reason)
+                runner._write(stored.record.with_label(label), stored, landing=True)
             return label
         except SceneRefused as error:
             if error.reason != "turn_changed":

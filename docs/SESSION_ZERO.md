@@ -1,6 +1,10 @@
 # Session zero — first-slice boundary contract
 
-**Status:** first slice of [Session Zero Boundaries](roadmap/sprints/session-zero-boundaries.md) (Wave 2, #016). It is a pure policy in `backend/src/grimoire/core/boundaries.py`. Field names are a first-slice contract, not a frozen file schema, and nothing is persisted. The policy makes **decisions**, not play. The [first text runner](roadmap/sprints/minimal-text-scene-runner.md) (#035) executes its mid-session requests (pause, skip, redirect, rephrase), clicked or typed, headless ([SCENES](SCENES.md#pause-skip-and-redirect-016)); a session-zero configuration is still not executed (a scope with one refuses generation), and there is no UI.
+**Status:** first slice of [Session Zero Boundaries](roadmap/sprints/session-zero-boundaries.md) (Wave 2, #016). It is a pure policy in `backend/src/grimoire/core/boundaries.py`. The policy makes **decisions**, not play, and persists nothing itself. The [first text runner](roadmap/sprints/minimal-text-scene-runner.md) (#035) executes it, headless:
+- its mid-session requests (pause, skip, redirect, rephrase), clicked or typed ([SCENES](SCENES.md#pause-skip-and-redirect-016));
+- a chat's configuration, stored in its play scope as `grimoire.session-zero/1` by `grimoire.core.boundaries_codec` and changed through the runner by an authenticated table member, which holds narration through `decide_presentation` ([SCENES](SCENES.md#session-zero-016)). No theme labeller exists yet, so any limit stricter than `allow` in force for the table holds all narration (016's unlabelled rule).
+
+There is no UI.
 
 Boundaries control how the fiction is **depicted** and which **proposals** may go ahead. They are separate from [player sovereignty](PLAYER_SOVEREIGNTY.md), which decides who may author a PC's choices and thoughts, and from adjudication, which decides what happened. A boundary or request can never create, edit or delete an accepted event, outcome or resolution.
 
@@ -8,9 +12,12 @@ Boundaries control how the fiction is **depicted** and which **proposals** may g
 
 - **Player-input channel only:** `Boundary` (through `BoundaryChange`), `BoundaryRequest` and `CheckInConsent`. Model output must never be turned into any of these. `set_by`, `requested_by` and `given_by` name the authenticated speaker, and none of them may be `DIRECTOR`.
 - **Caller duties (035):**
-  - `BoundaryContext.audience` must be the authenticated scene audience. 035 passes every human the sovereignty ledger records as controlling a present player character, plus the authenticated requester.
-  - The viewer passed to `owner_boundaries` must be the authenticated user.
-  - Boundary ids must be opaque.
+  - `BoundaryContext.audience` must be the authenticated scene audience. 035 passes every human the sovereignty ledger records as controlling a present player character, plus the authenticated requester, read again under the store lock where narration is shown or a change written, so a player seated while a model call was in flight is in it. When who is present cannot be read in full, 035 adds every player with a boundary to the audience rather than judging by the part it could read.
+  - The viewer passed to `owner_boundaries` must be the authenticated user. 035's `boundaries` passes the principal its handle authenticates.
+  - Boundary ids must be opaque. 035's `change_boundaries` accepts a `set` only with an id of `new_boundary_id()`'s form (`b-` and 32 random hex digits).
+  - A change's `requested_by` must be the authenticated speaker. 035 refuses any other (`not_your_boundary`).
+  - No setting exists for a chat to be in yet, so 035 never supplies a `setting_id`: its codec and `change_boundaries` refuse a `setting` boundary (`invalid_field`), and one already stored is unreadable.
+  - 035 adds one rule beside `apply`: the library's owner may withdraw a campaign or world boundary whose setter is not at the table as the change is written, so a departed setter never locks the chat (as a pause is lifted). A player boundary stays its player's.
 
   Anonymity holds only under these duties. A caller that fabricates an audience, say `{p3}` alone, can isolate one player's boundaries, and a pure function cannot prevent that.
 - **Labeller, not the narrator:** applies themes to segments and conditions. Matching is exact, so give the labeller the configured themes from `visible_boundaries`.
@@ -78,7 +85,7 @@ All refusals raise the same `BoundaryAuthorityError("not your boundary")`, so a 
 
 - **A skipped or avoided proposal is withheld,** so it can never become canon unseen. The director re-proposes it, for example as a transition summary, and the new proposal goes back through the labeller, `review_narration` and this function.
 - **Accepted canon is never changed.** An accepted segment always reports its `preserved_event_id`, and `SegmentDecision` has no field that could edit canon. A boundary added after an event was recorded changes only how that event is shown from then on.
-- **A check-in is cleared** for one segment and theme only when **every audience member** has given a matching `CheckInConsent.for_segment(segment, theme, player)`. A consent is bound to the segment's exact text (`NarrationSegment.digest`), so a rephrased segment needs fresh consent even under the same id. The ruling still reads `check_in`, and the decision carries the notice `check_in_cleared`. Collecting consent is 035's job.
+- **A check-in is cleared** for one segment and theme only when **every audience member** has given a matching `CheckInConsent.for_segment(segment, theme, player)`. A consent is bound to the segment's exact text (`NarrationSegment.digest`), so a rephrased segment needs fresh consent even under the same id. The ruling still reads `check_in`, and the decision carries the notice `check_in_cleared`. Collecting consent is 035's job; it waits for a theme labeller, since 035's segments are still unlabelled.
 
 ## Mid-session requests
 
@@ -116,12 +123,12 @@ Nothing caches the result. Callers recompute it on every review, so a tightened 
 
 | Deferred work | Owner |
 |---|---|
-| Persistence of configuration | Stored verbatim as the play scope's opaque `session_zero` object by [World-Optional Chat Scopes](CHATS.md) (#107). The store does not interpret it. A JSON codec for `SessionZero` and authenticating its setter belong to #035. |
+| ~~Persistence of configuration, a JSON codec and authenticating its setter~~ **done by 035 milestone 2** ([SCENES](SCENES.md#session-zero-016)): stored verbatim as the play scope's `session_zero` object by [World-Optional Chat Scopes](CHATS.md) (#107), which does not interpret it; `grimoire.core.boundaries_codec` (`grimoire.session-zero/1`, strict and canonical, versioned by `revision`) reads and writes it; `SceneRunner.change_boundaries` authenticates the setter and applies `SessionZero.apply`; every call that shows narration presents it through `decide_presentation`. A theme labeller, so a limit holds only the narration it touches, remains | #035 (labeller), #027 (rulings in prompts) |
 | Carrying over only genuine V1 preferences; missing ones stay unset | [V1 import](roadmap/sprints/v1-to-v2-import-apply.md) (#026) |
 | Rendering visible rulings into prompts, never `SessionZero` directly | #027 |
 | ~~Authenticated audience and speakers, request execution, extending the [intent router](intent-routing.md) with skip/redirect lanes~~ **done by 035 milestone 2** ([SCENES](SCENES.md#pause-skip-and-redirect-016)): the audience is every human the sovereignty ledger records as controlling a present player character, plus the authenticated requester; a kept line over an accepted effect is an `accepted` segment. Consent collection and a visible correction (the UI) remain | #035 (consent), #065 (UI) |
 | A participant's view of the group boundaries they agreed to (only the setter's owner view shows `agreed_by`) | #035 |
-| Group governance of shared scopes (who may author or withdraw a campaign, world or setting boundary beyond its recorder) | [Collaborative Multiplayer](roadmap/sprints/collaborative-multiplayer.md) |
+| Group governance of shared scopes (who may author or withdraw a campaign, world or setting boundary beyond its recorder; 035 lets only the owner withdraw one whose setter has left the table) | [Collaborative Multiplayer](roadmap/sprints/collaborative-multiplayer.md) |
 | Theme synonyms or taxonomies, audio/visual staging, confidential multi-player negotiation | Later milestones |
 
 ## Acceptance and unsafe scenarios

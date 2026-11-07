@@ -65,7 +65,7 @@ A bound card that was deleted (or excluded, or has lost the pinned revision) is 
 ## Known limits
 
 - **A persona is required, and chosen, not made.** Start Chat refuses a start with no persona (`no_persona`), because 035 takes no post at a table with no player character; there is no automatic default persona (the owner's Nov 6 call, *require a persona*). Picking or creating one before launch is the UI's part (052 with 065). A chat made outside Start Chat with no persona can still be continued, by the owner only.
-- **No session-zero boundaries at launch.** 016's configuration has no codec yet and 035 refuses to generate in a scope that has one (`session_zero_unreadable`), so Start Chat offers none: a chat with boundaries could not be played. Offering them at launch waits for 035 M2, which executes them.
+- **No session-zero boundaries at launch.** Start Chat offers none. 035 M2 now executes a chat's configuration ([SCENES](SCENES.md#session-zero-016)), so a player can set boundaries once the chat is started (`SceneRunner.change_boundaries`); offering them in the launch itself is 052's later work.
 - **Seat, open and keep are separate commits** after 107's transaction (above): a crash between them leaves a chat that `continue_chat` finishes, keeping an opening proposed but not yet kept. When the cast changed since that take and it is proposed again, it is proposed for the `opening` passed to `continue_chat` (by default the first greeting or opening), not necessarily the one first chosen.
 - **An unseated persona needs the owner.** If a non-owner's launch lost its seat, only the owner can continue it, which seats the persona with the owner; reassigning it is 003's.
 - **No duplicate guard.** Two `start` calls are two chats, as 107 defines a start. Offering **Continue** on `options(...).related` is the UI's part.
@@ -75,7 +75,7 @@ A bound card that was deleted (or excluded, or has lost the pinned revision) is 
 
 | Item | Owner |
 |---|---|
-| Session-zero boundaries at launch, once a scope with them can be played | 052, 035 M2, 016 |
+| Session-zero boundaries at launch (a scope with them can now be played: 035 M2) | 052, 016 |
 | Review and persist a named NPC/place when it becomes relevant; lazy world growth with provenance | 052 M2, M3 |
 | The UI: Start Chat from Chats, Character detail, Scenario detail and a source collection; Continue; Add Character/Card; Name as Campaign / Attach World | 052 with 065 |
 | Previewing and importing a card at launch | 037 |
