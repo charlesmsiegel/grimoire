@@ -14,14 +14,15 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.core.identity import AcceptedRef, RelationRef
-from grimoire.holdings import Holdings, Line, Operation
+from grimoire.core.identity import AcceptedRef, HoldingsRef, RelationRef
+from grimoire.holdings import Holdings, Line, Operation, plan
 from grimoire.ledgermerge import Kept, LedgerReview, Merged, Review, ReviewItem, Version, merge_holdings, merge_ledger
 from grimoire.store import LibraryStore, ScopeRecord
 from grimoire.store.envelope import scope_record_document
 from grimoire.store.jsonfmt import render
 
 from effects_fixtures import C, CHAT, INES, KEY1, TAM, WREN, give, moment
+from holdings_fixtures import ZeroSizer
 from ledger_fixtures import (
     COIN, OTHER, Device, StoreSizer, build_base, file_bytes, merge, pay, path_of, read_ledger, write_back,
 )
@@ -567,3 +568,30 @@ def test_an_empty_agreed_holder_hand_edited_on_both_devices_past_the_bound_is_to
     assert dict(roomy.values[WREN].stacks) == {"apple": 1, "pear": 1}
     refused = merge_holdings(agreed, sides, exists=lambda holder: True, sizer=StoreSizer(), max_file=size - 1)
     assert isinstance(refused, Review) and refused.reasons == {"too_large"}
+
+
+def _logged(holdings: Holdings, op: Operation) -> Holdings:
+    return plan(op, {holdings.holder: holdings}, "2026-11-07T00:00:00Z", exists=lambda holder: True,
+                size=ZeroSizer()).values[holdings.holder]
+
+
+def test_a_file_taken_whole_whose_holder_the_merged_library_lacks_is_missing_holder():
+    empty = Holdings.empty(WREN)
+    credited = _logged(empty, Operation("found-coin", (Line.add(WREN, COIN, 1),)))
+    agreed = {WREN: Version(empty, "sha256:agreed", "human:owner")}
+    sides = {"desktop": {WREN: Version(credited, "sha256:desktop", "human:owner")},
+             "phone": {WREN: Version(empty, "sha256:agreed", "human:owner")}}  # unchanged: desktop's taken whole
+    result = merge_holdings(agreed, sides, exists=lambda holder: False, sizer=StoreSizer())
+    assert isinstance(result, Review) and result.reasons == {"missing_holder"}
+    kept = merge_holdings(agreed, sides, exists=lambda holder: True, sizer=StoreSizer())  # merges once it exists
+    assert not isinstance(kept, Review) and kept.files[HoldingsRef.of(WREN)] == Kept("sha256:desktop", "desktop")
+
+
+def test_a_seq_far_past_the_log_is_a_gap_and_no_range_is_built():
+    empty = Holdings.empty(WREN)
+    agreed = {WREN: Version(empty, "sha256:agreed", "human:owner")}
+    for other in (empty, replace(empty, stacks={"pear": 1})):  # taken whole, or replayed against a hand edit
+        sides = {"desktop": {WREN: Version(replace(empty, seq=10 ** 15), "sha256:desktop", "human:owner")},
+                 "phone": {WREN: Version(other, "sha256:phone", "human:owner")}}
+        result = merge_holdings(agreed, sides, exists=lambda holder: True, sizer=StoreSizer())
+        assert isinstance(result, Review) and result.reasons == {"log_diverged"}

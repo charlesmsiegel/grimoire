@@ -89,7 +89,10 @@ def _extension(base: Holdings, side: Holdings, *, evicted: bool = False) -> list
     for entry in base.log:
         if entry.seq > side.evicted_through and logged.get(entry.seq) != entry:
             return f"agreed seq {entry.seq} is missing or rewritten"
-    fresh = [logged.get(seq) for seq in range(max(base.seq, side.evicted_through) + 1, side.seq + 1)]
+    start = max(base.seq, side.evicted_through)
+    if side.seq - start > len(side.log):  # a seq far past what the log holds (a hand edit): a gap, no range built
+        return "a seq after the agreed one is missing"
+    fresh = [logged.get(seq) for seq in range(start + 1, side.seq + 1)]
     if None in fresh:
         return "a seq after the agreed one is missing"
     return fresh  # type: ignore[return-value]
@@ -156,6 +159,9 @@ def merge_holdings(base: Mapping[InstanceRef, Version], sides: Mapping[str, Mapp
                 continue
             new[device][holder] = found
             pending += [peer for entry in found for peer in entry.operation.holders if peer not in replayed]
+    for holder in sorted(replayed, key=str):  # a rewritten file needs its holder (023's ``missing_holder``)
+        if not exists(holder):
+            items.append(ReviewItem("missing_holder", _ref(holder), "the merged library has no instance file for it"))
     kept: dict[str, Operation] = {}  # what the files taken whole newly log, by op id: never replayed, still checked
     for holder, (source, version) in sorted(whole.items(), key=lambda pair: str(pair[0])):
         if holder in replayed or source == BASE:
@@ -163,6 +169,12 @@ def merge_holdings(base: Mapping[InstanceRef, Version], sides: Mapping[str, Mapp
         found = _extension(starts[holder], version.value, evicted=True)
         if isinstance(found, str):
             items.append(ReviewItem("log_diverged", _ref(holder), f"{source}: {found}"))
+            continue
+        gone = sorted({str(peer) for peer in (holder, *(peer for entry in found for peer in entry.operation.holders))
+                       if not exists(peer)})
+        if gone:  # a file taken whole is never replayed, so 023's holder check is made here instead
+            detail = f"{source} changed it; the merged library has no instance file for {', '.join(gone)}"
+            items.append(ReviewItem("missing_holder", _ref(holder), detail[:_DETAIL]))
             continue
         for entry in found:
             if kept.setdefault(entry.op, entry.operation) != entry.operation:
