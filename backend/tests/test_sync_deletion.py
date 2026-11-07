@@ -14,9 +14,9 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.core.identity import SourceRef
+from grimoire.core.identity import InstanceRef, SourceRef
 from grimoire.store import InvalidEnvelope, LibraryStore, ProcessLocker, RecordEnvelope, SourceManifest, etag
-from grimoire.sync import ResolveRefused, resolve, sync, sync_until_quiet
+from grimoire.sync import ResolveRefused, SyncInterrupted, resolve, sync, sync_until_quiet
 from grimoire.sync import resolution, session as sync_session
 from grimoire.sync.documents import keeps_name, parse_keeps
 from grimoire.testing import CrashScenario, Invariant, explore_crashes, idempotent_recovery, no_residue, run_plans
@@ -203,6 +203,27 @@ def test_one_deletion_the_store_refuses_leaves_a_source_deleted_as_a_whole(pair,
     report = sync(desktop, phone, handles())
     assert {conflict.path: conflict.code for conflict in report.conflicts} == {PATHS["chat"]: "unapplicable"}
     assert not any((phone.root / path).exists() for path in gone) and (phone.root / PATHS["chat"]).exists()
+
+
+def test_a_record_written_after_the_plan_that_needs_a_deletion_stops_its_commit(pair, monkeypatch):
+    """The plan read the receiver earlier: under the data commit's lock its deletions are judged again
+    over the device as it is now, so a chat made meanwhile with the deleted character in it stops
+    the commit (nothing removed), and the next sync holds the deletion back."""
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    (desktop.root / path).unlink()
+    holds = sync_session._commit_holds
+
+    def then_a_new_chat(plan, device, applied):  # the person keeps playing on the phone meanwhile
+        holds(plan, device, applied)
+        put(phone, RecordEnvelope(InstanceRef("c2", "chat", "dockside"), {"participants": [str(WREN_B)], "history": []}))
+    monkeypatch.setattr(sync_session, "_commit_holds", then_a_new_chat)
+    with pytest.raises(SyncInterrupted):
+        sync(desktop, phone, handles())
+    assert (phone.root / path).exists()
+    monkeypatch.undo()
+    report = sync(desktop, phone, handles())
+    assert report.conflict(path).code == "delete_dependency" and (phone.root / path).exists()
 
 
 def test_a_record_that_cannot_be_read_on_the_receiver_holds_every_deletion_back(pair):

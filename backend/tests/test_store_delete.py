@@ -232,8 +232,8 @@ def test_an_edit_racing_the_removal_is_kept_and_the_hold_stays(tmp_path):
 
 
 def test_an_edit_racing_a_source_deletion_keeps_all_of_that_source(tmp_path):
-    """A source goes as a whole or not at all: a human edit to its manifest after the commit point, up
-    to the read just before its first removal, keeps every record of it (its revision too). After
+    """A commit's removals happen all or none: a human edit to the manifest after the commit point, up
+    to the read just before the first removal, keeps every record it deletes (the revision too). After
     that read only reads come before the removal: 010's R7 window, pinned, the removed bytes held."""
     paths = (R1_PATH, MANIFEST_PATH, WREN_A_PATH, WREN_B_PATH)
     scenario, template = _scenario(tmp_path / "setup", paths, (preserves_interleave(), idempotent_recovery()))
@@ -249,9 +249,9 @@ def test_an_edit_racing_a_source_deletion_keeps_all_of_that_source(tmp_path):
         ops.write_bytes(root / "lib" / MANIFEST_PATH, human)
     report = run_plans(scenario, [[Interleave(index, edit)] for index in range(commit + 1, check + 1)], tmp_path / "race")
     report.assert_ok()
-    for run in report.runs[1:]:
+    for run in report.runs[1:]:  # nothing of the batch is removed, the records that used the source included
         assert "WriteConflict" in run.action_error and run.recovered[f"lib/{MANIFEST_PATH}"] == human
-        assert run.recovered[f"lib/{R1_PATH}"] == template[R1_PATH]
+        assert all(run.recovered[f"lib/{path}"] == template[path] for path in (R1_PATH, WREN_A_PATH, WREN_B_PATH))
     window = run_plans(scenario, [[Interleave(check + 1, edit)]], tmp_path / "r7")
     run = window.runs[1]
     assert run.recovered[f"lib/{MANIFEST_PATH}"] == human and f"lib/{R1_PATH}" not in run.recovered
@@ -276,3 +276,19 @@ def test_a_damaged_removal_keeps_all_of_its_source(tmp_path):
     report.assert_ok()
     run = report.runs[1]
     assert all(run.recovered[f"lib/{path}"] == template[path] for path in (R1_PATH, MANIFEST_PATH))
+
+
+def test_a_removal_never_outlives_a_hold_that_did_not_land(tmp_path):
+    """A hold damaged after another entry is published (past the all-or-nothing check) is preserved as
+    the damaged bytes it holds: then no removal of the commit happens, so the record stays."""
+    paths = (R1_PATH, MANIFEST_PATH, WREN_A_PATH, WREN_B_PATH)
+    scenario, template = _scenario(tmp_path / "setup", paths, (idempotent_recovery(),))
+    trace = run_plans(scenario, [], tmp_path / "base").runs[0].action_trace
+    holds = [op for op in trace if op.kind == "replace" and op.target.startswith("lib/.conflicts/")]
+
+    def damage(ops, root):
+        ops.write_bytes(root / holds[1].path, b"{}")
+    report = run_plans(scenario, [[Interleave(holds[0].index + 1, damage)]], tmp_path / "damaged")
+    report.assert_ok()
+    run = report.runs[1]
+    assert all(run.recovered[f"lib/{path}"] == template[path] for path in paths)

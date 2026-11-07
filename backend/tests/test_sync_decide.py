@@ -155,6 +155,9 @@ def test_a_deletion_marker_makes_an_unfinished_deletion_a_tombstone_or_uncertain
     assert derive_base(P, archives, (removed, _pending({"from": X, "to": None})), (None, None)) == UNCERTAIN
     tombstones = (_archive(("deleted", E)), _archive(("deleted", E)))
     assert derive_base(P, tombstones, (removed, NO_PENDING), (E, None)) == Base("deleted", E)  # stale marker
+    for other in ({"from": X, "to": None}, {"from": E, "to": X}):  # disagreeing markers: never a stale one
+        for pair in ((removed, _pending(other)), (_pending(other), removed)):
+            assert derive_base(P, tombstones, pair, (None, None)) == UNCERTAIN
 
 
 # -- documents ---------------------------------------------------------------------------

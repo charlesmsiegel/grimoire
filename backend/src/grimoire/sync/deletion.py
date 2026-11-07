@@ -29,7 +29,7 @@ from grimoire.store import LibraryStore, StoreError, UnstorableIdentifier, etag
 from grimoire.store.jsonfmt import JsonError, parse_strict
 from grimoire.store.layout import (
     CAMPAIGNS, SCOPE, SOURCES, address_parts, chat_parts, classify, conflict_parts, definition_parts, kept_address,
-    logical,
+    logical, name_key,
 )
 from grimoire.store.replica import pinned_by
 
@@ -132,8 +132,9 @@ def admit(store: LibraryStore, current: Mapping[str, bytes], files: Mapping[str,
         return preflight(txn, what)
 
     blocked = list(blocked)
+    needs: dict[str, _Needs] = {}  # the same ``files`` each pass: each record is read once
     while True:
-        for path, why in orphaned(files, blobs, blocked, candidates).items():
+        for path, why in orphaned(files, blobs, blocked, candidates, needs).items():
             refused[path] = ("delete_dependency", why)
             del candidates[path]
         if not candidates or check(list(candidates.values()), "the deletions") is None:
@@ -186,23 +187,37 @@ def denied(deletes: Iterable[Delete], keys: frozenset[str], files: Mapping[str, 
     return refused, changes
 
 
+def still_needed(store: LibraryStore, writes: Mapping[str, bytes], blob_sizes: Mapping[str, int],
+                 paths: Iterable[str]) -> dict[str, str]:
+    """``orphaned`` again over the device as it is now, under the lock of the commit that deletes
+    (a fresh scan, with that commit's own record and blob writes): the plan read the device earlier,
+    and a record written there since (a new chat in the campaign whose scope goes) may need what is
+    about to go. The caller stops that commit; the next sync holds the deletion back."""
+    paths = list(paths)
+    if not paths:
+        return {}
+    found = store.scan()
+    return orphaned({**found.files, **writes}, {**found.blobs, **blob_sizes}, found.blocked, paths)
+
+
 def commit_holds(store: LibraryStore, view, device: str, peer: str, devices: tuple[str, str],  # type: ignore[no-untyped-def]
-                 deletes: Iterable[Delete]) -> tuple[str, bytes, str | None] | None:
+                 deletes: Iterable[Delete]) -> tuple[bool, tuple[str, bytes, str | None] | None]:
     """holds(d): before the data commit that deletes on ``device``, its kept-version records hold each
     removed version (the pair's, and no other pair's lists it as delivered), in a commit of its own,
     as ``resolve`` records a hold. Staged inside the data commit, 010's recovery could finish the
     removal and its hold without that ``.sync`` record, and a slot the hold reused (bytes once
     delivered) would stay dismissable though it may be the only copy left anywhere. Returns this
-    pair's record as committed (the step a peer transfer replays), if it changed; ``StaleWrite`` or
+    pair's record as committed (the step a peer transfer replays), if it changed, after whether anything
+    was committed (other pairs' records may change alone); ``StaleWrite`` or
     ``WriteConflict`` if a record changed meanwhile (nothing written)."""
     states = holds_state(store, view, device, peer, devices, deletes)
     if not states:
-        return None
+        return False, None
     txn = store.transaction()
     bookkeeping.stage(txn, states)
     txn.commit(None)
     own = keeps_name(peer)
-    return next((state for state in states if state[0] == own), None)
+    return True, next((state for state in states if state[0] == own), None)
 
 
 # -- what a record left on the receiver needs ------------------------------------------------------
@@ -330,19 +345,21 @@ def _provides(path: str) -> tuple[str, object] | None:
 
 
 def orphaned(files: Mapping[str, bytes], blobs: Mapping[str, int], blocked: Iterable[str],
-             deleting: Iterable[str]) -> dict[str, str]:
+             deleting: Iterable[str], cache: dict[str, _Needs] | None = None) -> dict[str, str]:
     """Of ``deleting``, the deletions to hold back on a device that would then hold ``files`` (its
     records with this commit's copies, before any deletion) and why: the fixpoint of every record left
-    still needing one. A record path blocked there (unreadable, a link, a look-alike) may be anything,
-    so it holds every deletion back: nothing can prove it does not need the deleted record."""
+    still needing one. A path blocked there (unreadable, a link, a look-alike) under ``sources`` or
+    ``campaigns``, or the library root itself, may be any record, so it holds every deletion back:
+    nothing can prove it does not need the deleted record. The root's other entries (``assets``, a
+    stray link or note) never hold records, as for the store's own reference check."""
     pending = set(deleting)
     if not pending:
         return {}
-    unknown = sorted(path for path in blocked if not path.startswith("assets/"))
+    unknown = sorted(path for path in blocked if path == "" or name_key(path.split("/")[0]) in (SOURCES, CAMPAIGNS))
     if unknown:
         return {path: f"cannot prove nothing on this device needs it: {unknown[0]} cannot be read as a record"
                 for path in pending}
-    cache: dict[str, _Needs] = {}
+    cache = {} if cache is None else cache  # one record's needs, for callers judging the same ``files`` again
     held: dict[str, str] = {}
     while True:
         remaining = [path for path in files if path not in pending]

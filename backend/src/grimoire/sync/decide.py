@@ -108,11 +108,12 @@ def derive_base(path: str, archives: tuple[ArchiveLike, ArchiveLike], pendings: 
     if entries:
         removals = {entry.get("from") for entry, _ in entries if _is_removal(entry)}
         if removals:  # 028: a sync or resolve deleted ``from`` here, and the peer was absent
-            removed = next(iter(removals))
-            if candidate == Base("deleted", removed):
-                return candidate  # both archives already record the tombstone: the marker is stale
-            if len(removals) == 1 and all(_is_removal(entry) and etag is None for entry, etag in entries):
-                return Base("deleted", removed)  # the deletion verifiably landed: absent wherever marked
+            if len(removals) == 1 and all(_is_removal(entry) for entry, _ in entries):
+                removed = next(iter(removals))
+                if candidate == Base("deleted", removed):
+                    return candidate  # both archives already record the tombstone: the marker is stale
+                if all(etag is None for _, etag in entries):
+                    return Base("deleted", removed)  # the deletion verifiably landed: absent wherever marked
             return UNCERTAIN  # a restore, a re-creation or disagreeing entries
         targets = {entry.get("to") for entry, _ in entries}
         to = next(iter(targets)) if len(targets) == 1 else None

@@ -17,13 +17,14 @@ import pytest
 
 from grimoire.chats.model import Launch
 from grimoire.chatstore import InvalidBinding
-from grimoire.core.identity import ScopeRef
+from grimoire.core.identity import InstanceRef, ScopeRef
 from grimoire.peersync import AuthenticationFailed, NotPaired, new_pairing_key, pair, transfer, unpair
 from grimoire.peersync import server as server_module
 from grimoire.peersync import snapshot as snapshot_module
+from grimoire.peersync import replay as replay_module
 from grimoire.peersync.pairing import peer_principal
 from grimoire.peersync.replay import StepBuffer
-from grimoire.store import LibraryStore, SourceManifest
+from grimoire.store import LibraryStore, RecordEnvelope, SourceManifest
 
 from chat_fixtures import ANYA, MARA
 from peersync_helpers import DESKTOP, PHONE, Device, paired, seed_cards, serving, start_scene
@@ -524,3 +525,30 @@ def test_a_deletion_on_either_device_is_made_on_the_other_and_its_version_kept_t
     assert again.status == "synced" and again.copied == () and again.deleted == (), again
     assert {key: value for key, value in _files(desktop.store.root).items() if not key.startswith(".conflicts/")} == {
         key: value for key, value in _files(phone.store.root).items() if not key.startswith(".conflicts/")}
+
+
+KIT = "campaigns/c5/instances/character/kit.json"
+
+
+def test_a_record_written_on_the_serving_device_after_its_snapshot_stops_a_deletion_it_needs(tmp_path, monkeypatch):
+    """The serving device judges a replayed deletion again under its commit's lock: a record written
+    there since its snapshot that reads the source being deleted refuses the step as stale, nothing
+    is removed, and the transfer's next pass holds the deletion back."""
+    desktop, phone, _ = paired(tmp_path)
+    _add_source(desktop, "catalog:extra")
+    path = "sources/catalog/extra/_source/manifest.json"
+    commit = StepBuffer._commit
+
+    def meanwhile(self, store, *args):  # type: ignore[no-untyped-def]
+        if any(header.get("op") == "delete" for header, _ in self.ops) and not (store.root / KIT).exists():
+            txn = store.transaction()  # the person adds a card on the phone that reads the source
+            txn.put(RecordEnvelope(InstanceRef("c5", "character", "kit"), {"from": "catalog:extra/character/kit"}), None)
+            txn.commit(phone.handle)
+        return commit(self, store, *args)
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+        (desktop.store.root / path).unlink()
+        monkeypatch.setattr(replay_module.StepBuffer, "_commit", meanwhile)
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert report.passes[-1].conflict(path).code == "delete_dependency" and report.deleted == ()
+    assert (phone.store.root / path).exists() and (phone.store.root / KIT).exists()

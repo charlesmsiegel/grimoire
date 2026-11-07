@@ -342,11 +342,6 @@ def _remove(access: Access, entry: Entry, settlement: Settlement) -> None:
     settlement.removed.append(_text(entry.target))
 
 
-def _removal_source(entry: Entry) -> str | None:
-    """The source a removal's target belongs to (a revision or its manifest), else ``None``."""
-    return _source_of_revision(entry.target) or _manifest_source(entry.target)
-
-
 def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlement:
     """Finish or preserve a committed journal, then remove it and any leftover staging.
 
@@ -410,26 +405,31 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
                 unwritten.add(entry.target)
     held_sources = {_source_of_revision(entry.target) for entry in journal.entries
                     if entry.target in unwritten and entry.kind != "remove"} - {None}
-    kept_revisions: set[str] | None = None  # decided once, right before the first removal (028)
+    removals_go: bool | None = None  # decided once, right before the first removal (028)
 
-    def removals_kept() -> set[str]:
-        # 028: a source deleted as a whole loses nothing of it unless all of it goes. Sources any removal
-        # of which cannot happen (its target holds other bytes, its staged document is damaged, or its
-        # temp vanished while the target still holds what it removes) keep every removal of theirs.
-        # Read after every other entry is settled, so an external edit is seen up to the removals
-        # themselves (then 010's R7 window).
-        kept: set[str] = set()
+    def all_removals_go() -> bool:
+        # 028: a commit's removals happen all or none (a source deleted as a whole, the records that used
+        # it, a campaign's chat with its scope), decided before anything is removed: none if any of them
+        # cannot happen (its target holds other bytes, its staged document is damaged, or its temp is
+        # gone while the target still holds what it removes), if the hold of what one removes is not in
+        # place (it may be the only copy), or if any other entry of the commit did not land as staged
+        # (held back, preserved or dropped: what the deletions were planned over is not there). Read
+        # after every other entry is settled, so an external edit is seen up to the removals themselves
+        # (then 010's R7 window).
+        if held_sources or settlement.preserved or settlement.incomplete or settlement.dropped:
+            return False
+        held = {entry.new for entry in journal.entries
+                if entry.kind == "hold" and access.etag_of(entry.target) == entry.new}
         for entry in journal.entries:
             if entry.kind != "remove":
                 continue
             current = access.etag_of(entry.target)
-            if entry.temp in staged:
-                cannot = current not in (entry.old, None) or temp_digest(entry) != entry.new
-            else:
-                cannot = current == entry.old
-            if cannot:
-                kept |= {_removal_source(entry)} - {None}
-        return kept
+            if entry.temp not in staged:
+                if current == entry.old:
+                    return False
+            elif current not in (entry.old, None) or temp_digest(entry) != entry.new or entry.old not in held:
+                return False
+        return True
 
     def hold_back(entry: Entry, digest: str | None) -> None:
         _preserve(access, entry, settlement, digest)
@@ -447,11 +447,10 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
             continue
         digest = temp_digest(entry)
         if entry.kind == "remove":
-            kept_revisions = removals_kept() if kept_revisions is None else kept_revisions
-            source = _removal_source(entry)
-            if journal.state == "abort" or digest != entry.new or source in kept_revisions or source in held_sources:
+            if removals_go is None:
+                removals_go = journal.state == "commit" and all_removals_go()
+            if not removals_go or digest != entry.new:
                 _preserve(access, entry, settlement, digest)  # dropped: nothing is removed
-                kept_revisions |= {source} - {None}
                 continue
             current = access.etag_of(entry.target)  # per-entry guard, immediately before acting
             if current == entry.old:
@@ -460,7 +459,6 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
                 access.ops.remove(access.path((TXN, entry.temp)))
             else:  # an external edit since the check above (010's R7 window): the human's file is kept
                 _preserve(access, entry, settlement, digest)
-                kept_revisions |= {source} - {None}
             continue
         if journal.state == "abort" or digest != entry.new:
             hold_back(entry, digest)

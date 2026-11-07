@@ -421,6 +421,17 @@ def _final_files(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[dict[st
     return deletion.final_files(plan.scans[dest].files, plan.scans[dest].blobs, copies)  # type: ignore[attr-defined]
 
 
+def _recheck_deletes(store: LibraryStore, copies: list[Copy], deletes: list[deletion.Delete]) -> None:
+    """``deletion.still_needed`` under the data commit's lock (028): a record written since the plan
+    that needs a deletion stops the commit before anything is written."""
+    needed = deletion.still_needed(store, {copy.path: copy.data for copy in copies if copy.data is not None},
+                                   {copy.path: copy.size for copy in copies if copy.data is None},  # type: ignore[misc]
+                                   [delete.path for delete in deletes])
+    if needed:
+        path, why = min(needed.items())
+        raise SyncInterrupted(f"a library changed while its deletions were planned: {path} {why}")
+
+
 def _admit_deletes(plan: SyncPlan, dest: str, paths: list[str]) -> None:
     """Row 9's deletions on ``dest`` (028): ``deletion.admit`` decides them over what ``dest`` will hold."""
     files, blobs = _final_files(plan, dest, plan.copies[dest])
@@ -1076,6 +1087,7 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
 
     try:
         with _locked(*plan.stores.values()):  # a blob copy loads from the origin inside this commit
+            _recheck_deletes(store, copies, deletes)
             result = txn.commit(handle, dict(approvals), on_denied=on_denied)
     except (StaleWrite, WriteConflict, SyncInterrupted, *PER_PATH_ERRORS) as error:
         applied.consumed.extend(getattr(error, "consumed_approvals", ()))  # spent without a write (R16)
@@ -1104,14 +1116,14 @@ def _commit_holds(plan: SyncPlan, device: str, applied: _Applied) -> None:
         return
     peer = plan.other(device)
     try:
-        own = deletion.commit_holds(plan.stores[device], plan.kept_records[device], device, peer, plan.devices,
-                                    plan.deletes[device])
+        committed, own = deletion.commit_holds(plan.stores[device], plan.kept_records[device], device, peer,
+                                               plan.devices, plan.deletes[device])
     except (StaleWrite, WriteConflict) as error:
         raise SyncInterrupted(f"the kept-version records on {device} changed during the sync: {error}",
                               _report(plan, applied)) from error
+    applied.wrote = applied.wrote or committed  # other pairs' records may change without this pair's
     if own is None:
         return
-    applied.wrote = True
     plan.kept_records[device] = parse_keeps(own[1], plan.devices)
     applied.observe(Step("holds", device, states=(own,)))
 

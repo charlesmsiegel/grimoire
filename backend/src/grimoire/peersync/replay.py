@@ -252,6 +252,14 @@ class StepBuffer:
                     targets.append((f".sync/{name}", name, lambda name=name: store.read_sync_state(name)))
                 else:  # only this pair's own .sync files, and records the peer's grants then decide
                     raise PeerRefused("invalid", f"a write this device does not accept: {op!r}")
+            if removals:  # 028: under this commit's lock, nothing written here since the snapshot needs them
+                needed = deletion.still_needed(
+                    store, {header["path"]: body for header, body in ops if header.get("op") == "put"},
+                    {header["path"]: header["size"] for header, _ in ops if header.get("op") == "blob"},
+                    [path for path, _, _ in removals])
+                if needed:
+                    path, why = min(needed.items())
+                    raise PeerRefused("stale", f"this library changed since the snapshot: {path} {why}")
             elsewhere = self._held_beforehand(store, ops, holds)
             if elsewhere:  # this device's own records of its other pairs, committed before the hold
                 # a step that cannot commit writes nothing, its grants included: otherwise a peer the
