@@ -453,6 +453,41 @@ def test_a_keep_closing_the_turn_while_it_is_confirmed_leaves_nothing_framed(car
         assert table.adjudication.state(chat.campaign_id).frame(record.turn_id) is None
 
 
+def test_a_pause_landing_while_an_action_is_confirmed_frames_nothing_and_nothing_is_decided_over_it(cards):
+    folder, chat = cards
+    with judged(folder, UNOPPOSED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        check = table.adjudication.check
+
+        def paused_meanwhile(*args, **kwargs):  # a player stops play while 029 checks the frame
+            table.adjudication.check = check
+            result = check(*args, **kwargs)
+            table.runner.request(chat, table.player(), "pause")
+            return result
+        table.adjudication.check = paused_meanwhile
+        refused("paused", table.runner.confirm, chat, table.player())
+        record = table.runner.open(chat).pending
+        assert record.framed is None and record.labels[-1].state == "proposed"
+        assert table.adjudication.state(chat.campaign_id).frame(record.turn_id) is None
+        refused("paused", table.runner.confirm, chat, table.player())  # and none while it stands
+        table.runner.resume(chat, table.player())
+        assert table.runner.confirm(chat, table.player()).decision.result == "success"
+
+
+def test_nothing_is_decided_while_play_is_paused(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        assert table.runner.confirm(chat, table.player()) is None
+        table.runner.request(chat, table.player(), "pause")
+        refused("paused", table.runner.decide, chat, table.owner, "partial", cites=("f1", "f2"),
+                consequences=("s1",))
+        table.runner.resume(chat, table.player())
+        table.runner.decide(chat, table.owner, "partial", cites=("f1", "f2"), consequences=("s1",))
+
+
 def test_a_confirm_cut_short_after_framing_finishes_on_the_next_confirm(cards):
     folder, chat = cards
     with judged(folder, UNOPPOSED) as table:

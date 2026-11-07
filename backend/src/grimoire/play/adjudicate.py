@@ -179,7 +179,10 @@ def _mark_framed(runner, chat: ChatRef, record: TurnRecord, number: int, princip
     The same write withdraws every proposed take and supersedes a running one: each was written without the
     outcome this frame will settle, so none may be kept once it is decided (a run in flight lands stale)."""
     for _ in range(WRITE_RETRIES):
-        stored = next((s for s in runner.scenes.turns(chat).turns if s.record.ref == record.ref), None)
+        turns = runner.scenes.turns(chat)
+        if turns.paused:  # a pause landed while 029 checked the frame: nothing is framed over it
+            raise _refuse("paused", "play was paused while the action was confirmed")
+        stored = next((s for s in turns.turns if s.record.ref == record.ref), None)
         if stored is None:
             break
         labels = stored.record.labels
@@ -199,7 +202,7 @@ def _mark_framed(runner, chat: ChatRef, record: TurnRecord, number: int, princip
                 elif take.state == "proposed":
                     framed = framed.with_take(_mark(take, {line.line_id for line in take.lines}, "withdrawn",
                                                     principal))
-            runner.scenes.write(framed, stored)
+            runner.scenes.write(framed, stored, unpaused=True)  # a pause written meanwhile refuses it
             return framed
         except SceneRefused as error:
             if error.reason != "turn_changed":
