@@ -96,7 +96,8 @@ def test_a_library_that_fits_one_file_keeps_019s_single_file(tmp_path, small_cap
     desktop, phone = make_pair(tmp_path)
     edit_instance(desktop, WREN_A, 9)
     sync(desktop, phone, handles())
-    assert set(_sync_files(desktop, PHONE)) == {"archive.json"}
+    # one archive file, no shards (and, 028, the kept-version record every completed sync leaves)
+    assert set(_sync_files(desktop, PHONE)) == {"archive.json", "keeps.json"}
     assert json.loads((desktop.root / ".sync/peers/phone/archive.json").read_bytes())["format"] == \
         "grimoire.sync.archive/1"
 
@@ -372,7 +373,7 @@ def test_a_crash_or_error_at_any_commit_boundary_of_a_sharded_sync_converges(tmp
         baseline.assert_ok()
         trace = baseline.runs[0].action_trace
     commits = [op.index for op in trace if op.kind == "replace" and (op.target or "").endswith("/.txn/journal.json")]
-    assert len(commits) == 6  # data(a), data(b), archive(b), archive(a), pending(b), pending(a)
+    assert len(commits) == 8  # data(a), data(b), keeps(b), keeps(a), archive(b), archive(a), pending(b), pending(a)
     points = {}
     for index in commits:
         points[index] = frozenset({"before", "after", "fail"})

@@ -32,9 +32,9 @@ jobs:
     name: compat (${{ matrix.os }}, py${{ matrix.python }}${{ matrix.shard && format(', {0}', matrix.shard) || '' }})
     runs-on: ${{ matrix.os }}
     # Windows file I/O makes the crash-exploration tests several times slower (the whole suite took
-    # 23-27 minutes there, ~4 on Ubuntu), so Windows runs in four shards that together cover every
+    # 23-27 minutes there, ~4 on Ubuntu), so Windows runs in five shards that together cover every
     # test file: the store-backed crash explorations, the other crash and fault explorations, the
-    # replica-sync files, and the rest
+    # replica-sync files, the other store files, and the rest
     # (tests/conftest.py; docs/TESTING.md#ci-gate).
     timeout-minutes: 30
     strategy:
@@ -56,6 +56,9 @@ jobs:
             shard: sync
           - os: windows-latest
             python: "3.11"
+            shard: stores
+          - os: windows-latest
+            python: "3.11"
             shard: rest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -66,3 +69,8 @@ jobs:
       - run: python -m pytest backend/tests -q
         env:
           GRIMOIRE_TEST_SHARD: ${{ matrix.shard }}
+          # On Windows the hung-test traceback dump can itself crash Python (an access violation
+          # while it walks a running thread's frames), and the slowest crash explorations take
+          # over 120 s there on a busy runner, so Windows dumps only after 10 minutes
+          # (docs/TESTING.md#ci-gate). The job timeout is still the hard stop.
+          PYTEST_ADDOPTS: ${{ runner.os == 'Windows' && '-o faulthandler_timeout=600' || '' }}

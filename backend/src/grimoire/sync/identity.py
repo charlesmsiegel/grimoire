@@ -58,8 +58,9 @@ def identify(store: LibraryStore, device_id: str, *, replace: bool = False) -> s
             for kind in ("archive", "pending"):
                 _retire(txn, store, existing, kind, peer)
             data = store.read_sync_state(keeps_name(peer))
-            if data is not None and not is_retired(data):
-                txn.put_sync_state(keeps_name(peer), _keeps_after(data, existing, device_id, peer), etag(data))
+            after = None if data is None or is_retired(data) else _keeps_after(data, existing, device_id, peer)
+            if after is not None and after != data:
+                txn.put_sync_state(keeps_name(peer), after, etag(data))
     txn.commit(None)
     return device_id
 
@@ -67,12 +68,17 @@ def identify(store: LibraryStore, device_id: str, *, replace: bool = False) -> s
 def _keeps_after(data: bytes, existing: str, device_id: str, peer: str) -> bytes:
     """The kept-version record under the new ID: the old pair's deliveries and dismissals end with it,
     but this device's own versions that ``resolve`` held here are still its own, perhaps their only
-    copy, so the new ID's record still lists them and they never become dismissable."""
+    copy, so the new ID's record still lists them and they never become dismissable. A conflict that
+    stands stays ``open``: a new ID changes neither device's version (the next sync finds it again).
+    A record that cannot be honoured stays as it is, so it still fails closed until a sync replaces it."""
     view = parse_keeps(data, tuple(sorted((existing, peer))))  # type: ignore[arg-type]
-    held = {path: KeptEntry(None, frozenset(), held=entry.held) for path, entry in view.entries.items() if entry.held}
-    if view.state != "valid" or not held or device_id == peer:
+    if view.state == "ignored":
+        return data
+    kept = {path: KeptEntry(None, frozenset(), held=entry.held, open=entry.open)
+            for path, entry in view.entries.items() if entry.held or entry.open is not None}
+    if view.state != "valid" or not kept or device_id == peer:
         return render_retired(existing)
-    return render_keeps(tuple(sorted((device_id, peer))), held)  # type: ignore[arg-type]
+    return render_keeps(tuple(sorted((device_id, peer))), kept)  # type: ignore[arg-type]
 
 
 def _retire(txn, store: LibraryStore, existing: str, kind: str, peer: str) -> None:  # type: ignore[no-untyped-def]

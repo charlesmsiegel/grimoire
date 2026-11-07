@@ -31,6 +31,7 @@ def test_the_shards_partition_every_test_file():
     assert {"test_sync_faults.py", "test_import_v1_recovery.py"} <= parts["explorations"]
     assert {"test_store_recovery.py", "test_rebasestore_recovery.py"} <= parts["store-explorations"]
     assert {"test_sync_shards.py", "test_peersync.py"} <= parts["sync"]
+    assert {"test_store_replica.py", "test_imagestore_scenarios.py"} <= parts["stores"]
     assert "test_ci_shards.py" in parts["rest"]
 
 

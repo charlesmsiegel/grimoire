@@ -9,16 +9,19 @@ from __future__ import annotations
 
 import functools
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from grimoire.core.identity import ChatRef, InstanceRef, SourceRef
+from grimoire.core.identity import InstanceRef, SourceRef
 from grimoire.security import Approval, Authorizer, Grant, Permission, ResourcePath, payload_digest
 from grimoire.store import InvalidEnvelope, LibraryStore, ProcessLocker, RecordEnvelope, SourceManifest, etag
-from grimoire.store.layout import address_parts, conflict_parts, turn_parts
-from grimoire.sync import ResolveRefused, SyncInterrupted, apply_sync, plan_sync, resolve, sync, sync_until_quiet
+from grimoire.store.layout import address_parts, conflict_parts
+from grimoire.sync import (
+    ResolveRefused, SyncInterrupted, apply_sync, identify, plan_sync, resolve, sync, sync_until_quiet,
+)
 from grimoire.sync import deletion, keeps as kept_record, resolution, session as sync_session
 from grimoire.sync.decide import decide
 from grimoire.sync.documents import keeps_name, parse_keeps, render_keeps
@@ -27,16 +30,16 @@ from grimoire.testing import CrashScenario, Invariant, explore_crashes, idempote
 from grimoire.testing.fileops import snapshot
 
 from evidence_fixtures import MARA
+from scene_fixtures import ANA, Table, card_library, say
 from store_helpers import HARBOR, OWNER, WREN_R2, drop_empty_dirs, harbor_manifest, instance, owner_handle
 from sync_helpers import (
     DESKTOP, PATHS, PHONE, WREN_A, WREN_B, canonical, chat_record, converged, edit_instance, handle, handles, kept,
     make_pair, new_revision, put,
 )
-from test_store_turns import post_turn, scenes, tag
+from test_store_turns import tag
 from test_sync_knowledge import batch_paths, offline_appends, pair_with_log, read
 
 PAIR = (DESKTOP, PHONE)
-TURN_CHAT = ChatRef("c1", "talk")
 
 
 @pytest.fixture
@@ -308,7 +311,15 @@ def test_a_deletion_whose_hold_the_record_cannot_take_is_held_back(pair, monkeyp
     (desktop.root / path).unlink()
     record = parse_keeps(phone.read_sync_state(keeps_name(DESKTOP)), PAIR)
     current = render_keeps(PAIR, record.entries if record.state == "valid" else {})
-    monkeypatch.setattr(kept_record, "RECORD_LIMIT", len(current) + 20)  # room for no held version
+    plan = sync_session.plan_sync
+
+    def planned_full(*args, **kwargs):  # type: ignore[no-untyped-def]
+        # full while the plan is made: room for no held version. Only then, since the conflict that
+        # stands is then recorded ``open`` in the deleting device's record, which must have room.
+        with monkeypatch.context() as limited:
+            limited.setattr(kept_record, "RECORD_LIMIT", len(current) + 20)
+            return plan(*args, **kwargs)
+    monkeypatch.setattr(sync_session, "plan_sync", planned_full)
     report = sync(desktop, phone, handles())
     assert report.conflict(path).code == "unapplicable" and (phone.root / path).exists()
 
@@ -699,17 +710,30 @@ def test_a_merged_knowledge_log_keeps_what_it_names_and_never_loses_a_batch(tmp_
         phone.close()
 
 
-def test_a_turn_deleted_on_one_device_is_never_deleted_on_the_other(pair):
-    """035's played turns are held: never copied, decided or deleted by sync, whichever device lacks one."""
-    desktop, phone = pair
-    written = scenes(desktop).write(post_turn(TURN_CHAT, 1, device=tag(DESKTOP)), None)
-    path = "/".join(turn_parts(written.record.ref))
-    (phone.root / path).parent.mkdir(parents=True, exist_ok=True)
-    (phone.root / path).write_bytes((desktop.root / path).read_bytes())
-    (desktop.root / path).unlink()
-    report = sync(desktop, phone, handles())
-    assert report.deleted == () and (phone.root / path).exists()
-    assert all(conflict.code == "held" for conflict in report.conflicts if conflict.path == path)
+def test_a_turn_deleted_on_one_device_is_never_deleted_on_the_other(tmp_path):
+    """035's played turns sync (028's turn merge) but row 9 never deletes one: a turn both devices
+    agreed on, then missing on one, stays a ``deleted`` conflict and the other device keeps it."""
+    (tmp_path / "built").mkdir()
+    folder, chat, _ = card_library(tmp_path / "built")
+    with Table(folder, [say("Dark, and the harbor pays for it.")]) as table:
+        table.runner.seat(chat, ANA)
+        table.runner.begin(chat, table.player())
+        table.runner.keep(chat, table.player(), 1)
+    for name in PAIR:
+        shutil.copytree(folder, tmp_path / name)
+        with Table(tmp_path / name) as table:
+            identify(table.store, name)
+    with Table(tmp_path / DESKTOP) as desk, Table(tmp_path / PHONE) as phone:
+        owners = {DESKTOP: desk.owner, PHONE: phone.owner}
+        assert sync_until_quiet(desk.store, phone.store, owners).conflicts == ()
+        turns = sorted((desk.store.root / "campaigns" / chat.campaign_id / "turns").glob("*.json"))
+        assert turns
+        path = turns[0].relative_to(desk.store.root).as_posix()
+        kept = (phone.store.root / path).read_bytes()
+        (desk.store.root / path).unlink()
+        report = sync(desk.store, phone.store, owners)
+        assert report.deleted == () and (phone.store.root / path).read_bytes() == kept
+        assert report.conflict(path).code == "deleted"
 
 
 def test_a_turn_never_takes_part_in_deletion_propagation_even_once_turns_sync():

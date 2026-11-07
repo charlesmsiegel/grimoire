@@ -14,19 +14,20 @@ Action = Literal["agreed", "copy", "conflict", "delete"]
 #: The record kinds sync owns (the store's ``classify`` kinds); later families extend this set,
 #: and archive and pending documents accept exactly these paths. ``scope`` and ``chat`` are
 #: 107's campaign-local play-scope and chat records; ``relation`` is 017's typed relation record;
-#: ``blob``, ``image`` and ``placement`` are 018's art; ``transcript`` is 036's chat transcript pages.
+#: ``blob``, ``image`` and ``placement`` are 018's art; ``transcript`` is 036's chat transcript pages; ``turn`` is
+#: 035's played chat turns (028's turn merge: mutable, so ordinary rows; ``sync.turns`` names what one needs).
 SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge",
-                          "blob", "image", "placement", "transcript"})
+                          "blob", "image", "placement", "transcript", "turn"})
 #: 018's art: own units, never source-coarse, never grouped with a definition. A blob is binary and
 #: content-addressed (listed by name and size, hashed only when copied or first seen).
 ASSET_KINDS = frozenset({"blob", "image", "placement"})
 #: Campaign-local kinds: independent of sources and of each other at commit time.
-CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge", "transcript"})
+CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge", "transcript", "turn"})
 #: Families whose own stores commit several files as one unit and whose cross-device merge rule is
 #: a later milestone (docs/EFFECTS.md, docs/HOLDINGS.md): never copied file by file, always reported
-#: as skipped. 021's accepted events and wrap-ups, 023's holdings, and 035's played chat turns (two devices
-#: playing one chat offline would both write its next turn; turn merges are 028's milestone before 044).
-HELD_BACK_KINDS = frozenset({"accepted", "wrapup", "holdings", "turn"})
+#: as skipped. 021's accepted events and wrap-ups and 023's holdings. 035's played turns left this set with
+#: 028's turn merge: two devices' turn n are two files, and a forked chat waits for its owner's choice.
+HELD_BACK_KINDS = frozenset({"accepted", "wrapup", "holdings"})
 #: A campaign holding any record of this kind on either device has its 017 relations held back too,
 #: because 021 changes relations in the same commit as an event: a relation must never arrive
 #: without the event that changed it.
