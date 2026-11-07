@@ -70,6 +70,12 @@ These rules reject traversal, absolute paths, separators, whitespace, control/fo
   - the handle is used for provider calls only, so a live scene asks for no per-attempt approval.
 
   Anything that would act on model output (tools, writes a reply names) still needs its own untrusted handle and approval.
+- **Scene runner (035), recorded in the Wave 5 audit.** `SceneRunner` stores generated lines in turn files with the library owner's trusted human handle. This is a second narrow exception to the rule above, extending the 027 decision, and it holds only while all of these stay true:
+  - the runner alone chooses what it writes and where: turn files of the open chat, at ids it allocates, never a path, family or record a reply names;
+  - model text is stored as payload only (a take's text and usage), never parsed into a grant, a record of another family or an accepted effect;
+  - turning a kept line into canon (labelling, 029, 021) goes through those sprints' own checks and authority, never this handle's trust.
+
+  Anything that would turn model output into state beyond the turn file needs its own untrusted handle and approval.
 - **Device sync (028):** pairing keys and device credentials live under reserved roots, and peer devices are non-owner principals.
 - **Multiplayer (102):** each human approves only uses of grants they issued.
 - **V1 migration ([V1 To V2 Import Apply](roadmap/sprints/v1-to-v2-import-apply.md)):** V1 libraries have no address in the V2 namespace. A future read-only migration source must be an explicit, separate root.

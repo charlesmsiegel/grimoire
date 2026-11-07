@@ -4,7 +4,7 @@
 - `grimoire.obstacles` (pure): obstacles, approaches, the frame rules, codecs and `derive`;
 - `grimoire.obstaclestore` (adapter): `ObstacleLibrary`, which records obstacles in an authority ledger, frames attempts against them through 029's `AdjudicationLibrary` and derives each obstacle's state from 029's outcomes.
 
-There is no runner, prompt, model call, dice or combat engine. Nothing labels prose yet: as in 029, the labeller that frames attempts is a caller obligation (035). All scenarios are synthetic.
+There is no prompt, model call, dice or combat engine, and 035's runner does not use obstacles yet (milestone 2). Nothing labels prose yet: as in 029, the labeller that frames attempts is a caller obligation (035). All scenarios are synthetic.
 
 **First useful proof.** "Support an unconventional solution without denying player choice": Mara, a player character, wants into a guarded archive. The archive suggests bribing the guard, fighting past him, slipping past the lantern and climbing in by a window (it has none). She bribes the guard instead of fighting. The guard's debts favour it, his loyalty to the archivist and his watch hinder it, and a report to the archivist or a pocketed purse are at stake. Decided a success, the archive is overcome and the bribe's price comes due: twelve crowns spent, and a guard who now expects a cut (resources and reputation). Fighting and sneaking stay real paths, and so does an approach no one suggested: forging a requisition under the archivist's seal, a clue that bears on none of the suggestions.
 

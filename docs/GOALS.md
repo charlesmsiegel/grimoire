@@ -1,6 +1,6 @@
 # NPC goals and bounded autonomy (first slice of sprint 039)
 
-**Status:** first slice of roadmap sprint 039, [NPC Goals And Autonomy](roadmap/sprints/npc-goals-and-autonomy.md): milestone 1 (one NPC pursues a simple goal) and the recorded, explained half of milestone 2 (a choice that refuses a planner's wish). The code is the pure package `grimoire.goals`, plus one optional argument of 027's `npc_brief`. Headless and in memory: an agenda is a value the caller supplies, nothing is stored, and the choice is a proposal that changes no state.
+**Status:** first slice of roadmap sprint 039, [NPC Goals And Autonomy](roadmap/sprints/npc-goals-and-autonomy.md): milestone 1 (one NPC pursues a simple goal) and the explained half of milestone 2 (a choice that refuses a planner's wish), in memory only. The code is the pure package `grimoire.goals`, plus one optional argument of 027's `npc_brief`. Headless and in memory: an agenda is a value the caller supplies, nothing is stored, and the choice is a proposal that changes no state.
 
 ## The rule
 
@@ -75,7 +75,9 @@ The sprint's proving scenario is `backend/tests/test_goals_scenarios.py`: the gu
 | Storing agendas, editing them in play, goal progress and completion | 039, next slice |
 | Commitments and deadlines (promises owed to someone, by when) | 039 next slice, with [Quests And Commitments](roadmap/sprints/quests-and-commitments.md) |
 | Feasibility from abilities (025), holdings (023), possessions (034) and location (041) | 039, later |
-| Temporal and resource consequences of autonomous actions | 039 milestone 2 onwards |
+| Temporal and resource consequences of autonomous actions | 039 later (the sprint's scope; no milestone names them yet) |
+| Choosing an intention in play, every turn, and storing each turn's `Choice` and explanation in the turn record (035's runner calls neither `choose` nor `check_agenda` yet) | 035 milestone 2 |
+| Checking a reply against the NPC's briefed intention: a reply that breaks a refusal (the NPC does what a limit forbids) is kept today, like any other line | [Narration Continuity Referee](roadmap/sprints/narration-continuity-referee.md) (047) flags the breach for review; 045 never rewrites a recorded intention |
 | Longer personal plans and self-initiated scene hooks | 039 milestone 3 |
 | Who may see whom (disguises, hidden actors) | 041 |
 | Model-assisted planning or decisions | 045 |

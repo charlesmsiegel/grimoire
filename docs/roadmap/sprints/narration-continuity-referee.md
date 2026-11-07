@@ -33,6 +33,13 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 
 The first 047 claim labeller is **independent of the NPC/narrator generation call**. It consumes the Wave 1 player-sovereignty claim checker, 012's epistemic policy, 017's relation graph and accepted effects, distinguishing PC authorship overreach from a reported false claim or narrator metaphor. Return source-anchored findings to the player/referee rather than silently changing text or replaying an effect. A review **cannot grant** a hidden NPC fact or a new PC commitment. Additional billed critique is opt-in and transparently metered; deterministic contradiction checks come first.
 
+## Inherited from Wave 5
+
+The [Wave 5 audit](../README.md#wave-5-status) found these inputs this referee relies on; none is stored across turns yet.
+- **Physical continuity (041, [STAGING](../../STAGING.md)).** The referee consumes `reach`, `sees` and `hears` answers with their `assumed` lists and never mutates a stage. Checking a narration needs the stage as of that narration's turn, which needs 041 milestone 2 (a stage kept across turns) or a stage 035's runner builds for each turn. Off stage is one place in the first slice: the stage does not remember which outside an absent actor is on.
+- **Obstacle escalations (040, [OBSTACLES](../../OBSTACLES.md)).** Escalated stakes ("the guard reported you") are derived from the obstacle's ledgers, not 017, 020 or 021 records, so the referee reads `ObstacleState` to check narration against them; 029's `resolutions()` covers only outcomes.
+- **NPC intentions (039, [GOALS](../../GOALS.md#not-in-this-slice)).** A reply that breaks the NPC's briefed refusal is kept today; this referee flags it for review rather than rejecting it.
+
 ## Open questions
 - When may a repair be automatic?
 - What confidence threshold avoids ruining deliberate ambiguity?

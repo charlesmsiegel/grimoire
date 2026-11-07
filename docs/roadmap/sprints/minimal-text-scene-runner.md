@@ -69,6 +69,20 @@ The [Wave 4 audit](../README.md#wave-4-status) collected the contracts its first
 - **037 ([CARDS](../../CARDS.md)):** build the opening from a card's greetings.
 - **028 ([SYNC](../../SYNC.md)):** register every new stored family (scenes, transcripts, ledgers) in `grimoire.sync.syncable()`; a family it does not name is never synced.
 
+## Obligations from Wave 5
+
+The [Wave 5 audit](../README.md#wave-5-status) found these contracts that other Wave 5 first slices leave to this runner, none of which the first slice does. They are milestone 2 work unless a row says otherwise; each is stated in the named doc.
+
+- **036 ([TRANSCRIPTS](../../TRANSCRIPTS.md), [ARCHAEOLOGY](../../ARCHAEOLOGY.md)), first item of milestone 2, before 044:** read a chat's imported pages (V1 scenes and SillyTavern chats) as the history before its first turn, and decide then who heard each line. Until then the scene reports `imported_history_unread` and no NPC has heard any imported line (the requester's decision in the Wave 5 audit: flag now, hear later).
+- **039 ([GOALS](../../GOALS.md#requirements-on-later-sprints)):** choose a director NPC's intention afresh for every turn's plan from the same `ActorKnowledge` its brief uses, with the turn's cast split into recognised and unrecognised actors; run `check_agenda` before an agenda is used; never let narration, a player's text or a reply author an agenda. Store each turn's `Choice` and its explanation in the turn record, so a reload can say why an NPC acted (045 relies on it).
+- **040 ([OBSTACLES](../../OBSTACLES.md#known-limits)):** the labeller picks a suggested or novel approach and frames it through 029, kept separate from the decider; turn `due()` costs and stakes into 021 accepted effects.
+- **041 ([STAGING](../../STAGING.md#checks-against-033-and-034)):** keep and pass on the latest stage (041 milestone 2 persists it); take 032 presences from the stage, so a whisper never passes a shut door in play (today the runner builds presences from the 033 cast); treat an absent cast member as not speaking in the room; check the stage against the current 033 cast every sequence; decide with 041 milestone 2 how a turn's several physical changes map onto sequences when 021 accepts one effect per turn.
+- **031 ([CONTEXT](../../CONTEXT.md)):** pack for a player character's controller (also listed under Wave 4).
+- **016 ([SESSION_ZERO](../../SESSION_ZERO.md)):** extend the intent router with skip and redirect lanes; authenticate the audience and speakers. Today `BoundaryContext.audience` is the requester alone, which holds for one local player; 102 changes it.
+- **029 ([ADJUDICATION](../../ADJUDICATION.md#known-limits)):** take consent only from the player's own live choice (also listed under Wave 4).
+- **052 ([Instant Campaign Creation](instant-campaign-creation.md)):** let a launch choose among a card's greetings (`begin` takes only the first), and run with no session zero at all (a scope with one refuses generation until 016's codec exists).
+- **048 ([Performance And Tracing](performance-and-tracing.md)):** turns store no timings and the runner has no tracing hook; every call reloads the library and re-reads every turn file of the campaign (see [SCENES](../../SCENES.md#known-limits)).
+
 ## Open questions
 - What user-visible review, failure and rollback flows must the implementation spec prove?
 - Which optional later integrations can stay outside the first slice?

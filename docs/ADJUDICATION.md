@@ -4,7 +4,7 @@
 - `grimoire.adjudication` (pure): action frames, the deterministic assessment, decisions, outcomes and the ledger codecs;
 - `grimoire.adjudicationstore` (adapter): `AdjudicationLibrary`, which records frames, ability rulings and decisions in an authority ledger and hands decided ability uses to [accepted effects (021)](EFFECTS.md).
 
-There is no runner, prompt, model call or dice. Nothing labels prose yet: the labeller that produces frames is a caller obligation (035). All scenarios are synthetic.
+There is no prompt, model call or dice, and 035's runner does not frame or decide attempts yet (milestone 2). Nothing labels prose yet: the labeller that produces frames is a caller obligation (035). All scenarios are synthetic.
 
 **First useful proof.** "Resolve a risky mechanics-free action without narrator fiat": Mara, a player character, vaults a collapsing bridge. Her training favours the vault, the gap and the falling span hinder it, and a fall or a lost satchel are at stake. The outcome may be a success, a failure or a success at a cost, but only one that a recorded cause supports, and every narration retry must agree with it.
 

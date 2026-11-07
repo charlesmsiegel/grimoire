@@ -5,7 +5,7 @@
 - `grimoire.partystore`: the store-backed `PartyLibrary`;
 - two predicates added to 017's [relation registry](GRAPH.md#predicates). There is **no new record family**.
 
-There is no app, no scene runner and no model call. The scenarios are synthetic.
+There is no app and no model call. 035's runner ([SCENES](SCENES.md)) reads reserves from this party state; the scenarios here are synthetic.
 
 ## What it means
 

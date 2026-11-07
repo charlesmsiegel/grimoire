@@ -32,6 +32,12 @@ This sprint moves from Wave 7 to **Wave 6**. A user should not need to locate a 
 
 [World-less chat lifecycle](../CHAT_MODEL.md) / [Sprint 107](world-optional-chat-scopes.md).
 
+## Inherited from Wave 5
+
+The [Wave 5 audit](../README.md#wave-5-status) found what one-click start needs from Wave 5 first slices:
+- **035 ([SCENES](../../SCENES.md)).** `begin` proposes only a card's first greeting, so choosing among greetings is 035's to add; a scope with a session zero refuses generation until 016's codec exists, so a quick start must work with none.
+- **042 ([REBASE](../../REBASE.md)).** "A world created later from reviewed selected facts" is 042's `CanonProposer` plus 107's `attach_world`, which promote picked characters only; promoting lore, places, organisations and relations is later 042 work.
+
 ## Open questions
 - What is the irreducible setup for safe, coherent play?
 - Who confirms newly established canon?
