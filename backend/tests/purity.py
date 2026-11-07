@@ -70,7 +70,7 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
                                          "datetime", "uuid", "secrets")
 
 #: grimoire packages that are adapters or test infrastructure, not pure.
-ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.archaeologystore", "grimoire.capture", "grimoire.cardstore", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.contextstore", "grimoire.devicetag", "grimoire.effective", "grimoire.effectstore",
+ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.archaeologystore", "grimoire.capture", "grimoire.cardstore", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.contextstore", "grimoire.decisionstore", "grimoire.devicetag", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       "grimoire.import_v1", "grimoire.ledgers", "grimoire.library", "grimoire.migrate_v1",
                       "grimoire.obstaclestore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
@@ -172,6 +172,10 @@ PURE_PACKAGES = (
     # NPC goals (039): authored agendas and the deterministic policy that chooses from the NPC's own
     # knowledge. It calls no model, so it never touches the inference contracts.
     PurePackage("grimoire.goals", ("grimoire.goals", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # Recorded NPC decisions (045): the record of a 039 choice, its evidence and codec, and replay; the
+    # ledger is an adapter. It calls no model, so it never touches the inference contracts.
+    PurePackage("grimoire.decisions", ("grimoire.decisions", "grimoire.goals", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
     # Transcripts (036): stored pages of posts and variants; SillyTavern chat reading over decoded lines.
     PurePackage("grimoire.transcripts", ("grimoire.transcripts", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
@@ -193,6 +197,8 @@ PURE_PACKAGES = (
     PurePackage("grimoire.scene", ("grimoire.scene", "grimoire.core", "grimoire.core.inference",
                                    "grimoire.comms", "grimoire.generation", "grimoire.transcripts",
                                    "grimoire.adjudication")),
+    # Operational tracing (048): spans, call samples and cost attribution; the clock and prices are passed in.
+    PurePackage("grimoire.tracing", ("grimoire.tracing", "grimoire.core.inference")),
     # Offline evaluation: of the domain core it uses only the inference contracts (sprint 015);
     # only its loader and CLI read files.
     PurePackage("grimoire.evals", ("grimoire.evals", "grimoire.core.inference"),

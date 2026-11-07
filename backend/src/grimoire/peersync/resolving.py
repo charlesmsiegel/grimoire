@@ -26,16 +26,17 @@ serving device in the step ``resolve`` relays for that record (this pair's recor
 no hold but its own current version: ``check_step``), and in a commit of its own for its other
 pairs' records, which the peer never sees, just before the hold's step; the hold's step itself
 is refused unless the pair's record already holds it (``peersync.replay``).
+
+Choosing the deletion (``keep=None``) is started only on the device that holds the record: that
+device receives (it holds its version, deletes the record and marks it, in its own library), and
+the serving device is the winner, written only bookkeeping, as for any other choice of the
+serving device's version. The serving device refuses a deletion it would have to make itself.
 """
 
 from __future__ import annotations
 
-import contextlib
-import os
 import tempfile
-import threading
-import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,8 +49,9 @@ from grimoire.sync.bookkeeping import read_document
 from grimoire.sync.documents import keeps_name
 from grimoire.sync.keeps import kept_slots
 
+from .busy import outgoing
 from .errors import MirrorMismatch, PeerRefused, TransportError
-from .replay import Op, kept_target, send_ops
+from .replay import Op, absent_here, ask_absent, kept_target, send_ops
 from .session import _check_paired, dial, hang_up, pairing_for
 from .snapshot import Limits, MirrorStore, receive_mirror
 from .wire import Channel, client_handshake
@@ -76,11 +78,12 @@ class ResolveReport:
 
 
 def resolve_conflict(store: LibraryStore, authority, peer: str, address: tuple[str, int], path: str,  # type: ignore[no-untyped-def]
-                     keep: str, expected: Mapping[str, str | None], *, timeout: float = 600.0,
+                     keep: str | None, expected: Mapping[str, str | None], *, timeout: float = 600.0,
                      workdir: str | Path | None = None, limits: Limits = Limits()) -> ResolveReport:
     """End the conflict at ``path`` with the paired device ``peer`` at ``address`` by keeping the
-    version whose current etag is ``keep``; ``expected`` gives each device's etag (``None``:
-    absent) as the conflict was reported, exactly as 019's ``resolve`` takes them.
+    version whose current etag is ``keep`` (``None``: the deletion, started on the device that holds
+    the record); ``expected`` gives each device's etag (``None``: absent) as the conflict was
+    reported, exactly as 019's ``resolve`` takes them.
 
     Raises ``NotPaired`` or ``AuthenticationFailed`` before anything is exchanged, as ``transfer``
     does; every other outcome is a report.
@@ -101,7 +104,7 @@ def resolve_conflict(store: LibraryStore, authority, peer: str, address: tuple[s
         # so following the advice never sends the user back here.
         return ResolveReport(peer, path, "refused", f"ResolveRefused: {path} is a definition revision {peer} "
                                                     f"would replace; start this resolve on {peer}")
-    with _outgoing(store):  # this library's own server now refuses what could wait on this resolve
+    with outgoing(store):  # this library's own server now refuses what could wait on this resolve
         try:
             connection = dial(address, timeout)
         except OSError as error:
@@ -119,18 +122,18 @@ def resolve_conflict(store: LibraryStore, authority, peer: str, address: tuple[s
 def _unusable(local: str, peer: str, path: object, keep: object, expected: object) -> str | None:
     """Why the request cannot be a resolve at all, before anything is sent.
 
-    ``keep=None`` would choose a deletion: resolve delivers a version, and an absent one is no
-    version to deliver (deletion propagation belongs to a later 028 slice).
+    ``keep=None`` chooses the deletion (028). The device that holds the record deletes it, and a
+    serving device never deletes a record for a peer, so it is started there.
     """
     if type(path) is not str or syncable(path) is None:
         return f"{path!r} is not a synchronized record"
-    if keep is None:
-        return "a deletion cannot be chosen: keep must be the current etag of one device's version"
-    if not is_etag(keep):
-        return "keep must be the current etag of one device's version"
+    if keep is not None and not is_etag(keep):
+        return "keep must be the current etag of one device's version, or None for the deletion"
     if not isinstance(expected, Mapping) or set(expected) != {local, peer} or not all(
             value is None or is_etag(value) for value in expected.values()):
         return f"expected must give the etag (or None) of {local} and {peer}"
+    if keep is None and expected[local] is None and expected[peer] is not None:
+        return f"{path} is held by {peer}, which deletes it: start this resolve on {peer}"
     return None
 
 
@@ -158,6 +161,7 @@ def _resolve(store: LibraryStore, channel: Channel, local: str, local_handle: ob
             return ResolveReport(peer, path, "incomplete", f"MirrorMismatch: {error}")
         relay = _Relay(channel, store, key, keeps_name(local) if expected[local] == keep else None)
         mirror.store.relay = relay  # type: ignore[attr-defined]
+        mirror.store.peer_check = relay.confirm_absent  # type: ignore[attr-defined]
         try:
             receiver = resolve(store, mirror.store, path, keep, expected, {local: local_handle, peer: mirror.handle})
             relay.flush()
@@ -222,6 +226,12 @@ class _Relay:
         for ops in held:
             self._send(ops)
 
+    def confirm_absent(self, paths: list[str]) -> None:
+        """Have the serving device confirm, under its own lock, that it still lacks each path a
+        deletion removes (028); a refusal (``stale``) ends the resolve before the deletion."""
+        _check_paired(self.store, self.channel.peer, self.key)
+        ask_absent(self.channel, paths)
+
     def _send(self, ops: list[tuple[str, Callable[[], Op]]]) -> None:
         # An owner who unpairs mid-resolve must not have anything more sent (as a transfer checks).
         _check_paired(self.store, self.channel.peer, self.key)
@@ -231,7 +241,7 @@ class _Relay:
 class RelayingMirror(MirrorStore):
     """The mirror for a resolve: every transaction it commits is replayed on the serving device."""
 
-    relay: Callable[[list[tuple[str, Callable[[], Op]]]], None] | None = None
+    relay: _Relay | None = None
 
     def transaction(self) -> Transaction:
         super().transaction()  # its checks: an open, writable library
@@ -269,6 +279,11 @@ class _RelayedTransaction(Transaction):
         body = bytes(data)
         self._ops.append(("put", lambda: (header, body, path, etag(body))))
         return key
+
+    def delete_exact(self, path: str, expected: str) -> str:
+        # resolve_conflict lets only the device holding the record choose its deletion, so the
+        # mirror (the serving device) is never the one that deletes; never relayed
+        raise ResolveRefused(f"{path} would be deleted on the serving device; start this resolve on that device")
 
     def put_blob_exact(self, path: str, read: Callable[[], bytes | None], *, size: int) -> str:
         key = super().put_blob_exact(path, read, size=size)
@@ -316,69 +331,13 @@ class _RelayedTransaction(Transaction):
 
 # -- serving side -----------------------------------------------------------------------------
 
-#: How long a serving device waits for its own library before refusing a step as ``busy``, once one
-#: of its own resolves is in flight. That resolve holds the library while it waits for its peer's
-#: answer (019 commits the receiver's data with both libraries held), so two devices resolving
-#: against each other would each wait on the other until the connection timed out, freezing
-#: every local write meanwhile.
-BUSY_WAIT = 1.0
-
-_OUTGOING: dict[str, int] = {}
-_OUTGOING_LOCK = threading.Lock()
-
-
-def _key(store: LibraryStore) -> str:
-    return os.path.realpath(store.root)
-
-
-@contextlib.contextmanager
-def _outgoing(store: LibraryStore) -> Iterator[None]:
-    """Mark ``store`` as resolving against a peer for the block (this process only: a library is
-    open for writing in one process at a time)."""
-    key = _key(store)
-    with _OUTGOING_LOCK:
-        _OUTGOING[key] = _OUTGOING.get(key, 0) + 1
-    try:
-        yield
-    finally:
-        with _OUTGOING_LOCK:
-            _OUTGOING[key] -= 1
-            if not _OUTGOING[key]:
-                del _OUTGOING[key]
-
-
-def resolving_out(store: LibraryStore) -> bool:
-    """Whether this process is resolving a conflict of ``store`` against a peer right now."""
-    with _OUTGOING_LOCK:
-        return _key(store) in _OUTGOING
-
-
-@contextlib.contextmanager
-def committing(store: LibraryStore) -> Iterator[None]:
-    """Hold ``store`` for one served commit, or refuse ``busy`` with nothing written.
-
-    Without a resolve of this library in flight the wait is unbounded, as before: whoever holds
-    the library is a local commit that will finish. With one, the holder may be that resolve,
-    waiting on its peer, whose server may in turn be waiting here: after ``BUSY_WAIT`` the step
-    is refused, so the cycle ends at once and no local write waits for a connection to time out.
-    """
-    started = time.monotonic()
-    while not store.lock.acquire(timeout=0.05):
-        if resolving_out(store) and time.monotonic() - started >= BUSY_WAIT:
-            raise PeerRefused("busy", "this library is busy resolving a conflict of its own; try again")
-    try:
-        yield
-    finally:
-        store.lock.release()
-
-
 @dataclass(frozen=True)
 class ResolveRequest:
     """A resolve request as the serving device accepts it: the path, the chosen etag, and the
     etags expected here and on the requesting device."""
 
     path: str
-    keep: str
+    keep: str | None  # None: the deletion, which only the requester (holding the record) makes
     expected: str | None
     theirs: str | None
     device: str
@@ -389,8 +348,9 @@ class ResolveRequest:
         path, keep, expected = header.get("path"), header.get("keep"), header.get("expected")
         if type(path) is not str or syncable(path) is None:
             raise PeerRefused("invalid", "a resolve request names a synchronized record")
-        if not is_etag(keep):  # a deletion (None) is never a version to keep
-            raise PeerRefused("invalid", "a resolve request keeps the current etag of one device's version")
+        if keep is not None and not is_etag(keep):  # None: the deletion (028)
+            raise PeerRefused("invalid", "a resolve request keeps the current etag of one device's version, "
+                                         "or none for the deletion")
         if not isinstance(expected, dict) or set(expected) != {device, peer} or not all(
                 value is None or is_etag(value) for value in expected.values()):
             raise PeerRefused("invalid", "a resolve request gives the expected etag of both devices")
@@ -408,11 +368,15 @@ class ResolveRequest:
         device that made it), or a blob, whose name is its content. A kept version counts only when
         its file reads (an unreadable one may hold anything). When this device receives, the chosen
         version must also be the requester's own current one: it is the version resolve copies.
-        Anything else would let a paired device write chosen bytes over a record.
+        Anything else would let a paired device write chosen bytes over a record. The deletion
+        (``keep=None``) is admitted only where this device lacks the record: it is the winner.
         """
         found = _current(store, self.path)
         if found != self.expected:
             raise PeerRefused("stale", f"{self.path} changed on this device since the conflict was reported")
+        if self.keep is None and found is not None:  # a peer never deletes a record here (028)
+            raise PeerRefused("invalid", f"{self.path} is held on this device, which deletes it: start this "
+                                         "resolve here")
         if self.keep == found:
             if self.theirs == found:
                 raise PeerRefused("no_conflict", f"{self.path} is identical on both devices")
@@ -436,6 +400,15 @@ class ResolveRequest:
         except (StoreError, OSError, ValueError, SyncInterrupted):
             return False  # unreadable is never an agreement
         return archive.state == "valid" and archive.entries.get(self.path) == ("agreed", self.keep)
+
+    def confirm_absent(self, store: LibraryStore, absent: object) -> None:
+        """A deletion's last check before the requester deletes (028), under this library's lock:
+        this device, the winner, still lacks the path and every revision the deletion takes along.
+        A record written here since the snapshot is refused ``stale``, so no tombstone is archived
+        for a version this device holds."""
+        if self.keep is not None or not isinstance(absent, list) or self.path not in absent:
+            raise PeerRefused("invalid", "a check confirms that the paths a deletion removes are absent here")
+        absent_here(store, absent)
 
     def check_step(self, store: LibraryStore, ops: list[tuple[dict, bytes | Path]]) -> str | None:  # type: ignore[type-arg]
         """Refuse a step of this resolve that does not do what the request said; return the etag of
@@ -463,7 +436,7 @@ class ResolveRequest:
         held = [body for header, body in writes if header.get("op") == "keep" and header.get("hold") is True]
         if any(found is None or type(body) is not bytes or etag(body) != found for body in held):
             raise PeerRefused("invalid", f"a resolve holds only this device's own version of {self.path}")
-        record = [(header, body) for header, body in writes if header.get("op") in ("put", "blob")]
+        record = [(header, body) for header, body in writes if header.get("op") in ("put", "blob", "delete")]
         if not record:
             if held:
                 raise PeerRefused("invalid", f"a resolve holds this device's own version of {self.path} only in "

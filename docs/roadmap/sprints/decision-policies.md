@@ -3,6 +3,8 @@
 > **V2 scope correction:** NPC decision selection must be optional and flagged when it adds a billable model call; independent NPC *writing* remains required. Use deterministic rules and actor evidence first. See the [V2 ordered roadmap](../README.md) for hard prerequisites and delivery wave; older references to existing V1 systems are porting targets, not the V2 starting baseline.
 
 
+**Status:** first slice implemented ([DECISIONS](../../DECISIONS.md)): milestone 1 and the proving scenario. One NPC's tactics decision is recorded per scene turn with its evidence, in a `decisions/<campaign>` authority ledger, and a reroll replays it, never re-deciding. The deterministic policy is [NPC Goals And Autonomy](npc-goals-and-autonomy.md)'s `choose` ([GOALS](../../GOALS.md)); an optional, capped `decision` call may pick only among the approaches it allows, when the turn's policy enables the stage ([Turn Costs And Feature Flags](turn-costs-and-feature-flags.md), [INFERENCE](../../INFERENCE.md)). Milestones 2 and 3 (comparison across a scene, sampled randomness and distributions) are later work.
+
 **Outcome:** Choose and record feasible NPC/world actions before narration, with reproducibility where appropriate.
 
 ## Scope

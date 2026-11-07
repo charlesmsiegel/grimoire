@@ -17,7 +17,7 @@ import json
 import os
 import re
 import stat
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -325,9 +325,18 @@ class MirrorStore(LibraryStore):
 
     peer_reasons: Mapping[str, str] = {}
     peer_bases = True  # 028: whether the serving device can store its base cache entries (``sync_state_fits``)
+    #: asks the serving device itself (``replay.ask_absent``), set once the session can
+    peer_check: Callable[[list[str]], None] | None = None
 
     def sync_state_fits(self, name: str) -> bool:
         return self.peer_bases and super().sync_state_fits(name)
+
+    def confirm_absent(self, paths: list[str]) -> None:
+        """019 checks, under both libraries' locks, that the device a deletion came from still lacks
+        each path (028). This mirror is a snapshot of that device, so the device answers instead."""
+        if self.peer_check is None:
+            raise StoreError("this mirror has no connection to confirm a deletion with")
+        self.peer_check(paths)
 
     def scan(self) -> CanonicalScan:
         found = super().scan()

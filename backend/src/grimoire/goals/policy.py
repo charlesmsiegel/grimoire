@@ -17,6 +17,10 @@ Credibility comes from three rules:
 
 A narrative planner's wish (``desired``) is recorded and explained, never obeyed: milestone 2's
 "policy-based choice conflicting with a desired plot outcome".
+
+A ``selected`` approach (045's bounded decision, docs/DECISIONS.md) is different: it replaces the
+authored order's pick, but only among the approaches the policy found possible and permitted now
+(``chosen`` or ``outranked``). It can never reach an approach a condition rules out or a limit forbids.
 """
 
 from __future__ import annotations
@@ -81,6 +85,8 @@ class Choice:
     considered: tuple[Considered, ...]
     desire: Desire | None = None
     unrecognised: frozenset[InstanceRef] = frozenset()
+    #: 045: the (goal id, approach id) a bounded decision picked in place of the authored order, if any.
+    selection: tuple[str, str] | None = None
     _seal: InitVar[object] = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
@@ -120,6 +126,16 @@ class Choice:
     def approach(self) -> Approach | None:
         chosen = self._chosen()
         return self.agenda.approach(chosen.goal_id, chosen.approach_id)[1] if chosen else None
+
+    @property
+    def default(self) -> Considered | None:
+        """The approach the authored order picks: the first possible and permitted one (045)."""
+        return next((entry for entry in self.considered if entry.outcome in ("chosen", "outranked")), None)
+
+    @property
+    def feasible(self) -> tuple[Considered, ...]:
+        """Every approach possible and permitted now, in the order tried: what a decision may pick from."""
+        return tuple(entry for entry in self.considered if entry.outcome in ("chosen", "outranked"))
 
     @property
     def refusals(self) -> tuple[Limit, ...]:
@@ -189,9 +205,15 @@ def _check_control(actor: InstanceRef, controls: object) -> None:
         raise GoalError("player_actor", f"{actor} is a player character")
 
 
+def _pair(value: object, label: str) -> tuple[str, str]:
+    if not (type(value) is tuple and len(value) == 2 and all(type(part) is str for part in value)):
+        raise GoalError("unknown_approach", f"{label} must be a (goal id, approach id) pair")
+    return value  # type: ignore[return-value]
+
+
 def choose(agenda: Agenda, knowledge: ActorKnowledge, *, present: Iterable[InstanceRef],
            controls: Iterable[ControlAssignment], desired: tuple[str, str] | None = None,
-           unrecognised: Iterable[InstanceRef] = ()) -> Choice:
+           unrecognised: Iterable[InstanceRef] = (), selected: tuple[str, str] | None = None) -> Choice:
     """What ``agenda``'s NPC pursues now, from its own ``knowledge`` and the scene's cast ``present``.
 
     ``present`` is the cast as this NPC recognises it; ``unrecognised`` the rest of the scene (an actor in
@@ -204,6 +226,11 @@ def choose(agenda: Agenda, knowledge: ActorKnowledge, *, present: Iterable[Insta
     ``ambiguous_control``, ``unassigned_actor`` and ``player_actor`` (only a director-controlled NPC has
     a policy); ``absent_actor`` (the NPC is not in the scene, so it can pursue nothing in it); and
     ``unknown_approach`` for a ``desired`` (goal id, approach id) the agenda does not have.
+
+    ``selected`` (045) is a bounded decision's pick: that approach is chosen in place of the authored
+    order's first, and the order's pick becomes ``outranked``. It must name an approach of the agenda
+    (``unknown_approach``) that is possible and permitted now (``infeasible_selection`` when a condition
+    is unmet or a limit forbids it): a decision chooses among what the policy allows, never past it.
     """
     if type(agenda) is not Agenda:
         raise GoalError("bad_agenda", "choose needs an Agenda")
@@ -225,9 +252,9 @@ def choose(agenda: Agenda, knowledge: ActorKnowledge, *, present: Iterable[Insta
     if actor not in cast:
         raise GoalError("absent_actor", f"{actor} is not in the scene")
     if desired is not None:
-        if not (isinstance(desired, tuple) and len(desired) == 2 and all(type(part) is str for part in desired)):
-            raise GoalError("unknown_approach", "desired must be a (goal id, approach id) pair")
-        agenda.approach(*desired)
+        agenda.approach(*_pair(desired, "desired"))
+    if selected is not None:
+        agenda.approach(*_pair(selected, "selected"))
 
     aware = held(knowledge)
 
@@ -246,16 +273,19 @@ def choose(agenda: Agenda, knowledge: ActorKnowledge, *, present: Iterable[Insta
                 outcome = "unmet"
             elif forbidden:
                 outcome = "forbidden"
-            elif not chosen:
+            elif not chosen and (selected is None or selected == (goal.goal_id, approach.approach_id)):
                 outcome, chosen = "chosen", True
             else:
                 outcome = "outranked"
             considered.append(Considered(goal.goal_id, approach.approach_id, outcome, missing, forbidden))
+    if selected is not None and not chosen:
+        # Unmet or forbidden: a decision may reorder what the policy allows, never reach past a limit.
+        raise GoalError("infeasible_selection", f"{actor} cannot take {selected[0]}/{selected[1]} now")
     desire = None
     if desired is not None:
         entry = next(entry for entry in considered if (entry.goal_id, entry.approach_id) == desired)
         desire = Desire(entry.goal_id, entry.approach_id, entry.outcome)
-    return Choice(agenda, knowledge, cast, tuple(considered), desire, unseen, _SEAL)
+    return Choice(agenda, knowledge, cast, tuple(considered), desire, unseen, selected, _SEAL)
 
 
 def explain(choice: Choice) -> tuple[str, ...]:
@@ -271,6 +301,14 @@ def explain(choice: Choice) -> tuple[str, ...]:
         lines.append(f"{choice.actor} pursues {goal.goal_id} ({goal.aim}) by {approach.approach_id}: {approach.action}")
     else:
         lines.append(f"{choice.actor} has nothing it can pursue now.")
+    default = choice.default
+    if choice.selection is not None and default is not None:
+        if (default.goal_id, default.approach_id) == choice.selection:
+            lines.append(f"A decision picked it among {len(choice.feasible)} possible approaches; "
+                         "the authored order would have picked it too.")
+        else:
+            lines.append(f"A decision picked it among {len(choice.feasible)} possible approaches, in place of "
+                         f"{default.goal_id}/{default.approach_id}, the authored order's pick.")
     desire = choice.desire
     if desire is not None:
         wished, wanted = choice.agenda.approach(desire.goal_id, desire.approach_id)

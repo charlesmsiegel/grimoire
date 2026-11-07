@@ -8,6 +8,7 @@ Validation is an allowlist: anything not explicitly permitted is rejected.
 
 from __future__ import annotations
 
+import functools
 import unicodedata
 from dataclasses import dataclass
 
@@ -52,7 +53,12 @@ def _canonical(segment: str) -> str:
         "NFKC", unicodedata.normalize("NFKC", segment).casefold())
 
 
+@functools.lru_cache(maxsize=4096)
 def _allowed_char(char: str) -> bool:
+    # A pure function of one character, asked of every character of every address the store reads: a chat's
+    # history alone is thousands of file names. Remembering the answer per character keeps validation exact
+    # and takes it off a played turn's critical path (048). ``_check_segment`` passes only characters of an
+    # exact ``str``, so the cache never sees a subclass with its own ``__eq__`` or ``__hash__``.
     point = ord(char)
     if any(low <= point <= high for low, high in _INVISIBLE):
         return False

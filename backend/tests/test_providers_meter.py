@@ -227,3 +227,24 @@ def test_cost_evidence_needs_hosted_provider_reported_accepted_unpoisoned_calls(
     meter._end(plan.calls[0].call_id, "failed")
     assert meter.poisoned_call_ids == frozenset({plan.calls[0].call_id})
     assert meter.cost_evidence is False
+
+
+def test_a_forgone_call_is_settled_at_no_cost_and_can_never_be_sent():
+    meter, plan = _meter()
+    first, second = plan.calls
+    meter.forgo(first)
+    assert meter.status(first.call_id) == "forgone"
+    assert [(a.outcome, a.usage.input_tokens, a.usage.output_tokens) for a in meter.ledger.attempts] == [
+        ("not_sent", 0, 0)]
+    assert first.call_id not in meter.summary().unmetered_call_ids
+    with pytest.raises(CallRefused) as refused:
+        meter._begin(first, DIGEST, False, 1)  # nothing may be sent for it afterwards
+    assert refused.value.reason == "completed"
+    with pytest.raises(CallRefused):
+        meter.forgo(first)
+    _run(meter, second)
+    with pytest.raises(CallRefused):
+        meter.forgo(second)  # a call that ran cannot be called forgone
+    assert meter.all_accepted and meter.summary().complete
+    with pytest.raises(UnplannedCallError):
+        meter.forgo(plan_turn("camp", "t2", present_actor_ids=["a"], speaking_npc_ids=["a"]).calls[0])

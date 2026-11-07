@@ -12,6 +12,12 @@
 2. Expose end-to-end time/cost breakdowns and missing-data states.
 3. Improve a measured bottleneck and prove no recall or continuity regression.
 
+## Status
+
+A first slice is built ([PERFORMANCE](../../PERFORMANCE.md)). Milestone 1: representative benchmarks of a played turn, cold and warm, over a growing synthetic history (a one-NPC card chat and the migrated two-NPC V1 campaign), and of the V1 and card imports, with recorded baselines. Milestone 2: the scene runner takes a `tracer` and hands it one trace per call, with each operation's wall and self time and, for each model call, its tokens, retries, provider time and cost, every missing value said as such (unreported, synthetic, unpriced, partial). Milestone 3: the measured bottleneck, decoding every turn file of the campaign twice a call, is cut to reading only this chat's files and decoding only what changed; a warm runner and a fresh one send the same prompts over an edited history.
+
+Later work, not in this slice: a per-chat index so a call stops reading every turn file, caching the library view, UI latency, retained traces (none is kept: the open question on safe metrics is answered "none" for now), real prices (013), and a retrieval-quality check, which waits for a change that reduces context (none is made here).
+
 ## Moonshot
 Offer a player-facing latency budget planner that predicts and optimizes RP quality per unit of latency, privacy and cost.
 

@@ -25,17 +25,27 @@ _TEMP = re.compile(r"[A-Za-z0-9][A-Za-z0-9_~-]*\.new")
 State = Literal["commit", "abort"]
 #: ``publish`` a canonical record; ``replica`` a canonical record holding another library's exact
 #: bytes; ``keep`` a kept copy of another library's version under ``.conflicts``; ``hold`` a kept
-#: version whose bytes exist nowhere else; ``state`` a device-local ``.sync`` file or 028 pairing record. Replica, keep
-#: and state entries are never preserved: dropped instead (their bytes are regenerable).
-Kind = Literal["publish", "replica", "keep", "hold", "state"]
-KINDS = ("publish", "replica", "keep", "hold", "state")
+#: version whose bytes exist nowhere else; ``state`` a device-local ``.sync`` file or 028 pairing record;
+#: ``remove`` (028) deletes a canonical record that still holds ``old`` (its temp is the deletion document,
+#: ``new`` that document's etag; the removed bytes are a ``hold`` of the same journal). Replica, keep,
+#: state and remove entries are never preserved: dropped instead (their bytes are regenerable, or,
+#: for a removal, still at the target or in its hold).
+Kind = Literal["publish", "replica", "keep", "hold", "state", "remove"]
+KINDS = ("publish", "replica", "keep", "hold", "state", "remove")
 #: Entries whose bytes exist elsewhere: dropped, never preserved, when they cannot publish.
-REGENERABLE_KINDS = frozenset({"replica", "keep", "state"})
+REGENERABLE_KINDS = frozenset({"replica", "keep", "state", "remove"})
+#: The record kinds a ``remove`` entry may delete (028): the families sync propagates a deletion of.
+#: 020 knowledge records, 036 transcript pages and 018 image objects are create-only and blobs are
+#: content-addressed: none of them is ever deleted, so a journal that would is refused.
+DELETABLE_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "placement"})
 
 
 def valid_target(kind: str, target: Parts) -> bool:
     if kind in ("publish", "replica"):
         return classify(target) is not None
+    if kind == "remove":
+        found = classify(target)
+        return found is not None and found[0] in DELETABLE_KINDS
     if kind in ("keep", "hold"):
         return is_kept_target(target)
     return kind == "state" and (is_sync_state(target) or is_secret_state(target))
@@ -98,6 +108,8 @@ def parse(data: bytes) -> Journal:
         found = classify(tuple(target.split("/")))
         if found is not None and found[0] in ("knowledge", "transcript") and raw["old"] is not None:  # create-only
             raise RecoveryFailed(f"journal would replace a create-only {found[0]} record: {target!r}")
+        if kind == "remove" and raw["old"] is None:  # a removal names the bytes it may remove
+            raise RecoveryFailed(f"journal removal names no current version: {target!r}")
         if kind in ("keep", "hold") and raw["old"] not in (None, raw["new"]):  # created, or re-verified unchanged
             raise RecoveryFailed(f"journal would replace an existing kept version: {target!r}")
         if type(temp) is not str or not is_staging_name(temp):

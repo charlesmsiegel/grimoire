@@ -11,19 +11,24 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
 
 from grimoire.chats.model import Launch
 from grimoire.chatstore import InvalidBinding
-from grimoire.core.identity import ScopeRef
+from grimoire.core.identity import InstanceRef, ScopeRef
 from grimoire.peersync import AuthenticationFailed, NotPaired, new_pairing_key, pair, transfer, unpair
+from grimoire.peersync import busy as busy_module
 from grimoire.peersync import server as server_module
+from grimoire.peersync import session as session_module
 from grimoire.peersync import snapshot as snapshot_module
+from grimoire.peersync import replay as replay_module
 from grimoire.peersync.pairing import peer_principal
 from grimoire.peersync.replay import StepBuffer
-from grimoire.store import LibraryStore, SourceManifest
+from grimoire.store import LibraryStore, RecordEnvelope, SourceManifest
+from grimoire.sync import deletion as sync_deletion
 
 from chat_fixtures import ANYA, MARA
 from peersync_helpers import DESKTOP, PHONE, Device, paired, seed_cards, serving, start_scene
@@ -498,3 +503,183 @@ def test_pairing_keys_and_ledgers_never_leave_their_device(tmp_path):
     assert secrets == [f"{DESKTOP}.json"]  # its own record of the pairing, never the desktop's
     for path, data in _files(phone.store.root).items():
         assert key.hex().encode() not in data, path
+
+
+# -- 028: deletions over the transport ---------------------------------------------------------------
+
+@pytest.mark.parametrize("deleter", [DESKTOP, PHONE])
+def test_a_deletion_on_either_device_is_made_on_the_other_and_its_version_kept_there(tmp_path, deleter):
+    """The phone serves. Deleted on the desktop, the phone deletes it in a replayed step under the
+    desktop's peer principal; deleted on the phone, the desktop deletes it in its own library."""
+    desktop, phone, _ = paired(tmp_path)
+    start_scene(desktop)
+    _add_source(desktop, "catalog:extra")
+    path = "sources/catalog/extra/_source/manifest.json"
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+        original = (desktop.store.root / path).read_bytes()
+        source, receiver = (desktop, phone) if deleter == DESKTOP else (phone, desktop)
+        (source.store.root / path).unlink()
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+        assert report.status == "synced" and (path, receiver.name) in report.deleted, report
+        assert not (receiver.store.root / path).exists()
+        assert original in [data for where, data in _files(receiver.store.root).items() if where.startswith(".conflicts/")]
+        assert "catalog:extra" not in receiver.store.load().sources
+        again = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert again.status == "synced" and again.copied == () and again.deleted == (), again
+    assert {key: value for key, value in _files(desktop.store.root).items() if not key.startswith(".conflicts/")} == {
+        key: value for key, value in _files(phone.store.root).items() if not key.startswith(".conflicts/")}
+
+
+@pytest.mark.parametrize("deleter", [DESKTOP, PHONE])
+def test_a_record_restored_on_the_deleting_device_after_the_snapshot_is_never_deleted(tmp_path, monkeypatch, deleter):
+    """The device that deleted puts the record back after the pass was planned. The receiver's data
+    commit checks it is still gone there, under both libraries' locks: the client reads its own
+    library, and asks the serving device (``check``) when that is the one that deleted. Nothing is
+    deleted, no tombstone is archived, and the transfer's next pass finds the devices agreeing."""
+    desktop, phone, _ = paired(tmp_path)
+    start_scene(desktop)
+    _add_source(desktop, "catalog:extra")
+    path = "sources/catalog/extra/_source/manifest.json"
+    source, receiver = (desktop, phone) if deleter == DESKTOP else (phone, desktop)
+    commit_holds = sync_deletion.commit_holds
+    restored = []
+
+    def then_restored(*args, **kwargs):  # holds(d), just before the receiver's data commit
+        result = commit_holds(*args, **kwargs)
+        if not restored:
+            restored.append(True)
+            txn = source.store.transaction()
+            txn.put_exact(path, original, None)
+            txn.commit(source.handle)
+        return result
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+        original = (desktop.store.root / path).read_bytes()
+        (source.store.root / path).unlink()
+        monkeypatch.setattr(sync_deletion, "commit_holds", then_restored)
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+        monkeypatch.undo()
+        assert restored and report.status == "synced" and report.deleted == (), report
+        for device in (desktop, phone):
+            assert (device.store.root / path).read_bytes() == original
+            assert b'"deleted"' not in b"".join(data for where, data in _files(device.store.root).items()
+                                                if where.endswith("/archive.json"))
+        again = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert again.status == "synced" and again.copied == () and again.deleted == (), again
+
+
+def test_a_deletion_the_receiving_device_does_not_grant_settles_as_a_denied_conflict(tmp_path):
+    """The phone no longer lets the desktop write its sources: the desktop's deletion is denied there
+    before its hold is recorded, so the transfer ends with the one ``denied`` conflict and nothing
+    written, and the next transfer writes nothing either."""
+    desktop, phone, _ = paired(tmp_path)
+    _add_source(desktop, "catalog:extra")
+    path = "sources/catalog/extra/_source/manifest.json"
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+        for grant in phone.authority.active_grants():
+            if grant.principal == peer_principal(DESKTOP) and str(grant.scope) == "sources":
+                phone.authority.revoke_grant(grant.grant_id)
+        original = (phone.store.root / path).read_bytes()
+        (desktop.store.root / path).unlink()
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+        assert report.status == "conflicts" and report.deleted == (), report
+        assert report.passes[-1].conflict(path).code == "denied"
+        before = _files(phone.store.root), _files(desktop.store.root)
+        again = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert again.status == "conflicts" and not any(one.wrote for one in again.passes), again
+    assert (_files(phone.store.root), _files(desktop.store.root)) == before
+    assert (phone.store.root / path).read_bytes() == original
+
+KIT = "campaigns/c5/instances/character/kit.json"
+
+
+def test_a_record_written_on_the_serving_device_after_its_snapshot_stops_a_deletion_it_needs(tmp_path, monkeypatch):
+    """The serving device judges a replayed deletion again under its commit's lock: a record written
+    there since its snapshot that reads the source being deleted refuses the step as stale, nothing
+    is removed, and the transfer's next pass holds the deletion back."""
+    desktop, phone, _ = paired(tmp_path)
+    _add_source(desktop, "catalog:extra")
+    path = "sources/catalog/extra/_source/manifest.json"
+    commit = StepBuffer._commit
+
+    def meanwhile(self, store, *args):  # type: ignore[no-untyped-def]
+        if any(header.get("op") == "delete" for header, _ in self.ops) and not (store.root / KIT).exists():
+            txn = store.transaction()  # the person adds a card on the phone that reads the source
+            txn.put(RecordEnvelope(InstanceRef("c5", "character", "kit"), {"from": "catalog:extra/character/kit"}), None)
+            txn.commit(phone.handle)
+        return commit(self, store, *args)
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+        (desktop.store.root / path).unlink()
+        monkeypatch.setattr(replay_module.StepBuffer, "_commit", meanwhile)
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert report.passes[-1].conflict(path).code == "delete_dependency" and report.deleted == ()
+    assert (phone.store.root / path).exists() and (phone.store.root / KIT).exists()
+
+
+def test_two_transfers_deleting_on_their_own_devices_at_once_end_on_the_busy_wait(tmp_path, monkeypatch):
+    """Each device starts a transfer to the other, and each transfer's first data commit deletes on
+    its own device: it holds its library while it asks the other device to confirm the record is
+    still gone there, and that device's server waits for its own library, held the same way. Each
+    library is marked held for a peer while it asks, so each server refuses ``busy`` after
+    ``BUSY_WAIT`` rather than both waiting for their connections to time out; the next transfer
+    then makes both deletions."""
+    desktop, phone, _ = paired(tmp_path)
+    for source in ("catalog:extra", "catalog:other"):
+        _add_source(desktop, source)
+    deleted_on_phone = "sources/catalog/extra/_source/manifest.json"  # the desktop deletes it in its own library
+    deleted_on_desktop = "sources/catalog/other/_source/manifest.json"  # the phone deletes it in its own library
+    monkeypatch.setattr(busy_module, "BUSY_WAIT", 0.1)
+    phone_planned, desktop_planned = threading.Event(), threading.Event()
+    asking = threading.Barrier(2, timeout=60)
+    real_plan, real_ask = session_module.plan_sync, session_module.ask_absent
+    planned: set[str] = set()
+
+    def plan_in_turn(store, *args, **kwargs):  # type: ignore[no-untyped-def]
+        plan = real_plan(store, *args, **kwargs)
+        if store.root == phone.store.root and "phone" not in planned:
+            planned.add("phone")  # planned before the phone deletes its record: the phone's only deletion is its own
+            (phone.store.root / deleted_on_phone).unlink()
+            phone_planned.set()
+            desktop_planned.wait(60)  # the desktop's snapshot of the phone is read before the phone is locked
+        elif store.root == desktop.store.root and "desktop" not in planned:
+            planned.add("desktop")
+            desktop_planned.set()
+        return plan
+
+    asked: set[int] = set()
+
+    def ask_together(channel, paths):  # type: ignore[no-untyped-def]
+        if threading.get_ident() not in asked:  # each transfer's first ask only: a retry asks at once
+            asked.add(threading.get_ident())
+            asking.wait()  # each holds its own library here
+        return real_ask(channel, paths)
+    with serving(phone) as on_phone, serving(desktop) as on_desktop:
+        assert transfer(desktop.store, desktop.authority, PHONE, on_phone.address).status == "synced"
+        (desktop.store.root / deleted_on_desktop).unlink()
+        monkeypatch.setattr(session_module, "plan_sync", plan_in_turn)
+        monkeypatch.setattr(session_module, "ask_absent", ask_together)
+        reports = {}
+
+        def from_phone() -> None:
+            reports[PHONE] = transfer(phone.store, phone.authority, DESKTOP, on_desktop.address, timeout=60)
+
+        def from_desktop() -> None:
+            phone_planned.wait(60)
+            reports[DESKTOP] = transfer(desktop.store, desktop.authority, PHONE, on_phone.address, timeout=60)
+        threads = [threading.Thread(target=from_phone), threading.Thread(target=from_desktop)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)  # well inside the connections' timeout
+        hung = [thread for thread in threads if thread.is_alive()]
+        for thread in threads:
+            thread.join(120)
+        monkeypatch.undo()
+        assert len(asked) == 2 and not hung and len(reports) == 2, reports
+        again = transfer(desktop.store, desktop.authority, PHONE, on_phone.address)
+        assert again.status == "synced", again
+    for device in (desktop, phone):
+        assert not (device.store.root / deleted_on_phone).exists() and not (device.store.root / deleted_on_desktop).exists()

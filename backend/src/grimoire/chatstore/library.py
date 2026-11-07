@@ -33,6 +33,7 @@ from grimoire.chats import (
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import ENTITY_SCHEMA, instance_to_payload
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, paired_instances, validate_segment
+from grimoire.decisionstore import decision_actor_ids
 from grimoire.devicetag import DeviceIdentityUnusable, device_tag
 from grimoire.effectstore import accepted_instance_ids
 from grimoire.evidencestore import evidence_instance_ids
@@ -106,6 +107,7 @@ def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool,
     taken |= adjudication_actor_ids(store, campaign_id)
     taken |= turn_instance_ids(store, campaign_id)
     taken |= obstacle_actor_ids(store, campaign_id)
+    taken |= decision_actor_ids(store, campaign_id)
     if security:  # skipped only by _fresh_campaign_taken_ids
         taken |= security_instance_ids(store, campaign_id, spent=spent)
     return frozenset(taken)

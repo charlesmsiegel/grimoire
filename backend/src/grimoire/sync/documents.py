@@ -121,7 +121,7 @@ class ArchiveView:
 @dataclass(frozen=True)
 class PendingView:
     state: str
-    entries: Mapping[str, Mapping[str, object]] = field(default_factory=dict)  # path -> {from,to}|{uncertain}
+    entries: Mapping[str, Mapping[str, object]] = field(default_factory=dict)  # path -> {from,to}|{uncertain}; to=None: deleted
     reason: str | None = None
     data: bytes | None = None
     named: frozenset[str] = frozenset()  # ignored only: paths it names, made uncertain, never trusted
@@ -200,7 +200,8 @@ def pending_entries(entries: Mapping[str, object]) -> tuple[dict[str, Mapping[st
     for path, entry in entries.items():
         valid = isinstance(entry, Mapping) and _syncable(path) and (
             dict(entry) == {"uncertain": True}
-            or (set(entry) in ({"from", "to"}, {"from", "to", "base"}) and is_etag(entry["to"])
+            or (set(entry) in ({"from", "to"}, {"from", "to", "base"})
+                and (is_etag(entry["to"]) or (entry["to"] is None and is_etag(entry["from"])))  # 028: a deletion
                 and (entry["from"] is None or is_etag(entry["from"]))
                 and (entry.get("base") is None or is_etag(entry["base"]))))
         if not valid:

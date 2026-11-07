@@ -10,11 +10,13 @@ runtime never loads the eval recorder. See docs/GENERATION.md.
 from .fence import FenceToken, RunFence, cancel_when_stale
 from .label import DEFAULT_LABEL_TOKENS, LabelReply, LabelRuntime
 from .runtime import (
-    DEFAULT_MAX_OUTPUT_TOKENS, NARRATOR, CallOutcome, GeneratedLine, GenerationRuntime, TurnOutcome,
+    DECISION_MAX_OUTPUT_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, NARRATOR, CallOutcome, DecisionOutcome, GeneratedLine,
+    GenerationRuntime, TurnOutcome,
 )
 
 __all__ = [
     "FenceToken", "RunFence", "cancel_when_stale",
     "DEFAULT_LABEL_TOKENS", "LabelReply", "LabelRuntime",
-    "DEFAULT_MAX_OUTPUT_TOKENS", "NARRATOR", "CallOutcome", "GeneratedLine", "GenerationRuntime", "TurnOutcome",
+    "DECISION_MAX_OUTPUT_TOKENS", "DEFAULT_MAX_OUTPUT_TOKENS", "NARRATOR", "CallOutcome", "DecisionOutcome",
+    "GeneratedLine", "GenerationRuntime", "TurnOutcome",
 ]

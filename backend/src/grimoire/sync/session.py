@@ -31,7 +31,7 @@ from grimoire.store.replica import (
     SHADOWED, CanonicalScan, chats_named, instances_named, parse_exact, pinned_by, previous_of,
 )
 
-from . import bookkeeping, keeps as kept_record, knowledge as merge, units as ledger_units
+from . import bookkeeping, deletion, keeps as kept_record, knowledge as merge, units as ledger_units
 from .art import art_needs, art_unmet
 from .decide import archive_candidate, decide, derive_base
 from .documents import ArchiveView, KeepsView, PendingView, parse_keeps, syncable
@@ -117,6 +117,7 @@ class SyncReport:
     notices: tuple[str, ...] = ()
     wrote: bool = False
     consumed_approvals: tuple[str, ...] = ()
+    deleted: tuple[tuple[str, str], ...] = ()  # (path, device that deleted it), 028
 
     def conflict(self, path: str) -> Conflict | None:
         return next((found for found in self.conflicts if found.path == path), None)
@@ -150,6 +151,8 @@ class SyncPlan:
     unit_copies: dict[str, dict[str, set[str]]] = field(default_factory=dict)
     choices: dict[str, str] = field(default_factory=dict)  # 028: ``resolve_ledger``'s decision, by campaign
     ledger_campaigns: frozenset[str] = frozenset()  # 028: whose relations are in their unit ("*": every one)
+    #: per device, the agreed versions it deletes because the other device deleted them (028, row 9)
+    deletes: dict[str, list[deletion.Delete]] = field(default_factory=dict)
 
     def other(self, device: str) -> str:
         return self.devices[1] if device == self.devices[0] else self.devices[0]
@@ -159,7 +162,7 @@ class SyncPlan:
         found: dict[str, dict[str, bytes]] = {}
         for device in self.devices:
             txn = self.stores[device].transaction()
-            _stage(txn, self.copies[device], self.keeps[device])
+            _stage(txn, self.copies[device], self.keeps[device], self.deletes.get(device, ()))
             found[device] = {key: data for key, data in txn.preview().items() if not key.startswith(".sync/")}
         return found
 
@@ -250,6 +253,7 @@ def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]
                     skipped=skipped, held=set(), kept_records=records,
                     units={path: unit for path in ordered if (unit := ledger_units.unit_of(path, ledgers)) is not None},
                     choices=choices or {}, ledger_campaigns=frozenset(ledgers))
+    doomed: dict[str, list[str]] = {a: [], b: []}  # row 9 (028): what each device deletes, before admission
     ungranted = _verify_blobs(plan, handles)
     for path in ordered:
         if path in plan.units:  # 028: merged as its campaign's ledger unit (below), never decided alone
@@ -261,6 +265,8 @@ def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]
         decision = decide(syncable(path), bases[path], sides[path][a], sides[path][b])  # type: ignore[arg-type]
         if decision.action == "agreed":
             plan.agreed.add(path)
+        elif decision.action == "delete":
+            doomed[other[a if decision.origin == "left" else b]].append(path)
         elif decision.action == "conflict":
             shadowed = decision.code == "blocked" and any(side.reason == SHADOWED for side in sides[path].values())
             detail = "; ".join(f"{side.reason} on {device}" for device, side in sides[path].items()
@@ -287,12 +293,15 @@ def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]
         ledger_units.whole(plan, device)
     _group_knowledge(plan)
     for device in pair:
+        _admit_deletes(plan, device, doomed[device])
+    for device in pair:
         _plan_keeps(plan, device)
     for device in pair:  # the whole planned commit, once: interactions between units are caught here
-        if not plan.copies[device] or (not plan.keeps[device] and device not in plan.fallback):
+        copies, keeps, deletes = plan.copies[device], plan.keeps[device], plan.deletes[device]
+        if (not copies and not deletes) or (not keeps and not (copies and deletes) and device not in plan.fallback):
             continue  # what remains was already checked as one whole
         txn = stores[device].transaction()
-        _stage(txn, plan.copies[device], plan.keeps[device])
+        _stage(txn, plan.copies[device], plan.keeps[device], plan.deletes[device])
         if txn.staged():
             error = _preflight(txn, "the combined plan")
             if error is not None:
@@ -414,7 +423,7 @@ def _preflight(txn, what: str) -> BaseException | None:  # type: ignore[no-untyp
     return None
 
 
-def _stage(txn, copies: list[Copy], keeps: list[Keep]) -> None:  # type: ignore[no-untyped-def]
+def _stage(txn, copies: list[Copy], keeps: list[Keep], deletes=()) -> None:  # type: ignore[no-untyped-def]
     for copy in copies:  # the origin still holds these bytes: an aborted commit drops, never parks, them
         if copy.data is None:  # a blob: loaded from the origin only when the commit needs its bytes
             assert copy.source is not None and copy.size is not None and copy.expected is None
@@ -424,6 +433,48 @@ def _stage(txn, copies: list[Copy], keeps: list[Keep]) -> None:  # type: ignore[
             txn.put_exact(copy.path, copy.data, copy.expected, regenerable=True)
     for keep in keeps:
         txn.keep_version(keep.path, keep.data, slot=keep.slot, regenerable=True)  # the peer still holds them
+    deletion.stage(txn, deletes)  # 028: each with the hold of what it removes
+
+
+def _final_files(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[dict[str, bytes], dict[str, int]]:
+    return deletion.final_files(plan.scans[dest].files, plan.scans[dest].blobs, copies)  # type: ignore[attr-defined]
+
+
+def _recheck_deletes(plan: SyncPlan, device: str, copies: list[Copy], deletes: list[deletion.Delete]) -> None:
+    """Under both devices' locks, before the data commit that deletes (028): the device a deletion
+    came from still lacks the record (``deletion.back_on``), and nothing written since the plan
+    needs it (``deletion.still_needed``). Either stops the commit before anything is written."""
+    if not deletes:
+        return
+    origin = plan.other(device)
+    back = deletion.back_on(plan.stores[origin], [delete.path for delete in deletes])
+    if back is not None:
+        raise SyncInterrupted(f"a library changed while its deletions were planned: {back} is back on {origin}")
+    store = plan.stores[device]
+    needed = deletion.still_needed(store, {copy.path: copy.data for copy in copies if copy.data is not None},
+                                   {copy.path: copy.size for copy in copies if copy.data is None},  # type: ignore[misc]
+                                   [delete.path for delete in deletes])
+    if needed:
+        path, why = min(needed.items())
+        raise SyncInterrupted(f"a library changed while its deletions were planned: {path} {why}")
+
+
+def _admit_deletes(plan: SyncPlan, dest: str, paths: list[str]) -> None:
+    """Row 9's deletions on ``dest`` (028): ``deletion.admit`` decides them over what ``dest`` will hold."""
+    files, blobs = _final_files(plan, dest, plan.copies[dest])
+    plan.deletes[dest], refused = deletion.admit(plan.stores[dest], plan.scans[dest].files, files, blobs,  # type: ignore[attr-defined]
+                                                 plan.scans[dest].blocked, paths, _preflight,
+                                                 functools.partial(_stage, copies=plan.copies[dest], keeps=[]))
+    try:  # each hold is recorded before its deletion (holds(d)): one the record cannot take holds them all back
+        if plan.deletes[dest]:
+            deletion.holds_state(plan.stores[dest], plan.kept_records[dest], dest, plan.other(dest), plan.devices,
+                                 plan.deletes[dest])
+    except InvalidEnvelope as error:
+        refused.update({delete.path: ("unapplicable", f"its version cannot be recorded as held: {error}")
+                        for delete in plan.deletes[dest]})
+        plan.deletes[dest] = []
+    for path, (code, why) in refused.items():
+        plan.conflicts[path] = Conflict(path, code, why)
 
 
 def _manifest_heads(copy: Copy) -> list[str]:
@@ -807,6 +858,7 @@ class _Applied:
     observer: Callable[[Step], None] | None = None
     published: dict[str, list[Copy]] = field(default_factory=dict)
     kept: dict[str, list[Keep]] = field(default_factory=dict)
+    deleted: dict[str, list[deletion.Delete]] = field(default_factory=dict)  # 028
     #: per device, the marker its data commit wrote: its entries and the files written (028: maybe shards)
     pending_written: dict[str, tuple[dict[str, Mapping[str, object]], dict[str, bytes]]] = field(default_factory=dict)
     wrote: bool = False
@@ -940,18 +992,19 @@ def _both_absent_uncertain(plan: SyncPlan, path: str) -> bool:
 
 def _report(plan: SyncPlan, applied: _Applied) -> SyncReport:
     copied = tuple(sorted((copy.path, device) for device, copies in applied.published.items() for copy in copies))
+    deleted = tuple(sorted((gone.path, device) for device, gones in applied.deleted.items() for gone in gones))
     skipped = {device: plan.skipped.get(device, plan.scans[device].skipped) for device in plan.devices}
     return SyncReport(plan.devices, copied, tuple(plan.conflicts[path] for path in sorted(plan.conflicts)),
-                      MappingProxyType(skipped), tuple(plan.notices), applied.wrote, tuple(applied.consumed))
+                      MappingProxyType(skipped), tuple(plan.notices), applied.wrote, tuple(applied.consumed), deleted)
 
 
 @dataclass(frozen=True)
 class Step:
     """One committed ``apply_sync`` step on one device, exactly as it was written.
 
-    ``kind`` is ``data``, ``keeps``, ``archive`` or ``pending``. A data step carries the copies and kept
-    versions its commit published (after any denial) and, in ``states``, the pending marker it
-    wrote; a keeps, archive or pending step carries only its ``.sync`` files. Each state is ``(name,
+    ``kind`` is ``holds``, ``data``, ``keeps``, ``archive`` or ``pending``. A data step carries the copies,
+    kept versions and (028) deletions its commit published (after any denial) and, in ``states``, the
+    pending marker it wrote; a holds, keeps, archive or pending step carries only its ``.sync`` files. Each state is ``(name,
     bytes, expected etag)``. 028's peer transfer replays a step on the device a local stand-in
     represents, in the same order (docs/DEVICE_SYNC.md).
     """
@@ -961,6 +1014,7 @@ class Step:
     copies: tuple[Copy, ...] = ()
     keeps: tuple[Keep, ...] = ()
     states: tuple[tuple[str, bytes, str | None], ...] = ()
+    deletes: tuple[deletion.Delete, ...] = ()
     #: 028: for a data step that lands a merged ledger, each unit as the plan read it on this device
     #: (``units.step_listings``), which a serving device checks of itself before it commits the step
     units: tuple[Mapping[str, object], ...] = ()
@@ -969,7 +1023,8 @@ class Step:
 def apply_sync(plan: SyncPlan, handles: Mapping[str, object],
                approvals: Mapping[str, Mapping[str, str]] | None = None, *,
                observer: Callable[[Step], None] | None = None) -> SyncReport:
-    """Write the plan: data(a), data(b), verify, keeps(b), keeps(a), archive(b), archive(a), pending(b), pending(a).
+    """Write the plan: data(a), data(b), verify, keeps(b), keeps(a), archive(b), archive(a), pending(b), pending(a);
+    a device that deletes (028) first commits holds(d), its kept-version record holding what it removes.
 
     ``observer`` is called with each step that wrote something, right after its commit and
     before the next step starts; an exception it raises stops the sync there, unchanged, so
@@ -977,6 +1032,7 @@ def apply_sync(plan: SyncPlan, handles: Mapping[str, object],
     approvals = approvals or {}
     applied = _Applied(observer)
     for device in plan.devices:
+        _commit_holds(plan, device, handles[device], approvals.get(device, {}), applied)
         _commit_data(plan, device, handles[device], approvals.get(device, {}), applied)
     _verify(plan, applied)
     resolved = _resolved(plan, applied)
@@ -992,20 +1048,20 @@ def apply_sync(plan: SyncPlan, handles: Mapping[str, object],
 def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping[str, str],
                  applied: _Applied) -> None:
     store = plan.stores[device]
-    copies, keeps = list(plan.copies[device]), list(plan.keeps[device])
+    copies, keeps, deletes = list(plan.copies[device]), list(plan.keeps[device]), list(plan.deletes[device])
     old = plan.pendings[device].files
     # The marker is written with the data, before any archive is rewritten: a fresh archive no
     # longer says why a path was uncertain, so the marker must already say it (R: crash between
     # archive and pending steps).
-    entries = _marker(plan, device, copies)
+    entries = _marker(plan, device, copies, deletes)
     files, width = bookkeeping.render_files("pending", plan.other(device), plan.devices, entries, ARCHIVE_LIMIT)
     marker = [(entries, files)]  # what the marker will hold (on_denied may change it)
-    if not copies and not keeps and not _marker_needed(plan, device, entries, files):
-        applied.published[device], applied.kept[device] = [], []
+    if not copies and not keeps and not deletes and not _marker_needed(plan, device, entries, files):
+        applied.published[device], applied.kept[device], applied.deleted[device] = [], [], []
         return
     txn = store.transaction()
     try:
-        _stage(txn, copies, keeps)
+        _stage(txn, copies, keeps, deletes)
     except StaleWrite as error:  # a planned kept-version slot was taken meanwhile
         raise SyncInterrupted(f"the data commit on {device} stopped: {error}", _report(plan, applied)) from error
     marker_keys: dict[str, str] = {}  # every file of the marker, so a denial can still rewrite any of them
@@ -1014,9 +1070,13 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
     delivery = kept_record.Delivery(plan, device, keeps)
     delivery.stage(txn)  # 028: a keep's delivery is recorded in the commit that writes it
     dropped: set[str] = set()
+    gone: set[str] = set()  # deletions dropped: denied, or now needed by what a denial left (028)
+
+    deleting = {key for delete in deletes for key in deletion.keys_of(delete)}
 
     def on_denied(keys: frozenset[str]) -> dict[str, bytes | None]:
-        denied = {key for key in keys if not key.startswith("kept/")}
+        # a denied deletion (028) drops only itself and its hold (``_deny_deletes``): no copy depends on it
+        denied = {key for key in keys if not key.startswith("kept/") and key not in deleting}
         own_units = CAMPAIGN_LOCAL | ASSET_KINDS  # never source-coarse: art is denied only for itself
         sources = {_source_of(path) for path in denied if syncable(path) not in own_units | LEDGER_KINDS}
         logs = {_knowledge_campaign(path) for path in denied} - {None}  # a log is one unit, too
@@ -1062,9 +1122,11 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
         for keep in refused:
             _kept(plan, keep.path, device, False, "keeping it was not authorized")
         changes.update(delivery.deny(refused))
+        changes.update(_deny_deletes(plan, device, deletes, keys, [copy for copy in copies if copy.path not in dropped],
+                                     gone))
         if marker_keys:  # fewer copies only shrink the marker: the same width holds it
             remaining = [copy for copy in copies if copy.path not in dropped]
-            shrunk = _marker(plan, device, remaining)
+            shrunk = _marker(plan, device, remaining, [gone_ for gone_ in deletes if gone_.path not in gone])
             written, _ = bookkeeping.render_files("pending", plan.other(device), plan.devices, shrunk, None, width)
             marker[0] = (shrunk, written)
             needed = _marker_needed(plan, device, shrunk, written)
@@ -1072,30 +1134,86 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
                 changes[key] = written[name] if needed else None
         return changes
 
+    held = contextlib.ExitStack()
     try:
-        with _locked(*plan.stores.values()):  # a blob copy loads from the origin inside this commit
-            stale = ledger_units.changed(plan, copies, applied.published)  # 028: rechecked under the locks
-            if stale is not None:
-                raise SyncInterrupted(stale, _report(plan, applied))
-            result = txn.commit(handle, dict(approvals), on_denied=on_denied)
+        held.enter_context(_locked(*plan.stores.values()))  # a blob copy loads from the origin inside this commit
+        stale = ledger_units.changed(plan, copies, applied.published)  # 028: rechecked under the locks
+        if stale is not None:
+            raise SyncInterrupted(stale, _report(plan, applied))
+        _recheck_deletes(plan, device, copies, deletes)
+        if deletes:
+            deletion.confirm_with_peer(plan.stores[plan.other(device)], [delete.path for delete in deletes])
+        result = txn.commit(handle, dict(approvals), on_denied=on_denied)
     except (StaleWrite, WriteConflict, SyncInterrupted, *PER_PATH_ERRORS) as error:
+        held.close()
         applied.consumed.extend(getattr(error, "consumed_approvals", ()))  # spent without a write (R16)
         raise SyncInterrupted(f"the data commit on {device} stopped: {error}", _report(plan, applied)) from error
-    applied.consumed.extend(result.consumed_approvals)
-    published = [copy for copy in copies if copy.path in result.etags]
-    units = ledger_units.step_listings(plan, device, published, applied.published.get(device, ()))
-    applied.published[device] = published
-    applied.kept[device] = [keep for keep in keeps if str(_kept_key(keep)) in result.etags]
-    states = tuple((name, marker[0][1][name], None if old.get(name) is None else etag(old[name]))
-                   for key, name in marker_keys.items() if key in result.etags)
-    if states:
-        applied.pending_written[device] = (marker[0][0], {name: data for name, data, _ in states})
-    applied.wrote = applied.wrote or bool(result.etags)
-    plan.copies[device] = published
-    plan.kept_records[device], recorded = delivery.committed(result.etags)
-    if result.etags:
-        applied.observe(Step("data", device, tuple(published), tuple(applied.kept[device]), (*states, *recorded),
-                             tuple(units)))
+    except BaseException:
+        held.close()
+        raise
+    if not deletes:
+        held.close()
+    # 028: a commit that deletes keeps both libraries locked until its step has been observed, so a
+    # stand-in's step replayed on the real device (peersync) still finds the deleting device as
+    # ``_recheck_deletes`` saw it
+    with held:
+        applied.consumed.extend(result.consumed_approvals)
+        published = [copy for copy in copies if copy.path in result.etags]
+        units = ledger_units.step_listings(plan, device, published, applied.published.get(device, ()))
+        applied.published[device] = published
+        applied.kept[device] = [keep for keep in keeps if str(_kept_key(keep)) in result.etags]
+        applied.deleted[device] = plan.deletes[device] = [
+            delete for delete in deletes if all(key in result.etags for key in deletion.keys_of(delete))]
+        states = tuple((name, marker[0][1][name], None if old.get(name) is None else etag(old[name]))
+                       for key, name in marker_keys.items() if key in result.etags)
+        if states:
+            applied.pending_written[device] = (marker[0][0], {name: data for name, data, _ in states})
+        applied.wrote = applied.wrote or bool(result.etags)
+        plan.copies[device] = published
+        plan.kept_records[device], recorded = delivery.committed(result.etags)
+        if result.etags:
+            applied.observe(Step("data", device, tuple(published), tuple(applied.kept[device]), (*states, *recorded),
+                                 tuple(applied.deleted[device]), tuple(units)))
+
+
+def _commit_holds(plan: SyncPlan, device: str, handle: object, approvals: Mapping[str, str],
+                  applied: _Applied) -> None:
+    """holds(d) (028): before the data commit that deletes on ``device`` (``deletion.commit_holds``).
+
+    A deletion ``handle`` refuses is denied here, before its hold is recorded (``deletion.refused``),
+    so a sync that cannot delete it writes nothing for it; one an approval may allow is left to the
+    data commit, which decides with the approval."""
+    if not plan.deletes[device]:
+        return
+    denied = deletion.refused(plan.stores[device], handle, plan.deletes[device]) - set(approvals)
+    if denied:
+        gone: set[str] = set()
+        _deny_deletes(plan, device, plan.deletes[device], frozenset(denied), list(plan.copies[device]), gone)
+        plan.deletes[device] = [delete for delete in plan.deletes[device] if delete.path not in gone]
+        if not plan.deletes[device]:
+            return
+    peer = plan.other(device)
+    try:
+        committed, own = deletion.commit_holds(plan.stores[device], plan.kept_records[device], device, peer,
+                                               plan.devices, plan.deletes[device])
+    except (StaleWrite, WriteConflict) as error:
+        raise SyncInterrupted(f"the kept-version records on {device} changed during the sync: {error}",
+                              _report(plan, applied)) from error
+    applied.wrote = applied.wrote or committed  # other pairs' records may change without this pair's
+    if own is None:
+        return
+    plan.kept_records[device] = parse_keeps(own[1], plan.devices)
+    applied.observe(Step("holds", device, states=(own,)))
+
+
+def _deny_deletes(plan: SyncPlan, device: str, deletes: list[deletion.Delete], keys: frozenset[str],
+                  copies: list[Copy], gone: set[str]) -> dict[str, bytes | None]:
+    """``deletion.denied``, each deletion it drops a ``denied`` conflict."""
+    files, blobs = _final_files(plan, device, copies)
+    refused, changes = deletion.denied(deletes, keys, files, blobs, plan.scans[device].blocked, gone)
+    for path, why in refused.items():
+        plan.conflicts[path] = Conflict(path, "denied", why, MappingProxyType({device: False}))
+    return changes
 
 
 def _marker_needed(plan: SyncPlan, device: str, entries: Mapping[str, object], files: Mapping[str, bytes]) -> bool:
@@ -1105,11 +1223,15 @@ def _marker_needed(plan: SyncPlan, device: str, entries: Mapping[str, object], f
     return changed and (bookkeeping.root_name("pending", plan.other(device)) in old or bool(entries))
 
 
-def _marker(plan: SyncPlan, device: str, copies: list[Copy]) -> dict[str, Mapping[str, object]]:
+def _marker(plan: SyncPlan, device: str, copies: list[Copy],
+            deletes: list[deletion.Delete]) -> dict[str, Mapping[str, object]]:
     entries = _pending_entries(plan, device)
     for copy in copies:
         entries[copy.path] = {"from": copy.expected, "to": copy.etag,
                               "base": _archived(archive_candidate(copy.path, *plan.archives.values()))}
+    for delete in deletes:  # 028: "to: absent", so a crash before the archives still reads as this deletion
+        entries[delete.path] = {"from": delete.expected, "to": None,
+                                "base": _archived(archive_candidate(delete.path, *plan.archives.values()))}
     return entries
 
 
@@ -1139,17 +1261,21 @@ def _verify(plan: SyncPlan, applied: _Applied) -> None:
         checks = [(copy.path, copy.etag) for copy in applied.published.get(device, [])]
         checks += [("/".join(conflict_parts(tuple(keep.path.split("/")), etag(keep.data), keep.slot)), etag(keep.data))
                    for keep in applied.kept.get(device, [])]
+        checks += [(gone.hold, gone.expected) for gone in applied.deleted.get(device, [])]  # 028: kept, and gone
+        checks += [(gone.path, None) for gone in applied.deleted.get(device, [])]
         for path, tag in checks:
             try:
                 found = store.read_exact(path)
             except NameCollision:  # renamed to a look-alike since it was published
-                found = None
-            if found is None or etag(found) != tag:
+                found = b"" if tag is None else None  # a look-alike where a deletion was is not "gone"
+            if (None if found is None else etag(found)) != tag:
                 raise SyncInterrupted(f"verification failed on {device}: {path} does not hold the planned bytes",
                                       _report(plan, applied))
 
 
 def _final(plan: SyncPlan, applied: _Applied, path: str, device: str) -> Side:
+    if any(gone.path == path for gone in applied.deleted.get(device, [])):
+        return Side.absent()
     for copy in applied.published.get(device, []):
         if copy.path == path:
             return Side.present(copy.etag)
@@ -1173,7 +1299,8 @@ def _resolved(plan: SyncPlan, applied: _Applied) -> dict[str, tuple[str, str] | 
         base = plan.bases[path]  # both absent: keep (or derive) a tombstone
         candidates = sorted({entry[1] for view in plan.archives.values() if view.state == "valid"
                              for entry in [view.entries.get(path)] if entry is not None}
-                            | {entry["to"] for view in plan.pendings.values() if view.state == "valid"  # type: ignore[misc]
+                            | {entry["to"] if entry["to"] is not None else entry["from"]  # type: ignore[misc]
+                               for view in plan.pendings.values() if view.state == "valid"  # a deletion's: from
                                for entry in [view.entries.get(path)] if entry is not None and "to" in entry})
         if base.kind in ("agreed", "deleted"):
             found[path] = ("deleted", base.etag)  # type: ignore[assignment]
@@ -1301,7 +1428,7 @@ def _merged(reports: list[SyncReport]) -> SyncReport:
 
     return SyncReport(final.devices, union(lambda report: report.copied), final.conflicts, final.skipped,
                       union(lambda report: report.notices), any(report.wrote for report in reports),
-                      union(lambda report: report.consumed_approvals))
+                      union(lambda report: report.consumed_approvals), union(lambda report: report.deleted))
 
 
 __all__ = [

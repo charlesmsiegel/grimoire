@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from grimoire.store.journal import DELETABLE_KINDS
+
 SideState = Literal["absent", "present", "blocked"]
 BaseKind = Literal["first", "none", "uncertain", "agreed", "deleted"]
-Action = Literal["agreed", "copy", "conflict"]
+Action = Literal["agreed", "copy", "conflict", "delete"]
 
 #: The record kinds sync owns (the store's ``classify`` kinds); later families extend this set,
 #: and archive and pending documents accept exactly these paths. ``scope`` and ``chat`` are
@@ -38,6 +40,12 @@ HOLDS_RELATIONS = "accepted"
 #: ``knowledge`` is 020's events, evidence and knowledge-log batches; ``image`` and ``blob`` are 018's;
 #: ``transcript`` is 036's append-only transcript pages.
 IMMUTABLE_KINDS = frozenset({"definition", "knowledge", "image", "blob", "transcript"})
+#: Kinds whose one-sided deletion of the agreed version propagates (028, row 9): the store's own
+#: deletable kinds. 020 knowledge records and 036 transcript pages are create-only with no delete (a
+#: missing one is damage), 018 image objects are create-only and blobs are content-addressed: for
+#: them row 9 stays a ``deleted`` conflict. A definition revision is immutable, never edited, but
+#: deleting one nothing left names is how a source drops an entity (``delete_dependency`` guards it).
+PROPAGATED_DELETIONS = DELETABLE_KINDS
 
 #: Conflict codes, each named in docs/SYNC.md. ``held``: a held-back path whose two devices hold
 #: different bytes (nothing is copied or kept for it; it ends only when both hold identical bytes).
@@ -46,6 +54,7 @@ IMMUTABLE_KINDS = frozenset({"definition", "knowledge", "image", "blob", "transc
 CONFLICT_CODES = frozenset({
     "blocked", "missing_ancestor", "deleted", "edit_delete", "concurrent", "resurrected",
     "revision_modified", "head_dependency", "name_collision", "unapplicable", "denied", "held", "merge_review",
+    "delete_dependency",
 })
 
 
@@ -88,7 +97,8 @@ FIRST, NONE, UNCERTAIN = Base("first"), Base("none"), Base("uncertain")
 
 @dataclass(frozen=True)
 class Decision:
-    """``copy`` names the side whose bytes travel (``origin``); a conflict names its ``code``."""
+    """``copy`` names the side whose bytes travel (``origin``); ``delete`` names the side that deleted
+    the agreed version (``origin``: the other side deletes it too); a conflict names its ``code``."""
 
     action: Action
     code: str | None = None

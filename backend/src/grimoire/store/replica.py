@@ -7,7 +7,7 @@ store's own ``put`` would re-render it and rewrite ``previous``. Everything here
 from __future__ import annotations
 
 import stat
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
@@ -396,7 +396,8 @@ def _regular_file(access: Access, original: Parts) -> bool:
     return info is not None and stat.S_ISREG(info.st_mode)
 
 
-def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str] = frozenset()) -> None:
+def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str] = frozenset(),
+                       ignore: frozenset[str] = frozenset(), found: CanonicalScan | None = None) -> None:
     """``RevisionReferenced`` unless nothing on this library can pin ``ref`` (a pinned revision).
 
     Checked across every parsable canonical record, those of excluded sources included:
@@ -408,14 +409,20 @@ def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str
     A blocked path that could be or hold such a record means "cannot prove unreferenced"; a blocked
     entry that cannot (a root-level link, a non-JSON note) does not. ``allowed`` names manifest
     etags whose references are accepted (``resolve``: manifests identical to the winner's).
+    ``ignore`` names records the same transaction deletes (028: a source deleted as a whole, or the
+    records that used it), and ``found`` reuses one scan for several revisions of one commit.
     """
-    found = scan(access)
+    found = found or scan(access)
     for path, reason in found.blocked.items():
+        if path in ignore:
+            continue
         if reason == SHADOWED:
             continue  # the look-alike that shadows it is blocked too, and judged by what it is
         if _may_hold_records(access, tuple(path.split("/"))):
             raise RevisionReferenced(f"cannot prove {ref} is unreferenced: {path} is {reason}")
     for path, data in found.files.items():
+        if path in ignore:
+            continue
         envelope = parse_exact(tuple(path.split("/")), data)
         if isinstance(envelope, AssetRecord):
             continue  # 018 art attaches to entities (its provenance text is not a pin)
@@ -426,7 +433,7 @@ def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str
             if any(head == SourceRef(ref.source, ref.kind, ref.entity_id) and revision == ref.revision
                    for head, revision in heads.items()):
                 raise RevisionReferenced(f"{path} names {ref} as its head")
-            if envelope.source == ref.source and ref.unpinned() not in heads and _sole_revision(found, ref):
+            if envelope.source == ref.source and ref.unpinned() not in heads and _sole_revision(found, ref, ignore):
                 raise RevisionReferenced(f"{path} has {ref} as its implicit head (its entity's only revision)")
             for link in envelope.links:
                 if ref in {_pinned(link.subject), _pinned(link.object)} | _payload_refs(link.extra):
@@ -445,15 +452,36 @@ def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str
             raise RevisionReferenced(f"{path} pins {ref} in its payload")
 
 
-def _sole_revision(found: CanonicalScan, ref: SourceRef) -> bool:
+def _sole_revision(found: CanonicalScan, ref: SourceRef, ignore: frozenset[str] = frozenset()) -> bool:
     """Whether ``ref`` is the only revision of its entity on this library: then it is the head even
-    with no head declared (the loader resolves it so), and an unpinned reference follows it."""
+    with no head declared (the loader resolves it so), and an unpinned reference follows it. Revisions
+    in ``ignore`` are being deleted (028): deleting an entity's last revision leaves no head to pin."""
     revisions = set()
     for path in (*found.files, *found.blocked):
+        if path in ignore:
+            continue
         kind = classify(tuple(path.split("/")))
         if kind is not None and kind[0] == "definition" and kind[1].unpinned() == ref.unpinned():  # type: ignore[union-attr]
             revisions.add(kind[1].revision)  # type: ignore[union-attr]
     return revisions == {ref.revision}
+
+
+def removal_blocker(access: Access, removed: Sequence[Parts]) -> str | None:
+    """Why the revisions among ``removed`` can no longer go, judged over the library as it is now (028
+    recovery): what the commit checked under its lock (``check_unreferenced``, the records the same
+    commit removes ignored), read again, since a record written while the app was down may pin one.
+    ``None`` when nothing does."""
+    ignore = frozenset("/".join(parts) for parts in removed)
+    revisions = [hit[1] for hit in map(classify, removed) if hit is not None and hit[0] == "definition"]
+    if not revisions:
+        return None
+    found = scan(access)
+    for ref in revisions:
+        try:
+            check_unreferenced(access, ref, ignore=ignore, found=found)  # type: ignore[arg-type]
+        except RevisionReferenced as error:
+            return str(error)
+    return None
 
 
 def pinned_by(parts: Parts, data: bytes) -> frozenset[SourceRef]:
@@ -641,7 +669,7 @@ def instance_derivation_of(data: bytes) -> tuple[SourceRef | None, str | None]:
     return instance_derivation(document.get("derived_from"), document.get("base"))
 
 
-__all__ = ["ASSET_RECORD_KINDS", "CanonicalScan", "INSTANCE_ID_CONFLICT", "check_unreferenced", "definition_is_derived",
+__all__ = ["ASSET_RECORD_KINDS", "CanonicalScan", "INSTANCE_ID_CONFLICT", "check_unreferenced", "removal_blocker", "definition_is_derived",
            "image_blob",
            "instance_derivation", "instance_derivation_of", "instances_named", "parse_exact", "pinned_by",
            "placement_target", "previous_of", "scan"]
