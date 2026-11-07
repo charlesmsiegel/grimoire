@@ -372,7 +372,7 @@ def test_a_crash_or_error_at_any_commit_boundary_of_a_sharded_sync_converges(tmp
         baseline.assert_ok()
         trace = baseline.runs[0].action_trace
     commits = [op.index for op in trace if op.kind == "replace" and (op.target or "").endswith("/.txn/journal.json")]
-    assert len(commits) == 6  # data(a), data(b), archive(b), archive(a), pending(b), pending(a)
+    assert len(commits) == 8  # data(a), data(b), keeps(b), keeps(a), archive(b), archive(a), pending(b), pending(a)
     points = {}
     for index in commits:
         points[index] = frozenset({"before", "after", "fail"})

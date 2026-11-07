@@ -286,6 +286,11 @@ class KeptEntry:
     #: this device's own versions ``resolve`` held here (perhaps their only copy anywhere): never
     #: delivered, never dismissable, and recorded until their slot is gone, whatever the conflict does
     held: frozenset[str] = frozenset()
+    #: the peer's version of this path that this device holds kept for a conflict that stands (or tried to keep,
+    #: or dismissed), as the last sync with the peer found it, whatever its base and whoever delivered its
+    #: bytes; ``None`` when there is none. Never a reason to dismiss or delete anything: it only says that the
+    #: devices still disagree here (028's turns wait on it, ``grimoire.sync.turns.open_conflicts``)
+    open: str | None = None
 
 
 @dataclass(frozen=True)
@@ -327,24 +332,25 @@ def parse_keeps(data: bytes | None, devices: tuple[str, str]) -> KeepsView:
     parsed: dict[str, KeptEntry] = {}
     for path, entry in entries.items():
         valid = (_syncable(path) and isinstance(entry, Mapping)
-                 and set(entry) == {"base", "delivered", "dismissed", "held"}
-                 and all(_etag_list(entry[key]) for key in ("delivered", "dismissed", "held")))
+                 and set(entry) - {"open"} == {"base", "delivered", "dismissed", "held"}
+                 and all(_etag_list(entry[key]) for key in ("delivered", "dismissed", "held"))
+                 and ("open" not in entry or is_etag(entry["open"])))  # written only when there is one
         if valid:  # one spelling: a base only beside a delivered version, a dismissal only on a base
             delivered, dismissed, held = (set(entry[key]) for key in ("delivered", "dismissed", "held"))  # type: ignore[index]
             base = entry["base"]  # type: ignore[index]
             valid = ((base is None and not dismissed) or (is_base_token(base) and bool(delivered))) and (
-                dismissed <= delivered and not held & delivered and bool(delivered or held))
+                dismissed <= delivered and not held & delivered and bool(delivered or held or "open" in entry))
         if not valid:
             return KeepsView("ignored", MappingProxyType({}), f"bad entry for {path!r}", data)
         parsed[path] = KeptEntry(entry["base"], frozenset(entry["delivered"]), frozenset(entry["dismissed"]),  # type: ignore[index]
-                                 frozenset(entry["held"]))  # type: ignore[index]
+                                 frozenset(entry["held"]), entry.get("open"))  # type: ignore[union-attr]
     return KeepsView("valid", MappingProxyType(parsed), None, data)
 
 
 def render_keeps(devices: tuple[str, str], entries: Mapping[str, KeptEntry]) -> bytes:
     body = {path: {"base": entry.base if entry.delivered else None,
                    "delivered": sorted(entry.delivered), "dismissed": sorted(entry.dismissed & entry.delivered),
-                   "held": sorted(entry.held)}
-            for path, entry in sorted(entries.items()) if entry.delivered or entry.held}
+                   "held": sorted(entry.held), **({} if entry.open is None else {"open": entry.open})}
+            for path, entry in sorted(entries.items()) if entry.delivered or entry.held or entry.open is not None}
     return render({"format": KEEPS_FORMAT, "devices": list(devices), "entries": body,
                    "check": _digest(devices, body)})

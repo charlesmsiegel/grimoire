@@ -1185,7 +1185,8 @@ def _commit_states(plan: SyncPlan, device: str, kind: str, states: list, applied
 def _commit_keeps(plan: SyncPlan, applied: _Applied) -> None:
     """keeps(b), keeps(a): each conflict this sync ended out of conflict before either archive records it (028)."""
     for device in reversed(plan.devices):
-        record = kept_record.ended(plan.kept_records[device], plan.other(device), plan.devices, plan.conflicts)
+        record = kept_record.ended(plan.kept_records[device], plan.other(device), plan.devices, plan.conflicts,
+                                   kept_record.opened(plan, device))
         if _commit_states(plan, device, "keeps", [record], applied):  # the pending step's record replaces it
             plan.kept_records[device] = parse_keeps(record[1], plan.devices)  # type: ignore[index]
 
@@ -1213,7 +1214,8 @@ def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object],
     bases = {path: kept_record.archived_token(*(archived[d].get(path) for d in plan.devices))  # what the next sync reads
              for path in plan.conflicts}
     record = kept_record.next_keeps(plan.kept_records[device], peer, plan.devices, bases,
-                                    functools.partial(kept_record.slot_stands, plan.stores[device]))
+                                    functools.partial(kept_record.slot_stands, plan.stores[device]),
+                                    kept_record.opened(plan, device))
     _commit_states(plan, device, "pending", [*states, record], applied)
 
 

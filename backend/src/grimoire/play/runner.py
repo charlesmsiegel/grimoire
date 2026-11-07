@@ -586,7 +586,7 @@ class SceneRunner:
 
         for _ in range(WRITE_RETRIES):
             try:
-                self.scenes.write(stored.record.with_take(take), stored, before_commit=fence)
+                self.scenes.write(stored.record.with_take(take), stored, landing=True, before_commit=fence)
                 return take
             except _Stale:  # a newer run of this chat started: keep the usage, drop the lines
                 take = replace(take, state="stale", lines=(), outcome="stale")

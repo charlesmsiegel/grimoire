@@ -15,7 +15,7 @@ turn (an unreadable payload is never copied: the scan blocks it).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from grimoire.core.identity import ChatRef, ScopeRef, TurnRef
 from grimoire.scene.model import parse_turn_id
@@ -23,7 +23,8 @@ from grimoire.store import LibraryStore, StoreError, UnstorableIdentifier
 from grimoire.store.layout import chat_parts, scope_parts, turn_parts
 from grimoire.store.replica import parse_exact
 
-from .documents import syncable
+from .bookkeeping import read_document
+from .documents import KeepsView, named_paths, syncable
 from .errors import NoDeviceIdentity, SyncInterrupted
 from .identity import device_of
 from .keeps import kept_slots, other_peers, read_keeps
@@ -83,12 +84,21 @@ def _turn_name(path: str) -> tuple[str, int, str | None] | None:
     return parse_turn_id(name[:-len(".json")]) if name.endswith(".json") else None
 
 
-def open_conflicts(store: LibraryStore, folder: str) -> tuple[dict[str, tuple[bytes, ...]], bool]:
+def open_conflicts(store: LibraryStore, folder: str, *, ended: Callable[[str], bool] = lambda peer: False,
+                   ) -> tuple[dict[str, tuple[bytes, ...]], bool]:
     """The files under ``folder`` that a pair's last sync found in conflict on this device and that no
-    ``resolve`` has ended yet (019's keep-both, as this device's kept-version records hold it: an entry
-    with a ``base``), each with the peer's versions kept here that can be read; and whether the records
-    are complete. ``False`` when a record cannot be honoured (damaged, or unreadable): any path may be in
-    conflict then, so callers fail closed. A library that never synced has none."""
+    ``resolve`` or later sync has ended (019's keep-both, as this device's kept-version records hold it),
+    each with the peer's versions kept here that can be read; and whether the records are complete.
+
+    A path is in conflict with a peer while that pair's entry names a version of it that this device
+    has not dismissed: the one the last sync kept (``open``, whatever the conflict's base and whoever's
+    keep first wrote those bytes here), or one a sync delivered in the conflict that stands. Dismissing
+    every such version is this device's local "keep mine": that pair's conflict no longer holds the path
+    here, though the next sync with the peer still reports it (019). A peer whose pairing was ``ended``
+    (``unpair``) holds nothing. ``False`` when a record of a peer that still counts cannot be honoured
+    (damaged, or unreadable) and that pair may have synced ``folder``'s campaign (its archive, or the
+    record itself, names a file of it, or the archive cannot be read): any path may be in conflict then,
+    so callers fail closed. A library that never synced has none."""
     try:
         device = device_of(store)
     except NoDeviceIdentity:
@@ -99,26 +109,45 @@ def open_conflicts(store: LibraryStore, folder: str) -> tuple[dict[str, tuple[by
     complete = True
     try:
         peers = other_peers(store, device)
-    except (StoreError, OSError):
+    except (StoreError, OSError, SyncInterrupted):
         return {}, False
     for peer in peers:
-        try:
-            view = read_keeps(store, peer, tuple(sorted((device, peer))))  # type: ignore[arg-type]
-        except (StoreError, OSError, ValueError):
-            complete = False
+        if ended(peer):
             continue
-        if view.state == "ignored":
-            complete = False
+        devices: tuple[str, str] = tuple(sorted((device, peer)))  # type: ignore[assignment]
+        try:
+            view = read_keeps(store, peer, devices)
+        except (StoreError, OSError, ValueError, SyncInterrupted):  # an unreadable ``.sync`` file
+            view = None
+        if view is None or view.state == "ignored":
+            complete = complete and not _synced(store, peer, devices, folder, view)
+            continue
         for path, entry in (view.entries.items() if view.state == "valid" else ()):
-            if entry.base is None or not path.startswith(folder + "/"):
+            standing = (({entry.open} - {None}) | entry.delivered) - entry.dismissed
+            if not standing or not path.startswith(folder + "/"):
                 continue
             kept = list(found.get(path, ()))
-            for tag in sorted(entry.delivered):
-                slots, unreadable = kept_slots(store, path, tag)
+            for tag in sorted(standing):  # type: ignore[type-var]
+                slots, unreadable = kept_slots(store, path, tag)  # type: ignore[arg-type]
                 complete = complete and not unreadable
                 kept += [data for slot in slots if (data := _read(store, slot)) is not None]
             found[path] = tuple(kept)
     return found, complete
+
+
+def _synced(store: LibraryStore, peer: str, devices: tuple[str, str], folder: str, view: KeepsView | None) -> bool:
+    """Whether the pair with ``peer`` may have synced ``folder``'s campaign, for a kept-version record that
+    cannot be honoured: its archive names a file of the campaign or cannot be honoured, or the record names one.
+    A pair folder with neither (a stray or newer record of a pair that never synced it) holds no chat."""
+    campaign = folder.rpartition("/")[0] + "/"
+    named = named_paths(view.data) if view is not None else frozenset()
+    try:
+        archive = read_document(store, "archive", peer, devices)
+    except (StoreError, OSError, ValueError, SyncInterrupted):
+        return True
+    if archive.state == "ignored":  # what it names is read best effort: it may hold anything
+        return True
+    return any(path.startswith(campaign) for path in (*named, *archive.entries))
 
 
 def _read(store: LibraryStore, slot: str) -> bytes | None:

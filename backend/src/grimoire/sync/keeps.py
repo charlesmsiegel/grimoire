@@ -18,7 +18,12 @@ of its own versions ``resolve`` held here (028).
 - ``held``: this device's own versions that ``resolve`` held under ``.conflicts`` when it replaced
   them with the peer's, recorded in a commit of its own just **before** resolve's data commit (so
   no recovery of that commit can lose it) and kept for as long as a slot holds those bytes, or
-  might (``identify`` carries them to the new ID's record).
+  might (``identify`` carries them to the new ID's record);
+- ``open``: the peer's version this device holds kept (or failed to keep, or dismissed) for a
+  conflict that stands, as the last sync of the pair found it, whatever its base and whoever's keep
+  first wrote those bytes here. It only says that the devices still disagree on that path (028's
+  turns wait while it stands, unless this device dismissed that version): nothing is ever dismissed
+  or deleted by it.
 
 It is what makes ``dismiss`` safe: a file under ``.conflicts/`` may be a kept copy of the peer's
 version or this device's own version that ``resolve`` held (perhaps its only copy anywhere), and
@@ -73,16 +78,17 @@ def archived_token(mine: tuple[str, str] | None, theirs: tuple[str, str] | None)
     return "none" if mine is None else f"{mine[0]}:{mine[1]}"
 
 
-def _entry(base: str | None, delivered: Iterable[str], dismissed: Iterable[str], held: Iterable[str]) -> KeptEntry | None:
+def _entry(base: str | None, delivered: Iterable[str], dismissed: Iterable[str], held: Iterable[str],
+           open: str | None = None) -> KeptEntry | None:
     """The record's one spelling of an entry: a held tag is never delivered, a base only beside a
     delivered version, a dismissal only on a base, and no entry at all when nothing is left."""
     held = frozenset(held)
     delivered = frozenset(delivered) - held
     base = base if delivered else None
     dismissed = frozenset(dismissed) & delivered if base is not None else frozenset()
-    if not delivered and not held:
+    if not delivered and not held and open is None:
         return None
-    return KeptEntry(base, delivered, dismissed, held)
+    return KeptEntry(base, delivered, dismissed, held, open)
 
 
 def _entries(view: KeepsView) -> dict[str, KeptEntry]:
@@ -110,13 +116,14 @@ def fit(view: KeepsView, devices: tuple[str, str], entries: Mapping[str, KeptEnt
     this order and then by path and etag: those this record already dismissed, a dismissal being
     recorded now (``dismiss`` refuses unless every earlier one is kept, so a new dismissal never
     evicts one), deliveries already recorded, then new ones. An unrecorded delivery is only a kept
-    copy that is never dismissable, which fails closed, and a sync never stops over it. Holds are
-    never what gives way. A sync adds no dismissal and never lengthens one (a dismissal lasts only
+    copy that is never dismissable, which fails closed, and a sync never stops over it. Holds and
+    ``open`` versions are never what gives way (an ``open`` let go would let a scene play over a
+    conflict that stands). A sync adds no dismissal and never lengthens one (a dismissal lasts only
     on its own base), so the dismissals already recorded outgrow the cap only if ``resolve`` adds
     holds to a full record: then the last ones by path go, and those versions are delivered again.
-    Holds alone overflow only past tens of thousands of versions ``resolve`` held and nobody deleted
-    (a hold goes once its slot does); then the write raises, and the sync or resolve stops before
-    anything of it is written."""
+    Holds and opens alone overflow only past tens of thousands of versions ``resolve`` held and nobody
+    deleted (a hold goes once its slot does), or of conflicts of one pair standing at once; then the
+    write raises, and the sync or resolve stops before anything of it is written."""
     entries = dict(entries)
     try:
         return entries, _render(devices, entries)
@@ -134,7 +141,8 @@ def fit(view: KeepsView, devices: tuple[str, str], entries: Mapping[str, KeptEnt
     def first(count: int) -> tuple[dict[str, KeptEntry], bytes] | None:
         chosen, kept = set(items[:count]), {}
         for path, entry in entries.items():
-            entry = _entry(entry.base, {tag for tag in entry.delivered if (path, tag) in chosen}, entry.dismissed, entry.held)
+            entry = _entry(entry.base, {tag for tag in entry.delivered if (path, tag) in chosen}, entry.dismissed, entry.held,
+                           entry.open)
             if entry is not None:
                 kept[path] = entry
         try:
@@ -142,8 +150,8 @@ def fit(view: KeepsView, devices: tuple[str, str], entries: Mapping[str, KeptEnt
         except InvalidEnvelope:
             return None
     best = first(0)
-    if best is None:  # the holds alone do not fit
-        raise InvalidEnvelope("the kept-version record's holds alone exceed the file size limit")
+    if best is None:  # the holds and opens alone do not fit
+        raise InvalidEnvelope("the kept-version record's holds and open conflicts alone exceed the file size limit")
     low, high = 1, len(items) - 1  # the most deliveries that fit: fewer always fit too
     while low <= high:
         middle = (low + high) // 2
@@ -184,7 +192,7 @@ def with_delivered(view: KeepsView, peer: str, devices: tuple[str, str], first: 
         before = entries.get(path) or KeptEntry(None, frozenset())
         base = bases.get(path) or before.base
         carried = before.delivered if _same_conflict(before.base, base) else frozenset()
-        entry = _entry(base, carried | {tag}, before.dismissed if base == before.base else (), before.held)
+        entry = _entry(base, carried | {tag}, before.dismissed if base == before.base else (), before.held, before.open)
         if entry is not None:
             entries[path] = entry
     return _write(view, peer, devices, entries)
@@ -235,7 +243,7 @@ class Delivery:
 
 
 def next_keeps(view: KeepsView, peer: str, devices: tuple[str, str], bases: Mapping[str, str | None],
-               stands: Stands) -> State | None:
+               stands: Stands, opened: Mapping[str, str]) -> State | None:
     """The record after a completed sync, or ``None`` if it does not change. It never adds a delivered
     version (the data commit did that): it drops what no longer applies.
 
@@ -245,16 +253,19 @@ def next_keeps(view: KeepsView, peer: str, devices: tuple[str, str], bases: Mapp
     while its slot cannot be read: only a slot confirmed gone lets a hold's record go. A delivered
     one carries over the same way (also while it is dismissed: the person deletes a dismissed copy),
     but only while the same conflict stands (``_same_conflict``): a path no longer in conflict, or
-    in conflict on another base, keeps none, so its old slots stay and are never dismissable."""
+    in conflict on another base, keeps none, so its old slots stay and are never dismissable. Each
+    entry's ``open`` is the sync's own (``opened``)."""
     entries: dict[str, KeptEntry] = {}
     for path, before in _entries(view).items():
         base = bases.get(path)
         dismissed = before.dismissed if base is not None and before.base == base else frozenset()
         delivered = before.delivered if path in bases and _same_conflict(before.base, base) else frozenset()
         entry = _entry(base, {tag for tag in delivered if tag in dismissed or stands(path, tag)},
-                       dismissed, {tag for tag in before.held if stands(path, tag)})
+                       dismissed, {tag for tag in before.held if stands(path, tag)}, opened.get(path))
         if entry is not None:
             entries[path] = entry
+    for path, tag in opened.items():
+        entries.setdefault(path, KeptEntry(None, frozenset(), open=tag))
     return _write(view, peer, devices, entries)
 
 
@@ -283,19 +294,44 @@ def without(view: KeepsView, peer: str, devices: tuple[str, str], paths: Iterabl
     return _write(view, peer, devices, entries)
 
 
-def ended(view: KeepsView, peer: str, devices: tuple[str, str], open_paths: Iterable[str]) -> State | None:
+def ended(view: KeepsView, peer: str, devices: tuple[str, str], open_paths: Iterable[str],
+          opened: Mapping[str, str]) -> State | None:
     """The record with every path a sync no longer finds in conflict taken out of conflict (``without``),
     for a commit of its own before that sync writes either archive: a crash after an archive records
     the agreement must never leave a kept copy dismissable (perhaps the last copy of a version
-    neither device holds any more) on a base only the later pending step would have cleared."""
-    return without(view, peer, devices, set(_entries(view)) - set(open_paths))
+    neither device holds any more) on a base only the later pending step would have cleared. Each
+    entry's ``open`` becomes the sync's own (``opened``) in the same commit, so a conflict that stands
+    is recorded before either archive moves, even one whose keep wrote nothing (its bytes were here)."""
+    entries = _entries(view)
+    if view.state != "valid" and not opened:
+        return None  # nothing to record: an ignored record is replaced by the pending step's, as before
+    for path in set(entries) - set(open_paths):
+        entries[path] = KeptEntry(None, frozenset(), held=entries[path].held)
+    for path in set(entries) | set(opened):
+        before = entries.get(path) or KeptEntry(None, frozenset())
+        entry = _entry(before.base, before.delivered, before.dismissed, before.held, opened.get(path))
+        if entry is None:
+            entries.pop(path, None)
+        else:
+            entries[path] = entry
+    return _write(view, peer, devices, entries)
+
+
+def opened(plan, device: str) -> dict[str, str]:  # type: ignore[no-untyped-def]
+    """``open`` for ``device`` after ``plan``: each conflict path where it holds the peer's version kept, tried
+    to keep it (``Conflict.kept``), or did not because it dismissed that version (``Conflict.dismissed``: the
+    entry also says so, and a sync after a dismissal rewrites nothing), by that version."""
+    other = plan.other(device)
+    return {path: tag for path, conflict in plan.conflicts.items()
+            if (device in conflict.kept or device in conflict.dismissed)
+            and (tag := plan.sides[path][other].etag) is not None}
 
 
 def with_held(view: KeepsView, peer: str, devices: tuple[str, str], path: str, tag: str) -> State | None:
     """The record with ``tag`` held for ``path``: ``resolve`` commits it just before its hold.
     A delivered entry of the same bytes (the hold reuses its slot) stops being delivered."""
     return _changed(view, peer, devices, path,
-                    lambda before: _entry(before.base, before.delivered, before.dismissed, {*before.held, tag}))
+                    lambda before: _entry(before.base, before.delivered, before.dismissed, {*before.held, tag}, before.open))
 
 
 def not_delivered(view: KeepsView, peer: str, devices: tuple[str, str], path: str, tag: str) -> State | None:
@@ -304,7 +340,7 @@ def not_delivered(view: KeepsView, peer: str, devices: tuple[str, str], path: st
     if view.state != "valid" or tag not in getattr(view.entries.get(path), "delivered", ()):
         return None
     return _changed(view, peer, devices, path,
-                    lambda before: _entry(before.base, before.delivered - {tag}, before.dismissed, before.held))
+                    lambda before: _entry(before.base, before.delivered - {tag}, before.dismissed, before.held, before.open))
 
 
 def not_delivered_elsewhere(store: LibraryStore, device: str, peer: str, path: str, tag: str) -> list[State]:

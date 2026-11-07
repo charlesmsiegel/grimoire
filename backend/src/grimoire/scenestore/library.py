@@ -22,6 +22,7 @@ from grimoire.scene.branches import is_mine, tag_for
 from grimoire.store import LibraryStore, ScopeRecord, StaleWrite, StoreError, TakenIdsUnlisted
 from grimoire.store.layout import CAMPAIGNS, TURNS, address_parts
 from grimoire.store.replica import parse_exact
+from grimoire.peersync.pairing import pairing_ended
 from grimoire.sync.turns import open_conflicts
 
 
@@ -146,7 +147,8 @@ class SceneLibrary:
         """This chat's turns that sync left in a keep-both conflict (019), and who paused in another device's
         version kept beside one. Each device reads its own version until the conflict is resolved, so a pause,
         a take or a choice the other made is unseen here: no play write goes on meanwhile (``turn_conflict``)."""
-        found, complete = open_conflicts(self.store, f"{CAMPAIGNS}/{chat.campaign_id}/{TURNS}")
+        found, complete = open_conflicts(self.store, f"{CAMPAIGNS}/{chat.campaign_id}/{TURNS}",
+                                         ended=lambda peer: pairing_ended(self.store, peer))
         conflicted, pausers = [] if complete else [CONFLICT_RECORDS], []
         for path, kept in found.items():
             name = path.rsplit("/", 1)[-1].removesuffix(".json")
@@ -189,8 +191,8 @@ class SceneLibrary:
         return tag[1:] or None
 
     def write(self, record: TurnRecord, base: StoredTurn | None, *, after: StoredTurn | None = None,
-              last: bool = False, unpaused: bool = False, before_commit: Callable[[], None] | None = None,
-              on_commit: Callable[[], None] | None = None) -> StoredTurn:
+              last: bool = False, unpaused: bool = False, landing: bool = False,
+              before_commit: Callable[[], None] | None = None, on_commit: Callable[[], None] | None = None) -> StoredTurn:
         """Create (``base=None``) or compare-and-swap one turn over ``base``, as read; the turn as now stored.
 
         A rewrite keeps ``base``'s envelope owner and unknown fields. ``after`` is the chat's previous turn as
@@ -201,7 +203,11 @@ class SceneLibrary:
         fence there): raising from it writes nothing. ``on_commit`` runs under the same lock once the write
         has committed (the runner claims its fence there, so publishing a run and claiming are one step).
         ``unpaused`` (implied by a create) writes only while no pause stands (016: play never goes on over one),
-        and no write but a pause goes on while a turn of the chat is in a sync conflict (``turn_conflict``).
+        and no write but a pause goes on while a turn of the chat is in a sync conflict (``turn_conflict``). Such a
+        write over an existing turn also needs that turn still on the chat's line: one a fork choice set aside
+        since it was read is never played on (028). ``landing`` (the runner's finished take, written over its own
+        running take) checks nothing of the chat: a run already in flight always lands, wherever a fork, a choice,
+        a conflict or a pause put its turn since, so its calls' usage is never lost; only ``base`` must hold.
         """
         payload = turn_to_payload(record)
         if base is None:
@@ -209,32 +215,8 @@ class SceneLibrary:
         else:
             envelope = ScopeRecord(record.ref, TURN_SCHEMA, payload, owner=base.owner, extra=base.extra)
         with self.store.lock:
-            view = self._view(record.chat, self.store.campaign_turns(record.chat.campaign_id))  # one read
-            line = view.turns  # turns set aside take no number (028)
-            if view.conflicted and not (last and record.paused):
-                raise SceneRefused("turn_conflict", "a turn of this chat is in a sync conflict; resolve it first")
-            if (unpaused or base is None) and view.paused:  # a pause written meanwhile, here or by sync
-                raise SceneRefused("turn_changed", "play was paused since the chat was read; read it again")
-            if view.problems:
-                # a file of this chat that cannot be read (a peer's newer turn, say) or a fork arrived since the
-                # caller read the chat: no turn is created or paused over what this version cannot see
-                raise SceneRefused("turn_changed", "the chat's turns changed since they were read; read them again")
-            if base is None:
-                if any(stored.record.number == record.number for stored in line):
-                    # this library already holds turn n under another device's tag (made before identify)
-                    raise SceneRefused("turn_changed", "this turn was played since it was read; read it again")
-                if record.device != self.tag_for(view, record.number):
-                    # identified (or re-identified) since the turn was planned, or its id was taken meanwhile
-                    raise SceneRefused("turn_changed", "this library's device identity changed; read it again")
-                if record.follows is not None and (view.fork is not None or view.last is None
-                                                   or view.last.record.turn_id != record.follows):
-                    raise SceneRefused("turn_changed", "the chat's line changed since it was read; read it again")
-            if last and any(stored.record.number > record.number for stored in line):
-                raise SceneRefused("turn_changed", "a later turn was played since this one was read; read it again")
-            if after is not None:
-                current = next((stored for stored in line if stored.record.ref == after.record.ref), None)
-                if current is None or current.etag != after.etag:
-                    raise SceneRefused("turn_changed", "the chat's last turn changed since it was read; read it again")
+            if not landing:
+                self._admits(record, base, after=after, last=last, unpaused=unpaused)
             if before_commit is not None:
                 before_commit()
             txn = self.store.transaction()
@@ -247,6 +229,40 @@ class SceneLibrary:
                 on_commit()
         etag = result.etags["/".join(address_parts(record.ref))]
         return StoredTurn(record, etag, envelope.owner, envelope.extra)
+
+    def _admits(self, record: TurnRecord, base: StoredTurn | None, *, after: StoredTurn | None, last: bool,
+                unpaused: bool) -> None:
+        """``write``'s checks of the chat as it now stands, under the store lock: refuses, or returns."""
+        view = self._view(record.chat, self.store.campaign_turns(record.chat.campaign_id))  # one read
+        line = view.turns  # turns set aside take no number (028)
+        if view.conflicted and not (last and record.paused):
+            raise SceneRefused("turn_conflict", "a turn of this chat is in a sync conflict; resolve it first")
+        if (unpaused or base is None) and view.paused:  # a pause written meanwhile, here or by sync
+            raise SceneRefused("turn_changed", "play was paused since the chat was read; read it again")
+        if view.problems:
+            # a file of this chat that cannot be read (a peer's newer turn, say) or a fork arrived since the
+            # caller read the chat: no turn is created or paused over what this version cannot see
+            raise SceneRefused("turn_changed", "the chat's turns changed since they were read; read them again")
+        if base is None:
+            if any(stored.record.number == record.number for stored in line):
+                # this library already holds turn n under another device's tag (made before identify)
+                raise SceneRefused("turn_changed", "this turn was played since it was read; read it again")
+            if record.device != self.tag_for(view, record.number):
+                # identified (or re-identified) since the turn was planned, or its id was taken meanwhile
+                raise SceneRefused("turn_changed", "this library's device identity changed; read it again")
+            if record.follows is not None and (view.fork is not None or view.last is None
+                                               or view.last.record.turn_id != record.follows):
+                raise SceneRefused("turn_changed", "the chat's line changed since it was read; read it again")
+        elif unpaused and not any(stored.record.ref == base.record.ref for stored in line):
+            # a fork choice set this turn aside since it was read (its file unchanged): no reply lands where
+            # no one hears it
+            raise SceneRefused("turn_changed", "this turn was set aside since it was read; read the chat again")
+        if last and any(stored.record.number > record.number for stored in line):
+            raise SceneRefused("turn_changed", "a later turn was played since this one was read; read it again")
+        if after is not None:
+            current = next((stored for stored in line if stored.record.ref == after.record.ref), None)
+            if current is None or current.etag != after.etag:
+                raise SceneRefused("turn_changed", "the chat's last turn changed since it was read; read it again")
 
     def choose(self, turns: ChatTurns, chosen: str, by: str) -> ChatTurns:
         """028: at the chat's fork, as read in ``turns``, the branch headed by ``chosen`` goes on; the chat's turns
