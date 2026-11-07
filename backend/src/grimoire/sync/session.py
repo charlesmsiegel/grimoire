@@ -547,8 +547,14 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
                 continue
             heads = set(_manifest_heads(copy)) if syncable(copy.path) == "manifest" else set()
             pins = {"/".join(definition_parts(ref)) for ref in pinned_by(parts, copy.data)}  # type: ignore[arg-type]
-            missing = sorted(path for path in pins | heads if final(path) != origin_files.get(path) or blocked(path)
-                             or (path in heads and origin_files.get(path) is None))
+            # a merged ledger file (028) is both devices' work, not the origin's: an event it keeps from the
+            # receiver pins what the receiver holds, which the origin need not, so a pin the origin lacks
+            # holds when the receiver keeps it. Revisions never change, so it means what it meant there.
+            merged = copy.unit is not None
+            missing = sorted(path for path in pins | heads if blocked(path)
+                             or (path in heads and origin_files.get(path) is None)
+                             or (final(path) is None if merged and origin_files.get(path) is None
+                                 else final(path) != origin_files.get(path)))
             # needed on the receiver even when the origin lost it (a turn's chain and chat too: ``sync.turns``)
             owner = {*_owning_chat(copy.path), *turn_needs(copy.path, copy.data),
                      *turn_named(copy.path, copy.data, origin_scan)}

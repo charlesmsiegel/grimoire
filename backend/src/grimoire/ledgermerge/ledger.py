@@ -25,7 +25,7 @@ from grimoire.holdings import MAX_FILE, Holdings
 
 from . import events as _events
 from .holdings import EnvelopeSizer, merge_holdings
-from .model import Ledger, Merged, Review, ReviewItem, ranks
+from .model import BASE, Ledger, Merged, Review, ReviewItem, ranks
 
 #: reasons that stop an automatic merge only by policy: the merge itself replays cleanly
 POLICY = frozenset({"same_chat", "revoked_vs_extended"})
@@ -72,7 +72,7 @@ def merge_ledger(base: Ledger, sides: Mapping[str, Ledger], *, instances: Iterab
     relation_values = _events.relation_values(relations, base, sides)
     items += _events.replay(base.campaign_id, by_id, (ref.event_id for ref in found.order), relation_values,
                             instances, found.numbering)
-    wrapup_values = [(base.wrapups if out.source == "base" else sides[out.source].wrapups)[ref].value  # type: ignore[union-attr]
+    wrapup_values = [(base.wrapups if out.source == BASE else sides[out.source].wrapups)[ref].value  # type: ignore[union-attr]
                      for ref, out in wrapups.items()]
     after = problems(base.campaign_id, merged.values(), relation_values, wrapup_values, held.values, instances)
     before: set[EffectProblem] = set()

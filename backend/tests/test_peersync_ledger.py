@@ -81,6 +81,25 @@ def test_offline_ledgers_merge_over_the_connection_from_the_base_cache(pair):
         assert report.status == "synced", report
 
 
+def test_an_unreadable_base_cache_entry_on_the_serving_device_is_left_out_not_a_failed_snapshot(pair):
+    desktop, phone = pair[DESKTOP], pair[PHONE]
+    tam = f"campaigns/{C}/holdings/character/tam.json"
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+        _accept(desktop, pay(sequence=8, chat=CHAT, attempt="pay-desk-8"))
+        _accept(phone, pay())
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+    entry = phone.store.root / ".sync" / base_name(DESKTOP, tam)
+    entry.unlink()
+    entry.mkdir()  # a folder where the cached file should be: the entry cannot be read
+    _accept(desktop, pay(sequence=12, chat=CHAT, attempt="pay-desk-12"))
+    _accept(phone, pay(sequence=13, attempt="pay-phone-13"))
+    with serving(phone) as server:
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert report.status == "synced", report  # the desktop's own cache still holds the agreed bytes
+    assert ledger_files(desktop.store) == ledger_files(phone.store)
+
+
 def test_a_ledger_merge_both_devices_must_review_is_reported_over_the_connection(pair):
     desktop, phone = pair[DESKTOP], pair[PHONE]
     with serving(phone) as server:

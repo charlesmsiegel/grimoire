@@ -432,7 +432,10 @@ def base_states(plan, device: str, entries: Mapping[str, tuple[str, str]], publi
         if data is None or etag(data) != entry[1]:
             continue  # never cache bytes the agreement does not name
         name = base_name(plan.other(device), path)
-        current = plan.stores[device].read_sync_state(name)
+        try:
+            current = plan.stores[device].read_sync_state(name)
+        except (StoreError, OSError, ValueError):
+            continue  # an entry that cannot be read is no copy to replace: an optional entry is left out
         if current != data:
             states.append((name, data, None if current is None else etag(current)))
     return states

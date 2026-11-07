@@ -7,6 +7,7 @@ devices with the same ledger bytes whichever device starts the sync; a merge tha
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -371,3 +372,36 @@ def test_a_ledger_folder_linked_away_during_the_sync_stops_the_merge_before_it_c
     with pytest.raises(SyncInterrupted, match="changed on phone during the sync"):
         apply_sync(plan, handles())
     assert ledger_files(pair[PHONE].store) == before
+
+
+def test_a_merged_event_that_pins_a_revision_only_its_own_device_holds_lands_on_both(pair):
+    # each device makes a definition of its own and accepts an event that pins it (an envelope field); the
+    # merge renumbers both, so each device receives its own event back, from a peer that lacks the pin
+    from grimoire.core.identity import SourceRef
+    from grimoire.store import RecordEnvelope, SourceManifest
+    from grimoire.store.jsonfmt import render
+    from sync_helpers import handle
+    accepted = {name: set((device.store.root / "campaigns" / C / "accepted").rglob("*.json"))
+                for name, device in pair.items()}
+    pair[DESKTOP].accept(pay(sequence=8, chat=CHAT, attempt="pay-desk"))
+    pair[PHONE].accept(pay())
+    for name, world in ((DESKTOP, "deskworld"), (PHONE, "phoneworld")):
+        store = pair[name].store
+        ref = SourceRef(f"world:{world}", "character", "wren")
+        txn = store.transaction()
+        txn.put(RecordEnvelope(ref.at("r1"), {"bio": "a sailor"}, name="Wren"), None)
+        txn.put(SourceManifest(f"world:{world}", OWNER, world, {"character/wren": "r1"}, ()), None)
+        txn.commit(handle())
+        (event,) = set((store.root / "campaigns" / C / "accepted").rglob("*.json")) - accepted[name]
+        document = json.loads(event.read_bytes())
+        document["x-provenance"] = str(ref.at("r1"))
+        event.write_bytes(render(document))
+    report = sync(pair[DESKTOP].store, pair[PHONE].store, handles())  # in one pass, not held for a second
+    assert report.conflicts == (), report.conflicts
+    assert ledger_files(pair[DESKTOP].store) == ledger_files(pair[PHONE].store)
+    assert len(read_ledger(pair[PHONE].store).events) == 2
+    for device in pair.values():  # each definition reached the device that lacked it
+        for world in ("deskworld", "phoneworld"):
+            assert (device.store.root / "sources" / "world" / world / "_source" / "records" / "character" / "wren"
+                    / "r1.json").exists()
+

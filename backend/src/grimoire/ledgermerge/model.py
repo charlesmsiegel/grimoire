@@ -37,8 +37,9 @@ REASONS = frozenset({
     "order_cycle",          # events that each say they were accepted after the other (a hand edit)
     "new_problem",          # the merged ledger reports a 021 problem neither device reported
 })
-#: the devices' own word for the agreed state in ``Kept.source``
-BASE = "base"
+#: the word for the agreed state in ``Kept.source``. It is not an ID segment, so no device id can be it: a
+#: device may well be called ``base`` (``sync.documents.check_device_id`` takes any segment).
+BASE = "@base"
 
 
 def device_tag(device: str) -> str:
@@ -180,9 +181,7 @@ def ranks(sides: Mapping[str, object]) -> dict[str, int]:
     if not isinstance(sides, Mapping) or len(sides) != 2:
         raise ValueError("a merge takes exactly two sides, by device id")
     for device in sides:
-        validate_segment(device, "device")
-        if device == BASE:
-            raise ValueError(f"{BASE!r} names the agreed state, not a device")
+        validate_segment(device, "device")  # so never BASE, which is no segment
     return {device: rank for rank, device in enumerate(sorted(sides))}
 
 
