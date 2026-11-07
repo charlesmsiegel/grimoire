@@ -16,6 +16,8 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 
+from grimoire.adjudication import Outcome
+from grimoire.adjudicationstore import AdjudicationLibrary
 from grimoire.chats import ChatCodecError
 from grimoire.comms import TransmissionError, Unread, read_message
 from grimoire.context import Budget
@@ -37,6 +39,7 @@ from grimoire.intent import RoutingContext, Utterance, route
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import ControlChange
 from grimoire.partystore import PartyLibrary
+from grimoire.play.adjudicate import check_decided, confirm_action, decide_action, outcome_lines, outcome_of
 from grimoire.play.forks import choose_branch
 from grimoire.play.history import chat_history
 from grimoire.play.labels import label_action
@@ -70,7 +73,9 @@ class SceneRunner:
     characters derive their own (027/026). ``fence`` makes an older run of the same chat stale.
     ``labeller`` frames player characters' actions (``label``) on its own untrusted provider handle, and
     ``label_handle`` is the untrusted handle this library's authority issued it, which must be allowed to
-    propose each labelling before it is written; without both nothing is labelled. ``tracer``
+    propose each labelling before it is written; without both nothing is labelled. ``adjudication`` is the
+    library's 029 ``AdjudicationLibrary`` over the app's own adjudication key: it frames a confirmed labelling
+    (``confirm``) and records its decision (``decide``); without it nothing is framed. ``tracer``
     receives one ``Trace`` per public call, timed with ``clock`` (048, docs/PERFORMANCE.md); without one
     nothing is timed.
     """
@@ -80,6 +85,7 @@ class SceneRunner:
                  secrets: Iterable[object] = (), voices: VoiceCatalog | None = None,
                  fence: RunFence | None = None, budget: Budget = DEFAULT_BUDGET,
                  labeller: LabelRuntime | None = None, label_handle=None,
+                 adjudication: AdjudicationLibrary | None = None,
                  tracer: Callable[[Trace], None] | None = None,
                  clock: Callable[[], float] = time.perf_counter) -> None:
         if not (authority.issued(handle) and getattr(handle, "trusted", False) is True
@@ -92,6 +98,13 @@ class SceneRunner:
         if label_handle is not None and not (authority.issued(label_handle)
                                              and getattr(label_handle, "trusted", None) is False):
             raise _refuse("bad_handle", "the label handle is an untrusted handle this library's authority issued")
+        if adjudication is not None and not (isinstance(adjudication, AdjudicationLibrary)
+                                             and adjudication.store is store and adjudication.authority is authority):
+            raise _refuse("bad_adjudication", "adjudication must be this library's AdjudicationLibrary")
+        if adjudication is not None and (not adjudication.principal.startswith("app:") or adjudication.principal in {
+                getattr(label_handle, "principal", None), getattr(getattr(labeller, "_handle", None), "principal", None)}):
+            # the requester's call: the key is the app's own, never a player's, the owner's or the labeller's
+            raise _refuse("bad_adjudication", "the adjudication key is the app's own, apart from the labeller's")
         self.store = store
         self.authority = authority
         self.handle = handle
@@ -104,6 +117,7 @@ class SceneRunner:
         self.budget = budget
         self.labeller = labeller
         self.label_handle = label_handle
+        self.adjudication = adjudication
         self.tracer = tracer
         self.clock = clock
         self.scenes = SceneLibrary(store, handle, owner=owner)
@@ -382,6 +396,7 @@ class SceneRunner:
         if not chosen and not director:
             raise _refuse("nothing_to_generate", "no NPC here can speak; ask for a director reply")
         pending = scene.pending
+        check_decided(self, pending)
         stored = scene.turns.last if pending is not None else None
         following = 1 if scene.last is None else scene.last.number + 1
         record = pending if pending is not None else TurnRecord(
@@ -478,10 +493,11 @@ class SceneRunner:
             return []
         scene, snap, chat = context.scene, context.captured.snapshot, context.scene.chat
         ledger, as_of = self._knowledge(chat)
+        _, bare = outcome_lines(self, turns, scene.names)  # an NPC hears a result where it saw the action
         briefs = []
         for actor, voice in chosen:
             with span("brief.npc") as timed:
-                heard = heard_for(turns, actor, scene.names, before=scene.imported)
+                heard = heard_for(turns, actor, scene.names, before=scene.imported, outcomes=bare)
                 with span("pack") as packed:
                     built = actor_context(context.view, chat, ledger, actor, as_of=as_of, budget=self.budget,
                                           present=scene.cast, scene_text=render(heard))
@@ -502,7 +518,8 @@ class SceneRunner:
         scenario = _scenario_text(context)
         if not scenario:
             raise _refuse("no_scenario", "a director reply needs a bound scenario or a premise")
-        table = table_lines(turns, scene.names, before=scene.imported)
+        table = table_lines(turns, scene.names, before=scene.imported,
+                            outcomes=outcome_lines(self, turns, scene.names)[0])
         with span("pack") as packed:
             lore = chat_lore(context.view, chat, table_text=render(table), budget=self.budget).lore
             packed.count(items=len(lore.items), omitted=len(lore.omitted))
@@ -602,6 +619,30 @@ class SceneRunner:
         """
         return label_action(self, chat, by)
 
+    @traced("confirm")
+    def confirm(self, chat: ChatRef, by) -> Outcome | None:
+        """Frame the open action exactly as its latest proposed labelling says (029), unedited.
+
+        Only the acting character's player confirms, with their own trusted handle; a wrong labelling is
+        fixed by labelling again, never by editing it. The frame is recorded with the adjudication key and
+        the labelling written ``framed``. An action the rules decide (straightforward, impossible) is decided
+        at once, by rule, and its ``Outcome`` returned; an uncertain one waits for ``decide`` (``None``).
+        """
+        return confirm_action(self, chat, by)
+
+    @traced("decide")
+    def decide(self, chat: ChatRef, by, result: str, *, basis: str = "adjudicated", cites=(),
+               consequences=()) -> Outcome:
+        """Decide the open turn's framed, uncertain action: the director (the library owner) adjudicates
+        it (``basis="adjudicated"``), or its player consents to a setback (``basis="consent"``), citing
+        the frame's factors and naming the stakes that come true. 029 checks every rule."""
+        return decide_action(self, chat, by, result, basis=basis, cites=cites, consequences=consequences)
+
+    @traced("outcome")
+    def outcome(self, chat: ChatRef) -> Outcome | None:
+        """The recorded outcome of the open turn's framed action, if it was decided."""
+        return outcome_of(self, self._context(chat).scene.pending)
+
     # -- the table's choices ------------------------------------------------------------------------
 
     @traced("keep")
@@ -616,6 +657,7 @@ class SceneRunner:
         found = next((t for t in record.takes if t.take == take), None)
         if found is None or found.state != "proposed":
             raise _refuse("not_proposed", "only a proposed take can be kept")
+        check_decided(self, record)
         if not found.shown():
             raise _refuse("empty_take", "this take has no line to keep")
         if found.unscreened and not acknowledge_unscreened:

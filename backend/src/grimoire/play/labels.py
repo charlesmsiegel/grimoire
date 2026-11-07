@@ -22,6 +22,7 @@ from grimoire.core.authority import AuthorityError
 from grimoire.core.knowledge import KnowledgeError
 from grimoire.core.perspective import player_knowledge
 from grimoire.labelling import LabelRefused, facts, label_messages, parse_labels
+from grimoire.play.adjudicate import outcome_lines
 from grimoire.play.scene import WRITE_RETRIES, _refuse
 from grimoire.play.tracing import record_calls, span
 from grimoire.providers.meter import TurnMeter
@@ -63,6 +64,8 @@ def label_action(runner, chat: ChatRef, by) -> Label:
     post = record.post if record is not None else None
     if post is None or post.kind != "action":
         raise _refuse("not_an_action", "only the open turn's action post is labelled")
+    if post.private:
+        raise _refuse("private_action", "an action that may carry a private message is not adjudicated at the table")
     controller = scene.controller(post.actor)
     if post.actor not in scene.cast or controller in (None, DIRECTOR):
         raise _refuse("not_a_player_action", "only a present player character's action is labelled")
@@ -88,7 +91,9 @@ def label_action(runner, chat: ChatRef, by) -> Label:
 
     ledger, as_of = runner._knowledge(chat)
     # the character's own window: narration reaches the table, not what the character perceived
-    heard = heard_for(scene.records, post.actor, scene.names, before=scene.imported, narration=False)
+    _, bare = outcome_lines(runner, scene.records, scene.names)  # a settled action's result, where it was
+    heard = heard_for(scene.records, post.actor, scene.names, before=scene.imported, narration=False,
+                      outcomes=bare)
     built = actor_context(context.view, chat, ledger, post.actor, as_of=as_of, budget=runner.budget,
                           present=scene.cast, scene_text=render(heard))
     offered = facts(built.pack.items, own=own_propositions(ledger.knowledge, controller, scene.controls, post.actor,
