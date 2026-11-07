@@ -93,15 +93,54 @@ _SYSTEM = (
 )
 
 
-def label_messages(actor: str, action: str, offered: Sequence[Fact], scene: str = "") -> tuple[tuple[str, str], ...]:
+#: How a reply names an approach the obstacle never suggested.
+NOVEL = "novel"
+
+_AGAINST = (
+    "The action is an attempt at an obstacle. Choose the approach it takes: the id of one of the suggested "
+    f"approaches, or \"{NOVEL}\" if it takes none of them; never refuse an approach for being unlisted. The "
+    "obstacle's own facts and stakes for a suggested approach are added for you, so with a suggested approach "
+    "list no stakes; with a novel one, list what is at stake as usual.\n"
+    f"So answer instead with JSON only, no other text: {{\"approach\": \"...\", \"factors\": [{{\"fact\": \"f1\", "
+    f"\"bearing\": \"hinders\"}}], \"stakes\": [\"...\"]}}, within the same limits."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Obstacle:
+    """What a labeller is told of a 040 obstacle: its goal and its suggested approaches ``(id, text)``. Its facts
+    are not offered: those that bear on the approach chosen are added to the frame by rule, never cited.
+
+    ``fixed`` names the approach the reply must take, when the action's attempt is already linked with one (a
+    suggestion's id, or ``NOVEL``); for a novel one, ``stakes`` is how many stakes the reply must list."""
+
+    goal: str
+    approaches: tuple[tuple[str, str], ...]
+    fixed: str | None = None
+    stakes: int | None = None
+
+
+def label_messages(actor: str, action: str, offered: Sequence[Fact], scene: str = "", *,
+                   obstacle: Obstacle | None = None) -> tuple[tuple[str, str], ...]:
     """The labeller's chat messages: ``(role, content)`` pairs. ``scene`` is what the actor heard lately:
-    context for the model, never citable."""
+    context for the model, never citable. With ``obstacle``, the reply also chooses the approach."""
     listed = "\n".join(f"{fact.fact_id}: {fact.text}" for fact in offered) or "(no facts)"
     parts = [f"Acting character: {actor}", f"Action: {action}"]
     if scene.strip():
         parts.append(f"Recent scene (context only, not citable):\n{scene}")
+    system = _SYSTEM
+    if obstacle is not None:
+        system = f"{_SYSTEM}\n{_AGAINST}"
+        suggested = "\n".join(f"{approach_id}: {text}" for approach_id, text in obstacle.approaches)
+        parts.append(f"Obstacle: {obstacle.goal}\nSuggested approaches:\n{suggested}")
+        if obstacle.fixed == NOVEL:
+            count = obstacle.stakes or 0
+            parts.append(f"This action's approach is fixed: answer \"{NOVEL}\", listing exactly {count} "
+                         f"stake{'' if count == 1 else 's'}.")
+        elif obstacle.fixed is not None:
+            parts.append(f"This action's approach is fixed: answer \"{obstacle.fixed}\".")
     parts.append(f"Facts:\n{listed}")
-    return (("system", _SYSTEM), ("user", "\n\n".join(parts)))
+    return (("system", system), ("user", "\n\n".join(parts)))
 
 
-__all__ = ["Fact", "MAX_FACTS", "MAX_STAKE_CHARS", "facts", "label_messages"]
+__all__ = ["Fact", "MAX_FACTS", "MAX_STAKE_CHARS", "NOVEL", "Obstacle", "facts", "label_messages"]

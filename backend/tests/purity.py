@@ -141,8 +141,9 @@ PURE_PACKAGES = (
     PurePackage("grimoire.adjudication", ("grimoire.adjudication", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
     # Open obstacles (040): obstacles, the frame rules, codecs and derivation over 029's values;
-    # the service is an adapter.
-    PurePackage("grimoire.obstacles", ("grimoire.obstacles", "grimoire.adjudication", "grimoire.core"),
+    # the service is an adapter. A consequence's authored changes are 017 predicates and 023 lines.
+    PurePackage("grimoire.obstacles", ("grimoire.obstacles", "grimoire.adjudication", "grimoire.core",
+                                       "grimoire.graph", "grimoire.holdings"),
                 never_import=("grimoire.core.inference",)),
     PurePackage("grimoire.security", ("grimoire.security",)),
     # World Change Sets (043): values, codec and diffs; reviewing and applying is an adapter.

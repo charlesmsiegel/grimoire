@@ -41,6 +41,7 @@ from grimoire.import_v1 import imported_voices
 from grimoire.intent import Command, RoutingContext, Utterance, route
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import ControlChange
+from grimoire.obstaclestore import ObstacleLibrary
 from grimoire.partystore import PartyLibrary
 from grimoire.play.accept import (
     approve_effect, effect_problems, endorse_effect, propose_effect, recover_effects,
@@ -49,6 +50,7 @@ from grimoire.play.adjudicate import check_decided, confirm_action, decide_actio
 from grimoire.play.forks import choose_branch
 from grimoire.play.history import chat_history
 from grimoire.play.labels import label_action
+from grimoire.play.obstacles import pass_attempt
 from grimoire.play.scene import (
     DEFAULT_BUDGET, NOW, WRITE_RETRIES, Scene, _assigned, _audience, _Context, _declined, _find_line, _first_text,
     _follows, _has_imported, _human_of, _latest, _macros, _mark, _name_index, _no_clock, _no_id, _payload,
@@ -93,7 +95,10 @@ class SceneRunner:
     library's 029 ``AdjudicationLibrary`` over the app's own adjudication key: it frames a confirmed labelling
     (``confirm``) and records its decision (``decide``); without it nothing is framed. ``effects`` is the
     library's 021 ``TurnEffectsLibrary`` on the same store and this runner's own (owner's) handle: it accepts
-    a turn's effect once it holds every key (``propose_effect``); without it no effect is proposed. ``agendas``
+    a turn's effect once it holds every key (``propose_effect``); without it no effect is proposed. ``obstacles``
+    is the library's 040 ``ObstacleLibrary`` on the same adjudication key: a labelling may then be asked against one
+    of its obstacles, the labeller choosing the approach, and confirming frames the attempt through it; whatever the
+    attempt makes due is part of every effect proposed for its turn (docs/SCENES.md). ``agendas``
     are 039's director-authored ``Agenda`` values, at most one per NPC: each take chooses afresh what a speaking
     director NPC with one pursues, from the knowledge its brief is built from, and records the choice on the
     turn. They are the app's configuration, never read from a turn, a post or a reply. ``stages`` is the app's 041
@@ -110,7 +115,8 @@ class SceneRunner:
                  fence: RunFence | None = None, budget: Budget = DEFAULT_BUDGET,
                  labeller: LabelRuntime | None = None, label_handle=None,
                  adjudication: AdjudicationLibrary | None = None,
-                 effects: TurnEffectsLibrary | None = None, agendas: Iterable[Agenda] = (),
+                 effects: TurnEffectsLibrary | None = None, obstacles: ObstacleLibrary | None = None,
+                 agendas: Iterable[Agenda] = (),
                  stages: StageSource | None = None,
                  tracer: Callable[[Trace], None] | None = None,
                  clock: Callable[[], float] = time.perf_counter) -> None:
@@ -134,6 +140,11 @@ class SceneRunner:
         if effects is not None and not (isinstance(effects, TurnEffectsLibrary) and effects.store is store
                                         and effects.handle is handle):
             raise _refuse("bad_effects", "effects must be this library's TurnEffectsLibrary on the runner's handle")
+        if obstacles is not None and not (isinstance(obstacles, ObstacleLibrary) and obstacles.store is store
+                                          and adjudication is not None
+                                          and obstacles.adjudication.authority is authority
+                                          and obstacles.adjudication.principal == adjudication.principal):
+            raise _refuse("bad_obstacles", "obstacles must be this library's ObstacleLibrary on the adjudication key")
         if stages is not None and not callable(getattr(stages, "latest", None)):
             raise _refuse("bad_stages", "stages must be a StageSource: latest(chat) gives a chat's latest stage")
         by_actor = _agendas(agendas)
@@ -151,6 +162,7 @@ class SceneRunner:
         self.label_handle = label_handle
         self.adjudication = adjudication
         self.effects = effects
+        self.obstacles = obstacles
         self.recovery = None if effects is None else EffectRecovery(effects)
         self._agendas = by_actor  # director-authored input, fixed here: nothing played can author or change one
         self.stages = stages
@@ -790,16 +802,18 @@ class SceneRunner:
     # -- labelling ---------------------------------------------------------------------------------
 
     @traced("label")
-    def label(self, chat: ChatRef, by) -> Label:
+    def label(self, chat: ChatRef, by, *, obstacle: str | None = None) -> Label:
         """Propose 029 labels for the open turn's action: which offered facts bear on it, what is at stake.
 
         Asked by the acting character's player or the owner. One ``labelling`` call on the labeller's
         untrusted handle; its reply may cite only facts from that character's own context pack. The
         labelling is written ``running`` before the call, so a crash leaves its usage on record, then
         ``proposed`` (labels to confirm) or ``refused`` (why). An earlier unconfirmed labelling of the turn
-        is superseded. Nothing is framed, decided or accepted here.
+        is superseded. Nothing is framed, decided or accepted here. With ``obstacle`` (a 040 obstacle's id), the
+        action is an attempt at it: the labeller chooses a suggested approach or a novel one, and the obstacle's
+        own facts and stakes for that approach are added by rule.
         """
-        return label_action(self, chat, by)
+        return label_action(self, chat, by, obstacle)
 
     @traced("confirm")
     def confirm(self, chat: ChatRef, by) -> Outcome | None:
@@ -829,14 +843,16 @@ class SceneRunner:
 
     @traced("propose_effect")
     def propose_effect(self, chat: ChatRef, by, turn: str, summary: str, operations=(), holdings=None, *,
-                       abilities=()):
+                       abilities=(), waive=()):
         """Propose ``turn``'s effect as structured 021 operations and holdings lines, whole (no model call).
 
         For a kept turn or a decided action, by the owner or the player whose post the turn is. It takes the
         next campaign sequence, names who must endorse it (each acting player character's player), supersedes
-        the turn's earlier live proposal, and is written ``proposed``. Ability use is not in this slice.
+        the turn's earlier live proposal, and is written ``proposed``. Ability use is not in this slice. What
+        the turn's 040 obstacle attempt made due comes first, but for the ``Waiver`` values the director gives
+        in ``waive`` (a due change the world cannot take: docs/SCENES.md).
         """
-        return propose_effect(self, chat, by, turn, summary, operations, holdings, abilities=abilities)
+        return propose_effect(self, chat, by, turn, summary, operations, holdings, abilities=abilities, waive=waive)
 
     @traced("approve_effect")
     def approve_effect(self, chat: ChatRef, by, turn: str, number: int):
@@ -920,6 +936,9 @@ class SceneRunner:
         if scene.paused:
             raise _refuse("paused", "play is paused")
         record = stored.record
+        framed = record.framed
+        if framed is not None and framed.against is not None and outcome_of(self, record) is None:
+            pass_attempt(self, record)  # 040: refused, or withdrawn for good before the turn is written
         if record.running is not None:
             record = record.with_take(replace(record.running, state="superseded"))
         record = replace(record, passed_by=principal)

@@ -38,11 +38,14 @@ from grimoire.core.authority import AuthorityError, PlayerContribution
 from grimoire.core.identity import AcceptedRef, ChatRef, TurnRef
 from grimoire.core.knowledge import Moment
 from grimoire.core.model import ControlAssignment
-from grimoire.effects import EffectError, EffectProposal, EndorsementRecord, authorize, revocation_fingerprint
+from grimoire.effects import (
+    EffectError, EffectHoldings, EffectProposal, EndorsementRecord, authorize, revocation_fingerprint,
+)
 from grimoire.effectstore import Endorsement, InvalidEffect
 from grimoire.play.adjudicate import _029, _UNAVAILABLE, outcome_of
+from grimoire.play.obstacles import applied, due_changes, holds_due
 from grimoire.play.scene import NOW, WRITE_RETRIES, _readable, _refuse
-from grimoire.scene import MAX_EFFECTS, SceneRefused, TurnEffect, TurnRecord, turn_from_payload
+from grimoire.scene import MAX_EFFECTS, SceneRefused, TurnEffect, TurnRecord, Waiver, turn_from_payload
 from grimoire.scenestore import StoredTurn
 from grimoire.security import Permission, is_human
 from grimoire.store import StaleWrite, StoreError
@@ -152,11 +155,16 @@ def _playing(runner, chat: ChatRef, by):
 # -- proposing -----------------------------------------------------------------------------------
 
 def propose_effect(runner, chat: ChatRef, by, turn: str, summary: str, operations=(), holdings=None, *,
-                   abilities=()) -> TurnEffect:
+                   abilities=(), waive=()) -> TurnEffect:
     """See ``SceneRunner.propose_effect``."""
     scene, principal, _ = _playing(runner, chat, by)
     if not isinstance(abilities, (list, tuple)) or abilities:
         raise _refuse("not_in_this_slice", "no ability use is proposed or charged here yet")
+    if not isinstance(waive, (list, tuple)) or not all(type(item) is Waiver for item in waive):
+        raise _refuse("invalid_field", "waive holds Waiver values")
+    waivers = tuple(sorted(waive, key=lambda item: item.change))
+    if waivers and principal not in runner.authority.owners:
+        raise _refuse("not_director", "only the director waives a change an obstacle attempt made due")
     stored = _turn(scene, turn)
     record = stored.record
     if record.post is not None and record.post.kind == "action" and record.post.private:
@@ -188,9 +196,18 @@ def propose_effect(runner, chat: ChatRef, by, turn: str, summary: str, operation
         operations = tuple(operations)
     except TypeError:
         raise _refuse("invalid_field", "operations are 021 Op values") from None
+    # 040: what the turn's obstacle attempt made due comes first, whatever the proposer adds, but for what the
+    # director waives (docs/SCENES.md)
+    due_ops, due_lines = applied(due_changes(runner, scene, record), frozenset(item.change for item in waivers))
     with runner.store.lock:  # the sequence is taken and written in one step
         sequence = next_sequence(runner, chat.campaign_id, runner._knowledge(chat)[1])
         try:
+            operations = due_ops + operations
+            if due_lines:
+                if holdings is not None and type(holdings) is not EffectHoldings:
+                    raise TypeError("holdings is an EffectHoldings")
+                holdings = EffectHoldings(due_lines + (() if holdings is None else holdings.lines),
+                                          None if holdings is None else holdings.note)
             proposal = EffectProposal(chat.campaign_id, chat, Moment(sequence, chat.chat_id, record.turn_id),
                                       summary, operations, "director" if director else "player",
                                       attempt_id=None if holdings is None else record.turn_id, holdings=holdings)
@@ -207,7 +224,14 @@ def propose_effect(runner, chat: ChatRef, by, turn: str, summary: str, operation
         for effect in record.effects:
             if effect.live:
                 current = current.with_effect(replace(effect, state="superseded"))
-        effect = TurnEffect(number, "proposed", proposal, tuple(sorted(endorsers.items())))
+        effect = TurnEffect(number, "proposed", proposal, tuple(sorted(endorsers.items())), waivers=waivers)
+        # a proposal whose turn write would lose (the turn changed since it was read) records nothing: refused here
+        fresh = next((s for s in runner.scenes.turns(chat).turns if s.record.ref == record.ref), None)
+        if fresh is None or fresh.etag != stored.etag:
+            raise _refuse("turn_changed", "the turn changed while the effect was proposed; propose again")
+        # the authority's own record of every proposal of the turn, before the turn records it: the latest one is
+        # what a waiver counts by
+        _record_proposal(runner, by, record.ref, effect.number, effect.fingerprint)
         runner._write(current.with_effect(effect), stored, unpaused=True)
     return effect
 
@@ -247,7 +271,7 @@ def endorse_effect(runner, chat: ChatRef, by, turn: str, number: int, fingerprin
     stored = _turn(scene, turn)
     effect = _effect(stored, number)
     _collecting(effect)
-    if fingerprint != effect.proposal.fingerprint:
+    if fingerprint != effect.fingerprint:  # the proposal's, with any waivers it makes
         raise _refuse("fingerprint_mismatch", "endorse the effect as it was shown: its fingerprint differs")
     mine = [cid for cid, endorser in effect.endorsers if endorser == principal]
     if not mine:
@@ -258,10 +282,11 @@ def endorse_effect(runner, chat: ChatRef, by, turn: str, number: int, fingerprin
         now = None
     if now is None or tuple(sorted(now.items())) != effect.endorsers:
         raise _refuse("control_changed", "who plays a character of this effect changed since it was proposed")
-    for cid in mine:  # the authority's own record of this key, before the turn records it
+    for cid in mine:  # the authority's own record of this key, over what was shown, before the turn records it
         _record_endorsement(runner, by, stored.record.ref, cid, fingerprint)
+    # 021 records it over the proposal's own fingerprint (its effect); the authority's record covers the waivers
     given = {(item.contribution_id, item.principal): item for item in effect.endorsements}
-    given.update({(cid, principal): EndorsementRecord(cid, principal, fingerprint) for cid in mine})
+    given.update({(cid, principal): EndorsementRecord(cid, principal, effect.proposal.fingerprint) for cid in mine})
     endorsed = replace(effect, endorsements=tuple(given[key] for key in sorted(given)))
     if endorsed.complete:  # the last key commits, with this player's own live handle
         return _accept(runner, scene, stored, endorsed, {principal: by})
@@ -274,9 +299,10 @@ def endorsement_address(ref: TurnRef, contribution_id: str, fingerprint: str) ->
     return "/".join((*address_parts(ref), "endorsements", contribution_id, fingerprint.removeprefix("sha256:")))
 
 
-def _recorded(runner, ref: TurnRef, item: EndorsementRecord) -> bool:
-    """Whether the authority's audit holds ``item``'s endorsement as given with that player's own trusted handle."""
-    address = endorsement_address(ref, item.contribution_id, item.fingerprint)
+def _recorded(runner, ref: TurnRef, item: EndorsementRecord, shown: str) -> bool:
+    """Whether the authority's audit holds ``item``'s endorsement as given with that player's own trusted handle,
+    over ``shown`` (the effect's fingerprint as the player was shown it: its proposal's, with any waivers)."""
+    address = endorsement_address(ref, item.contribution_id, shown)
     return any(record.principal == item.principal and record.trusted is True
                and record.permission is Permission.PROPOSE and record.resource == address
                for record in reversed(runner.authority.audit()))
@@ -289,8 +315,46 @@ def _record_endorsement(runner, handle, ref: TurnRef, contribution_id: str, fing
     item = EndorsementRecord(contribution_id, handle.principal, fingerprint)
     handle.authorize(Permission.PROPOSE, endorsement_address(ref, contribution_id, fingerprint),
                      fingerprint.encode("utf-8"))
-    if not _recorded(runner, ref, item):
+    if not _recorded(runner, ref, item, fingerprint):
         raise _refuse("authority_unavailable", "the authority could not record this endorsement; give it again")
+
+
+def waiver_address(ref: TurnRef, number: int, fingerprint: str) -> str:
+    """The logical address the authority records a proposal at: the turn, the effect's number and its fingerprint
+    (its 021 proposal's, with any waivers). Every proposal is recorded there, by whoever proposes it, so the latest
+    record under the turn names the last proposal made for it: the live effect, since each proposal supersedes the
+    turn's earlier ones."""
+    return "/".join((*address_parts(ref), "waivers", str(number), fingerprint.removeprefix("sha256:")))
+
+
+def _latest_proposal(runner, ref: TurnRef):
+    """The authority's latest recorded proposal of the turn, of any effect number, or ``None``."""
+    prefix = "/".join((*address_parts(ref), "waivers", ""))
+    return next((record for record in reversed(runner.authority.audit())
+                 if record.permission is Permission.PROPOSE and type(record.resource) is str
+                 and record.resource.startswith(prefix)), None)
+
+
+def _waivers_recorded(runner, ref: TurnRef, number: int, fingerprint: str) -> bool:
+    """Whether the latest proposal the authority recorded for the turn is the director's own (an owner's trusted
+    handle) as effect ``number`` over ``fingerprint``: a waiver counts only then. Any proposal of the turn made since,
+    by anyone and as any number, takes the place of an earlier one, so neither a copy of an earlier proposal nor a
+    superseded effect set live again brings its waivers back. (A proposal that would lose its turn write is refused
+    before it records.)"""
+    latest = _latest_proposal(runner, ref)
+    return (latest is not None and latest.principal in runner.authority.owners and latest.trusted is True
+            and latest.resource == waiver_address(ref, number, fingerprint))
+
+
+def _record_proposal(runner, handle, ref: TurnRef, number: int, fingerprint: str) -> None:
+    """Have the authority record that ``handle`` proposed ``fingerprint`` as effect ``number`` (as an endorsement
+    is recorded). Only the director's record makes a waiver count at acceptance, so a waiver written into a turn
+    file never does; and each later proposal of the number supersedes the record."""
+    address = waiver_address(ref, number, fingerprint)
+    handle.authorize(Permission.PROPOSE, address, fingerprint.encode("utf-8"))
+    latest = _latest_proposal(runner, ref)
+    if latest is None or latest.resource != address or latest.principal != handle.principal:
+        raise _refuse("authority_unavailable", "the authority could not record this proposal; propose again")
 
 
 def _endorsements(runner, record: TurnRecord, effect: TurnEffect, live: Mapping[str, object]
@@ -303,7 +367,7 @@ def _endorsements(runner, record: TurnRecord, effect: TurnEffect, live: Mapping[
     for item in effect.endorsements:
         handle = live.get(item.principal)
         if handle is None:
-            if not _recorded(runner, record.ref, item):
+            if not _recorded(runner, record.ref, item, effect.fingerprint):
                 raise _refuse("invalid_endorsement", "the authority has no record of an endorsement on this turn: "
                                                      "the player endorses again, or is present to recover it")
             handle = runner.authority.handle_for(item.principal, trusted=True)
@@ -400,8 +464,17 @@ def _accepting(runner, scene, stored: StoredTurn, effect: TurnEffect, live: Mapp
     proposal = effect.proposal
     try:
         _029(runner.adjudication.check_effect, proposal)
+        # 040: an effect of a turn whose obstacle attempt made something due still holds it (a turn file edited
+        # since, by hand or by a peer, could have dropped it). A waiver counts only with the authority's record
+        # of the director proposing it, so one edited in with the drop is still due_missing
+        recorded = not effect.waivers or _waivers_recorded(runner, record.ref, effect.number, effect.fingerprint)
+        waived = frozenset(item.change for item in effect.waivers) if recorded else frozenset()
+        if not holds_due(proposal, due_changes(runner, scene, record), waived):
+            raise _refuse("due_missing", "the effect leaves out what the turn's obstacle attempt made due")
+        if not recorded:
+            raise _refuse("invalid_waiver", "the authority has no record of the director proposing these waivers")
     except SceneRefused as error:
-        if error.reason in _UNAVAILABLE:
+        if error.reason in _UNAVAILABLE or error.reason == "no_obstacles":
             raise
         return _write(runner, stored, replace(effect, state="refused", reason=error.reason))
     try:

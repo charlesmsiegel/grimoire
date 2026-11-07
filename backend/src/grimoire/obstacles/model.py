@@ -33,6 +33,9 @@ from grimoire.adjudication import ActionFrame, AdjudicationError, Factor, Outcom
 from grimoire.adjudication.model import PROSE_MAX
 from grimoire.core.identity import TEXT_MAX, InstanceRef, validate_segment
 
+from .changes import ACTOR, Change, check_changes
+from .errors import ObstacleError
+
 Bearing = Literal["favours", "hinders", "prevents"]
 
 BEARINGS = frozenset({"favours", "hinders", "prevents"})
@@ -50,17 +53,6 @@ MAX_STAKES = 8
 MAX_APPROACHES = 8
 MAX_COSTS = 4
 MAX_ACTORS = 16
-
-
-class ObstacleError(ValueError):
-    """An invalid obstacle or attempt, or a refused step; ``reason`` is machine-readable."""
-
-    def __init__(self, message: str, reason: str) -> None:
-        super().__init__(message)
-        self.reason = reason
-
-    def __reduce__(self) -> tuple[object, ...]:
-        return (type(self), (str(self), self.reason))
 
 
 def _invalid(message: str) -> ObstacleError:
@@ -168,11 +160,14 @@ class ObstacleStake:
     stake_id: str
     text: str
     escalates: tuple[tuple[str, Bearing], ...] = ()
+    #: what it does to the world when it comes true, authored (docs/OBSTACLES.md#structured-changes)
+    changes: tuple[Change, ...] = ()
 
     def __post_init__(self) -> None:
         _segment(self.stake_id, "stake_id")
         _text(self.text, "stake text", PROSE_MAX)
         object.__setattr__(self, "escalates", _bearings(self.escalates, "escalation"))
+        object.__setattr__(self, "changes", check_changes(self.changes, "stake changes"))
 
     @property
     def stake(self) -> Stake:
@@ -182,14 +177,18 @@ class ObstacleStake:
 
 @dataclass(frozen=True, slots=True)
 class Cost:
-    """What succeeding by an approach spends or changes whatever else happens: coin, time, a debt owed."""
+    """What succeeding by an approach spends or changes whatever else happens: coin, time, a debt owed.
+
+    ``changes`` are what it does to the world, authored (docs/OBSTACLES.md#structured-changes)."""
 
     cost_id: str
     text: str
+    changes: tuple[Change, ...] = ()
 
     def __post_init__(self) -> None:
         _segment(self.cost_id, "cost_id")
         _text(self.text, "cost text", PROSE_MAX)
+        object.__setattr__(self, "changes", check_changes(self.changes, "cost changes"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +286,9 @@ class Obstacle:
             if unknown:
                 raise ObstacleError(f"approach {approach.approach_id} risks undeclared stakes: {', '.join(unknown)}",
                                     "unknown_stake")
+        for approach in approaches:
+            _check_named(approach.costs, actors)
+        _check_named(stakes, actors)
         viable = _viable(approach_ids, facts)
         lasting = _viable(viable, [s.escalates for s in stakes])
         if len(lasting) < MIN_VIABLE:
@@ -313,6 +315,18 @@ class Obstacle:
     def opens(self) -> int:
         """The latest sequence its authored facts are established at: an attempt comes after it."""
         return max((f.established for f in self.facts), default=0)
+
+
+def _check_named(consequences: Iterable[Cost | ObstacleStake], actors: Iterable[InstanceRef]) -> None:
+    """A consequence's changes name only ``ACTOR`` and the obstacle's own actors (``unlisted_actor``), so every
+    instance they reach is reserved with the obstacle and was checked when it was recorded."""
+    listed = set(actors)
+    for consequence in consequences:
+        for change in consequence.changes:
+            unlisted = sorted(str(ref) for ref in change.refs() if ref not in listed)
+            if unlisted:
+                raise ObstacleError(f"a change names instances that are not the obstacle's actors (or {ACTOR!r}): "
+                                    f"{', '.join(unlisted)}", "unlisted_actor")
 
 
 def _viable(approach_ids: Iterable[str], held: Iterable[object]) -> tuple[str, ...]:
@@ -370,6 +384,7 @@ def resolve_approach(obstacle: Obstacle, approach: object) -> tuple[Approach, bo
         raise _invalid("an approach is a suggestion's id or a novel Approach")
     if obstacle.approach(approach.approach_id) is not None:
         raise ObstacleError(f"{approach.approach_id!r} is a suggested approach: name it by id", "not_novel")
+    _check_named(approach.costs, obstacle.actors)
     return approach, False
 
 
@@ -452,11 +467,15 @@ AttemptStatus = Literal["pending", "failed", "overcame", "diverged", "void"]
 
 @dataclass(frozen=True, slots=True)
 class Consequence:
-    """Something an attempt made true: a declared stake (``stake``) or the approach's price (``cost``)."""
+    """Something an attempt made true: a declared stake (``stake``) or the approach's price (``cost``).
+
+    ``changes`` are its authored structured changes (an obstacle stake's or a cost's); a stake only the
+    labeller named has none."""
 
     kind: Literal["stake", "cost"]
     consequence_id: str
     text: str
+    changes: tuple[Change, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -503,7 +522,8 @@ class ObstacleState:
 
 
 def derive(obstacle: Obstacle, revision: int, attempts: Iterable[Attempt],
-           frames: Mapping[str, ActionFrame], outcomes: Mapping[str, Outcome]) -> ObstacleState:
+           frames: Mapping[str, ActionFrame], outcomes: Mapping[str, Outcome],
+           withdrawn: Iterable[str] = ()) -> ObstacleState:
     """Replay ``attempts`` (oldest first) against their latest 029 ``frames`` and recorded ``outcomes``.
 
     Each attempt is checked against the obstacle's facts as they stood when it was made (its own, and
@@ -518,10 +538,12 @@ def derive(obstacle: Obstacle, revision: int, attempts: Iterable[Attempt],
     hands) is ``void`` for good: control may come back and 029 may decide it after all, but that decision
     brings nothing and the attempts after it do not answer to it. A link recorded before links named what
     they superseded has no ``supersedes``: an undecided attempt with a later one after it is then ``void``
-    too, but decided afterwards it counts in link order, and what follows must agree with it.
+    too, but decided afterwards it counts in link order, and what follows must agree with it. An attempt in
+    ``withdrawn`` (a pending attempt withdrawn when its turn passed while 029 could not decide it) is ``void``
+    for good in the same way, whatever control does afterwards.
     """
     attempts = list(attempts)
-    superseded = {a.supersedes for a in attempts if a.supersedes is not None}
+    superseded = {a.supersedes for a in attempts if a.supersedes is not None} | set(withdrawn)
     facts = list(obstacle.facts)
     states: list[AttemptState] = []
     status: Status = "open"
@@ -556,9 +578,13 @@ def derive(obstacle: Obstacle, revision: int, attempts: Iterable[Attempt],
             continue
         decision = outcome.decision
         stakes = {stake.stake_id: stake for stake in frame.stakes}
-        brought = [Consequence("stake", stake_id, stakes[stake_id].text) for stake_id in sorted(decision.consequences)]
+        # A frame stake with an obstacle stake's id is that stake (``check_attempt``: same text), so it brings the
+        # author's changes; a stake only the labeller named brings none.
+        brought = [Consequence("stake", stake_id, stakes[stake_id].text,
+                               declared.changes if (declared := obstacle.stake(stake_id)) is not None else ())
+                   for stake_id in sorted(decision.consequences)]
         if decision.result in ("success", "partial"):
-            brought += [Consequence("cost", cost.cost_id, cost.text) for cost in attempt.approach.costs]
+            brought += [Consequence("cost", cost.cost_id, cost.text, cost.changes) for cost in attempt.approach.costs]
             states.append(AttemptState(attempt, frame, "overcame", decision.result, tuple(brought)))
             status, overcome_by = "overcome", attempt.attempt_id
             continue

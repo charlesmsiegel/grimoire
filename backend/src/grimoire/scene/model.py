@@ -10,6 +10,7 @@ present player characters), never by an NPC. Withdrawn and struck lines are show
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
@@ -369,6 +370,65 @@ class SetAside:
 
 
 @dataclass(frozen=True, slots=True)
+class Against:
+    """The 040 obstacle a labelling frames its action against, and the approach the labeller chose for it.
+
+    ``approach_id`` is one of the obstacle's suggestions, or, with ``novel``, an approach it never suggested (the
+    runner names it ``novel``; its text is the action and its risks the labelling's stakes). It is ``None`` while
+    the labelling runs, and on one refused or superseded before a reply chose."""
+
+    obstacle_id: str
+    approach_id: str | None = None
+    novel: bool = False
+
+    def __post_init__(self) -> None:
+        for value, label in ((self.obstacle_id, "against.obstacle"), (self.approach_id, "against.approach")):
+            if value is None and label == "against.approach":
+                continue
+            if type(value) is not str:
+                raise _fail("invalid_field", f"{label} must be an id")
+            try:
+                validate_segment(value, label)
+            except ValueError as error:
+                raise _fail("invalid_field", str(error)) from None
+        if type(self.novel) is not bool or (self.novel and self.approach_id is None):
+            raise _fail("invalid_field", "against.novel is a bool, and a novel approach is named")
+
+
+#: A due change's id: ``<cost|stake>.<consequence id>.<n>``, its ``n``th authored change (040's ``changes``).
+_DUE_CHANGE = re.compile(r"(cost|stake)\.(.+)\.([1-9][0-9]?)")
+#: At most this many waivers on one effect (one attempt makes at most 8 stakes and 4 costs due, two changes each).
+MAX_WAIVERS = 24
+
+
+def due_change_id(kind: str, consequence_id: str, index: int) -> str:
+    """The id of the ``index``th (from 1) change of the consequence a 040 attempt made due."""
+    return f"{kind}.{consequence_id}.{index}"
+
+
+@dataclass(frozen=True, slots=True)
+class Waiver:
+    """The director's decision that one change a 040 obstacle attempt made due is not applied by this effect.
+
+    ``change`` is its id (``due_change_id``); ``reason`` says why, in a few words (the relation already holds,
+    the actor cannot pay, the character changed hands). The obstacle's own record of what came due is unchanged."""
+
+    change: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        found = _DUE_CHANGE.fullmatch(self.change) if type(self.change) is str else None
+        try:
+            if found is None:
+                raise ValueError("a waiver names a due change: <cost|stake>.<consequence id>.<n>")
+            validate_segment(found.group(2), "waiver.change")
+        except ValueError as error:
+            raise _fail("invalid_field", str(error)) from None
+        if type(self.reason) is not str or not self.reason.strip() or len(self.reason) > 200:
+            raise _fail("invalid_field", "a waiver gives its reason in at most 200 characters")
+
+
+@dataclass(frozen=True, slots=True)
 class Label:
     """One labelling of a turn's action for 029: the facts that bear on it and what is at stake (035 M2).
 
@@ -376,6 +436,8 @@ class Label:
     Factors and stakes are proposals read from a labeller's reply on an untrusted handle; a factor's text,
     sequence and source were offered to the labeller, never written by it. ``reason`` says why a ``refused``
     labelling gave no labels (a call status, or ``grimoire.labelling``'s refusal). ``by`` is who asked.
+    ``against`` names the 040 obstacle it frames the action against, when the press named one: its factors then
+    hold the obstacle's facts that bear on the chosen approach, and its stakes the approach's risks.
     """
 
     label: int
@@ -386,6 +448,7 @@ class Label:
     calls: tuple[CallRecord, ...] = ()
     reason: str | None = None
     by: str | None = None
+    against: Against | None = None
 
     def __post_init__(self) -> None:
         if type(self.label) is not int or not 1 <= self.label <= MAX_LABELS:
@@ -412,6 +475,13 @@ class Label:
             raise _fail("invalid_field", "a labelling's calls are labelling CallRecord values")
         _optional(self.reason, "reason", 200)
         _optional(self.by, "by", MAX_PRINCIPAL)
+        if self.against is not None:
+            if type(self.against) is not Against:
+                raise _fail("invalid_field", "against is an Against value")
+            chosen = self.against.approach_id is not None
+            if (self.state == "running" and chosen) or (self.state in ("proposed", "framed") and not chosen):
+                raise _fail("invalid_field", "an approach is chosen by the reply: none while running, one once "
+                                             "proposed or framed")
 
     def attempts(self) -> tuple[CallAttempt, ...]:
         return tuple(attempt for call in self.calls for attempt in call.attempts)
@@ -435,6 +505,9 @@ class TurnEffect:
     turns), recorded and kept with ``controls_at``: 021's files of it are on that device (sync does not carry
     them), so only that device settles it. ``None`` where ``controls_at`` is, and on a library with no device
     identity; an effect without it is read as this device's.
+    ``waivers`` are the due changes of the turn's 040 obstacle attempt this effect does not apply, each the
+    director's decision with its reason (only on the director's proposal, sorted by change). They are part of
+    what is shown and keyed (``fingerprint``); an effect without them is shown by its proposal's fingerprint.
     """
 
     number: int
@@ -447,6 +520,7 @@ class TurnEffect:
     reason: str | None = None
     controls_at: int | None = None
     accepted_on: str | None = None
+    waivers: tuple[Waiver, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.number) is not int or not 1 <= self.number <= MAX_EFFECTS:
@@ -455,6 +529,15 @@ class TurnEffect:
             raise _fail("invalid_field", f"an effect is one of {EFFECT_STATES}")
         if type(self.proposal) is not EffectProposal:
             raise _fail("invalid_field", "an effect holds an EffectProposal")
+        waivers = tuple(self.waivers) if isinstance(self.waivers, (list, tuple)) else None
+        if waivers is None or not all(type(item) is Waiver for item in waivers):
+            raise _fail("invalid_field", "waivers are Waiver values")
+        changes = [item.change for item in waivers]
+        if changes != sorted(set(changes)) or len(waivers) > MAX_WAIVERS:
+            raise _fail("invalid_field", f"waivers name each due change once, in order, at most {MAX_WAIVERS}")
+        if waivers and self.proposal.proposed_by != "director":
+            raise _fail("invalid_field", "only the director's proposal waives a due change")
+        object.__setattr__(self, "waivers", waivers)
         endorsers = tuple(tuple(pair) for pair in self.endorsers)
         if not all(len(pair) == 2 and all(type(part) is str and part.strip() for part in pair) for pair in endorsers):
             raise _fail("invalid_field", "endorsers are (contribution id, principal) pairs")
@@ -498,6 +581,18 @@ class TurnEffect:
             raise _fail("invalid_field", "accepted_on is a device tag (eight hex digits)")
         if self.accepted_on is not None and self.event_id is None:
             raise _fail("invalid_field", "only an accepting, accepted or revoked effect records its device")
+
+    @property
+    def fingerprint(self) -> str:
+        """What a player is shown and endorses: the proposal's 021 fingerprint, with the waivers when it has any
+        (each change and a digest of its reason), so an endorsement covers exactly what it waives. 021 records
+        the endorsement over the proposal's own fingerprint; the authority's record of it is over this one."""
+        if not self.waivers:
+            return self.proposal.fingerprint
+        lines = ["035 effect with waivers", self.proposal.fingerprint]
+        lines += [f"waive={item.change}|{hashlib.sha256(item.reason.encode('utf-8')).hexdigest()}"
+                  for item in self.waivers]
+        return "sha256:" + hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
 
     @property
     def complete(self) -> bool:
@@ -861,11 +956,12 @@ def usage_totals(attempts: Iterable[CallAttempt]) -> dict[str, int]:
 
 
 __all__ = [
-    "CALL_STATES", "CallRecord", "EFFECT_STATES", "INTENTION_OUTCOMES", "Intention", "IntentionOption", "LABEL_STATES",
+    "Against", "CALL_STATES", "CallRecord", "EFFECT_STATES", "INTENTION_OUTCOMES", "Intention", "IntentionOption",
+    "LABEL_STATES",
     "LINE_STATES", "Label", "MAX_CHAT_ID", "MAX_EFFECTS", "MAX_LABELS",
     "MAX_TAGGED_CHAT_ID", "MAX_TAKES", "ORIGINS",
     "POST_KINDS", "Post",
     "SceneLine", "SceneRefused", "SetAside", "TAKE_STATES", "Take", "TokenUsage", "TurnEffect", "TurnRecord",
-    "parse_turn_id", "turn_id",
+    "MAX_WAIVERS", "Waiver", "due_change_id", "parse_turn_id", "turn_id",
     "usage_totals",
 ]

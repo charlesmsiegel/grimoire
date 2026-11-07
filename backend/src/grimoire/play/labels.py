@@ -19,13 +19,17 @@ from grimoire.contextstore import player_context
 from grimoire.core import DIRECTOR
 from grimoire.core.identity import ChatRef
 from grimoire.core.inference import InferencePlanError, InferenceStage, OptionalRequest, TurnUsageLedger, plan_turn
-from grimoire.labelling import LabelRefused, facts, label_messages, parse_labels
+from grimoire.adjudication import AdjudicationError
+from grimoire.labelling import LabelRefused, facts, label_messages, parse_attempt, parse_labels
+from grimoire.obstacles import Attempt, ObstacleError, check_attempt
 from grimoire.play.accept import next_sequence
-from grimoire.play.adjudicate import outcome_lines
+from grimoire.play.adjudicate import frame_of, outcome_lines
+from grimoire.play.obstacles import attempt_labels, check_moment, fixed_attempt, open_obstacle, refuse_live_link
+from grimoire.play.obstacles import offered as obstacle_offer
 from grimoire.play.scene import WRITE_RETRIES, _perceived, _refuse
 from grimoire.play.tracing import record_calls, span
 from grimoire.providers.meter import TurnMeter
-from grimoire.scene import MAX_LABELS, CallRecord, Label, SceneRefused, TurnRecord, heard_for, render
+from grimoire.scene import MAX_LABELS, Against, CallRecord, Label, SceneRefused, TurnRecord, heard_for, render
 from grimoire.scene.codec import turn_to_payload
 from grimoire.scenestore import StoredTurn
 from grimoire.security import Permission
@@ -46,8 +50,8 @@ def own_propositions(knowledge, controller: str, controls, actor, as_of: int) ->
     return frozenset(belief.proposition_id for belief in projected.current if belief.stance == "believed")
 
 
-def label_action(runner, chat: ChatRef, by) -> Label:
-    """See ``SceneRunner.label``."""
+def label_action(runner, chat: ChatRef, by, obstacle: str | None = None) -> Label:
+    """See ``SceneRunner.label``. With ``obstacle``, the labeller also chooses the approach (``play/obstacles.py``)."""
     context = runner._context(chat)
     scene = context.scene
     principal = runner._principal(scene, by)
@@ -73,6 +77,13 @@ def label_action(runner, chat: ChatRef, by) -> Label:
     number = len(record.labels) + 1
     if number > MAX_LABELS:
         raise _refuse("too_many_labels", f"an action is labelled at most {MAX_LABELS} times")
+    # 040: the obstacle the press names must be open to an attempt now; read before any call is planned
+    state = None if obstacle is None else open_obstacle(runner, chat.campaign_id, obstacle)
+    # an action whose attempt the obstacle ledger links (and no later one superseded) is labelled against that
+    # obstacle only: framed plainly, it would leave the obstacle diverged
+    refuse_live_link(runner, record, obstacle)
+    # and keeps the approach its link took: the labeller is offered only that one
+    fixed = None if state is None else fixed_attempt(state, record)
     players = [actor.instance_id for actor in scene.players]
     try:
         plan = plan_turn(chat.campaign_id, record.label_turn(number),
@@ -105,7 +116,7 @@ def label_action(runner, chat: ChatRef, by) -> Label:
     offered = facts(built.pack.items, own=own_propositions(ledger.knowledge, controller, scene.controls, post.actor,
                                                            as_of))
     messages = label_messages(scene.names.get(post.actor) or post.actor.instance_id, post.text, offered,
-                              render(heard[-12:]))
+                              render(heard[-12:]), obstacle=None if state is None else obstacle_offer(state, fixed))
 
     planned = CallRecord(call.call_id.phase, call.stage, call.call_id.actor_id, call.call_id.ordinal, "planned")
     stored = scene.turns.last
@@ -114,8 +125,11 @@ def label_action(runner, chat: ChatRef, by) -> Label:
         if previous.state in ("running", "proposed"):
             current = current.with_label(replace(previous, state="superseded"))
     with runner.store.lock:  # one campaign sequence, after every one used, taken and written in one step
-        running = Label(number, "running", next_sequence(runner, chat.campaign_id, as_of), calls=(planned,),
-                        by=principal)
+        sequence = next_sequence(runner, chat.campaign_id, as_of)
+        if state is not None:
+            check_moment(state, sequence)  # nothing is written, nor called, for an attempt out of the obstacle's order
+        running = Label(number, "running", sequence, calls=(planned,), by=principal,
+                        against=None if state is None else Against(state.obstacle.obstacle_id))
         # a call starts only on a turn still on the chat's line with no pause or sync conflict standing (028, 016)
         stored = runner._write(current.with_label(running), stored, unpaused=True)
 
@@ -131,19 +145,51 @@ def label_action(runner, chat: ChatRef, by) -> Label:
     finished = replace(running, state="refused", reason=reason or status)
     if status == "decoded":
         try:
-            factors, stakes = parse_labels(decoded, offered)
+            if state is None:
+                factors, stakes = parse_labels(decoded, offered)
+                against = None
+            else:
+                against, factors, stakes = _against(state, record, running, decoded, offered, fixed)
         except LabelRefused as refused:
             status, reason = "rejected", refused.reason
             finished = replace(running, state="refused", reason=refused.reason)
         else:
             status = "accepted"
-            finished = replace(running, state="proposed", factors=factors, stakes=stakes)
+            finished = replace(running, state="proposed", factors=factors, stakes=stakes,
+                               against=against or running.against)
     elif status == "unparseable":  # the model answered, but not with one JSON value
         status = "rejected"
     attempts = tuple(attempt for attempt in meter.ledger.attempts if attempt.call_id == call.call_id)
     finished = replace(finished, calls=(CallRecord(planned.phase, planned.stage, planned.actor_id, planned.ordinal,
                                                    status, reason, attempts),))
     return _land(runner, chat, stored, finished)
+
+
+def _against(state, record: TurnRecord, running: Label, decoded, offered, fixed: Attempt | None = None):
+    """A reply against an obstacle: the approach it chose and the frame's labels, the author's part added by rule.
+    The frame is checked against the obstacle as read (040's ``check_attempt``), so a labelling that could never be
+    framed is refused here, with the obstacle's reason; confirming checks it again as the obstacle stands then.
+    With ``fixed`` (the attempt already linked), a reply taking any other approach is ``approach_changed``."""
+    chosen, own, stakes = parse_attempt(decoded, offered, [a.approach_id for a in state.obstacle.approaches])
+    against, factors, stakes, approach, listed = attempt_labels(state, chosen, running.sequence, record.post.text,
+                                                                own, stakes)
+    if fixed is not None:
+        # the approach is the linked one: the same suggestion, or the same novel action risking as many stakes
+        # (s1..sN by id); the frame is checked with the linked approach itself
+        if (approach.approach_id, listed) != (fixed.approach.approach_id, fixed.listed) or (
+                not listed and approach.text != fixed.approach.text):
+            raise LabelRefused("approach_changed", "this action's attempt is linked with another approach; it keeps it")
+        if approach.risks != fixed.approach.risks:
+            raise LabelRefused("approach_changed", f"this action's novel attempt risks exactly "
+                                                   f"{len(fixed.approach.risks)} stakes; the reply lists them")
+        approach = fixed.approach
+    try:
+        frame, _ = frame_of(record, replace(running, state="proposed", factors=factors, stakes=stakes,
+                                            against=against))
+        check_attempt(state.obstacle, state.facts, Attempt(record.turn_id, approach, listed), frame, state.after)
+    except (ObstacleError, AdjudicationError) as error:
+        raise LabelRefused(error.reason, str(error)[:200]) from None
+    return against, factors, stakes
 
 
 def _proposed(runner, record: TurnRecord) -> bool:

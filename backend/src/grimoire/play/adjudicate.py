@@ -13,12 +13,14 @@ to a setback. Until it is decided, no narration is generated or kept for its tur
 from __future__ import annotations
 
 from dataclasses import replace
+from functools import partial
 
 from grimoire.adjudication import PROSE_MAX, ActionFrame, AdjudicationError, Decision, Outcome
 from grimoire.core.authority import PlayerContribution
 from grimoire.core.identity import ChatRef
 from grimoire.core.knowledge import Moment
 from grimoire.generation import MAX_LINE_CHARS, HeardLine
+from grimoire.obstacles import ObstacleError
 from grimoire.play.scene import WRITE_RETRIES, _mark, _refuse
 from grimoire.scene import SceneRefused, TurnRecord
 from grimoire.store.errors import LedgerInvalid, StoreError
@@ -40,10 +42,11 @@ def _library(runner):
 
 
 def _029(call, *args, **kwargs):
-    """Run one 029 library call; every refusal or ledger failure comes back as a ``SceneRefused``."""
+    """Run one 029 (or 040, framing through 029) library call; every refusal or ledger failure comes back as a
+    ``SceneRefused``. Either authority ledger failing is ``adjudication_unreadable`` or ``_unavailable``."""
     try:
         return call(*args, **kwargs)
-    except AdjudicationError as error:
+    except (AdjudicationError, ObstacleError) as error:
         raise _refuse(error.reason, str(error)[:200]) from None
     except LedgerInvalid:
         raise _refuse("adjudication_unreadable", "the adjudication ledger cannot be trusted") from None
@@ -107,8 +110,22 @@ def confirm_action(runner, chat: ChatRef, by) -> Outcome | None:
         if post.submitted_by != controller:
             _unframe(runner, chat, record, label.label, "control_changed")
             raise _refuse("control_changed", "the character changed hands since this action was posted")
+        # 040: an attempt against an obstacle is linked to it and then framed, through the obstacle library
+        check, record_frame = library.check, library.frame
+        from grimoire.play.obstacles import _library as obstacles_of, approach_of, refuse_live_link  # imports us
+        if label.against is not None:
+            against = obstacles_of(runner)
+            options = {"approach": approach_of(record, label)}
+            check = partial(against.check, label.against.obstacle_id, **options)
+            record_frame = partial(against.frame, label.against.obstacle_id, **options)
+        else:  # a plain frame of an attempt the obstacle ledger links would leave its obstacle diverged
+            plain = check
+
+            def check(*args, **kwargs):
+                refuse_live_link(runner, record)
+                return plain(*args, **kwargs)
         try:
-            _029(library.check, frame, contribution=contribution, author=by)
+            _029(check, frame, contribution=contribution, author=by)
         except SceneRefused as error:
             if error.reason not in _UNAVAILABLE:
                 _unframe(runner, chat, record, label.label, error.reason)
@@ -116,7 +133,7 @@ def confirm_action(runner, chat: ChatRef, by) -> Outcome | None:
         if marked is None:
             record = _mark_framed(runner, chat, record, label.label, principal)
         try:
-            _029(library.frame, frame, contribution=contribution, author=by)
+            _029(record_frame, frame, contribution=contribution, author=by)
         except SceneRefused as error:
             current = _029(library.state, chat.campaign_id).frame(record.turn_id)
             if current is None or current.frame != frame:  # a concurrent confirm did not record it either
@@ -135,7 +152,9 @@ def confirm_action(runner, chat: ChatRef, by) -> Outcome | None:
     cites = {factor_id for factor_id, factor in assessment.factors.items()
              if factor.bearing == ("prevents" if result == "failure" else "favours")}
     try:
-        return _029(library.decide, chat.campaign_id, record.turn_id, Decision(result, "rule", frozenset(cites)))
+        with runner.store.lock:  # 029's and 040's lock: an attempt withdrawn from its obstacle is never decided
+            _refuse_void(runner, record)
+            return _029(library.decide, chat.campaign_id, record.turn_id, Decision(result, "rule", frozenset(cites)))
     except SceneRefused as error:
         decided = _029(library.outcome, chat.campaign_id, record.turn_id)
         if error.reason == "already_decided" and decided is not None:
@@ -228,7 +247,15 @@ def decide_action(runner, chat: ChatRef, by, result: str, *, basis: str = "adjud
     else:
         raise _refuse("invalid_field", "basis is adjudicated or consent; the rules decide the rest at confirm")
     decision = _029(Decision, result, basis, _ids(cites, "cites"), _ids(consequences, "consequences"))
-    return _029(library.decide, chat.campaign_id, record.turn_id, decision, consent=consent)
+    with runner.store.lock:  # 029's and 040's lock: an attempt withdrawn from its obstacle is never decided
+        _refuse_void(runner, record)
+        return _029(library.decide, chat.campaign_id, record.turn_id, decision, consent=consent)
+
+
+def _refuse_void(runner, record: TurnRecord) -> None:
+    """``attempt_withdrawn`` when the obstacle ledger holds ``record``'s attempt void (040)."""
+    from grimoire.play.obstacles import refuse_void_attempt  # it imports this module
+    refuse_void_attempt(runner, record)
 
 
 def _ids(values, field: str) -> frozenset[str]:

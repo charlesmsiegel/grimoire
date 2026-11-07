@@ -8,15 +8,15 @@ as what a failure could bring. Anything else in the reply is refused whole, neve
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 
 from grimoire.adjudication import BEARINGS, MAX_FACTORS, MAX_STAKES, AdjudicationError, Factor, Stake
 
-from .facts import MAX_STAKE_CHARS, Fact
+from .facts import MAX_STAKE_CHARS, NOVEL, Fact
 
 #: Why a reply could not be read as labels.
 LABEL_REFUSALS = ("unparseable", "unknown_fact", "repeated_fact", "invalid_bearing", "too_many_factors",
-                  "too_many_stakes", "invalid_stake")
+                  "too_many_stakes", "invalid_stake", "unknown_approach", "suggested_stakes")
 
 
 class LabelRefused(ValueError):
@@ -28,6 +28,23 @@ class LabelRefused(ValueError):
 
     def __reduce__(self) -> tuple[object, ...]:
         return (type(self), (self.reason,))
+
+
+def parse_attempt(decoded: object, offered: Sequence[Fact], approaches: Collection[str]
+                  ) -> tuple[str, tuple[Factor, ...], tuple[Stake, ...]]:
+    """A decoded reply against a 040 obstacle: the approach it chose (a suggestion's id from ``approaches``, or
+    ``NOVEL``), and its factors and stakes as ``parse_labels`` reads them. A reply that names no offered approach
+    is ``unknown_approach``; one that chose a suggestion and still lists stakes is ``suggested_stakes`` (a
+    suggestion risks exactly the author's stakes, which the runner adds)."""
+    if not isinstance(decoded, Mapping) or set(decoded) - {"approach", "factors", "stakes"}:
+        raise LabelRefused("unparseable", "the reply is an object with approach, factors and stakes only")
+    approach = decoded.get("approach")
+    if type(approach) is not str or (approach != NOVEL and approach not in approaches):
+        raise LabelRefused("unknown_approach", f"the approach is a suggested one's id, or {NOVEL!r}")
+    factors, stakes = parse_labels({key: value for key, value in decoded.items() if key != "approach"}, offered)
+    if approach != NOVEL and stakes:
+        raise LabelRefused("suggested_stakes", "a suggested approach risks the obstacle's own stakes, listed for it")
+    return approach, factors, stakes
 
 
 def parse_labels(decoded: object, offered: Sequence[Fact]) -> tuple[tuple[Factor, ...], tuple[Stake, ...]]:
@@ -71,4 +88,4 @@ def parse_labels(decoded: object, offered: Sequence[Fact]) -> tuple[tuple[Factor
     return tuple(factors[key] for key in sorted(factors)), tuple(stakes)
 
 
-__all__ = ["LABEL_REFUSALS", "LabelRefused", "parse_labels"]
+__all__ = ["LABEL_REFUSALS", "LabelRefused", "parse_attempt", "parse_labels"]
