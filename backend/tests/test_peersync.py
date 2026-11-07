@@ -25,6 +25,7 @@ from grimoire.peersync import replay as replay_module
 from grimoire.peersync.pairing import peer_principal
 from grimoire.peersync.replay import StepBuffer
 from grimoire.store import LibraryStore, RecordEnvelope, SourceManifest
+from grimoire.sync import deletion as sync_deletion
 
 from chat_fixtures import ANYA, MARA
 from peersync_helpers import DESKTOP, PHONE, Device, paired, seed_cards, serving, start_scene
@@ -525,6 +526,44 @@ def test_a_deletion_on_either_device_is_made_on_the_other_and_its_version_kept_t
     assert again.status == "synced" and again.copied == () and again.deleted == (), again
     assert {key: value for key, value in _files(desktop.store.root).items() if not key.startswith(".conflicts/")} == {
         key: value for key, value in _files(phone.store.root).items() if not key.startswith(".conflicts/")}
+
+
+@pytest.mark.parametrize("deleter", [DESKTOP, PHONE])
+def test_a_record_restored_on_the_deleting_device_after_the_snapshot_is_never_deleted(tmp_path, monkeypatch, deleter):
+    """The device that deleted puts the record back after the pass was planned. The receiver's data
+    commit checks it is still gone there, under both libraries' locks: the client reads its own
+    library, and asks the serving device (``check``) when that is the one that deleted. Nothing is
+    deleted, no tombstone is archived, and the transfer's next pass finds the devices agreeing."""
+    desktop, phone, _ = paired(tmp_path)
+    start_scene(desktop)
+    _add_source(desktop, "catalog:extra")
+    path = "sources/catalog/extra/_source/manifest.json"
+    source, receiver = (desktop, phone) if deleter == DESKTOP else (phone, desktop)
+    commit_holds = sync_deletion.commit_holds
+    restored = []
+
+    def then_restored(*args, **kwargs):  # holds(d), just before the receiver's data commit
+        result = commit_holds(*args, **kwargs)
+        if not restored:
+            restored.append(True)
+            txn = source.store.transaction()
+            txn.put_exact(path, original, None)
+            txn.commit(source.handle)
+        return result
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+        original = (desktop.store.root / path).read_bytes()
+        (source.store.root / path).unlink()
+        monkeypatch.setattr(sync_deletion, "commit_holds", then_restored)
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+        monkeypatch.undo()
+        assert restored and report.status == "synced" and report.deleted == (), report
+        for device in (desktop, phone):
+            assert (device.store.root / path).read_bytes() == original
+            assert b'"deleted"' not in b"".join(data for where, data in _files(device.store.root).items()
+                                                if where.endswith("/archive.json"))
+        again = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert again.status == "synced" and again.copied == () and again.deleted == (), again
 
 
 KIT = "campaigns/c5/instances/character/kit.json"

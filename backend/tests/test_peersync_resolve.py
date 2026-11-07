@@ -297,6 +297,63 @@ def test_a_deletion_is_refused_once_the_serving_device_holds_the_record_again(tm
         assert "deleted" not in json.dumps(archive.get("entries", {}).get(case.path)), archive
 
 
+@pytest.mark.parametrize("fresh", ["the deleted version", "a new version"])
+def test_a_record_written_on_the_serving_device_after_its_check_is_never_deleted_or_lost(tmp_path, monkeypatch, fresh):
+    """The window ``check`` leaves: the serving device takes a write of the record after it confirmed
+    the deletion and before the requester's data commit. The requester deletes (its version held) and
+    the resolve is ``incomplete``. The next transfer derives ``deleted E`` from the requester's marker
+    and judges the fresh write by the decision table: the deleted bytes again are ``resurrected``
+    (row 12), new bytes a new record at a deleted path, copied (row 13). Never a deletion over it."""
+    case = Conflict(tmp_path)
+    (case.desktop.store.root / case.path).unlink()
+    expected = {DESKTOP: None, PHONE: case.expected[PHONE]}
+    deleted = case.versions[PHONE]
+    data = deleted if fresh == "the deleted version" else case.versions[DESKTOP].replace(b"Saltmarch", b"Brineholt")
+    confirm = resolving_module._Relay.confirm_absent
+
+    def then_written(self, paths):  # the desktop's user writes the chat once it has answered
+        confirm(self, paths)
+        write = case.desktop.store.transaction()
+        write.put_exact(case.path, data, None)
+        write.commit(case.desktop.handle)
+    with serving(case.desktop) as server:
+        assert transfer(case.phone.store, case.phone.authority, DESKTOP, server.address).passes[-1].conflict(
+            case.path) is not None
+        monkeypatch.setattr(resolving_module._Relay, "confirm_absent", then_written)
+        report = case.resolve(server, None, start=case.phone, expected=expected)  # type: ignore[arg-type]
+        monkeypatch.undo()
+        assert report.status == "incomplete" and "stale" in report.reason, report
+        assert not (case.phone.store.root / case.path).exists() and deleted in _kept(case.phone.store.root)
+        again = transfer(case.phone.store, case.phone.authority, DESKTOP, server.address)
+        assert case.bytes(case.desktop) == data and all(not p.deleted for p in again.passes), again
+        if fresh == "the deleted version":
+            assert again.status == "conflicts" and again.passes[-1].conflict(case.path).code == "resurrected"
+            assert not (case.phone.store.root / case.path).exists()
+        else:
+            assert again.status == "synced" and case.bytes(case.phone) == data, again
+        assert deleted in _kept(case.phone.store.root)  # the version the phone deleted stays held
+        quiet = transfer(case.phone.store, case.phone.authority, DESKTOP, server.address)
+        assert all(not p.deleted and not p.copied for p in quiet.passes), quiet
+
+
+def test_a_serving_device_without_the_check_refuses_the_deletion_and_nothing_is_deleted(tmp_path, monkeypatch):
+    """A serving device that predates ``check`` answers it ``protocol``: the resolve is ``refused`` and the
+    requester still holds its record (every paired device runs the same version for 028's deletions)."""
+    case = Conflict(tmp_path)
+    (case.desktop.store.root / case.path).unlink()
+    expected = {DESKTOP: None, PHONE: case.expected[PHONE]}
+
+    def unknown(self, store, absent):  # what a server without ``check`` answers any request it does not know
+        raise PeerRefused("protocol", "unexpected request 'check'")
+    with serving(case.desktop) as server:
+        assert transfer(case.phone.store, case.phone.authority, DESKTOP, server.address).passes[-1].conflict(
+            case.path) is not None
+        monkeypatch.setattr(resolving_module.ResolveRequest, "confirm_absent", unknown)
+        report = case.resolve(server, None, start=case.phone, expected=expected)  # type: ignore[arg-type]
+    assert report.status == "refused" and "protocol" in report.reason, report
+    assert case.bytes(case.phone) == case.versions[PHONE] and not (case.desktop.store.root / case.path).exists()
+
+
 def test_a_serving_device_never_deletes_its_own_record_for_a_peer(tmp_path):
     """A request that would have the serving device delete (it holds the record) is refused there,
     and no step of a resolve may delete anything on it."""

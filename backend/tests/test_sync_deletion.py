@@ -17,7 +17,7 @@ import pytest
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef
 from grimoire.store import InvalidEnvelope, LibraryStore, ProcessLocker, RecordEnvelope, SourceManifest, etag
 from grimoire.store.layout import address_parts, conflict_parts, turn_parts
-from grimoire.sync import ResolveRefused, SyncInterrupted, resolve, sync, sync_until_quiet
+from grimoire.sync import ResolveRefused, SyncInterrupted, apply_sync, plan_sync, resolve, sync, sync_until_quiet
 from grimoire.sync import deletion, keeps as kept_record, resolution, session as sync_session
 from grimoire.sync.documents import keeps_name, parse_keeps, render_keeps
 from grimoire.testing import CrashScenario, Invariant, explore_crashes, idempotent_recovery, no_residue, run_plans
@@ -73,6 +73,28 @@ def test_a_deletion_on_one_device_is_made_on_the_other_and_its_version_is_kept(p
         assert _archive(store, peer)[path] == {"deleted": etag(original)}
     again = sync(desktop, phone, handles())
     assert again.conflicts == () and again.copied == () and again.deleted == ()
+
+
+def test_a_record_restored_on_the_deleting_device_after_the_plan_is_never_deleted(pair):
+    """The device that deleted puts the record back between plan and apply: the receiver's data
+    commit checks, under both devices' locks, that the deleting device still lacks it, so nothing is
+    deleted and no tombstone is archived; the next sync finds both devices agreeing again."""
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    original = (phone.root / path).read_bytes()
+    (desktop.root / path).unlink()
+    plan = plan_sync(desktop, phone, handles())
+    assert [delete.path for delete in plan.deletes[PHONE]] == [path]
+    restore = desktop.transaction()
+    restore.put_exact(path, original, None)
+    restore.commit(handle())
+    with pytest.raises(SyncInterrupted, match=f"{path} is back on {DESKTOP}"):
+        apply_sync(plan, handles())
+    assert (phone.root / path).read_bytes() == original and original not in kept(phone)
+    assert all(_archive(store, peer).get(path) != {"deleted": etag(original)}
+               for store, peer in ((desktop, PHONE), (phone, DESKTOP)))
+    report = sync(desktop, phone, handles())
+    assert report.conflicts == () and report.deleted == () and report.copied == ()
 
 
 def test_a_restore_after_the_tombstone_is_a_conflict_never_a_silent_copy(pair):

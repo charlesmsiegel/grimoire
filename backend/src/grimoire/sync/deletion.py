@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from grimoire.core.identity import (
     ChatRef, ImageRef, InstanceRef, PlacementRef, RelationRef, ScopeRef, SourceRef, TurnRef,
 )
-from grimoire.store import LibraryStore, StaleWrite, StoreError, UnstorableIdentifier, etag
+from grimoire.store import LibraryStore, NameCollision, StaleWrite, StoreError, UnstorableIdentifier, etag
 from grimoire.store.jsonfmt import JsonError, parse_strict
 from grimoire.store.layout import (
     CAMPAIGNS, SCOPE, SOURCES, address_parts, chat_parts, classify, conflict_parts, definition_parts, kept_address,
@@ -203,6 +203,28 @@ def still_needed(store: LibraryStore, writes: Mapping[str, bytes], blob_sizes: M
         return {}
     found = store.scan()
     return orphaned({**found.files, **writes}, {**found.blobs, **blob_sizes}, found.blocked, paths)
+
+
+def back_on(store: LibraryStore, paths: Iterable[str]) -> str | None:
+    """The first of ``paths`` that ``store``, the device a deletion came from, holds again, under the
+    lock of the commit that deletes (a look-alike counts): deleting the other device's copy and
+    archiving the tombstone would make that record ``resurrected`` at the next sync."""
+    for path in sorted(paths):
+        try:
+            if store.read_exact(path) is not None:
+                return path
+        except NameCollision:
+            return path
+    return None
+
+
+def confirm_with_peer(store: LibraryStore, paths: Iterable[str]) -> None:
+    """When ``store`` is a mirror of a device across a connection (``peersync``), its snapshot says
+    nothing of that device now: it confirms itself, under its own lock, that it still lacks each
+    path (``confirm_absent``), as late as the caller can ask, just before the commit that deletes."""
+    confirm = getattr(store, "confirm_absent", None)
+    if confirm is not None:
+        confirm(sorted(paths))
 
 
 def commit_holds(store: LibraryStore, view, device: str, peer: str, devices: tuple[str, str],  # type: ignore[no-untyped-def]

@@ -19,10 +19,11 @@ from grimoire.store import LibraryStore, StoreError
 from grimoire.sync import SyncInterrupted, device_of
 from grimoire.sync.documents import check_device_id
 
+from .busy import committing, resolving_out
 from .errors import AuthenticationFailed, PeerRefused, TransportError
 from .pairing import peer_principal, read_pairing
-from .replay import StepBuffer, confirmation
-from .resolving import ResolveRequest, committing, resolving_out
+from .replay import StepBuffer, absent_here, confirmation
+from .resolving import ResolveRequest
 from .snapshot import send_snapshot
 from .wire import Channel, is_loopback, no_delay, server_handshake
 
@@ -152,13 +153,14 @@ class PeerServer:
                     buffer.resolving, resolving = request.path, request
                     send_snapshot(channel, self.store, self.authority, peer)
                 elif kind == "check":  # a deletion's last check before the requester deletes (028)
-                    if resolving is None:
-                        raise PeerRefused("invalid", "a check belongs to a resolve")
                     with committing(self.store):
                         if not self._still_paired(peer, channel_key):
                             channel.refuse("not_paired", "this device is no longer paired with yours")
                             return
-                        resolving.confirm_absent(self.store, header.get("absent"))
+                        if resolving is not None:
+                            resolving.confirm_absent(self.store, header.get("absent"))
+                        else:  # a sync: the requester deletes what this device deleted
+                            absent_here(self.store, header.get("absent"))
                     channel.send({"t": "confirmed"})
                 elif kind == "op":
                     buffer.add(header, body)  # a refusal here is held and answered at "commit"

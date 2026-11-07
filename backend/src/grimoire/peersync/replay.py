@@ -82,6 +82,29 @@ def send_ops(channel: Channel, kind: str, ops: Iterable[Op]) -> None:
         raise PeerRefused("verification", f"the peer did not confirm the {kind} step's planned bytes")
 
 
+def ask_absent(channel: Channel, paths: list[str]) -> None:
+    """Ask the serving device, just before this device commits a deletion whose record came from it
+    (028), to confirm under its own lock that it still lacks each path; it refuses ``stale`` if not.
+    Its snapshot said so earlier, and a deletion over a record written there since would archive a
+    tombstone for a version it holds."""
+    channel.send({"t": "check", "absent": list(paths)})
+    header, _ = channel.recv()
+    if header.get("t") != "confirmed":
+        raise PeerRefused("verification", "the peer did not confirm the deletion's paths")
+
+
+def absent_here(store: LibraryStore, absent: object) -> None:
+    """The serving side of ``ask_absent``, under this library's lock: refuse ``stale`` unless each
+    path, a record of a family sync deletes, is absent here (a look-alike is not absent)."""
+    if (not isinstance(absent, list) or not absent or len(absent) > MAX_STEP_OPS
+            or not all(type(path) is str and syncable(path) in PROPAGATED_DELETIONS for path in absent)):
+        raise PeerRefused("invalid", "a check confirms that the records a deletion removes are absent here")
+    back = deletion.back_on(store, absent)
+    if back is not None:
+        raise PeerRefused("stale", f"{back} changed on this device since the conflict was reported or the "
+                                   "sync was planned")
+
+
 def kept_target(path: str, data: bytes, slot: int) -> str:
     """Where a kept version of ``path`` holding ``data`` lands in ``slot``."""
     return "/".join(conflict_parts(tuple(path.split("/")), etag(data), slot))

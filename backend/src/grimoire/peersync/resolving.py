@@ -35,12 +35,8 @@ serving device's version. The serving device refuses a deletion it would have to
 
 from __future__ import annotations
 
-import contextlib
-import os
 import tempfile
-import threading
-import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -53,8 +49,9 @@ from grimoire.sync.bookkeeping import read_document
 from grimoire.sync.documents import keeps_name
 from grimoire.sync.keeps import kept_slots
 
+from .busy import outgoing
 from .errors import MirrorMismatch, PeerRefused, TransportError
-from .replay import MAX_STEP_OPS, Op, kept_target, send_ops
+from .replay import Op, absent_here, ask_absent, kept_target, send_ops
 from .session import _check_paired, dial, hang_up, pairing_for
 from .snapshot import Limits, MirrorStore, receive_mirror
 from .wire import Channel, client_handshake
@@ -107,7 +104,7 @@ def resolve_conflict(store: LibraryStore, authority, peer: str, address: tuple[s
         # so following the advice never sends the user back here.
         return ResolveReport(peer, path, "refused", f"ResolveRefused: {path} is a definition revision {peer} "
                                                     f"would replace; start this resolve on {peer}")
-    with _outgoing(store):  # this library's own server now refuses what could wait on this resolve
+    with outgoing(store):  # this library's own server now refuses what could wait on this resolve
         try:
             connection = dial(address, timeout)
         except OSError as error:
@@ -164,6 +161,7 @@ def _resolve(store: LibraryStore, channel: Channel, local: str, local_handle: ob
             return ResolveReport(peer, path, "incomplete", f"MirrorMismatch: {error}")
         relay = _Relay(channel, store, key, keeps_name(local) if expected[local] == keep else None)
         mirror.store.relay = relay  # type: ignore[attr-defined]
+        mirror.store.peer_check = relay.confirm_absent  # type: ignore[attr-defined]
         try:
             receiver = resolve(store, mirror.store, path, keep, expected, {local: local_handle, peer: mirror.handle})
             relay.flush()
@@ -232,10 +230,7 @@ class _Relay:
         """Have the serving device confirm, under its own lock, that it still lacks each path a
         deletion removes (028); a refusal (``stale``) ends the resolve before the deletion."""
         _check_paired(self.store, self.channel.peer, self.key)
-        self.channel.send({"t": "check", "absent": list(paths)})
-        header, _ = self.channel.recv()
-        if header.get("t") != "confirmed":
-            raise PeerRefused("verification", "the peer did not confirm the deletion's paths")
+        ask_absent(self.channel, paths)
 
     def _send(self, ops: list[tuple[str, Callable[[], Op]]]) -> None:
         # An owner who unpairs mid-resolve must not have anything more sent (as a transfer checks).
@@ -247,13 +242,6 @@ class RelayingMirror(MirrorStore):
     """The mirror for a resolve: every transaction it commits is replayed on the serving device."""
 
     relay: _Relay | None = None
-
-    def confirm_absent(self, paths: list[str]) -> None:
-        """019's ``resolve`` rechecks the winner under the pair's locks before a deletion; this mirror
-        is a snapshot, so the device it mirrors answers instead (``ResolveRequest.confirm_absent``)."""
-        if self.relay is None:
-            raise StoreError("this mirror has no peer to confirm with")
-        self.relay.confirm_absent(paths)
 
     def transaction(self) -> Transaction:
         super().transaction()  # its checks: an open, writable library
@@ -343,62 +331,6 @@ class _RelayedTransaction(Transaction):
 
 # -- serving side -----------------------------------------------------------------------------
 
-#: How long a serving device waits for its own library before refusing a step as ``busy``, once one
-#: of its own resolves is in flight. That resolve holds the library while it waits for its peer's
-#: answer (019 commits the receiver's data with both libraries held), so two devices resolving
-#: against each other would each wait on the other until the connection timed out, freezing
-#: every local write meanwhile.
-BUSY_WAIT = 1.0
-
-_OUTGOING: dict[str, int] = {}
-_OUTGOING_LOCK = threading.Lock()
-
-
-def _key(store: LibraryStore) -> str:
-    return os.path.realpath(store.root)
-
-
-@contextlib.contextmanager
-def _outgoing(store: LibraryStore) -> Iterator[None]:
-    """Mark ``store`` as resolving against a peer for the block (this process only: a library is
-    open for writing in one process at a time)."""
-    key = _key(store)
-    with _OUTGOING_LOCK:
-        _OUTGOING[key] = _OUTGOING.get(key, 0) + 1
-    try:
-        yield
-    finally:
-        with _OUTGOING_LOCK:
-            _OUTGOING[key] -= 1
-            if not _OUTGOING[key]:
-                del _OUTGOING[key]
-
-
-def resolving_out(store: LibraryStore) -> bool:
-    """Whether this process is resolving a conflict of ``store`` against a peer right now."""
-    with _OUTGOING_LOCK:
-        return _key(store) in _OUTGOING
-
-
-@contextlib.contextmanager
-def committing(store: LibraryStore) -> Iterator[None]:
-    """Hold ``store`` for one served commit, or refuse ``busy`` with nothing written.
-
-    Without a resolve of this library in flight the wait is unbounded, as before: whoever holds
-    the library is a local commit that will finish. With one, the holder may be that resolve,
-    waiting on its peer, whose server may in turn be waiting here: after ``BUSY_WAIT`` the step
-    is refused, so the cycle ends at once and no local write waits for a connection to time out.
-    """
-    started = time.monotonic()
-    while not store.lock.acquire(timeout=0.05):
-        if resolving_out(store) and time.monotonic() - started >= BUSY_WAIT:
-            raise PeerRefused("busy", "this library is busy resolving a conflict of its own; try again")
-    try:
-        yield
-    finally:
-        store.lock.release()
-
-
 @dataclass(frozen=True)
 class ResolveRequest:
     """A resolve request as the serving device accepts it: the path, the chosen etag, and the
@@ -474,13 +406,9 @@ class ResolveRequest:
         this device, the winner, still lacks the path and every revision the deletion takes along.
         A record written here since the snapshot is refused ``stale``, so no tombstone is archived
         for a version this device holds."""
-        if (self.keep is not None or not isinstance(absent, list) or self.path not in absent
-                or len(absent) > MAX_STEP_OPS
-                or not all(type(path) is str and syncable(path) for path in absent)):
+        if self.keep is not None or not isinstance(absent, list) or self.path not in absent:
             raise PeerRefused("invalid", "a check confirms that the paths a deletion removes are absent here")
-        for path in absent:
-            if _current(store, path) is not None:
-                raise PeerRefused("stale", f"{path} changed on this device since the conflict was reported")
+        absent_here(store, absent)
 
     def check_step(self, store: LibraryStore, ops: list[tuple[dict, bytes | Path]]) -> str | None:  # type: ignore[type-arg]
         """Refuse a step of this resolve that does not do what the request said; return the etag of

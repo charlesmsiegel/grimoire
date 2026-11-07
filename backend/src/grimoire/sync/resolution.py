@@ -266,9 +266,7 @@ def _resolve_deletion(stores: Mapping[str, LibraryStore], scans: Mapping[str, Ca
             _end_deliveries(stores, other, pair, paths)
             _commit_holds(store, receiver, deletion.holds_state(
                 store, kept_record.read_keeps(store, winner, pair), receiver, winner, pair, deletes))
-            confirm = getattr(stores[winner], "confirm_absent", None)
-            if confirm is not None:  # a mirror of the winner: that device answers, as late as it can
-                confirm(sorted(gone.path for gone in deletes))
+            deletion.confirm_with_peer(stores[winner], [gone.path for gone in deletes])
             txn.commit(handles[receiver], dict(approvals.get(receiver, {})))
     except WriteDenied as error:  # nothing was written: the grant refuses it, like any other refusal
         raise ResolveRefused(f"{path} cannot be deleted on {receiver}: {error}") from error

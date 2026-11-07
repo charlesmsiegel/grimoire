@@ -421,9 +421,17 @@ def _final_files(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[dict[st
     return deletion.final_files(plan.scans[dest].files, plan.scans[dest].blobs, copies)  # type: ignore[attr-defined]
 
 
-def _recheck_deletes(store: LibraryStore, copies: list[Copy], deletes: list[deletion.Delete]) -> None:
-    """``deletion.still_needed`` under the data commit's lock (028): a record written since the plan
-    that needs a deletion stops the commit before anything is written."""
+def _recheck_deletes(plan: SyncPlan, device: str, copies: list[Copy], deletes: list[deletion.Delete]) -> None:
+    """Under both devices' locks, before the data commit that deletes (028): the device a deletion
+    came from still lacks the record (``deletion.back_on``), and nothing written since the plan
+    needs it (``deletion.still_needed``). Either stops the commit before anything is written."""
+    if not deletes:
+        return
+    origin = plan.other(device)
+    back = deletion.back_on(plan.stores[origin], [delete.path for delete in deletes])
+    if back is not None:
+        raise SyncInterrupted(f"a library changed while its deletions were planned: {back} is back on {origin}")
+    store = plan.stores[device]
     needed = deletion.still_needed(store, {copy.path: copy.data for copy in copies if copy.data is not None},
                                    {copy.path: copy.size for copy in copies if copy.data is None},  # type: ignore[misc]
                                    [delete.path for delete in deletes])
@@ -1093,29 +1101,42 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
                 changes[key] = written[name] if needed else None
         return changes
 
+    held = contextlib.ExitStack()
     try:
-        with _locked(*plan.stores.values()):  # a blob copy loads from the origin inside this commit
-            _recheck_deletes(store, copies, deletes)
-            result = txn.commit(handle, dict(approvals), on_denied=on_denied)
+        held.enter_context(_locked(*plan.stores.values()))  # a blob copy loads from the origin inside this commit
+        _recheck_deletes(plan, device, copies, deletes)
+        if deletes:
+            deletion.confirm_with_peer(plan.stores[plan.other(device)], [delete.path for delete in deletes])
+        result = txn.commit(handle, dict(approvals), on_denied=on_denied)
     except (StaleWrite, WriteConflict, SyncInterrupted, *PER_PATH_ERRORS) as error:
+        held.close()
         applied.consumed.extend(getattr(error, "consumed_approvals", ()))  # spent without a write (R16)
         raise SyncInterrupted(f"the data commit on {device} stopped: {error}", _report(plan, applied)) from error
-    applied.consumed.extend(result.consumed_approvals)
-    published = [copy for copy in copies if copy.path in result.etags]
-    applied.published[device] = published
-    applied.kept[device] = [keep for keep in keeps if str(_kept_key(keep)) in result.etags]
-    applied.deleted[device] = plan.deletes[device] = [
-        delete for delete in deletes if all(key in result.etags for key in deletion.keys_of(delete))]
-    states = tuple((name, marker[0][1][name], None if old.get(name) is None else etag(old[name]))
-                   for key, name in marker_keys.items() if key in result.etags)
-    if states:
-        applied.pending_written[device] = (marker[0][0], {name: data for name, data, _ in states})
-    applied.wrote = applied.wrote or bool(result.etags)
-    plan.copies[device] = published
-    plan.kept_records[device], recorded = delivery.committed(result.etags)
-    if result.etags:
-        applied.observe(Step("data", device, tuple(published), tuple(applied.kept[device]), (*states, *recorded),
-                             tuple(applied.deleted[device])))
+    except BaseException:
+        held.close()
+        raise
+    if not deletes:
+        held.close()
+    # 028: a commit that deletes keeps both libraries locked until its step has been observed, so a
+    # stand-in's step replayed on the real device (peersync) still finds the deleting device as
+    # ``_recheck_deletes`` saw it
+    with held:
+        applied.consumed.extend(result.consumed_approvals)
+        published = [copy for copy in copies if copy.path in result.etags]
+        applied.published[device] = published
+        applied.kept[device] = [keep for keep in keeps if str(_kept_key(keep)) in result.etags]
+        applied.deleted[device] = plan.deletes[device] = [
+            delete for delete in deletes if all(key in result.etags for key in deletion.keys_of(delete))]
+        states = tuple((name, marker[0][1][name], None if old.get(name) is None else etag(old[name]))
+                       for key, name in marker_keys.items() if key in result.etags)
+        if states:
+            applied.pending_written[device] = (marker[0][0], {name: data for name, data, _ in states})
+        applied.wrote = applied.wrote or bool(result.etags)
+        plan.copies[device] = published
+        plan.kept_records[device], recorded = delivery.committed(result.etags)
+        if result.etags:
+            applied.observe(Step("data", device, tuple(published), tuple(applied.kept[device]), (*states, *recorded),
+                                 tuple(applied.deleted[device])))
 
 
 def _commit_holds(plan: SyncPlan, device: str, applied: _Applied) -> None:
