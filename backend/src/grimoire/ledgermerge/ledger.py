@@ -56,8 +56,9 @@ def merge_ledger(base: Ledger, sides: Mapping[str, Ledger], *, instances: Iterab
     devices = sorted(sides, key=rank.__getitem__)
     instances = frozenset(instances)
     found = _events.order_events(base, sides)
+    revoked = frozenset(ref.event_id for ref, (_, version) in found.chosen.items() if not version.value.active)
     relations, relation_items = _events.three_way(base.relations, {d: sides[d].relations for d in devices},
-                                                  "relation")
+                                                  "relation", revoked)
     wrapups, wrapup_items = _events.three_way(base.wrapups, {d: sides[d].wrapups for d in devices}, "wrapup")
     items = list(found.items) + relation_items + wrapup_items
     if _blocking(items):

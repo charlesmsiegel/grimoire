@@ -28,6 +28,9 @@ from grimoire.holdings import Operation
 
 from .model import BASE, Kept, Ledger, Output, ReviewItem, Rewrite, Version, choose, ranks
 
+#: the sequence ``causal_order`` keys a revoked event by: ahead of every active one, so that it never holds back
+#: the events accepted after it (021's sequence rule is about active events only)
+REVOKED_SEQUENCE = -1
 #: what a merge may rewrite in an event: outside its fingerprint, so every endorsement stays valid
 REWRITTEN = ("ordinal", "holdings.seqs", "revocation.holdings_seqs")
 
@@ -52,6 +55,66 @@ def _same_file(a: Version, b: Version) -> bool:
     return a.etag == b.etag
 
 
+def revoked_copy(versions: Mapping[str, Version]) -> str | None:
+    """The device whose version of one event is the other's with only its revocation added, else ``None``.
+
+    A revocation is one-way: once an event is revoked it is never in force again. So when two devices hold one
+    event and differ only in that one has taken it back (a revocation that reached one of them by another
+    path, through a third device), the revoked one is that event's later state, not a second content (028).
+    """
+    if len(versions) != 2:
+        return None
+    one, two = versions
+    for revoked, active in ((one, two), (two, one)):
+        r, x = versions[revoked], versions[active]
+        if (not r.value.active and x.value.active and r.meta == x.meta
+                and _core(replace(r.value, revocation=None)) == _core(x.value)):
+            return revoked
+    return None
+
+
+def _both_revoked(versions: Mapping[str, Version]) -> bool:
+    """Two versions of one event that differ only in their revocations, both revoked: each device revoked it."""
+    a, b = versions.values()
+    return (not a.value.active and not b.value.active and a.meta == b.meta
+            and _core(replace(a.value, revocation=None)) == _core(replace(b.value, revocation=None)))
+
+
+def _unrevoked(relation: Relation, event_id: str) -> Relation | None:
+    """``relation`` as it stood before event ``event_id``'s revocation changed it, or ``None`` when that
+    revocation did not change it last: 021 revokes a begun relation by retracting it and an ended one by
+    reopening it, and records the event's ``revoked`` token either way."""
+    if relation.retraction is not None:
+        if parse_token(relation.retraction.provenance) != ("revoked", event_id):
+            return None
+        return replace(relation, retraction=None)
+    if relation.ending is not None or not relation.reopenings:
+        return None
+    last = relation.reopenings[-1]
+    if (parse_token(last.provenance) != ("revoked", event_id)
+            or parse_token(last.ending.provenance) != ("accepted", event_id)):
+        return None
+    return replace(relation, ending=last.ending, reopenings=relation.reopenings[:-1])
+
+
+def revoked_relation(versions: Mapping[str, Version], revoked: frozenset[str]) -> str | None:
+    """The device whose version of one relation file is the other's with only one revoked event's revocation
+    applied, else ``None``: the relation's half of ``revoked_copy``, for an event the merge keeps revoked."""
+    if len(versions) != 2:
+        return None
+    one, two = versions
+    for later, earlier in ((one, two), (two, one)):
+        r, x = versions[later], versions[earlier]
+        if r.meta != x.meta or not isinstance(r.value, Relation) or not isinstance(x.value, Relation):
+            continue
+        for token in (r.value.retraction, *(r.value.reopenings[-1:])):
+            found = None if token is None else parse_token(token.provenance)
+            if (found is not None and found[0] == "revoked" and found[1] in revoked
+                    and _unrevoked(r.value, found[1]) == x.value):
+                return later
+    return None
+
+
 @dataclass(frozen=True)
 class EventOrder:
     """Which version of each event the merge keeps, and the merged order of those the base lacks."""
@@ -59,6 +122,7 @@ class EventOrder:
     chosen: Mapping[AcceptedRef, tuple[str, Version]]  # source (``base`` or a device) and its version
     order: tuple[AcceptedRef, ...]
     onesided: Mapping[AcceptedRef, str]  # events only one device holds, by device
+    spread: Mapping[AcceptedRef, str]  # new events one device holds revoked and the other active: the active one
     numbering: Mapping[str, int]  # every kept event's merged ordinal, by event id: its place in one global order
     items: tuple[ReviewItem, ...]
 
@@ -81,6 +145,7 @@ def order_events(base: Ledger, sides: Mapping[str, Ledger]) -> EventOrder:
     items: list[ReviewItem] = []
     chosen: dict[AcceptedRef, tuple[str, Version]] = {}
     onesided: dict[AcceptedRef, str] = {}
+    spread: dict[AcceptedRef, str] = {}
     refs = set(base.events).union(*(sides[device].events for device in devices))
     for ref in sorted(refs, key=str):
         agreed = base.events.get(ref)
@@ -98,7 +163,17 @@ def order_events(base: Ledger, sides: Mapping[str, Ledger]) -> EventOrder:
             continue
         holding = list(versions)
         if len(holding) == 2 and not same_event(versions[holding[0]], versions[holding[1]]):
-            items.append(ReviewItem("id_collision", str(ref), "one event id with two contents"))
+            revoked = revoked_copy(versions)
+            if revoked is None:
+                if _both_revoked(versions):  # one event each device took back itself: two revocations
+                    items.append(ReviewItem("both_changed", str(ref), "a new event revoked on both devices"))
+                else:
+                    items.append(ReviewItem("id_collision", str(ref), "one event id with two contents"))
+                continue
+            # a revocation that reached the two devices by different paths: keep it, and the other device's
+            # copy is checked like any revocation of an event it held in force (revoked_vs_extended)
+            chosen[ref] = (revoked, versions[revoked])
+            spread[ref] = next(device for device in holding if device != revoked)
             continue
         chosen[ref] = (holding[0], versions[holding[0]])
         if len(holding) == 1:
@@ -113,7 +188,7 @@ def order_events(base: Ledger, sides: Mapping[str, Ledger]) -> EventOrder:
     everything = [by_id[event_id] for event_id in ordered + stuck]
     numbering = {ref.event_id: number for number, ref in enumerate(everything, start=1)}
     fresh = [ref for ref in everything if ref not in base.events]
-    found = EventOrder(chosen, tuple(fresh), onesided, numbering, ())
+    found = EventOrder(chosen, tuple(fresh), onesided, spread, numbering, ())
     return replace(found, items=tuple(items + _policy(base, sides, found, devices)))
 
 
@@ -146,7 +221,8 @@ def causal_order(events: Mapping[str, AcceptedEvent]) -> tuple[list[str], list[s
             following.setdefault(previous, []).append(event_id)
 
     def key(event_id: str) -> tuple:
-        return merge_key(event_id, events[event_id].moment.sequence)
+        event = events[event_id]
+        return merge_key(event_id, event.moment.sequence if event.active else REVOKED_SEQUENCE)
 
     ready = [(key(event_id), event_id) for event_id, count in waiting.items() if count == 0]
     heapq.heapify(ready)
@@ -187,16 +263,30 @@ def _policy(base: Ledger, sides: Mapping[str, Ledger], found: EventOrder, device
     one, other = (by_device[device] for device in devices)
     chats = sorted({str(e.chat) for e in one} & {str(e.chat) for e in other})
     items += [ReviewItem("same_chat", chat, "new events on both devices") for chat in chats]
+    # revoked_vs_extended: an event the merge keeps revoked that the other device holds in force and accepted
+    # new events after (directly or through others). The revocation was made where those were not held, so it
+    # would take back an event they were accepted after. The event is agreed and active in the base, or new and
+    # revoked on its way to only one of the two (a revocation spreading through a third device). A new event the
+    # other device holds only because a third device gave it is not "after" unless it says so.
     for ref, (source, version) in found.chosen.items():
         agreed = base.events.get(ref)
-        if agreed is None or not agreed.value.active or version.value.active:
+        if version.value.active:
             continue
-        # only a device that still holds it in force: one that already has the revocation (synced from a third
-        # device, say) did not extend past an agreed event the other took back
-        others = [device for device in devices if device != source and sides[device].events[ref].value.active]
-        if any(by_device[device] for device in others):
-            items.append(ReviewItem("revoked_vs_extended", str(ref), f"revoked on {source}; the other device "
-                                    "accepted new events"))
+        if agreed is not None:
+            if not agreed.value.active:
+                continue
+            others = [device for device in devices if device != source and sides[device].events[ref].value.active]
+        elif ref in found.spread:
+            others = [found.spread[ref]]
+        else:
+            continue
+        for device in others:
+            held = sides[device].events
+            later = _descendants(ref.event_id, [held[r].value for r in held],
+                                 {r.event_id for r, d in found.onesided.items() if d == device})
+            if later:
+                items.append(ReviewItem("revoked_vs_extended", str(ref), f"revoked on {source}; {device} "
+                                        f"accepted {min(later)} after it"))
     prints = {e.fingerprint: e.event_id for e in other}
     for event in one:
         if event.fingerprint in prints:
@@ -210,6 +300,20 @@ def _policy(base: Ledger, sides: Mapping[str, Ledger], found: EventOrder, device
             if attempt in spent:
                 items.append(ReviewItem("attempt_reused", event.event_id, spent[attempt]))
     return items
+
+
+def _descendants(event_id: str, events: list[AcceptedEvent], among: set[str]) -> set[str]:
+    """The events of ``among`` accepted after ``event_id``, directly or through others, in ``events``."""
+    before = predecessors(events)
+    memo: dict[str, bool] = {}
+
+    def after(current: str) -> bool:
+        if current not in memo:
+            memo[current] = False  # a cycle (a hand edit) reaches nothing
+            memo[current] = any(p == event_id or after(p) for p in before.get(current, ()))
+        return memo[current]
+
+    return {other for other in among if after(other)}
 
 
 def rewrite(found: EventOrder, holder_seqs: Mapping[tuple[InstanceRef, str], int]) -> dict[AcceptedRef, AcceptedEvent]:
@@ -254,12 +358,14 @@ def event_outputs(found: EventOrder, merged: Mapping[AcceptedRef, AcceptedEvent]
     return outputs
 
 
-def three_way(base: Mapping, sides: Mapping[str, Mapping], label: str
+def three_way(base: Mapping, sides: Mapping[str, Mapping], label: str, revoked: frozenset[str] = frozenset()
               ) -> tuple[dict, list[ReviewItem]]:
     """Wrap-ups and relation files merge whole: a file one device changed is that device's file.
 
     Two different changes of one file, or two different files written under one new id, stop the merge
-    (a wrap-up's id is derived from its chat scene, so two devices wrapping one scene up meet here).
+    (a wrap-up's id is derived from its chat scene, so two devices wrapping one scene up meet here), but for a
+    relation file one device holds as the other's with the revocation of an event in ``revoked`` (the events
+    the merge keeps revoked) applied: that one is kept, as its event's revoked copy is (``revoked_relation``).
     """
     rank = ranks(sides)
     devices = sorted(sides, key=rank.__getitem__)
@@ -272,6 +378,8 @@ def three_way(base: Mapping, sides: Mapping[str, Mapping], label: str
             items += [ReviewItem("deleted", str(ref), device) for device in missing]
             continue
         pick = choose(agreed, versions, rank, _same_file)
+        if pick is None and revoked:
+            pick = revoked_relation(versions, revoked)
         if pick is None:
             reason = "both_changed" if agreed is not None or label == "wrapup" else "id_collision"
             items.append(ReviewItem(reason, str(ref), f"a {label} changed on both devices"))

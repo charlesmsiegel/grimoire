@@ -769,9 +769,18 @@ class TurnEffectsLibrary:
 
 def causal_after(snap: _Snapshot, tag: str) -> tuple[str, ...] | None:
     """What a new event on this library records it was accepted after (028): the frontier of every accepted
-    event it holds, revoked ones too. Only an identified library records it, since only paired libraries merge;
-    an unidentified one writes its events exactly as before, their place being their ordinal."""
-    return accepted_frontier(snap.events.values()) if tag else None
+    event it holds, revoked ones too.
+
+    An identified library records it, and so does one that holds any event recording it: a library whose
+    identity was lost for a while (its ``.sync`` deleted) and is identified again later still merges, and an
+    event it accepted meanwhile must not lose its place above the events it was accepted after. Only a
+    library that never took part in 028 (no identity and no event recording ``after``) writes its events
+    exactly as before, their place being their ordinal.
+    """
+    events = snap.events.values()
+    if tag or any(event.after is not None for event in events):
+        return accepted_frontier(events)
+    return None
 
 
 def _relations_unreadable(graph: CampaignGraph) -> bool:

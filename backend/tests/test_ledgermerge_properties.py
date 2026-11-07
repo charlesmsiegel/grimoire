@@ -9,6 +9,7 @@ problem in, and come out unchanged when merged again.
 
 from __future__ import annotations
 
+import contextlib
 import random
 import shutil
 from dataclasses import replace
@@ -20,6 +21,7 @@ from grimoire.core import Moment
 from grimoire.core.identity import AcceptedRef
 from grimoire.effects import AcceptedEvent, AcceptedOperation, accepted_frontier
 from grimoire.holdings import Line, Operation
+from grimoire.effectstore import InvalidEffect
 from grimoire.ledgermerge import LedgerReview, Merged, Review, causal_order, device_tag
 from grimoire.store import LibraryStore
 
@@ -195,3 +197,65 @@ def test_the_merge_order_of_what_two_devices_hold_is_the_order_of_everything_res
         subset = _closed(events, {event_id for event_id in events if rng.random() < 0.4})
         part, stuck = causal_order({event_id: events[event_id] for event_id in subset})
         assert not stuck and part == [event_id for event_id in everything if event_id in subset]
+
+
+# -- three devices: payments, revocations of the latest event, pairs merging in random order ----------------
+
+@pytest.mark.parametrize("seed", range(12))
+def test_three_devices_never_collide_on_tagged_ids_and_settle_when_nothing_is_reviewed(seed, tmp_path):
+    """Tagged ids are never drawn twice, so no merge of them is an ``id_collision``, however revocations travel
+    between the devices; and when no merge stopped, a few rounds leave all three holding one library."""
+    from test_ledgermerge import ledger_bytes
+    from test_ledgermerge_pairs import HOMES, NAMES, PURSES, Pairs, causally_numbered, latest
+
+    rng = random.Random(seed)
+    pairs = Pairs(tmp_path)
+    stopped = []
+    try:
+        pairs.devices["phone"].hand_op(Operation("found-coins", (Line.add(INES, COIN, 5),)))
+        floor = dict.fromkeys(NAMES, 8)
+
+        def sync(pair: tuple[str, ...]) -> None:
+            result = merge(pairs.bases[pair], {name: pairs.devices[name].store for name in pair})
+            assert "id_collision" not in getattr(result, "reasons", ()), result
+            if isinstance(result, Merged):
+                pairs.sync(*pair)
+                for name in pair:
+                    assert causally_numbered(pairs.devices[name].store)
+                    floor[name] = max(floor.values())
+            else:
+                stopped.append((pair, sorted(result.reasons)))
+
+        for step in range(14):
+            name = rng.choice(NAMES)
+            device = pairs.devices[name]
+            roll = rng.random()
+            if roll < 0.6:
+                sequence = floor[name] + rng.randint(0, 1)
+                giver, to = PURSES[name]
+                try:
+                    device.accept(pay(giver, to, 1, sequence=sequence, chat=HOMES[name], attempt=f"{name}-{step}",
+                                      turn=f"t{step}"))
+                    floor[name] = sequence
+                except InvalidEffect:  # a purse run dry, or a sequence behind a merged one: 021 refuses, as it should
+                    continue
+            elif roll < 0.8:
+                active = [v for v in read_ledger(device.store).events.values() if v.value.active]
+                if active:  # 021 may still refuse the undo (an event built on it, say)
+                    with contextlib.suppress(InvalidEffect):
+                        device.revoke(latest(device))
+            else:
+                sync(tuple(sorted(rng.sample(NAMES, 2))))
+        for _ in range(3):
+            for _ in range(3):
+                sync(tuple(sorted(rng.sample(NAMES, 2))))
+        if not stopped:
+            pairs.round()
+            pairs.round()
+            held = {name: ledger_bytes(device.store) for name, device in pairs.devices.items()}
+            assert len(set(map(repr, held.values()))) == 1
+            for device in pairs.devices.values():
+                assert causally_numbered(device.store)
+                assert device.effects.continuity(C, as_of=1000, requested_by="director").problems == ()
+    finally:
+        pairs.close()

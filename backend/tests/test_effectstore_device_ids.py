@@ -6,10 +6,12 @@ with two contents: 028's ledger merge tells events apart by id. All fixtures are
 
 from __future__ import annotations
 
+import shutil
 from hashlib import sha256
 
 import pytest
 
+from grimoire.effects import ACCEPTED_SCHEMA_V2
 from grimoire.core.identity import SEGMENT_MAX, AcceptedRef, RelationRef, validate_segment
 from grimoire.effectstore import InvalidEffect
 from grimoire.store import LibraryStore, StaleWrite
@@ -65,6 +67,29 @@ def test_an_unidentified_library_keeps_plain_ids(world):
     done = accept(library, handles, give()).commit()
     event, _ = library.read(done.ref, requested_by="director")
     assert done.ref.event_id == "e-1" and begun(event).relation_id == "r-1"
+    # a library that never took part in 028 writes its events exactly as before: no ``after``, no /2 record
+    second = accept(library, handles, later()).commit()
+    for ref in (done.ref, second.ref):
+        found, _ = library.read(ref, requested_by="director")
+        assert found.after is None and store.read(ref).record.schema != ACCEPTED_SCHEMA_V2
+
+
+def test_a_library_that_lost_its_identity_still_records_what_it_accepted_after(world):
+    """028: ``.sync`` may be deleted and the device identified again later; what it accepted meanwhile has an
+    untagged id, but it still records ``after``, or a merge could number it below the events it followed."""
+    store, handles = world
+    identify(store, "desktop")
+    library = effects_library(store, handles)
+    first = accept(library, handles, give()).commit()
+    shutil.rmtree(store.root / ".sync")
+    library = effects_library(store, handles)
+    second = accept(library, handles, later()).commit()
+    event, _ = library.read(second.ref, requested_by="director")
+    assert second.ref.event_id == "e-1" and event.after == (first.ref.event_id,)  # untagged, own counter
+    assert store.read(second.ref).record.schema == ACCEPTED_SCHEMA_V2
+    undo(library, handles, second.ref, later())
+    undo(library, handles, first.ref, give())
+    assert not library.continuity(C, as_of=8, requested_by="director").problems
 
 
 def test_an_identified_library_tags_new_event_and_relation_ids(world):
