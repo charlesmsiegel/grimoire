@@ -123,7 +123,7 @@ capture evidence.
 - It refuses any `PlannedCall` its turn's plan lacks.
 - It books every attempt, including retries and fallbacks, through one `TurnMeter` per turn.
 - **An attempt begins at `connect()`.** A refusal before that (authorization, key, cancel) sends nothing and is not booked, so the call stays unmetered and the meter records status `refused`.
-- **Evidence rule:** a `complete` summary only says every planned call was metered. For cost comparisons a turn needs `TurnMeter.cost_evidence`: provider-reported counts, every call accepted, no poisoned booking, and no loopback peer.
+- **Evidence rule:** a `complete` summary only says every planned call was metered. For cost comparisons a turn needs `TurnMeter.cost_evidence`: provider-reported counts, every call accepted (or forgone: settled at no cost without a call), no poisoned booking, and no loopback peer.
 
 ## Deferred
 

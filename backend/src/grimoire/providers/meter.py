@@ -24,7 +24,8 @@ from grimoire.core.inference.plan import CallId
 
 from .errors import CallRefused
 
-CallStatus = Literal["accepted", "incomplete", "failed", "cancelled", "refused", "poisoned"]
+#: ``forgone``: a planned call deliberately not made (``TurnMeter.forgo``); it cost nothing.
+CallStatus = Literal["accepted", "incomplete", "failed", "cancelled", "refused", "poisoned", "forgone"]
 BookingResult = Literal["precise", "fallback", "poisoned"]
 FALLBACK_NOTE = "booking fell back to unknown usage"
 
@@ -104,8 +105,8 @@ class TurnMeter:
 
     @property
     def all_accepted(self) -> bool:
-        """Every planned call ended with an accepted reply (015's evidence rule)."""
-        return all(self.status(call.call_id) == "accepted" for call in self._ledger.plan.calls)
+        """Every planned call ended with an accepted reply or was forgone (015's evidence rule)."""
+        return all(self.status(call.call_id) in ("accepted", "forgone") for call in self._ledger.plan.calls)
 
     @property
     def poisoned_call_ids(self) -> frozenset[CallId]:
@@ -129,6 +130,24 @@ class TurnMeter:
 
     def next_attempt(self, call_id: CallId) -> int:
         return 1 + sum(1 for each in self._ledger.attempts if each.call_id == call_id)
+
+    def forgo(self, call: PlannedCall) -> None:
+        """Record that a planned call was deliberately not made, so the turn's usage stays complete.
+
+        045: a decision call with nothing to offer is skipped. One ``not_sent`` attempt that used no
+        tokens is booked, so the call is not unmetered, and its status becomes ``forgone``. Refused
+        (``CallRefused("completed")``) for a call that already has an attempt or a status.
+        """
+        with self._idle():
+            if not isinstance(call, PlannedCall) or call not in self._ledger.plan.calls:
+                raise UnplannedCallError(f"not a planned call of this turn: {call!r}")
+            state = self._calls.setdefault(call.call_id, _CallState())
+            if (state.status is not None or state.poisoned
+                    or any(each.call_id == call.call_id for each in self._ledger.attempts)):
+                raise CallRefused("completed")
+            self._ledger = self._ledger.record(
+                CallAttempt(call.call_id, 1, TokenUsage(0, 0), Measurement.SYNTHETIC, "not_sent"))
+            state.status = "forgone"
 
     def extend(self, plan: TurnInferencePlan) -> None:
         with self._idle():
@@ -167,6 +186,8 @@ class TurnMeter:
             state = self._calls.setdefault(call.call_id, _CallState())
             if state.poisoned:
                 raise CallRefused("poisoned")
+            if state.status == "forgone":
+                raise CallRefused("completed")  # it was settled without a call
             previous = [a for a in self._ledger.attempts if a.call_id == call.call_id]
             if any(a.outcome == "completed" for a in previous):
                 raise CallRefused("completed")

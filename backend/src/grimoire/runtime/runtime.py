@@ -158,7 +158,7 @@ def _assign(meter: TurnMeter, briefs: tuple[NpcBrief, ...], director: DirectorBr
             if call.actor_id in picks:
                 raise GenerationError("duplicate_decision", f"two decision calls are planned about {call.actor_id}")
             outcome = decided.get(call.call_id)
-            ran = outcome is not None and (outcome.status == "skipped") == (meter.status(call.call_id) is None)
+            ran = outcome is not None and (outcome.status == "skipped") == (meter.status(call.call_id) == "forgone")
             if outcome is None or outcome.meter_token != meter.token or not ran:
                 raise GenerationError("decision_not_run", f"{call.call_id} must be decided before the turn runs")
             picks[call.actor_id] = outcome  # type: ignore[index]
@@ -306,6 +306,7 @@ class GenerationRuntime:
             messages = decision_messages(brief)
         except GenerationError as error:
             if error.reason in _NOTHING_TO_OFFER:
+                meter.forgo(call)  # nothing sent, nothing spent, and the turn's usage stays complete
                 return ended("skipped", reason=error.reason)
             raise
         cancel = cancel if cancel is not None else CancelToken()

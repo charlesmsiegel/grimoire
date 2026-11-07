@@ -66,6 +66,8 @@ The `approvals(label, attempt, envelope)` callback receives those bytes. Handles
 - If the precise attempt cannot be built or recorded, a fallback with unknown usage is booked, and the call ends without a reply.
 - If even the fallback fails, or an interrupt lands mid-booking, the call is **poisoned**: it stays write-ahead marked and every later `execute` of it is refused. A poisoned call may hide a sent attempt, so the summary's `complete` flag is unreliable for that turn; `meter.poisoned_call_ids` lists such calls, and `cost_evidence` excludes the turn.
 
+**A call can be forgone.** `meter.forgo(call)` settles a planned call that is deliberately not made (045: a decision with nothing to offer). It books one `not_sent` attempt that used no tokens, so the call is not unmetered and the summary stays `complete`, and the call's status becomes `forgone`. A call that already has an attempt or a status is refused (`CallRefused("completed")`), and so is any later `execute` of a forgone call.
+
 **`on_delta` text is provisional.** Deltas reach the consumer before the attempt ends, and may come from an attempt that later fails, truncates or is cancelled. A consumer may display them, but must commit nothing unless `CallResult.status == "accepted"`, and then only `CallResult.reply`.
 
 **Completion and acceptance.** A `finish_reason` counts only when it is a non-null, non-empty string. Real streams send `null` on every content chunk.
@@ -128,7 +130,7 @@ The route label `<id>@<host[:port]>/<model>` and `AttemptReport.peer_loopback` s
 
 **Evidence rule for cost comparisons (015):** use a turn only when `meter.cost_evidence` is true. That requires all of the following:
 - every count is provider-reported;
-- every planned call was accepted;
+- every planned call was accepted, or forgone;
 - no call is poisoned (`meter.poisoned_call_ids`);
 - every sent attempt reached a non-loopback peer.
 

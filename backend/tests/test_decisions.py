@@ -359,7 +359,12 @@ def test_d_nothing_to_decide_makes_no_call_and_the_turn_still_runs():
     outcome = harness.runtime.decide(meter, call, brief(alone), controls=CONTROLS)
     assert (outcome.status, outcome.pick, outcome.reason) == ("skipped", None, "nothing_to_decide")
     assert harness.runtime.run_turn(meter, [brief(alone)], controls=CONTROLS).status == "complete"
-    assert meter.summary().optional.attempts == 0 and len(harness.prompts()) == 1
+    assert len(harness.prompts()) == 1 and meter.status(call.call_id) == "forgone"
+    # The skip is booked as an attempt never sent, so the turn's usage is complete and costs nothing extra.
+    summary = meter.summary()
+    assert summary.complete and not summary.unmetered_call_ids
+    assert [(each.outcome, each.usage.input_tokens, each.usage.output_tokens)
+            for each in meter.ledger.attempts if each.call_id == call.call_id] == [("not_sent", 0, 0)]
     with pytest.raises(GenerationError) as error:
         harness.runtime.decide(meter, call, brief(alone), controls=CONTROLS)
     assert error.value.reason == "call_already_run"
@@ -494,7 +499,8 @@ def test_d_a_turn_with_a_decision_is_recorded_with_the_decision_billed_and_no_li
         recorded = recorded_turn(1, meter, turn)
         assert [line.call_id for line in recorded.lines] == [speech.call_id]
         billed = [each.call_id for each in recorded.ledger.attempts]
-        assert billed == ([call.call_id, speech.call_id] if choice is not None else [speech.call_id])
+        assert billed == [call.call_id, speech.call_id]  # a skip is booked as an attempt never sent
+        assert meter.summary().complete
 
 
 def test_d_the_narration_must_stand_on_the_ground_that_was_decided():
