@@ -165,7 +165,7 @@ Fields:
 
 - **Another additive 010 envelope amendment:** the scope-record address union adds `TurnRef`, `campaign:<id>#turn/<turn_id>`, at `campaigns/<id>/turns/<turn_id>.json`. `parse_scope_record` dispatches by the exact fragment; `parse_ref` does not return it. The payload schema is `grimoire.scene-turn/1`.
 - `classify` recognises exactly the new path, so recovery accepts journals that name it, and the replica treats it as an exact kind.
-- **`load()` skips `turns/`**, as it skips `accepted/`: one file is written per played turn. It is read through `campaign_turns(id)` (`CampaignRecords`, contained per file) and `read(TurnRef)`.
+- **`load()` skips `turns/`**, as it skips `accepted/`: one file is written per played turn. It is read through `campaign_turns(id)` (`CampaignRecords`, contained per file) and `read(TurnRef)`. `campaign_turns(id, *, skip=None, known=None)` (048) leaves out any file whose name `skip` accepts before reading it, and returns a record from `known` (by address) unchanged when the file's bytes hash to that record's etag, so an unchanged file is read and hashed but not parsed again.
 - 107's allocators treat every actor id a turn names as taken (`grimoire.scenestore.turn_instance_ids`, fail closed on an unreadable file).
 - 019 synchronizes turn files as a mutable campaign-local kind since 028's turn merge ([SYNC](SYNC.md#played-turns-035-028s-turn-merge)); a turn's lines pin revisions, so an unlistable `turns/` folder means the store's reference check cannot prove a revision unreferenced.
 

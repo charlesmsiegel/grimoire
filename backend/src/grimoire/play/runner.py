@@ -12,7 +12,8 @@ until the table keeps it. Nothing here writes world state (events, evidence, eff
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 
 from grimoire.adjudication import Outcome
@@ -56,8 +57,10 @@ from grimoire.scene import (
 from grimoire.scenestore import SceneLibrary, StoredTurn
 from grimoire.security import is_human
 from grimoire.store import LibraryStore, RecordNotFound
+from grimoire.tracing import Trace
 from grimoire.voice import ResolvedVoice, VoiceCatalog
 
+from .tracing import record_calls, span, traced
 
 class SceneRunner:
     """Plays chats of one open library through 027's runtime; every write is one turn file.
@@ -72,7 +75,9 @@ class SceneRunner:
     ``label_handle`` is the untrusted handle this library's authority issued it, which must be allowed to
     propose each labelling before it is written; without both nothing is labelled. ``adjudication`` is the
     library's 029 ``AdjudicationLibrary`` over the app's own adjudication key: it frames a confirmed labelling
-    (``confirm``) and records its decision (``decide``); without it nothing is framed.
+    (``confirm``) and records its decision (``decide``); without it nothing is framed. ``tracer``
+    receives one ``Trace`` per public call, timed with ``clock`` (048, docs/PERFORMANCE.md); without one
+    nothing is timed.
     """
 
     def __init__(self, store: LibraryStore, authority, handle, *, owner: str,
@@ -80,7 +85,9 @@ class SceneRunner:
                  secrets: Iterable[object] = (), voices: VoiceCatalog | None = None,
                  fence: RunFence | None = None, budget: Budget = DEFAULT_BUDGET,
                  labeller: LabelRuntime | None = None, label_handle=None,
-                 adjudication: AdjudicationLibrary | None = None) -> None:
+                 adjudication: AdjudicationLibrary | None = None,
+                 tracer: Callable[[Trace], None] | None = None,
+                 clock: Callable[[], float] = time.perf_counter) -> None:
         if not (authority.issued(handle) and getattr(handle, "trusted", False) is True
                 and is_human(getattr(handle, "principal", ""))):
             raise _refuse("bad_handle", "the runner writes with a trusted human handle this library's authority issued")
@@ -111,11 +118,14 @@ class SceneRunner:
         self.labeller = labeller
         self.label_handle = label_handle
         self.adjudication = adjudication
+        self.tracer = tracer
+        self.clock = clock
         self.scenes = SceneLibrary(store, handle, owner=owner)
         self.sovereignty = SovereigntyLedger(authority)
 
     # -- reading ----------------------------------------------------------------------------------
 
+    @traced("open")
     def open(self, chat: ChatRef) -> Scene:
         """The chat as it stands now; nothing is written."""
         return self._context(chat).scene
@@ -123,9 +133,11 @@ class SceneRunner:
     def _context(self, chat: ChatRef) -> _Context:
         if type(chat) is not ChatRef:
             raise _refuse("invalid_field", "chat must be a ChatRef")
-        view = self.store.load()
+        with span("read.library"):
+            view = self.store.load()
         try:
-            captured = chat_snapshot(view, chat)
+            with span("read.snapshot"):
+                captured = chat_snapshot(view, chat)
         except (RecordNotFound, ChatCodecError) as error:
             raise _refuse("no_chat", f"{chat} cannot be read ({type(error).__name__})") from None
         problems: list[tuple[str, str]] = [("snapshot", problem) for problem in captured.problems]
@@ -133,15 +145,23 @@ class SceneRunner:
         # reported by its exact ref; the story stays, and nothing similarly named is bound in its place.
         problems += [("broken_source", str(resolution.source.ref)) for resolution in captured.snapshot.sources()
                      if resolution.broken is not None]
-        turns = self.scenes.turns(chat)
+        with span("read.turns") as timed:
+            turns = self.scenes.turns(chat)
+            timed.count(files=turns.reads.files, decoded=turns.reads.decoded, reused=turns.reads.reused,
+                        turns=len(turns.turns))
         problems += [("turns", f"{path}:{code}") for path, code in turns.problems]
         problems += self.scenes.fork_problems(turns)  # 028: which turns, which devices, from which number
         if turns.conflicted:  # 019's keep-both on a turn: each device reads its own until it is resolved
             problems.append(("turn_conflict", ", ".join(turns.conflicted)))
-        history, history_problems = chat_history(self.store, chat, captured.chat, captured.snapshot)
+        with span("read.transcript") as timed:
+            history, history_problems = chat_history(self.store, chat, captured.chat, captured.snapshot)
+            timed.count(posts=0 if history is None else history.posts)
         problems += history_problems
-        controls = tuple(self.sovereignty.load(chat.campaign_id).controls)
-        party = PartyLibrary(self.store, self.handle, clock=_no_clock, new_id=_no_id).view(chat.campaign_id, as_of=NOW)
+        with span("read.control"):
+            controls = tuple(self.sovereignty.load(chat.campaign_id).controls)
+        with span("read.party"):
+            party = PartyLibrary(self.store, self.handle, clock=_no_clock, new_id=_no_id).view(chat.campaign_id,
+                                                                                               as_of=NOW)
         party_problems = tuple(f"{problem.path}:{problem.code}" for problem in party.problems)
         problems += [("party", problem) for problem in party_problems]
         candidates = []
@@ -153,7 +173,8 @@ class SceneRunner:
                 problems.append(("party_uncertain", str(actor)))  # fail closed: it may be stored away
             elif not party.state.reserved(actor):  # a reserved member is stored away: never on stage
                 candidates.append(actor)
-        staged, unstaged = _stage(party, chat, candidates)
+        with span("stage.cast"):
+            staged, unstaged = _stage(party, chat, candidates)
         problems += unstaged
         cast_t = staged.present if staged is not None else ()
         persona_binding = captured.chat.persona
@@ -165,15 +186,16 @@ class SceneRunner:
                 names[actor] = snap.entity(actor).name
             except Exception as error:  # 022's refusals: the actor stays nameless, and says why
                 problems.append(("unnamed_actor", f"{actor}:{type(error).__name__}"))
-        voices = imported_voices(snap, self.authored)
         scene = Scene(chat, turns, controls, cast_t, persona, names, (), staged, history)
-        for actor in scene.cast:
-            if actor == persona or _human_of(scene, actor) is not None:
-                continue  # a player character speaks through its player
-            try:
-                voices.resolve(actor)
-            except Exception as error:  # 014/022's refusals: it stays silent, and says why
-                problems.append(("no_voice", f"{actor}:{getattr(error, 'reason', type(error).__name__)}"))
+        with span("voices"):
+            voices = imported_voices(snap, self.authored)
+            for actor in scene.cast:
+                if actor == persona or _human_of(scene, actor) is not None:
+                    continue  # a player character speaks through its player
+                try:
+                    voices.resolve(actor)
+                except Exception as error:  # 014/022's refusals: it stays silent, and says why
+                    problems.append(("no_voice", f"{actor}:{getattr(error, 'reason', type(error).__name__)}"))
         if persona is not None and persona in scene.cast and scene.controller(persona) == DIRECTOR:
             problems.append(("persona_not_player", str(persona)))  # 003 must give it back to a player
         if scene.interrupted:
@@ -182,6 +204,7 @@ class SceneRunner:
 
     # -- control ----------------------------------------------------------------------------------
 
+    @traced("seat")
     def seat(self, chat: ChatRef, player: str) -> tuple[ControlAssignment, ...]:
         """Record control for the chat's actors that have none: the persona to ``player``, every other
         bound character to the director. A recorded controller is never changed here."""
@@ -201,6 +224,10 @@ class SceneRunner:
                 raise _refuse("not_seated", str(error)[:200]) from None
         return tuple(self.sovereignty.load(chat.campaign_id).controls)
 
+    def _write(self, *args, **kwargs) -> StoredTurn:
+        with span("write.turn"):
+            return self.scenes.write(*args, **kwargs)
+
     def _principal(self, scene: Scene, handle) -> str:
         """The authenticated principal behind ``handle``, if it plays a present character or owns the library."""
         if not (self.authority.issued(handle) and getattr(handle, "trusted", False) is True):
@@ -214,6 +241,7 @@ class SceneRunner:
 
     # -- turns ------------------------------------------------------------------------------------
 
+    @traced("begin")
     def begin(self, chat: ChatRef, by, *, opening: str | None = None) -> TurnRecord:
         """The opening turn (number 1), as a proposed take: a card's first greeting spoken by its character,
         or a scenario's first opening (or the chat's premise) narrated. Keep it with ``keep``.
@@ -244,7 +272,7 @@ class SceneRunner:
         line = self._opening(context, record, number, opening)
         take = Take(number, "proposed", "opening", scene.cast, lines=(line,), by=principal)
         record = record.with_take(take)
-        self.scenes.write(record, stored, unpaused=True)
+        self._write(record, stored, unpaused=True)
         return record
 
     def _opening(self, context: _Context, record: TurnRecord, take: int, chosen: str | None) -> SceneLine:
@@ -274,6 +302,7 @@ class SceneRunner:
             return SceneLine(line_id, None, NARRATOR, _macros(launch.premise, None, user), scene.players)
         raise _refuse("no_opening", "this chat has no greeting or opening to begin with")
 
+    @traced("post")
     def post(self, chat: ChatRef, by, text: str, *, mode: str = "auto") -> TurnRecord:
         """A player's line for their character, saved as a new turn before anything is generated.
 
@@ -336,9 +365,10 @@ class SceneRunner:
                 return last  # the same post retried: it is already saved
             raise _refuse("turn_open", "the last turn is still open: keep a take, or pass it")
         record = TurnRecord(chat, number, "post", post, device=device, follows=_follows(last))
-        self.scenes.write(record, None, after=scene.turns.last)
+        self._write(record, None, after=scene.turns.last)
         return record
 
+    @traced("generate")
     def generate(self, chat: ChatRef, by, *, speakers: Iterable[InstanceRef] | None = None,
                  director: bool = False) -> Take:
         """One new proposed take for the open turn (a turn with no post is opened when none is).
@@ -378,9 +408,10 @@ class SceneRunner:
         history = scene.records if pending is None else scene.records[:-1]
         heard_turns = (*history, record)
         try:
-            plan = plan_generation_turn(chat.campaign_id, plan_turn, present=[a.instance_id for a in scene.cast],
-                                        speakers=[a.instance_id for a, _ in chosen], controls=scene.controls,
-                                        director_reply=director, policy=self.policy)
+            with span("plan"):
+                plan = plan_generation_turn(chat.campaign_id, plan_turn, present=[a.instance_id for a in scene.cast],
+                                            speakers=[a.instance_id for a, _ in chosen], controls=scene.controls,
+                                            director_reply=director, policy=self.policy)
         except GenerationError as error:
             raise _refuse(error.reason, "the turn cannot be planned") from None
         if director and not any(call.stage is InferenceStage.DIRECTOR_GENERATION for call in plan.calls):
@@ -399,22 +430,27 @@ class SceneRunner:
         record = record.with_take(running)
         claimed = []  # the fence is claimed as the running take is published, never after: an older run
         # resuming between the two would otherwise cancel the reroll that superseded it
-        stored = self.scenes.write(record, stored, after=scene.turns.last if stored is None else None, unpaused=True,
+        stored = self._write(record, stored, after=scene.turns.last if stored is None else None, unpaused=True,
                                    on_commit=lambda: claimed.append(self.fence.claim(str(chat))))
         (token,) = claimed
         meter = TurnMeter(TurnUsageLedger(plan))
         silent = tuple(voice for actor, voice in self._voices(context) if actor not in {a for a, _ in chosen})
         try:
-            outcome = self.runtime.run_turn(meter, briefs, controls=scene.controls,
-                                            director=director_view[0] if director_view else None, token=token,
-                                            scene_voices=silent)
+            with span("provider", calls=len(plan.calls)):
+                try:
+                    outcome = self.runtime.run_turn(meter, briefs, controls=scene.controls,
+                                                    director=director_view[0] if director_view else None,
+                                                    token=token, scene_voices=silent)
+                finally:
+                    record_calls(meter)
         except GenerationError as error:
             outcome = None
             failure = error.reason
         else:
             failure = None
-        take = self._finished(record, running, plan, meter, outcome, failure, scene,
-                              director_view[1] if director_view else ())
+        with span("review"):
+            take = self._finished(record, running, plan, meter, outcome, failure, scene,
+                                  director_view[1] if director_view else ())
         return self._land(chat, stored, take, token)
 
     # -- generation helpers -----------------------------------------------------------------------
@@ -447,8 +483,10 @@ class SceneRunner:
         return chosen
 
     def _knowledge(self, chat: ChatRef):
-        ledger = EvidenceLibrary(self.store, self.handle, owner=self.owner).read(chat.campaign_id, requested_by=DIRECTOR)
-        return ledger, _latest(ledger.knowledge)
+        with span("read.knowledge"):
+            ledger = EvidenceLibrary(self.store, self.handle, owner=self.owner).read(chat.campaign_id,
+                                                                                     requested_by=DIRECTOR)
+            return ledger, _latest(ledger.knowledge)
 
     def _briefs(self, context: _Context, chosen, turns: Sequence[TurnRecord]) -> list:
         if not chosen:
@@ -458,23 +496,33 @@ class SceneRunner:
         _, bare = outcome_lines(self, turns, scene.names)  # an NPC hears a result where it saw the action
         briefs = []
         for actor, voice in chosen:
-            heard = heard_for(turns, actor, scene.names, before=scene.imported, outcomes=bare)
-            built = actor_context(context.view, chat, ledger, actor, as_of=as_of, budget=self.budget,
-                                  present=scene.cast, scene_text=render(heard))
-            knowledge = actor_knowledge(ledger.knowledge, actor, as_of=as_of)
-            view = snapshot_actor_view(snap.instance(actor), snap, knowledge)
-            briefs.append(npc_brief(view, voice, heard=heard, secrets=self.secrets, names=scene.names,
-                                    context=built.pack, snapshot=snap))
+            with span("brief.npc") as timed:
+                heard = heard_for(turns, actor, scene.names, before=scene.imported, outcomes=bare)
+                with span("pack") as packed:
+                    built = actor_context(context.view, chat, ledger, actor, as_of=as_of, budget=self.budget,
+                                          present=scene.cast, scene_text=render(heard))
+                    packed.count(items=len(built.pack.items), omitted=len(built.pack.omitted))
+                knowledge = actor_knowledge(ledger.knowledge, actor, as_of=as_of)
+                view = snapshot_actor_view(snap.instance(actor), snap, knowledge)
+                briefs.append(npc_brief(view, voice, heard=heard, secrets=self.secrets, names=scene.names,
+                                        context=built.pack, snapshot=snap))
+                timed.count(heard=len(heard))
         return briefs
 
     def _director(self, context: _Context, turns: Sequence[TurnRecord]):
+        with span("brief.director"):
+            return self._director_brief(context, turns)
+
+    def _director_brief(self, context: _Context, turns: Sequence[TurnRecord]):
         scene, chat = context.scene, context.scene.chat
         scenario = _scenario_text(context)
         if not scenario:
             raise _refuse("no_scenario", "a director reply needs a bound scenario or a premise")
         table = table_lines(turns, scene.names, before=scene.imported,
                             outcomes=outcome_lines(self, turns, scene.names)[0])
-        lore = chat_lore(context.view, chat, table_text=render(table), budget=self.budget).lore
+        with span("pack") as packed:
+            lore = chat_lore(context.view, chat, table_text=render(table), budget=self.budget).lore
+            packed.count(items=len(lore.items), omitted=len(lore.omitted))
         names = {actor.instance_id: name for actor, name in scene.names.items()}
         brief = director_brief(scenario, campaign_id=chat.campaign_id, present=[a.instance_id for a in scene.cast],
                                controls=scene.controls, names=names, heard=table, secrets=self.secrets, lore=lore,
@@ -531,7 +579,7 @@ class SceneRunner:
         published = next(t for t in stored.record.takes if t.take == take.take)  # the running take, as written
         for _ in range(WRITE_RETRIES):
             try:
-                self.scenes.write(stored.record.with_take(take), stored, landing=True, before_commit=fence)
+                self._write(stored.record.with_take(take), stored, landing=True, before_commit=fence)
                 return take
             except _Stale:  # a newer run of this chat started: keep the usage, drop the lines
                 take = replace(take, state="stale", lines=(), outcome="stale")
@@ -559,6 +607,7 @@ class SceneRunner:
 
     # -- labelling ---------------------------------------------------------------------------------
 
+    @traced("label")
     def label(self, chat: ChatRef, by) -> Label:
         """Propose 029 labels for the open turn's action: which offered facts bear on it, what is at stake.
 
@@ -570,6 +619,7 @@ class SceneRunner:
         """
         return label_action(self, chat, by)
 
+    @traced("confirm")
     def confirm(self, chat: ChatRef, by) -> Outcome | None:
         """Frame the open action exactly as its latest proposed labelling says (029), unedited.
 
@@ -580,6 +630,7 @@ class SceneRunner:
         """
         return confirm_action(self, chat, by)
 
+    @traced("decide")
     def decide(self, chat: ChatRef, by, result: str, *, basis: str = "adjudicated", cites=(),
                consequences=()) -> Outcome:
         """Decide the open turn's framed, uncertain action: the director (the library owner) adjudicates
@@ -587,12 +638,14 @@ class SceneRunner:
         the frame's factors and naming the stakes that come true. 029 checks every rule."""
         return decide_action(self, chat, by, result, basis=basis, cites=cites, consequences=consequences)
 
+    @traced("outcome")
     def outcome(self, chat: ChatRef) -> Outcome | None:
         """The recorded outcome of the open turn's framed action, if it was decided."""
         return outcome_of(self, self._context(chat).scene.pending)
 
     # -- the table's choices ------------------------------------------------------------------------
 
+    @traced("keep")
     def keep(self, chat: ChatRef, by, take: int, *, acknowledge_unscreened: bool = False) -> TurnRecord:
         """Keep one proposed take: its shown lines become the transcript, and the turn closes."""
         scene = self._context(chat).scene
@@ -619,9 +672,10 @@ class SceneRunner:
         if record.running is not None:  # a run still in flight loses: its take lands stale
             record = record.with_take(replace(record.running, state="superseded"))
         record = record.with_take(replace(found, state="kept", by=principal))
-        self.scenes.write(record, stored, unpaused=True)
+        self._write(record, stored, unpaused=True)
         return record
 
+    @traced("strike")
     def strike(self, chat: ChatRef, by, line_id: str) -> TurnRecord:
         """Strike one kept line from the transcript: no one hears it from now on."""
         scene = self._context(chat).scene
@@ -631,9 +685,10 @@ class SceneRunner:
         if take.state != "kept" or not line.shown:
             raise _refuse("not_kept", "only a shown line of a kept take can be struck")
         record = stored.record.with_take(_mark(take, {line_id}, "struck", principal))
-        self.scenes.write(record, stored)
+        self._write(record, stored)
         return record
 
+    @traced("pass_turn")
     def pass_turn(self, chat: ChatRef, by) -> TurnRecord:
         """Close the open turn with nothing kept, so play can go on."""
         scene = self._context(chat).scene
@@ -645,9 +700,10 @@ class SceneRunner:
         if record.running is not None:
             record = record.with_take(replace(record.running, state="superseded"))
         record = replace(record, passed_by=principal)
-        self.scenes.write(record, stored, unpaused=True)
+        self._write(record, stored, unpaused=True)
         return record
 
+    @traced("request")
     def request(self, chat: ChatRef, by, kind: str, targets: Iterable[str] = (), *,
                 direction: str | None = None) -> TurnRecord:
         """016's mid-session request: ``pause`` stops play; ``skip``, ``redirect`` and ``rephrase`` withdraw
@@ -676,7 +732,7 @@ class SceneRunner:
             if not decision.halt:
                 raise _refuse(decision.reason, "the pause was refused")
             record = replace(stored.record, paused=True, paused_by=principal)
-            self.scenes.write(record, stored, last=True)
+            self._write(record, stored, last=True)
             return record
         stored, _take, _line = _find_line(scene, targets[0])
         decision = decide_request(request, boundary, segments(stored.record))
@@ -693,9 +749,10 @@ class SceneRunner:
             if decision.direction:
                 changed = replace(changed, direction=decision.direction)
             record = record.with_take(changed)
-        self.scenes.write(record, stored)
+        self._write(record, stored)
         return record
 
+    @traced("resume")
     def resume(self, chat: ChatRef, by) -> TurnRecord:
         """Lift a pause: the player who paused lifts their own, the library's owner every one (so a pauser who has
         left the table never locks the chat). A pause on a turn a fork choice set aside is lifted the same way;
@@ -703,10 +760,12 @@ class SceneRunner:
         scene = self._context(chat).scene
         principal = self._principal(scene, by)
         _readable(scene)
-        after = self.scenes.resume(scene.turns, principal, owner=principal in self.authority.owners)
+        with span("write.turn"):
+            after = self.scenes.resume(scene.turns, principal, owner=principal in self.authority.owners)
         assert after.last is not None  # a pause needs a turn, and a set-aside one a chosen line
         return after.last.record
 
+    @traced("choose")
     def choose(self, chat: ChatRef, by, turn: str) -> Scene:
         """028: at a forked chat, the branch whose first turn is ``turn`` goes on; the others are set aside.
         Only the library's owner may choose (``play.forks``)."""
