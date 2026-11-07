@@ -14,9 +14,8 @@ Sprint: [live-inheritance-and-overrides](roadmap/sprints/live-inheritance-and-ov
 The two kinds of value inherit differently, on purpose.
 
 - **Fields** (name, description, sections, facets) come from 022's composition over a **pinned** `derivation.base`. A newer base revision never reaches a portrayal on its own. The inspector shows it as a source diff, and a reviewed rebase ([REBASE](REBASE.md), 042) re-pins.
-- **Art** attaches to an **entity**, across its revisions ([IMAGES](IMAGES.md)), so it inherits **live**. When the catalog Mara gets a new portrait, every portrayal and individual that has not overridden that slot shows it at once.
-
-Pinning art to a revision for pinned chats is not in this slice ([Limits](#limits)).
+- **Art** attaches to an **entity**, across its revisions ([IMAGES](IMAGES.md)), so it inherits **live**. When the catalog Mara gets a new portrait, every portrayal, and every individual that follows its source, shows it at once in any slot it has not overridden.
+- **A pinned chat's actor pins its pictures too** (the owner's call). New art reaches it only through the same reviewed rebase as card text ([Pinned art](#pinned-art)).
 
 ## Inspecting a portrayal: `grimoire.effective.inspect_definition(view, ref)`
 
@@ -100,16 +99,44 @@ Before this slice, a source placement could only `set` or mark a picture `unreso
   - A damaged portrayal layer is treated like a damaged campaign layer: every slot it would inherit, and any `adjust` or `inherit` in it, is `Unavailable(invalid_placement, "portrayal layer damaged")`.
   - An `adjust` that names a picture other than the one inherited is refused `stale_adjust` when written. If the base later changes its picture, the `adjust` goes `stale_adjust` and shows nothing.
 
+## Pinned art
+
+The store keeps no older placement, because a placement is rewritten in place. So a pinned actor keeps a **snapshot**: its instance file's `art_pin` holds every placement of its pinned base revision's lineage, as it read when the actor was pinned. Image objects and blobs are create-only, so the pictures a snapshot names stay the same pictures.
+
+- **Who writes it.**
+  - `ChatLibrary` writes the snapshot when it makes a new actor for a pinned binding. A pinned binding that reuses an actor with no snapshot for its own `base` (a following chat made it, or an older build did) writes one too, of the art the actor shows now, in the same commit and guarded by the same etag.
+  - A [reviewed rebase](REBASE.md#rebase-review-sourcerebasereviewactor-targetnone) writes the snapshot its review showed, never newer art.
+  - An actor that follows its head gets no snapshot. A rebase drops one only when no pinned chat binds the actor any more.
+  - One actor can be bound by pinned and following chats at once. It then shows pinned art in all of them, so no pinned chat's pictures move unreviewed. The following chats see new art with each reviewed rebase instead.
+  - `grimoire.imagestore.freeze_art(store, base)` takes the snapshot of one pinned revision.
+- **What it shows.**
+  - The instance's campaign layer, live, over the frozen layers. A campaign may still hide, set or re-crop any slot. A campaign `adjust` names the frozen picture the actor shows, not the entity's live one (`stale_adjust` otherwise).
+  - Only what a slot shows is kept: mode, role, image, crop, focus and expression, and an `unresolved` slot's note. Open provenance and unknown fields are left out, so a deep or large placement can never make the instance file unwritable.
+  - The lineage is the pinned revision's own `derivation` chain, which never changes, not the head's.
+- **It is data, and it fails closed.**
+  - The resolver re-checks every frozen placement as it checks a live one: its mode, and that a `set` names its own entity's source (`wrong_scope` otherwise).
+  - A snapshot that cannot be read inherits nothing (`art_pin_unreadable`). So does one whose entities are not the pinned revision's chain (`art_pin_mismatch`), so a namesake's picture is never shown.
+  - A frozen layer's `derived` flag is clamped, never trusted: a layer may hide, re-crop or reset only where its revision's chain lets it (every member but the root, and the root only while its own head is derived).
+  - A hand-edited snapshot can still show any picture of a source in the chain, in any slot of that source's layer. That is accepted: anyone who can edit the instance file can already set such a picture in its campaign layer.
+- **When it is ignored.**
+  - A snapshot taken for another `base` is ignored, and the actor's art is live again. This happens when a build older than this one rebased the actor and kept the field.
+  - A build older than this one keeps the field but ignores it, so it shows live art.
+- **Review.** `RebaseReview.art` lists each slot that would show something different: its `before` and `after` slot. When only the art changed, a review of the actor's own revision is allowed. It has no field rows and re-pins no chat. `up_to_date` now means that neither the revision nor the art changed. A pinned actor with no snapshot for its own `base` can also be reviewed at its own revision: the review has no rows and no art changes, and applying it pins the art the actor shows now.
+
 ## Answers to the sprint's open questions
 
-- **Which fields inherit live and which must snapshot?** Fields snapshot through the pinned base revision. Art is live per entity. Whether pinned chats should pin pictures too waits on the owner's call, after pin-by-default lands.
+- **Which fields inherit live and which must snapshot?** Fields snapshot through the pinned base revision. Art is live per entity, except for a pinned chat's actor, which keeps a snapshot until a reviewed rebase ([Pinned art](#pinned-art), the owner's call).
 - **What is the semantics of explicit null?** Null never clears, and blank text never clears. A clear is always typed: `clear_sections`, `clear_facets`, `clear_description`, or a placement `hide`. A `derivation: null` is not a derivation: 022 refuses it, it inherits no art, and the edit helpers refuse it `not_derived`.
 - **How are deprecated source values shown?** As `upstream: removed` on the field that still shows the pinned value. A clear of a value the head dropped says `removed` too.
 
 ## Limits
 
-- **Pinned art.** Art follows the entity, not a chat's pinned revision. A pinned chat therefore sees new base art at once.
-- **Sync.** [Device sync](SYNC.md#art) holds a derived portrayal's `adjust` and `inherit`, and a campaign `inherit`: each shows what the base chain shows, which sync does not compare yet. Every other derived placement syncs like any source placement.
+- **Pinned art.**
+  - An actor made before this build, or by a V1 or card import, has no snapshot. Its art stays live until a pinned chat binds it again or a review pins it (a review of no change is allowed for this).
+  - An actor shared by pinned and following chats shows pinned art in the following chats too.
+  - A lineage with more than 1024 placements is not pinned, so its art stays live.
+  - A review adopts all of the new art or none of it. A slot cannot keep its old picture while the rest move.
+- **Sync.** [Device sync](SYNC.md#art) holds a derived portrayal's `adjust` and `inherit`, a campaign `inherit`, and a campaign `adjust` on an actor with pinned art: each shows what the base chain (or the snapshot) shows, which sync does not compare yet. Every other derived placement syncs like any source placement.
 - **Instance fields.** An individual still has no field-level override of description, sections or card extras ([REBASE](REBASE.md) `not_overridable`). Keeping a campaign's own voice, greeting or system prompt when a card changes is not built.
 - **Not in this slice:**
   - versioned sheets, mechanics baselines and nested content (milestone 3);

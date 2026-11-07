@@ -180,7 +180,8 @@ Actor instances are written as `grimoire.record/1` with:
 - the 009 payload;
 - the preserved top-level `"schema": "grimoire.entity/0"`;
 - its `source` and `derived_from` set to the binding ref (pinned by default; unpinned only with `follow=True`);
-- `base` / `base_etag` set to the resolved revision.
+- `base` / `base_etag` set to the resolved revision;
+- for a pinned binding, `art_pin`: the pictures that revision shows now, which the actor keeps until a reviewed rebase ([INHERITANCE](INHERITANCE.md#pinned-art)). A pinned binding that reuses an actor with no `art_pin` for its own `base` rewrites that actor's file with one, guarded by the etag the reuse checked.
 
 ## Boundaries and deferrals
 

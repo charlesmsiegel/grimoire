@@ -71,6 +71,7 @@ The rebased instance must compose over the upstream (009 `compose_instance`), an
 
   `history.problems` lists files that could not be read for the list. It is reported, never a refusal, since the rebase writes none of them.
   A review is director-level: it names evidence ids whoever observed them, so it is for the campaign's owner and never goes into a character's prompt.
+- `art` (046): every slot whose picture the rebase changes, with what it shows now (`before`) and after (`after`). A pinned actor's [pinned art](INHERITANCE.md#pinned-art) moves only with the review. When only the art changed, a review of the ancestor itself is allowed: it has no rows and re-pins no chat.
 - `history_review`: upstream changes the description, a section or an uncomposed payload key, and the actor has history. Established events may contradict the new authored text, so a human reads both. This is a notice listing ids, not a contradiction check.
 
 **Refusals** (`RebaseError.reason`):
@@ -84,11 +85,11 @@ The rebased instance must compose over the upstream (009 `compose_instance`), an
 | `missing_ancestor` | the ancestor does not resolve |
 | `ancestor_edited` | the ancestor's bytes no longer match `base_etag` |
 | `other_entity` | the target is another entity: a namesake or any other definition is never a rebase target |
-| `missing_target`, `up_to_date` | the target does not resolve, or is the ancestor |
+| `missing_target`, `up_to_date` | the target does not resolve, or it is the ancestor and the actor's art would not change either |
 | `follows_head` | an instance that follows its head, or one a chat binds following the head, and a target that is not the head (a following chat would compose the result over the head) |
 | `chats_unreadable` | a chat file of the campaign cannot be read or interpreted, so its bindings cannot all be found |
 | `binding_disagrees` | the campaign's chats pin the actor to different revisions; rebind or detach one first |
-| `binding_limit` | a chat to re-pin already holds 107's maximum number of bindings |
+| `binding_limit` | a chat to re-pin already holds 107's maximum number of bindings (an art-only review re-pins none) |
 | `nature_changed` | an individual became a template or back: a different kind of thing, not a field change |
 
 Composition refusals of either side (`PortrayalError`) propagate.
@@ -101,6 +102,7 @@ The returned `RebaseChange` writes:
 - **the instance**, guarded by CAS on its reviewed etag.
   - A pinned `source` is re-pinned to the target; a following source stays unpinned. `derived_from` is re-pinned likewise if it named a pinned revision of the entity.
   - `base` becomes the target and `base_etag` the target's etag.
+  - `art_pin` becomes the snapshot the review showed, or is dropped once no pinned chat binds the actor (046). An actor that pinned and following chats share stays pinned.
   - Every other envelope field, the payload's unknown keys, state and individuality are kept.
 - **each chat with an active pinned binding of the actor.** The binding is tombstoned and a new pinned binding of the target, for the same actor, is added. The roster is unchanged.
 

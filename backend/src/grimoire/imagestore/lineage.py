@@ -44,7 +44,24 @@ def lineage(entity: SourceRef, definition: Callable[[SourceRef], StoredDefinitio
             view: Callable[[], LibraryView]) -> Lineage:
     """The lineage of an unpinned ``entity`` whose head ``definition`` reads (the caller has checked it
     resolves). ``view`` loads the library once, and only for a derived head."""
-    found = definition(entity)
+    return _lineage_of(entity, definition(entity), definition, view)
+
+
+def pinned_lineage(base: SourceRef, definition: Callable[[SourceRef], StoredDefinition | str],
+                   view: Callable[[], LibraryView]) -> Lineage:
+    """The lineage of one pinned revision ``base``: its own ``derivation`` chain, which never changes,
+    instead of its entity's head's. A pinned chat's actor pins its art over this chain (046), so a base
+    later re-parented by a new revision keeps the pictures the chat began with until a reviewed rebase.
+    A revision that does not resolve inherits nothing, with the reason as a problem."""
+    found = definition(base)
+    if not isinstance(found, StoredDefinition):
+        return Lineage((base.unpinned(),), (False,), (Problem(str(base), str(found), "its art is not inherited"),))
+    return _lineage_of(base.unpinned(), found, definition, view)
+
+
+def _lineage_of(entity: SourceRef, found: StoredDefinition | str,
+                definition: Callable[[SourceRef], StoredDefinition | str],
+                view: Callable[[], LibraryView]) -> Lineage:
     if not isinstance(found, StoredDefinition) or not is_derived(found.envelope):
         return Lineage((entity,), (False,))
     library = view()
@@ -68,4 +85,4 @@ def _head_is_derived(entity: SourceRef, definition: Callable[[SourceRef], Stored
     return isinstance(found, StoredDefinition) and is_derived(found.envelope)
 
 
-__all__ = ["Lineage", "is_derived", "lineage"]
+__all__ = ["Lineage", "is_derived", "lineage", "pinned_lineage"]

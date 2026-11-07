@@ -182,6 +182,9 @@ def art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes], blobs:
     if head is None:
         return done(f"{entity} has no head revision on the origin")
     identical.update((instance, manifest, head))
+    if mode == "adjust" and _has_art_pin(instance_data):
+        return done(f"{subject}'s adjust re-crops its pinned art, which sync does not compare yet "
+                    "(046 later): the receiver may show other pinned pictures there")
     hold = art(image)
     if hold is None and mode == "adjust":
         inherited_data = origin.get(inherited)
@@ -196,6 +199,16 @@ def art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes], blobs:
         identical.add(inherited)
         hold = art(base_image)
     return done(hold)
+
+
+def _has_art_pin(data: bytes) -> bool:
+    """Whether an instance file carries 046 pinned art (``art_pin``), read or not: either way the
+    picture an adjust names may be a frozen one, not the entity's live placement."""
+    try:
+        document = parse_strict(data)
+    except JsonError:
+        return True
+    return not isinstance(document, Mapping) or "art_pin" in document
 
 
 def _image_refusal(data: bytes, blob: str, blobs: Mapping[str, int]) -> str | None:
