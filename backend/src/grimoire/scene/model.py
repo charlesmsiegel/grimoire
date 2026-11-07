@@ -31,7 +31,7 @@ POST_KINDS = ("speech", "action")
 #: 027's call outcomes, and ``planned`` for a call of a running take that has not ended.
 CALL_STATES = ("planned", "accepted", "rejected", "incomplete", "failed", "cancelled", "refused", "not_issued")
 TURN_OUTCOMES = ("complete", "halted", "cancelled", "stale")
-#: A labelling of a turn's action: ``running`` (written before its call, so a crash leaves usage on record),
+#: A labelling of a turn's action: ``running`` (written before its call, so a crash leaves the planned call on record),
 #: ``proposed`` (labels to confirm), ``refused`` (the call or its reply gave no labels), ``superseded`` (a running
 #: or proposed labelling a newer one replaced) and ``framed`` (recorded as the action's 029 frame).
 LABEL_STATES = ("running", "proposed", "refused", "superseded", "framed")

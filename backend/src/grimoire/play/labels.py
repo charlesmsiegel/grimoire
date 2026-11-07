@@ -4,7 +4,7 @@ proposed 029 labels and written on the action's turn. Nothing here frames, decid
 Two handles, by the requester's decision in the Wave 6 audit. The labeller's call runs on its own untrusted
 handle (``LabelRuntime``), and so does the proposal: before a labelling that holds anything read from the
 reply is written, the runner's ``label_handle`` (untrusted, issued by the library's authority) must be allowed
-to ``propose`` that turn's exact bytes. The owner's handle then writes the turn file, as it writes every turn
+to ``propose`` that turn's canonical payload. The owner's handle then writes the turn file, as it writes every turn
 (TOOL_AUTHORITY's narrow 035 exception: it never acts on model text). A labelling with nothing read from a
 reply (running, refused) is the runner's own record and needs no proposal.
 """
@@ -109,7 +109,7 @@ def label_action(runner, chat: ChatRef, by) -> Label:
 
 
 def _proposed(runner, record: TurnRecord) -> bool:
-    """Whether the label handle may propose ``record``'s exact bytes at its address."""
+    """Whether the label handle may propose ``record``'s canonical payload at its address."""
     address = "/".join(address_parts(record.ref))
     payload = json.dumps(turn_to_payload(record), sort_keys=True, separators=(",", ":")).encode("utf-8")
     return runner.label_handle.authorize(Permission.PROPOSE, address, payload).allowed

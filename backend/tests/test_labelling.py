@@ -153,3 +153,17 @@ def test_a_label_reason_is_bounded_text():
     with pytest.raises(SceneRefused):
         Label(1, "refused", 1, reason="x" * 201)
     assert json.dumps(Label(1, "refused", 1, reason="unknown_fact").reason) == '"unknown_fact"'
+
+
+def test_a_reply_that_029_could_not_record_is_refused_not_raised():
+    with pytest.raises(LabelRefused) as error:
+        parse_labels({"stakes": ["\ud800"]}, OFFERED)  # a lone surrogate could never be stored
+    assert error.value.reason == "invalid_stake"
+    long = Fact("f1", "A fact.", 0, "x" * 600)  # facts() never offers it; parse refuses it anyway
+    with pytest.raises(LabelRefused):
+        parse_labels({"factors": [{"fact": "f1", "bearing": "hinders"}]}, (long,))
+
+
+def test_a_fact_whose_source_029_could_not_record_is_never_offered():
+    long = SourceRef("card:" + "a" * 120, "lorebook", "b" * 128, "r" * 128)
+    assert facts([item("lore", "A fact.", source=long, name="c" * 128, audience="common")]) == ()

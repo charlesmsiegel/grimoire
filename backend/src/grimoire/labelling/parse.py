@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from grimoire.adjudication import BEARINGS, MAX_FACTORS, MAX_STAKES, Factor, Stake
+from grimoire.adjudication import BEARINGS, MAX_FACTORS, MAX_STAKES, AdjudicationError, Factor, Stake
 
 from .facts import MAX_STAKE_CHARS, Fact
 
@@ -55,13 +55,19 @@ def parse_labels(decoded: object, offered: Sequence[Fact]) -> tuple[tuple[Factor
         if fact_id in factors:
             raise LabelRefused("repeated_fact", "a fact is cited once")
         fact = by_id[fact_id]
-        factors[fact_id] = Factor(fact_id, bearing, fact.text, fact.established, fact.source)
+        try:
+            factors[fact_id] = Factor(fact_id, bearing, fact.text, fact.established, fact.source)
+        except AdjudicationError:  # facts() offers only what 029 records; refuse rather than escape regardless
+            raise LabelRefused("unknown_fact", "a factor cites a fact 029 cannot record") from None
     stakes: list[Stake] = []
     for entry in raw_stakes:
         text = entry.strip() if type(entry) is str else None
         if not text or len(text) > MAX_STAKE_CHARS:
             raise LabelRefused("invalid_stake", f"a stake is nonblank text of at most {MAX_STAKE_CHARS} characters")
-        stakes.append(Stake(f"s{len(stakes) + 1}", text))
+        try:
+            stakes.append(Stake(f"s{len(stakes) + 1}", text))
+        except AdjudicationError:  # e.g. a lone surrogate: text that could never be stored
+            raise LabelRefused("invalid_stake", "a stake is storable text") from None
     return tuple(factors[key] for key in sorted(factors)), tuple(stakes)
 
 

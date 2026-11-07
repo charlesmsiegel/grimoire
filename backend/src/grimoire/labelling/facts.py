@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 from grimoire.adjudication import MAX_FACTORS, MAX_STAKES, PROSE_MAX
 from grimoire.context import PackedItem
+from grimoire.core.identity import TEXT_MAX
 
 #: Pack items that state a fact of the fiction. The identity line only names the actor.
 _FACT_KINDS = ("description", "section", "perception", "proposition", "lore")
@@ -67,7 +68,7 @@ def facts(items: Iterable[PackedItem]) -> tuple[Fact, ...]:
             continue  # an actor's pack holds no director lore; never offer any
         source = _source(item)
         text = item.line.strip()
-        if source is None or not text or len(text) > PROSE_MAX:
+        if source is None or len(source) > TEXT_MAX or not text or len(text) > PROSE_MAX:  # what 029 records
             continue
         sequence = item.sequence if type(item.sequence) is int and item.sequence > 0 else 0
         found.append(Fact(f"f{len(found) + 1}", text, sequence, source))
