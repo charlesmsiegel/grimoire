@@ -473,7 +473,7 @@ class LibraryStore:
             raise StoreError("a read-only store cannot recover")
         with self.lock:  # waits for this process's commits; it would clean their staging
             try:
-                report = RecoveryReport.of(engine.recover(self._access))
+                report = RecoveryReport.of(engine.recover(self._access, replica.removal_blocker))
             except OSError as error:
                 raise RecoveryBlocked(f"recovery could not finish: {error}") from error
             finally:

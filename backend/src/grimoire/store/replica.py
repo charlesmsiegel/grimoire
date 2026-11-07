@@ -7,7 +7,7 @@ store's own ``put`` would re-render it and rewrite ``previous``. Everything here
 from __future__ import annotations
 
 import stat
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
@@ -466,6 +466,24 @@ def _sole_revision(found: CanonicalScan, ref: SourceRef, ignore: frozenset[str] 
     return revisions == {ref.revision}
 
 
+def removal_blocker(access: Access, removed: Sequence[Parts]) -> str | None:
+    """Why the revisions among ``removed`` can no longer go, judged over the library as it is now (028
+    recovery): what the commit checked under its lock (``check_unreferenced``, the records the same
+    commit removes ignored), read again, since a record written while the app was down may pin one.
+    ``None`` when nothing does."""
+    ignore = frozenset("/".join(parts) for parts in removed)
+    revisions = [hit[1] for hit in map(classify, removed) if hit is not None and hit[0] == "definition"]
+    if not revisions:
+        return None
+    found = scan(access)
+    for ref in revisions:
+        try:
+            check_unreferenced(access, ref, ignore=ignore, found=found)  # type: ignore[arg-type]
+        except RevisionReferenced as error:
+            return str(error)
+    return None
+
+
 def pinned_by(parts: Parts, data: bytes) -> frozenset[SourceRef]:
     """Every pinned revision the record at ``parts`` can mean: exactly what ``check_unreferenced``
     counts as a reference, read from one record (sync's dependency rule, 019)."""
@@ -651,7 +669,7 @@ def instance_derivation_of(data: bytes) -> tuple[SourceRef | None, str | None]:
     return instance_derivation(document.get("derived_from"), document.get("base"))
 
 
-__all__ = ["ASSET_RECORD_KINDS", "CanonicalScan", "INSTANCE_ID_CONFLICT", "check_unreferenced", "definition_is_derived",
+__all__ = ["ASSET_RECORD_KINDS", "CanonicalScan", "INSTANCE_ID_CONFLICT", "check_unreferenced", "removal_blocker", "definition_is_derived",
            "image_blob",
            "instance_derivation", "instance_derivation_of", "instances_named", "parse_exact", "pinned_by",
            "placement_target", "previous_of", "scan"]

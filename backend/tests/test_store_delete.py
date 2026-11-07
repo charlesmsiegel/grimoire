@@ -19,8 +19,11 @@ from grimoire.testing import (
 )
 from grimoire.testing.fileops import snapshot
 
+from grimoire.core.identity import InstanceRef
+
 from store_helpers import (
-    HARBOR, OWNER, WREN, WREN_A, WREN_B, WREN_R2, drop_empty_dirs, harbor_manifest, instance, owner_handle, seed, wren,
+    HARBOR, OWNER, WREN, WREN_A, WREN_B, WREN_R1, WREN_R2, drop_empty_dirs, harbor_manifest, instance, owner_handle,
+    seed, wren,
 )
 
 ALL = ("sources", "campaigns", "kept")
@@ -472,3 +475,47 @@ def test_a_copy_edited_while_its_batch_settles_cancels_the_batchs_removals(tmp_p
     report.assert_ok()
     assert any(run.recovered.get(f"lib/{WREN_B_PATH}") == human_b and run.recovered.get(f"lib/{R1_PATH}")
                == template[R1_PATH] for run in report.runs[1:])
+
+
+WREN_C_PATH = "campaigns/c1/instances/character/wren-c.json"
+
+
+def test_a_record_added_while_the_app_is_down_that_needs_a_removal_cancels_the_batch(tmp_path):
+    """Recovery judges the batch's removals again over the library as it now is, as the commit did
+    under its lock: a new instance pinning r1, written while the app is down after a crash anywhere
+    in a whole-source deletion, keeps r1, and so all of the batch (what was removed comes back from
+    its hold). Crashed at every step, and recovery crashed in turn after each of its own."""
+    paths = (R1_PATH, MANIFEST_PATH, WREN_A_PATH, WREN_B_PATH)
+    probe, template = _scenario(tmp_path / "setup", paths, ())
+    shutil.copytree(tmp_path / "setup" / "lib", tmp_path / "other")
+    with LibraryStore.open(tmp_path / "other") as other:  # the new record's canonical bytes
+        txn = other.transaction()
+        txn.put(instance(InstanceRef("c1", "character", "wren-c"), WREN_R1, hp=5), None)
+        txn.commit(owner_handle())
+        added = (tmp_path / "other" / WREN_C_PATH).read_bytes()
+    assert b"wren@r1" in added
+
+    def add(ops, root):
+        if not (root / "lib" / WREN_C_PATH).exists():
+            ops.write_bytes(root / "lib" / WREN_C_PATH, added)
+
+    def all_kept(outcome):
+        if not outcome.meddled_paths:
+            return None  # the baseline: nothing added
+        if outcome.recovered.get(f"lib/{WREN_C_PATH}") != added:
+            return "the added record is gone"
+        if all(outcome.after_action.get(f"lib/{path}") is None for path in paths):
+            return None  # the whole batch went before the crash: the record is added after it
+        lost = sorted(path for path in paths if outcome.recovered.get(f"lib/{path}") != template[path])
+        if lost:
+            return f"part of the batch is gone though the added record needs it: {lost}"
+        removed = [path for path in paths if outcome.after_action.get(f"lib/{path}") is None]
+        kept = [value for key, value in outcome.recovered.items() if key.startswith("lib/.conflicts/")]
+        return None if all(template[path] in kept for path in removed) else "the hold of a removed record is gone"
+
+    scenario = replace(probe, meddle=add, invariants=(
+        preserves_meddle(), idempotent_recovery(), Invariant("all_kept", all_kept)))
+    report = explore_crashes(scenario, tmp_path / "crashed", torn=False, recovery_crashes=True)
+    report.assert_ok()
+    assert sum(run.recovered.get(f"lib/{R1_PATH}") == template[R1_PATH]
+               and run.recovered.get(f"lib/{WREN_C_PATH}") == added for run in report.runs[1:]) >= 3

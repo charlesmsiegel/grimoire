@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import stat
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -371,13 +371,16 @@ def _restore(access: Access, entry: Entry, journal: Journal, settlement: Settlem
         access.ops.remove(temp)
 
 
-def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlement:
+def settle(access: Access, journal: Journal, *, live: bool = False,
+           needed: Callable[[Access, list[Parts]], str | None] | None = None) -> Settlement:
     """Finish or preserve a committed journal, then remove it and any leftover staging.
 
     ``live`` is the committing process itself, right after the commit point: none
     of its staging can have been published yet, so a missing staged file is
     incomplete unless the target already holds the new bytes. In recovery a
     missing temp normally means "already published", and the disk is kept.
+    ``needed`` (recovery, 028) says why the commit's removals can no longer go, judged
+    over the library as it is now (``replica.removal_blocker``), or ``None``.
     """
     settlement = Settlement()
     access.check_staging()  # point-in-time checks: repeat them before every phase that mutates
@@ -452,6 +455,12 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
         # one aside and died (its temp gone, its target edited): only the disk still says so, so every
         # other entry must hold exactly its planned bytes, whichever run settled it.
         if any(entry.kind != "remove" and access.etag_of(entry.target) != entry.new for entry in journal.entries):
+            return False
+        # The commit judged its removals under its lock; a record written while the app was down (a
+        # new instance pinning a revision the batch deletes) was not there then. Read from the disk
+        # alone, so a recovery that crashes and runs again decides the same.
+        if needed is not None and needed(access, [entry.target for entry in journal.entries
+                                                  if entry.kind == "remove"]) is not None:
             return False
         # the bytes each landed hold keeps, by the folder it keeps them in (one per record)
         held = {(entry.target[:-1], entry.new) for entry in journal.entries
@@ -546,8 +555,10 @@ def clean_staging(access: Access) -> None:
             access.ops.remove(access.path((TXN, name)))
 
 
-def recover(access: Access) -> Settlement:
-    """Validate the root, the journal and every path it names before changing anything."""
+def recover(access: Access, needed: Callable[[Access, list[Parts]], str | None] | None = None) -> Settlement:
+    """Validate the root, the journal and every path it names before changing anything.
+
+    ``needed`` judges a commit's removals again over the library as it now is (``settle``)."""
     try:
         access.guard.check_session()  # even with no journal: cleanup must not follow a swapped root
         access.check_staging()
@@ -569,6 +580,6 @@ def recover(access: Access) -> Settlement:
     except (StoreError, ValueError) as error:  # LibraryPathError is a ValueError
         raise RecoveryFailed(f"refusing to recover through an unsafe path: {error}") from error
     try:
-        return settle(access, journal)
+        return settle(access, journal, needed=needed)
     except (StoreError, ValueError) as error:  # a path became unsafe while recovering
         raise RecoveryFailed(f"refusing to recover through an unsafe path: {error}") from error
