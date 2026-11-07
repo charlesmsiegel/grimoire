@@ -53,6 +53,13 @@ LEDGER_FOLDERS = frozenset({"accepted", "wrapups", "holdings", "relations"})
 _DETAIL = 300
 
 
+def unit_folders(relations: bool) -> frozenset[str]:
+    """The folders of a campaign its ledger unit is read from: ``relations`` only where the campaign's
+    relations are in its unit (``relations_in_unit``). Every check of a unit's folders (by name, listing
+    them again, or finding one that cannot be listed) reads this one rule."""
+    return LEDGER_FOLDERS if relations else LEDGER_FOLDERS - {"relations"}
+
+
 def base_name(peer: str, path: str) -> str:
     """The base cache entry of ``path`` on a device, for its pair with ``peer``: keyed by a digest of the
     path, so its length never depends on the path's (``layout.SYNC_BASES``). Its bytes are used only where
@@ -461,7 +468,7 @@ def relations_in_unit(plan, campaign: str) -> bool:  # type: ignore[no-untyped-d
 def of_unit(path: str, campaign: str, relations: bool) -> bool:
     """Whether ``path`` is a file of the campaign's ledger unit, by name (its kind, in the campaign's folder)."""
     parts = path.split("/")
-    if not (len(parts) > 3 and parts[0] == "campaigns" and parts[1] == campaign and parts[2] in LEDGER_FOLDERS):
+    if not (len(parts) > 3 and parts[0] == "campaigns" and parts[1] == campaign and parts[2] in unit_folders(relations)):
         return False
     kind = syncable(path)
     return kind in LEDGER_KINDS or (relations and kind == "relation")
@@ -484,9 +491,7 @@ def unit_listing(store, campaign: str, relations: bool) -> dict[str, str | None]
     folder of the unit that is a link or cannot be listed is ``None`` under its own name: never followed,
     it hides what it holds, so the unit is never the one the plan read (``stale_listing``)."""
     found: dict[str, str | None] = {}
-    for folder in sorted(LEDGER_FOLDERS):
-        if folder == "relations" and not relations:
-            continue
+    for folder in sorted(unit_folders(relations)):
         root = store.root / "campaigns" / campaign / folder
         if root.is_symlink() or root.exists():
             _list_folder(store.root, root, campaign, relations, found)
@@ -561,10 +566,11 @@ def _same(plan, path: str) -> bool:  # type: ignore[no-untyped-def]
 
 def unlistable_folders(plan) -> list[tuple[str, ReviewItem]]:  # type: ignore[no-untyped-def]
     """Every folder a ledger unit is read from that cannot be listed, on either device, with its campaign:
-    a ledger folder of a campaign (or one below it), the campaign folder, or ``campaigns`` or the root
-    (campaign ``"*"``: they hide every campaign's ledger); and a look-alike spelling of a ledger folder,
-    which hides what it holds. The one list ``_unlistable`` and ``plan_units`` both read, so no route
-    drops a folder the other reports."""
+    a folder of a campaign's unit (``unit_folders``: ``relations`` only where the campaign's relations
+    are in its unit) or one below it, the campaign folder, or ``campaigns`` or the root (campaign ``"*"``:
+    they hide every campaign's ledger); and a look-alike spelling of a unit folder, which hides what it
+    holds. The one list ``_unlistable`` and ``plan_units`` both read, so no route drops a folder the other
+    reports, and none stops a merge for a folder outside its unit."""
     found = []
     for device in plan.devices:
         for path in plan.scans[device].blocked:
@@ -573,7 +579,8 @@ def unlistable_folders(plan) -> list[tuple[str, ReviewItem]]:  # type: ignore[no
                 continue  # a file: ``unreadable``, with its unit
             if path in ("", "campaigns"):
                 campaign = "*"
-            elif parts[0] == "campaigns" and len(parts) >= 2 and (len(parts) == 2 or parts[2].casefold() in LEDGER_FOLDERS):
+            elif parts[0] == "campaigns" and len(parts) >= 2 and (
+                    len(parts) == 2 or parts[2].casefold() in unit_folders(relations_in_unit(plan, parts[1]))):
                 campaign = parts[1]
             else:
                 continue
@@ -581,8 +588,8 @@ def unlistable_folders(plan) -> list[tuple[str, ReviewItem]]:  # type: ignore[no
                                                f"{device}: {plan.scans[device].blocked_reason(path)}"[:_DETAIL])))
         for path in plan.scans[device].skipped:  # a look-alike spelling of a ledger folder hides what it holds
             parts = path.split("/")
-            if (parts[0] == "campaigns" and len(parts) >= 3 and parts[2].casefold() in LEDGER_FOLDERS
-                    and parts[2] not in LEDGER_FOLDERS):
+            if (parts[0] == "campaigns" and len(parts) >= 3 and parts[2] not in LEDGER_FOLDERS
+                    and parts[2].casefold() in unit_folders(relations_in_unit(plan, parts[1]))):
                 found.append((parts[1], ReviewItem("unlistable", "/".join(parts[:3]),
                                                    f"{device}: another spelling of a ledger folder")))
     return found
@@ -597,16 +604,12 @@ def _folder_reviews(plan, groups: Mapping[str, object]) -> dict[str, tuple[str, 
     """Reviews hung on unlistable folders themselves, by folder, with their campaign, where no file of a
     unit can carry one: a campaign with no ledger file on either device (nor in either archive) whose ledger
     folder, or campaign folder, cannot be listed; and ``campaigns`` or the root while no campaign has a
-    unit. A ``relations`` folder counts only where the campaign's relations are its ledger's."""
+    unit."""
     folders = unlistable_folders(plan)
     found: dict[str, tuple[str, Review]] = {}
     for campaign, item in folders:
         if campaign in groups or (campaign == "*" and groups):
             continue  # that unit's review (``plan_unit``), or every unit's, already names it
-        parts = item.subject.split("/")
-        if (campaign != "*" and len(parts) >= 3 and parts[2].casefold() == "relations"
-                and not relations_in_unit(plan, campaign)):
-            continue  # an ordinary relations folder: 019 decides what it can see of it
         found[item.subject] = (campaign, Review(tuple(_unlistable(plan, campaign, folders))))
     return found
 
@@ -686,6 +689,7 @@ __all__ = [
     "step_listings",
     "unit_base",
     "unit_bases",
+    "unit_folders",
     "unit_listing",
     "unit_of",
 ]

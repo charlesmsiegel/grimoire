@@ -365,3 +365,52 @@ def test_a_blocked_ledger_folder_is_a_review_though_the_campaign_has_no_ledger_f
     finally:
         desktop.close()
         phone.close()
+
+
+@pytest.mark.parametrize("how", ["symlink", "Relations"])
+def test_an_unlistable_relations_folder_outside_the_ledger_never_stops_a_holdings_merge(tmp_path, how):
+    """No accepted event on either device: the campaign's relations are ordinary records, outside its unit,
+    so a relations folder the phone cannot list (a link, or a look-alike spelling) is no reason to stop the
+    holdings merge, as an unreadable relation file outside a unit is none."""
+    made = _devices(tmp_path / "relations")
+    try:
+        phone = made[PHONE].store
+        folder = phone.root / "campaigns" / C / "relations"
+        if how == "symlink":
+            shutil.move(str(folder), str(tmp_path / "elsewhere"))
+            try:
+                folder.symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+            except (OSError, NotImplementedError):
+                pytest.skip("this system cannot make a directory link")
+        else:
+            (folder.parent / "Relations").mkdir()
+            if (folder.parent / "Relations").samefile(folder):
+                pytest.skip("this file system does not tell the spellings apart")
+        made[DESKTOP].hand_op(Operation("hand-1", (Line.move(TAM, WREN, COIN, 1),)))  # a holdings-only change
+        report = sync(made[DESKTOP].store, phone, handles())
+        assert not [conflict for conflict in report.conflicts if conflict.code == "merge_review"], report.conflicts
+        holdings = {name: data for name, data in ledger_files(made[DESKTOP].store).items() if "/holdings/" in name}
+        assert holdings and holdings == {name: data for name, data in ledger_files(phone).items() if "/holdings/" in name}
+    finally:
+        _close(made)
+
+
+def test_an_unlistable_relations_folder_stops_the_merge_once_the_relations_are_the_ledgers(tmp_path):
+    """The same linked folder, once the campaign has an accepted event: its relations are in the unit, and
+    what the folder holds is unknown, so the merge stops for review (``unlistable``) and nothing moves."""
+    made = _devices(tmp_path / "relations")
+    try:
+        phone = made[PHONE].store
+        folder = phone.root / "campaigns" / C / "relations"
+        shutil.move(str(folder), str(tmp_path / "elsewhere"))
+        try:
+            folder.symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("this system cannot make a directory link")
+        made[DESKTOP].accept(pay(sequence=8, chat=CHAT, attempt="pay-desk"))
+        report = sync(made[DESKTOP].store, phone, handles())
+        reviews = {(item.reason, item.subject) for conflict in report.conflicts for item in conflict.review}
+        assert ("unlistable", f"campaigns/{C}/relations") in reviews, report.conflicts
+        assert not [path for path, _ in report.copied if f"campaigns/{C}/" in path and "/instances/" not in path]
+    finally:
+        _close(made)
