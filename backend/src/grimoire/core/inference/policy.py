@@ -26,6 +26,10 @@ class InferenceStage(StrEnum):
     CRITIQUE = "critique"
     #: A scene-level director/narrator reply (027): optional, at most one per turn, never an actor.
     DIRECTOR_GENERATION = "director_generation"
+    #: Framing a player character's action for 029 (035): which offered facts bear on it, what is at stake.
+    #: Optional, planned for the scene (no call decides for a player character); its reply is read on an
+    #: untrusted handle and never spoken.
+    LABELLING = "labelling"
 
     @property
     def is_baseline(self) -> bool:

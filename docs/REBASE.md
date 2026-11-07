@@ -52,7 +52,7 @@ The recorded `base_etag` must still match the ancestor's bytes. If it doesn't, t
 - **`keep`** keeps the campaign's value as an instance override: the ancestor value on an `upstream` row, the override on a `conflict` row.
   - A name goes to `local_name`.
   - A facet goes to `replaced` if upstream has that trait, otherwise to `added`. A converged or kept `added` facet that upstream now has moves to `replaced`, because 009 refuses an `added` facet that shadows a trait.
-  - Description, sections and payload extras have no instance-level override in this slice. An instance also cannot suppress a trait upstream adds. `keep` on those is `not_overridable`: take the change, or stay pinned. A campaign keeping its own voice or greeting is 046's design.
+  - Description, sections and payload extras have no instance-level override in this slice. An instance also cannot suppress a trait upstream adds. `keep` on those is `not_overridable`: take the change, or stay pinned. A campaign keeping its own voice or greeting is not built yet ([INHERITANCE](INHERITANCE.md#limits)); a world portrayal can already override, clear or reset one field at a time.
 
 **Uncomposed payload keys** get an `extra:<key>` row too. 022 does not compose them (`EffectiveDefinition.uncomposed`), but other sprints read them. The main one is 037's `card`, which holds a card's example dialogue, greetings and system prompt; 035 reads it for the actor's voice and its opening line.
 - The row compares the key's value in every layer of the chain, leaf first, because 035's voice reads a base's card too. `ancestor` and `upstream` hold those values (`None` where a layer lacks the key).
@@ -71,6 +71,7 @@ The rebased instance must compose over the upstream (009 `compose_instance`), an
 
   `history.problems` lists files that could not be read for the list. It is reported, never a refusal, since the rebase writes none of them.
   A review is director-level: it names evidence ids whoever observed them, so it is for the campaign's owner and never goes into a character's prompt.
+- `art` (046): every slot whose picture the rebase changes, with what it shows now (`before`) and after (`after`). A pinned actor's [pinned art](INHERITANCE.md#pinned-art) moves only with the review. When only the art changed, a review of the ancestor itself is allowed: it has no rows and re-pins no chat.
 - `history_review`: upstream changes the description, a section or an uncomposed payload key, and the actor has history. Established events may contradict the new authored text, so a human reads both. This is a notice listing ids, not a contradiction check.
 
 **Refusals** (`RebaseError.reason`):
@@ -84,11 +85,11 @@ The rebased instance must compose over the upstream (009 `compose_instance`), an
 | `missing_ancestor` | the ancestor does not resolve |
 | `ancestor_edited` | the ancestor's bytes no longer match `base_etag` |
 | `other_entity` | the target is another entity: a namesake or any other definition is never a rebase target |
-| `missing_target`, `up_to_date` | the target does not resolve, or is the ancestor |
+| `missing_target`, `up_to_date` | the target does not resolve, or it is the ancestor and the actor's art would not change either |
 | `follows_head` | an instance that follows its head, or one a chat binds following the head, and a target that is not the head (a following chat would compose the result over the head) |
 | `chats_unreadable` | a chat file of the campaign cannot be read or interpreted, so its bindings cannot all be found |
 | `binding_disagrees` | the campaign's chats pin the actor to different revisions; rebind or detach one first |
-| `binding_limit` | a chat to re-pin already holds 107's maximum number of bindings |
+| `binding_limit` | a chat to re-pin already holds 107's maximum number of bindings (an art-only review re-pins none) |
 | `nature_changed` | an individual became a template or back: a different kind of thing, not a field change |
 
 Composition refusals of either side (`PortrayalError`) propagate.
@@ -101,6 +102,7 @@ The returned `RebaseChange` writes:
 - **the instance**, guarded by CAS on its reviewed etag.
   - A pinned `source` is re-pinned to the target; a following source stays unpinned. `derived_from` is re-pinned likewise if it named a pinned revision of the entity.
   - `base` becomes the target and `base_etag` the target's etag.
+  - `art_pin` becomes the snapshot the review showed, or is dropped once no pinned chat binds the actor (046). An actor that pinned and following chats share stays pinned.
   - Every other envelope field, the payload's unknown keys, state and individuality are kept.
 - **each chat with an active pinned binding of the actor.** The binding is tombstoned and a new pinned binding of the target, for the same actor, is added. The roster is unchanged.
 
@@ -152,7 +154,7 @@ What the chat's snapshot refuses for an actor (missing, undecodable, broken bind
 |---|---|
 | Rebasing a derived portrayal onto its base's new revision (source-level rebase) | 042 later |
 | Campaign-local overrides of description and sections, so one of two changed sections can be kept | 042 later (a 009 payload change) |
-| Keeping a campaign's own voice, greeting or system prompt when a card changes (`keep` on an `extra:` row) | 046 |
+| Keeping a campaign's own voice, greeting or system prompt when a card changes (`keep` on an `extra:` row) | 046 later |
 | Adopting a *different* entity for an existing actor (a world portrayal of its card), which needs a 107 roster change | 042 later |
 | A reviewed way to drop lived state when upstream removes the facet it needs | 042 later |
 | Checking at review that every layer of a derived ancestor is still what was adopted (`base_etag` covers the leaf; commit re-checks every layer against the review) | 042 later |
