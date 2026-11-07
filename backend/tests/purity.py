@@ -188,6 +188,8 @@ PURE_PACKAGES = (
     PurePackage("grimoire.scene", ("grimoire.scene", "grimoire.core", "grimoire.core.inference",
                                    "grimoire.comms", "grimoire.generation", "grimoire.transcripts",
                                    "grimoire.adjudication")),
+    # Operational tracing (048): spans, call samples and cost attribution; the clock and prices are passed in.
+    PurePackage("grimoire.tracing", ("grimoire.tracing", "grimoire.core.inference")),
     # Offline evaluation: of the domain core it uses only the inference contracts (sprint 015);
     # only its loader and CLI read files.
     PurePackage("grimoire.evals", ("grimoire.evals", "grimoire.core.inference"),

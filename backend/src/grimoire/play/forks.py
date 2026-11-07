@@ -11,6 +11,7 @@ player of a present character may not).
 from __future__ import annotations
 
 from grimoire.core.identity import ChatRef
+from grimoire.play.tracing import span
 from grimoire.scene import SceneRefused
 
 
@@ -33,7 +34,8 @@ def choose_branch(runner, chat: ChatRef, by, turn: str):  # type: ignore[no-unty
     if other:
         raise SceneRefused("turns_unreadable", f"this chat's turns are incomplete "
                                                f"({', '.join(sorted(set(other)))}); nothing is written")
-    runner.scenes.choose(turns, turn, principal)
+    with span("write.turn"):
+        runner.scenes.choose(turns, turn, principal)
     return runner.open(chat)
 
 
