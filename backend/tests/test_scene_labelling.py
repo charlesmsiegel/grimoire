@@ -429,3 +429,32 @@ def test_the_tables_outcome_line_names_what_came_of_it_and_fits_one_heard_line()
     line = outcome_line(SimpleNamespace(frame=frame, decision=decision), {actor: "Anya Rook"})
     assert line.text.startswith("Anya Rook's action (I climb) succeeds at a cost. What comes of it: She falls")
     assert len(line.text) <= MAX_LINE_CHARS and line.text.endswith("…")
+
+
+def test_a_frame_029_refuses_for_good_sends_the_action_back_to_unframed_play(cards):
+    folder, chat = cards
+    with judged(folder, UNOPPOSED, UNOPPOSED, steps=[say("Mara looks up.")]) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        failing_once(table.adjudication, "check", AdjudicationError("refused", "unresolved_actor"))
+        refused("unresolved_actor", table.runner.confirm, chat, table.player())
+        assert table.runner.open(chat).pending.labels[-1].state == "proposed"  # nothing was marked
+        failing_once(table.adjudication, "frame", AdjudicationError("refused", "unresolved_actor"))
+        refused("unresolved_actor", table.runner.confirm, chat, table.player())  # refused after the mark
+        record = table.runner.open(chat).pending
+        assert record.framed is None and (record.labels[-1].state, record.labels[-1].reason) == (
+            "refused", "unresolved_actor")
+        table.runner.generate(chat, table.player())  # never framed: play goes on
+        table.runner.label(chat, table.player())
+        assert table.runner.confirm(chat, table.player()).decision.result == "success"
+
+
+def test_ids_given_as_a_generator_are_all_kept(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        table.runner.confirm(chat, table.player())
+        outcome = table.runner.decide(chat, table.owner, "partial", cites=(c for c in ("f1", "f2")),
+                                      consequences=(s for s in ("s1",)))
+        assert outcome.decision.consequences == frozenset({"s1"})

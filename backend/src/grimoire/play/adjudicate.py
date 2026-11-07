@@ -79,32 +79,53 @@ def frame_of(record: TurnRecord, label) -> tuple[ActionFrame, PlayerContribution
 def confirm_action(runner, chat: ChatRef, by) -> Outcome | None:
     """See ``SceneRunner.confirm``.
 
-    The labelling is written ``framed`` on the turn first (compare-and-swap, so a relabel racing it wins or
-    loses whole), and only then recorded in 029: once framed, the turn can no longer be relabelled, so a
-    confirm interrupted at any step finishes on the next confirm, with the same frame.
+    029 checks the frame first (writing nothing). The labelling is then written ``framed`` on the turn
+    (compare-and-swap, so a relabel racing it wins or loses whole), and only then recorded in 029: once framed,
+    the turn can no longer be relabelled, so a confirm cut short by a failing ledger finishes on the next
+    confirm, with the same frame. If 029 refuses the frame for good after the mark (the actor's card deleted
+    meanwhile), the labelling is written ``refused`` with 029's reason: the action goes back to unframed play.
     """
     library = _library(runner)
     scene, principal, record, post = _action(runner, chat, by)
     controller = scene.controller(post.actor)
-    if principal != controller:
-        raise _refuse("not_controller", "only the acting character's player confirms its labels")
-    if post.submitted_by != controller:
-        raise _refuse("control_changed", "the character changed hands since this action was posted")
-    label = record.framed
-    if label is None:
+    marked = record.framed
+    if marked is None:
         label = record.labels[-1] if record.labels else None
         if label is None or label.state != "proposed":
             raise _refuse("not_proposed", "only the latest labelling, while proposed, is confirmed")
-        record = _mark_framed(runner, chat, record, label.label)
-        label = record.framed
-    elif _029(library.outcome, chat.campaign_id, record.turn_id) is not None:
-        raise _refuse("already_framed", "this action is framed and decided already")
-    frame, contribution = frame_of(record, label)
+    else:
+        label = marked
+        if _029(library.outcome, chat.campaign_id, record.turn_id) is not None:
+            raise _refuse("already_framed", "this action is framed and decided already")
+    if principal != controller:
+        raise _refuse("not_controller", "only the acting character's player confirms its labels")
+    frame, contribution = _029(frame_of, record, label)
     existing = _029(library.state, chat.campaign_id).frame(record.turn_id)
-    if existing is None:
-        _029(library.frame, frame, contribution=contribution, author=by)
-    elif existing.frame != frame:
+    if existing is not None and existing.frame != frame:
         raise _refuse("frame_mismatch", "029 holds another frame for this action")
+    if existing is None:
+        if post.submitted_by != controller:
+            _unframe(runner, chat, record, label.label, "control_changed")
+            raise _refuse("control_changed", "the character changed hands since this action was posted")
+        try:
+            _029(library.check, frame, contribution=contribution, author=by)
+        except SceneRefused as error:
+            if error.reason not in _UNAVAILABLE:
+                _unframe(runner, chat, record, label.label, error.reason)
+            raise
+        if marked is None:
+            record = _mark_framed(runner, chat, record, label.label)
+        try:
+            _029(library.frame, frame, contribution=contribution, author=by)
+        except SceneRefused as error:
+            current = _029(library.state, chat.campaign_id).frame(record.turn_id)
+            if current is None or current.frame != frame:  # a concurrent confirm did not record it either
+                if error.reason not in _UNAVAILABLE:
+                    _unframe(runner, chat, record, label.label, error.reason)
+                raise
+    decided = _029(library.outcome, chat.campaign_id, record.turn_id)
+    if decided is not None:  # a concurrent confirm decided it meanwhile
+        return decided
     assessment = _029(library.assess, chat.campaign_id, record.turn_id)
     result = _BY_RULE.get(assessment.classification)
     if result is None:
@@ -113,7 +134,34 @@ def confirm_action(runner, chat: ChatRef, by) -> Outcome | None:
         return None
     cites = {factor_id for factor_id, factor in assessment.factors.items()
              if factor.bearing == ("prevents" if result == "failure" else "favours")}
-    return _029(library.decide, chat.campaign_id, record.turn_id, Decision(result, "rule", frozenset(cites)))
+    try:
+        return _029(library.decide, chat.campaign_id, record.turn_id, Decision(result, "rule", frozenset(cites)))
+    except SceneRefused as error:
+        decided = _029(library.outcome, chat.campaign_id, record.turn_id)
+        if error.reason == "already_decided" and decided is not None:
+            return decided
+        raise
+
+
+#: Refusals that say 029's ledger could not be used now, not that it refused the frame: a confirm retries.
+_UNAVAILABLE = frozenset({"adjudication_unreadable", "adjudication_unavailable"})
+
+
+def _unframe(runner, chat: ChatRef, record: TurnRecord, number: int, reason: str) -> None:
+    """Write labelling ``number`` ``refused`` with ``reason`` if it is the turn's framed one and 029 never
+    recorded it, so the action goes back to unframed play; best effort (the refusal is raised either way)."""
+    for _ in range(WRITE_RETRIES):
+        stored = next((s for s in runner.scenes.turns(chat).turns if s.record.ref == record.ref), None)
+        label = stored.record.framed if stored is not None else None
+        if label is None or label.label != number:
+            return
+        try:
+            runner.scenes.write(stored.record.with_label(
+                replace(label, state="refused", factors=(), stakes=(), reason=reason[:200])), stored)
+            return
+        except SceneRefused as error:
+            if error.reason != "turn_changed":
+                return
 
 
 def _mark_framed(runner, chat: ChatRef, record: TurnRecord, number: int) -> TurnRecord:
@@ -162,9 +210,10 @@ def decide_action(runner, chat: ChatRef, by, result: str, *, basis: str = "adjud
 
 def _ids(values, field: str) -> frozenset[str]:
     """A set of factor or stake ids; a bare string is one id's letters, so it is refused."""
-    if isinstance(values, (str, bytes)) or not all(isinstance(each, str) for each in _iterable(values, field)):
+    items = () if isinstance(values, (str, bytes)) else _iterable(values, field)
+    if isinstance(values, (str, bytes)) or not all(isinstance(each, str) for each in items):
         raise _refuse("invalid_field", f"{field} is a collection of ids")
-    return frozenset(values)
+    return frozenset(items)
 
 
 def _iterable(values, field: str):
@@ -176,17 +225,16 @@ def _iterable(values, field: str):
 
 def outcome_of(runner, record: TurnRecord | None) -> Outcome | None:
     """The recorded outcome of ``record``'s framed action; ``None`` when there is none (or nothing framed)."""
-    if record is None or record.framed is None or runner.adjudication is None:
+    if record is None or record.framed is None:
         return None
-    return _029(runner.adjudication.outcome, record.chat.campaign_id, record.turn_id)
+    return _029(_library(runner).outcome, record.chat.campaign_id, record.turn_id)
 
 
 def check_decided(runner, record: TurnRecord | None) -> Outcome | None:
     """Refuse narration for a framed, undecided action (``undecided_attempt``); its outcome otherwise."""
     if record is None or record.framed is None:
         return None
-    _library(runner)  # a framed turn is read only with the key it was framed under
-    outcome = outcome_of(runner, record)
+    outcome = outcome_of(runner, record)  # a framed turn is read only with the key it was framed under
     if outcome is None:
         raise _refuse("undecided_attempt", "this action is framed and not yet decided; decide it before narrating")
     return outcome
