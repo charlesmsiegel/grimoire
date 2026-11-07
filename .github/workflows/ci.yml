@@ -31,17 +31,20 @@ jobs:
   compat:
     name: compat (${{ matrix.os }}, py${{ matrix.python }}${{ matrix.shard && format(', {0}', matrix.shard) || '' }})
     runs-on: ${{ matrix.os }}
-    # Windows file I/O makes the crash-exploration tests several times slower (the whole suite took
-    # 23-27 minutes there, ~4 on Ubuntu), so Windows runs in five shards that together cover every
-    # test file: the store-backed crash explorations, the other crash and fault explorations, the
-    # replica-sync files, the other store files, and the rest
-    # (tests/conftest.py; docs/TESTING.md#ci-gate).
+    # The suite no longer fits one 30-minute job: the whole of it took 25-30 minutes on the Ubuntu
+    # cells (Python 3.12 and 3.13) and Windows file I/O makes the crash explorations several times
+    # slower still. So Ubuntu and Windows run in five shards that together cover every test file: the
+    # store-backed crash explorations, the other crash and fault explorations, the replica-sync files,
+    # the other store files, and the rest (tests/conftest.py; docs/TESTING.md#ci-gate). The Ubuntu
+    # cells are the os x python x shard product; each include entry names another OS, so it adds a
+    # cell of its own (macOS unsharded, Windows one per shard).
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04]
         python: ["3.12", "3.13"]  # 3.11 on Ubuntu is the domain job
+        shard: [store-explorations, explorations, sync, stores, rest]
         include:
           - os: macos-latest
             python: "3.11"

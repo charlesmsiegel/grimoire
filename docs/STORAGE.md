@@ -360,7 +360,7 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
 11. **Publish.** Each target is re-hashed immediately before its `replace`. An edit caught there is kept, the store's version is preserved, the remaining entries publish, and `WriteConflict` names both what was published and what was preserved. When the edit is to a revision record, its source's manifest in the same commit is kept aside with it rather than published, so a head never names bytes the commit did not write.
 12. The journal is removed. Any failure in steps 10–12 raises `CommitIncomplete`, and the on-disk journal then blocks reads and commits until recovery. If staged files vanished before publication (removed by another program), nothing is published (see Recovery: vanished staging) and commit raises `CommitIncomplete` naming the targets that were not written; it never reports success for them.
 
-**Residual race (R7, pinned by a test):** an external edit landing between step 11's per-entry re-hash and its `replace` is overwritten; for a `remove`, one landing between its re-hash and the unlink is removed (`backend/tests/test_store_delete.py`). Multi-file atomicity holds only when no external edit happens concurrently.
+**Residual race (R7, pinned by a test):** an external edit landing between step 11's per-entry re-hash and its `replace` is overwritten; for a `remove`, one landing between its re-hash and the unlink is removed (`backend/tests/test_deletion_recovery.py`). Multi-file atomicity holds only when no external edit happens concurrently.
 
 ## Synchronization extensions (019)
 
