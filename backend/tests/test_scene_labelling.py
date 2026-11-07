@@ -105,6 +105,23 @@ def test_the_owner_may_ask_for_labels_and_another_player_may_not(cards):
         assert table.runner.label(chat, table.owner).by == OWNER
 
 
+def test_narration_reaches_the_table_but_never_the_labeller(built, tmp_path):
+    folder, _, storm = built
+    copy = tmp_path / "storm"
+    shutil.copytree(folder, copy)
+    unseen = "Unseen by Anya, someone slips into the lighthouse."
+    with Table(copy, [say(unseen)], policy=LABEL_POLICY, labels=[say(REPLY)]) as table:
+        table.runner.seat(storm, ANA)
+        table.runner.post(storm, table.player(), '"Hello?"')
+        (line,) = table.runner.generate(storm, table.player(), director=True).lines
+        assert line.actor is None and line.audience == (table.runner.open(storm).persona,)  # the table's
+        table.runner.keep(storm, table.player(), 1)
+        acting(table, storm)
+        table.runner.label(storm, table.player())
+        (prompt,) = table.labels.prompts()
+    assert "Hello?" in prompt and unseen not in prompt  # the character's window: its player saw it, it did not
+
+
 # -- what is never labelled -----------------------------------------------------------------------
 
 def test_nothing_is_labelled_without_a_labeller_or_a_label_handle(cards):
