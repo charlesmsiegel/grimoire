@@ -66,3 +66,8 @@ jobs:
       - run: python -m pytest backend/tests -q
         env:
           GRIMOIRE_TEST_SHARD: ${{ matrix.shard }}
+          # On Windows the hung-test traceback dump can itself crash Python (an access violation
+          # while it walks a running thread's frames), and the slowest crash explorations take
+          # over 120 s there on a busy runner, so Windows dumps only after 10 minutes
+          # (docs/TESTING.md#ci-gate). The job timeout is still the hard stop.
+          PYTEST_ADDOPTS: ${{ runner.os == 'Windows' && '-o faulthandler_timeout=600' || '' }}
