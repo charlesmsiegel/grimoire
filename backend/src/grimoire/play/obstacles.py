@@ -24,6 +24,7 @@ and with a reason, on the director's own proposal (``Waiver``); the waivers are 
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 
 from grimoire.adjudication import MAX_FACTORS, PROSE_MAX, Factor, Stake
@@ -256,7 +257,13 @@ def due_changes(runner, scene, record: TurnRecord) -> tuple[Due, ...]:
         raise _refuse("obstacle_diverged", f"this attempt no longer agrees with its obstacle ({found.problem})")
     if found.status == "pending":
         raise _refuse("undecided_attempt", "this action is framed and not yet decided; decide it first")
-    actor = record.post.actor  # type: ignore[union-attr]
+    # the actor is the one 029 recorded attempting it (the decided frame's), never the turn file's word for it: a
+    # post edited or synced to another actor after the confirm would redirect the costs and stakes
+    assert found.frame is not None  # decided: 029 holds its frame
+    actor = found.frame.actor
+    if record.post is None or record.post.actor != actor:
+        raise _refuse("obstacle_link_mismatch", "the turn names another actor than the one who attempted the "
+                                                "obstacle")
     # the actor's own act is backed by the post (its contribution id is the turn id) while a player plays it
     backed = record.turn_id if scene.controller(actor) not in (None, DIRECTOR) else None
     due: list[Due] = []
@@ -299,17 +306,20 @@ def _shape(op: Op) -> tuple:
 
 
 def holds_due(proposal: EffectProposal, due: tuple[Due, ...], waived: frozenset[str]) -> bool:
-    """Whether ``proposal`` carries every due change it does not waive: each such operation, and each such
-    holdings line first, in order. A waiver of a change that was never due does not hold."""
+    """Whether ``proposal`` carries every due change it does not waive: each such operation as many times as it is
+    owed (two consequences making one change due are owed it twice, so one of them must be waived, since 021 takes an
+    operation once), and each such holdings line first, in order. A waiver of a change that was never due does not
+    hold."""
     if waived - {item.change_id for item in due}:
         return False
     kept = [item for item in due if item.change_id not in waived]
     if any(item.problem is not None for item in kept):
         return False
-    held = {_shape(op) for op in proposal.operations}
+    held = Counter(_shape(op) for op in proposal.operations)
+    owed = Counter(_shape(item.op) for item in kept if item.op is not None)
     given = () if proposal.holdings is None else proposal.holdings.lines
     lines = [item.line for item in kept if item.line is not None]
-    return all(_shape(item.op) in held for item in kept if item.op is not None) and [
+    return all(held[shape] >= count for shape, count in owed.items()) and [
         (item.line, item.agent) for item in given[:len(lines)]] == [(item.line, item.agent) for item in lines]
 
 

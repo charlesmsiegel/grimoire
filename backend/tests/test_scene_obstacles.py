@@ -994,3 +994,49 @@ def test_a_superseded_waived_effect_set_live_again_in_place_does_not_count_its_w
         result = at.runner.endorse_effect(chat, at.player(), turn, 1, first.fingerprint)
         assert (result.state, result.reason) == ("refused", "due_missing")
         assert at.effects.continuity(chat.campaign_id, as_of=NOW, requested_by=DIRECTOR).events == ()
+
+
+# -- PR review ---------------------------------------------------------------------------------------------
+
+def _post_by(at, chat, turn, actor):
+    """The turn file edited (by hand, or a peer's sync) so its post names ``actor``."""
+    (current,) = [s for s in at.runner.scenes.turns(chat).turns if s.record.turn_id == turn]
+    record = current.record
+    at.runner._write(replace(record, post=replace(record.post, actor=actor)), current)
+
+
+def test_what_comes_due_is_bound_to_the_actor_029_recorded_attempting_it(cards):
+    folder, chat = cards
+
+    def chit_only(mara):  # the bribe's price is the actor's own holdings change, nothing else
+        take = Cost("chit", CHIT, (HoldingsChange("add", ACTOR, "debt-chit", 1, agent=ACTOR),))
+        base = hold(mara)
+        return hold(mara, approaches=(replace(base.approaches[0], costs=(take,)), base.approaches[1]))
+    with table(folder, reply("bribe")) as at:
+        turn, anya, mara = acting(at, chat, obstacle=chit_only)
+        at.runner.label(chat, at.player(), obstacle="hold")
+        assert at.runner.confirm(chat, at.player()).decision.result == "success"
+        # the turn file edited (or synced) so its post names the director's NPC: the chit would fall on Mara, as
+        # the director's own act, with no player to endorse it
+        _post_by(at, chat, turn, mara)
+        refused("obstacle_link_mismatch", at.runner.propose_effect, chat, at.owner, turn, "Mara takes the chit.")
+        assert stored(at, chat, turn).effects == ()
+
+
+def test_a_change_two_consequences_made_due_is_owed_twice_and_one_is_waived(cards):
+    folder, chat = cards
+    with table(folder, reply("bribe", [("f1", "hinders")])) as at:
+        turn, anya, mara = acting(at, chat)
+        at.runner.label(chat, at.player(), obstacle="hold")
+        assert at.runner.confirm(chat, at.player()) is None  # hindered: the director decides
+        at.runner.decide(chat, at.owner, "partial", cites=("debt", "f1"), consequences=("reported",))
+        effect = at.runner.propose_effect(chat, at.owner, turn, "Anya pays; Mara reports her.",
+                                          waive=[Waiver("stake.reported.1", "The chit makes Mara know her.")])
+        # edited by hand: the waiver dropped. The one operation cannot stand for both the chit and the report
+        (current,) = [s for s in at.runner.scenes.turns(chat).turns if s.record.turn_id == turn]
+        bare = replace(current.record.effect(effect.number), waivers=())
+        at.runner._write(current.record.with_effect(bare), current)
+        at.runner.endorse_effect(chat, at.player(), turn, effect.number, bare.fingerprint)
+        result = at.runner.approve_effect(chat, at.owner, turn, effect.number)
+        assert (result.state, result.reason) == ("refused", "due_missing")
+        assert at.effects.continuity(chat.campaign_id, as_of=NOW, requested_by=DIRECTOR).events == ()
