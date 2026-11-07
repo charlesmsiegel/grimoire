@@ -18,6 +18,8 @@ from grimoire.adjudication import MAX_FACTORS, MAX_STAKES, Factor, Stake
 from grimoire.comms import CHANNELS
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TurnRef, validate_segment
 from grimoire.core.inference import TOKEN_FIELDS, CallAttempt, CallId, InferenceStage, TokenUsage
+from grimoire.effects import EffectProposal, EndorsementRecord
+from grimoire.goals import MAX_APPROACHES, MAX_CONDITIONS, MAX_GOALS, MAX_LIMITS, OUTCOMES
 
 #: How a turn opened: a player's post, the table asking the cast to go on (no post), a card or scenario's
 #: opening, or (036, not written here) history imported from another app.
@@ -37,8 +39,28 @@ TURN_OUTCOMES = ("complete", "halted", "cancelled", "stale")
 LABEL_STATES = ("running", "proposed", "refused", "superseded", "framed")
 #: Labellings per turn: each is a metered call, kept for good.
 MAX_LABELS = 8
+#: A turn's proposed 021 effect (035 milestone 2): ``proposed`` (keys to collect), ``approved`` (the director's
+#: outcome key given), ``accepting`` (every key held and an event id allocated: written before the commit, so a
+#: crash leaves it for open-time recovery), ``accepted`` (the event is in force), ``refused`` (021 or 029 refused
+#: it, or recovery aborted it unpublished), ``superseded`` (a newer proposal replaced it) and ``revoked``
+#: (recovery aborted it after something landed, or its accepted event was revoked through 021 since).
+EFFECT_STATES = ("proposed", "approved", "accepting", "accepted", "refused", "superseded", "revoked")
+#: Effect proposals per turn, kept for good.
+MAX_EFFECTS = 8
 #: Takes per turn: rerolls are cheap to ask for, and each one is stored for good.
 MAX_TAKES = 16
+#: A recorded 039 intention (035 milestone 2) follows 039's own caps: every approach of an agenda is weighed.
+INTENTION_OUTCOMES = OUTCOMES
+MAX_INTENTION_OPTIONS = MAX_GOALS * MAX_APPROACHES
+MAX_INTENTION_CONDITIONS = MAX_CONDITIONS
+MAX_INTENTION_LIMITS = MAX_LIMITS
+#: A condition as ``describe()`` gives it: an actor reference of three 128-character segments, or a proposition id
+#: and its stances, with room to spare.
+MAX_CONDITION_CHARS = 1000
+#: ``explain`` gives one or two lines; each quotes at most an actor, ids, an aim and an action (400 characters each)
+#: or the conditions a wish lacks (8 at most).
+MAX_EXPLANATION = 4
+MAX_EXPLANATION_CHARS = MAX_CONDITIONS * MAX_CONDITION_CHARS + 2000
 #: 032's channels that reach only their addressees.
 _PRIVATE = frozenset({"whisper", "telepathy"})
 #: A turn id is ``<chat_id>.<number:06d>`` (``-<device>`` on a library with a device identity), and the post's
@@ -365,6 +387,234 @@ class Label:
 
 
 @dataclass(frozen=True, slots=True)
+class TurnEffect:
+    """One structured 021 effect proposed for a turn, and the keys collected for it (035 milestone 2).
+
+    The proposal is kept whole, so a restart can present it again (030's obligation). ``endorsers`` are the
+    ``(contribution_id, principal)`` pairs 021 requires an endorsement from (a player character's voluntary
+    act), worked out when it was proposed; ``endorsements`` are those given so far, each over the proposal's
+    fingerprint. ``approved_by`` is the director who gave the outcome key. ``event_id`` names the accepted event
+    once the acceptance is under way (``accepting``) or done. ``reason`` says why it was refused or revoked.
+    ``controls_at`` is the position in the campaign's sovereignty ledger (003/010b) whose control the acceptance
+    was authorized under (the seq of its latest control change, 0 for none), recorded with ``accepting`` so a
+    recovery replays that control from the ledger rather than today's, and kept once the effect is ``accepted``
+    (and if it is later ``revoked``) as a record of that control. ``None`` on every other state, on an effect
+    accepted as a duplicate (nothing was published), and on an acceptance recorded before it existed.
+    ``accepted_on`` is the tag of the device whose library started the acceptance (028's device tag, as on its
+    turns), recorded and kept with ``controls_at``: 021's files of it are on that device (sync does not carry
+    them), so only that device settles it. ``None`` where ``controls_at`` is, and on a library with no device
+    identity; an effect without it is read as this device's.
+    """
+
+    number: int
+    state: str
+    proposal: EffectProposal
+    endorsers: tuple[tuple[str, str], ...] = ()
+    approved_by: str | None = None
+    endorsements: tuple[EndorsementRecord, ...] = ()
+    event_id: str | None = None
+    reason: str | None = None
+    controls_at: int | None = None
+    accepted_on: str | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.number) is not int or not 1 <= self.number <= MAX_EFFECTS:
+            raise _fail("invalid_field", f"an effect is numbered 1..{MAX_EFFECTS}")
+        if self.state not in EFFECT_STATES:
+            raise _fail("invalid_field", f"an effect is one of {EFFECT_STATES}")
+        if type(self.proposal) is not EffectProposal:
+            raise _fail("invalid_field", "an effect holds an EffectProposal")
+        endorsers = tuple(tuple(pair) for pair in self.endorsers)
+        if not all(len(pair) == 2 and all(type(part) is str and part.strip() for part in pair) for pair in endorsers):
+            raise _fail("invalid_field", "endorsers are (contribution id, principal) pairs")
+        if list(endorsers) != sorted(set(endorsers)) or len({cid for cid, _ in endorsers}) != len(endorsers):
+            raise _fail("invalid_field", "endorsers name each contribution once, in order")
+        object.__setattr__(self, "endorsers", endorsers)
+        endorsements = tuple(self.endorsements)
+        if not all(type(item) is EndorsementRecord for item in endorsements):
+            raise _fail("invalid_field", "endorsements are EndorsementRecord values")
+        given = [(item.contribution_id, item.principal) for item in endorsements]
+        if given != sorted(set(given)) or not set(given) <= set(endorsers):
+            raise _fail("invalid_field", "an endorsement is one endorser's, once, in order")
+        if any(item.fingerprint != self.proposal.fingerprint for item in endorsements):
+            raise _fail("invalid_field", "an endorsement is over the proposal's fingerprint")
+        object.__setattr__(self, "endorsements", endorsements)
+        _optional(self.approved_by, "approved_by", MAX_PRINCIPAL)
+        _optional(self.reason, "reason", 200)
+        if self.event_id is not None:
+            try:
+                validate_segment(self.event_id, "event_id")
+            except ValueError as error:
+                raise _fail("invalid_field", str(error)) from None
+        if self.state == "proposed" and self.approved_by is not None:
+            raise _fail("invalid_field", "a proposed effect is not approved yet")
+        if self.state in ("approved", "accepting") and self.approved_by is None:
+            raise _fail("invalid_field", "an approved effect names its director")
+        if self.state in ("accepting", "accepted", "revoked") and not self.complete:
+            raise _fail("invalid_field", "an effect is accepted only with every key")
+        if (self.event_id is not None) != (self.state in ("accepting", "accepted", "revoked")):
+            raise _fail("invalid_field", "an accepting, accepted or revoked effect names its event; no other does")
+        if self.reason is not None and self.state not in ("refused", "revoked"):
+            raise _fail("invalid_field", "only a refused or revoked effect has a reason")
+        if self.state == "refused" and self.reason is None:
+            raise _fail("invalid_field", "a refused effect says why")
+        if self.controls_at is not None and (type(self.controls_at) is not int or self.controls_at < 0):
+            raise _fail("invalid_field", "controls_at is a sovereignty ledger position (0 or more)")
+        if self.controls_at is not None and self.event_id is None:
+            raise _fail("invalid_field", "only an accepting, accepted or revoked effect records its control")
+        if self.accepted_on is not None and (type(self.accepted_on) is not str
+                                             or not _DEVICE.fullmatch(self.accepted_on)):
+            raise _fail("invalid_field", "accepted_on is a device tag (eight hex digits)")
+        if self.accepted_on is not None and self.event_id is None:
+            raise _fail("invalid_field", "only an accepting, accepted or revoked effect records its device")
+
+    @property
+    def complete(self) -> bool:
+        """Whether every key is held: the director's approval and each required endorsement."""
+        return self.approved_by is not None and len(self.endorsements) == len(self.endorsers)
+
+    @property
+    def live(self) -> bool:
+        """Still collecting keys (``proposed`` or ``approved``): a newer proposal supersedes it."""
+        return self.state in ("proposed", "approved")
+
+
+def _segment_id(value: object, label: str) -> str:
+    if type(value) is not str:
+        raise _fail("invalid_field", f"{label} must be an id")
+    try:
+        validate_segment(value, label)
+    except ValueError:
+        raise _fail("invalid_field", f"{label} must be a lowercase id segment") from None
+    return value
+
+
+def _texts(values: object, label: str, *, limit: int, count: int) -> tuple[str, ...]:
+    if isinstance(values, (str, bytes)):
+        raise _fail("invalid_field", f"{label} must be a list of texts")
+    try:
+        found = tuple(values)  # type: ignore[arg-type]
+    except TypeError:
+        raise _fail("invalid_field", f"{label} must be a list of texts") from None
+    if len(found) > count:
+        raise _fail("invalid_field", f"{label} holds at most {count} texts")
+    return tuple(_text(value, label, limit=limit) for value in found)
+
+
+@dataclass(frozen=True, slots=True)
+class IntentionOption:
+    """One approach as 039's policy weighed it for a take: ``outcome`` is its ``Considered`` outcome, ``unmet``
+    the conditions that did not hold (as ``describe()`` gives them) and ``forbidden_by`` the limits forbidding it."""
+
+    goal_id: str
+    approach_id: str
+    outcome: str
+    unmet: tuple[str, ...] = ()
+    forbidden_by: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _segment_id(self.goal_id, "intention.goal_id")
+        _segment_id(self.approach_id, "intention.approach_id")
+        if self.outcome not in INTENTION_OUTCOMES:
+            raise _fail("invalid_field", f"an approach's outcome is one of {INTENTION_OUTCOMES}")
+        object.__setattr__(self, "unmet", _texts(self.unmet, "unmet", limit=MAX_CONDITION_CHARS,
+                                                 count=MAX_INTENTION_CONDITIONS))
+        if isinstance(self.forbidden_by, (str, bytes)):
+            raise _fail("invalid_field", "forbidden_by must be a list of limit ids")
+        forbidden = tuple(_segment_id(limit, "forbidden_by") for limit in self.forbidden_by)
+        if len(set(forbidden)) != len(forbidden) or len(forbidden) > MAX_INTENTION_LIMITS:
+            raise _fail("invalid_field", f"forbidden_by names at most {MAX_INTENTION_LIMITS} limits, once each")
+        object.__setattr__(self, "forbidden_by", forbidden)
+        if (self.outcome == "unmet") != bool(self.unmet) or (self.outcome == "forbidden") != (
+                bool(forbidden) and not self.unmet):
+            raise _fail("invalid_field", "an unmet approach names what is unmet, a forbidden one what forbids it")
+
+
+@dataclass(frozen=True, slots=True)
+class Intention:
+    """039's choice for one director NPC in one take, as the runner briefed it (035 milestone 2).
+
+    A record of a ``grimoire.goals.Choice``, never one itself: the agenda stays the director's input and is
+    never read back from a turn. ``as_of`` is the knowledge sequence it was chosen from; ``present`` the cast as
+    the NPC recognised it and ``unrecognised`` the rest of the take's cast; ``goal_id`` and ``approach_id`` what
+    it pursued (``None`` for nothing it could pursue); ``refusals`` the limits it was refusing, ``considered``
+    the approaches in the order tried, up to the chosen one, then those after it that a limit forbids (``omitted``
+    counts the others after it, outranked or unmet, which are not recorded, so a turn file stays small) and
+    ``explanation`` 039's ``explain`` lines. Director-side text: it names
+    actors and propositions by id, so it is in no NPC's window and not in the table's view.
+    """
+
+    take: int
+    actor: InstanceRef
+    as_of: int
+    present: tuple[InstanceRef, ...]
+    unrecognised: tuple[InstanceRef, ...] = ()
+    goal_id: str | None = None
+    approach_id: str | None = None
+    refusals: tuple[str, ...] = ()
+    considered: tuple[IntentionOption, ...] = ()
+    explanation: tuple[str, ...] = ()
+    omitted: int = 0
+
+    def __post_init__(self) -> None:
+        if type(self.take) is not int or not 1 <= self.take <= MAX_TAKES:
+            raise _fail("invalid_field", f"an intention is for a take numbered 1..{MAX_TAKES}")
+        if type(self.actor) is not InstanceRef:
+            raise _fail("invalid_field", "an intention's actor is an InstanceRef")
+        if type(self.as_of) is not int or self.as_of < 0:
+            raise _fail("invalid_field", "an intention was chosen as of a knowledge sequence (0 or more)")
+        campaign = self.actor.campaign_id
+        present = _actors(self.present, "intention.present", campaign)
+        unseen = _actors(self.unrecognised, "intention.unrecognised", campaign)
+        if self.actor not in present or set(present) & set(unseen):
+            raise _fail("invalid_field", "an intention's NPC is in its recognised cast, and no one is in both")
+        object.__setattr__(self, "present", present)
+        object.__setattr__(self, "unrecognised", unseen)
+        considered = tuple(self.considered)
+        if not considered or len(considered) > MAX_INTENTION_OPTIONS or not all(
+                type(option) is IntentionOption for option in considered):
+            raise _fail("invalid_field", f"an intention weighs 1..{MAX_INTENTION_OPTIONS} IntentionOption values")
+        if len({(o.goal_id, o.approach_id) for o in considered}) != len(considered):
+            raise _fail("invalid_field", "an intention weighs each approach once")
+        object.__setattr__(self, "considered", considered)
+        chosen = [option for option in considered if option.outcome == "chosen"]
+        if len(chosen) > 1:
+            raise _fail("invalid_field", "an intention chooses at most one approach")
+        pursued = (chosen[0].goal_id, chosen[0].approach_id) if chosen else (None, None)
+        if (self.goal_id, self.approach_id) != pursued:
+            raise _fail("invalid_field", "an intention pursues the approach it chose, or nothing")
+        # Recorded: every approach tried up to the chosen one, and the forbidden ones after it (they are what it
+        # refuses); the rest after the choice (outranked, or unmet) are only counted, in ``omitted``.
+        after = considered[considered.index(chosen[0]) + 1:] if chosen else ()
+        if any(option.outcome == "outranked" for option in considered) or any(
+                option.outcome != "forbidden" for option in after):
+            raise _fail("invalid_field", "after its choice an intention records only the approaches it refuses")
+        if type(self.omitted) is not int or self.omitted < 0 or (self.omitted and not chosen) or (
+                len(considered) + self.omitted > MAX_INTENTION_OPTIONS):
+            raise _fail("invalid_field", "an intention omits only approaches weighed after its choice")
+        if isinstance(self.refusals, (str, bytes)):
+            raise _fail("invalid_field", "refusals must be a list of limit ids")
+        refusals = tuple(_segment_id(limit, "refusals") for limit in self.refusals)
+        active = {limit for option in considered if option.outcome == "forbidden" for limit in option.forbidden_by}
+        if len(set(refusals)) != len(refusals) or set(refusals) != active:
+            raise _fail("invalid_field", "an intention's refusals are the limits forbidding what it could do")
+        object.__setattr__(self, "refusals", refusals)
+        explanation = _texts(self.explanation, "explanation", limit=MAX_EXPLANATION_CHARS, count=MAX_EXPLANATION)
+        if not explanation:
+            raise _fail("invalid_field", "an intention is explained")
+        object.__setattr__(self, "explanation", explanation)
+
+    @property
+    def acts(self) -> bool:
+        return self.approach_id is not None
+
+    @property
+    def scene(self) -> frozenset[InstanceRef]:
+        """The take's whole cast, recognised or not: the scene the choice was made for."""
+        return frozenset(self.present) | frozenset(self.unrecognised)
+
+
+@dataclass(frozen=True, slots=True)
 class TurnRecord:
     """One turn of one chat: ``post`` (or none), its takes, and whether the table closed it.
 
@@ -388,6 +638,8 @@ class TurnRecord:
     follows: str | None = None
     set_aside: SetAside | None = None
     labels: tuple[Label, ...] = ()
+    effects: tuple[TurnEffect, ...] = ()
+    intentions: tuple[Intention, ...] = ()
     extras: dict[str, object] = field(default_factory=dict, compare=False)
 
     def __post_init__(self) -> None:
@@ -438,6 +690,20 @@ class TurnRecord:
             if any(a.call_id.campaign_id != self.chat.campaign_id or a.call_id.turn_id != planned
                    for a in label.attempts()):
                 raise _fail("invalid_field", "a labelling's calls were planned under <turn_id>.l<label>")
+        object.__setattr__(self, "effects", tuple(self.effects))
+        if not all(type(effect) is TurnEffect for effect in self.effects):
+            raise _fail("invalid_field", "a turn's effects are TurnEffect values")
+        if [effect.number for effect in self.effects] != list(range(1, len(self.effects) + 1)):
+            raise _fail("invalid_field", "effects are numbered 1, 2, ... in order")
+        if sum(effect.live for effect in self.effects) > 1:
+            raise _fail("invalid_field", "a turn collects keys for at most one effect at a time")
+        if sum(effect.state in ("accepting", "accepted") for effect in self.effects) > 1:
+            raise _fail("invalid_field", "a turn has at most one accepted effect (021)")
+        for effect in self.effects:  # the effect of this turn, at this turn's moment
+            moment = effect.proposal.moment
+            if effect.proposal.chat != self.chat or (moment.scene_id, moment.turn_id) != (self.chat.chat_id,
+                                                                                        self.turn_id):
+                raise _fail("invalid_field", "a turn's effect is proposed for that turn of its chat")
         prefix = self.turn_id + "."
         campaign = self.chat.campaign_id
         if self.post is not None and any(actor.campaign_id != campaign for actor in self.post.audience):
@@ -454,6 +720,17 @@ class TurnRecord:
                     raise _fail("invalid_field", "a line id is <turn_id>.<take>.<n>")
                 if line.actor is not None and line.actor.campaign_id != self.chat.campaign_id:
                     raise _fail("invalid_field", "a line's actor belongs to the turn's campaign")
+        intentions = tuple(self.intentions)
+        if not all(type(intention) is Intention for intention in intentions):
+            raise _fail("invalid_field", "a turn's intentions are Intention values")
+        order = [(intention.take, str(intention.actor)) for intention in intentions]
+        if order != sorted(set(order)):
+            raise _fail("invalid_field", "a turn holds one intention per take and actor, in order")
+        for intention in intentions:  # 039: a choice is for the one scene its take was generated for
+            take = self.takes[intention.take - 1] if intention.take <= len(self.takes) else None
+            if take is None or take.origin != "generated" or intention.scene != frozenset(take.cast):
+                raise _fail("invalid_field", "an intention is for a generated take of this turn, and its whole cast")
+        object.__setattr__(self, "intentions", intentions)
 
     @property
     def turn_id(self) -> str:
@@ -493,6 +770,26 @@ class TurnRecord:
     def framed(self) -> Label | None:
         return next((label for label in self.labels if label.state == "framed"), None)
 
+    def with_effect(self, effect: TurnEffect) -> TurnRecord:
+        """The turn with ``effect`` added, or replacing the effect of the same number."""
+        effects = [existing for existing in self.effects if existing.number != effect.number]
+        effects.append(effect)
+        return replace(self, effects=tuple(sorted(effects, key=lambda each: each.number)))
+
+    def effect(self, number: int) -> TurnEffect | None:
+        return next((effect for effect in self.effects if effect.number == number), None)
+
+    def with_intentions(self, take: int, intentions: Iterable[Intention]) -> TurnRecord:
+        """The turn with ``take``'s intentions replaced by ``intentions`` (each for that take)."""
+        found = tuple(intentions)
+        if any(type(intention) is not Intention or intention.take != take for intention in found):
+            raise _fail("invalid_field", f"intentions for take {take} are that take's Intention values")
+        kept = [intention for intention in self.intentions if intention.take != take]
+        return replace(self, intentions=tuple(sorted((*kept, *found), key=lambda i: (i.take, str(i.actor)))))
+
+    def intentions_of(self, take: int) -> tuple[Intention, ...]:
+        return tuple(intention for intention in self.intentions if intention.take == take)
+
     def with_take(self, take: Take) -> TurnRecord:
         """The turn with ``take`` added, or replacing the take of the same number."""
         takes = [existing for existing in self.takes if existing.take != take.take]
@@ -521,9 +818,11 @@ def usage_totals(attempts: Iterable[CallAttempt]) -> dict[str, int]:
 
 
 __all__ = [
-    "CALL_STATES", "CallRecord", "LABEL_STATES", "LINE_STATES", "Label", "MAX_CHAT_ID", "MAX_LABELS",
+    "CALL_STATES", "CallRecord", "EFFECT_STATES", "INTENTION_OUTCOMES", "Intention", "IntentionOption", "LABEL_STATES",
+    "LINE_STATES", "Label", "MAX_CHAT_ID", "MAX_EFFECTS", "MAX_LABELS",
     "MAX_TAGGED_CHAT_ID", "MAX_TAKES", "ORIGINS",
     "POST_KINDS", "Post",
-    "SceneLine", "SceneRefused", "SetAside", "TAKE_STATES", "Take", "TokenUsage", "TurnRecord", "parse_turn_id", "turn_id",
+    "SceneLine", "SceneRefused", "SetAside", "TAKE_STATES", "Take", "TokenUsage", "TurnEffect", "TurnRecord",
+    "parse_turn_id", "turn_id",
     "usage_totals",
 ]

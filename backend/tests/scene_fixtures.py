@@ -29,6 +29,7 @@ from grimoire.chats import Launch
 from grimoire.chatstore import ChatLibrary
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef
 from grimoire.core.inference import InferencePolicy
+from grimoire.effectstore import TurnEffectsLibrary
 from grimoire.import_v1 import chat_id_of
 from grimoire.ledgers import DurableAuthority
 from grimoire.play import SceneRunner
@@ -153,7 +154,8 @@ class Table:
 
     def __init__(self, folder: Path, steps=(), *, voices: VoiceCatalog | None = None, runtime: bool = True,
                  policy: InferencePolicy = POLICY, secrets=(), fence=None, labels=None,
-                 propose: bool = True, adjudicate: bool = False, **traced) -> None:
+                 propose: bool = True, adjudicate: bool = False, effects: bool = False, agendas=(),
+                 **traced) -> None:
         self.store = LibraryStore.open(folder)
         self.authority = DurableAuthority.open(self.store, [OWNER], clock=fixed_clock())
         self.owner = self.authority.handle_for(OWNER, trusted=True)
@@ -171,10 +173,14 @@ class Table:
         if adjudicate:  # the app's own adjudication key: never the labeller's, never a player's
             self.adjudication = AdjudicationLibrary(self.store, self.authority,
                                                     self.authority.handle_for(ADJUDICATOR, trusted=True))
+        self.effects = None
+        if effects:  # 021 over the same store, with the owner's handle as the outcome key
+            self.effects = TurnEffectsLibrary(self.store, self.owner, issued=self.authority.issued, clock=Clock(),
+                                              new_id=Tagged("e"), owner=OWNER)
         self.runner = SceneRunner(self.store, self.authority, self.owner, owner=OWNER,
                                   runtime=self.harness.runtime if runtime else None, policy=policy, secrets=secrets,
                                   voices=voices, fence=fence, labeller=labeller, label_handle=self.label_handle,
-                                  adjudication=self.adjudication,
+                                  adjudication=self.adjudication, effects=self.effects, agendas=agendas,
                                   **traced)  # 048: ``tracer`` and ``clock``
 
     def player(self, principal: str = ANA):

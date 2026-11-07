@@ -6,17 +6,21 @@ All content is synthetic. No store, provider or clock.
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import replace
 
 import pytest
 
 from grimoire.adjudication import Factor, Stake
+from grimoire.core import Moment
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TurnRef
 from grimoire.core.inference import CallAttempt, CallId, InferenceStage, TokenUsage
+from grimoire.effects import ActedLine, EffectHoldings, EffectProposal, EndorsementRecord, Op
 from grimoire.generation import MAX_HEARD, MAX_LINE_CHARS
+from grimoire.holdings import Line
 from grimoire.scene import (
-    MAX_CHAT_ID, MAX_TAGGED_CHAT_ID, MAX_TAKES, NARRATOR, TURN_SCHEMA, CallRecord, Label, Post, SceneLine,
-    SceneRefused, Take, TurnRecord,
+    MAX_CHAT_ID, MAX_EFFECTS, MAX_TAGGED_CHAT_ID, MAX_TAKES, NARRATOR, TURN_SCHEMA, CallRecord, Label, Post,
+    SceneLine, SceneRefused, Take, TurnEffect, TurnRecord,
     heard_for, parse_turn_id, render, segments, table_lines, turn_from_payload, turn_id, turn_to_payload,
     usage_totals,
 )
@@ -306,3 +310,91 @@ def test_a_labelling_call_billed_under_another_labelling_is_refused():
     stray = replace(record.labels[1], label=1)  # its attempt was planned under the turn's second labelling
     with pytest.raises(SceneRefused, match="planned under"):
         TurnRecord(CHAT, 4, "post", record.post, labels=(stray,))
+
+
+# -- effects (035 M2) -------------------------------------------------------------------------------
+
+def _effected() -> TurnRecord:
+    """A turn whose first proposal was superseded and whose second is accepted with both keys."""
+    action = Post("human:ana", PC, "action", "I hand Mara the ledger", (PC, MARA, SERA), "speech")
+    record = TurnRecord(CHAT, 4, "post", action)
+    turn = record.turn_id
+    first = EffectProposal(C, CHAT, Moment(8, CHAT.chat_id, turn), "Wren meets Mara.",
+                           (Op("begin", "has_met", PC, MARA, PC, turn),), "player")
+    second = EffectProposal(C, CHAT, Moment(9, CHAT.chat_id, turn), "Wren gives Mara a coin.",
+                            (Op("begin", "knows", MARA, PC),), "player", attempt_id=turn,
+                            holdings=EffectHoldings((ActedLine(Line.move(PC, MARA, "coin", 1), PC, turn),), "a tip"))
+    endorsers = ((turn, "human:ana"),)
+    keys = (EndorsementRecord(turn, "human:ana", second.fingerprint),)
+    return (record.with_effect(TurnEffect(1, "superseded", first, endorsers))
+            .with_effect(TurnEffect(2, "accepted", second, endorsers, "human:owner", keys, "e-1")))
+
+
+def test_a_turns_effects_round_trip_and_a_turn_without_one_writes_no_key():
+    record = _effected()
+    payload = turn_to_payload(record)
+    assert turn_from_payload(record.ref, TURN_SCHEMA, copy.deepcopy(payload)) == record
+    assert "domain" not in json.dumps(payload["effects"])  # only acceptance decides the domain
+    assert "effects" not in turn_to_payload(full_turn())
+
+
+def test_an_effects_control_and_device_round_trip_and_an_effect_without_them_writes_neither():
+    record = _effected()
+    plain = turn_to_payload(record)["effects"][1]
+    assert "controls_at" not in plain and "accepted_on" not in plain  # as every record written before them
+    recorded = record.with_effect(replace(record.effect(2), controls_at=3, accepted_on="0badcafe"))
+    payload = turn_to_payload(recorded)
+    assert (payload["effects"][1]["controls_at"], payload["effects"][1]["accepted_on"]) == (3, "0badcafe")
+    assert turn_from_payload(recorded.ref, TURN_SCHEMA, copy.deepcopy(payload)) == recorded
+    for value in ("0BADCAFE", "badcafe", "", 1):
+        with pytest.raises(SceneRefused):
+            replace(record.effect(2), accepted_on=value)
+    with pytest.raises(SceneRefused):
+        replace(record.effect(1), accepted_on="0badcafe")  # a superseded proposal names no event
+
+
+def _two_live(p) -> None:
+    p["effects"][0].update(state="proposed")
+    p["effects"][1].update(state="approved", event_id=None)
+
+
+@pytest.mark.parametrize("change", [
+    lambda p: p["effects"][1].update(state="applied"),
+    lambda p: p["effects"][1].update(event_id=None),  # accepted names its event
+    lambda p: p["effects"][1].update(endorsements=[]),  # accepted needs every key
+    lambda p: p["effects"][1]["endorsements"][0].update(fingerprint="sha256:" + "0" * 64),
+    lambda p: p["effects"][1]["proposal"]["operations"][0].update(predicate="owns"),  # the key no longer fits
+    lambda p: p["effects"][1]["proposal"]["operations"][0].update(domain="director"),
+    lambda p: p["effects"][1]["proposal"]["moment"].update(turn_id="chat-1.000005"),  # another turn's
+    _two_live,
+    lambda p: p["effects"][0].update(state="accepted", approved_by="human:owner", event_id="e-0"),  # two accepted
+    lambda p: p["effects"].reverse(),
+    lambda p: p["effects"][1].update(reason="because"),
+    lambda p: p["effects"][1].update(color="red"),
+    lambda p: p["effects"][1].update(accepted_on="0BADCAFE"),  # a device tag is eight lower-case hex digits
+    lambda p: p["effects"][1].update(accepted_on="0badcaf"),
+    lambda p: p["effects"][1].update(accepted_on=12345678),
+    lambda p: p["effects"][1].update(accepted_on=None),  # present, it names a device
+    lambda p: p["effects"][0].update(accepted_on="0badcafe"),  # only an effect with an event records its device
+])
+def test_a_malformed_effect_is_refused(change):
+    record = _effected()
+    payload = copy.deepcopy(turn_to_payload(record))
+    change(payload)
+    with pytest.raises(SceneRefused):
+        turn_from_payload(record.ref, TURN_SCHEMA, payload)
+
+
+def test_effect_values_hold_their_invariants():
+    record = _effected()
+    accepted = record.effect(2)
+    assert accepted.complete and not accepted.live and record.effect(3) is None
+    for build in (lambda: replace(accepted, state="approved", event_id=None, approved_by=None),
+                  lambda: replace(accepted, state="refused", event_id=None),  # a refusal says why
+                  lambda: replace(accepted, number=MAX_EFFECTS + 1),
+                  lambda: replace(accepted, endorsers=accepted.endorsers * 2),
+                  lambda: replace(accepted, state="proposed", event_id=None)):  # a proposal has no approval
+        with pytest.raises(SceneRefused):
+            build()
+    with pytest.raises(SceneRefused):
+        record.with_effect(replace(record.effect(1), number=4))  # numbered without a gap

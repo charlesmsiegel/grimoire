@@ -13,16 +13,20 @@ from collections.abc import Mapping
 from grimoire.adjudication import Factor, Stake
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TurnRef
 from grimoire.core.inference import TOKEN_FIELDS, CallAttempt, CallId, InferenceStage, TokenUsage
+from grimoire.effects import EffectCodecError, EndorsementRecord, proposal_from_payload, proposal_to_payload
 
-from .model import CallRecord, Label, Post, SceneLine, SceneRefused, SetAside, Take, TurnRecord, turn_id
+from .model import (_DEVICE, CallRecord, Intention, IntentionOption, Label, Post, SceneLine, SceneRefused, SetAside,
+                    Take, TurnEffect, TurnRecord, turn_id)
 
 TURN_SCHEMA = "grimoire.scene-turn/1"
 _TURN_KEYS = frozenset({"chat", "number", "origin", "post", "takes", "paused", "paused_by", "passed_by"})
 #: Written on every turn. A turn written before turn ids carried a device tag has no ``device`` (read as
 #: untagged); one written before 028's turn merge has no ``follows`` (its place is inferred) or ``set_aside``.
-#: ``labels`` is written only on a turn whose action was labelled (035 milestone 2); an older build keeps it as
-#: an unknown field when it rewrites the turn.
-_OPTIONAL_TURN_KEYS = frozenset({"device", "follows", "set_aside", "labels"})
+#: ``labels`` is written only on a turn whose action was labelled, and ``effects`` only on a turn an effect was
+#: proposed for (035 milestone 2); an older build keeps either as an unknown field when it rewrites the turn.
+#: ``intentions`` (039's choices, 035 milestone 2) is written only on a turn a director NPC with an agenda was
+#: briefed in; a turn without it read as none.
+_OPTIONAL_TURN_KEYS = frozenset({"device", "follows", "set_aside", "labels", "effects", "intentions"})
 _SET_ASIDE_KEYS = frozenset({"chosen", "by"})
 _IDENTITY_KEYS = frozenset({"schema", "address", "campaign_id", "ref"})
 _POST_KEYS = frozenset({"submitted_by", "actor", "kind", "text", "audience", "channel", "addressees", "withheld"})
@@ -35,6 +39,16 @@ _ATTEMPT_KEYS = frozenset({"attempt", "outcome", "measurement", "route", "usage"
 _LABEL_KEYS = frozenset({"label", "state", "sequence", "factors", "stakes", "calls", "reason", "by"})
 _FACTOR_KEYS = frozenset({"factor", "bearing", "text", "established", "source"})
 _STAKE_KEYS = frozenset({"stake", "text"})
+_EFFECT_KEYS = frozenset({"effect", "state", "proposal", "endorsers", "approved_by", "endorsements", "event_id",
+                          "reason"})
+#: written only on an effect whose acceptance recorded the control it was authorized under; an effect written
+#: before it existed has none and still reads
+_OPTIONAL_EFFECT_KEYS = frozenset({"controls_at", "accepted_on"})
+_INTENTION_KEYS = frozenset({"take", "actor", "as_of", "present", "unrecognised", "goal", "approach", "refusals",
+                             "considered", "explanation", "omitted"})
+_OPTION_KEYS = frozenset({"goal", "approach", "outcome", "unmet", "forbidden_by"})
+_ENDORSER_KEYS = frozenset({"contribution_id", "principal"})
+_ENDORSEMENT_KEYS = _ENDORSER_KEYS | {"fingerprint"}
 
 
 def _invalid(message: str) -> SceneRefused:
@@ -58,6 +72,39 @@ def turn_to_payload(record: TurnRecord) -> dict[str, object]:
     })
     if record.labels:
         payload["labels"] = [_label(label) for label in record.labels]
+    if record.effects:
+        payload["effects"] = [_effect(effect) for effect in record.effects]
+    if record.intentions:
+        payload["intentions"] = [_intention(intention) for intention in record.intentions]
+    return payload
+
+
+def _intention(intention: Intention) -> dict[str, object]:
+    return {"take": intention.take, "actor": str(intention.actor), "as_of": intention.as_of,
+            "present": [str(a) for a in intention.present], "unrecognised": [str(a) for a in intention.unrecognised],
+            "goal": intention.goal_id, "approach": intention.approach_id, "refusals": list(intention.refusals),
+            "considered": [{"goal": o.goal_id, "approach": o.approach_id, "outcome": o.outcome,
+                            "unmet": list(o.unmet), "forbidden_by": list(o.forbidden_by)}
+                           for o in intention.considered],
+            "explanation": list(intention.explanation), "omitted": intention.omitted}
+
+
+def _effect(effect: TurnEffect) -> dict[str, object]:
+    try:
+        proposal = proposal_to_payload(effect.proposal)
+    except EffectCodecError as error:
+        raise SceneRefused(error.reason, "this effect cannot be stored") from None
+    payload: dict[str, object] = {
+        "effect": effect.number, "state": effect.state, "proposal": proposal,
+        "endorsers": [{"contribution_id": cid, "principal": principal} for cid, principal in effect.endorsers],
+        "approved_by": effect.approved_by,
+        "endorsements": [{"contribution_id": e.contribution_id, "principal": e.principal,
+                          "fingerprint": e.fingerprint} for e in effect.endorsements],
+        "event_id": effect.event_id, "reason": effect.reason}
+    if effect.controls_at is not None:
+        payload["controls_at"] = effect.controls_at
+    if effect.accepted_on is not None:
+        payload["accepted_on"] = effect.accepted_on
     return payload
 
 
@@ -168,6 +215,8 @@ def turn_from_payload(address: TurnRef, schema: str, payload: object) -> TurnRec
                           data["paused"], data["paused_by"], data["passed_by"],  # type: ignore[arg-type]
                           device, follows, set_aside,  # type: ignore[arg-type]
                           tuple(_decode_label(item, address) for item in _list(data.get("labels", []), "labels")),
+                          tuple(_decode_effect(item, address) for item in _list(data.get("effects", []), "effects")),
+                          tuple(_decode_intention(item) for item in _list(data.get("intentions", []), "intentions")),
                           extras=extras)
     except SceneRefused:
         raise
@@ -213,6 +262,58 @@ def _decode_label(value: object, address: TurnRef) -> Label:
     calls = tuple(_decode_call(item, address.campaign_id, plan_turn) for item in _list(data["calls"], "label.calls"))
     return Label(number, data["state"], data["sequence"], tuple(factors), tuple(stakes),  # type: ignore[arg-type]
                  calls, data["reason"], data["by"])  # type: ignore[arg-type]
+
+
+def _decode_intention(value: object) -> Intention:
+    data = _mapping(value, "intention", _INTENTION_KEYS)
+    options = []
+    for item in _list(data["considered"], "intention.considered"):
+        found = _mapping(item, "intention option", _OPTION_KEYS)
+        unmet = tuple(_list(found["unmet"], "option.unmet"))
+        forbidden = tuple(_list(found["forbidden_by"], "option.forbidden_by"))
+        options.append(IntentionOption(found["goal"], found["approach"], found["outcome"],  # type: ignore[arg-type]
+                                       unmet, forbidden))  # type: ignore[arg-type]
+    return Intention(_int(data["take"], "intention.take"), _actor(data["actor"], "intention.actor"),
+                     _int(data["as_of"], "intention.as_of"),
+                     tuple(_actor(a, "intention.present") for a in _list(data["present"], "intention.present")),
+                     tuple(_actor(a, "intention.unrecognised")
+                           for a in _list(data["unrecognised"], "intention.unrecognised")),
+                     data["goal"], data["approach"],  # type: ignore[arg-type]
+                     tuple(_list(data["refusals"], "intention.refusals")), tuple(options),  # type: ignore[arg-type]
+                     tuple(_list(data["explanation"], "intention.explanation")),  # type: ignore[arg-type]
+                     data["omitted"])  # type: ignore[arg-type]
+
+
+def _decode_effect(value: object, address: TurnRef) -> TurnEffect:
+    data = _mapping(value, "effect", _EFFECT_KEYS, open_keys=True)
+    unknown = set(data) - _EFFECT_KEYS - _OPTIONAL_EFFECT_KEYS
+    if unknown:
+        raise _invalid(f"effect has unknown fields {sorted(unknown)}")
+    controls_at = data.get("controls_at")
+    if "controls_at" in data and (type(controls_at) is not int or controls_at < 0):
+        raise _invalid("effect.controls_at is a sovereignty ledger position")
+    accepted_on = data.get("accepted_on")
+    if "accepted_on" in data and (type(accepted_on) is not str or not _DEVICE.fullmatch(accepted_on)):
+        raise _invalid("effect.accepted_on is a device tag")
+    try:
+        proposal = proposal_from_payload(address.campaign_id, data["proposal"])
+    except EffectCodecError as error:
+        raise _invalid(f"effect.proposal cannot be read ({error.reason})") from None
+    endorsers = tuple((found["contribution_id"], found["principal"])
+                      for found in (_mapping(item, "endorser", _ENDORSER_KEYS)
+                                    for item in _list(data["endorsers"], "effect.endorsers")))
+    endorsements = []
+    for item in _list(data["endorsements"], "effect.endorsements"):
+        found = _mapping(item, "endorsement", _ENDORSEMENT_KEYS)
+        try:
+            endorsements.append(EndorsementRecord(
+                found["contribution_id"], found["principal"], found["fingerprint"]))  # type: ignore[arg-type]
+        except ValueError:
+            raise _invalid("effect.endorsements holds an invalid endorsement") from None
+    number = _int(data["effect"], "effect")
+    return TurnEffect(number, data["state"], proposal, endorsers, data["approved_by"],  # type: ignore[arg-type]
+                      tuple(endorsements), data["event_id"], data["reason"], controls_at,  # type: ignore[arg-type]
+                      accepted_on)
 
 
 def _decode_line(value: object) -> SceneLine:

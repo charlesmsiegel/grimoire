@@ -213,11 +213,8 @@ def known_ids(knowledge: ActorKnowledge) -> frozenset[str]:
 def _who(ref: InstanceRef | None, names: Mapping[InstanceRef, str], hidden: tuple[SecretFact, ...],
          exposed: Sequence[str]) -> str:
     """How the actor names ``ref``: "Someone" when unnamed, or when the name states a hidden secret."""
-    name = names.get(ref) if ref is not None else None
-    if not (isinstance(name, str) and has_words(name)):
-        return "Someone"
-    name = _one_line(name)
-    return "Someone" if leaks(name, hidden, exposed) is not None else name
+    name = _label_text(ref, None, names)
+    return SOMEONE if name is None else _screened(name, hidden, exposed)
 
 
 def _contents(knowledge: ActorKnowledge) -> tuple[str, ...]:
@@ -402,12 +399,57 @@ def leaks(text: str, hidden: tuple[SecretFact, ...], exposed: Sequence[str]) -> 
     return None
 
 
+def unrecognised(brief: NpcBrief, actors: Iterable[InstanceRef]) -> frozenset[InstanceRef]:
+    """Those of ``actors`` this brief's NPC does not recognise: the ones its brief would label "Someone".
+
+    Each actor's labels are exactly the ones a heard line's label is built from (``_label``): its name in the
+    brief's ``names``, else the speaker label of each line the NPC heard it say. An actor is unrecognised when any
+    of those states a secret the NPC has not learned (a disguised actor's real name), screened against everything
+    it holds and heard (``exposed``), or when it has no label at all (fail closed: nothing to know it by). This is
+    039's split of a scene's cast (GOALS.md): the rest is the cast as the NPC knows it. The NPC itself is never
+    unrecognised.
+    """
+    if type(brief) is not NpcBrief:
+        raise GenerationError("bad_brief", "unrecognised needs an NpcBrief from npc_brief()")
+    if isinstance(actors, (str, bytes, Mapping)):
+        raise GenerationError("bad_names", "actors must be a collection of InstanceRef values")
+    names = dict(brief.names)
+    found = set()
+    for ref in actors:
+        if type(ref) is not InstanceRef:
+            raise GenerationError("bad_names", "actors must be InstanceRef values")
+        if ref == brief.actor:
+            continue
+        # every label the brief could show for ``ref``: its name, else each line it was heard on's own speaker
+        labels = {_label_text(ref, None, names)} | {_label_text(ref, line.speaker, names)
+                                                     for line in brief.heard if line.actor == ref}
+        labels.discard(None)
+        if not labels or any(leaks(label, brief.hidden, brief.exposed) is not None for label in labels):
+            found.add(ref)  # fail closed: no label to know them by, or one the brief hides
+    return frozenset(found)
+
+
+#: What a brief calls an actor it may not name.
+SOMEONE = "Someone"
+
+
+def _label_text(actor: InstanceRef | None, speaker: str | None, names: Mapping[InstanceRef, str]) -> str | None:
+    """The label a brief gives ``actor`` before screening: its name in ``names``, else ``speaker`` (a heard line's
+    own label), else none. Shared by heard lines' labels and 039's ``unrecognised``, so the two cannot drift."""
+    label = names.get(actor) if actor is not None else None
+    if isinstance(label, str) and has_words(label):
+        return _one_line(label)
+    return _one_line(speaker) if isinstance(speaker, str) and has_words(speaker) else None
+
+
+def _screened(label: str, hidden: tuple[SecretFact, ...], exposed: Sequence[str]) -> str:
+    return SOMEONE if leaks(label, hidden, exposed) is not None else label
+
+
 def _label(line: HeardLine, names: Mapping[InstanceRef, str], hidden: tuple[SecretFact, ...],
            exposed: Sequence[str]) -> str:
     """Who spoke, as this listener labels them; "Someone" when the label would state a hidden secret."""
-    label = names.get(line.actor) if line.actor is not None else None
-    label = _one_line(label) if isinstance(label, str) and has_words(label) else _one_line(line.speaker)
-    return "Someone" if leaks(label, hidden, exposed) is not None else label
+    return _screened(_label_text(line.actor, line.speaker, names) or _one_line(line.speaker), hidden, exposed)
 
 
 def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLine] = (),

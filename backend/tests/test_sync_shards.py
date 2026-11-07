@@ -367,20 +367,26 @@ def _fault_scenario():
                          normalize=drop_empty_dirs)
 
 
-def test_a_crash_or_error_at_any_commit_boundary_of_a_sharded_sync_converges(tmp_path, small_cap):
+@pytest.mark.parametrize("commits", ["data-and-keeps", "archives-and-pending"])
+@pytest.mark.parametrize("faults", ["crashes", "errors"])
+def test_a_crash_or_error_at_any_commit_boundary_of_a_sharded_sync_converges(tmp_path, small_cap, faults, commits):
+    """Split four ways to keep each test far below the hung-test dump (docs/TESTING.md#ci-gate): the
+    crashes before and after each commit point, or the errors there and at its first publish, of the
+    first four commits or the last four."""
     with tempfile.TemporaryDirectory() as folder:
         baseline = run_plans(_fault_scenario(), [], Path(folder))
         baseline.assert_ok()
         trace = baseline.runs[0].action_trace
-    commits = [op.index for op in trace if op.kind == "replace" and (op.target or "").endswith("/.txn/journal.json")]
-    assert len(commits) == 8  # data(a), data(b), keeps(b), keeps(a), archive(b), archive(a), pending(b), pending(a)
+    commit_points = [op.index for op in trace if op.kind == "replace" and (op.target or "").endswith("/.txn/journal.json")]
+    assert len(commit_points) == 8  # data(a), data(b), keeps(b), keeps(a), archive(b), archive(a), pending(b), pending(a)
+    timings = {"crashes": {"before", "after"}, "errors": {"fail"}}[faults]
     points = {}
-    for index in commits:
-        points[index] = frozenset({"before", "after", "fail"})
+    for index in commit_points[:4] if commits == "data-and-keeps" else commit_points[4:]:
+        points[index] = frozenset({"before", "after", "fail"}) & timings
         publish = next((op.index for op in trace[index + 1:] if op.kind == "replace" and "/.txn/" in op.path), None)
-        if publish is not None:
+        if publish is not None and faults == "errors":
             points[publish] = frozenset({"fail"})
     report = explore_crashes(_fault_scenario(), tmp_path, errors=True, torn=False,
                              select=lambda op: points.get(op.index, frozenset()))
     report.assert_ok()
-    assert report.points_explored >= 18
+    assert report.points_explored >= (8 if faults == "crashes" else 7)
