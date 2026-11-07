@@ -86,7 +86,7 @@ A correction does not revoke a delegation. The player revokes it separately so t
 - a claim whose subject is an NPC but which speaks for the PC (refused `not_controller`);
 - PC speech bundled into a resolved outcome (refused `not_player_authority`).
 
-Both are labelling errors, so the remedy is a labeller and a mislabel-review path, not a wider correction right that could strike claims about other actors.
+Both are labelling errors, so the remedy is a labeller and a mislabel-review path, not a wider correction right that could strike claims about other actors. The review path exists: the referee routes both shapes from the labeller's `voiced_by`, and only that PC's controller may flag one, which strikes nothing ([REFEREE](REFEREE.md#authorship-claims-and-mislabel-review)). The labeller itself is still 047's next milestone.
 
 **Delegations and control changes.** Control assignments are a snapshot, with no history. A delegation is therefore honored whenever its grantor controls the PC again: one granted by P1 is suspended while P2 controls the PC, and it applies again when control returns to P1. Ending it for good takes a revocation by the grantor. Control history is now persisted (see [Persistence](#persistence-010b)); using it in review belongs to [Local Multi PC](roadmap/sprints/local-multi-pc.md).
 

@@ -41,24 +41,42 @@ def _evidence(store):
 
 
 def test_020_two_offline_appends_never_freeze_either_knowledge_log(tmp_path):
-    """The batches conflict; no record of either append crosses without its batch, so both logs stay healthy."""
+    """028: each device names its batch for itself, so both appends cross and merge into one log that
+    both devices read whole and append to again (test_sync_knowledge.py holds the merge rules)."""
     desktop, phone = _evidence_pair(tmp_path)
     try:
         _evidence(desktop).append(EVIDENCE_C, [Event(EVIDENCE_C, "e-desk", "desk event", m(1), "director")]).commit()
         _evidence(phone).append(EVIDENCE_C, [Event(EVIDENCE_C, "e-phone", "phone event", m(1), "director")]).commit()
         report = sync(desktop, phone, handles())
-        assert [conflict.code for conflict in report.conflicts] == ["missing_ancestor"]  # the batch
-        assert not [path for path, _ in report.copied if "/events/" in path or "/evidence/" in path]
-        assert any("/events/" in path for path in report.skipped[DESKTOP])  # reported, never silently gone
-        assert any("/events/" in path for path in report.skipped[PHONE])
+        assert report.conflicts == ()
+        assert any("/events/e-desk" in path for path, device in report.copied if device == PHONE)
+        assert any("/events/e-phone" in path for path, device in report.copied if device == DESKTOP)
         for store, device in ((desktop, DESKTOP), (phone, PHONE)):
             log = _evidence(store).read(EVIDENCE_C, requested_by="director")
             assert log.problems == () and log.quarantined == ()
+            assert {event.event_id for event in log.knowledge.events} == {"e-desk", "e-phone"}
             _evidence(store).append(EVIDENCE_C, [Event(EVIDENCE_C, f"e-next-{device}", "later", m(2),
                                                        "director")]).commit()  # never refused
     finally:
         desktop.close()
         phone.close()
+
+
+def _untagged(stores):
+    """Hide each library's identity while it appends, as a build before 028's tagged batch names did."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def hidden():
+        saved = {store: (store.root / ".sync" / "device.json").read_bytes() for store in stores}
+        for store in stores:
+            (store.root / ".sync" / "device.json").unlink()
+        try:
+            yield
+        finally:
+            for store, data in saved.items():
+                (store.root / ".sync" / "device.json").write_bytes(data)
+    return hidden()
 
 
 def test_020_one_devices_append_still_syncs_whole(tmp_path):
@@ -433,7 +451,8 @@ def test_020_a_knowledge_log_stuck_by_uncertainty_is_ended_by_one_resolve(tmp_pa
         _evidence(desktop).append(EVIDENCE_C, [Event(EVIDENCE_C, "e-1", "first", m(1), "director")]).commit()
         identify(phone, "phone2", replace=True)
         renamed = {DESKTOP: handles()[DESKTOP], "phone2": handles()[PHONE]}
-        batch = f"campaigns/{EVIDENCE_C}/evidence/batch/0000000001.json"
+        batch = next(f"campaigns/{EVIDENCE_C}/evidence/batch/{found.name}"
+                     for found in (desktop.root / "campaigns" / EVIDENCE_C / "evidence" / "batch").iterdir())
         assert sync(desktop, phone, renamed).conflict(batch).code == "missing_ancestor"
         mine = (desktop.root / batch).read_bytes()
         assert resolve(desktop, phone, batch, etag(mine), {DESKTOP: etag(mine), "phone2": None}, renamed) == "phone2"
@@ -448,10 +467,12 @@ def test_020_a_knowledge_log_stuck_by_uncertainty_is_ended_by_one_resolve(tmp_pa
 
 
 def test_020_resolve_never_merges_two_diverged_knowledge_logs(tmp_path):
+    """Two logs that collide on one batch path (appended before 028's tagged names) are never merged."""
     desktop, phone = _evidence_pair(tmp_path)
     try:
-        _evidence(desktop).append(EVIDENCE_C, [Event(EVIDENCE_C, "e-d", "desk", m(1), "director")]).commit()
-        _evidence(phone).append(EVIDENCE_C, [Event(EVIDENCE_C, "e-p", "phone", m(1), "director")]).commit()
+        with _untagged((desktop, phone)):
+            _evidence(desktop).append(EVIDENCE_C, [Event(EVIDENCE_C, "e-d", "desk", m(1), "director")]).commit()
+            _evidence(phone).append(EVIDENCE_C, [Event(EVIDENCE_C, "e-p", "phone", m(1), "director")]).commit()
         sync(desktop, phone, handles())
         event = f"campaigns/{EVIDENCE_C}/events/e-d.json"
         mine = (desktop.root / event).read_bytes()

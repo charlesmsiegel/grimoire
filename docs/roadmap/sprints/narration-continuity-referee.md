@@ -2,6 +2,8 @@
 
 **Outcome:** Catch factual contradictions in proposed narration before they propagate into canon, without making the narrator rigid or repetitive.
 
+**Status:** **first slice implemented**, headless and pure: `grimoire.referee` (no labeller call, no runner). The contract is in [REFEREE.md](../../REFEREE.md). Milestone 1 and the proving scenario are met on synthetic fixtures: five categories (presence, staging, possessions, knowledge, outcomes) checked against 041, 023/034, 012 and 029/040 records, with cited evidence and the prose unchanged, plus 003 authorship review and mislabel routing. The labeller and milestone 2 (one narration workflow in 035's runner) are next.
+
 ## Scope and ownership
 - Check generated text against currently authoritative presence, possessions, identity, capabilities, knowledge, scene staging and resolved outcomes.
 - Classify explicit contradiction, uncertain inference, acceptable metaphor and intentional unreliable narration; cite source evidence for material findings.
@@ -39,6 +41,11 @@ The [Wave 5 audit](../README.md#wave-5-status) found these inputs this referee r
 - **Physical continuity (041, [STAGING](../../STAGING.md)).** The referee consumes `reach`, `sees` and `hears` answers with their `assumed` lists and never mutates a stage. Checking a narration needs the stage as of that narration's turn, which needs 041 milestone 2 (a stage kept across turns) or a stage 035's runner builds for each turn. Off stage is one place in the first slice: the stage does not remember which outside an absent actor is on.
 - **Obstacle escalations (040, [OBSTACLES](../../OBSTACLES.md)).** Escalated stakes ("the guard reported you") are derived from the obstacle's ledgers, not 017, 020 or 021 records, so the referee reads `ObstacleState` to check narration against them; 029's `resolutions()` covers only outcomes.
 - **NPC intentions (039, [GOALS](../../GOALS.md#not-in-this-slice)).** A reply that breaks the NPC's briefed refusal is kept today; this referee flags it for review rather than rejecting it.
+
+In the first slice ([REFEREE](../../REFEREE.md)):
+- 041: a stage at any sequence other than the review's own is refused (`stale_stage`), and staging claims are reported `unchecked` without one.
+- 040: `overcomes` checks the derived `ObstacleState` and cites a fact that `prevents` the narrated approach.
+- 039: not yet checked. A claim kind that compares an NPC's reply with its briefed refusal waits on the requester's call on whether 047 or 045 owns it.
 
 ## Open questions
 - When may a repair be automatic?

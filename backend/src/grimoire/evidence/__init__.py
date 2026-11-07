@@ -9,12 +9,12 @@ store-backed service is ``grimoire.evidencestore``.
 
 from .assemble import CHAIN_FAMILIES, Assembly, Quarantine, ScannedFile, assemble, build_ledger
 from .codec import (
-    BATCH_LIMIT, BATCH_SCHEMA, CLAIMED_PROPOSITION_SCHEMA, FAMILIES, LABEL_LIMIT, SCHEMAS, TEXT_LIMIT, Batch, BatchEntry, EvidenceCodecError,
+    BATCH_LIMIT, BATCH_SCHEMA, CLAIMED_PROPOSITION_SCHEMA, FAMILIES, JOIN_BATCH_SCHEMA, LABEL_LIMIT, SCHEMAS, TEXT_LIMIT, Batch, BatchEntry, EvidenceCodecError,
     batch_entry, chain_key, decode, decode_batch, decode_claimed, encode, encode_batch, record_ref,
 )
 
 __all__ = [
-    "BATCH_LIMIT", "BATCH_SCHEMA", "CHAIN_FAMILIES", "CLAIMED_PROPOSITION_SCHEMA", "FAMILIES", "LABEL_LIMIT", "SCHEMAS", "TEXT_LIMIT", "Assembly",
+    "BATCH_LIMIT", "BATCH_SCHEMA", "JOIN_BATCH_SCHEMA", "CHAIN_FAMILIES", "CLAIMED_PROPOSITION_SCHEMA", "FAMILIES", "LABEL_LIMIT", "SCHEMAS", "TEXT_LIMIT", "Assembly",
     "Batch", "BatchEntry", "build_ledger", "EvidenceCodecError", "Quarantine", "ScannedFile", "assemble", "batch_entry",
     "chain_key", "decode", "decode_batch", "decode_claimed", "encode", "encode_batch", "record_ref",
 ]

@@ -207,7 +207,8 @@ def test_bad_batches_are_never_written(seq, previous, entries, reason):
 
 def test_bad_batches_are_never_read():
     ref, schema, payload = encode_batch(C, 1, None, ENTRIES)
-    for bad_schema, bad, reason in (("grimoire.knowledge-batch/2", payload, "unsupported_schema"),
+    for bad_schema, bad, reason in (("grimoire.knowledge-batch/3", payload, "unsupported_schema"),
+                                    ("grimoire.knowledge-batch/2", payload, "invalid_field"),  # a root joins nothing
                                     (schema, {**payload, "seq": 2}, "invalid_field"),
                                     (schema, {**payload, "extra": 1}, "unknown_field"),
                                     (schema, {**payload, "previous": None}, "invalid_field"),
@@ -221,3 +222,23 @@ def test_bad_batches_are_never_read():
     assert caught.value.reason == "invalid_field"
     with pytest.raises(EvidenceCodecError):
         decode(ref, schema, payload)  # a batch is not a record
+
+
+OTHER = "sha256:" + "b" * 64
+
+
+def test_a_join_names_every_head_sorted_and_one_parent_stays_the_first_form():
+    """028: a batch that joins two devices' heads is ``/2`` with its parents sorted; one parent is ``/1``."""
+    ref, schema, payload = encode_batch(C, 3, (OTHER, ETAG), ENTRIES, "3f2a91c0")
+    assert schema == "grimoire.knowledge-batch/2" and payload["previous"] == [ETAG, OTHER]
+    assert str(ref) == "campaign:c1#batch/0000000003-3f2a91c0" and ref.seq == 3 and ref.tag == "3f2a91c0"
+    batch = decode_batch(ref, schema, payload)
+    assert batch.parents == (ETAG, OTHER) and batch.previous == (ETAG, OTHER)
+    single = encode_batch(C, 3, (ETAG,), ENTRIES)
+    assert single[1] == BATCH_SCHEMA and single[2] == encode_batch(C, 3, ETAG, ENTRIES)[2]
+    for bad in ([OTHER, ETAG], [ETAG, ETAG], [ETAG], ETAG, [ETAG, "garbage"]):
+        with pytest.raises(EvidenceCodecError) as caught:
+            decode_batch(ref, schema, {**payload, "previous": bad})
+        assert caught.value.reason == "invalid_field"
+    with pytest.raises(EvidenceCodecError):
+        encode_batch(C, 3, ETAG, ENTRIES, "NOT-A-TAG")

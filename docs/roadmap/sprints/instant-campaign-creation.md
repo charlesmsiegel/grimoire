@@ -1,5 +1,7 @@
 # One-Premise Campaign Launch and Organic World Growth
 
+**Status:** milestone 1's **first slice is implemented**, headless: `grimoire.quickstart`'s Start Chat from one character, scenario, character + lorebook bundle or premise to an open world-less 035 chat, every source pinned, the opening chosen by id, Continue, Add Card, a broken source's repair choice and naming the chat a campaign. The contract is in [QUICKSTART.md](../../QUICKSTART.md), proven by `backend/tests/test_quickstart.py`. It needs 042's reviewed rebase as a prerequisite (a pinned chat moves only through it). Not yet: session-zero boundaries at launch (they wait for 035 M2 to execute them), a UI, and milestones 2 and 3.
+
 **Outcome:** Launch a character/scenario chat in one action without worldbuilding, and let the player grow it into a multi-card campaign or authored setting only if desired.
 
 ## Scope and ownership
@@ -35,7 +37,7 @@ This sprint moves from Wave 7 to **Wave 6**. A user should not need to locate a 
 ## Inherited from Wave 5
 
 The [Wave 5 audit](../README.md#wave-5-status) found what one-click start needs from Wave 5 first slices:
-- **035 ([SCENES](../../SCENES.md)).** `begin` proposes only a card's first greeting, so choosing among greetings is 035's to add; a scope with a session zero refuses generation until 016's codec exists, so a quick start must work with none.
+- **035 ([SCENES](../../SCENES.md)).** `begin` proposes only a card's first greeting, so choosing among greetings is 035's to add (**done**: `begin` takes an opening id, [QUICKSTART](../../QUICKSTART.md#choosing-the-opening-035)); a scope with a session zero refuses generation until 016's codec exists, so a quick start must work with none (it does: Start Chat offers no boundaries).
 - **042 ([REBASE](../../REBASE.md)).** "A world created later from reviewed selected facts" is 042's `CanonProposer` plus 107's `attach_world`, which promote picked characters only; promoting lore, places, organisations and relations is later 042 work.
 
 ## Open questions

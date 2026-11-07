@@ -27,7 +27,7 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 
 [019](sync-revisions-and-conflict-core.md) leaves these with this sprint as **first-proof obligations** ([SYNC](../../SYNC.md)):
 - **Merge rules for 021 accepted events and scene wrap-ups and 023 holdings.** They are still held back: never copied, and reported as `held` conflicts whenever the devices differ (with the 017 relations of any campaign holding an accepted event). Two devices accepting offline collide on ordinals, and both stores commit several files as one unit.
-- **Merging 020 knowledge logs** when both devices appended to one campaign offline (today a keep-both `missing_ancestor` conflict on the batch; a log moves only whole).
+- **Merging 020 knowledge logs** when both devices appended to one campaign offline: done. An identified library names each batch for its device and an append extends every head, so the two devices' appends are different files that sync copies create-only into one log both read whole; a union 020 would not read whole, or rulings on one proposition from both devices, stays one held unit (`unapplicable`) ([SYNC](../../SYNC.md#knowledge-logs-028), [EVIDENCE](../../EVIDENCE.md#the-knowledge-log)).
 - **Dismissing kept versions:** done. `dismiss` records the path and the dismissed bytes' etag per pair, only for a version a sync wrote here from the peer, recorded in the commit that writes the keep (never one `resolve` held, which every pair's record lists as `held`); a sync never keeps those bytes for that device again on that conflict's base, a different later version still is, the other device is untouched, and the record ends with its conflict ([SYNC](../../SYNC.md#keep-both)).
 - **Deletion propagation**, and resolving toward a deletion.
 - **Per-device actor id allocation:** done in the first slice; an identified library numbers actors `<entity>-<tag>-<n>`, and 034's unique items the same way ([DEVICE_SYNC](../../DEVICE_SYNC.md#per-device-ids)).
@@ -39,7 +39,7 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 Still owed by this sprint, and due **before Sprint 044**:
 - **Merge rules for 021 accepted events and scene wrap-ups, and for 023 holdings.** Until then they stay `held`: never copied, reported whenever the devices differ.
 - **Merge rules for 035 played turns** (`turns/`, [SCENES](../../SCENES.md)): two devices that played one chat offline both wrote its next turn. Until then turns stay `held` like the families above.
-- **Merging 020 knowledge logs** that both devices appended to offline (today a keep-both `missing_ancestor` conflict on the batch).
+- ~~**Merging 020 knowledge logs** that both devices appended to offline~~: done ([SYNC](../../SYNC.md#knowledge-logs-028)). Still owed by the allocators (021/029/032/035): device-tagged record ids and sequences taken from the merged high-water mark.
 - **Deletion propagation**, and resolving toward a deletion.
 
 ## Wave 2 handoff: revision-safe transfers

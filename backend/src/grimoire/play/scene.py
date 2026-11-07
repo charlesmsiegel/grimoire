@@ -217,11 +217,13 @@ def _payload(snapshot, ref, role: str) -> Mapping[str, object]:
     return found[1] if found is not None and isinstance(found[1], Mapping) else {}
 
 
-def _first_text(items: object, *, wanted: str | None = None) -> str | None:
+def _first_text(items: object, *, wanted: str | None = None, chosen: bool = False) -> str | None:
+    """The first usable text, or the one ``wanted`` by id. A group-only greeting is never a default, but one
+    the player ``chosen`` by its id is theirs to open with."""
     if not isinstance(items, (list, tuple)):
         return None
     for item in items:
-        if not isinstance(item, Mapping) or item.get("group_only"):
+        if not isinstance(item, Mapping) or (item.get("group_only") and not chosen):
             continue
         if wanted is not None and item.get("id") != wanted:
             continue
