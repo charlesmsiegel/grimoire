@@ -43,6 +43,8 @@ def label_action(runner, chat: ChatRef, by) -> Label:
     post = record.post if record is not None else None
     if post is None or post.kind != "action":
         raise _refuse("not_an_action", "only the open turn's action post is labelled")
+    if post.private:
+        raise _refuse("private_action", "an action that may carry a private message is not adjudicated at the table")
     controller = scene.controller(post.actor)
     if post.actor not in scene.cast or controller in (None, DIRECTOR):
         raise _refuse("not_a_player_action", "only a present player character's action is labelled")

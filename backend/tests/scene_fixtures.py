@@ -24,6 +24,7 @@ from ledger_helpers import fixed_clock
 from store_helpers import OWNER, owner_handle
 from v1_fixture import CAMPAIGN, sha, write
 
+from grimoire.adjudicationstore import AdjudicationLibrary
 from grimoire.chats import Launch
 from grimoire.chatstore import ChatLibrary
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef
@@ -41,6 +42,7 @@ ANA, BOB = "human:ana", "human:bob"
 SCOPES = ("sources", "campaigns", "assets", "kept")
 POLICY = InferencePolicy({"director_generation": 1}, max_attempts_per_call=1)
 LABELLER = "app:labeller"
+ADJUDICATOR = "app:adjudicator"
 LABEL_POLICY = InferencePolicy({"director_generation": 1, "labelling": 1}, max_attempts_per_call=1)
 
 # -- V1 ---------------------------------------------------------------------------------------------
@@ -151,7 +153,7 @@ class Table:
 
     def __init__(self, folder: Path, steps=(), *, voices: VoiceCatalog | None = None, runtime: bool = True,
                  policy: InferencePolicy = POLICY, secrets=(), fence=None, labels=None,
-                 propose: bool = True) -> None:
+                 propose: bool = True, adjudicate: bool = False) -> None:
         self.store = LibraryStore.open(folder)
         self.authority = DurableAuthority.open(self.store, [OWNER], clock=fixed_clock())
         self.owner = self.authority.handle_for(OWNER, trusted=True)
@@ -165,9 +167,14 @@ class Table:
                 self.authority.add_grant(Grant("labeller-campaigns", LABELLER, frozenset({Permission.PROPOSE}),
                                                ResourcePath.parse("campaigns"), OWNER))
             self.label_handle = self.authority.handle_for(LABELLER, trusted=False)
+        self.adjudication = None
+        if adjudicate:  # the app's own adjudication key: never the labeller's, never a player's
+            self.adjudication = AdjudicationLibrary(self.store, self.authority,
+                                                    self.authority.handle_for(ADJUDICATOR, trusted=True))
         self.runner = SceneRunner(self.store, self.authority, self.owner, owner=OWNER,
                                   runtime=self.harness.runtime if runtime else None, policy=policy, secrets=secrets,
-                                  voices=voices, fence=fence, labeller=labeller, label_handle=self.label_handle)
+                                  voices=voices, fence=fence, labeller=labeller, label_handle=self.label_handle,
+                                  adjudication=self.adjudication)
 
     def player(self, principal: str = ANA):
         return self.authority.handle_for(principal, trusted=True)
@@ -184,7 +191,8 @@ class Table:
 
 
 __all__ = [
-    "ANA", "ANYA", "BOB", "LABEL_POLICY", "LABELLER", "LIGHTHOUSE", "MARA", "MARA_EXAMPLE", "MARA_LORE", "MARA_VELL",
+    "ADJUDICATOR", "ANA", "ANYA", "BOB", "LABEL_POLICY", "LABELLER", "LIGHTHOUSE", "MARA", "MARA_EXAMPLE", "MARA_LORE",
+    "MARA_VELL",
     "MARA_VOICE", "POLICY",
     "SERAPHINE", "SERAPHINE_EXAMPLE", "STORM", "TAMSIN", "Table", "V1_CHAT", "VELL_EXAMPLE", "WINIFRED",
     "attach_tamsin", "card_library", "say", "secure", "v1_library",

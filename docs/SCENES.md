@@ -49,7 +49,7 @@ A turn is open until one take is kept or somebody passes it. Lines are `<turn_id
 
 ## The runner
 
-`SceneRunner(store, authority, handle, *, owner, runtime=None, policy=None, secrets=(), voices=None, fence=None, budget=DEFAULT_BUDGET, labeller=None, label_handle=None)`.
+`SceneRunner(store, authority, handle, *, owner, runtime=None, policy=None, secrets=(), voices=None, fence=None, budget=DEFAULT_BUDGET, labeller=None, label_handle=None, adjudication=None)`.
 - `handle` is a trusted human handle `authority` issued (the library owner's). It writes turn files and records control at `seat`.
 - `runtime` is the app's `GenerationRuntime`: a trusted app handle, the configured provider only, no approvals asked. Without one, nothing is generated (`no_runtime`).
 - `policy` caps the calls a turn may plan; a director reply needs `director_generation`.
@@ -57,6 +57,7 @@ A turn is open until one take is kept or somebody passes it. Lines are `<turn_id
 - `voices` are authored profiles; an imported character with none derives its voice from its card (027/026), and one with no example lines speaks anyway.
 - `fence` makes an older run of the same chat stale.
 - `labeller` is the app's `LabelRuntime` (its own untrusted provider handle, every attempt approved) and `label_handle` the untrusted handle `authority` issued for proposing labels. Without both, nothing is labelled (`no_labeller`); see [Labelling an action](#labelling-an-action).
+- `adjudication` is the library's 029 `AdjudicationLibrary` (on this `store`, `bad_adjudication` otherwise), over the app's own trusted adjudication key: never the labeller's handle and never a player's. Without it nothing is framed or decided (`no_adjudication`); see [Confirming and deciding an action](#confirming-and-deciding-an-action).
 
 Every method reads the chat afresh (one `LibraryView`, 022's chat snapshot, the turns, 010b's recorded control, 033's party) and writes at most one turn file.
 
@@ -73,6 +74,9 @@ Every method reads the chat afresh (one `LibraryView`, 022's chat snapshot, the 
 | `request(chat, by, kind, targets=(), *, direction=None)` | 016's mid-session request with no session-zero configuration: `pause`, or `skip`, `redirect` and `rephrase` naming lines, which are withdrawn (kept or proposed). A direction is recorded on the take. |
 | `resume(chat, by)` | Lifts a pause; only the player who paused, or the library owner, may. |
 | `label(chat, by)` | Proposes 029 labels for the open turn's action post: which offered facts bear on it and what is at stake. See [Labelling an action](#labelling-an-action). |
+| `confirm(chat, by)` | The acting player frames the open action exactly as its latest proposed labelling says. Returns the `Outcome` when the rules decide it at once, else `None`. See [Confirming and deciding an action](#confirming-and-deciding-an-action). |
+| `decide(chat, by, result, *, basis="adjudicated", cites=(), consequences=())` | Decides a framed, uncertain action: the director adjudicates it, or its player consents to a setback. |
+| `outcome(chat)` | The open turn's recorded outcome, if its action was decided. |
 
 While play is paused nothing is begun, posted, generated, kept or passed (`paused`); marks and `resume` still work. A run already in flight when the pause lands writes its take, which waits for the resume. A pause is written only on the chat's last turn: if play went on meanwhile, it is refused `turn_changed`.
 
@@ -80,13 +84,13 @@ While play is paused nothing is begun, posted, generated, kept or passed (`pause
 
 **Generating.** Speakers default to every present, director-controlled NPC with a voice; named speakers must be present (`not_present`), NPCs (`not_an_npc`) and voiced (`no_voice`). Each is briefed from its own knowledge (020, as of the newest sequence), its own pack built from this turn's snapshot, and only what it heard; silent present NPCs' voices go to the screen as `scene_voices`. A director reply is asked for explicitly, needs a bound scenario or a premise (`no_scenario`), and sees only what the table saw plus triggered lore. Every NPC line passes `review_narration` as voluntary speech by that NPC; a rejected line is dropped and its call marked `rejected`. A run claims its fence in the same step that publishes its running take, so an older run can never cancel the reroll that superseded it. The run re-checks its fence inside the commit: a run made stale keeps its usage and drops its lines. When a reroll supersedes a take still running and the older run lands first, the reroll reads the turn again and still writes its own take; a take that was itself superseded meanwhile is written stale. A take found `running` when the chat opens is reported `interrupted` and superseded by the next.
 
-**Refusals** (`SceneRefused(reason)`). None writes anything, except that `generate` has already written its `running` take when its result is refused `turn_changed` (the next run supersedes that take, as an interrupted one). The reasons: `bad_handle`, `bad_runtime`, `invalid_field`, `chat_id_too_long`, `too_many_turns`, `no_chat`, `not_seated`, `not_authenticated`, `not_at_table`, `not_your_character`, `already_begun`, `no_opening`, `no_persona`, `persona_absent`, `persona_not_player`, `no_content`, `uncertain` (with the router's feedback), `not_in_this_slice` (commands, direction, interiority), 032's unread reasons, `turn_open`, `no_runtime`, `session_zero_unreadable`, `party_unreadable`, `unassigned_actor`, `nothing_to_generate`, `too_many_takes`, `director_declined`, `no_scenario`, `not_present`, `not_an_npc`, `no_voice`, `not_proposed`, `empty_take`, `cast_changed`, `unscreened_lore`, `not_kept`, `unknown_line`, `no_targets`, `nothing_to_pause`, `already_paused`, `not_paused`, `not_yours`, `paused`, `no_open_turn`, `bad_labeller`, `no_labeller`, `not_an_action`, `not_a_player_action`, `not_controller`, `already_framed`, `too_many_labels`, `labelling_unplannable`, `labelling_declined`, `turns_unreadable`, `turn_fork` (two turns of one number in this library: every write waits for 028's merge), `turn_changed`, `device_identity` (a damaged device identity: no new turn); and 027's planning and briefing reasons, passed on unchanged.
+**Refusals** (`SceneRefused(reason)`). None writes anything, except that `generate` has already written its `running` take when its result is refused `turn_changed` (the next run supersedes that take, as an interrupted one). The reasons: `bad_handle`, `bad_runtime`, `invalid_field`, `chat_id_too_long`, `too_many_turns`, `no_chat`, `not_seated`, `not_authenticated`, `not_at_table`, `not_your_character`, `already_begun`, `no_opening`, `no_persona`, `persona_absent`, `persona_not_player`, `no_content`, `uncertain` (with the router's feedback), `not_in_this_slice` (commands, direction, interiority), 032's unread reasons, `turn_open`, `no_runtime`, `session_zero_unreadable`, `party_unreadable`, `unassigned_actor`, `nothing_to_generate`, `too_many_takes`, `director_declined`, `no_scenario`, `not_present`, `not_an_npc`, `no_voice`, `not_proposed`, `empty_take`, `cast_changed`, `unscreened_lore`, `not_kept`, `unknown_line`, `no_targets`, `nothing_to_pause`, `already_paused`, `not_paused`, `not_yours`, `paused`, `no_open_turn`, `bad_labeller`, `no_labeller`, `not_an_action`, `not_a_player_action`, `not_controller`, `already_framed`, `too_many_labels`, `labelling_unplannable`, `labelling_declined`, `private_action`, `no_adjudication`, `bad_adjudication`, `not_proposed` (also: only the latest labelling, while proposed, is confirmed), `control_changed`, `not_framed`, `not_director`, `undecided_attempt`, 029's framing and decision reasons (such as `uncited_result`, `partial_without_cost`, `result_not_allowed`), passed on unchanged, `turns_unreadable`, `turn_fork` (two turns of one number in this library: every write waits for 028's merge), `turn_changed`, `device_identity` (a damaged device identity: no new turn); and 027's planning and briefing reasons, passed on unchanged.
 
 ## Labelling an action
 
 The first step of 029's fiction-first adjudication for a player character's action (035 milestone 2). Labelling frames nothing and decides nothing: it proposes the labels a frame would carry, on the action's own turn.
 
-**Who asks.** The acting character's player, or the library owner, by pressing for it (`label(chat, by)`). Only the open turn's post is labelled, only when it is an action (`not_an_action`), and only for a present player character (`not_a_player_action`); another player is refused `not_controller`. An action already framed is refused `already_framed`.
+**Who asks.** The acting character's player, or the library owner, by pressing for it (`label(chat, by)`). Only the open turn's post is labelled, only when it is an action (`not_an_action`) the table saw (a withheld action is `private_action`: its labelling would need a private frame), and only for a present player character (`not_a_player_action`); another player is refused `not_controller`. An action already framed is refused `already_framed`.
 
 **What the labeller sees.** One `labelling` call ([INFERENCE](INFERENCE.md)), planned for the scene with no actor (no model call decides for a player character) under its own plan turn, `<turn_id>.l<n>`. Its prompt holds the action, the last 12 lines the acting character heard (context only, not citable) and a numbered list of facts from the acting character's own 031 pack: their description and card sections, their perceptions, the propositions they believe, and triggered lore. It never sees a secret, an NPC's private knowledge or director lore.
 
@@ -99,8 +103,32 @@ The first step of 029's fiction-first adjudication for a player character's acti
 **Known limits.**
 - A hindrance the acting character does not know of is never labelled: the facts offered are theirs. A referee's view of the scene belongs to the decision, not to labelling.
 - Kept lines are not facts: what an NPC said is offered only as context, never as a citable fact, until 020 records it as knowledge.
-- Labelling runs on a press, not on every post, and nothing confirms, frames or decides the proposal yet: that is the next part of 035 milestone 2.
+- Labelling runs on a press, not on every post.
 - At most 64 facts are offered, in pack order; a crowded pack may leave a relevant fact out.
+
+## Confirming and deciding an action
+
+The rest of 029's adjudication for a player character's action (035 milestone 2): the labelling becomes a frame, and the frame a decision, before anything narrates the result.
+
+**The player confirms, unedited** (the requester's decision in Wave 6). `confirm(chat, by)` frames exactly the turn's latest labelling, and only while it is `proposed` (`not_proposed`): nothing in it can be edited, so a wrong labelling is fixed by labelling again (the acting player or the owner asks). Only the acting character's controller confirms (`not_controller`, the owner included), and only while that player still controls the character who posted (`control_changed`). An action framed already is `already_framed`, and a framed action is never labelled again.
+
+**What 029 records.** The frame's attempt is the turn id, at the labelling's moment (the sequence after the newest knowledge, the chat and the turn), with the post's words as the intent (at most 4,000 characters), the labelling's factors and stakes, and `035 labelling <n>, confirmed by the acting player` as its provenance. It is backed by the player's own contribution (the post: its turn id, actor and `submitted_by`) and given with the player's own trusted handle, as 029 requires for a player character; the adjudication key records it. The labelling is then written `framed` on the turn. A confirm interrupted after 029 recorded the frame finds the same frame there and only marks the labelling.
+
+**Deciding.** 029 assesses the frame at once. An action the rules decide is decided at once, by rule, with the adjudication key: `straightforward` succeeds (citing every favouring factor) and `impossible` fails (citing every preventing factor), and `confirm` returns its `Outcome`. An `uncertain` action waits (`confirm` returns `None`) for `decide`:
+- `basis="adjudicated"`: the director (the library owner) chooses the result, citing the frame's factors and naming the stakes that come true (`not_director` for anyone else).
+- `basis="consent"`: the acting player chooses a setback for their own character, a result worse than the best the frame allows, with their own trusted handle as their consent (`not_controller` for anyone else).
+
+029 checks every rule (a success or partial cites a favouring factor, a failure or partial a hindering one, a partial names its consequences) and its refusal reason is passed on. Only a framed action is decided (`not_framed`); `basis` is `adjudicated` or `consent` (`invalid_field`).
+
+**Narration waits for the decision.** While the open turn's action is framed and undecided, `generate` and `keep` are refused `undecided_attempt`, so no take is written for it and none is kept. Once decided, the outcome is one heard line (speaker `Outcome`): "<name>'s action (<intent>) succeeds | succeeds at a cost | fails. Because: <cited factors>. What comes of it: <consequences>." The director reply sees it among the table's lines; an NPC hears it only if it saw the action. An action that was never confirmed binds nothing: it narrates as before.
+
+**Known limits.**
+- **A take written before framing** (a reroll of the action's own turn, generated before it was confirmed) can be kept after the decision, though it was written without the outcome.
+- **Narration is not checked against the outcome.** A take that narrates the opposite result is not refused here; checking narration against 029's resolution is the Narration Continuity Referee's (047), and turning narration into effects is the effects part of this milestone.
+- **One adjudication key frames and decides.** The runner, not the key, decides who frames (the acting player, on their own contribution and handle) and who decides (the rules, the director, or the player's consent), so the key's holder is the app alone.
+- **The intent is the post as written**, cut to 4,000 characters; nothing summarises it.
+- **No ability is framed.** The runner's frames carry no 025 ability, so 029 never assesses one `clarify` (an ability that needs a ruling); framing a power, and its ruling, is 040's and this milestone's later part.
+- **Passing the turn** with an undecided frame leaves the attempt undecided in 029; nothing narrates it later.
 
 ## Storage and sync
 
@@ -126,7 +154,7 @@ The first step of 029's fiction-first adjudication for a player character's acti
 
 | Item | Owner |
 |---|---|
-| Confirming a labelling into a 029 frame, and its decision; labelling kept narration into effect proposals; `check_effect`; 021 acceptance; 030 recovery at open before the next acceptance | 035 M2, 029, 021, 030 |
+| Labelling kept narration into effect proposals; `check_effect`; 021 acceptance; 030 recovery at open before the next acceptance | 035 M2, 029, 021, 030 |
 | Writing 032's delivery records to 020 in the turn's commit, so NPC memory of a scene is knowledge, not only a window | 035 M2 |
 | Choosing 039's intentions each turn, and storing the `Choice` in the turn record | 035 M2, 039 |
 | Framing 040's approaches, and applying `due()` through 021 | 035 M2, 040, 021 |
