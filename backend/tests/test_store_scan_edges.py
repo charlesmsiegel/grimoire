@@ -154,12 +154,12 @@ def test_a_replace_whose_hold_vanished_live_never_publishes(tmp_path, monkeypatc
     a, b = _diverged_r2(tmp_path)
     real = engine.settle
 
-    def settle(access, journal, *, live=False):
+    def settle(access, journal, *, live=False, **kwargs):  # type: ignore[no-untyped-def]
         if live:
             for entry in journal.entries:
                 if entry.kind == "hold":
                     access.ops.remove(access.path((".txn", entry.temp)))
-        return real(access, journal, live=live)
+        return real(access, journal, live=live, **kwargs)
     try:
         monkeypatch.setattr(library.engine, "settle", settle)
         txn, _, replaced = _replace(a, b)

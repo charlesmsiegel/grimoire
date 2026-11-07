@@ -14,10 +14,18 @@ import shutil
 import pytest
 
 from generation_fixtures import say
-from scene_fixtures import ANA, BOB, LABEL_POLICY, LABELLER, LIGHTHOUSE, POLICY, Table, card_library
+from scene_fixtures import ADJUDICATOR, ANA, BOB, LABEL_POLICY, LABELLER, LIGHTHOUSE, POLICY, Table, card_library
 from store_helpers import OWNER
 
+from types import SimpleNamespace
+
+from grimoire.adjudication import AdjudicationError
+from grimoire.core.identity import InstanceRef
+from grimoire.adjudicationstore import AdjudicationLibrary
 from grimoire.core.inference import InferenceStage
+from grimoire.generation import MAX_LINE_CHARS
+from grimoire.play.adjudicate import outcome_line
+from grimoire.store.errors import AuthorityUnavailable, LedgerInvalid
 from grimoire.ledgers.codec import ControlChange
 from grimoire.play import SceneRunner
 from grimoire.providers import RouteChoice
@@ -246,6 +254,347 @@ def test_the_label_handle_is_an_untrusted_handle_the_librarys_authority_issued(c
                     label_handle=handle)
         refused("bad_labeller", SceneRunner, table.store, table.authority, table.owner, owner=OWNER,
                 labeller=object())
+
+
+# -- confirming and deciding (the requester's call: the player confirms, unedited) -----------------
+
+HINDERED = json.dumps({"factors": [{"fact": "f1", "bearing": "favours"}, {"fact": "f2", "bearing": "hinders"}],
+                       "stakes": ["She falls to the deck"]})
+PREVENTED = json.dumps({"factors": [{"fact": "f1", "bearing": "prevents"}], "stakes": []})
+UNOPPOSED = json.dumps({"factors": [{"fact": "f1", "bearing": "favours"}], "stakes": []})
+
+
+def judged(folder, *replies, steps=()) -> Table:
+    return Table(folder, steps, policy=LABEL_POLICY, labels=[say(reply) for reply in replies], adjudicate=True)
+
+
+def test_the_player_confirms_the_labels_unedited_and_the_rules_decide_an_unopposed_action(cards):
+    folder, chat = cards
+    with judged(folder, UNOPPOSED) as table:
+        acting(table, chat)
+        label = table.runner.label(chat, table.player())
+        outcome = table.runner.confirm(chat, table.player())
+        assert (outcome.classification, outcome.decision.result, outcome.decision.basis) == (
+            "straightforward", "success", "rule")
+        assert outcome.frame.factors == label.factors and outcome.frame.stakes == label.stakes
+        assert outcome.frame.moment.sequence == label.sequence
+        assert outcome.decided_by == ADJUDICATOR  # the app's key: never the labeller's, never the player's
+        assert table.runner.open(chat).pending.framed.label == 1
+        assert table.runner.outcome(chat) == outcome
+        refused("already_framed", table.runner.confirm, chat, table.player())
+        refused("already_framed", table.runner.label, chat, table.player())
+
+
+def test_a_prevented_action_fails_by_rule_citing_what_prevents_it(cards):
+    folder, chat = cards
+    with judged(folder, PREVENTED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        outcome = table.runner.confirm(chat, table.player())
+        assert (outcome.classification, outcome.decision.result, outcome.decision.cites) == (
+            "impossible", "failure", frozenset({"f1"}))
+
+
+def test_only_the_acting_player_confirms(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        acting(table, chat)
+        refused("not_proposed", table.runner.confirm, chat, table.player())  # nothing labelled yet
+        table.runner.label(chat, table.player())
+        refused("not_controller", table.runner.confirm, chat, table.owner)  # the director never confirms for her
+        assert table.adjudication.state(chat.campaign_id).frame(table.runner.open(chat).pending.turn_id) is None
+
+
+def test_a_refused_or_superseded_labelling_is_never_confirmed(cards):
+    folder, chat = cards
+    with judged(folder, "not json", UNOPPOSED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        refused("not_proposed", table.runner.confirm, chat, table.player())
+        table.runner.label(chat, table.player())  # the relabel is the only fix
+        assert table.runner.confirm(chat, table.player()).frame.provenance.startswith("035 labelling 2")
+
+
+def test_nothing_is_framed_without_an_adjudication_key(cards):
+    folder, chat = cards
+    with labelled(folder, UNOPPOSED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        refused("no_adjudication", table.runner.confirm, chat, table.player())
+
+
+def test_an_uncertain_action_waits_and_no_narration_is_written_or_kept_until_it_is_decided(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED, steps=[say("Mara looks up."), say("Mara steadies the line.")]) as table:
+        acting(table, chat)
+        early = table.runner.generate(chat, table.player())  # before framing, play goes on
+        table.runner.label(chat, table.player())
+        assert table.runner.confirm(chat, table.player()) is None
+        refused("undecided_attempt", table.runner.generate, chat, table.player())
+        refused("not_proposed", table.runner.keep, chat, table.player(), early.take)  # withdrawn at confirm
+        refused("not_director", table.runner.decide, chat, table.player(), "partial", cites=("f1", "f2"),
+                consequences=("s1",))
+        refused("uncited_result", table.runner.decide, chat, table.owner, "success")  # 029's own rules
+        outcome = table.runner.decide(chat, table.owner, "partial", cites=("f1", "f2"), consequences=("s1",))
+        assert (outcome.decision.basis, outcome.decision.result) == ("adjudicated", "partial")
+        # The take written before the confirm never heard the outcome, so it stays withdrawn once decided.
+        refused("not_proposed", table.runner.keep, chat, table.player(), early.take)
+        withdrawn = next(t for t in table.runner.open(chat).pending.takes if t.take == early.take)
+        assert withdrawn.state == "withdrawn" and not withdrawn.shown()
+        take = table.runner.generate(chat, table.player())
+        prompt = table.harness.prompts()[-1]
+        # An NPC who saw the action hears the bare result: its causes are Anya's own facts, its stakes the
+        # labeller's words, and her name is the action's own line's to give.
+        assert "Anya Rook: *I climb the rigging*\nOutcome: The action succeeds at a cost.\n" in prompt
+        assert "She falls to the deck" not in prompt and "Because" not in prompt
+        table.runner.keep(chat, table.player(), take.take)
+
+
+def test_a_run_in_flight_when_the_action_is_confirmed_lands_stale_and_is_never_kept(cards, monkeypatch):
+    folder, chat = cards
+    with judged(folder, UNOPPOSED, steps=[say("You reach the top."), say("The rope holds.")]) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        run_turn, decided = table.harness.runtime.run_turn, []
+
+        def confirmed_meanwhile(*args, **kwargs):
+            outcome = run_turn(*args, **kwargs)
+            if not decided:  # the player confirms while the take's call is out; the rules decide it
+                decided.append(table.runner.confirm(chat, table.player()))
+            return outcome
+
+        monkeypatch.setattr(table.harness.runtime, "run_turn", confirmed_meanwhile)
+        early = table.runner.generate(chat, table.player())
+        assert decided[0].decision.result == "success"
+        assert early.state == "stale" and early.lines == ()  # written without the outcome: dropped
+        refused("not_proposed", table.runner.keep, chat, table.player(), early.take)
+        take = table.runner.generate(chat, table.player())
+        assert "Outcome: The action succeeds." in table.harness.prompts()[-1]
+        table.runner.keep(chat, table.player(), take.take)
+
+
+def test_a_decided_outcome_stays_where_it_was_heard_in_later_turns(cards):
+    folder, chat = cards
+    steps = [say("Mara nods."), say("Mara answers."), say("The storm builds.")]
+    with judged(folder, UNOPPOSED, steps=steps) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        table.runner.confirm(chat, table.player())
+        table.runner.keep(chat, table.player(), table.runner.generate(chat, table.player()).take)
+        table.runner.post(chat, table.player(), '"Did you see that?"')
+        table.runner.generate(chat, table.player())
+        npc = table.harness.prompts()[-1]
+        assert "Anya Rook: *I climb the rigging*\nOutcome: The action succeeds.\nMara Vell: Mara nods." in npc
+        assert "A harbor pilot" not in npc.split("Outcome:", 1)[1].split("\n", 1)[0]  # still the bare result
+
+
+def test_the_player_may_consent_to_a_setback_for_their_own_action(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        table.runner.confirm(chat, table.player())
+        refused("not_controller", table.runner.decide, chat, table.owner, "failure", basis="consent")
+        outcome = table.runner.decide(chat, table.player(), "failure", basis="consent", consequences=("s1",))
+        assert (outcome.decision.basis, outcome.consented_by) == ("consent", ANA)
+
+
+def test_an_action_that_may_carry_a_private_message_is_not_labelled(cards):
+    folder, chat = cards
+    with judged(folder, UNOPPOSED) as table:
+        acting(table, chat, "*I whisper the vault code 1234 under my breath*")
+        assert table.runner.open(chat).pending.post.private
+        refused("private_action", table.runner.label, chat, table.player())
+
+
+def test_the_adjudication_key_must_be_this_librarys(cards, tmp_path):
+    folder, _ = cards
+    with judged(folder) as table:
+        refused("bad_adjudication", SceneRunner, table.store, table.authority, table.owner, owner=OWNER,
+                adjudication=object())
+
+
+def test_the_adjudication_key_is_the_apps_own_never_a_players_or_the_labellers(cards):
+    folder, _ = cards
+    with judged(folder) as table:
+        for principal in (ANA, OWNER, LABELLER):  # the acting player, the owner, the labeller's principal
+            key = AdjudicationLibrary(table.store, table.authority, table.authority.handle_for(principal, trusted=True))
+            refused("bad_adjudication", SceneRunner, table.store, table.authority, table.owner, owner=OWNER,
+                    label_handle=table.authority.handle_for(LABELLER, trusted=False), adjudication=key)
+
+
+def failing_once(owner, name: str, error: Exception) -> None:
+    """``owner.name`` raises ``error`` on its next call, then works as before."""
+    original = getattr(owner, name)
+
+    def call(*args, **kwargs):
+        setattr(owner, name, original)
+        raise error
+    setattr(owner, name, call)
+
+
+def test_a_keep_closing_the_turn_while_it_is_confirmed_leaves_nothing_framed(cards):
+    folder, chat = cards
+    with judged(folder, UNOPPOSED, steps=[say("You reach the top.")]) as table:
+        acting(table, chat)
+        early = table.runner.generate(chat, table.player())
+        table.runner.label(chat, table.player())
+        check = table.adjudication.check
+
+        def kept_meanwhile(*args, **kwargs):  # the table keeps the take while 029 checks the frame
+            table.adjudication.check = check
+            result = check(*args, **kwargs)
+            table.runner.keep(chat, table.player(), early.take)
+            return result
+        table.adjudication.check = kept_meanwhile
+        refused("no_open_turn", table.runner.confirm, chat, table.player())
+        record = table.runner.open(chat).turns.last.record
+        assert record.kept.take == early.take and record.framed is None
+        assert table.adjudication.state(chat.campaign_id).frame(record.turn_id) is None
+
+
+def test_a_pause_landing_while_an_action_is_confirmed_frames_nothing_and_nothing_is_decided_over_it(cards):
+    folder, chat = cards
+    with judged(folder, UNOPPOSED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        check = table.adjudication.check
+
+        def paused_meanwhile(*args, **kwargs):  # a player stops play while 029 checks the frame
+            table.adjudication.check = check
+            result = check(*args, **kwargs)
+            table.runner.request(chat, table.player(), "pause")
+            return result
+        table.adjudication.check = paused_meanwhile
+        refused("paused", table.runner.confirm, chat, table.player())
+        record = table.runner.open(chat).pending
+        assert record.framed is None and record.labels[-1].state == "proposed"
+        assert table.adjudication.state(chat.campaign_id).frame(record.turn_id) is None
+        refused("paused", table.runner.confirm, chat, table.player())  # and none while it stands
+        table.runner.resume(chat, table.player())
+        assert table.runner.confirm(chat, table.player()).decision.result == "success"
+
+
+def test_nothing_is_decided_while_play_is_paused(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        assert table.runner.confirm(chat, table.player()) is None
+        table.runner.request(chat, table.player(), "pause")
+        refused("paused", table.runner.decide, chat, table.owner, "partial", cites=("f1", "f2"),
+                consequences=("s1",))
+        table.runner.resume(chat, table.player())
+        table.runner.decide(chat, table.owner, "partial", cites=("f1", "f2"), consequences=("s1",))
+
+
+def test_a_confirm_cut_short_after_framing_finishes_on_the_next_confirm(cards):
+    folder, chat = cards
+    with judged(folder, UNOPPOSED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        failing_once(table.adjudication, "frame", LedgerInvalid("poisoned"))
+        refused("adjudication_unreadable", table.runner.confirm, chat, table.player())
+        assert table.runner.open(chat).pending.framed.label == 1  # framed on the turn first, so never relabelled
+        refused("already_framed", table.runner.label, chat, table.player())
+        refused("undecided_attempt", table.runner.generate, chat, table.player())
+        failing_once(table.adjudication, "decide", AuthorityUnavailable("gone"))
+        refused("adjudication_unavailable", table.runner.confirm, chat, table.player())
+        failing_once(table.adjudication, "assess", AdjudicationError("refused", "not_in_chat"))
+        refused("not_in_chat", table.runner.confirm, chat, table.player())
+        outcome = table.runner.confirm(chat, table.player())  # the frame is 029's already; the rules decide it
+        assert (outcome.decision.result, outcome.decision.basis) == ("success", "rule")
+        turn_id = table.runner.open(chat).pending.turn_id
+        assert len(table.adjudication.state(chat.campaign_id).frames[turn_id]) == 1  # one revision, never two
+        refused("already_framed", table.runner.confirm, chat, table.player())
+
+
+def test_a_relabel_landing_while_a_confirm_writes_is_never_framed_by_it(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED, UNOPPOSED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        write, relabelled = table.runner.scenes.write, []
+
+        def racing(record, base, **kwargs):
+            if not relabelled:
+                relabelled.append(None)
+                relabelled.append(table.runner.label(chat, table.owner))  # the owner relabels meanwhile
+            return write(record, base, **kwargs)
+        table.runner.scenes.write = racing
+        refused("turn_changed", table.runner.confirm, chat, table.player())
+        table.runner.scenes.write = write
+        record = table.runner.open(chat).pending
+        assert record.framed is None and table.adjudication.state(chat.campaign_id).frame(record.turn_id) is None
+        outcome = table.runner.confirm(chat, table.player())  # the player confirms what they now see
+        assert outcome.frame.provenance.startswith("035 labelling 2")
+
+
+def test_a_framed_turn_is_read_only_with_its_key_and_ids_are_collections(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        table.runner.confirm(chat, table.player())
+        for cites in ("f1", [1], 7):
+            refused("invalid_field", table.runner.decide, chat, table.owner, "partial", cites=cites,
+                    consequences=("s1",))
+        table.runner.adjudication = None
+        refused("no_adjudication", table.runner.generate, chat, table.player())
+
+
+def test_the_tables_outcome_line_names_what_came_of_it_and_fits_one_heard_line():
+    actor = InstanceRef("c1", "character", "anya")
+    factors = tuple(SimpleNamespace(factor_id=f"f{n}", text="x" * 300) for n in range(1, 9))
+    stakes = (SimpleNamespace(stake_id="s1", text="She falls to the deck"),)
+    frame = SimpleNamespace(actor=actor, intent="I climb", factors=factors, stakes=stakes)
+    decision = SimpleNamespace(result="partial", cites=frozenset(f.factor_id for f in factors),
+                               consequences=frozenset({"s1"}))
+    line = outcome_line(SimpleNamespace(frame=frame, decision=decision), {actor: "Anya Rook"})
+    assert line.text.startswith("Anya Rook's action (I climb) succeeds at a cost. What comes of it: She falls")
+    assert len(line.text) <= MAX_LINE_CHARS and line.text.endswith("…")
+
+
+def test_a_frame_029_refuses_for_good_sends_the_action_back_to_unframed_play(cards):
+    folder, chat = cards
+    with judged(folder, UNOPPOSED, UNOPPOSED, steps=[say("Mara looks up.")]) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        failing_once(table.adjudication, "check", AdjudicationError("refused", "unresolved_actor"))
+        refused("unresolved_actor", table.runner.confirm, chat, table.player())
+        assert table.runner.open(chat).pending.labels[-1].state == "proposed"  # nothing was marked
+        failing_once(table.adjudication, "frame", AdjudicationError("refused", "unresolved_actor"))
+        refused("unresolved_actor", table.runner.confirm, chat, table.player())  # refused after the mark
+        record = table.runner.open(chat).pending
+        assert record.framed is None and (record.labels[-1].state, record.labels[-1].reason) == (
+            "refused", "unresolved_actor")
+        table.runner.generate(chat, table.player())  # never framed: play goes on
+        table.runner.label(chat, table.player())
+        assert table.runner.confirm(chat, table.player()).decision.result == "success"
+
+
+def test_a_rollback_never_unframes_a_frame_029_recorded_meanwhile(cards):
+    from grimoire.play.adjudicate import _unframe
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        assert table.runner.confirm(chat, table.player()) is None  # framed in 029, waiting on a decision
+        record = table.runner.open(chat).pending
+        _unframe(table.runner, chat, record, record.framed.label, "card_missing")  # a losing confirm's rollback
+        assert table.runner.open(chat).pending.framed is not None  # the recorded frame keeps its turn marker
+        assert table.runner.decide(chat, table.owner, "partial", cites=("f1", "f2"), consequences=("s1",))
+
+
+def test_ids_given_as_a_generator_are_all_kept(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        table.runner.confirm(chat, table.player())
+        outcome = table.runner.decide(chat, table.owner, "partial", cites=(c for c in ("f1", "f2")),
+                                      consequences=(s for s in ("s1",)))
+        assert outcome.decision.consequences == frozenset({"s1"})
 
 
 def test_nothing_is_labelled_while_a_session_zero_cannot_be_read(cards):

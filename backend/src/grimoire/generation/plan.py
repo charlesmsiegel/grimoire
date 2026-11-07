@@ -14,6 +14,9 @@ from .errors import GenerationError
 
 #: The planned purpose of the optional scene-level reply.
 DIRECTOR_PURPOSE = "director reply"
+#: The planned purpose of an optional bounded NPC decision (045), and the phase that holds it.
+DECISION_PURPOSE = "npc decision"
+DECISION_PHASE = "select"
 
 
 def _texts(values: object, label: str) -> tuple[str, ...]:
@@ -60,20 +63,30 @@ def require_director(campaign_id: str, actor_id: str, controls: tuple[ControlAss
 
 def plan_generation_turn(campaign_id: str, turn_id: str, *, present: Iterable[str], speakers: Iterable[str],
                          controls: Iterable[ControlAssignment], director_reply: bool = False,
-                         policy: InferencePolicy | None = None, phase: str = "main") -> TurnInferencePlan:
+                         policy: InferencePolicy | None = None, phase: str = "main",
+                         decisions: Iterable[str] = ()) -> TurnInferencePlan:
     """One planned ``npc_generation`` call per speaking NPC, and at most one optional director reply.
 
     Who is player-controlled is derived from ``controls``: every present actor whose controller is
     a human. A speaker must be present and director-controlled. A silent present NPC costs nothing.
     ``director_reply`` requests the optional ``director_generation`` call; a policy without a cap for
     it declines the request as data (``plan.declined``), it is never planned implicitly.
+
+    ``decisions`` (045, docs/DECISIONS.md) are the NPCs for which a bounded ``decision`` call is
+    requested, in a ``select`` phase planned before ``phase``. Each must be present and
+    director-controlled. A policy without a ``decision`` cap declines them as data, like a director
+    reply: the deterministic policy then decides, and the turn costs what it would have without them.
     """
     controls = checked_controls(controls)
     present = _texts(present, "present")
     speakers = _texts(speakers, "speakers")
+    deciders = _texts(decisions, "decisions")
+    if deciders and phase == DECISION_PHASE:
+        raise GenerationError("bad_input", f"the generation phase cannot be {DECISION_PHASE!r} when decisions are asked")
     if not isinstance(director_reply, bool):
         raise GenerationError("bad_input", "director_reply must be true or false")
-    for ids, reason in ((present, "duplicate_present"), (speakers, "duplicate_speaker")):
+    for ids, reason in ((present, "duplicate_present"), (speakers, "duplicate_speaker"),
+                        (deciders, "duplicate_decision")):
         if len(set(ids)) != len(ids):
             raise GenerationError(reason, f"an actor is listed twice in {ids}")
     owners = {actor_id: controller(campaign_id, actor_id, controls) for actor_id in present}
@@ -84,8 +97,23 @@ def plan_generation_turn(campaign_id: str, turn_id: str, *, present: Iterable[st
         if speaker not in owners:
             raise GenerationError("absent_speaker", f"{speaker} is not present this turn")
         require_director(campaign_id, speaker, controls)
+    for decider in deciders:
+        if decider not in owners:
+            raise GenerationError("absent_decider", f"{decider} is not present this turn")
+        # Player sovereignty: a player character's choices are its player's, never a model's.
+        require_director(campaign_id, decider, controls)
     players = [actor_id for actor_id, owner in owners.items() if owner not in (None, DIRECTOR)]
     requests = ((OptionalRequest(InferenceStage.DIRECTOR_GENERATION, None, DIRECTOR_PURPOSE),)
                 if director_reply else ())
-    return plan_turn(campaign_id, turn_id, present_actor_ids=present, speaking_npc_ids=speakers,
-                     player_controlled_ids=players, optional_requests=requests, phase=phase, policy=policy)
+    if not deciders:
+        return plan_turn(campaign_id, turn_id, present_actor_ids=present, speaking_npc_ids=speakers,
+                         player_controlled_ids=players, optional_requests=requests, phase=phase, policy=policy)
+    asked = tuple(OptionalRequest(InferenceStage.DECISION, decider, DECISION_PURPOSE) for decider in deciders)
+    select = plan_turn(campaign_id, turn_id, present_actor_ids=present, player_controlled_ids=players,
+                       optional_requests=asked, phase=DECISION_PHASE, policy=policy)
+    if not select.calls:
+        # The mode declined every decision: the plan is the one without decisions, its declines kept as data.
+        return plan_turn(campaign_id, turn_id, present_actor_ids=present, speaking_npc_ids=speakers,
+                         player_controlled_ids=players, optional_requests=asked + requests, phase=phase,
+                         policy=policy)
+    return select.add_phase(phase, speaking_npc_ids=speakers, optional_requests=requests)

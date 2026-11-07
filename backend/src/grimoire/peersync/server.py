@@ -19,10 +19,11 @@ from grimoire.store import LibraryStore, StoreError
 from grimoire.sync import SyncInterrupted, device_of
 from grimoire.sync.documents import check_device_id
 
+from .busy import committing, resolving_out
 from .errors import AuthenticationFailed, PeerRefused, TransportError
 from .pairing import peer_principal, read_pairing
-from .replay import StepBuffer, confirmation
-from .resolving import ResolveRequest, committing, resolving_out
+from .replay import StepBuffer, absent_here, confirmation
+from .resolving import ResolveRequest
 from .snapshot import send_snapshot
 from .wire import Channel, is_loopback, no_delay, server_handshake
 
@@ -131,7 +132,7 @@ class PeerServer:
                         may_hold = None
                         if resolving is not None and buffer.poisoned is None:
                             may_hold = resolving.check_step(self.store, buffer.ops)
-                        etags = buffer.commit(self.store, handle, may_hold=may_hold)
+                        etags = buffer.commit(self.store, handle, may_hold=may_hold, step=header.get("step"))
                     channel.send({"t": "committed", "count": len(etags), "digest": confirmation(etags)})
                     continue
                 if kind in ("snapshot", "resolve") and not self._still_paired(peer, channel_key):
@@ -151,6 +152,16 @@ class PeerServer:
                     request.admit(self.store)  # before anything is sent
                     buffer.resolving, resolving = request.path, request
                     send_snapshot(channel, self.store, self.authority, peer)
+                elif kind == "check":  # a deletion's last check before the requester deletes (028)
+                    with committing(self.store):
+                        if not self._still_paired(peer, channel_key):
+                            channel.refuse("not_paired", "this device is no longer paired with yours")
+                            return
+                        if resolving is not None:
+                            resolving.confirm_absent(self.store, header.get("absent"))
+                        else:  # a sync: the requester deletes what this device deleted
+                            absent_here(self.store, header.get("absent"))
+                    channel.send({"t": "confirmed"})
                 elif kind == "op":
                     buffer.add(header, body)  # a refusal here is held and answered at "commit"
                 else:  # a client this confused cannot be kept in step: refuse and end the session

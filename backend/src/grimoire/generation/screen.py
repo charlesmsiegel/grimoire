@@ -7,7 +7,7 @@ from collections.abc import Iterable, Sequence
 from grimoire.evals.text import has_words
 from grimoire.voice import ResolvedVoice, example_copies
 
-from .brief import MAX_LINE_CHARS, DirectorBrief, HeardLine, NpcBrief, _leaks
+from .brief import MAX_LINE_CHARS, DirectorBrief, HeardLine, NpcBrief, leaks
 
 #: Why a provider-accepted reply is still not a line. The call stays billed either way.
 REJECTIONS = ("silent_reply", "too_long", "copied_example", "unlearned_secret")
@@ -32,6 +32,6 @@ def screen_reply(brief: NpcBrief | DirectorBrief, text: str, *, spoken: Sequence
     if example_copies(text, voices):
         return "copied_example"
     exposed = brief.exposed + tuple(line.text for line in spoken)
-    if _leaks(text, brief.hidden, exposed) is not None:
+    if leaks(text, brief.hidden, exposed) is not None:
         return "unlearned_secret"
     return None

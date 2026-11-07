@@ -131,28 +131,20 @@ def test_s3_a_chat_conflict_keeps_every_participant_and_one_chat_record(pair):
 
 # -- S4 tombstones ---------------------------------------------------------------------------
 
-def test_s4_deletions_are_never_propagated_or_silently_resurrected(pair):
+def test_s4_deletions_propagate_and_are_never_silently_resurrected(pair):
+    """028: the agreed version one device deleted is deleted on the other, kept there as a hold; a
+    restore of exactly those bytes afterwards is a conflict, never a copy back."""
     desktop, phone = pair
     original = (phone.root / PATHS["wren_b"]).read_bytes()
     (desktop.root / PATHS["wren_b"]).unlink()
     report = sync(desktop, phone, handles())
-    assert report.conflict(PATHS["wren_b"]).code == "deleted"
-    assert (phone.root / PATHS["wren_b"]).read_bytes() == original and not (desktop.root / PATHS["wren_b"]).exists()
-    assert kept(desktop) == [original]  # the deleting device still holds the other version
-    expected = {DESKTOP: None, PHONE: etag(original)}
-    with pytest.raises(ResolveRefused, match="deletions cannot be chosen"):  # was a KeyError (Wave 4 audit)
-        resolve(desktop, phone, PATHS["wren_b"], None, expected, handles())
-    assert (phone.root / PATHS["wren_b"]).read_bytes() == original
-    (phone.root / PATHS["wren_b"]).unlink()
-    assert sync(desktop, phone, handles()).conflicts == ()
-    archive = json.loads(desktop.read_sync_state(f"peers/{PHONE}/archive.json"))
-    assert archive["entries"][PATHS["wren_b"]] == {"deleted": etag(original)}  # the tombstone
-    (phone.root / PATHS["wren_b"]).write_bytes(original)  # an old copy restored from a backup
+    assert report.conflicts == () and report.deleted == ((PATHS["wren_b"], PHONE),)
+    assert not (phone.root / PATHS["wren_b"]).exists() and kept(phone) == [original]
+    (phone.root / PATHS["wren_b"]).write_bytes(original)
     assert sync(desktop, phone, handles()).conflict(PATHS["wren_b"]).code == "resurrected"
     assert not (desktop.root / PATHS["wren_b"]).exists()
-    edit_instance(phone, WREN_B, 1)  # genuinely new content at the deleted path
-    report = sync(desktop, phone, handles())
-    assert (PATHS["wren_b"], DESKTOP) in report.copied
+    (phone.root / PATHS["wren_b"]).unlink()
+    assert sync(desktop, phone, handles()).conflicts == ()
 
 
 # -- S5 missing ancestors and lineage ---------------------------------------------------------
@@ -373,9 +365,15 @@ def test_s8_resolving_a_deletion_or_blocked_side_is_refused(pair):
     desktop, phone = pair
     original = (phone.root / PATHS["wren_b"]).read_bytes()
     (desktop.root / PATHS["wren_b"]).unlink()
-    sync(desktop, phone, handles())
-    with pytest.raises(ResolveRefused):  # a deletion cannot be chosen in this slice
-        resolve(desktop, phone, PATHS["wren_b"], etag(b""), {DESKTOP: None, PHONE: etag(original)}, handles())
+    odd = phone.root / "campaigns/c2/instances/character/odd.json"
+    odd.write_bytes(b"{")  # unreadable: it might need wren-b, so the deletion is held back
+    assert sync(desktop, phone, handles()).conflict(PATHS["wren_b"]).code == "delete_dependency"
+    expected = {DESKTOP: None, PHONE: etag(original)}
+    with pytest.raises(ResolveRefused):  # neither device's version
+        resolve(desktop, phone, PATHS["wren_b"], etag(b""), expected, handles())
+    with pytest.raises(ResolveRefused, match="delete_dependency"):  # the deletion, while something may need it
+        resolve(desktop, phone, PATHS["wren_b"], None, expected, handles())
+    odd.unlink()
     # restoring the present version is allowed
     resolve(desktop, phone, PATHS["wren_b"], etag(original), {DESKTOP: None, PHONE: etag(original)}, handles())
     assert (desktop.root / PATHS["wren_b"]).read_bytes() == original
@@ -1534,7 +1532,9 @@ def test_a_marker_only_data_commit_survives_a_crash_before_the_pending_step(pair
     be committed before the archives are rewritten: else a crash there lets a later sync undo a deletion."""
     desktop, phone = pair
     (desktop.root / PATHS["wren_b"]).unlink()
-    assert sync(desktop, phone, handles()).conflict(PATHS["wren_b"]).code == "deleted"  # kept copy on the desktop
+    odd = phone.root / "campaigns/c2/instances/character/odd.json"
+    odd.write_bytes(b"{")  # the phone holds the deletion back: a conflict, with a kept copy on the desktop
+    assert sync(desktop, phone, handles()).conflict(PATHS["wren_b"]).code == "delete_dependency"
     identify(desktop, "tablet", replace=True)
     renamed = {PHONE: handle(), "tablet": handle()}
     plan = plan_sync(desktop, phone)

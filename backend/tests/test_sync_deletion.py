@@ -1,0 +1,747 @@
+"""028: a deletion on one device propagates to the other, holds back what would orphan a record, and
+``resolve`` can end a conflict toward the deletion (docs/SYNC.md row 9 and "Ending a conflict").
+
+The synthetic pair (``sync_helpers``): world harbor with wren@r1, campaign c1's wren-a pinned to
+r1, campaign c2's wren-b following wren's head, and c1's chat instance harbor-talk.
+"""
+
+from __future__ import annotations
+
+import functools
+import json
+import shutil
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from grimoire.core.identity import InstanceRef, SourceRef
+from grimoire.security import Approval, Authorizer, Grant, Permission, ResourcePath, payload_digest
+from grimoire.store import InvalidEnvelope, LibraryStore, ProcessLocker, RecordEnvelope, SourceManifest, etag
+from grimoire.store.layout import address_parts, conflict_parts
+from grimoire.sync import (
+    ResolveRefused, SyncInterrupted, apply_sync, identify, plan_sync, resolve, sync, sync_until_quiet,
+)
+from grimoire.sync import deletion, keeps as kept_record, resolution, session as sync_session
+from grimoire.sync.decide import decide
+from grimoire.sync.documents import keeps_name, parse_keeps, render_keeps
+from grimoire.sync.model import PROPAGATED_DELETIONS, Base, Side
+from grimoire.testing import CrashScenario, Invariant, explore_crashes, idempotent_recovery, no_residue, run_plans
+from grimoire.testing.fileops import snapshot
+
+from evidence_fixtures import MARA
+from scene_fixtures import ANA, Table, card_library, say
+from store_helpers import HARBOR, OWNER, WREN_R2, drop_empty_dirs, harbor_manifest, instance, owner_handle
+from sync_helpers import (
+    DESKTOP, PATHS, PHONE, WREN_A, WREN_B, canonical, chat_record, converged, edit_instance, handle, handles, kept,
+    make_pair, new_revision, put,
+)
+from test_store_turns import tag
+from test_sync_knowledge import batch_paths, offline_appends, pair_with_log, read
+
+PAIR = (DESKTOP, PHONE)
+
+
+@pytest.fixture
+def pair(tmp_path):
+    desktop, phone = make_pair(tmp_path)
+    yield desktop, phone
+    desktop.close()
+    phone.close()
+
+
+def _archive(store: LibraryStore, peer: str) -> dict:
+    return json.loads(store.read_sync_state(f"peers/{peer}/archive.json"))["entries"]
+
+
+def _held(store: LibraryStore, peer: str) -> dict[str, list[str]]:
+    view = parse_keeps(store.read_sync_state(keeps_name(peer)), PAIR)
+    return {path: list(entry.held) for path, entry in view.entries.items() if entry.held}
+
+
+def _tree(root: Path) -> dict:
+    return {key: value for key, value in snapshot(root).items() if not key.endswith("/.lock")}
+
+
+# -- propagation -------------------------------------------------------------------------------
+
+def test_a_deletion_on_one_device_is_made_on_the_other_and_its_version_is_kept(pair):
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    original = (phone.root / path).read_bytes()
+    (desktop.root / path).unlink()
+    report = sync(desktop, phone, handles())
+    assert report.conflicts == () and (path, PHONE) in report.deleted
+    assert not (phone.root / path).exists() and not (desktop.root / path).exists()
+    assert kept(phone) == [original]  # recoverable on the device that deleted it for the sync
+    assert _held(phone, DESKTOP) == {path: [etag(original)]}  # its only copy: never dismissable
+    for store, peer in ((desktop, PHONE), (phone, DESKTOP)):
+        assert _archive(store, peer)[path] == {"deleted": etag(original)}
+    again = sync(desktop, phone, handles())
+    assert again.conflicts == () and again.copied == () and again.deleted == ()
+
+
+def test_a_record_restored_on_the_deleting_device_after_the_plan_is_never_deleted(pair):
+    """The device that deleted puts the record back between plan and apply: the receiver's data
+    commit checks, under both devices' locks, that the deleting device still lacks it, so nothing is
+    deleted and no tombstone is archived; the next sync finds both devices agreeing again."""
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    original = (phone.root / path).read_bytes()
+    (desktop.root / path).unlink()
+    plan = plan_sync(desktop, phone, handles())
+    assert [delete.path for delete in plan.deletes[PHONE]] == [path]
+    restore = desktop.transaction()
+    restore.put_exact(path, original, None)
+    restore.commit(handle())
+    with pytest.raises(SyncInterrupted, match=f"{path} is back on {DESKTOP}"):
+        apply_sync(plan, handles())
+    assert (phone.root / path).read_bytes() == original and original not in kept(phone)
+    assert all(_archive(store, peer).get(path) != {"deleted": etag(original)}
+               for store, peer in ((desktop, PHONE), (phone, DESKTOP)))
+    report = sync(desktop, phone, handles())
+    assert report.conflicts == () and report.deleted == () and report.copied == ()
+
+
+def test_a_restore_after_the_tombstone_is_a_conflict_never_a_silent_copy(pair):
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    original = (phone.root / path).read_bytes()
+    (desktop.root / path).unlink()
+    sync(desktop, phone, handles())
+    (phone.root / path).write_bytes(original)  # restored by hand from the kept copy
+    report = sync(desktop, phone, handles())
+    assert report.conflict(path).code == "resurrected" and not (desktop.root / path).exists()
+
+
+def test_an_edit_against_a_deletion_stays_a_conflict(pair):
+    desktop, phone = pair
+    path = PATHS["wren_a"]
+    (desktop.root / path).unlink()
+    edit_instance(phone, WREN_A, 7)
+    edited = (phone.root / path).read_bytes()
+    report = sync(desktop, phone, handles())
+    assert report.conflict(path).code == "edit_delete" and report.deleted == ()
+    assert (phone.root / path).read_bytes() == edited
+
+
+def test_sync_in_either_order_leaves_byte_identical_libraries(tmp_path):
+    trees = []
+    for order in ("ab", "ba"):
+        desktop, phone = make_pair(tmp_path / order)
+        (desktop.root / PATHS["wren_b"]).unlink()
+        edit_instance(phone, WREN_A, 4)
+        sync(*((desktop, phone) if order == "ab" else (phone, desktop)), handles())
+        desktop.close(), phone.close()
+        trees.append(_tree(tmp_path / order))
+    assert trees[0] == trees[1]
+
+
+def test_a_source_deleted_on_one_device_is_held_back_while_anything_needs_it(pair):
+    """The source's manifest and revision go only once nothing left names them: wren-a pins r1 and
+    wren-b follows wren's head (an unpinned reference needs some revision of wren)."""
+    desktop, phone = pair
+    source = [PATHS["manifest"], PATHS["r1"]]
+    for path in source:
+        (desktop.root / path).unlink()
+    report = sync(desktop, phone, handles())
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == dict.fromkeys(source, "delete_dependency")
+    assert all((phone.root / path).exists() for path in source) and report.deleted == ()
+    assert "wren-a" in report.conflict(PATHS["r1"]).detail  # names what still needs it
+    for path in (PATHS["wren_a"], PATHS["wren_b"]):  # the people who used the source go too
+        (desktop.root / path).unlink()
+    report = sync_until_quiet(desktop, phone, handles())
+    assert report.conflicts == ()
+    assert not any((phone.root / path).exists() for path in [*source, PATHS["wren_a"], PATHS["wren_b"]])
+    assert len(kept(phone)) == 4
+
+
+def test_a_deletion_the_grant_refuses_is_denied_and_nothing_is_removed(pair):
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    original = (phone.root / path).read_bytes()
+    (desktop.root / path).unlink()
+    report = sync(desktop, phone, {DESKTOP: handle(), PHONE: owner_handle("sources", "kept")})
+    assert report.conflict(path).code == "denied" and report.deleted == ()
+    assert (phone.root / path).read_bytes() == original
+    report = sync(desktop, phone, handles())  # granted now: the deletion is retried
+    assert report.conflicts == () and not (phone.root / path).exists()
+
+
+def test_a_deletion_the_grant_refuses_settles_as_a_stable_conflict(pair):
+    """Denied each time, the deletion must not write a tentative hold for the commit to drop again:
+    the syncs go quiet, with the one ``denied`` conflict, the record kept and no hold left behind."""
+    desktop, phone = pair
+    path = "sources/catalog/extra/_source/manifest.json"
+    put(desktop, SourceManifest("catalog:extra", OWNER, "Extra cards"), None)
+    assert sync(desktop, phone, handles()).conflicts == ()
+    original = (phone.root / path).read_bytes()
+    (desktop.root / path).unlink()
+    refused = {DESKTOP: handle(), PHONE: owner_handle("campaigns", "kept")}  # the phone's grant on sources revoked
+    report = sync_until_quiet(desktop, phone, refused)
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == {path: "denied"}
+    assert (phone.root / path).read_bytes() == original and report.deleted == ()
+    before = _tree(phone.root), _tree(desktop.root)
+    again = sync(desktop, phone, refused)
+    assert not again.wrote and again.conflict(path).code == "denied"
+    assert (_tree(phone.root), _tree(desktop.root)) == before
+    assert _held(phone, DESKTOP) == {}  # the pair's kept-version record holds nothing for it
+    report = sync(desktop, phone, handles())  # granted again: the deletion is made, its hold first
+    assert report.conflicts == () and not (phone.root / path).exists()
+    assert original in [data for where, data in _tree(phone.root).items() if where.startswith(".conflicts/")]
+
+def test_a_deletion_only_an_approval_allows_is_left_to_the_data_commit_and_made(pair):
+    """The check before holds(d) authorizes with no approval, so it never denies a deletion the data
+    commit's approval allows: that one is held, then made."""
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    original = (phone.root / path).read_bytes()
+    (desktop.root / path).unlink()
+    authority = Authorizer([OWNER])
+    for number, scope in enumerate(("sources", "campaigns", "kept")):  # untrusted: each write needs an approval
+        authority.add_grant(Grant(f"g{number}", "app:sync", frozenset({Permission.APPLY}), ResourcePath.parse(scope),
+                                  OWNER))
+    plan = plan_sync(desktop, phone)
+    keys, preview = deletion.keys_of(plan.deletes[PHONE][0]), plan.preview()[PHONE]
+    approvals = {}
+    for number, key in enumerate(keys):  # the deletion and its hold
+        authority.register_approval(Approval(f"a{number}", "app:sync", Permission.APPLY, ResourcePath.parse(key),
+                                             payload_digest(preview[key]), OWNER))
+        approvals[key] = f"a{number}"
+    report = apply_sync(plan, {DESKTOP: handle(), PHONE: authority.handle_for("app:sync")}, {PHONE: approvals})
+    assert report.conflicts == () and sorted(report.consumed_approvals) == ["a0", "a1"]
+    assert not (phone.root / path).exists()
+    assert original in [data for where, data in _tree(phone.root).items() if where.startswith(".conflicts/")]
+
+def test_a_denied_deletion_drops_only_itself_never_the_rest_of_its_source(pair):
+    """A denied revision deletion is not a denied write of its source: the other changes to that
+    source (a new entity and its manifest) still land (028; denial is source-coarse only for writes)."""
+    desktop, phone = pair
+    new_revision(desktop, "r2", "a captain")
+    for ref in (WREN_A, WREN_B):
+        put(desktop, instance(ref, WREN_R2, base=WREN_R2))
+    assert sync(desktop, phone, handles()).conflicts == ()  # r1 is no longer anyone's: deletable
+    (desktop.root / PATHS["r1"]).unlink()
+    _add_kestrel(desktop, {"character/wren": "r2", "character/kestrel": "k1"})
+    grant = owner_handle("sources/world/harbor/_source/manifest.json",
+                         "sources/world/harbor/_source/records/character/kestrel", "campaigns", "kept")
+    report = sync(desktop, phone, {DESKTOP: handle(), PHONE: grant})
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == {PATHS["r1"]: "denied"}
+    assert (phone.root / PATHS["r1"]).exists() and report.deleted == ()
+    assert phone.read_source(HARBOR).etag == desktop.read_source(HARBOR).etag
+    assert (phone.root / KESTREL_PATH).exists()
+
+
+KESTREL = SourceRef(HARBOR, "character", "kestrel")
+KESTREL_PATH = "sources/world/harbor/_source/records/character/kestrel/k1.json"
+
+
+def _add_kestrel(store: LibraryStore, heads: dict[str, str]) -> None:
+    txn = store.transaction()
+    txn.put(RecordEnvelope(KESTREL.at("k1"), {"bio": "a gull"}, name="Kestrel"), None)
+    txn.put(harbor_manifest(heads), store.read_source(HARBOR).etag)
+    txn.commit(handle())
+
+
+@pytest.mark.parametrize("declared", [True, False], ids=["declared-head", "only-revision"])
+def test_an_entity_dropped_from_a_source_goes_in_one_sync(pair, declared):
+    """A source drops an entity by deleting its revisions (with the manifest edit that drops its
+    head, if one was declared): the store judges the deletion over what the same commit leaves, so
+    neither the old manifest's head nor an entity's last revision being its implicit head holds it."""
+    desktop, phone = pair
+    _add_kestrel(desktop, {"character/kestrel": "k1"} if declared else {})
+    assert sync(desktop, phone, handles()).conflicts == () and (phone.root / KESTREL_PATH).exists()
+    if declared:
+        put(desktop, harbor_manifest(), desktop.read_source(HARBOR).etag)
+    (desktop.root / KESTREL_PATH).unlink()
+    report = sync(desktop, phone, handles())
+    assert report.conflicts == () and (KESTREL_PATH, PHONE) in report.deleted
+    assert not (phone.root / KESTREL_PATH).exists()
+    assert phone.read_source(HARBOR).etag == desktop.read_source(HARBOR).etag
+
+
+def test_one_deletion_the_store_refuses_leaves_a_source_deleted_as_a_whole(pair, monkeypatch):
+    """Split on failure, deletions join the ones already admitted: a source going as a whole (its
+    manifest, its revision, the records that used it) is never refused piece by piece because of
+    an unrelated deletion the store refuses."""
+    desktop, phone = pair
+    put(desktop, chat_record(["a stranger"]))
+    assert sync(desktop, phone, handles()).conflicts == ()
+    gone = [PATHS["manifest"], PATHS["r1"], PATHS["wren_a"], PATHS["wren_b"]]
+    for path in [*gone, PATHS["chat"]]:
+        (desktop.root / path).unlink()
+    preflight = sync_session._preflight
+
+    def refusing(txn, what):  # the store refuses the chat's deletion (any reason it may have)
+        if PATHS["chat"] in txn.staged():
+            return InvalidEnvelope("refused for this test")
+        return preflight(txn, what)
+    monkeypatch.setattr(sync_session, "_preflight", refusing)
+    report = sync(desktop, phone, handles())
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == {PATHS["chat"]: "unapplicable"}
+    assert not any((phone.root / path).exists() for path in gone) and (phone.root / PATHS["chat"]).exists()
+
+
+def test_a_record_written_after_the_plan_that_needs_a_deletion_stops_its_commit(pair, monkeypatch):
+    """The plan read the receiver earlier: under the data commit's lock its deletions are judged again
+    over the device as it is now, so a chat made meanwhile with the deleted character in it stops
+    the commit (nothing removed), and the next sync holds the deletion back."""
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    (desktop.root / path).unlink()
+    holds = sync_session._commit_holds
+
+    def then_a_new_chat(*args):  # type: ignore[no-untyped-def]  # the person keeps playing on the phone meanwhile
+        holds(*args)
+        put(phone, RecordEnvelope(InstanceRef("c2", "chat", "dockside"), {"participants": [str(WREN_B)], "history": []}))
+    monkeypatch.setattr(sync_session, "_commit_holds", then_a_new_chat)
+    with pytest.raises(SyncInterrupted):
+        sync(desktop, phone, handles())
+    assert (phone.root / path).exists()
+    monkeypatch.undo()
+    report = sync(desktop, phone, handles())
+    assert report.conflict(path).code == "delete_dependency" and (phone.root / path).exists()
+
+
+def test_a_deletion_whose_hold_the_record_cannot_take_is_held_back(pair, monkeypatch):
+    """Each hold is recorded before its deletion: when the pair's kept-version record is full, the
+    deletion is ``unapplicable`` at planning and the record stays, instead of the sync failing."""
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    (desktop.root / path).unlink()
+    record = parse_keeps(phone.read_sync_state(keeps_name(DESKTOP)), PAIR)
+    current = render_keeps(PAIR, record.entries if record.state == "valid" else {})
+    plan = sync_session.plan_sync
+
+    def planned_full(*args, **kwargs):  # type: ignore[no-untyped-def]
+        # full while the plan is made: room for no held version. Only then, since the conflict that
+        # stands is then recorded ``open`` in the deleting device's record, which must have room.
+        with monkeypatch.context() as limited:
+            limited.setattr(kept_record, "RECORD_LIMIT", len(current) + 20)
+            return plan(*args, **kwargs)
+    monkeypatch.setattr(sync_session, "plan_sync", planned_full)
+    report = sync(desktop, phone, handles())
+    assert report.conflict(path).code == "unapplicable" and (phone.root / path).exists()
+
+
+def test_a_hold_slot_taken_while_planning_interrupts_the_sync(pair, monkeypatch):
+    """Another writer fills the slot planned for a hold before it is staged: the sync stops as
+    interrupted (and replans next time), never with a raw store error, and nothing is removed."""
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    (desktop.root / path).unlink()
+    slot = deletion.hold_slot
+
+    def then_taken(store, where, data):  # type: ignore[no-untyped-def]
+        planned = slot(store, where, data)
+        taken = phone.root / "/".join(conflict_parts(tuple(where.split("/")), etag(data), planned))
+        taken.parent.mkdir(parents=True, exist_ok=True)
+        taken.write_bytes(b'{"someone": "else"}')
+        return planned
+    monkeypatch.setattr(deletion, "hold_slot", then_taken)
+    with pytest.raises(SyncInterrupted):
+        sync(desktop, phone, handles())
+    assert (phone.root / path).exists()
+
+
+def test_a_record_that_cannot_be_read_on_the_receiver_holds_every_deletion_back(pair):
+    desktop, phone = pair
+    (desktop.root / PATHS["wren_b"]).unlink()
+    (phone.root / "campaigns/c1/instances/character/odd.json").write_bytes(b"not json")
+    report = sync(desktop, phone, handles())
+    assert report.conflict(PATHS["wren_b"]).code == "delete_dependency"
+    assert (phone.root / PATHS["wren_b"]).exists()
+
+
+@pytest.mark.parametrize("step", ["_commit_holds", "_commit_data", "_verify", "_commit_keeps", "_commit_archive",
+                                  "_commit_pending"])
+def test_a_crash_before_any_step_reaches_the_uninterrupted_result(tmp_path, monkeypatch, step):
+    """A restart and one more sync reach exactly what the uninterrupted sync and its quiet follow-up
+    reach, byte for byte (holds, kept-version records, tombstones and markers included)."""
+    def diverge(root):
+        desktop, phone = make_pair(root)
+        (desktop.root / PATHS["wren_b"]).unlink()
+        edit_instance(desktop, WREN_A, 9)
+        return desktop, phone
+    desktop, phone = diverge(tmp_path / "completed")
+    sync(desktop, phone, handles())
+    sync(desktop, phone, handles())
+    desktop.close(), phone.close()
+    completed = _tree(tmp_path / "completed")
+
+    desktop, phone = diverge(tmp_path / "crashed")
+
+    def die(*args, **kwargs):
+        raise RuntimeError(f"power loss before {step}")
+    monkeypatch.setattr(sync_session, step, die)
+    with pytest.raises(RuntimeError):
+        sync(desktop, phone, handles())
+    monkeypatch.undo()
+    desktop.close(), phone.close()
+    desktop, phone = LibraryStore.open(tmp_path / "crashed" / DESKTOP), LibraryStore.open(tmp_path / "crashed" / PHONE)
+    sync(desktop, phone, handles())
+    sync(desktop, phone, handles())
+    desktop.close(), phone.close()
+    assert converged(_tree(tmp_path / "crashed"), completed) is None
+
+
+def test_a_crash_after_the_deletion_then_a_restore_is_never_undone_silently(tmp_path, monkeypatch):
+    """The marker alone records the deletion until the archives do: a restore of the deleted bytes
+    on the receiver before the next sync is a conflict, never a copy back to the deleting device."""
+    desktop, phone = make_pair(tmp_path)
+    path = PATHS["wren_b"]
+    original = (phone.root / path).read_bytes()
+    (desktop.root / path).unlink()
+
+    def die(*args, **kwargs):
+        raise RuntimeError("power loss before the archives")
+    monkeypatch.setattr(sync_session, "_commit_archive", die)
+    with pytest.raises(RuntimeError):
+        sync(desktop, phone, handles())
+    monkeypatch.undo()
+    assert not (phone.root / path).exists()
+    (phone.root / path).write_bytes(original)
+    report = sync(desktop, phone, handles())
+    assert report.conflict(path) is not None and report.copied == ()
+    assert not (desktop.root / path).exists()
+    desktop.close(), phone.close()
+
+
+# -- resolve toward the deletion --------------------------------------------------------------
+
+def _expected(desktop, phone, path):
+    return {device: etag((store.root / path).read_bytes()) if (store.root / path).exists() else None
+            for device, store in ((DESKTOP, desktop), (PHONE, phone))}
+
+
+def test_resolve_can_end_an_edit_delete_conflict_toward_the_deletion(pair):
+    desktop, phone = pair
+    path = PATHS["wren_a"]
+    (desktop.root / path).unlink()
+    edit_instance(phone, WREN_A, 7)
+    edited = (phone.root / path).read_bytes()
+    assert sync(desktop, phone, handles()).conflict(path).code == "edit_delete"
+    assert resolve(desktop, phone, path, None, _expected(desktop, phone, path), handles()) == PHONE
+    assert not (phone.root / path).exists() and edited in kept(phone)
+    assert _held(phone, DESKTOP)[path] == [etag(edited)]
+    for store, peer in ((desktop, PHONE), (phone, DESKTOP)):
+        assert _archive(store, peer)[path] == {"deleted": etag(edited)}
+    report = sync(desktop, phone, handles())
+    assert report.conflicts == () and report.copied == () and report.deleted == ()
+
+
+def test_resolve_toward_the_deletion_judges_again_under_its_lock(pair, monkeypatch):
+    """A record written on the deleting device after resolve read it, which needs the deletion,
+    refuses the resolve before anything is written: the record and the conflict stay."""
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    (desktop.root / path).unlink()
+    edit_instance(phone, WREN_B, 7)
+    edited = (phone.root / path).read_bytes()
+    assert sync(desktop, phone, handles()).conflict(path).code == "edit_delete"
+    stage = deletion.stage
+
+    def then_a_new_chat(txn, deletes):  # the person keeps playing on the phone meanwhile
+        stage(txn, deletes)
+        put(phone, RecordEnvelope(InstanceRef("c2", "chat", "dockside"), {"participants": [str(WREN_B)], "history": []}))
+    monkeypatch.setattr(deletion, "stage", then_a_new_chat)
+    with pytest.raises(ResolveRefused, match="delete_dependency"):
+        resolve(desktop, phone, path, None, _expected(desktop, phone, path), handles())
+    assert (phone.root / path).read_bytes() == edited and edited not in kept(phone)
+    monkeypatch.undo()
+    assert sync(desktop, phone, handles()).conflict(path).code == "edit_delete"
+
+
+def test_resolve_toward_the_deletion_refuses_once_the_record_is_back_on_the_other_device(pair, monkeypatch):
+    """The device that deleted writes the record again after resolve read it, before the resolve holds
+    both libraries: checked again under the pair's locks, nothing is deleted and no tombstone is
+    archived. The restore is the agreed version again, so the next sync carries the edit across,
+    never a ``resurrected`` record."""
+    desktop, phone = pair
+    path = PATHS["wren_a"]
+    data = (desktop.root / path).read_bytes()
+    (desktop.root / path).unlink()
+    edit_instance(phone, WREN_A, 7)
+    edited = (phone.root / path).read_bytes()
+    assert sync(desktop, phone, handles()).conflict(path).code == "edit_delete"
+    expected = _expected(desktop, phone, path)
+    stage = deletion.stage
+
+    def then_restored(txn, deletes):  # the person puts the record back on the desktop meanwhile
+        stage(txn, deletes)
+        restore = desktop.transaction()
+        restore.put_exact(path, data, None)
+        restore.commit(handle())
+    monkeypatch.setattr(deletion, "stage", then_restored)
+    with pytest.raises(ResolveRefused, match=f"{path} changed on {DESKTOP}"):
+        resolve(desktop, phone, path, None, expected, handles())
+    monkeypatch.undo()
+    assert (phone.root / path).read_bytes() == edited and edited not in kept(phone)
+    assert all(_archive(store, peer).get(path) != {"deleted": etag(edited)}
+               for store, peer in ((desktop, PHONE), (phone, DESKTOP)))
+    report = sync(desktop, phone, handles())
+    assert report.conflicts == () and report.deleted == () and report.copied == ((path, DESKTOP),)
+    assert (desktop.root / path).read_bytes() == edited
+
+
+def test_resolve_toward_the_deletion_of_a_manifest_takes_its_agreed_revisions_along(pair):
+    desktop, phone = pair
+    for path in (PATHS["manifest"], PATHS["r1"], PATHS["wren_a"], PATHS["wren_b"]):
+        (desktop.root / path).unlink()
+    for path in (PATHS["wren_a"], PATHS["wren_b"]):  # the phone deletes the users of the source too
+        (phone.root / path).unlink()
+    txn = phone.transaction()  # and renames the source with wren@r1 as its head: an edit_delete that pins r1
+    current = phone.read_source("world:harbor")
+    txn.put(SourceManifest(current.manifest.source, current.manifest.owner, "Harbor (old)", {"character/wren": "r1"},
+                           current.manifest.links, extra=current.manifest.extra), current.etag)
+    txn.commit(handle())
+    report = sync(desktop, phone, handles())
+    assert report.conflict(PATHS["manifest"]).code == "edit_delete"
+    assert report.conflict(PATHS["r1"]).code == "delete_dependency"
+    manifest = PATHS["manifest"]
+    assert resolve(desktop, phone, manifest, None, _expected(desktop, phone, manifest), handles()) == PHONE
+    assert not (phone.root / manifest).exists() and not (phone.root / PATHS["r1"]).exists()
+    assert sync(desktop, phone, handles()).conflicts == ()
+    assert canonical(desktop) == canonical(phone)
+
+
+@pytest.mark.parametrize("case", ["both hold it", "both lack it", "something still needs it"])
+def test_resolve_toward_the_deletion_is_refused_where_a_sync_would_not_delete(pair, case):
+    desktop, phone = pair
+    path = PATHS["r1"] if case == "something still needs it" else PATHS["wren_a"]
+    if case == "both hold it":
+        edit_instance(desktop, WREN_A, 9)
+        edit_instance(phone, WREN_A, 4)
+    elif case == "both lack it":
+        for store in pair:
+            (store.root / path).unlink()
+    else:
+        (desktop.root / path).unlink()
+    sync(desktop, phone, handles())
+    before = _tree(desktop.root.parent)
+    with pytest.raises(ResolveRefused, match="delete_dependency|both devices"):
+        resolve(desktop, phone, path, None, _expected(desktop, phone, path), handles())
+    after = _tree(desktop.root.parent)
+    assert {key for key in after if after.get(key) != before.get(key) and not key.endswith("keeps.json")} == set()
+
+
+def test_resolve_never_chooses_the_deletion_of_a_create_only_record(pair):
+    desktop, phone = pair
+    path = "campaigns/c1/images/wren.json"  # 018 image object: create-only
+    (phone.root / path).parent.mkdir(parents=True, exist_ok=True)
+    (phone.root / path).write_bytes(b"{}")
+    with pytest.raises(ResolveRefused):
+        resolve(desktop, phone, path, None, {DESKTOP: None, PHONE: etag(b"{}")}, handles())
+    assert (phone.root / path).read_bytes() == b"{}"
+
+
+def test_a_crash_after_resolve_deleted_reaches_the_tombstone(tmp_path, monkeypatch):
+    desktop, phone = make_pair(tmp_path)
+    path = PATHS["wren_a"]
+    (desktop.root / path).unlink()
+    edit_instance(phone, WREN_A, 7)
+    sync(desktop, phone, handles())
+
+    def die(*args, **kwargs):
+        raise RuntimeError("power loss before the archives")
+    monkeypatch.setattr(resolution, "_settle", die)
+    with pytest.raises(RuntimeError):
+        resolve(desktop, phone, path, None, _expected(desktop, phone, path), handles())
+    monkeypatch.undo()
+    assert not (phone.root / path).exists()
+    report = sync(desktop, phone, handles())
+    assert report.conflicts == () and report.copied == ()
+    for store, peer in ((desktop, PHONE), (phone, DESKTOP)):
+        assert "deleted" in _archive(store, peer)[path]
+    desktop.close(), phone.close()
+
+
+# -- under the 006 fault harness: a crash or an I/O error at every commit boundary ---------------------
+
+@functools.cache
+def _deleted_fixture() -> tuple[tuple[str, bytes | None], ...]:
+    """A synced pair; the desktop deleted wren-b (propagated) and edited wren-a (copied)."""
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        desktop, phone = make_pair(root)
+        (desktop.root / PATHS["wren_b"]).unlink()
+        edit_instance(desktop, WREN_A, 9)
+        desktop.close(), phone.close()
+        return tuple(snapshot(root).items())
+
+
+def _deletion_scenario() -> CrashScenario:
+    locker = ProcessLocker()
+    original = dict(_deleted_fixture())[f"{PHONE}/{PATHS['wren_b']}"]
+
+    def setup(ops, root):
+        for key, data in _deleted_fixture():
+            ops.make_dirs(root / key) if data is None else ops.write_bytes(root / key, data)
+
+    def once(ops, root):
+        desktop = LibraryStore.open(root / DESKTOP, ops=ops, locker=locker)
+        try:
+            phone = LibraryStore.open(root / PHONE, ops=ops, locker=locker)
+            try:
+                sync(desktop, phone, handles())
+            finally:
+                phone.close()
+        finally:
+            desktop.close()
+
+    def survives(outcome):
+        if not any(value == original for value in outcome.recovered.values() if value is not None):
+            return "the deleted version is kept nowhere"
+        return None
+
+    def converges(outcome):
+        return converged(outcome.recovered, outcome.completed)
+    return CrashScenario(
+        "deletion", setup, once, once,
+        (Invariant("converges", converges), Invariant("deleted_version_survives", survives), idempotent_recovery(),
+         no_residue(*(f"{device}/.txn/{name}" for device in PAIR for name in ("*.new", "journal.json")))),
+        normalize=drop_empty_dirs)
+
+
+def _boundaries(trace) -> dict[int, frozenset[str]]:
+    """Per commit: crashes before and after its commit point (the journal replace), an error there."""
+    return {op.index: frozenset({"before", "after", "fail"}) for op in trace
+            if op.kind == "replace" and (op.target or "").endswith("/.txn/journal.json")}
+
+
+def test_a_deletion_survives_a_crash_or_error_at_every_commit_boundary(tmp_path):
+    with tempfile.TemporaryDirectory() as folder:
+        baseline = run_plans(_deletion_scenario(), [], Path(folder))
+        baseline.assert_ok()
+        trace = baseline.runs[0].action_trace
+    points = _boundaries(trace)
+    commits = [trace[index].target.split("/")[0] for index in sorted(points)]
+    # holds(phone), data(phone), archive(phone), archive(desktop), pending(phone): the desktop receives nothing
+    assert commits == [PHONE, PHONE, PHONE, DESKTOP, PHONE], commits
+    report = explore_crashes(_deletion_scenario(), tmp_path, errors=True, torn=False,
+                             select=lambda op: points.get(op.index, frozenset()))
+    report.assert_ok()
+    assert report.points_explored >= 3 * len(points)
+
+
+@functools.cache
+def _edit_delete_fixture() -> tuple[tuple[str, bytes | None], ...]:
+    """The desktop deleted wren-a, the phone edited it: an ``edit_delete`` conflict, reported."""
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        desktop, phone = make_pair(root)
+        (desktop.root / PATHS["wren_a"]).unlink()
+        edit_instance(phone, WREN_A, 7)
+        assert sync(desktop, phone, handles()).conflict(PATHS["wren_a"]).code == "edit_delete"
+        desktop.close(), phone.close()
+        return tuple(snapshot(root).items())
+
+
+def test_resolving_toward_the_deletion_survives_a_crash_or_error_at_every_commit_boundary(tmp_path):
+    """Whatever point it stops at, the phone's edited version stays somewhere and a restart's sync
+    settles (a crash before the data leaves the conflict open; after it, the tombstone)."""
+    locker = ProcessLocker()
+    tree = _edit_delete_fixture()
+    edited = dict(tree)[f"{PHONE}/{PATHS['wren_a']}"]
+
+    def setup(ops, root):
+        for key, data in tree:
+            ops.make_dirs(root / key) if data is None else ops.write_bytes(root / key, data)
+
+    def both(function):
+        def phase(ops, root):
+            desktop = LibraryStore.open(root / DESKTOP, ops=ops, locker=locker)
+            try:
+                phone = LibraryStore.open(root / PHONE, ops=ops, locker=locker)
+                try:
+                    function(desktop, phone)
+                finally:
+                    phone.close()
+            finally:
+                desktop.close()
+        return phase
+
+    def survives(outcome):
+        if not any(value == edited for value in outcome.recovered.values() if value is not None):
+            return "the phone's edited version is kept nowhere"
+        if outcome.recovered.get(f"{DESKTOP}/{PATHS['wren_a']}") is not None:
+            return "the deletion was undone"
+        return None
+    scenario = CrashScenario(
+        "resolve-deletion", setup,
+        both(lambda desktop, phone: resolve(desktop, phone, PATHS["wren_a"], None,
+                                            {DESKTOP: None, PHONE: etag(edited)}, handles())),
+        both(lambda desktop, phone: sync(desktop, phone, handles())),
+        (Invariant("edited_version_survives", survives), idempotent_recovery()), normalize=drop_empty_dirs)
+    with tempfile.TemporaryDirectory() as folder:
+        baseline = run_plans(scenario, [], Path(folder))
+        baseline.assert_ok()
+        trace = baseline.runs[0].action_trace
+    points = _boundaries(trace)
+    report = explore_crashes(scenario, tmp_path, errors=True, torn=False,
+                             select=lambda op: points.get(op.index, frozenset()))
+    report.assert_ok()
+    assert len(points) >= 5  # holds, data, archives, pending
+
+
+# -- knowledge logs and turns never take part (020 create-only, 035 held) ----------------------
+
+def test_a_merged_knowledge_log_keeps_what_it_names_and_never_loses_a_batch(tmp_path):
+    """After two offline appends merged, one device deletes an actor the log names and one of the
+    merged batches: the actor's deletion is held back (the log still names it), the batch is
+    create-only so its absence is a conflict, never a deletion, and both devices still read the
+    whole merged log."""
+    desktop, phone = pair_with_log(tmp_path)
+    try:
+        offline_appends(desktop, phone)
+        assert sync(desktop, phone, handles()).conflicts == ()
+        actor = "/".join(address_parts(MARA))
+        batch = next(path for path in batch_paths(phone) if path.endswith(f"-{tag(PHONE)}.json"))
+        for path in (actor, batch):
+            (desktop.root / path).unlink()
+        report = sync(desktop, phone, handles())
+        assert report.deleted == () and report.conflict(actor).code == "delete_dependency"
+        assert report.conflict(batch) is not None and (phone.root / batch).exists() and (phone.root / actor).exists()
+        log = read(phone)
+        assert log.quarantined == () and log.problems == ()
+        assert {e.event_id for e in log.knowledge.events} == {"e1", "e-desk", "e-phone"}
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_a_turn_deleted_on_one_device_is_never_deleted_on_the_other(tmp_path):
+    """035's played turns sync (028's turn merge) but row 9 never deletes one: a turn both devices
+    agreed on, then missing on one, stays a ``deleted`` conflict and the other device keeps it."""
+    (tmp_path / "built").mkdir()
+    folder, chat, _ = card_library(tmp_path / "built")
+    with Table(folder, [say("Dark, and the harbor pays for it.")]) as table:
+        table.runner.seat(chat, ANA)
+        table.runner.begin(chat, table.player())
+        table.runner.keep(chat, table.player(), 1)
+    for name in PAIR:
+        shutil.copytree(folder, tmp_path / name)
+        with Table(tmp_path / name) as table:
+            identify(table.store, name)
+    with Table(tmp_path / DESKTOP) as desk, Table(tmp_path / PHONE) as phone:
+        owners = {DESKTOP: desk.owner, PHONE: phone.owner}
+        assert sync_until_quiet(desk.store, phone.store, owners).conflicts == ()
+        turns = sorted((desk.store.root / "campaigns" / chat.campaign_id / "turns").glob("*.json"))
+        assert turns
+        path = turns[0].relative_to(desk.store.root).as_posix()
+        kept = (phone.store.root / path).read_bytes()
+        (desk.store.root / path).unlink()
+        report = sync(desk.store, phone.store, owners)
+        assert report.deleted == () and (phone.store.root / path).read_bytes() == kept
+        assert report.conflict(path).code == "deleted"
+
+
+def test_a_turn_never_takes_part_in_deletion_propagation_even_once_turns_sync():
+    """Row 9 on a turn is never a propagated deletion, whatever holds turns back today: a turn missing
+    on one device and unchanged on the other stays a conflict that keeps it (the turn merge's own
+    standing turn conflict), so a chat never loses a played turn to a sync."""
+    played = etag(b"turn")
+    assert "turn" not in PROPAGATED_DELETIONS
+    for left, right in ((Side.present(played), Side.absent()), (Side.absent(), Side.present(played))):
+        decision = decide("turn", Base("agreed", played), left, right)
+        assert decision.action != "delete" and decision.code == "deleted", decision

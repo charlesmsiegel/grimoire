@@ -13,6 +13,12 @@ present    = new        = new       drop the temp
 present    = new        other       preserve (external edit is kept)
 =========  ===========  ==========  =====================================
 
+A ``remove`` entry (028) deletes its target only while it still holds ``old``; absent means
+already done, and other bytes are an external edit, kept (the entry is dropped). Removals are
+settled after every other entry (revision removals before manifest removals), so the ``hold`` of
+the removed bytes in the same journal is published or preserved first, and an ``abort`` journal
+never removes anything.
+
 "Preserve" applies to ``publish`` and ``hold`` entries. A ``replica`` (another
 library's exact bytes), ``keep`` (a kept copy of another library's version) or
 ``state`` (``.sync``) entry that would be preserved is *dropped* instead: its bytes
@@ -30,7 +36,7 @@ from __future__ import annotations
 
 import stat
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -217,6 +223,8 @@ class Settlement:
     incomplete: list[str] = field(default_factory=list)  # targets not written (vanished or held back)
     vanished: bool = False  # some staged file was gone (not only kept aside)
     dropped: list[str] = field(default_factory=list)  # keep/state targets set aside unpublished
+    removed: list[str] = field(default_factory=list)  # targets a ``remove`` entry deleted (028)
+    restored: list[str] = field(default_factory=list)  # removed targets put back from their holds (028)
     aborted: bool = False
 
 
@@ -321,13 +329,58 @@ def _publish(access: Access, entry: Entry, settlement: Settlement) -> None:
     settlement.published.append((_text(entry.target), entry.new))
 
 
-def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlement:
+def _landed(entry: Entry, current: str | None) -> bool:
+    """Whether an entry's effect is on disk: its new bytes, or (a removal) the old bytes gone."""
+    return current != entry.old if entry.kind == "remove" else current == entry.new
+
+
+def _remove(access: Access, entry: Entry, settlement: Settlement) -> None:
+    """Delete a removal's target, durably (its folder synced), before its temp goes."""
+    staging = lstat_or_none(access.path((TXN,)))
+    access.guard.check_write(entry.target, staging_device=staging.st_dev if staging else None)
+    access.ops.remove(access.path(entry.target), durable=True)
+    access.ops.remove(access.path((TXN, entry.temp)))
+    settlement.removed.append(_text(entry.target))
+
+
+def _restore(access: Access, entry: Entry, journal: Journal, settlement: Settlement) -> None:
+    """Put a removed record back from its hold, only while its path is still absent (028).
+
+    The hold is the journal's own hold of those bytes, or (an earlier recovery kept it in the next
+    free slot) any file of that record's kept-version folder holding exactly them. A path written
+    since is the human's file and stays; a hold gone too leaves the target listed as incomplete.
+    """
+    folder = conflict_parts(entry.target, entry.old)[:-1]  # type: ignore[arg-type]  # a removal names its old bytes
+    slots = [hold.target for hold in journal.entries if hold.kind == "hold" and hold.target[:-1] == folder]
+    if access.presence(folder) == "present":
+        slots += [folder + (name,) for name in sorted(access.ops.list_dir(access.path(folder)))]
+    data = next((found for found in map(access.read, slots) if found is not None and etag(found) == entry.old), None)
+    if data is None:
+        settlement.incomplete.append(_text(entry.target))
+        return
+    staging = lstat_or_none(access.path((TXN,)))
+    access.guard.check_write(entry.target, staging_device=staging.st_dev if staging else None)
+    if access.presence(entry.target[:-1]) == "absent":
+        access.make_parent(entry.target)
+    temp = access.ops.make_temp(access.path((TXN,)), prefix="rec", suffix=".new")
+    access.ops.write_bytes(temp, data)
+    if access.presence(entry.target) == "absent":  # per-entry guard, immediately before acting (R7)
+        access.ops.replace(temp, access.path(entry.target))
+        settlement.restored.append(_text(entry.target))
+    else:
+        access.ops.remove(temp)
+
+
+def settle(access: Access, journal: Journal, *, live: bool = False,
+           needed: Callable[[Access, list[Parts]], str | None] | None = None) -> Settlement:
     """Finish or preserve a committed journal, then remove it and any leftover staging.
 
     ``live`` is the committing process itself, right after the commit point: none
     of its staging can have been published yet, so a missing staged file is
     incomplete unless the target already holds the new bytes. In recovery a
     missing temp normally means "already published", and the disk is kept.
+    ``needed`` (recovery, 028) says why the commit's removals can no longer go, judged
+    over the library as it is now (``replica.removal_blocker``), or ``None``.
     """
     settlement = Settlement()
     access.check_staging()  # point-in-time checks: repeat them before every phase that mutates
@@ -341,7 +394,8 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
 
     if journal.state == "commit" and all(entry.temp in staged for entry in journal.entries):
         for entry in journal.entries:  # pre-publish guard: all or nothing while nothing is published
-            if temp_digest(entry) != entry.new or access.etag_of(entry.target) not in (entry.old, entry.new):
+            allowed = (entry.old, None) if entry.kind == "remove" else (entry.old, entry.new)
+            if temp_digest(entry) != entry.new or access.etag_of(entry.target) not in allowed:
                 journal = journal.aborted()
                 _replace_journal(access, journal)
                 break
@@ -355,8 +409,8 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
         # unpublished while another entry is still staged proves nothing was published either.
         current = {entry.target: access.etag_of(entry.target) for entry in journal.entries}
         missing = [entry for entry in journal.entries
-                   if entry.temp not in staged and current[entry.target] != entry.new]
-        published = any(entry.temp not in staged and current[entry.target] == entry.new
+                   if entry.temp not in staged and not _landed(entry, current[entry.target])]
+        published = any(entry.temp not in staged and _landed(entry, current[entry.target])
                         for entry in journal.entries)
         held = (any(entry.kind == "hold" for entry in missing)
                 and any(entry.temp in staged for entry in journal.entries))
@@ -365,12 +419,14 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
             _replace_journal(access, journal)
     unwritten = set()  # targets of entries that will never be published
     pending_manifests = {_manifest_source(entry.target) for entry in journal.entries
-                         if entry.temp in staged} - {None}
+                         if entry.temp in staged and entry.kind != "remove"} - {None}
     for entry in journal.entries:
         if entry.temp not in staged:
             current_etag = access.etag_of(entry.target)
             vanished = current_etag != entry.new if live else (entry.old != entry.new and current_etag == entry.old)
-            if (not live and journal.state == "commit" and current_etag != entry.new
+            if entry.kind == "remove":  # its temp is gone: done unless the target still holds what it removes
+                vanished = current_etag == entry.old
+            elif (not live and journal.state == "commit" and current_etag != entry.new
                     and _source_of_revision(entry.target) in pending_manifests):
                 # A revision an earlier recovery kept aside (its slot held other bytes) still holds
                 # back its head move: that decision lived only in memory and the recovery crashed.
@@ -380,7 +436,47 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
                 settlement.vanished = True
                 unwritten.add(entry.target)
     held_sources = {_source_of_revision(entry.target) for entry in journal.entries
-                    if entry.target in unwritten} - {None}
+                    if entry.target in unwritten and entry.kind != "remove"} - {None}
+    removals_go: bool | None = None  # decided once, right before the first removal (028)
+
+    def all_removals_go() -> bool:
+        # 028: a commit's removals happen all or none (a source deleted as a whole, the records that used
+        # it, a campaign's chat with its scope), decided before anything is removed: none if any of them
+        # cannot happen (its target holds other bytes, its staged document is damaged, or its temp is
+        # gone while its target is there again: a record recreated since an earlier run removed it may
+        # need what the rest removes), if the hold of what one removes is not in
+        # place (it may be the only copy), or if any other entry of the commit did not land as staged
+        # (held back, preserved or dropped: what the deletions were planned over is not there). Read
+        # after every other entry is settled, so an external edit is seen up to the removals themselves
+        # (then 010's R7 window).
+        if held_sources or settlement.preserved or settlement.incomplete or settlement.dropped:
+            return False
+        # Those lists know only this run. In recovery an earlier run may have dropped a copy or kept
+        # one aside and died (its temp gone, its target edited): only the disk still says so, so every
+        # other entry must hold exactly its planned bytes, whichever run settled it.
+        if any(entry.kind != "remove" and access.etag_of(entry.target) != entry.new for entry in journal.entries):
+            return False
+        # The commit judged its removals under its lock; a record written while the app was down (a
+        # new instance pinning a revision the batch deletes) was not there then. Read from the disk
+        # alone, so a recovery that crashes and runs again decides the same.
+        if needed is not None and needed(access, [entry.target for entry in journal.entries
+                                                  if entry.kind == "remove"]) is not None:
+            return False
+        # the bytes each landed hold keeps, by the folder it keeps them in (one per record)
+        held = {(entry.target[:-1], entry.new) for entry in journal.entries
+                if entry.kind == "hold" and access.etag_of(entry.target) == entry.new}
+        for entry in journal.entries:
+            if entry.kind != "remove":
+                continue
+            current = access.etag_of(entry.target)
+            if entry.temp not in staged:
+                if current is not None:  # done by an earlier run, and there again (its bytes or others)
+                    return False
+            elif (current not in (entry.old, None) or temp_digest(entry) != entry.new
+                  or (conflict_parts(entry.target, entry.old)[:-1], entry.old) not in held):  # its own hold
+                return False
+        return True
+
     def hold_back(entry: Entry, digest: str | None) -> None:
         _preserve(access, entry, settlement, digest)
         source = _source_of_revision(entry.target)
@@ -389,11 +485,35 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
             held_sources.add(source)
             settlement.incomplete.append(_text(entry.target))
 
-    # Manifests last, whatever order the journal lists them in, so every revision is decided first.
-    for entry in sorted(journal.entries, key=lambda entry: _manifest_source(entry.target) is not None):
+    # Manifests last, whatever order the journal lists them in, so every revision is decided first;
+    # removals after everything else (028), so the hold of what they remove is settled before them.
+    for entry in sorted(journal.entries, key=lambda entry: (entry.kind == "remove",
+                                                            _manifest_source(entry.target) is not None)):
         if entry.temp not in staged:
             continue
         digest = temp_digest(entry)
+        if entry.kind == "remove":
+            if removals_go is None:
+                removals_go = journal.state == "commit" and all_removals_go()
+                if not removals_go and not live:
+                    # All or none holds across a crash: an earlier run of this commit may have removed
+                    # some of them already. Recovery cannot tell its own unlink from another program's,
+                    # so every removed target comes back from its hold (keeping is never a loss),
+                    # before the remaining removals are dropped. Live, nothing is removed yet.
+                    for removal in journal.entries:
+                        if removal.kind == "remove" and access.presence(removal.target) == "absent":
+                            _restore(access, removal, journal, settlement)
+            if not removals_go or digest != entry.new:
+                _preserve(access, entry, settlement, digest)  # dropped: nothing is removed
+                continue
+            current = access.etag_of(entry.target)  # per-entry guard, immediately before acting
+            if current == entry.old:
+                _remove(access, entry, settlement)
+            elif current is None:
+                access.ops.remove(access.path((TXN, entry.temp)))
+            else:  # an external edit since the check above (010's R7 window): the human's file is kept
+                _preserve(access, entry, settlement, digest)
+            continue
         if journal.state == "abort" or digest != entry.new:
             hold_back(entry, digest)
             continue
@@ -435,8 +555,10 @@ def clean_staging(access: Access) -> None:
             access.ops.remove(access.path((TXN, name)))
 
 
-def recover(access: Access) -> Settlement:
-    """Validate the root, the journal and every path it names before changing anything."""
+def recover(access: Access, needed: Callable[[Access, list[Parts]], str | None] | None = None) -> Settlement:
+    """Validate the root, the journal and every path it names before changing anything.
+
+    ``needed`` judges a commit's removals again over the library as it now is (``settle``)."""
     try:
         access.guard.check_session()  # even with no journal: cleanup must not follow a swapped root
         access.check_staging()
@@ -458,6 +580,6 @@ def recover(access: Access) -> Settlement:
     except (StoreError, ValueError) as error:  # LibraryPathError is a ValueError
         raise RecoveryFailed(f"refusing to recover through an unsafe path: {error}") from error
     try:
-        return settle(access, journal)
+        return settle(access, journal, needed=needed)
     except (StoreError, ValueError) as error:  # a path became unsafe while recovering
         raise RecoveryFailed(f"refusing to recover through an unsafe path: {error}") from error

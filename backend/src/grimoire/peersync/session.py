@@ -20,9 +20,10 @@ from pathlib import Path
 from grimoire.store import LibraryStore, StoreError
 from grimoire.sync import Conflict, SyncError, SyncInterrupted, SyncReport, apply_sync, device_of, plan_sync
 
+from .busy import outgoing
 from .errors import MirrorMismatch, NotPaired, PeerRefused, TransportError
 from .pairing import peer_principal, read_pairing
-from .replay import send_step
+from .replay import ask_absent, send_step
 from .snapshot import Limits, receive_mirror
 from .wire import Channel, client_handshake, is_loopback, no_delay
 
@@ -48,6 +49,11 @@ class TransferReport:
     @property
     def copied(self) -> tuple[tuple[str, str], ...]:
         return tuple(sorted({entry for report in self.passes for entry in report.copied}))
+
+    @property
+    def deleted(self) -> tuple[tuple[str, str], ...]:
+        """(path, device that deleted it) for every propagated deletion of every pass (028)."""
+        return tuple(sorted({entry for report in self.passes for entry in report.deleted}))
 
 
 def transfer(store: LibraryStore, authority, peer: str, address: tuple[str, int], *,  # type: ignore[no-untyped-def]
@@ -164,10 +170,21 @@ def _one_pass(store: LibraryStore, channel: Channel, local: str, local_handle: o
             handles = {local: local_handle, peer: mirror.handle}
             plan = plan_sync(store, mirror.store, handles)
 
+            def confirm(paths: list[str]) -> None:  # this device deletes what the peer deleted (028)
+                _check_paired(store, peer, key)
+                # asked with this library locked (019's data commit), so this library's own server
+                # waits for it only ``BUSY_WAIT`` meanwhile, as for a replayed deleting step
+                with outgoing(store):
+                    ask_absent(channel, paths)
+            mirror.store.peer_check = confirm  # type: ignore[attr-defined]
+
             def replay(step) -> None:  # type: ignore[no-untyped-def]
                 if step.device == peer:
                     _check_paired(store, peer, key)
-                    send_step(channel, step, mirror.store.read_blob_exact)
+                    # a deleting step is replayed with this library still locked (019's data commit),
+                    # so this library's own server waits for it only ``BUSY_WAIT`` meanwhile
+                    with outgoing(store):
+                        send_step(channel, step, mirror.store.read_blob_exact)
             return apply_sync(plan, handles, observer=replay)
         finally:
             mirror.store.close()
