@@ -17,7 +17,7 @@ from grimoire.core.entity import DERIVATION_KEY
 from grimoire.core.identity import SourceRef
 from grimoire.core.index import MissingDefinition
 from grimoire.core.portrayal import PortrayalError, derivation_chain
-from grimoire.effective import entity_decoder, explainer
+from grimoire.effective import explainer, view_reader
 from grimoire.images import Problem
 from grimoire.store import LibraryView, RecordEnvelope, StoredDefinition
 
@@ -47,13 +47,8 @@ def lineage(entity: SourceRef, definition: Callable[[SourceRef], StoredDefinitio
     if not isinstance(found, StoredDefinition) or not is_derived(found.envelope):
         return Lineage((entity,), (False,))
     library = view()
-
-    def read(ref: SourceRef):  # type: ignore[no-untyped-def]
-        stored = library.index.resolve(ref)
-        return entity_decoder(stored), getattr(stored, "etag", None)
-
     try:
-        chain = derivation_chain(found.ref, library.index, read, explainer(library))
+        chain = derivation_chain(found.ref, library.index, view_reader(library), explainer(library))
     except PortrayalError as error:
         why = f"{error.reason}/{error.detail}" if error.detail else error.reason
         return Lineage((entity,), (True,), (Problem(str(entity), error.reason,
