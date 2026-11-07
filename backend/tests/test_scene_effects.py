@@ -383,6 +383,37 @@ def test_a_crash_after_the_commit_is_recovered_as_accepted_and_blocks_every_othe
         assert [event.event_id for event in events(at, chat).events][0] == event_id
 
 
+def test_a_landed_event_whose_holder_file_cannot_be_read_is_never_settled(cards, monkeypatch):
+    """The event file landed, but a holder file it receipts is unreadable: 021 reports undecodable_holdings
+    (not a receipt mismatch), and recovery refuses until it is repaired rather than marking it accepted."""
+    folder, chat = cards
+    with table(folder) as at:
+        turn, anya, mara = decided(at, chat)
+        found = EffectHoldings((Line.add(anya, "coin", 3),), "found on the quay")
+        at.runner.propose_effect(chat, at.owner, turn, "Mara knows Anya; Anya finds three coins.",
+                                 [Op("begin", "knows", mara, anya)], found)
+        commit = EffectChange.commit
+
+        def published(change, approvals=None):  # every file of it lands, holder files too; then the process dies
+            commit(change, approvals)
+            raise Crash
+        monkeypatch.setattr(EffectChange, "commit", published)
+        with pytest.raises(Crash):
+            at.runner.approve_effect(chat, at.owner, turn, 1)
+        monkeypatch.undo()
+        event_id = stored_effect(at, chat, turn).event_id
+        assert unsettled(at, chat) == [f"{turn}:{event_id}:landed"]
+        (holder,) = (folder / "campaigns" / chat.campaign_id / "holdings").rglob("*.json")
+        saved = holder.read_bytes()
+        holder.write_bytes(b"{not json")
+        assert unsettled(at, chat) == [f"{turn}:{event_id}:unreadable"]
+        refused("effects_unreadable", at.runner.recover_effects, chat, at.owner)
+        assert stored_effect(at, chat, turn).state == "accepting"  # the gate stays shut
+        holder.write_bytes(saved)  # repaired
+        (settled,) = at.runner.recover_effects(chat, at.owner)
+        assert (settled.state, settled.event_id) == ("accepted", event_id)
+
+
 def test_an_event_that_landed_without_its_changes_is_completed(cards, monkeypatch):
     folder, chat = cards
     with table(folder) as at:

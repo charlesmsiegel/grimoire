@@ -513,16 +513,18 @@ def shape_of(continuity, event_id: str) -> str:
     hold part of it)."""
     events = {event.event_id: event for event in (*continuity.events, *continuity.revoked)}
     codes = {problem.code for problem in continuity.problems if problem.event_id in (event_id, None)}
+    graph = continuity.graph
+    # checked first: a file that cannot be read may hold part of it, even when its event file landed (a holder
+    # file 021 reads as undecodable_holdings, never as a receipt mismatch), so no settled shape is told over it
+    if codes & {"undecodable_event", "undecodable_holdings"} or graph.problems or any(
+            problem.code == "undecodable" for problem in graph.index.problems):
+        return "unreadable"
     event = events.get(event_id)
     if event is not None:
         if not event.active:
             return "revoked"
         mine = {problem.code for problem in continuity.problems if problem.event_id == event_id}
         return "complete" if "receipt_mismatch" in mine else "landed"
-    graph = continuity.graph
-    if codes & {"undecodable_event", "undecodable_holdings"} or graph.problems or any(
-            problem.code == "undecodable" for problem in graph.index.problems):
-        return "unreadable"
     orphaned = any(problem.code == "orphan_effect" and problem.event_id == event_id
                    for problem in continuity.problems)
     return "adopt" if orphaned else "unpublished"
