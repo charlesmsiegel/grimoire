@@ -22,6 +22,7 @@ from grimoire.generation import (
     DirectorBrief, GenerationError, HeardLine, NpcBrief, checked_controls, controller, director_messages,
     decision_messages, decision_options, npc_messages, read_pick, require_director, screen_reply,
 )
+from grimoire.goals import Choice
 from grimoire.providers.adapter import Approvals, CallResult, ProviderAdapter
 from grimoire.providers.cancel import CancelToken
 from grimoire.providers.config import RouteChoice
@@ -90,7 +91,9 @@ class DecisionOutcome:
     says why (``unreadable_pick``, a provider refusal, an error kind, ``cancelled`` or ``stale``).
     ``status`` is the call's own status on the meter, and the call is billed either way. ``skipped``
     means no call was made, because there was nothing to offer: ``reason`` is ``no_intention``,
-    ``nothing_to_decide``, ``too_many_options`` or ``option_leak``.
+    ``nothing_to_decide``, ``too_many_options`` or ``option_leak``. ``basis`` is the choice the call
+    decided on (``None`` for ``no_intention``): ``run_turn`` holds the narration brief to its agenda,
+    knowledge and scene, so neither a pick nor the fallback can be rebound to another choice.
     """
 
     call_id: CallId
@@ -99,6 +102,16 @@ class DecisionOutcome:
     pick: tuple[str, str] | None = None
     reason: str | None = None
     meter_token: str | None = field(default=None, repr=False, compare=False)
+    basis: Choice | None = field(default=None, repr=False, compare=False)
+
+
+def _same_ground(intention: Choice | None, basis: Choice | None) -> bool:
+    """Whether a narration brief's choice was made on the very ground a decision call decided on: the
+    same agenda, knowledge and scene. Only its selection may differ, and ``run_turn`` checks that apart."""
+    if intention is None or basis is None:
+        return intention is basis
+    return ((intention.agenda, intention.knowledge, intention.present, intention.unrecognised)
+            == (basis.agenda, basis.knowledge, basis.present, basis.unrecognised))
 
 
 def _briefs(briefs: object) -> tuple[NpcBrief, ...]:
@@ -185,8 +198,7 @@ def _assign(meter: TurnMeter, briefs: tuple[NpcBrief, ...], director: DirectorBr
         # ``choose`` held to what is possible and permitted, as it holds any selection.
         decided = picks.get(actor_id)
         # A brief with no choice is fine only when there was none to decide on (``no_intention``).
-        if decided is not None and (selection != decided.pick or (
-                brief.intention is None and decided.reason != "no_intention")):
+        if decided is not None and (selection != decided.pick or not _same_ground(brief.intention, decided.basis)):
             raise GenerationError("decision_ignored", f"the brief for {brief.actor} does not carry what a "
                                   "decision call on this meter picked")
     extra = sorted(set(by_actor) - used)
@@ -284,7 +296,8 @@ class GenerationRuntime:
             if token is not None and token.stale and status != "skipped":
                 pick, reason = None, "stale"
             reason = reason[:_MAX_REASON] if reason is not None else None  # a record keeps a short reason
-            outcome = DecisionOutcome(call.call_id, brief.actor, status, pick, reason, meter_token=meter.token)
+            outcome = DecisionOutcome(call.call_id, brief.actor, status, pick, reason, meter_token=meter.token,
+                                      basis=brief.intention)
             decided[call.call_id] = outcome
             return outcome
 

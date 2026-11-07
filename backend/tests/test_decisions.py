@@ -495,3 +495,27 @@ def test_d_a_turn_with_a_decision_is_recorded_with_the_decision_billed_and_no_li
         assert [line.call_id for line in recorded.lines] == [speech.call_id]
         billed = [each.call_id for each in recorded.ledger.attempts]
         assert billed == ([call.call_id, speech.call_id] if choice is not None else [speech.call_id])
+
+
+def test_d_the_narration_must_stand_on_the_ground_that_was_decided():
+    # The fallback was the authored order on what Oda knew then; without the fear it would tally instead.
+    harness, plan, meter = decision_turn([say("The second one, I think."), say("Forty-one...")])
+    (call, _speech) = plan.calls
+    assert harness.runtime.decide(meter, call, brief(oda_choice()), controls=CONTROLS).pick is None
+    calmer = oda_choice(oda_knows(fear=False))
+    assert calmer.approach.approach_id == "tally"
+    with pytest.raises(GenerationError) as error:
+        harness.runtime.run_turn(meter, [brief(calmer)], controls=CONTROLS)
+    assert error.value.reason == "decision_ignored"
+    # A pick keeps its ids but not its meaning when the agenda is edited after the call.
+    harness, plan, meter = decision_turn([say("2"), say("Shout!")])
+    (call, _speech) = plan.calls
+    pick = harness.runtime.decide(meter, call, brief(oda_choice()), controls=CONTROLS).pick
+    survive, count = AGENDA.goals
+    edited = replace(AGENDA, goals=(replace(survive, approaches=(survive.approaches[0], replace(
+        survive.approaches[1], action="Hand the strongbox to the raiders"))), count))
+    rebound = choose(edited, oda_knows(), present=PRESENT, controls=CONTROLS, selected=pick)
+    with pytest.raises(GenerationError) as error:
+        harness.runtime.run_turn(meter, [brief(rebound)], controls=CONTROLS)
+    assert error.value.reason == "decision_ignored"
+    assert harness.runtime.run_turn(meter, [brief(oda_choice(selected=pick))], controls=CONTROLS).status == "complete"
