@@ -20,6 +20,13 @@ def test_the_card_benchmark_plays_a_cold_and_a_warm_turn_at_each_history(tmp_pat
     assert len(generated.calls) == 1 and call_costs(generated).total.latency == "synthetic"
 
 
+def test_each_history_size_measures_exactly_that_history(tmp_path):
+    measured = card_turns(tmp_path / "card", (1, 2)) + v1_turns(tmp_path / "v1", (1, 2))
+    for each in measured:
+        if each.phase == "cold" and each.operation == "open":
+            assert each.trace.counts("read.turns")["turns"] == each.history
+
+
 def test_the_v1_benchmark_has_two_speakers(tmp_path):
     measured = v1_turns(tmp_path / "bench", (2,))
     (generated,) = [each.trace for each in measured if each.operation == "generate" and each.phase == "warm"]

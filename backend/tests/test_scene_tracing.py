@@ -167,33 +167,68 @@ class _Probe:
         record_calls(meter)
 
 
-def test_a_sent_call_whose_booking_was_lost_is_still_in_the_trace():
-    plan = plan_generation_turn("camp", "turn-1", present=["a", "b"], speakers=["a", "b"],
-                                controls=[ControlAssignment("camp", actor, "director") for actor in ("a", "b")],
-                                policy=InferencePolicy({}, max_attempts_per_call=1))
+def _metered(bookings: list[list[bool]]) -> TurnMeter:
+    """A meter over one planned call per entry of ``bookings``: each entry lists its attempts, in order, and
+    whether that attempt's booking fails both ways after it was sent (the meter then poisons the call)."""
+    actors = [f"a{index}" for index in range(len(bookings))]
+    plan = plan_generation_turn("camp", "turn-1", present=actors, speakers=actors,
+                                controls=[ControlAssignment("camp", actor, "director") for actor in actors],
+                                policy=InferencePolicy({}, max_attempts_per_call=2))
     failing = {"now": False}
     meter = TurnMeter(TurnUsageLedger(plan), _fail_booking=lambda stage: failing["now"])
-    for index, call in enumerate(plan.calls):
-        failing["now"] = index == 1  # the second call is sent, then both its bookings fail
+    for call, attempts in zip(plan.calls, bookings, strict=True):
+        meter._begin(call, "digest", False, len(attempts))
+        for number, fails in enumerate(attempts, 1):
+            failing["now"] = fails
 
-        def build(call=call):
-            done = CallAttempt(call.call_id, 1, TokenUsage(1000, 200), Measurement.PROVIDER_REPORTED,
-                               "completed", "test/route")
-            return done, AttemptReport(call.call_id, 1, "test/route", "completed", done.usage, done.measurement,
-                                       total_s=1.0, latency_measurement="measured")
+            def build(call=call, number=number):
+                outcome = "completed" if number == len(attempts) else "failed"
+                done = CallAttempt(call.call_id, number, TokenUsage(1000, 200), Measurement.PROVIDER_REPORTED,
+                                   outcome, "test/route")
+                return done, AttemptReport(call.call_id, number, "test/route", outcome, done.usage,
+                                           done.measurement, total_s=1.0, latency_measurement="measured")
 
-        meter._begin(call, "digest", False, 1)
-        meter._book(call.call_id, 1, "test/route", sent=True, measurement=Measurement.PROVIDER_REPORTED,
-                    error_kind=None, build=build)
+            meter._book(call.call_id, number, "test/route", sent=True, measurement=Measurement.PROVIDER_REPORTED,
+                        error_kind=None, build=build)
         meter._end(call.call_id, "accepted")
-    assert len(meter.poisoned_call_ids) == 1
+    return meter
+
+
+def _traced_calls(meter: TurnMeter):
     log = TraceLog()
     _Probe(log).run(meter)
     (trace,) = log.traces
-    assert [sample.lost for sample in trace.calls] == [False, True]
-    costs = call_costs(trace, PriceTable({"test/route": Price(Decimal(3), Decimal(15))}))
+    return trace, call_costs(trace, PriceTable({"test/route": Price(Decimal(3), Decimal(15))}))
+
+
+def test_a_sent_call_whose_booking_was_lost_is_still_in_the_trace():
+    meter = _metered([[False], [True]])  # the second call is sent, then both its bookings fail
+    assert len(meter.poisoned_call_ids) == 1
+    trace, costs = _traced_calls(meter)
+    assert [(sample.lost, sample.attempt.attempt) for sample in trace.calls] == [(False, 1), (True, 1)]
     assert costs.total.calls == 2 and costs.total.lost == 1
     assert costs.total.cost_state == "partial" and costs.total.latency == "partial"
+
+
+def test_a_retry_whose_booking_was_lost_is_in_the_trace_after_the_attempts_that_were_booked():
+    meter = _metered([[False, True]])  # attempt 1 booked, its retry sent and then lost
+    trace, costs = _traced_calls(meter)
+    assert [(sample.lost, sample.attempt.attempt) for sample in trace.calls] == [(False, 1), (True, 2)]
+    assert costs.total.calls == 1 and costs.total.attempts == 2 and costs.total.retries == 1
+    assert costs.total.lost == 1 and costs.total.cost_state == "partial"
+
+
+def test_a_change_a_caller_makes_to_a_turn_without_writing_it_never_reaches_the_next_read(cards):
+    folder, chat, _ = cards
+    seed_history(folder, chat, 2)
+    with Table(folder) as table:
+        first = table.runner.open(chat)
+        first.records[0].extras["x-note"] = "unsaved"  # extras is the one mutable field of a turn
+        first.turns.turns[1].record.extras["x-note"] = "unsaved"
+        again = table.runner.open(chat)
+        assert again.turns.reads.reused == 2  # served from what was read, yet untouched
+        assert all("x-note" not in record.extras for record in again.records)
+        assert all("x-note" not in stored.record.extras for stored in table.runner.scenes.turns(chat).turns)
 
 
 def test_a_refusal_is_the_trace_status_and_reaches_the_caller_unchanged(cards):

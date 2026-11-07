@@ -145,9 +145,10 @@ def record_calls(meter: TurnMeter) -> None:
     """One sample per booked attempt of the meter's plan, with the provider timing the adapter reported.
 
     An attempt whose report is missing (its booking fell back) is ``unreported``; timing against a scripted
-    or test clock is ``synthetic`` (the adapter says which). A call that was sent but whose booking failed
-    entirely (poisoned: no attempt on the ledger) gets one ``unreported`` sample with every count unreported,
-    so it is never missing from the trace and its cost is never complete."""
+    or test clock is ``synthetic`` (the adapter says which). A call whose booking failed entirely after it was
+    sent (poisoned: that attempt is not on the ledger, though earlier attempts of the call may be) gets one
+    ``lost`` sample for that attempt with every count unreported, so it is never missing from the trace and
+    its cost is never complete."""
     current = _CURRENT.get()
     if current is None or current.broken:
         return
@@ -164,9 +165,9 @@ def _record(builder: TraceBuilder, meter: TurnMeter) -> None:
     for call in plan.calls:  # numbered in plan order, so the same speaker order gives the same labels
         if call.call_id.actor_id is not None:
             actors.setdefault(call.call_id.actor_id, f"npc-{len(actors) + 1}")
-    booked = set()
+    booked: dict[CallId, int] = {}  # each call's last booked attempt number
     for attempt in meter.ledger.attempts:
-        booked.add(attempt.call_id)
+        booked[attempt.call_id] = max(booked.get(attempt.call_id, 0), attempt.attempt)
         report = next((each for each in meter.reports(attempt.call_id) if each.attempt == attempt.attempt), None)
         if report is None or report.total_s is None:
             latency, first, total = "unreported", None, None
@@ -175,8 +176,9 @@ def _record(builder: TraceBuilder, meter: TurnMeter) -> None:
             first = report.first_byte_s if report.first_byte_s is not None and report.first_byte_s <= total else None
         _sample(builder, _anonymous(attempt, actors), stages.get(attempt.call_id, "unplanned"), latency, first,
                 total)
-    for cid in sorted(meter.poisoned_call_ids - booked, key=str):
-        lost = CallAttempt(cid, 1, TokenUsage(None, None), "estimated", "failed")
+    for cid in sorted(meter.poisoned_call_ids, key=str):
+        # the attempt whose booking failed: the first, or a retry after attempts that were booked
+        lost = CallAttempt(cid, booked.get(cid, 0) + 1, TokenUsage(None, None), "estimated", "failed")
         _sample(builder, _anonymous(lost, actors), stages.get(cid, "unplanned"), "unreported", None, None,
                 lost=True)
 

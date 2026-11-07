@@ -102,10 +102,10 @@ def play_turns(folder: Path, chat: ChatRef, *, scenario: str, history: int, spea
 
 def card_turns(root: Path, histories=(10, 100), *, traced: bool = True) -> list[Measured]:
     """The world-less card chat (Mara Vell, with her lorebook; one speaker) at each history size."""
-    root.mkdir(parents=True, exist_ok=True)
-    folder, chat, _storm = card_library(root)
     measured: list[Measured] = []
-    for history in histories:
+    for history in histories:  # a library of its own for each size, so no size inherits another's turns
+        (root / f"h{history}").mkdir(parents=True, exist_ok=True)
+        folder, chat, _storm = card_library(root / f"h{history}")
         seed_history(folder, chat, history)
         measured += play_turns(folder, chat, scenario="card", history=history, speakers=1, traced=traced)
     return measured
@@ -113,10 +113,10 @@ def card_turns(root: Path, histories=(10, 100), *, traced: bool = True) -> list[
 
 def v1_turns(root: Path, histories=(10,), *, traced: bool = True) -> list[Measured]:
     """026's migrated two-NPC campaign (Mara and Seraphine both answer) at each history size."""
-    root.mkdir(parents=True, exist_ok=True)
-    folder = v1_library(root)
     measured: list[Measured] = []
-    for history in histories:
+    for history in histories:  # a library of its own for each size, so no size inherits another's turns
+        (root / f"h{history}").mkdir(parents=True, exist_ok=True)
+        folder = v1_library(root / f"h{history}")
         seed_history(folder, V1_CHAT, history)
         measured += play_turns(folder, V1_CHAT, scenario="v1", history=history, speakers=2, voices=MARA_VOICE,
                                traced=traced)
