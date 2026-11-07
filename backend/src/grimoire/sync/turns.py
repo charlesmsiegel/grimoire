@@ -19,11 +19,14 @@ from collections.abc import Mapping
 
 from grimoire.core.identity import ChatRef, ScopeRef, TurnRef
 from grimoire.scene.model import parse_turn_id
-from grimoire.store import UnstorableIdentifier
+from grimoire.store import LibraryStore, StoreError, UnstorableIdentifier
 from grimoire.store.layout import chat_parts, scope_parts, turn_parts
 from grimoire.store.replica import parse_exact
 
 from .documents import syncable
+from .errors import NoDeviceIdentity, SyncInterrupted
+from .identity import device_of
+from .keeps import kept_slots, other_peers, read_keeps
 
 
 def _payload(path: str, data: bytes | None) -> Mapping | None:  # type: ignore[type-arg]
@@ -80,6 +83,51 @@ def _turn_name(path: str) -> tuple[str, int, str | None] | None:
     return parse_turn_id(name[:-len(".json")]) if name.endswith(".json") else None
 
 
+def open_conflicts(store: LibraryStore, folder: str) -> tuple[dict[str, tuple[bytes, ...]], bool]:
+    """The files under ``folder`` that a pair's last sync found in conflict on this device and that no
+    ``resolve`` has ended yet (019's keep-both, as this device's kept-version records hold it: an entry
+    with a ``base``), each with the peer's versions kept here that can be read; and whether the records
+    are complete. ``False`` when a record cannot be honoured (damaged, or unreadable): any path may be in
+    conflict then, so callers fail closed. A library that never synced has none."""
+    try:
+        device = device_of(store)
+    except NoDeviceIdentity:
+        return {}, True
+    except SyncInterrupted:
+        return {}, False
+    found: dict[str, tuple[bytes, ...]] = {}
+    complete = True
+    try:
+        peers = other_peers(store, device)
+    except (StoreError, OSError):
+        return {}, False
+    for peer in peers:
+        try:
+            view = read_keeps(store, peer, tuple(sorted((device, peer))))  # type: ignore[arg-type]
+        except (StoreError, OSError, ValueError):
+            complete = False
+            continue
+        if view.state == "ignored":
+            complete = False
+        for path, entry in (view.entries.items() if view.state == "valid" else ()):
+            if entry.base is None or not path.startswith(folder + "/"):
+                continue
+            kept = list(found.get(path, ()))
+            for tag in sorted(entry.delivered):
+                slots, unreadable = kept_slots(store, path, tag)
+                complete = complete and not unreadable
+                kept += [data for slot in slots if (data := _read(store, slot)) is not None]
+            found[path] = tuple(kept)
+    return found, complete
+
+
+def _read(store: LibraryStore, slot: str) -> bytes | None:
+    try:
+        return store.read_exact(slot)
+    except (StoreError, OSError, ValueError):
+        return None
+
+
 def _spell(parts) -> str | None:  # type: ignore[no-untyped-def]
     try:
         return "/".join(parts())
@@ -87,4 +135,4 @@ def _spell(parts) -> str | None:  # type: ignore[no-untyped-def]
         return None
 
 
-__all__ = ["turn_named", "turn_needs"]
+__all__ = ["open_conflicts", "turn_named", "turn_needs"]

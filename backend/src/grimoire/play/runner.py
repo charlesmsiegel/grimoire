@@ -111,8 +111,8 @@ class Scene:
         return pending is not None and pending.running is not None
 
     @property
-    def paused(self) -> bool:  # any open pause, on the line or set aside by a fork choice (028)
-        return bool(self.turns.pauses)
+    def paused(self) -> bool:  # any open pause: on the line, set aside (028), or kept beside a turn by sync
+        return self.turns.paused
 
     def controller(self, actor: InstanceRef) -> str | None:
         found = {c.controller_id for c in self.controls
@@ -195,6 +195,8 @@ class SceneRunner:
         turns = self.scenes.turns(chat)
         problems += [("turns", f"{path}:{code}") for path, code in turns.problems]
         problems += self.scenes.fork_problems(turns)  # 028: which turns, which devices, from which number
+        if turns.conflicted:  # 019's keep-both on a turn: each device reads its own until it is resolved
+            problems.append(("turn_conflict", ", ".join(turns.conflicted)))
         history, history_problems = chat_history(self.store, chat, captured.chat, captured.snapshot)
         problems += history_problems
         controls = tuple(self.sovereignty.load(chat.campaign_id).controls)
@@ -301,7 +303,7 @@ class SceneRunner:
         line = self._opening(context, record, number, opening)
         take = Take(number, "proposed", "opening", scene.cast, lines=(line,), by=principal)
         record = record.with_take(take)
-        self.scenes.write(record, stored)
+        self.scenes.write(record, stored, unpaused=True)
         return record
 
     def _opening(self, context: _Context, record: TurnRecord, take: int, chosen: str | None) -> SceneLine:
@@ -455,7 +457,7 @@ class SceneRunner:
         record = record.with_take(running)
         claimed = []  # the fence is claimed as the running take is published, never after: an older run
         # resuming between the two would otherwise cancel the reroll that superseded it
-        stored = self.scenes.write(record, stored, after=scene.turns.last if stored is None else None,
+        stored = self.scenes.write(record, stored, after=scene.turns.last if stored is None else None, unpaused=True,
                                    on_commit=lambda: claimed.append(self.fence.claim(str(chat))))
         (token,) = claimed
         meter = TurnMeter(TurnUsageLedger(plan))
@@ -631,7 +633,7 @@ class SceneRunner:
         if record.running is not None:  # a run still in flight loses: its take lands stale
             record = record.with_take(replace(record.running, state="superseded"))
         record = record.with_take(replace(found, state="kept", by=principal))
-        self.scenes.write(record, stored)
+        self.scenes.write(record, stored, unpaused=True)
         return record
 
     def strike(self, chat: ChatRef, by, line_id: str) -> TurnRecord:
@@ -657,7 +659,7 @@ class SceneRunner:
         if record.running is not None:
             record = record.with_take(replace(record.running, state="superseded"))
         record = replace(record, passed_by=principal)
-        self.scenes.write(record, stored)
+        self.scenes.write(record, stored, unpaused=True)
         return record
 
     def request(self, chat: ChatRef, by, kind: str, targets: Iterable[str] = (), *,
@@ -666,7 +668,7 @@ class SceneRunner:
         the named lines (``redirect``/``rephrase`` record the direction on their take)."""
         scene = self._context(chat).scene
         principal = self._principal(scene, by)
-        _readable(scene)
+        _readable(scene, pausing=kind == "pause")
         targets = tuple(targets)
         if kind in ("skip", "redirect", "rephrase") and not targets:
             raise _refuse("no_targets", f"a {kind} names the lines it is about")
@@ -743,15 +745,19 @@ class SceneRunner:
         return stored
 
 
-def _readable(scene: Scene) -> None:
+def _readable(scene: Scene, *, pausing: bool = False) -> None:
     """Every write needs the chat's whole history: one unreadable turn file stops them all, and so does a fork
-    (two turns of one number after one turn, every file readable), until the owner chooses a branch (028)."""
-    if scene.turns.complete:
-        return
-    if set(scene.turns.problems) == {(str(scene.chat), "turn_fork")}:
-        raise _refuse("turn_fork", "this chat holds two devices' turns of one number; nothing is written until "
-                                   "the owner chooses which goes on")
-    raise _refuse("turns_unreadable", "a turn file of this chat cannot be read; nothing is written")
+    (two turns of one number after one turn, every file readable), until the owner chooses a branch (028), and
+    a turn sync left in a keep-both conflict (each device reads its own version), until it is resolved; a pause
+    still goes on then (016)."""
+    if not scene.turns.complete:
+        if set(scene.turns.problems) == {(str(scene.chat), "turn_fork")}:
+            raise _refuse("turn_fork", "this chat holds two devices' turns of one number; nothing is written "
+                                       "until the owner chooses which goes on")
+        raise _refuse("turns_unreadable", "a turn file of this chat cannot be read; nothing is written")
+    if scene.turns.conflicted and not pausing:
+        raise _refuse("turn_conflict", "a turn of this chat is in a sync conflict; nothing is played until it is "
+                                       "resolved")
 
 
 def _follows(last: TurnRecord | None) -> str | None:

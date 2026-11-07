@@ -6,13 +6,14 @@ containment, recovery) are covered with 021's families in ``test_store_effect_re
 
 from __future__ import annotations
 
+from dataclasses import replace
 from hashlib import sha256
 
 import pytest
 
 from grimoire.chatstore import campaign_taken_ids
 from grimoire.core.identity import ChatRef, InstanceRef, TurnRef
-from grimoire.scene import Post, SceneRefused, TurnRecord, turn_id
+from grimoire.scene import TURN_SCHEMA, Post, SceneRefused, TurnRecord, turn_id, turn_to_payload
 from grimoire.scenestore import SceneLibrary, turn_instance_ids
 from grimoire.store import LibraryStore, ScopeRecord, TakenIdsUnlisted
 from grimoire.sync import identify, sync
@@ -193,3 +194,20 @@ def test_a_last_turn_write_waits_for_no_later_turn(library):
         lib.write(post_turn(CHAT, 1, "Paused."), first, last=True)
     assert error.value.reason == "turn_changed"
     assert lib.turns(CHAT).turns[0].record.post.text == "Hello."
+
+
+def test_a_play_write_over_an_existing_turn_waits_for_no_pause_anywhere_in_the_chat(library):
+    """016: a keep, a pass or a run's start on the open turn is refused under the lock while any turn of the
+    chat holds a pause written since it was read (by sync, say, on an earlier turn); a mark still goes on."""
+    lib = scenes(library)
+    first = lib.write(post_turn(CHAT, 1), None)
+    second = lib.write(post_turn(CHAT, 2), None, after=first)
+    txn = library.transaction()
+    paused = replace(first.record, paused=True, paused_by=OWNER)
+    txn.put(ScopeRecord(first.record.ref, TURN_SCHEMA, turn_to_payload(paused), owner=first.owner), first.etag)
+    txn.commit(owner_handle("campaigns"))
+    with pytest.raises(SceneRefused) as error:
+        lib.write(post_turn(CHAT, 2, "Kept over a pause."), second, unpaused=True)
+    assert error.value.reason == "turn_changed"
+    lib.write(post_turn(CHAT, 2, "A mark."), second)
+    assert lib.turns(CHAT).paused

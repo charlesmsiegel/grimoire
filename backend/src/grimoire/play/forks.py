@@ -27,6 +27,8 @@ def choose_branch(runner, chat: ChatRef, by, turn: str):  # type: ignore[no-unty
     if not isinstance(turn, str):
         raise SceneRefused("not_a_branch", "a branch is named by its first turn's id")
     turns = scene.turns  # what the choice is checked against again under the store lock
+    if turns.conflicted:  # each device may read different marks until sync's conflict is resolved
+        raise SceneRefused("turn_conflict", "a turn of this chat is in a sync conflict; resolve it first")
     other = [code for _, code in turns.problems if code != "turn_fork"]
     if other:
         raise SceneRefused("turns_unreadable", f"this chat's turns are incomplete "

@@ -226,16 +226,21 @@ def test_a_turn_played_after_a_set_aside_one_on_a_third_device_is_set_aside_when
         scene = desk.runner.open(chat)
         assert scene.turns.fork is None and [r.turn_id for r in scene.records] == [turn_id(chat, 1), ours]
         assert [s.record.turn_id for s in scene.turns.set_aside] == [theirs, late]
-        play(desk, chat, "The desktop goes on.")  # turn 3 of the line; the tablet's turn 3 takes no number
         # the desktop and the tablet each received the phone's turn 2 from another device, so they share no base
-        # for it: its mark is an ordinary keep-both conflict there, and the tablet stays forked until it is resolved
+        # for it: its mark is an ordinary keep-both conflict there. The tablet stays forked, and neither plays on
+        # until it is resolved, since each reads its own version of that turn
         path = f"campaigns/{chat.campaign_id}/turns/{theirs}.json"
         conflict = report.conflict(path)
         assert conflict is not None and conflict.code == "missing_ancestor"
         assert tablet.runner.open(chat).turns.fork.state == "open"
+        for table in (desk, tablet):
+            assert table.runner.open(chat).turns.conflicted == (theirs,)
+        refused("turn_conflict", play, desk, chat, "Too soon.")
         expected = {name: etag((tmp_path / name / path).read_bytes()) for name in (DESKTOP, TABLET)}
         resolve(desk.store, tablet.store, path, expected[DESKTOP], expected,
                 {DESKTOP: desk.owner, TABLET: tablet.owner})
+        assert desk.runner.open(chat).turns.conflicted == ()
+        play(desk, chat, "The desktop goes on.")  # turn 3 of the line; the tablet's turn 3 takes no number
         assert between(DESKTOP, TABLET).conflicts == ()
         scene = tablet.runner.open(chat)
         assert scene.turns.fork is None and late in [s.record.turn_id for s in scene.turns.set_aside]
@@ -461,3 +466,37 @@ def test_a_forked_imported_chat_hears_its_history_then_the_chosen_branch_only(bu
         assert prompt.index("The lamps are out tonight.") < prompt.index("Asked on the desktop.")
         assert "Then we wait for the tide." in prompt and "Asked on the phone." not in prompt
         assert phone.runner.open(chat).imported is not None
+
+
+def test_a_pause_in_a_turn_the_other_device_edited_holds_on_both_until_resolved(built, tmp_path):
+    """A pause lives in its turn's file, so the other device's offline edit of that turn (a strike) makes a
+    keep-both conflict and each device reads its own version. Both still read the chat as paused (one from
+    the version kept beside its own), and nothing is played on either until the conflict is resolved."""
+    chat = devices(built, tmp_path)
+    with Table(tmp_path / DESKTOP, [say("Desk three.")]) as desk, \
+            Table(tmp_path / PHONE, [say("Phone two."), say("Phone three.")]) as phone:
+        synced(desk, phone)
+        play(phone, chat, "Second.")
+        synced(desk, phone)  # both hold turn 2, the chat's last turn
+        two = turn_id(chat, 2, tag(PHONE))
+        desk.runner.request(chat, desk.player(), "pause")  # the desktop's player stops play
+        phone.runner.strike(chat, phone.owner, f"{two}.1.1")  # offline, the phone edits the same turn
+        report = synced(desk, phone)
+        path = f"campaigns/{chat.campaign_id}/turns/{two}.json"
+        assert report.conflict(path).code == "concurrent"
+        for table in (desk, phone):
+            scene = table.runner.open(chat)
+            assert scene.paused and scene.turns.conflicted == (two,)
+            assert ("turn_conflict", two) in scene.problems
+            refused("turn_conflict", table.runner.post, chat, table.player(), '"Play on?"')
+            refused("turn_conflict", table.runner.resume, chat, table.owner)
+        assert phone.runner.open(chat).turns.kept_pauses == (desk.player().principal,)  # who paused, seen there
+        expected = {name: etag((tmp_path / name / path).read_bytes()) for name in (DESKTOP, PHONE)}
+        resolve(desk.store, phone.store, path, expected[DESKTOP], expected,
+                {DESKTOP: desk.owner, PHONE: phone.owner})
+        for table in (desk, phone):
+            scene = table.runner.open(chat)
+            assert scene.turns.conflicted == () and scene.paused  # the version kept is the paused one
+        phone.runner.resume(chat, phone.player())
+        play(phone, chat, "Third, once resolved.")
+        assert synced(desk, phone).conflicts == () and not desk.runner.open(chat).paused

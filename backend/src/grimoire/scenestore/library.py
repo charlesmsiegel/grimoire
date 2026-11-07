@@ -19,8 +19,10 @@ from grimoire.scene import (
     turn_to_payload,
 )
 from grimoire.scene.branches import is_mine, tag_for
-from grimoire.store import LibraryStore, ScopeRecord, StaleWrite, TakenIdsUnlisted
-from grimoire.store.layout import address_parts
+from grimoire.store import LibraryStore, ScopeRecord, StaleWrite, StoreError, TakenIdsUnlisted
+from grimoire.store.layout import CAMPAIGNS, TURNS, address_parts
+from grimoire.store.replica import parse_exact
+from grimoire.sync.turns import open_conflicts
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,10 @@ class ChatTurns:
     problems: tuple[tuple[str, str], ...]
     set_aside: tuple[StoredTurn, ...] = ()
     fork: Fork | None = None
+    #: turns of this chat in a sync conflict no ``resolve`` has ended (``CONFLICT_RECORDS`` when this device's
+    #: records of them cannot be read), and the players whose pause another device's kept version holds
+    conflicted: tuple[str, ...] = ()
+    kept_pauses: tuple[str, ...] = ()
 
     @property
     def complete(self) -> bool:
@@ -60,6 +66,12 @@ class ChatTurns:
         return tuple(stored.record for stored in self.turns)
 
     @property
+    def paused(self) -> bool:
+        """Play waits: a pause stands on a turn of the chat, or on another device's version of one kept here
+        while their sync conflict stands (so both devices show it, 016)."""
+        return bool(self.pauses or self.kept_pauses)
+
+    @property
     def pauses(self) -> tuple[StoredTurn, ...]:
         """Every turn that holds an open pause, on the line or set aside (016's pause is a safety tool: a turn a
         fork choice set aside keeps its pause, so a merge never lifts one, 028). Play waits while any stands."""
@@ -67,6 +79,17 @@ class ChatTurns:
 
     def etags(self) -> dict[str, str]:
         return {stored.record.turn_id: stored.etag for stored in (*self.turns, *self.set_aside)}
+
+
+#: ``ChatTurns.conflicted`` when this device's kept-version records cannot be read: any turn may be in conflict
+CONFLICT_RECORDS = "<sync records unreadable>"
+
+
+def _parsed(path: str, data: bytes):  # type: ignore[no-untyped-def]
+    try:
+        return parse_exact(tuple(path.split("/")), data)
+    except (StoreError, ValueError):
+        return None
 
 
 def _chat_of(turn_id: str) -> str:
@@ -114,8 +137,27 @@ class SceneLibrary:
             problems.append((str(chat), "turn_fork"))
         if lineage.orphans:  # a turn whose predecessor is missing or cannot be told
             problems.append((str(chat), "turn_gap"))
+        conflicted, kept_pauses = self._conflicts(chat)
         return ChatTurns(chat, tuple(by_id[turn.turn_id] for turn in lineage.line), tuple(sorted(problems)),
-                         tuple(by_id[turn.turn_id] for turn in lineage.set_aside), lineage.fork)
+                         tuple(by_id[turn.turn_id] for turn in lineage.set_aside), lineage.fork, conflicted,
+                         kept_pauses)
+
+    def _conflicts(self, chat: ChatRef) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """This chat's turns that sync left in a keep-both conflict (019), and who paused in another device's
+        version kept beside one. Each device reads its own version until the conflict is resolved, so a pause,
+        a take or a choice the other made is unseen here: no play write goes on meanwhile (``turn_conflict``)."""
+        found, complete = open_conflicts(self.store, f"{CAMPAIGNS}/{chat.campaign_id}/{TURNS}")
+        conflicted, pausers = [] if complete else [CONFLICT_RECORDS], []
+        for path, kept in found.items():
+            name = path.rsplit("/", 1)[-1].removesuffix(".json")
+            if _chat_of(name) != chat.chat_id:
+                continue
+            conflicted.append(name)
+            for data in kept:
+                payload = getattr(_parsed(path, data), "payload", None)
+                if isinstance(payload, Mapping) and payload.get("paused") is True:
+                    pausers.append(str(payload.get("paused_by")))
+        return tuple(sorted(conflicted)), tuple(sorted(set(pausers)))
 
     def fork_problems(self, turns: ChatTurns) -> list[tuple[str, str]]:
         """``("turn_fork", <which turns, which devices, from which number>)`` for a forked chat, else nothing."""
@@ -147,7 +189,7 @@ class SceneLibrary:
         return tag[1:] or None
 
     def write(self, record: TurnRecord, base: StoredTurn | None, *, after: StoredTurn | None = None,
-              last: bool = False, before_commit: Callable[[], None] | None = None,
+              last: bool = False, unpaused: bool = False, before_commit: Callable[[], None] | None = None,
               on_commit: Callable[[], None] | None = None) -> StoredTurn:
         """Create (``base=None``) or compare-and-swap one turn over ``base``, as read; the turn as now stored.
 
@@ -158,6 +200,8 @@ class SceneLibrary:
         ``before_commit`` runs under the store lock just before the commit point (the runner re-checks its
         fence there): raising from it writes nothing. ``on_commit`` runs under the same lock once the write
         has committed (the runner claims its fence there, so publishing a run and claiming are one step).
+        ``unpaused`` (implied by a create) writes only while no pause stands (016: play never goes on over one),
+        and no write but a pause goes on while a turn of the chat is in a sync conflict (``turn_conflict``).
         """
         payload = turn_to_payload(record)
         if base is None:
@@ -165,17 +209,17 @@ class SceneLibrary:
         else:
             envelope = ScopeRecord(record.ref, TURN_SCHEMA, payload, owner=base.owner, extra=base.extra)
         with self.store.lock:
-            view = (self._view(record.chat, self.store.campaign_turns(record.chat.campaign_id))
-                    if base is None or last or after is not None else None)  # one read for every check
-            line = view.turns if view is not None else ()  # turns set aside take no number (028)
-            if view is not None and view.problems:
+            view = self._view(record.chat, self.store.campaign_turns(record.chat.campaign_id))  # one read
+            line = view.turns  # turns set aside take no number (028)
+            if view.conflicted and not (last and record.paused):
+                raise SceneRefused("turn_conflict", "a turn of this chat is in a sync conflict; resolve it first")
+            if (unpaused or base is None) and view.paused:  # a pause written meanwhile, here or by sync
+                raise SceneRefused("turn_changed", "play was paused since the chat was read; read it again")
+            if view.problems:
                 # a file of this chat that cannot be read (a peer's newer turn, say) or a fork arrived since the
                 # caller read the chat: no turn is created or paused over what this version cannot see
                 raise SceneRefused("turn_changed", "the chat's turns changed since they were read; read them again")
             if base is None:
-                assert view is not None
-                if view.pauses:  # a pause written meanwhile, on any turn (a peer's, set aside): never played over
-                    raise SceneRefused("turn_changed", "play was paused since the chat was read; read it again")
                 if any(stored.record.number == record.number for stored in line):
                     # this library already holds turn n under another device's tag (made before identify)
                     raise SceneRefused("turn_changed", "this turn was played since it was read; read it again")
@@ -244,6 +288,8 @@ class SceneLibrary:
         meanwhile, anywhere in the chat, refuses it: ``turn_changed``)."""
         with self.store.lock:
             now = self.turns(turns.chat)
+            if now.conflicted:
+                raise SceneRefused("turn_conflict", "a turn of this chat is in a sync conflict; resolve it first")
             if now.etags() != turns.etags() or now.problems != turns.problems:
                 raise SceneRefused("turn_changed", "the chat's turns changed since they were read; read them again")
             if not changes:
