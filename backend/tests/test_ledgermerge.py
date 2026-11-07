@@ -14,14 +14,16 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.core.identity import AcceptedRef
+from grimoire.core.identity import AcceptedRef, RelationRef
 from grimoire.holdings import Holdings, Line, Operation
 from grimoire.ledgermerge import Kept, LedgerReview, Merged, Review, ReviewItem, Version, merge_holdings, merge_ledger
-from grimoire.store import LibraryStore
+from grimoire.store import LibraryStore, ScopeRecord
+from grimoire.store.envelope import scope_record_document
+from grimoire.store.jsonfmt import render
 
 from effects_fixtures import C, CHAT, INES, KEY1, TAM, WREN, give, moment
 from ledger_fixtures import (
-    COIN, OTHER, Device, StoreSizer, build_base, file_bytes, merge, pay, read_ledger, write_back,
+    COIN, OTHER, Device, StoreSizer, build_base, file_bytes, merge, pay, path_of, read_ledger, write_back,
 )
 
 
@@ -66,6 +68,10 @@ def ledger_bytes(store: LibraryStore) -> dict[str, bytes]:
         for path in sorted(root.rglob("*.json")) if root.exists() else ():
             found[path.relative_to(store.root).as_posix()] = path.read_bytes()
     return found
+
+
+def swapped(sides: dict) -> dict:
+    return dict(reversed(list(sides.items())))
 
 
 def agreed_base(base_path: Path, tmp_path: Path, *proposals) -> Path:
@@ -207,6 +213,51 @@ def test_untagged_devices_collide_on_event_ids(base_path, tmp_path):
         base.close()
 
 
+def test_one_operation_id_logged_differently_on_two_holders_no_other_device_touched_is_a_collision(base, devices):
+    devices["desktop"].hand_op(Operation("offline-op-1", (Line.add(TAM, COIN, 3),)))
+    devices["phone"].hand_op(Operation("offline-op-1", (Line.add(WREN, COIN, 4),)))  # each file taken whole
+    assert reasons(merge(base, stores(devices))) == {"id_collision"}
+
+
+def test_one_operation_id_on_a_file_taken_whole_and_a_replayed_one_is_a_collision(base, devices):
+    devices["desktop"].hand_op(Operation("offline-op-1", (Line.add(TAM, COIN, 3),)))
+    devices["desktop"].hand_op(Operation("found-coins", (Line.add(INES, COIN, 1),)))
+    devices["phone"].hand_op(Operation("won-coins", (Line.add(INES, COIN, 2),)))  # Ines replayed, Tam taken whole
+    devices["phone"].hand_op(Operation("offline-op-1", (Line.add(INES, COIN, 5),)))
+    assert "id_collision" in reasons(merge(base, stores(devices)))
+
+
+def _restore(device: Device, base: LibraryStore, name: str) -> None:
+    """Put the agreed bytes of one holder file back on a device (a restored backup of that one file)."""
+    agreed = next((base.root / "campaigns" / C / "holdings").rglob(name))
+    write_back(device.store, {agreed.relative_to(base.root).as_posix(): agreed.read_bytes()})
+
+
+def test_an_operation_one_holder_file_taken_whole_logs_but_its_peer_does_not_is_partial(base, devices):
+    devices["desktop"].hand_op(Operation("offline-op-1", (Line.move(TAM, WREN, COIN, 3),)))
+    _restore(devices["desktop"], base, "wren.json")  # Tam's file keeps the transfer, Wren's is the agreed one
+    devices["phone"].hand_op(Operation("found-coins", (Line.add(INES, COIN, 1),)))  # Tam and Wren: taken whole
+    for sides in (stores(devices), swapped(stores(devices))):
+        result = merge(base, sides)
+        assert isinstance(result, LedgerReview) and result.candidate is None
+        assert result.items == (ReviewItem("partial_op", "offline-op-1", f"desktop does not log it on {WREN}"),)
+
+
+def test_a_peer_that_evicted_an_operation_a_file_taken_whole_still_logs_is_not_partial(base, devices):
+    devices["desktop"].hand_op(Operation("offline-op-1", (Line.move(TAM, WREN, COIN, 3),)))
+    devices["phone"].hand_op(Operation("found-coins", (Line.add(INES, COIN, 1),)))
+    ledgers = {name: read_ledger(store) for name, store in stores(devices).items()}
+    wren = ledgers["desktop"].holdings[WREN]
+    # Wren's file evicted the transfer's entry (a full file, say); Tam's still logs it
+    evicted = replace(wren, value=replace(wren.value, log=(), evicted_through=wren.value.seq),
+                      etag="sha256:" + "2" * 64)
+    ledgers["desktop"] = replace(ledgers["desktop"], holdings={**ledgers["desktop"].holdings, WREN: evicted})
+    kwargs = {"instances": set(base.campaign_instances(C)), "sizer": StoreSizer()}
+    result = merge_ledger(read_ledger(base), ledgers, **kwargs)
+    assert isinstance(result, Merged), result
+    assert merge_ledger(read_ledger(base), swapped(ledgers), **kwargs) == result
+
+
 def test_revoking_an_agreed_event_while_the_other_device_goes_on(base_path, tmp_path):
     agreed = agreed_base(base_path, tmp_path, give())
     desktop, phone = Device(agreed, tmp_path, "desktop"), Device(agreed, tmp_path, "phone")
@@ -253,6 +304,58 @@ def test_revoking_one_event_identically_on_both_devices_merges(base_path, tmp_pa
     finally:
         for store in (desktop, phone):
             store.close()
+        base.close()
+
+
+def test_an_attempt_one_device_accepted_and_revoked_in_full_may_be_spent_on_the_other(base, base_path, devices,
+                                                                                      tmp_path):
+    first = pay(TAM, INES, 2)
+    revised = pay(TAM, INES, 3, chat=CHAT, attempt=first.attempt_id)  # a revised effect under the same attempt
+    one = Device(base_path, tmp_path, "sequential")  # one device may do exactly this in turn
+    try:
+        one.revoke(one.accept(first))
+        one.accept(revised)
+    finally:
+        one.close()
+    paid = devices["desktop"].accept(first)
+    devices["desktop"].revoke(paid)
+    devices["phone"].accept(revised)
+    result = merge(base, stores(devices))
+    assert isinstance(result, Merged), result
+    assert merge(base, swapped(stores(devices))) == result
+    files = file_bytes(result, base, stores(devices))
+    write_back(devices["desktop"].store, files)
+    assert devices["desktop"].effects.continuity(C, as_of=100, requested_by="director").problems == ()
+    held = read_ledger(devices["desktop"].store).holdings
+    assert held[TAM].value.count(COIN) == 7 and held[INES].value.count(COIN) == 3
+
+
+def test_a_relation_of_an_unknown_predicate_is_kept_byte_for_byte(base_path, tmp_path):
+    agreed = tmp_path / "agreed"
+    shutil.copytree(base_path, agreed)
+    ref = RelationRef(C, "r-future-1")  # written by a newer version: a predicate this one does not know
+    record = ScopeRecord(ref, "grimoire.relation/0", {"predicate": "mentors", "subject": str(TAM), "object": str(INES),
+                                                      "provenance": "director", "since": {"sequence": 1}},
+                         owner="human:owner")
+    path = path_of(ref)
+    agreed.joinpath(*path.split("/")).write_bytes(render(scope_record_document(record, None)))
+    desktop, phone = Device(agreed, tmp_path, "desktop"), Device(agreed, tmp_path, "phone")
+    base = LibraryStore.open(agreed)
+    try:
+        sides = {"desktop": desktop.store, "phone": phone.store}
+        idle = merge(base, sides)  # nothing done on either device
+        assert isinstance(idle, Merged), idle
+        assert all(isinstance(out, Kept) for out in idle.files.values())
+        desktop.accept(give())
+        phone.accept(pay())
+        result = merge(base, sides)
+        assert isinstance(result, Merged), result
+        assert merge(base, swapped(sides)) == result
+        files = file_bytes(result, base, sides)
+        assert files[path] == agreed.joinpath(*path.split("/")).read_bytes()
+    finally:
+        for device in (desktop, phone):
+            device.close()
         base.close()
 
 

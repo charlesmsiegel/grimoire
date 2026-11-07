@@ -340,6 +340,35 @@ def never_applied(event: AcceptedEvent) -> bool:
     return event.holdings is not None and skipped is not None and skipped.startswith(NEVER_APPLIED)
 
 
+def attempt_refusal(event: AcceptedEvent, fingerprint: str) -> str | None:
+    """Why ``event`` refuses a new acceptance of the effect ``fingerprint`` that shares one of its attempts, as
+    far as the event itself says (021): ``attempt_reused`` while it is in force; ``attempt_revoked`` when it was
+    revoked but the new one retries the very same effect or its revocation left its holdings change in force;
+    ``None`` once it is undone and the new effect is a revision. ``undo_unconfirmed`` is the holder files' half."""
+    if event.active:
+        return "attempt_reused"
+    assert event.revocation is not None
+    if event.fingerprint == fingerprint or event.revocation.holdings_left:
+        return "attempt_revoked"
+    return None
+
+
+def undo_unconfirmed(event: AcceptedEvent, holders: Mapping[InstanceRef, Holdings | str]) -> bool:
+    """A revoked event whose undo the holder files do not confirm, so it still holds its attempts: an applied undo
+    whose receipt some holder does not log (unless that holder was restored from before the forward change, so
+    holds none of it either), or a ``never applied`` skip where a holder logs the forward change after all."""
+    if event.holdings is None or event.revocation is None:
+        return False
+    failures = holdings_failures(event, holders)
+    if never_applied(event):
+        return bool(failures)
+    if not event.revocation.holdings_seqs:
+        return False
+    forward = event.holdings.seqs
+    return any(not (isinstance(held, Holdings) and held.seq < forward[holder])
+               for holder, _, _ in failures for held in (holders.get(holder),))
+
+
 def _undone(holdings: Holdings, op_id: str) -> bool:
     inverse = inverse_op_id(op_id)
     return any(entry.op == inverse for entry in holdings.log)

@@ -18,5 +18,6 @@ packages = ["src/grimoire"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-# Dumps tracebacks of a hung test; CI job timeouts are the hard stop.
+# Dumps tracebacks of a hung test; CI job timeouts are the hard stop. Windows CI waits 600 s
+# instead (.github/workflows/ci.yml, docs/TESTING.md#ci-gate).
 faulthandler_timeout = 120

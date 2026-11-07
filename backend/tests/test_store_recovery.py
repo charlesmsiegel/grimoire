@@ -106,8 +106,8 @@ def scenario(action, *, invariants=None, meddle=None, name="native store commit"
     )
 
 
-# Exploration is split so no single test nears the 120 s faulthandler watchdog on Windows
-# runners (about 7x slower here): errors, recovery crashes after a crash, and recovery crashes
+# Exploration is split so no single test runs for minutes on Windows runners (about 7x
+# slower here; docs/TESTING.md#ci-gate): errors, recovery crashes after a crash, and recovery crashes
 # after an injected error (FAIL_RECOVERY) together cover what one combined run would.
 # Directory creation only differs in the action: its recovery takes the same table that
 # head-move and the meddle scenario explore to depth 2.

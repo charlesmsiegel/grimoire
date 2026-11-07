@@ -21,9 +21,9 @@ from grimoire.core.identity import AcceptedRef, InstanceRef, RelationRef
 from grimoire.core.json_value import freeze_object
 from grimoire.effects import (
     AcceptedEvent, EffectError, EffectHoldings, EffectProposal, EndStep, accepted_schema, accepted_to_payload,
-    inverse_op_id, parse_token, plan, predecessors, verify_receipts,
+    attempt_refusal, inverse_op_id, parse_token, plan, predecessors, undo_unconfirmed, verify_receipts,
 )
-from grimoire.graph import GraphError, GraphIndex, Relation
+from grimoire.graph import GraphError, GraphIndex, Relation, UnsupportedRelation
 from grimoire.holdings import Operation
 
 from .model import BASE, Kept, Ledger, Output, ReviewItem, Rewrite, Version, choose, ranks
@@ -291,15 +291,28 @@ def _policy(base: Ledger, sides: Mapping[str, Ledger], found: EventOrder, device
     for event in one:
         if event.fingerprint in prints:
             items.append(ReviewItem("same_effect", event.event_id, prints[event.fingerprint]))
-    spent: dict[str, str] = {}
+    # attempt_reused: two events that each still hold an attempt both spent. As 021 accepts in turn, an event
+    # revoked in full releases its attempts to a revision (another fingerprint), so the pair merges when either
+    # one releases them to the other: it was accepted and taken back first, and the other accepted after.
+    held = {device: {holder: v.value for holder, v in sides[device].holdings.items()} for device in devices}
+    spent: dict[str, list[AcceptedEvent]] = {}
     for event in other:
         for attempt in event.attempts:
-            spent.setdefault(attempt, event.event_id)
+            spent.setdefault(attempt, []).append(event)
     for event in one:
         for attempt in sorted(event.attempts):
-            if attempt in spent:
-                items.append(ReviewItem("attempt_reused", event.event_id, spent[attempt]))
+            clash = next((theirs for theirs in spent.get(attempt, ())
+                          if _holds(theirs, event, held[devices[1]]) and _holds(event, theirs, held[devices[0]])),
+                         None)
+            if clash is not None:
+                items.append(ReviewItem("attempt_reused", event.event_id, clash.event_id))
     return items
+
+
+def _holds(event: AcceptedEvent, against: AcceptedEvent, holders: Mapping) -> bool:
+    """Whether ``event`` would refuse ``against`` an attempt they share, as 021's acceptance checks it
+    (``attempt_refusal``, and ``undo_unconfirmed`` on the holder files of the device that holds ``event``)."""
+    return attempt_refusal(event, against.fingerprint) is not None or undo_unconfirmed(event, holders)
 
 
 def _descendants(event_id: str, events: list[AcceptedEvent], among: set[str]) -> set[str]:
@@ -395,6 +408,21 @@ def three_way(base: Mapping, sides: Mapping[str, Mapping], label: str, revoked: 
 
 # -- replay ----------------------------------------------------------------------------------------
 
+def split_relations(relations: Iterable[Relation | UnsupportedRelation]
+                    ) -> tuple[list[Relation], list[UnsupportedRelation]]:
+    """The relations this version reads, and those of a predicate it does not know (017: kept byte for byte,
+    never walked or rewritten), as ``GraphIndex.build`` takes them. Anything else stays with the first, where the
+    index refuses it."""
+    supported: list[Relation] = []
+    unsupported: list[UnsupportedRelation] = []
+    for relation in relations:
+        if type(relation) is UnsupportedRelation:
+            unsupported.append(relation)
+        else:
+            supported.append(relation)  # type: ignore[arg-type]
+    return supported, unsupported
+
+
 def _before(relations: Iterable[Relation], later: frozenset[str], undone: frozenset[str]) -> list[Relation]:
     """The relations as they stood before the events ``later`` (and with the cleanly ``undone`` new ones gone).
 
@@ -427,7 +455,7 @@ def _proposal(event: AcceptedEvent) -> EffectProposal | None:
 
 
 def replay(campaign_id: str, events: Mapping[str, AcceptedEvent], order: Iterable[str],
-           relations: Iterable[Relation], instances: frozenset[InstanceRef],
+           relations: Iterable[Relation | UnsupportedRelation], instances: frozenset[InstanceRef],
            numbering: Mapping[str, int] | None = None) -> list[ReviewItem]:
     """Replay each new event, in merged order, with 021's planner; every one must reproduce its receipts.
 
@@ -437,7 +465,8 @@ def replay(campaign_id: str, events: Mapping[str, AcceptedEvent], order: Iterabl
     event this pair agreed on can still go after a new one (the order is global), and leaving it applied
     would plan the new event against a later state of the world (028).
     """
-    order, relations = list(order), list(relations)
+    order = list(order)
+    relations, unsupported = split_relations(relations)  # an unknown predicate is kept, never rolled back
     if numbering is None:
         numbering = {event_id: number for number, event_id in enumerate(order, start=1)}
     items: list[ReviewItem] = []
@@ -450,7 +479,7 @@ def replay(campaign_id: str, events: Mapping[str, AcceptedEvent], order: Iterabl
         if revocation.holdings_left:
             items.append(ReviewItem("partial_revocation", event_id, "its holdings change was left in force"))
     try:
-        final = GraphIndex.build(campaign_id, relations, instances)
+        final = GraphIndex.build(campaign_id, relations, instances, unsupported=unsupported)
     except GraphError as error:
         return items + [ReviewItem("receipt_mismatch", campaign_id, f"the merged relations: {error.reason}")]
     for event_id in order:
@@ -460,7 +489,8 @@ def replay(campaign_id: str, events: Mapping[str, AcceptedEvent], order: Iterabl
         later = frozenset(other for other, place in numbering.items()
                           if place >= numbering[event_id] and other in events and events[other].active)
         try:  # the graph as it stood before this event; rolling a hand-edited relation back can break it
-            index = GraphIndex.build(campaign_id, _before(relations, later, undone), instances)
+            index = GraphIndex.build(campaign_id, _before(relations, later, undone), instances,
+                                     unsupported=unsupported)
         except GraphError as error:
             items.append(ReviewItem("receipt_mismatch", event_id, f"the relations before it: {error.reason}"))
             continue
@@ -483,7 +513,7 @@ def replay(campaign_id: str, events: Mapping[str, AcceptedEvent], order: Iterabl
 
 
 def relation_values(relations: Mapping[RelationRef, Output], base: Ledger, sides: Mapping[str, Ledger]
-                    ) -> list[Relation]:
+                    ) -> list[Relation | UnsupportedRelation]:
     """The merged relation files, decoded: each the version its output keeps."""
     found = []
     for ref, output in relations.items():
