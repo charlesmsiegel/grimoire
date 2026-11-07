@@ -250,3 +250,73 @@ def test_one_unreadable_relation_inside_a_ledger_unit_stops_only_that_merge_for_
         assert {conflict.code for conflict in report.conflicts} <= {"merge_review", "blocked"}
     finally:
         _close(made)
+
+
+@pytest.mark.parametrize("how", ["symlink", "busy"])
+def test_an_unlistable_ledger_folder_is_a_review_even_when_every_file_seen_matches(tmp_path, monkeypatch, how):
+    """What a folder that cannot be listed holds is unknown, so the unit is never read as agreed: here the
+    desktop's ``wrapups`` (a directory link, or held by another program) may hold a wrap-up the phone lacks."""
+    from grimoire.store import engine
+    made = _devices(tmp_path / "unlistable")
+    try:
+        made[DESKTOP].accept(give())
+        assert sync_until_quiet(made[DESKTOP].store, made[PHONE].store, handles()).conflicts == ()
+        folder = made[DESKTOP].store.root / "campaigns" / C / "wrapups"
+        assert not folder.exists()
+        if how == "symlink":
+            (tmp_path / "elsewhere").mkdir()
+            try:
+                folder.symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+            except (OSError, NotImplementedError):
+                pytest.skip("this system cannot make a directory link")
+        else:
+            folder.mkdir()
+            real = engine.Access.list_dir
+
+            def busy(self, parts):  # type: ignore[no-untyped-def]
+                if tuple(parts) == ("campaigns", C, "wrapups") and self.root == made[DESKTOP].store.root:
+                    raise PermissionError(13, "held by another program")
+                return real(self, parts)
+            monkeypatch.setattr(engine.Access, "list_dir", busy)
+        report = sync(made[DESKTOP].store, made[PHONE].store, handles())
+        reviews = {(item.reason, item.subject) for conflict in report.conflicts for item in conflict.review}
+        assert ("unlistable", f"campaigns/{C}/wrapups") in reviews, report.conflicts
+        assert {conflict.code for conflict in report.conflicts} == {"merge_review"}
+        assert not report.copied
+        if how == "symlink":
+            folder.unlink()
+        monkeypatch.undo()
+        assert sync_until_quiet(made[DESKTOP].store, made[PHONE].store, handles()).conflicts == ()  # listable again
+    finally:
+        _close(made)
+
+
+def test_an_agreed_relation_of_an_unknown_predicate_never_stops_its_ledger_and_is_kept_byte_for_byte(tmp_path):
+    """A relation a newer version wrote (a predicate this one does not know) decodes as unsupported: the
+    merge keeps it as it is (docs/LEDGER_MERGE.md), so it is no reason to review the campaign's ledger."""
+    from grimoire.core.identity import RelationRef
+    from grimoire.store import ScopeRecord
+    from grimoire.store.envelope import scope_record_document
+    from grimoire.store.jsonfmt import render
+    from effects_fixtures import INES
+    from store_helpers import OWNER
+    root = tmp_path / "future"
+    root.mkdir()
+    base = build_base(root)
+    record = ScopeRecord(RelationRef(C, "r-future-1"), "grimoire.relation/0",
+                         {"predicate": "mentors", "subject": str(TAM), "object": str(INES), "provenance": "director",
+                          "since": {"sequence": 1}}, owner=OWNER)
+    path = f"campaigns/{C}/relations/r-future-1.json"
+    (base / path).write_bytes(render(scope_record_document(record, None)))
+    original = (base / path).read_bytes()
+    made = {name: Device(base, root, name) for name in (DESKTOP, PHONE)}
+    try:
+        assert sync(made[DESKTOP].store, made[PHONE].store, handles()).conflicts == ()
+        made[DESKTOP].accept(pay(sequence=8, chat=CHAT, attempt="pay-desk"))  # the relations join the unit
+        report = sync_until_quiet(made[DESKTOP].store, made[PHONE].store, handles())
+        assert report.conflicts == (), [(item.reason, item.subject) for c in report.conflicts for item in c.review]
+        assert ledger_files(made[DESKTOP].store) == ledger_files(made[PHONE].store)
+        assert len(read_ledger(made[PHONE].store).events) == 1
+        assert (made[PHONE].store.root / path).read_bytes() == original == (made[DESKTOP].store.root / path).read_bytes()
+    finally:
+        _close(made)

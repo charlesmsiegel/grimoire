@@ -221,3 +221,29 @@ def test_resolve_ledger_is_not_stopped_by_a_deletion_that_depends_on_a_copy_it_l
     finally:
         for device in made.values():
             device.close()
+
+
+def test_resolve_ledger_refuses_until_a_record_the_merged_ledger_names_is_on_the_receiver(pair):
+    """The merge pays Zed, who is only on the desktop: resolving writes only the ledger, so it must not land
+    Zed's holder file and event on the phone without Zed. It is refused until a sync brings Zed over."""
+    from grimoire.core.identity import InstanceRef
+    from grimoire.sync import ResolveRefused
+    from store_helpers import owner_handle
+    desktop, phone = pair[DESKTOP].store, pair[PHONE].store
+    _write(desktop.root, ZED, {"address": f"campaign:{C}/character/zed", "format": "grimoire.record/1", "owner": OWNER,
+                               "payload": {"local_name": "Zed"}, "previous": None, "schema": "grimoire.entity/0"})
+    pair[DESKTOP].accept(pay(to=InstanceRef(C, "character", "zed"), sequence=8, attempt="pay-desk"))
+    pair[PHONE].accept(pay(sequence=9, attempt="pay-phone"))  # one chat on both devices: a review
+    report = sync(desktop, phone, {DESKTOP: handles()[DESKTOP], PHONE: owner_handle("sources", "kept")})
+    assert report.conflict(ZED).code == "denied" and not (phone.root / ZED).exists()
+    token = {conflict.token for conflict in report.conflicts if conflict.code == "merge_review"}.pop()
+    zed_holdings = f"campaigns/{C}/holdings/character/zed.json"
+    before = ledger_files(phone)
+    with pytest.raises(ResolveRefused, match="zed"):  # the handles now suffice, but Zed is not on the phone
+        resolve_ledger(desktop, phone, C, "merge", token, handles())
+    assert ledger_files(phone) == before and not (phone.root / zed_holdings).exists()
+    after = sync(desktop, phone, handles())  # Zed lands; the review still stands, on the same files
+    assert (phone.root / ZED).exists() and {conflict.code for conflict in after.conflicts} == {"merge_review"}
+    resolve_ledger(desktop, phone, C, "merge", token, handles())
+    assert ledger_files(desktop) == ledger_files(phone) and (phone.root / zed_holdings).exists()
+    assert sync(desktop, phone, handles()).conflicts == ()

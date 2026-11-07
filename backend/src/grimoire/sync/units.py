@@ -34,7 +34,6 @@ from types import MappingProxyType
 from grimoire.core.identity import HoldingsRef, InstanceRef
 from grimoire.effects import accepted_from_payload, wrapup_from_payload
 from grimoire.graph.codec import relation_from_payload
-from grimoire.graph.model import Relation
 from grimoire.holdings import HOLDINGS_SCHEMA, Holdings, LogEntry, entry_to_payload, holdings_from_payload, holdings_to_payload
 from grimoire.ledgermerge import (
     BASE, Kept, Ledger, LedgerReview, Merged, Review, ReviewItem, Rewrite, Version, merge_ledger,
@@ -253,9 +252,9 @@ def plan_unit(plan, campaign: str, paths: Iterable[str], choice: str | None = No
     """
     paths = tuple(sorted(paths))
     differ = tuple(path for path in paths if not _same(plan, path))
-    if not differ:
+    items: list[ReviewItem] = list(_unlistable(plan, campaign))  # first: a folder never listed may differ
+    if not differ and not items:
         return UnitResult(campaign, paths, differ)
-    items: list[ReviewItem] = list(_unlistable(plan, campaign))
     if choice in plan.devices:
         return _taken(plan, campaign, paths, differ, choice, items)
     for path in paths:
@@ -585,11 +584,8 @@ def _ledger(campaign: str, files: Mapping[str, bytes | None], items: list[Review
                 events[ref] = _version(accepted_from_payload(ref, record.schema, record.payload), data, record)  # type: ignore[arg-type]
             elif kind == "wrapup":
                 wrapups[ref] = _version(wrapup_from_payload(ref, record.schema, record.payload), data, record)  # type: ignore[arg-type]
-            elif kind == "relation":
-                value = relation_from_payload(ref, record.schema, record.payload)  # type: ignore[arg-type]
-                if not isinstance(value, Relation):
-                    raise ValueError("a relation of a schema this version cannot merge")
-                relations[ref] = _version(value, data, record)
+            elif kind == "relation":  # an ``UnsupportedRelation`` (an unknown predicate) too: kept byte for byte
+                relations[ref] = _version(relation_from_payload(ref, record.schema, record.payload), data, record)  # type: ignore[arg-type]
             else:
                 holder = InstanceRef(ref.campaign_id, ref.kind, ref.instance_id)  # type: ignore[union-attr]
                 holdings[holder] = _version(holdings_from_payload(holder, record.schema, record.payload), data, record)

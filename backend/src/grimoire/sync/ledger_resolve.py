@@ -13,7 +13,9 @@ crash-safe as a sync and the next sync finds the ledger agreed. Two decisions:
   losing device holds (an event it accepted) is refused; revoke it on that device first.
 
 ``token`` is the ``Conflict.token`` the review was reported with: if either device's ledger changed
-since, the decision would be about something the owner never saw, so it is refused.
+since, the decision would be about something the owner never saw, so it is refused. A merged file that
+names a record its receiver lacks (an instance only the sync's other copies would bring) is refused too:
+sync first. This is the only way to decide a review: ``plan_sync`` takes no decision.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from collections.abc import Iterable, Mapping
 from grimoire.store import LibraryStore
 
 from .errors import ResolveRefused
-from .session import SyncPlan, SyncReport, _lock_order, _plan, apply_sync
+from .session import SyncPlan, SyncReport, _dependencies, _lock_order, _plan, apply_sync
 from . import units as ledger_units
 
 
@@ -71,6 +73,13 @@ def plan_resolution(left: LibraryStore, right: LibraryStore, campaign: str, keep
         plan.copies[device] = [copy for copy in plan.copies[device] if copy.unit == campaign]
         plan.keeps[device] = []
         plan.deletes[device] = []  # no propagated deletion either (and so no holds step): a ledger file has none
+        # the ledger was admitted beside the sync's other copies: a record it names that only one of those
+        # would have brought (an instance a holder file or an event names) must be on the receiver already
+        held = _dependencies(plan, device, plan.copies[device])[1]
+        if held:
+            path = min(held)
+            raise ResolveRefused(f"campaign {campaign}'s ledger cannot be resolved yet: {path} needs on {device} "
+                                 f"what is not synchronized there ({held[path]}); sync again first")
     return plan
 
 

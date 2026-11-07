@@ -149,7 +149,8 @@ class SyncPlan:
     #: 028: each ledger file's campaign (``units``), and per device the paths each unit's merge copies there
     units: dict[str, str] = field(default_factory=dict)
     unit_copies: dict[str, dict[str, set[str]]] = field(default_factory=dict)
-    choices: dict[str, str] = field(default_factory=dict)  # 028: ``resolve_ledger``'s decision, by campaign
+    #: 028: ``plan_resolution``'s checked decision, by campaign (only it passes one to ``_plan``)
+    choices: dict[str, str] = field(default_factory=dict)
     ledger_campaigns: frozenset[str] = frozenset()  # 028: whose relations are in their unit ("*": every one)
     #: per device, the agreed versions it deletes because the other device deleted them (028, row 9)
     deletes: dict[str, list[deletion.Delete]] = field(default_factory=dict)
@@ -183,15 +184,16 @@ def _current(side: Side) -> str | None:
     return side.etag if side.state == "present" else None
 
 
-def plan_sync(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object] | None = None, *,
-              choices: Mapping[str, str] | None = None) -> SyncPlan:
+def plan_sync(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object] | None = None) -> SyncPlan:
     """Decide every path; read only. Raises ``SameDevice``/``NoDeviceIdentity`` or ``SyncInterrupted``.
 
     With the ``handles`` the sync will commit with, a blob copy its receiver's durable authority
-    grants no write for is ``denied`` here, without reading the blob (``_ungranted``)."""
+    grants no write for is ``denied`` here, without reading the blob (``_ungranted``). It takes no
+    decision on a ledger review: that is ``ledger_resolve.plan_resolution``'s, with its owner and
+    review-token checks (028)."""
     first, second = _lock_order((left, right))
     with first.cached_reads(), second.cached_reads():
-        return _plan(left, right, handles or {}, dict(choices or {}))
+        return _plan(left, right, handles or {})
 
 
 def _lock_order(stores) -> list[LibraryStore]:  # type: ignore[no-untyped-def]

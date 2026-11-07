@@ -122,6 +122,22 @@ def test_resolve_ledger_keeping_a_device_discards_only_for_an_owner(pair):
     assert ledger_files(pair[DESKTOP].store) == ledger_files(pair[PHONE].store)
 
 
+def test_an_ordinary_sync_plan_never_takes_a_ledger_decision(pair):
+    """Keeping one device's ledger discards the other's changes: only ``resolve_ledger``, with its owner
+    and review-token checks, may decide it. ``plan_sync`` takes no decision at all."""
+    pair[DESKTOP].accept(pay(sequence=8, attempt="pay-desk"))
+    pair[PHONE].hand_edit(TAM, COIN, 12)
+    report = sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    assert "hand_edit_overlap" in {item.reason for conflict in report.conflicts for item in conflict.review}
+    tam = pair[PHONE].store.root / f"campaigns/{C}/holdings/character/tam.json"
+    edited = tam.read_bytes()
+    with pytest.raises(TypeError):
+        apply_sync(plan_sync(pair[DESKTOP].store, pair[PHONE].store, handles(), choices={C: DESKTOP}), handles())
+    assert tam.read_bytes() == edited  # the phone's edit is never discarded unchecked
+    again = sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    assert {conflict.code for conflict in again.conflicts} == {"merge_review"} and not again.wrote
+
+
 def test_resolve_ledger_refuses_a_stale_review_and_a_file_only_the_losing_device_holds(pair):
     token = _review(pair)
     with pytest.raises(ResolveRefused, match="revoke"):
