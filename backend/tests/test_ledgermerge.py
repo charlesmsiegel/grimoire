@@ -207,6 +207,20 @@ def test_untagged_devices_collide_on_event_ids(base_path, tmp_path):
         base.close()
 
 
+def test_one_operation_id_logged_differently_on_two_holders_no_other_device_touched_is_a_collision(base, devices):
+    devices["desktop"].hand_op(Operation("offline-op-1", (Line.add(TAM, COIN, 3),)))
+    devices["phone"].hand_op(Operation("offline-op-1", (Line.add(WREN, COIN, 4),)))  # each file taken whole
+    assert reasons(merge(base, stores(devices))) == {"id_collision"}
+
+
+def test_one_operation_id_on_a_file_taken_whole_and_a_replayed_one_is_a_collision(base, devices):
+    devices["desktop"].hand_op(Operation("offline-op-1", (Line.add(TAM, COIN, 3),)))
+    devices["desktop"].hand_op(Operation("found-coins", (Line.add(INES, COIN, 1),)))
+    devices["phone"].hand_op(Operation("won-coins", (Line.add(INES, COIN, 2),)))  # Ines replayed, Tam taken whole
+    devices["phone"].hand_op(Operation("offline-op-1", (Line.add(INES, COIN, 5),)))
+    assert "id_collision" in reasons(merge(base, stores(devices)))
+
+
 def test_revoking_an_agreed_event_while_the_other_device_goes_on(base_path, tmp_path):
     agreed = agreed_base(base_path, tmp_path, give())
     desktop, phone = Device(agreed, tmp_path, "desktop"), Device(agreed, tmp_path, "phone")

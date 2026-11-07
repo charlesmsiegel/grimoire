@@ -156,16 +156,24 @@ def merge_holdings(base: Mapping[InstanceRef, Version], sides: Mapping[str, Mapp
                 continue
             new[device][holder] = found
             pending += [peer for entry in found for peer in entry.operation.holders if peer not in replayed]
-    for holder, (source, version) in whole.items():
+    kept: dict[str, Operation] = {}  # what the files taken whole newly log, by op id: never replayed, still checked
+    for holder, (source, version) in sorted(whole.items(), key=lambda pair: str(pair[0])):
         if holder in replayed or source == BASE:
             continue
         found = _extension(starts[holder], version.value, evicted=True)
         if isinstance(found, str):
             items.append(ReviewItem("log_diverged", _ref(holder), f"{source}: {found}"))
+            continue
+        for entry in found:
+            if kept.setdefault(entry.op, entry.operation) != entry.operation:
+                items.append(ReviewItem("id_collision", entry.op, "one operation id with two contents"))
     if items:
         return Review(tuple(items))
     holders = sorted(replayed, key=str)
     ops, held_by, at = _operations(new, devices, items)
+    for op_id in sorted(set(kept) & set(ops)):
+        if kept[op_id] != ops[op_id]:  # a whole file and a replayed one log one id with two contents
+            items.append(ReviewItem("id_collision", op_id, "one operation id with two contents"))
     after = _constraints(new, devices)
     envelopes, extras = _envelopes(base, sides, holders, devices, order, items)
     if items:
