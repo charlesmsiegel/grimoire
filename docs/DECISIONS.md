@@ -59,8 +59,8 @@ Each campaign has one authority ledger, `authority/decisions/<campaign_id>` ([ST
 
 | Sprint | Must |
 |---|---|
-| 035 (scene runner) | Decide once per scene turn, before the first take: `choose`, optionally `decide`, then `record` the decision; for every later take of the turn (a reroll), `replay` the recorded decision instead of choosing again, and plan no decision call. Wiring agendas into the runner at all is open ([GOALS](GOALS.md#requirements-on-later-sprints)). |
-| 045 next or 047 (continuity referee) | A recorded decision is the reference for "narration never rewrites a recorded intention". This slice makes the brief carry it and refuses a turn whose brief does not, but a generated reply that contradicts it (or breaks a briefed refusal) is still kept; which sprint screens replies against it is open. |
+| 035 (scene runner) | Decide once per scene turn, before the first take: `choose`, optionally `decide`, then `record` the decision; for every later take of the turn (a reroll), `replay` the recorded decision instead of choosing again, and plan no decision call. Choosing an intention every turn and keeping the turn's `Choice` in its turn record are 035 milestone 2's ([GOALS](GOALS.md#not-in-this-slice)); the decision ledger stays the record a reroll replays from. |
+| 047 (continuity referee) | A recorded decision is the reference for "narration never rewrites a recorded intention". This slice makes the brief carry it and refuses a turn whose brief does not, but a generated reply that contradicts it (or breaks a briefed refusal) is still kept; 047 flags such a breach for review ([GOALS](GOALS.md#not-in-this-slice)), and 045 never rewrites a recorded intention. |
 
 ## Not in this slice
 
