@@ -80,7 +80,7 @@ The [Wave 5 audit](../README.md#wave-5-status) found these contracts that other 
 - **031 ([CONTEXT](../../CONTEXT.md)):** pack for a player character's controller (also listed under Wave 4).
 - **016 ([SESSION_ZERO](../../SESSION_ZERO.md)):** extend the intent router with skip and redirect lanes; authenticate the audience and speakers. Today `BoundaryContext.audience` is the requester alone, which holds for one local player; 102 changes it.
 - **029 ([ADJUDICATION](../../ADJUDICATION.md#known-limits)):** take consent only from the player's own live choice (also listed under Wave 4).
-- **052 ([Instant Campaign Creation](instant-campaign-creation.md)):** let a launch choose among a card's greetings (`begin` takes only the first), and run with no session zero at all (a scope with one refuses generation until 016's codec exists).
+- **052 ([Instant Campaign Creation](instant-campaign-creation.md)):** ~~let a launch choose among a card's greetings (`begin` takes only the first)~~ **done with 052's first slice**: `begin(..., opening=id)` ([SCENES](../../SCENES.md)); a quick start runs with no session zero at all (a scope with one still refuses generation until 016's codec exists).
 - **048 ([Performance And Tracing](performance-and-tracing.md)):** turns store no timings and the runner has no tracing hook; every call reloads the library and re-reads every turn file of the campaign (see [SCENES](../../SCENES.md#known-limits)).
 
 ## Open questions
