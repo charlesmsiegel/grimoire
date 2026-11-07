@@ -167,6 +167,24 @@ def test_sync_never_lands_a_turn_without_its_chat_and_scope_and_never_hides_it(t
         phone.close()
 
 
+def test_a_turn_this_version_cannot_read_arriving_before_a_create_refuses_it(library):
+    """028: sync can bring a peer's turn this version cannot decode at any time; a create (or a pause) checked
+    against a chat read before it arrived is refused, never written beside a turn n it could not see."""
+    lib = scenes(library)
+    first = lib.write(post_turn(CHAT, 1), None)
+    read = lib.turns(CHAT)
+    txn = library.transaction()
+    txn.put(ScopeRecord(TurnRef(C, turn_id(CHAT, 2, tag(PHONE))), "grimoire.scene-turn/9", {"future": True},
+                        owner=OWNER), None)
+    txn.commit(owner_handle("campaigns"))
+    for call in (lambda: lib.write(post_turn(CHAT, 2, "Racing."), None, after=read.last),
+                 lambda: lib.write(post_turn(CHAT, 1, "Pause."), first, last=True)):
+        with pytest.raises(SceneRefused) as error:
+            call()
+        assert error.value.reason == "turn_changed"
+    assert [t.record.number for t in lib.turns(CHAT).turns] == [1]
+
+
 def test_a_last_turn_write_waits_for_no_later_turn(library):
     lib = scenes(library)
     first = lib.write(post_turn(CHAT, 1), None)

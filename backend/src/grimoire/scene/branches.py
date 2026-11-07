@@ -89,6 +89,15 @@ def parent(record: TurnRecord, by_number: dict[int, list[TurnRecord]]) -> str | 
     return before[0].turn_id if len(before) == 1 else None
 
 
+def followed(records: Iterable[TurnRecord]) -> set[str]:
+    """The ids of the turns some turn among ``records`` was played after (a turn not among them is a leaf)."""
+    turns = sorted(records, key=order)
+    by_number: dict[int, list[TurnRecord]] = {}
+    for turn in turns:
+        by_number.setdefault(turn.number, []).append(turn)
+    return {above for turn in turns if (above := parent(turn, by_number)) is not None}
+
+
 def arrange(records: Iterable[TurnRecord]) -> Lineage:
     """The chat's line, its first fork and what is set aside, from all of one chat's readable turns."""
     turns = sorted(records, key=order)
@@ -156,10 +165,13 @@ def replay_tag(tag: str | None, k: int) -> str:
 def tag_for(tag: str | None, taken: Iterable[str], spell: Callable[[str | None], str]) -> str | None:
     """The device tag a new turn takes: this device's own (``None``: untagged), unless that id is taken (by a turn
     set aside), then the first free ``replay_tag``. ``spell`` gives the turn id for a tag; ``taken`` are the chat's
-    ids. Refused ``too_many_turns`` past ``MAX_REPLAYS``."""
+    ids. Refused ``too_many_turns`` past ``MAX_REPLAYS``, and ``device_identity`` on a library with no identity:
+    a replay tag must be unique to its device, and such a library has nothing unique to derive one from."""
     used = set(taken)
     if spell(tag) not in used:
         return tag
+    if tag is None:
+        raise SceneRefused("device_identity", "give this library a device identity to play a set-aside number again")
     for k in range(1, MAX_REPLAYS + 1):
         candidate = replay_tag(tag, k)
         if spell(candidate) not in used:
@@ -175,5 +187,5 @@ def is_mine(tag: str | None, device: str | None, replays: int) -> bool:
     return device is not None and any(replay_tag(tag, k) == device for k in range(1, replays + 1))
 
 
-__all__ = ["Branch", "Fork", "Lineage", "MAX_REPLAYS", "arrange", "is_mine", "order", "parent", "replay_tag",
-           "tag_for"]
+__all__ = ["Branch", "Fork", "Lineage", "MAX_REPLAYS", "arrange", "followed", "is_mine", "order", "parent",
+           "replay_tag", "tag_for"]

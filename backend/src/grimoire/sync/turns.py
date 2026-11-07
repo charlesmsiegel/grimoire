@@ -14,6 +14,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from grimoire.core.identity import ChatRef, ScopeRef, TurnRef
+from grimoire.store import UnstorableIdentifier
+from grimoire.store.layout import chat_parts, scope_parts, turn_parts
 from grimoire.store.replica import parse_exact
 
 from .documents import syncable
@@ -25,17 +28,28 @@ def turn_needs(path: str, data: bytes | None) -> list[str]:
         return []
     parts = path.split("/")
     campaign = parts[1]
-    payload = parse_exact(tuple(parts), data).payload  # type: ignore[union-attr]
-    needs = [f"campaigns/{campaign}/scope.json"]
-    chat = payload.get("chat") if isinstance(payload, Mapping) else None
+    envelope = parse_exact(tuple(parts), data)
+    payload = getattr(envelope, "payload", None)
+    if not isinstance(payload, Mapping):
+        return []
+    needs = [_spell(lambda: scope_parts(ScopeRef(campaign)))]
+    chat = payload.get("chat")
     if isinstance(chat, str):
-        needs.append(f"campaigns/{campaign}/chats/{chat}.json")
-    mark = payload.get("set_aside") if isinstance(payload, Mapping) else None
-    for turn in (payload.get("follows") if isinstance(payload, Mapping) else None,
-                 mark.get("chosen") if isinstance(mark, Mapping) else None):
+        needs.append(_spell(lambda: chat_parts(ChatRef(campaign, chat))))
+    mark = payload.get("set_aside")
+    for turn in (payload.get("follows"), mark.get("chosen") if isinstance(mark, Mapping) else None):
         if isinstance(turn, str):
-            needs.append(f"campaigns/{campaign}/turns/{turn}.json")
-    return [need for need in needs if need != path]
+            needs.append(_spell(lambda turn=turn: turn_parts(TurnRef(campaign, turn))))
+    # text that spells no path a library can store names nothing (as for 107's named actors): the turn itself is
+    # then one this version cannot decode, which the receiver reports as a damaged turn of that chat
+    return [need for need in needs if need is not None and need != path]
+
+
+def _spell(parts) -> str | None:  # type: ignore[no-untyped-def]
+    try:
+        return "/".join(parts())
+    except (ValueError, TypeError, UnstorableIdentifier):
+        return None
 
 
 __all__ = ["turn_needs"]

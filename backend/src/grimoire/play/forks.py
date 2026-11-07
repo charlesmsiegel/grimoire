@@ -29,8 +29,10 @@ def choose_branch(runner, chat: ChatRef, by, turn: str):  # type: ignore[no-unty
     if not isinstance(turn, str):
         raise SceneRefused("not_a_branch", "a branch is named by its first turn's id")
     turns = runner.scenes.turns(chat)
-    if any(problem != (str(chat), "turn_fork") for problem in turns.problems):
-        raise SceneRefused("turns_unreadable", "a turn file of this chat cannot be read; nothing is written")
+    other = [code for _, code in turns.problems if code != "turn_fork"]
+    if other:
+        raise SceneRefused("turns_unreadable", f"this chat's turns are incomplete ({', '.join(sorted(set(other)))}); "
+                                               "nothing is written")
     runner.scenes.choose(turns, turn, principal)
     return runner.open(chat)
 

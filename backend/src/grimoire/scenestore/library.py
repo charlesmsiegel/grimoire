@@ -18,7 +18,7 @@ from grimoire.scene import (
     TURN_SCHEMA, Fork, SceneRefused, SetAside, TurnRecord, arrange, parse_turn_id, turn_from_payload, turn_id,
     turn_to_payload,
 )
-from grimoire.scene.branches import is_mine, tag_for
+from grimoire.scene.branches import followed, is_mine, tag_for
 from grimoire.store import LibraryStore, ScopeRecord, StaleWrite, TakenIdsUnlisted
 from grimoire.store.layout import address_parts
 
@@ -159,14 +159,18 @@ class SceneLibrary:
             view = (self._view(record.chat, self.store.campaign_turns(record.chat.campaign_id))
                     if base is None or last or after is not None else None)  # one read for every check
             line = view.turns if view is not None else ()  # turns set aside take no number (028)
+            if view is not None and view.problems:
+                # a file of this chat that cannot be read (a peer's newer turn, say) or a fork arrived since the
+                # caller read the chat: no turn is created or paused over what this version cannot see
+                raise SceneRefused("turn_changed", "the chat's turns changed since they were read; read them again")
             if base is None:
                 assert view is not None
-                if record.device != self.tag_for(view, record.number):
-                    # identified (or re-identified) since the turn was planned, or its id was taken meanwhile
-                    raise SceneRefused("turn_changed", "this library's device identity changed; read it again")
                 if any(stored.record.number == record.number for stored in line):
                     # this library already holds turn n under another device's tag (made before identify)
                     raise SceneRefused("turn_changed", "this turn was played since it was read; read it again")
+                if record.device != self.tag_for(view, record.number):
+                    # identified (or re-identified) since the turn was planned, or its id was taken meanwhile
+                    raise SceneRefused("turn_changed", "this library's device identity changed; read it again")
                 if record.follows is not None and (view.fork is not None or view.last is None
                                                    or view.last.record.turn_id != record.follows):
                     raise SceneRefused("turn_changed", "the chat's line changed since it was read; read it again")
@@ -202,12 +206,20 @@ class SceneLibrary:
         if chosen not in heads:
             raise SceneRefused("not_a_branch", "choose the first turn of one of the fork's branches")
         by_id = {stored.record.turn_id: stored for stored in (*turns.turns, *turns.set_aside)}
-        changes = []
+        records = {turn: stored.record for turn, stored in by_id.items()}
         for head in heads:
-            stored = by_id[head]
-            wanted = None if head == chosen else SetAside(chosen, by)
-            if stored.record.set_aside != wanted:
-                changes.append((replace(stored.record, set_aside=wanted), stored))
+            records[head] = replace(records[head], set_aside=None if head == chosen else SetAside(chosen, by))
+        after = arrange(records.values())
+        aside = {stored.record.turn_id for stored in turns.set_aside}
+        pauser = next((turn.paused_by for turn in after.set_aside if turn.paused and turn.turn_id not in aside), None)
+        if pauser is not None:
+            # a pause on a branch now set aside still holds: the chosen line stays paused, wherever it ends, until
+            # the player who paused it (or the owner) resumes (016's pause is a safety tool, never lifted by a merge)
+            inner = followed(after.line)
+            for turn in after.line:
+                if turn.number >= fork.number and turn.turn_id not in inner and not turn.paused:
+                    records[turn.turn_id] = replace(records[turn.turn_id], paused=True, paused_by=pauser)
+        changes = [(record, by_id[turn]) for turn, record in records.items() if record != by_id[turn].record]
         with self.store.lock:
             now = self.turns(turns.chat)
             if now.fork != fork or now.problems != turns.problems:

@@ -594,7 +594,7 @@ class SceneRunner:
                     raise
             # someone else wrote the turn (an older run's usage, a pass, a newer run): read it again
             current = self.scenes.turns(chat)
-            found = next((s for s in current.turns if s.record.ref == stored.record.ref), None)
+            found = next((s for s in (*current.turns, *current.set_aside) if s.record.ref == stored.record.ref), None)
             if found is None:
                 break
             stored = found

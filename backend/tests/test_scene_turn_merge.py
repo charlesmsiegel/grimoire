@@ -224,6 +224,25 @@ def test_a_turn_played_after_a_set_aside_one_on_a_third_device_is_set_aside_when
         assert [r.turn_id for r in scene.records] == [r.turn_id for r in desk.runner.open(chat).records]
 
 
+def test_a_pause_on_a_branch_set_aside_still_holds_the_chosen_line(built, tmp_path):
+    """016's pause is a safety tool: a choice never lifts it. The phone's player paused after its turn 2; the
+    owner chooses the desktop's branch, and the chat stays paused until that player (or the owner) resumes."""
+    chat = devices(built, tmp_path)
+    with Table(tmp_path / DESKTOP, [say("Desk."), say("Desk again.")]) as desk, \
+            Table(tmp_path / PHONE, [say("Phone.")]) as phone:
+        synced(desk, phone)
+        play(desk, chat, "On the desktop.")
+        play(phone, chat, "On the phone.")
+        phone.runner.request(chat, phone.player(), "pause")
+        synced(desk, phone)
+        ours = turn_id(chat, 2, tag(DESKTOP))
+        scene = desk.runner.choose(chat, desk.owner, ours)
+        assert scene.turns.fork is None and scene.paused and scene.last.turn_id == ours
+        refused("paused", desk.runner.post, chat, desk.player(), '"Onward?"')
+        desk.runner.resume(chat, desk.player())  # the player who paused, on either device
+        play(desk, chat, "Onward.")
+
+
 def test_a_turn_never_lands_without_its_chat_or_the_turn_it_follows(built, tmp_path):
     chat = devices(built, tmp_path)
     turns = f"campaigns/{chat.campaign_id}/turns"

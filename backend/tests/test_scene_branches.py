@@ -141,3 +141,6 @@ def test_a_device_replaying_a_number_it_set_aside_takes_a_fresh_documented_tag()
     assert tag_for(DESK, [spell(DESK), spell(first)], spell) == replay_tag(DESK, 2)
     assert is_mine(DESK, first, 1) and not is_mine(PHONE, first, 5) and is_mine(None, None, 0)
     assert tag_for(None, [], lambda tag: turn_id(CHAT, 3, tag)) is None  # an unidentified library stays untagged
+    with pytest.raises(SceneRefused) as error:  # nothing unique to derive a replay tag from: identify first
+        tag_for(None, [turn_id(CHAT, 3)], lambda tag: turn_id(CHAT, 3, tag))
+    assert error.value.reason == "device_identity"
