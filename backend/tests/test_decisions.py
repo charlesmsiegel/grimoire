@@ -30,6 +30,7 @@ from grimoire.generation import (
 )
 from grimoire.providers.cancel import CancelToken
 from grimoire.providers.errors import CallRefused
+from grimoire.runtime.record import recorded_turn
 from grimoire.goals import Agenda, Approach, Goal, GoalError, Holds, Limit, Present, choose, explain
 from grimoire.voice import SecretFact
 
@@ -478,3 +479,19 @@ def test_d_an_npc_with_no_choice_skips_its_decision_and_still_speaks():
     with pytest.raises(GenerationError) as error:
         harness.runtime.run_turn(meter, [plain], controls=CONTROLS)
     assert error.value.reason == "decision_ignored"
+
+
+def test_d_a_turn_with_a_decision_is_recorded_with_the_decision_billed_and_no_line_for_it():
+    for replies, choice in (([say("2"), say("Table against the door!")], oda_choice()),
+                            ([say("Forty-one, forty-two...")], None)):
+        harness, plan, meter = decision_turn(replies)
+        (call, speech) = plan.calls
+        shown = brief(choice) if choice is not None else npc_brief(
+            oda_view(oda_knows()), VOICES[ODA.instance_id], secrets=SECRETS)
+        outcome = harness.runtime.decide(meter, call, shown, controls=CONTROLS)
+        spoken = shown if choice is None else brief(oda_choice(selected=outcome.pick))
+        turn = harness.runtime.run_turn(meter, [spoken], controls=CONTROLS)
+        recorded = recorded_turn(1, meter, turn)
+        assert [line.call_id for line in recorded.lines] == [speech.call_id]
+        billed = [each.call_id for each in recorded.ledger.attempts]
+        assert billed == ([call.call_id, speech.call_id] if choice is not None else [speech.call_id])
