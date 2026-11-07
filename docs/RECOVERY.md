@@ -204,8 +204,11 @@ its event names.
 - **Restart does not recover by itself.** Nothing detects a partial publication and runs these operations, and
   shape B needs the original proposal and endorsements, which a crashed process no longer holds. **Obligation on
   035 (and milestone 2):** persist the proposal and its endorsements before committing an acceptance, so a
-  restart can adopt; until then shape B after a real crash is a human repair. The proving tests carry the
-  proposal across the crash in memory.
+  restart can adopt. **035 does this** for the effects its runner accepts: the proposal and its keys are
+  on the turn before the commit, each endorsement is also in the authority's own audit, the turn names the
+  sovereignty ledger position whose control the acceptance was authorized under (so `adopt` gets that
+  control, not today's, as `controls`), and `open` reports each acceptance cut short for `recover_effects`
+  ([SCENES](SCENES.md#accepting-an-effect)). An acceptance made outside the runner is still a human repair.
 - **No record that a completion or adoption ran,** beyond the writes' own tokens (`effect:accepted/<X>` on what
   they publish). The 007 audit obligation stays with this sprint.
 
@@ -217,7 +220,7 @@ its event names.
 | Recording a human repair of a skipped holdings undo (`partial_revocation`) | 030, later slice |
 | Orphan detection and duplicate recognition beyond the bounded holder log; per-file identity (epochs) | 030 / 019 |
 | A durable operation record for actions spanning several store transactions (inventory, actor and association) | 030 milestone 2 |
-| Detecting partial publications at open and persisting proposals so restart can recover | 035 / 030 milestone 2 |
+| Detecting partial publications at open and persisting proposals so restart can recover (done for 035's runner; other callers) | 035 / 030 milestone 2 |
 | Recording in the event that it was completed or adopted; the 007 decision audit | 030, later slice |
 | Cross-process run fencing of model calls ([GENERATION](GENERATION.md)); readers in other processes overlapping a commit ([TESTING](TESTING.md)) | 030, later slice (readers with 022) |
 | Persisting a holdings operation's `basis` so a retry is recognised beyond the bounded log ([HOLDINGS](HOLDINGS.md)) | 030, later slice |

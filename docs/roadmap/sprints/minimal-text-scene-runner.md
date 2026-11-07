@@ -6,7 +6,7 @@
 
 **What the first slice leaves (milestone 2):**
 - ~~First, due before 044: read a chat's imported history as the history before turn 1, and decide who heard it.~~ **Done in milestone 2's first PR**: the cast a chat was imported with heard it, a later arrival none ([SCENES](../../SCENES.md#who-heard-what)).
-- Kept lines are transcript, not canon. The labeller, 029 framing and decision, `check_effect`, 021 acceptance and 030 open-time recovery before the next acceptance (the Wave 4 obligations of 029, 030 and 021) are milestone 2. Milestone 2 has the labeller and 029 framing and decision so far ([SCENES](../../SCENES.md#confirming-and-deciding-an-action)); nothing accepts an effect yet.
+- Kept lines are transcript, not canon. The labeller, 029 framing and decision, `check_effect`, 021 acceptance and 030 open-time recovery before the next acceptance (the Wave 4 obligations of 029, 030 and 021) are milestone 2. Milestone 2 has the labeller and 029 framing and decision ([SCENES](../../SCENES.md#confirming-and-deciding-an-action)), and accepts a turn's structured effect proposal into 021 with every key, `check_effect` first and 030's recovery at open time before the next acceptance ([SCENES](../../SCENES.md#accepting-an-effect)); no model proposes an effect from kept narration yet, and no ability use is proposed.
 - 032's delivery records are not written to 020 yet: an NPC's memory of a scene is the window of lines it heard.
 - A session-zero configuration is not executed (016 has no codec yet): a scope with one refuses generation. Mid-session requests run with an empty configuration.
 - A redirect's or rephrase's direction is recorded on its take but not sent to the model.

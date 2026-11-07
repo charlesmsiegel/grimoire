@@ -18,8 +18,8 @@ from grimoire.core.knowledge import KnowledgeError, Moment
 from grimoire.holdings import HoldingsError, Line
 
 from .model import (
-    AcceptedEvent, AcceptedOperation, ContributionSnapshot, ControlSnapshot, EffectError, EndorsementRecord, Op,
-    Receipt, Revocation, SceneWrapUp, Skipped,
+    AcceptedEvent, AcceptedOperation, ContributionSnapshot, ControlSnapshot, EffectError, EffectProposal,
+    EndorsementRecord, Op, Receipt, Revocation, SceneWrapUp, Skipped,
 )
 from .parts import AbilityCharge, AcceptedHoldings, ActedLine, EffectHoldings
 
@@ -52,6 +52,11 @@ _ABILITY = frozenset({"attempt_id", "actor", "ability_id", "needs", "provenance"
                       "classification", "ruling_id", "charges", "domain"})
 _ABILITY_REQUIRED = _ABILITY - {"effect_id", "ruling_id"}
 _SKIPPED = frozenset({"op", "why"})
+#: a proposal as 035 keeps it on its turn before accepting it (030's obligation): no domain, receipt or key yet
+_PROPOSAL = frozenset({"chat", "moment", "summary", "operations", "proposed_by", "attempt_id", "holdings"})
+_PROPOSAL_REQUIRED = frozenset({"chat", "moment", "summary", "operations", "proposed_by"})
+_PROPOSED_OP = _OP - {"domain"}
+_PROPOSED_HOLDINGS = frozenset({"lines", "note"})
 
 
 class EffectCodecError(ValueError):
@@ -84,10 +89,11 @@ def _endorsement(item: EndorsementRecord) -> dict:
     return {"contribution_id": item.contribution_id, "principal": item.principal, "fingerprint": item.fingerprint}
 
 
-def _op(item: AcceptedOperation) -> dict:
-    op = item.op
-    data: dict = {"kind": op.kind, "predicate": op.predicate, "subject": str(op.subject), "object": str(op.object),
-                  "domain": item.domain}
+def _op(op: Op, domain: str | None) -> dict:
+    """One operation; ``domain`` is ``None`` for a proposal's, which only acceptance decides."""
+    data: dict = {"kind": op.kind, "predicate": op.predicate, "subject": str(op.subject), "object": str(op.object)}
+    if domain is not None:
+        data["domain"] = domain
     if op.agent is not None:
         data["agent"] = str(op.agent)
     if op.backed_by is not None:
@@ -95,9 +101,11 @@ def _op(item: AcceptedOperation) -> dict:
     return data
 
 
-def _line(item: ActedLine, domain: str) -> dict:
+def _line(item: ActedLine, domain: str | None) -> dict:
     line = item.line
-    data: dict = {"line": line.kind, "holder": str(line.holder), "item": line.item, "domain": domain}
+    data: dict = {"line": line.kind, "holder": str(line.holder), "item": line.item}
+    if domain is not None:
+        data["domain"] = domain
     if line.kind == "adjust":
         data.update(seen=line.seen, to=line.to)
     else:
@@ -154,7 +162,7 @@ def accepted_to_payload(event: AcceptedEvent) -> dict:
     _extras_clash(event.extras, _ACCEPTED_IDENTITY, ACCEPTED_FIELDS | PART_FIELDS)
     payload: dict = {
         "chat": str(event.chat), "moment": _moment(event.moment), "summary": event.summary,
-        "proposed_by": event.proposed_by, "operations": [_op(item) for item in event.operations],
+        "proposed_by": event.proposed_by, "operations": [_op(item.op, item.domain) for item in event.operations],
         "contributions": [{"contribution_id": c.contribution_id, "actor_id": c.actor_id,
                            "submitted_by": c.submitted_by, "kind": c.kind, "scene_id": c.scene_id,
                            "turn_id": c.turn_id, "text": c.text} for c in event.contributions],
@@ -180,6 +188,29 @@ def accepted_to_payload(event: AcceptedEvent) -> dict:
     if event.abilities:
         payload["abilities"] = [_ability(charge) for charge in event.abilities]
     return {**thaw(event.extras), **payload}  # type: ignore[dict-item]
+
+
+def proposal_to_payload(proposal: EffectProposal) -> dict:
+    """A proposal as 035 keeps it on its turn, so a restart can present it again (030's obligation).
+
+    Every field of ``EffectProposal`` but its campaign, which the chat names. Ability uses are refused
+    (``not_in_this_slice``): 035 proposes none yet, and their 025 assessments have no stored form here.
+    """
+    if type(proposal) is not EffectProposal:
+        raise _invalid("a proposal must be an EffectProposal")
+    if proposal.abilities:
+        raise _invalid("a proposal's ability uses are not stored in this slice", "not_in_this_slice")
+    data: dict = {"chat": str(proposal.chat), "moment": _moment(proposal.moment), "summary": proposal.summary,
+                  "operations": [_op(op, None) for op in proposal.operations],
+                  "proposed_by": proposal.proposed_by}
+    if proposal.attempt_id is not None:
+        data["attempt_id"] = proposal.attempt_id
+    if proposal.holdings is not None:
+        part = proposal.holdings
+        data["holdings"] = {"lines": [_line(item, None) for item in part.lines]}
+        if part.note is not None:
+            data["holdings"]["note"] = part.note
+    return data
 
 
 def wrapup_to_payload(wrapup: SceneWrapUp) -> dict:
@@ -279,11 +310,12 @@ def _ref_text(value: object, label: str) -> InstanceRef:
     return _ref(InstanceRef.parse, value, label)
 
 
-def _decode_line(value: object, label: str) -> tuple[ActedLine, object]:
+def _decode_line(value: object, label: str, *, domain: bool = True) -> tuple[ActedLine, object]:
+    """One holdings line and its recorded domain (``domain=False``: a proposal's line, which has none yet)."""
     kind = value.get("line") if isinstance(value, Mapping) else None
     if type(kind) is not str or kind not in _LINE_FIELDS:
         raise _invalid(f"{label}.line is not a line kind")
-    required = frozenset({"line", "holder", "item", "domain", *_LINE_FIELDS[kind]})
+    required = frozenset({"line", "holder", "item", *(("domain",) if domain else ()), *_LINE_FIELDS[kind]})
     data = _object(value, label, required | _LINE_OPTIONAL, required)
     _no_nulls(data, label)
     target = _ref_text(data["target"], f"{label}.target") if "target" in data else None
@@ -297,7 +329,7 @@ def _decode_line(value: object, label: str) -> tuple[ActedLine, object]:
     except HoldingsError:
         raise _invalid(f"{label} is not a valid line") from None
     agent = None if "agent" not in data else _ref_text(data["agent"], f"{label}.agent")
-    return _build(lambda: ActedLine(line, agent, data.get("backed_by"))), data["domain"]
+    return _build(lambda: ActedLine(line, agent, data.get("backed_by"))), data.get("domain")
 
 
 def _decode_seqs(value: object, label: str) -> dict[InstanceRef, int]:
@@ -414,6 +446,34 @@ def accepted_from_payload(ref: AcceptedRef, schema: str, payload: object) -> Acc
     if accepted_schema(event) != schema:
         raise _invalid(f"an event with no holdings or ability use is stored as {ACCEPTED_SCHEMA}")  # one form
     return event
+
+
+def proposal_from_payload(campaign_id: str, payload: object) -> EffectProposal:
+    """A proposal kept by ``proposal_to_payload``, in ``campaign_id``. Strict at every level, so a hand edit
+    that breaks it makes it unreadable (``EffectCodecError``) rather than another effect."""
+    data = _object(payload, "proposal", _PROPOSAL, _PROPOSAL_REQUIRED)
+    _no_nulls(data, "proposal")
+    if type(data["chat"]) is not str:
+        raise _invalid("proposal.chat is not a valid reference")
+    chat = _ref(ChatRef.parse, data["chat"], "proposal.chat")
+    moment = _decode_moment(data["moment"], "proposal.moment")
+    operations = []
+    for index, item in enumerate(_list(data["operations"], "proposal.operations")):
+        label = f"proposal.operations[{index}]"
+        op = _object(item, label, _PROPOSED_OP, _PROPOSED_OP - {"agent", "backed_by"})
+        _no_nulls(op, label)
+        agent = None if "agent" not in op else _ref_text(op["agent"], f"{label}.agent")
+        subject, other = _ref_text(op["subject"], label), _ref_text(op["object"], label)
+        operations.append(_build(lambda: Op(op["kind"], op["predicate"], subject, other, agent, op.get("backed_by"))))
+    holdings = None
+    if "holdings" in data:
+        part = _object(data["holdings"], "proposal.holdings", _PROPOSED_HOLDINGS, frozenset({"lines"}))
+        _no_nulls(part, "proposal.holdings")
+        lines = [_decode_line(item, f"proposal.holdings.lines[{index}]", domain=False)[0]
+                 for index, item in enumerate(_list(part["lines"], "proposal.holdings.lines"))]
+        holdings = _build(lambda: EffectHoldings(tuple(lines), part.get("note")))
+    return _build(lambda: EffectProposal(campaign_id, chat, moment, data["summary"], tuple(operations),
+                                         data["proposed_by"], data.get("attempt_id"), holdings))
 
 
 def wrapup_from_payload(ref: WrapUpRef, schema: str, payload: object) -> SceneWrapUp:
