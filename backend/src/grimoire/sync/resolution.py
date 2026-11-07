@@ -242,7 +242,10 @@ def _resolve_deletion(stores: Mapping[str, LibraryStore], scans: Mapping[str, Ca
     except (StoreError, OSError) as error:  # no slot can take the hold: the record stays
         raise ResolveRefused(f"{path} cannot be deleted on {receiver}: its version cannot be kept: {error}") from error
     txn = store.transaction()
-    deletion.stage(txn, deletes)
+    try:
+        deletion.stage(txn, deletes)
+    except StaleWrite as error:  # its hold's slot was taken meanwhile: nothing was written
+        raise ResolveRefused(f"{path} cannot be deleted on {receiver}: {error}") from error
     marked = dict(pendings[receiver].entries)
     for gone in deletes:  # marked in the same commit, as a copy is: a restore before the archives is a conflict
         marked[gone.path] = {"from": gone.expected, "to": None, "base": _archived(archive_candidate(gone.path, *archived))}

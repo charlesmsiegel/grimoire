@@ -16,6 +16,7 @@ import pytest
 
 from grimoire.core.identity import InstanceRef, SourceRef
 from grimoire.store import InvalidEnvelope, LibraryStore, ProcessLocker, RecordEnvelope, SourceManifest, etag
+from grimoire.store.layout import conflict_parts
 from grimoire.sync import ResolveRefused, SyncInterrupted, resolve, sync, sync_until_quiet
 from grimoire.sync import deletion, keeps as kept_record, resolution, session as sync_session
 from grimoire.sync.documents import keeps_name, parse_keeps, render_keeps
@@ -237,6 +238,26 @@ def test_a_deletion_whose_hold_the_record_cannot_take_is_held_back(pair, monkeyp
     monkeypatch.setattr(kept_record, "RECORD_LIMIT", len(current) + 20)  # room for no held version
     report = sync(desktop, phone, handles())
     assert report.conflict(path).code == "unapplicable" and (phone.root / path).exists()
+
+
+def test_a_hold_slot_taken_while_planning_interrupts_the_sync(pair, monkeypatch):
+    """Another writer fills the slot planned for a hold before it is staged: the sync stops as
+    interrupted (and replans next time), never with a raw store error, and nothing is removed."""
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    (desktop.root / path).unlink()
+    slot = deletion.hold_slot
+
+    def then_taken(store, where, data):  # type: ignore[no-untyped-def]
+        planned = slot(store, where, data)
+        taken = phone.root / "/".join(conflict_parts(tuple(where.split("/")), etag(data), planned))
+        taken.parent.mkdir(parents=True, exist_ok=True)
+        taken.write_bytes(b'{"someone": "else"}')
+        return planned
+    monkeypatch.setattr(deletion, "hold_slot", then_taken)
+    with pytest.raises(SyncInterrupted):
+        sync(desktop, phone, handles())
+    assert (phone.root / path).exists()
 
 
 def test_a_record_that_cannot_be_read_on_the_receiver_holds_every_deletion_back(pair):

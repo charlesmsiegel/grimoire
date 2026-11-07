@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from grimoire.core.identity import (
     ChatRef, ImageRef, InstanceRef, PlacementRef, RelationRef, ScopeRef, SourceRef, TurnRef,
 )
-from grimoire.store import LibraryStore, StoreError, UnstorableIdentifier, etag
+from grimoire.store import LibraryStore, StaleWrite, StoreError, UnstorableIdentifier, etag
 from grimoire.store.jsonfmt import JsonError, parse_strict
 from grimoire.store.layout import (
     CAMPAIGNS, SCOPE, SOURCES, address_parts, chat_parts, classify, conflict_parts, definition_parts, kept_address,
@@ -37,6 +37,7 @@ from grimoire.store.replica import pinned_by
 from . import bookkeeping, keeps as kept_record
 from .art import art_needs
 from .documents import keeps_name, syncable
+from .errors import SyncInterrupted
 
 _SLOT = re.compile(r"~[0-9a-f]{12}(?:\.([1-9][0-9]*))?$")
 #: The text references a record can hold, read from every string of it (keys included).
@@ -129,7 +130,10 @@ def admit(store: LibraryStore, current: Mapping[str, bytes], files: Mapping[str,
         txn = store.transaction()
         if context is not None:
             context(txn)
-        stage(txn, deletes)
+        try:
+            stage(txn, deletes)
+        except StaleWrite as error:  # a planned hold slot was taken meanwhile: replan, as for a stale check
+            raise SyncInterrupted(f"a library changed while {what} was planned: {error}") from error
         return preflight(txn, what)
 
     blocked = list(blocked)

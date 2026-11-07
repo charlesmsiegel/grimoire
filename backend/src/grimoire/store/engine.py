@@ -418,7 +418,8 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
         # (then 010's R7 window).
         if held_sources or settlement.preserved or settlement.incomplete or settlement.dropped:
             return False
-        held = {entry.new for entry in journal.entries
+        # the bytes each landed hold keeps, by the folder it keeps them in (one per record)
+        held = {(entry.target[:-1], entry.new) for entry in journal.entries
                 if entry.kind == "hold" and access.etag_of(entry.target) == entry.new}
         for entry in journal.entries:
             if entry.kind != "remove":
@@ -427,7 +428,8 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
             if entry.temp not in staged:
                 if current == entry.old:
                     return False
-            elif current not in (entry.old, None) or temp_digest(entry) != entry.new or entry.old not in held:
+            elif (current not in (entry.old, None) or temp_digest(entry) != entry.new
+                  or (conflict_parts(entry.target, entry.old)[:-1], entry.old) not in held):  # its own hold
                 return False
         return True
 
