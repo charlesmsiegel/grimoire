@@ -347,3 +347,95 @@ def test_without_a_record_another_imported_picture_in_a_slot_is_a_persons_choice
     pieces, _ = card_art(parse_card(json.loads(encode(card(assets=ASSETS)))), PORTRAIT)
     stage = stage_art(images, "card:mara-vell", MARA, pieces, {}, False, {}, str)
     assert {entry.slot: entry.status for entry in stage.slots}[SMILE] == "hand_edited"
+
+
+# -- names with no ASCII letter or digit (Wave 5 audit, 038 B3) ------------------------------------
+
+SMILE_JA, ANGER_JA = "笑顔", "怒り"  # "smile" and "anger"
+#: the first 8 hex digits of the sha256 of each (NFC) name: the slot follows the name, not its place
+SMILE_JA_SLOT, ANGER_JA_SLOT = "expr.default.emotion-b80c40ec", "expr.default.emotion-9370c62b"
+JA_SMILE = {"type": "emotion", "uri": data_uri(SMILE_PNG), "name": SMILE_JA, "ext": "png"}
+JA_ANGER = {"type": "emotion", "uri": data_uri(FROWN_GIF, "image/gif"), "name": ANGER_JA, "ext": "gif"}
+
+
+def test_a_sprite_named_without_ascii_keeps_its_slot_when_the_card_reorders_its_assets(store):
+    land(store, encode(card(assets=[JA_SMILE, JA_ANGER])), portrait=PORTRAIT)
+    _individuals(store)
+    images = _images(store)
+    own = images.change()
+    picture = own.add_image("campaign:c1", "first-smile", PORTRAIT_2)
+    own.place(FIRST, SMILE_JA_SLOT, Placement("set", "expression", picture,
+                                              expression=Expression("default", "emotion-b80c40ec")), None)
+    own.commit()
+
+    update = land(store, encode(card(assets=[JA_ANGER, JA_SMILE])), portrait=PORTRAIT, target="card:mara-vell")
+    assert {entry.slot: entry.asset for entry in update.report.art if entry.slot.startswith("expr.")} == {
+        ANGER_JA_SLOT: 0, SMILE_JA_SLOT: 1}  # each sprite's place changed; its slot did not
+    shown = images.effective_placements(MARA)
+    assert images.read_image_bytes(shown.slot(SMILE_JA_SLOT).image) == SMILE_PNG
+    assert images.read_image_bytes(shown.slot(ANGER_JA_SLOT).image) == FROWN_GIF
+    assert shown.slot(SMILE_JA_SLOT).provenance["x-card-asset"]["name"] == SMILE_JA
+    assert images.effective_placements(FIRST).slot(SMILE_JA_SLOT).image == picture  # still over the smile
+    assert images.read_image_bytes(images.effective_placements(SECOND).slot(ANGER_JA_SLOT).image) == FROWN_GIF
+
+
+def test_the_slot_of_a_name_without_ascii_ignores_its_unicode_spelling_and_an_unnamed_asset_keeps_its_place():
+    import unicodedata
+    composed = "웃음"  # Hangul, which NFD spells as separate letters
+    assets = [{"type": "emotion", "uri": data_uri(SMILE_PNG), "name": composed},
+              {"type": "icon", "uri": data_uri(SMILE_PNG), "name": "main"},
+              {"type": "icon", "uri": data_uri(SMILE_PNG), "name": SMILE_JA},
+              {"type": "background", "uri": data_uri(SMILE_PNG), "name": "main"},
+              {"type": "background", "uri": data_uri(SMILE_PNG), "name": ANGER_JA},
+              {"type": "x-prop", "uri": data_uri(SMILE_PNG), "name": f" {ANGER_JA} "},
+              {"type": "emotion", "uri": data_uri(SMILE_PNG)}]
+    decomposed = [dict(asset) for asset in assets]
+    decomposed[0]["name"] = unicodedata.normalize("NFD", composed)
+    assert decomposed[0]["name"] != composed
+
+    def slots(listed):
+        return [piece.slot for piece in card_art(parse_card(json.loads(encode(card(assets=listed)))), None)[0]]
+
+    expected = ["expr.default.emotion-4f5bbfbe", "avatar", "icon-b80c40ec", "background", "background-9370c62b",
+                "asset-9370c62b", "expr.default.emotion-6"]
+    assert slots(assets) == slots(decomposed) == expected
+
+
+def test_a_rerun_over_slots_an_earlier_build_named_by_place_neither_fails_nor_copies_a_picture(store, monkeypatch):
+    import grimoire.cards.art as art
+
+    def by_place(asset, prefix):  # the slot names a build before this fix gave such sprites
+        return f"{prefix}{asset.index}" if prefix else str(asset.index)
+
+    monkeypatch.setattr(art, "_name", by_place)
+    land(store, encode(card(assets=[JA_SMILE, JA_ANGER])), portrait=PORTRAIT)
+    monkeypatch.undo()
+    images = _images(store)
+    before = images.effective_placements(MARA)
+    old_smile = before.slot("expr.default.emotion-0").image
+    blobs = _blob_count(store)
+
+    rerun = land(store, encode(card(assets=[JA_SMILE, JA_ANGER])), portrait=PORTRAIT, target="card:mara-vell")
+    assert {entry.slot: entry.status for entry in rerun.report.art if entry.slot.startswith("expr.")} == {
+        SMILE_JA_SLOT: "placed", ANGER_JA_SLOT: "placed"}
+    after = images.effective_placements(MARA)
+    assert after.slot(SMILE_JA_SLOT).image == old_smile  # the same image object, and no new blob
+    assert _blob_count(store) == blobs
+    # a slot the card no longer fills keeps its last picture, as for a renamed asset (a known limit)
+    assert after.slot("expr.default.emotion-0").image == old_smile
+    again = importer(store).plan(encode(card(assets=[JA_SMILE, JA_ANGER])), portrait=PORTRAIT,
+                                 target="card:mara-vell")
+    assert again.report.status == "unchanged" and again.preview() == {}
+
+
+def test_names_that_lose_letters_to_the_ascii_fold_keep_their_own_slots():
+    smile_2, anger_2 = f"{SMILE_JA} 2", f"{ANGER_JA} 2"
+    assets = [{"type": "emotion", "uri": data_uri(SMILE_PNG), "name": smile_2},
+              {"type": "emotion", "uri": data_uri(FROWN_GIF, "image/gif"), "name": anger_2},
+              {"type": "emotion", "uri": data_uri(SMILE_PNG), "name": "Café"},  # an accent alone loses nothing
+              {"type": "emotion", "uri": data_uri(SMILE_PNG), "name": "Smile"}]
+    pieces, losses = card_art(parse_card(json.loads(encode(card(assets=assets)))), None)
+    digest = {name: hashlib.sha256(name.encode("utf-8")).hexdigest()[:8] for name in (smile_2, anger_2)}
+    assert [piece.slot for piece in pieces] == [f"expr.default.2-{digest[smile_2]}", f"expr.default.2-{digest[anger_2]}",
+                                                "expr.default.cafe", SMILE]
+    assert not [loss for loss in losses if loss.reason == "duplicate_slot"]
