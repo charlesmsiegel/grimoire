@@ -334,12 +334,17 @@ def _landed(entry: Entry, current: str | None) -> bool:
 
 
 def _remove(access: Access, entry: Entry, settlement: Settlement) -> None:
-    """Delete a removal's target, durably, before its temp goes (``DiskOps.remove`` syncs the folder)."""
+    """Delete a removal's target, durably (its folder synced), before its temp goes."""
     staging = lstat_or_none(access.path((TXN,)))
     access.guard.check_write(entry.target, staging_device=staging.st_dev if staging else None)
-    access.ops.remove(access.path(entry.target))
+    access.ops.remove(access.path(entry.target), durable=True)
     access.ops.remove(access.path((TXN, entry.temp)))
     settlement.removed.append(_text(entry.target))
+
+
+def _removal_source(entry: Entry) -> str | None:
+    """The source a removal's target belongs to (a revision or its manifest), else ``None``."""
+    return _source_of_revision(entry.target) or _manifest_source(entry.target)
 
 
 def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlement:
@@ -405,7 +410,21 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
                 unwritten.add(entry.target)
     held_sources = {_source_of_revision(entry.target) for entry in journal.entries
                     if entry.target in unwritten and entry.kind != "remove"} - {None}
-    kept_revisions: set[str] = set()  # sources a revision removal of which did not happen (028)
+    kept_revisions: set[str] | None = None  # decided once, right before the first removal (028)
+
+    def removals_kept() -> set[str]:
+        # 028: a source deleted as a whole loses nothing of it unless all of it goes. Sources any removal
+        # of which cannot happen (its target holds other bytes, or its temp vanished while the target
+        # still holds what it removes) keep every removal of theirs. Read after every other entry is
+        # settled, so an external edit is seen up to the removals themselves (then 010's R7 window).
+        kept: set[str] = set()
+        for entry in journal.entries:
+            if entry.kind == "remove":
+                current = access.etag_of(entry.target)
+                if current not in (entry.old, None) if entry.temp in staged else current == entry.old:
+                    kept |= {_removal_source(entry)} - {None}
+        return kept
+
     def hold_back(entry: Entry, digest: str | None) -> None:
         _preserve(access, entry, settlement, digest)
         source = _source_of_revision(entry.target)
@@ -422,8 +441,9 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
             continue
         digest = temp_digest(entry)
         if entry.kind == "remove":
-            source = _source_of_revision(entry.target)
-            if journal.state == "abort" or digest != entry.new or _manifest_source(entry.target) in kept_revisions:
+            kept_revisions = removals_kept() if kept_revisions is None else kept_revisions
+            source = _removal_source(entry)
+            if journal.state == "abort" or digest != entry.new or source in kept_revisions or source in held_sources:
                 _preserve(access, entry, settlement, digest)  # dropped: nothing is removed
                 kept_revisions |= {source} - {None}
                 continue
@@ -432,7 +452,7 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
                 _remove(access, entry, settlement)
             elif current is None:
                 access.ops.remove(access.path((TXN, entry.temp)))
-            else:  # an external edit: the human's file is kept, and a manifest never loses a revision it keeps
+            else:  # an external edit since the check above (010's R7 window): the human's file is kept
                 _preserve(access, entry, settlement, digest)
                 kept_revisions |= {source} - {None}
             continue

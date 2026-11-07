@@ -395,7 +395,8 @@ def _regular_file(access: Access, original: Parts) -> bool:
     return info is not None and stat.S_ISREG(info.st_mode)
 
 
-def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str] = frozenset()) -> None:
+def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str] = frozenset(),
+                       ignore: frozenset[str] = frozenset(), found: CanonicalScan | None = None) -> None:
     """``RevisionReferenced`` unless nothing on this library can pin ``ref`` (a pinned revision).
 
     Checked across every parsable canonical record, those of excluded sources included:
@@ -407,14 +408,20 @@ def check_unreferenced(access: Access, ref: SourceRef, *, allowed: frozenset[str
     A blocked path that could be or hold such a record means "cannot prove unreferenced"; a blocked
     entry that cannot (a root-level link, a non-JSON note) does not. ``allowed`` names manifest
     etags whose references are accepted (``resolve``: manifests identical to the winner's).
+    ``ignore`` names records the same transaction deletes (028: a source deleted as a whole, or the
+    records that used it), and ``found`` reuses one scan for several revisions of one commit.
     """
-    found = scan(access)
+    found = found or scan(access)
     for path, reason in found.blocked.items():
+        if path in ignore:
+            continue
         if reason == SHADOWED:
             continue  # the look-alike that shadows it is blocked too, and judged by what it is
         if _may_hold_records(access, tuple(path.split("/"))):
             raise RevisionReferenced(f"cannot prove {ref} is unreferenced: {path} is {reason}")
     for path, data in found.files.items():
+        if path in ignore:
+            continue
         envelope = parse_exact(tuple(path.split("/")), data)
         if isinstance(envelope, AssetRecord):
             continue  # 018 art attaches to entities (its provenance text is not a pin)

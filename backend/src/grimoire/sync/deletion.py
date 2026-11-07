@@ -105,6 +105,9 @@ def admit(store: LibraryStore, current: Mapping[str, bytes], files: Mapping[str,
     fixpoint: a deletion held back keeps a record whose own needs then count."""
     refused: dict[str, tuple[str, str]] = {}
     candidates: dict[str, Delete] = {}
+    paths = list(paths)
+    if not paths:
+        return [], refused  # nothing to judge: no record is read
     for path in paths:
         data = current[path]
         try:
@@ -140,6 +143,8 @@ def denied(deletes: Iterable[Delete], keys: frozenset[str], files: Mapping[str, 
     needs. Adds each to ``gone``; returns why each newly dropped one is ``denied``, and the puts to drop."""
     deletes = list(deletes)
     refused: dict[str, str] = {}
+    if not deletes:
+        return refused, {}
     for delete in deletes:
         if delete.path not in gone and any(key in keys for key in keys_of(delete)):
             gone.add(delete.path)
@@ -305,6 +310,8 @@ def orphaned(files: Mapping[str, bytes], blobs: Mapping[str, int], blocked: Iter
     still needing one. A record path blocked there (unreadable, a link, a look-alike) may be anything,
     so it holds every deletion back: nothing can prove it does not need the deleted record."""
     pending = set(deleting)
+    if not pending:
+        return {}
     unknown = sorted(path for path in blocked if not path.startswith("assets/"))
     if unknown:
         return {path: f"cannot prove nothing on this device needs it: {unknown[0]} cannot be read as a record"

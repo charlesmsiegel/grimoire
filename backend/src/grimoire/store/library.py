@@ -1786,6 +1786,13 @@ class _Commit:
     def _check_sources(self) -> None:
         touched: dict[str, tuple[SourceManifest | None, list[SourceRef]]] = {}
         art: set[str] = set()  # sources receiving images or placements
+        removed = frozenset("/".join(put.parts) for put in self.puts if put.kind == "remove")
+        revisions = [hit[1] for hit in (classify(tuple(path.split("/"))) for path in sorted(removed))
+                     if hit is not None and hit[0] == "definition"]
+        if revisions:  # 028: a deleted revision is never one a record staying here pins, checked under the lock
+            found = replica.scan(self.access)
+            for ref in revisions:
+                replica.check_unreferenced(self.access, ref, ignore=removed, found=found)  # type: ignore[arg-type]
         for put in self.puts:
             if put.kind != "record":
                 continue

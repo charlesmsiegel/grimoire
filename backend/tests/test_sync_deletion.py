@@ -14,15 +14,19 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.store import LibraryStore, ProcessLocker, SourceManifest, etag
+from grimoire.core.identity import SourceRef
+from grimoire.store import LibraryStore, ProcessLocker, RecordEnvelope, SourceManifest, etag
 from grimoire.sync import ResolveRefused, resolve, sync, sync_until_quiet
 from grimoire.sync import resolution, session as sync_session
 from grimoire.sync.documents import keeps_name, parse_keeps
 from grimoire.testing import CrashScenario, Invariant, explore_crashes, idempotent_recovery, no_residue, run_plans
 from grimoire.testing.fileops import snapshot
 
-from store_helpers import drop_empty_dirs, owner_handle
-from sync_helpers import DESKTOP, PATHS, PHONE, WREN_A, canonical, converged, edit_instance, handle, handles, kept, make_pair
+from store_helpers import HARBOR, WREN_R2, drop_empty_dirs, harbor_manifest, instance, owner_handle
+from sync_helpers import (
+    DESKTOP, PATHS, PHONE, WREN_A, WREN_B, canonical, converged, edit_instance, handle, handles, kept, make_pair,
+    new_revision, put,
+)
 
 PAIR = (DESKTOP, PHONE)
 
@@ -129,6 +133,29 @@ def test_a_deletion_the_grant_refuses_is_denied_and_nothing_is_removed(pair):
     assert (phone.root / path).read_bytes() == original
     report = sync(desktop, phone, handles())  # granted now: the deletion is retried
     assert report.conflicts == () and not (phone.root / path).exists()
+
+
+def test_a_denied_deletion_drops_only_itself_never_the_rest_of_its_source(pair):
+    """A denied revision deletion is not a denied write of its source: the other changes to that
+    source (a new entity and its manifest) still land (028; denial is source-coarse only for writes)."""
+    desktop, phone = pair
+    new_revision(desktop, "r2", "a captain")
+    for ref in (WREN_A, WREN_B):
+        put(desktop, instance(ref, WREN_R2, base=WREN_R2))
+    assert sync(desktop, phone, handles()).conflicts == ()  # r1 is no longer anyone's: deletable
+    (desktop.root / PATHS["r1"]).unlink()
+    kestrel = RecordEnvelope(SourceRef(HARBOR, "character", "kestrel").at("k1"), {"bio": "a gull"}, name="Kestrel")
+    txn = desktop.transaction()
+    txn.put(kestrel, None)
+    txn.put(harbor_manifest({"character/wren": "r2", "character/kestrel": "k1"}), desktop.read_source(HARBOR).etag)
+    txn.commit(handle())
+    grant = owner_handle("sources/world/harbor/_source/manifest.json",
+                         "sources/world/harbor/_source/records/character/kestrel", "campaigns", "kept")
+    report = sync(desktop, phone, {DESKTOP: handle(), PHONE: grant})
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == {PATHS["r1"]: "denied"}
+    assert (phone.root / PATHS["r1"]).exists() and report.deleted == ()
+    assert phone.read_source(HARBOR).etag == desktop.read_source(HARBOR).etag
+    assert (phone.root / "sources/world/harbor/_source/records/character/kestrel/k1.json").exists()
 
 
 def test_a_record_that_cannot_be_read_on_the_receiver_holds_every_deletion_back(pair):

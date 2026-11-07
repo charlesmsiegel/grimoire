@@ -30,7 +30,7 @@ class FileOps(Protocol):
     def write_bytes(self, path: PathArg, data: bytes) -> None: ...
     def make_temp(self, directory: PathArg, prefix: str = "", suffix: str = "") -> str: ...
     def replace(self, src: PathArg, dst: PathArg) -> None: ...
-    def remove(self, path: PathArg) -> None: ...
+    def remove(self, path: PathArg, *, durable: bool = False) -> None: ...
     def make_dirs(self, path: PathArg) -> None: ...
     def remove_dir(self, path: PathArg) -> None: ...
 
@@ -82,11 +82,12 @@ class DiskOps:
         os.replace(src, dst)
         _sync_directory(os.path.dirname(os.path.abspath(dst)))
 
-    def remove(self, path: PathArg) -> None:
-        """Remove a file durably: a record a ``remove`` entry deletes (028) must stay gone once
-        its temp and journal are removed after it, so the folder is synced first."""
+    def remove(self, path: PathArg, *, durable: bool = False) -> None:
+        """Remove a file. ``durable``: sync its folder too, so the removal survives a power loss (a record
+        a ``remove`` entry deletes, 028, must stay gone once its temp and journal go after it)."""
         os.remove(path)
-        _sync_directory(os.path.dirname(os.path.abspath(path)))
+        if durable:
+            _sync_directory(os.path.dirname(os.path.abspath(path)))
 
     def make_dirs(self, path: PathArg) -> None:
         missing = []

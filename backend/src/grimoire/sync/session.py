@@ -278,8 +278,8 @@ def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]
     for device in pair:
         _plan_keeps(plan, device)
     for device in pair:  # the whole planned commit, once: interactions between units are caught here
-        if not plan.copies[device] or (not plan.keeps[device] and not plan.deletes[device]
-                                       and device not in plan.fallback):
+        copies, keeps, deletes = plan.copies[device], plan.keeps[device], plan.deletes[device]
+        if (not copies and not deletes) or (not keeps and not (copies and deletes) and device not in plan.fallback):
             continue  # what remains was already checked as one whole
         txn = stores[device].transaction()
         _stage(txn, plan.copies[device], plan.keeps[device], plan.deletes[device])
@@ -1017,8 +1017,11 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
     dropped: set[str] = set()
     gone: set[str] = set()  # deletions dropped: denied, or now needed by what a denial left (028)
 
+    deleting = {key for delete in deletes for key in deletion.keys_of(delete)}
+
     def on_denied(keys: frozenset[str]) -> dict[str, bytes | None]:
-        denied = {key for key in keys if not key.startswith("kept/")}
+        # a denied deletion (028) drops only itself and its hold (``_deny_deletes``): no copy depends on it
+        denied = {key for key in keys if not key.startswith("kept/") and key not in deleting}
         own_units = CAMPAIGN_LOCAL | ASSET_KINDS  # never source-coarse: art is denied only for itself
         sources = {_source_of(path) for path in denied if syncable(path) not in own_units}
         logs = {_knowledge_campaign(path) for path in denied} - {None}  # a log is one unit, too

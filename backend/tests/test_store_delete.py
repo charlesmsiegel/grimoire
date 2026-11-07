@@ -6,7 +6,7 @@ import pytest
 
 from grimoire.security import Approval, Authorizer, Grant, Permission, ResourcePath, payload_digest
 from grimoire.store import (
-    InvalidEnvelope, LibraryStore, ProcessLocker, RecordNotFound, StaleWrite, WriteConflict, WriteDenied, etag,
+    InvalidEnvelope, LibraryStore, ProcessLocker, RecordNotFound, RevisionReferenced, StaleWrite, WriteConflict, WriteDenied, etag,
 )
 from grimoire.store.journal import Entry, Journal, parse
 from grimoire.store.errors import RecoveryFailed
@@ -20,6 +20,7 @@ from store_helpers import OWNER, WREN_A, drop_empty_dirs, owner_handle, seed
 
 ALL = ("sources", "campaigns", "kept")
 WREN_A_PATH = "campaigns/c1/instances/character/wren-a.json"
+WREN_B_PATH = "campaigns/c2/instances/character/wren-b.json"
 R1_PATH = "sources/world/harbor/_source/records/character/wren/r1.json"
 MANIFEST_PATH = "sources/world/harbor/_source/manifest.json"
 
@@ -55,11 +56,19 @@ def test_a_deletion_removes_the_record_and_keeps_its_bytes_as_a_hold(store):
 
 
 def test_a_source_is_deleted_as_a_whole_in_one_transaction(store):
-    revision, manifest = ((store.root / path).read_bytes() for path in (R1_PATH, MANIFEST_PATH))
-    _delete(store, R1_PATH, MANIFEST_PATH)
-    assert not (store.root / R1_PATH).exists() and not (store.root / MANIFEST_PATH).exists()
-    assert _kept(store) == sorted([revision, manifest])
+    paths = (R1_PATH, MANIFEST_PATH, WREN_A_PATH, WREN_B_PATH)  # both wrens pin r1, so they go in the same transaction
+    removed = sorted((store.root / path).read_bytes() for path in paths)
+    _delete(store, *paths)
+    assert not any((store.root / path).exists() for path in paths)
+    assert _kept(store) == removed
     assert "world:harbor" not in store.load().sources
+
+
+def test_a_revision_a_record_staying_here_pins_is_never_deleted(store):
+    """Checked under the lock at commit, whatever a sync planned earlier: wren-a and wren-b pin r1."""
+    with pytest.raises(RevisionReferenced):
+        _delete(store, R1_PATH, MANIFEST_PATH)
+    assert (store.root / R1_PATH).exists() and (store.root / MANIFEST_PATH).exists() and _kept(store) == []
 
 
 @pytest.mark.parametrize("keep", ["none", "regenerable", "other bytes"])
@@ -179,7 +188,7 @@ def _scenario(tmp_path, paths, invariants):
         invariants, normalize=drop_empty_dirs), template
 
 
-@pytest.mark.parametrize("paths", [(WREN_A_PATH,), (R1_PATH, MANIFEST_PATH)], ids=["instance", "source"])
+@pytest.mark.parametrize("paths", [(WREN_A_PATH,), (R1_PATH, MANIFEST_PATH, WREN_A_PATH, WREN_B_PATH)], ids=["instance", "source"])
 def test_a_deletion_survives_every_crash_torn_write_and_error(tmp_path, paths):
     """Before its commit point nothing happened; after it, recovery finishes it: the record gone and
     its hold in place. Never the record gone without its hold."""
@@ -220,3 +229,30 @@ def test_an_edit_racing_the_removal_is_kept_and_the_hold_stays(tmp_path):
         assert data in [value for key, value in run.recovered.items() if key.startswith("lib/.conflicts/")]
     window = run_plans(scenario, [[Interleave(removal, edit)]], tmp_path / "r7")
     assert "preserves_interleave" in {violation.invariant for violation in window.violations}  # R7, pinned
+
+
+def test_an_edit_racing_a_source_deletion_keeps_all_of_that_source(tmp_path):
+    """A source goes as a whole or not at all: a human edit to its manifest after the commit point, up
+    to the read just before its first removal, keeps every record of it (its revision too). After
+    that read only reads come before the removal: 010's R7 window, pinned, the removed bytes held."""
+    paths = (R1_PATH, MANIFEST_PATH, WREN_A_PATH, WREN_B_PATH)
+    scenario, template = _scenario(tmp_path / "setup", paths, (preserves_interleave(), idempotent_recovery()))
+    human = template[MANIFEST_PATH].replace(b'"Harbor"', b'"Harbour"')
+    trace = run_plans(scenario, [], tmp_path / "base").runs[0].action_trace
+    commit = next(op.index for op in trace if op.kind == "replace" and op.target == "lib/.txn/journal.json")
+    removal = next(op.index for op in trace if op.kind == "remove" and op.path == f"lib/{R1_PATH}")
+    check = max(op.index for op in trace if op.kind == "read_bytes" and op.path == f"lib/{MANIFEST_PATH}"
+                and op.index < removal)
+    assert all(op.kind in ("read_bytes", "list_dir", "exists") for op in trace if check <= op.index < removal)  # nothing written
+
+    def edit(ops, root):
+        ops.write_bytes(root / "lib" / MANIFEST_PATH, human)
+    report = run_plans(scenario, [[Interleave(index, edit)] for index in range(commit + 1, check + 1)], tmp_path / "race")
+    report.assert_ok()
+    for run in report.runs[1:]:
+        assert "WriteConflict" in run.action_error and run.recovered[f"lib/{MANIFEST_PATH}"] == human
+        assert run.recovered[f"lib/{R1_PATH}"] == template[R1_PATH]
+    window = run_plans(scenario, [[Interleave(check + 1, edit)]], tmp_path / "r7")
+    run = window.runs[1]
+    assert run.recovered[f"lib/{MANIFEST_PATH}"] == human and f"lib/{R1_PATH}" not in run.recovered
+    assert template[R1_PATH] in [value for key, value in run.recovered.items() if key.startswith("lib/.conflicts/")]
