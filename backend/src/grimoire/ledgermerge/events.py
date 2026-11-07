@@ -1,9 +1,8 @@
 """Merging one campaign's 021 accepted events, wrap-ups and their 017 relations from two devices (028).
 
-The events the base lacks are put in one order, the same on both devices: by sequence, then the device
-that accepted the event (the lower device id first; an event's device is read from its id's device tag),
-then its ordinal there. They are numbered after the agreed events, ``max(base ordinals) + position``.
-Event ids are kept and nothing an endorsement covers changes: only ``ordinal``, ``holdings.seqs`` and
+Every event is put in one global order, the same for any pair of devices and whichever side holds it
+(``merge_key``: sequence, the accepting device's tag read from the id, the id's allocation counter), and
+numbered by it, the agreed events too. Event ids are kept and nothing an endorsement covers changes: only ``ordinal``, ``holdings.seqs`` and
 ``revocation.holdings_seqs`` are rewritten, none of which the fingerprint covers (EFFECTS, Fingerprint).
 
 Each new event is then replayed with 021's own planner against the merged relations as they stood just
@@ -25,7 +24,7 @@ from grimoire.effects import (
 from grimoire.graph import GraphError, GraphIndex, Relation
 from grimoire.holdings import Operation
 
-from .model import BASE, Kept, Ledger, Output, ReviewItem, Rewrite, Version, choose, device_tag, ranks
+from .model import BASE, Kept, Ledger, Output, ReviewItem, Rewrite, Version, choose, ranks
 
 #: what a merge may rewrite in an event: outside its fingerprint, so every endorsement stays valid
 REWRITTEN = ("ordinal", "holdings.seqs", "revocation.holdings_seqs")
@@ -58,7 +57,7 @@ class EventOrder:
     chosen: Mapping[AcceptedRef, tuple[str, Version]]  # source (``base`` or a device) and its version
     order: tuple[AcceptedRef, ...]
     onesided: Mapping[AcceptedRef, str]  # events only one device holds, by device
-    first: int  # the ordinal of the first event the base lacks
+    numbering: Mapping[str, int]  # every kept event's merged ordinal, by event id: its place in one global order
     items: tuple[ReviewItem, ...]
 
     @property
@@ -102,34 +101,39 @@ def order_events(base: Ledger, sides: Mapping[str, Ledger]) -> EventOrder:
         chosen[ref] = (holding[0], versions[holding[0]])
         if len(holding) == 1:
             onesided[ref] = holding[0]
-    tags = {device_tag(device): device for device in devices}
-
-    def origin(ref: AcceptedRef) -> tuple:
-        """Where the device that accepted it ranks, from the event id alone (028's tag), never from which
-        side holds it: a third device's event, held by one side now and by both after a merge, must sort the
-        same either way, or merging a merge would renumber it. The two devices by rank, then any other
-        device by its tag; only an untagged id (an unidentified library) falls back to its holder."""
-        tail = _tag_of(ref.event_id)
-        if tail is None:
-            return (0, rank[chosen[ref][0]], "")
-        if tail in tags:
-            return (0, rank[tags[tail]], "")
-        return (1, 0, tail)
-
     fresh = [ref for ref in chosen if ref not in base.events]
-    fresh.sort(key=lambda ref: (chosen[ref][1].value.moment.sequence, origin(ref),
-                                chosen[ref][1].value.ordinal, ref.event_id))
-    first = 1 + max((version.value.ordinal for version in base.events.values()), default=0)
-    found = EventOrder(chosen, tuple(fresh), onesided, first, ())
+    fresh.sort(key=lambda ref: merge_key(ref.event_id, chosen[ref][1].value.moment.sequence))
+    # Why every event is renumbered, the agreed ones too: three paired devices merge pair by pair, each pair
+    # from its own agreed state, so numbering only the events a pair's base lacks would number the same events
+    # differently in each pair, and the pairs would rewrite each other's ordinals forever (028).
+    everything = sorted(chosen, key=lambda ref: merge_key(ref.event_id, chosen[ref][1].value.moment.sequence))
+    numbering = {ref.event_id: number for number, ref in enumerate(everything, start=1)}
+    found = EventOrder(chosen, tuple(fresh), onesided, numbering, ())
     return replace(found, items=tuple(items + _policy(base, found, devices)))
 
 
-def _tag_of(event_id: str) -> str | None:
-    """The device tag a tagged id ends in (``e-<n>-<8 hex>``), or ``None`` for an untagged id."""
+def _split(event_id: str) -> tuple[str, str]:
+    """An id's allocation part and its device tag: ``e-<n>-<8 hex>`` gives ``("e-<n>", tag)``; an untagged
+    id gives ``(id, "")``."""
     head, _, tail = event_id.rpartition("-")
     if "-" not in head or len(tail) != 8 or any(c not in "0123456789abcdef" for c in tail):
-        return None
-    return tail
+        return event_id, ""
+    return head, tail
+
+
+def merge_key(event_id: str, sequence: int) -> tuple:
+    """Where an event the base lacks goes, the same for every pair of devices and whichever side holds it.
+
+    By sequence; then by the accepting device's tag, read from the id (untagged ids, from libraries never
+    identified, first); then by the id's allocation counter (``e-<n>``), which keeps one device's own accept
+    order at one sequence; then the id. Why nothing else: ordinals are rewritten by every merge and which
+    devices are merging changes from pair to pair, so either would let two pairs order the same events
+    differently and renumber them back and forth (028).
+    """
+    head, tag = _split(event_id)
+    prefix, _, number = head.rpartition("-")
+    counter = int(number) if prefix and number.isascii() and number.isdigit() else None
+    return (sequence, tag, counter is None, counter or 0, event_id)
 
 
 def _policy(base: Ledger, found: EventOrder, devices: list[str]) -> list[ReviewItem]:
@@ -166,12 +170,10 @@ def _policy(base: Ledger, found: EventOrder, devices: list[str]) -> list[ReviewI
 
 def rewrite(found: EventOrder, holder_seqs: Mapping[tuple[InstanceRef, str], int]) -> dict[AcceptedRef, AcceptedEvent]:
     """Every kept event as the merge stores it: new ordinals, and holdings receipts at the merged seqs."""
-    positions = found.positions
     merged = {}
     for ref, (_, version) in found.chosen.items():
         event = version.value
-        ordinal = found.first + positions[ref.event_id] - 1 if ref.event_id in positions else event.ordinal
-        changes: dict[str, object] = {"ordinal": ordinal}
+        changes: dict[str, object] = {"ordinal": found.numbering[ref.event_id]}
         if event.holdings is not None:
             op_id = event.holdings.op_id
             seqs = {holder: holder_seqs.get((holder, op_id), seq) for holder, seq in event.holdings.seqs.items()}

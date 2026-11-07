@@ -49,6 +49,10 @@ def stores(devices) -> dict[str, LibraryStore]:
     return {name: device.store for name, device in devices.items()}
 
 
+def tag_of(ref) -> str:
+    return ref.event_id.rsplit("-", 1)[1]
+
+
 def reasons(result) -> set[str]:
     assert isinstance(result, Review), result
     return set(result.reasons)
@@ -82,8 +86,8 @@ def test_two_chats_offline_merge_to_identical_bytes_and_a_clean_library(base, de
 
     result = merge(base, stores(devices))
     assert isinstance(result, Merged), result
-    # same sequence: the lower device id first, whichever side the caller lists first
-    assert result.order == (gave.event_id, paid.event_id)
+    # same sequence: by the accepting device's tag (phone's sorts before desktop's), whichever side is first
+    assert tag_of(paid) < tag_of(gave) and result.order == (paid.event_id, gave.event_id)
     flipped = merge(base, dict(reversed(list(stores(devices).items()))))
     assert flipped == result
     files = file_bytes(result, base, stores(devices))
@@ -132,7 +136,8 @@ def test_holdings_receipts_are_rewritten_from_the_replayed_seqs(base, devices):
     tam = read_ledger(devices["desktop"].store).holdings[TAM].value
     assert tam.count(COIN) == 3 and [entry.seq for entry in tam.log][-2:] == [2, 3]
     receipts = {e.event_id: e.holdings.seqs[TAM] for e in seen.events}  # type: ignore[union-attr]
-    assert receipts == {first.event_id: 2, second.event_id: 3}
+    # one sequence: phone's event first by its device tag, so its payment is Tam's second entry
+    assert receipts == {second.event_id: 2, first.event_id: 3}
 
 
 def test_hand_operations_on_both_devices_both_count(base, devices):
@@ -414,7 +419,8 @@ def test_a_third_devices_events_keep_their_place_however_many_sides_hold_them(ba
         pair = {"a-phone": made["a-phone"].store, "desktop": made["desktop"].store}
         result = merge(base, pair)
         assert isinstance(result, Merged), result
-        assert result.order == (own.event_id, theirs.event_id)  # a device neither side is comes after both
+        # by tag alone, whichever pair merges: the tablet's tag sorts before the desktop's
+        assert tag_of(theirs) < tag_of(own) and result.order == (theirs.event_id, own.event_id)
         files = file_bytes(result, base, pair)
         write_back(made["a-phone"].store, files)  # the phone took the merge; the desktop has not yet
         lagging = merge(base, pair)

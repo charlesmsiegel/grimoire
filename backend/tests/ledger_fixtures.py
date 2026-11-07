@@ -37,17 +37,19 @@ from effects_fixtures import C, CHAT, CONTROLS, INES, TAM, WREN, Handles, contri
 from store_helpers import OWNER
 
 OTHER = ChatRef(C, "t-2")  # the second chat: two devices playing two chats offline is the clean case
+THIRD = ChatRef(C, "t-3")  # a third chat, for a third device
 COIN = "coin"
 
 
 def build_base(root: Path) -> Path:
-    """The agreed library: the harbor campaign, a second chat, and ten coins each for Wren and Tam."""
+    """The agreed library: the harbor campaign, two more chats, and ten coins each for Wren and Tam."""
     path = root / "base"
     with LibraryStore.create(path) as store:
         handles = Handles()
         seed(store, handles)
         chats = ChatLibrary(store, handles.app, clock=Clock(), new_id=_After("t", 1), owner=OWNER)
         chats.start_chat(Launch("premise", premise="The fish market at dawn."), scope=ScopeRef(C)).commit()
+        chats.start_chat(Launch("premise", premise="The lighthouse at dusk."), scope=ScopeRef(C)).commit()
         holdings = HoldingsLibrary(store, handles.app, clock=Clock(), owner=OWNER)
         holdings.apply(Operation("seed-coins", (Line.add(WREN, COIN, 10), Line.add(TAM, COIN, 10)))).commit()
     return path
@@ -184,5 +186,5 @@ def write_back(store: LibraryStore, files: Mapping[str, bytes]) -> None:
         target.write_bytes(data)
 
 
-__all__ = ["CHAT", "COIN", "Device", "OTHER", "build_base", "file_bytes", "merge", "pay", "read_ledger",
+__all__ = ["CHAT", "COIN", "Device", "OTHER", "THIRD", "build_base", "file_bytes", "merge", "pay", "read_ledger",
            "write_back"]
