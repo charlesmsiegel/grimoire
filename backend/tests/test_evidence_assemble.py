@@ -18,13 +18,13 @@ from grimoire.core import (
     actor_knowledge,
     player_knowledge, standing,
 )
-from grimoire.evidence import ScannedFile, assemble, decode_batch, encode, encode_batch
+from grimoire.evidence import ScannedFile, assemble, batch_entry, decode_batch, encode, encode_batch
 
 from grimoire.graph import ClaimSet, claims_about
 
 from evidence_fixtures import (
-    ACTORS, C, CLAIMS, E1, INES, MARA, ORRIN, PC_CONTROLS, PLAYER, SAM, TAVI, all_records, batches, fake_etag,
-    in_memory_files, m,
+    ACTORS, C, CLAIMS, E1, INES, MARA, ORRIN, PC_CONTROLS, PLAYER, SAM, TAG_A, TAG_B, TAVI, all_records, batches,
+    fake_etag, forked_files, in_memory_files, m,
 )
 
 AS_OF = range(0, 10)
@@ -532,3 +532,126 @@ def test_random_visible_damage_never_teaches_anyone_anything():  # F23, in memor
                    "unknown_evidence"):
         assert seen[reason], reason  # every reachable path was exercised
     assert partial > 100
+
+
+# -- 028: a log two devices appended to offline is a DAG of batches -----------------------------------
+
+FORK_A4, FORK_A5 = KnowledgeRef.batch(C, 4, TAG_A), KnowledgeRef.batch(C, 5, TAG_A)
+FORK_B4, JOIN = KnowledgeRef.batch(C, 4, TAG_B), KnowledgeRef.batch(C, 6, TAG_A)
+
+
+def _rewrite(files, batch_ref, *, seq=None, previous="same", drop=None, add=None):
+    """Re-encode one batch of ``files`` as a hand edit would (a new etag), optionally changing it."""
+    old = decode_batch(batch_ref, files[batch_ref].schema, files[batch_ref].payload)
+    entries = {name: entry for name, entry in old.entries.items() if name != drop}
+    entries.update(add or {})
+    seq = old.seq if seq is None else seq
+    new_ref = KnowledgeRef.batch(C, seq, batch_ref.tag)
+    _, schema, payload = encode_batch(C, seq, old.previous if previous == "same" else previous, entries, batch_ref.tag)
+    del files[batch_ref]
+    files[new_ref] = ScannedFile(fake_etag(new_ref, schema, [payload, "hand edit"]), schema, payload)
+
+
+def test_a_log_two_devices_extended_offline_and_a_join_assembles_to_exactly_u():
+    assembly = assemble(C, forked_files())
+    assert assembly.knowledge == U and assembly.clean and assembly.log_intact
+    assert dict(assembly.claims) == CLAIMS
+    assert assembly.heads == ((6, forked_files()[JOIN].etag),) and assembly.head == assembly.heads[0]
+    assert assembly.high_water == 8
+
+
+def test_two_unjoined_heads_are_both_extended_by_the_next_append():
+    files = forked_files()
+    del files[JOIN], files[ref("belief:b-ines-2")]
+    assembly = assemble(C, files)
+    assert assembly.clean and assembly.heads == tuple(sorted(((4, files[FORK_B4].etag), (5, files[FORK_A5].etag))))
+
+
+def test_two_devices_first_appends_are_two_roots():
+    files = {}
+    for tag, records in ((TAG_A, batches()[0][:1]), (TAG_B, batches()[0][1:2])):
+        entries = {}
+        for record in records:
+            record_ref, schema, payload = encode(record)
+            files[record_ref] = ScannedFile(fake_etag(record_ref, schema, payload), schema, payload)
+            entries[record_ref.name] = batch_entry(record, files[record_ref].etag)
+        batch_ref, schema, payload = encode_batch(C, 1, None, entries, tag)
+        files[batch_ref] = ScannedFile(fake_etag(batch_ref, schema, payload), schema, payload)
+    assembly = assemble(C, files)
+    assert assembly.clean and len(assembly.heads) == 2 and {e.event_id for e in assembly.knowledge.events} == {"e1", "e2"}
+
+
+@pytest.mark.parametrize("how", ["edited", "deleted"])
+def test_damage_to_a_branch_head_a_join_names_trusts_nothing_of_it(how):
+    files = forked_files()
+    if how == "edited":
+        _rewrite(files, FORK_B4)
+    else:
+        del files[FORK_B4]
+    assembly = assemble(C, files)
+    assert "log_broken" in assembly.problems and not assembly.log_intact and assembly.heads == ()
+    assert reasons(assembly)["belief:b-sam-2"] in ("log_broken", "unlisted", "belief_family_damaged")
+    check_guarantees(assembly, files)
+    # the shared prefix and the other branch's events and evidence are still read
+    assert {"e1", "e2", "e3"} <= {e.event_id for e in assembly.knowledge.events}
+
+
+def test_a_join_that_skips_a_sequence_number_breaks_the_log():
+    files = forked_files()
+    _rewrite(files, JOIN, seq=7)
+    assembly = assemble(C, files)
+    assert "log_broken" in assembly.problems
+    check_guarantees(assembly, files)
+
+
+def test_a_record_both_branches_list_breaks_the_log():
+    files = forked_files()
+    shared = decode_batch(FORK_A4, files[FORK_A4].schema, files[FORK_A4].payload).entries
+    name = "event:e3" if "event:e3" in shared else sorted(shared)[0]
+    entry = next(decode_batch(r, f.schema, f.payload).entries[name] for r, f in files.items()
+                 if r.family == "batch" and name in decode_batch(r, f.schema, f.payload).entries)
+    _rewrite(files, FORK_B4, add={name: entry})
+    del files[JOIN]  # the join named the old head: drop it so only the duplicate breaks the log
+    files.pop(ref("belief:b-ines-2"))
+    assembly = assemble(C, files)
+    assert "log_broken" in assembly.problems
+    check_guarantees(assembly, files)
+
+
+def test_a_join_naming_one_parent_twice_or_unsorted_is_never_read():
+    files = forked_files()
+    old = decode_batch(JOIN, files[JOIN].schema, files[JOIN].payload)
+    for bad in (list(old.parents[::-1]), [old.parents[0], old.parents[0]], [old.parents[0]]):
+        with pytest.raises(Exception):
+            decode_batch(JOIN, files[JOIN].schema, {**files[JOIN].payload, "previous": bad})
+
+
+def _fork_damage(files: dict, rng: random.Random) -> str:
+    """One visible damage to the forked log: record damage as for U, or an edit or deletion of a batch
+    that some batch names (a head's own edit is the undetectable tail case, as for a linear log)."""
+    if rng.random() < 0.5:
+        return damage(files, rng)
+    named = sorted((r for r in files if r.family == "batch" and r != JOIN), key=str)
+    target = rng.choice(named)
+    if rng.random() < 0.5:
+        del files[target]
+        return "batch_delete"
+    old = decode_batch(target, files[target].schema, files[target].payload)
+    drop = rng.choice(sorted(old.entries))
+    _rewrite(files, target, drop=drop if len(old.entries) > 1 else None)
+    if rng.random() < 0.7 and len(old.entries) > 1:
+        files.pop(ref(drop), None)
+    return "batch_edit"
+
+
+def test_random_visible_damage_to_a_forked_log_never_teaches_anyone_anything():
+    seen: Counter = Counter()
+    for seed in range(150):
+        rng = random.Random(seed)
+        files = forked_files()
+        kind = _fork_damage(files, rng)
+        assembly = assemble(C, files)
+        check_guarantees(assembly, files)
+        seen[kind] += 1
+        seen.update(assembly.problems)
+    assert seen["log_broken"] and seen["batch_edit"] and seen["batch_delete"]

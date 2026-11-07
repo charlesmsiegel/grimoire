@@ -31,7 +31,7 @@ from grimoire.store.replica import (
     SHADOWED, CanonicalScan, chats_named, instances_named, parse_exact, pinned_by, previous_of,
 )
 
-from . import bookkeeping, keeps as kept_record
+from . import bookkeeping, keeps as kept_record, knowledge as merge
 from .art import art_needs, art_unmet
 from .decide import archive_candidate, decide, derive_base
 from .documents import ArchiveView, KeepsView, PendingView, parse_keeps, syncable
@@ -856,8 +856,14 @@ def _group_knowledge(plan: SyncPlan) -> None:
     If any knowledge path of a campaign is a conflict (diverged batches, a refused or blocked
     record), no knowledge copy of that campaign lands: half an append would leave records no batch
     lists, and the log would refuse every later append. The held copies are reported as skipped.
+    028: two logs both devices appended to offline merge by copying, unless their union would not
+    read whole (``knowledge.refused_merges``); then their batches are ``unapplicable`` conflicts.
     """
     stuck = ({_knowledge_campaign(path) for path in plan.conflicts} - {None}) | _unknown_logs(plan.scans.values())
+    incoming = {device: [copy.path for copy in plan.copies[device]] for device in plan.devices}
+    for path, why in merge.refused_merges(incoming, plan.scans.values(), stuck).items():
+        plan.conflicts[path] = Conflict(path, "unapplicable", why)
+        stuck.add(_knowledge_campaign(path))  # type: ignore[arg-type]
     if not stuck:
         return
     for device in plan.devices:
@@ -867,7 +873,8 @@ def _group_knowledge(plan: SyncPlan) -> None:
             (held if campaign is not None and (campaign in stuck or "*" in stuck) else kept).append(copy)
         plan.copies[device] = kept
         for copy in held:
-            plan.skipped[copy.origin] = tuple(sorted({*plan.skipped.get(copy.origin, ()), copy.path}))
+            if copy.path not in plan.conflicts:  # a refused merge's batch is reported as its conflict
+                plan.skipped[copy.origin] = tuple(sorted({*plan.skipped.get(copy.origin, ()), copy.path}))
 
 
 def _unknown_logs(scans) -> set[str]:  # type: ignore[no-untyped-def]

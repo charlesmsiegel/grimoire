@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from hashlib import sha256
 
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
 from grimoire.core.identity import AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, ScopeRef, paired_instances
@@ -34,7 +35,9 @@ from grimoire.store import (
     CommitIncomplete, InvalidEnvelope, KnowledgeRecord, KnowledgeScan, LibraryStore, RecordNotFound, StaleWrite, StoreError,
     TakenIdsUnlisted, UnstorableIdentifier, WriteConflict, etag,
 )
+from grimoire.library import LibraryPathError
 from grimoire.store.layout import address_parts, logical
+from grimoire.sync.documents import DEVICE_FILE, parse_device
 
 #: one append may move the campaign's high-water mark by at most this much
 MAX_SEQUENCE_STEP = 1_000_000
@@ -160,6 +163,7 @@ class KnowledgeChange:
     actors: frozenset[InstanceRef]
     batch: KnowledgeRef
     events: tuple[Event, ...] = ()  # re-checked against the accepted (021) events at commit
+    tag: str = ""  # the device tag the batch is named with (028), re-checked at commit
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -203,6 +207,8 @@ class KnowledgeChange:
         paired = sorted(str(actor) for actor in self.actors & paired_instances(present))  # formed since append
         if paired:
             return [(text, "instance_id_conflict") for text in paired]
+        if device_batch_tag(store) != self.tag:  # identified (or re-identified) since: the batch's name is stale
+            return [(f"{base}/evidence", "device_identity")]
         scan = store.campaign_knowledge(campaign)
         if (scan.entries, scan.problems) != self.snapshot:
             return [(f"{base}/evidence", "changed")]
@@ -381,7 +387,10 @@ class EvidenceLibrary:
             if isinstance(outcome, str):
                 raise EvidenceWriteError(outcome, (_name(record),))
             stored.append(outcome)
-        # 10: the records, then one batch accounting for their exact bytes.
+        # 10: the records, then one batch accounting for their exact bytes, named for this device (028).
+        device_tag = device_batch_tag(self.store)
+        if device_tag is None:
+            raise EvidenceWriteError("device_identity")
         puts = [KnowledgeRecord(ref, schema, payload, owner=self.owner) for ref, schema, payload in stored]
         transaction = self.store.transaction()
         oversized = _staged(transaction, puts)
@@ -390,8 +399,12 @@ class EvidenceLibrary:
         preview = transaction.preview()
         tags = {put.address: etag(preview[str(logical(address_parts(put.address)))]) for put in puts}
         entries = {ref.name: batch_entry(record, tags[ref]) for record, (ref, _, _) in zip(new, stored)}
-        seq, previous = (assembly.head[0] + 1, assembly.head[1]) if assembly.head else (1, None)
-        batch_ref, batch_schema, batch_payload = encode_batch(campaign_id, seq, previous, entries)
+        # 028: the batch extends every head (after a sync merged two devices' offline appends there are
+        # several, and this append joins them) and carries this device's tag, so two devices that append
+        # offline never write one batch path.
+        seq = max((head for head, _ in assembly.heads), default=0) + 1
+        previous = tuple(tag for _, tag in assembly.heads) or None
+        batch_ref, batch_schema, batch_payload = encode_batch(campaign_id, seq, previous, entries, device_tag)
         batch = KnowledgeRecord(batch_ref, batch_schema, batch_payload, owner=self.owner)
         transaction.put(batch, None)
         batch_tag = etag(transaction.preview()[str(logical(address_parts(batch_ref)))])
@@ -404,7 +417,26 @@ class EvidenceLibrary:
                 **assembly.claims, **shaped}:
             raise AssertionError("an append would not read back as an intact ledger")
         return KnowledgeChange(self, campaign_id, (*puts, batch), (scan.entries, scan.problems), chat,
-                               actors, batch_ref, events)
+                               actors, batch_ref, events, device_tag)
+
+
+def device_batch_tag(store: LibraryStore) -> str | None:
+    """The device tag this library's new batches are named with (028), ``""`` if it was never
+    identified, or ``None`` if its identity cannot be read (an append is then refused, never written
+    under the untagged name two devices could both use).
+
+    The same eight hex digits as ``chatstore.device_tag`` (which this package cannot import: chatstore
+    imports it): the first eight of the SHA-256 of the device ID. A library that was never identified
+    has never synced, so it keeps the untagged names, and its log is byte for byte what it was.
+    """
+    try:
+        data = store.read_sync_state(DEVICE_FILE)
+    except (StoreError, LibraryPathError, OSError):  # a link or folder too: never "no identity"
+        return None
+    if data is None:
+        return ""
+    device = parse_device(data)
+    return None if device is None else sha256(device.encode()).hexdigest()[:8]
 
 
 def _accepted_refusal(store: LibraryStore, campaign_id: str, events: tuple[Event, ...]

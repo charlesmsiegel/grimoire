@@ -230,7 +230,10 @@ class ChatRef:
 
 #: Record families of one campaign's events/evidence store (020): 012's error families plus the log.
 KNOWLEDGE_FAMILIES = ("event", "proposition", "ruling", "evidence", "belief", "disclosure", "batch")
-_BATCH_ID_RE = re.compile(r"[0-9]{10}")
+#: A batch id is its ten-digit sequence number, followed on an identified library (028) by ``-`` and the
+#: appending device's eight-hex-digit tag, so two devices appending one campaign offline never write one path.
+_BATCH_ID_RE = re.compile(r"[0-9]{10}(?:-[0-9a-f]{8})?")
+_BATCH_TAG_RE = re.compile(r"[0-9a-f]{8}")
 _KNOWLEDGE_REF_RE = re.compile(
     rf"campaign:(?P<campaign_id>{_SEGMENT})#(?P<family>{'|'.join(KNOWLEDGE_FAMILIES)})/(?P<record_id>{_SEGMENT})"
 )
@@ -242,7 +245,8 @@ class KnowledgeRef:
 
     ``campaign:<campaign_id>#<family>/<record_id>``. ``name`` is 012's ``KnowledgeError.records``
     form (``"<family>:<id>"``), so an error names exactly one stored file. A batch id is its
-    sequence number as exactly ten digits, from 1. Not returned by ``parse_ref``.
+    sequence number as exactly ten digits, from 1, and on an identified library (028) the device tag
+    after a ``-`` (``0000000007-3f2a91c0``). Not returned by ``parse_ref``.
     """
 
     campaign_id: str
@@ -255,8 +259,8 @@ class KnowledgeRef:
             raise ValueError("unknown knowledge family")
         validate_segment(self.record_id, "record_id")
         if self.family == "batch" and (not _BATCH_ID_RE.fullmatch(self.record_id)
-                                       or int(self.record_id) < 1):
-            raise ValueError("a batch id is a ten-digit sequence number from 1")
+                                       or int(self.record_id[:10]) < 1):
+            raise ValueError("a batch id is a ten-digit sequence number from 1, with an optional device tag")
         if len(str(self)) > TEXT_MAX:
             raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
 
@@ -271,13 +275,22 @@ class KnowledgeRef:
     def seq(self) -> int:
         if self.family != "batch":
             raise ValueError("only a batch has a sequence number")
-        return int(self.record_id)
+        return int(self.record_id[:10])
+
+    @property
+    def tag(self) -> str:
+        """A batch's device tag (028), or ``""`` for an untagged batch."""
+        if self.family != "batch":
+            raise ValueError("only a batch has a device tag")
+        return self.record_id[11:]
 
     @classmethod
-    def batch(cls, campaign_id: str, seq: int) -> KnowledgeRef:
+    def batch(cls, campaign_id: str, seq: int, tag: str = "") -> KnowledgeRef:
         if type(seq) is not int or not 1 <= seq <= 9_999_999_999:
             raise ValueError("a batch sequence number is an int from 1")
-        return cls(campaign_id, "batch", f"{seq:010d}")
+        if type(tag) is not str or (tag and not _BATCH_TAG_RE.fullmatch(tag)):
+            raise ValueError("a batch's device tag is eight lowercase hex digits")
+        return cls(campaign_id, "batch", f"{seq:010d}-{tag}" if tag else f"{seq:010d}")
 
     @classmethod
     def from_name(cls, campaign_id: str, name: object) -> KnowledgeRef:

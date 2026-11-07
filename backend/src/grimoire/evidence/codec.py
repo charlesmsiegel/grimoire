@@ -25,6 +25,9 @@ TEXT_LIMIT = 20_000
 LABEL_LIMIT = 200
 BATCH_LIMIT = 500
 BATCH_SCHEMA = "grimoire.knowledge-batch/1"
+#: 028: a batch that extends two or more heads (a log both devices appended to offline, then merged by
+#: sync) names every one of them; a batch with one parent or none stays ``/1``, byte for byte.
+JOIN_BATCH_SCHEMA = "grimoire.knowledge-batch/2"
 
 Record = Event | Proposition | Ruling | Perception | Report | Belief | Disclosure
 
@@ -379,9 +382,18 @@ class BatchEntry:
 
 @dataclass(frozen=True)
 class Batch:
+    """One batch of the knowledge log. ``previous`` is ``None`` (a root, seq 1), the etag of the one
+    batch it extends (``/1``), or the sorted etags of every head it joins (``/2``, two or more; 028)."""
+
     seq: int
-    previous: str | None
+    previous: str | tuple[str, ...] | None
     entries: Mapping[str, BatchEntry]
+
+    @property
+    def parents(self) -> tuple[str, ...]:
+        if self.previous is None:
+            return ()
+        return (self.previous,) if isinstance(self.previous, str) else self.previous
 
 
 def batch_entry(record: Record, etag: str) -> BatchEntry:
@@ -406,11 +418,12 @@ def _entry_payload(entry: BatchEntry) -> dict[str, object]:
     return payload
 
 
-def _batch_payload(seq: int, previous: str | None, entries: Mapping[str, BatchEntry]) -> dict[str, object]:
+def _batch_payload(seq: int, previous: str | tuple[str, ...] | None,
+                   entries: Mapping[str, BatchEntry]) -> dict[str, object]:
     payload: dict[str, object] = {"seq": seq,
                                   "records": {name: _entry_payload(entries[name]) for name in sorted(entries)}}
     if previous is not None:
-        payload["previous"] = previous
+        payload["previous"] = previous if isinstance(previous, str) else list(previous)
     return payload
 
 
@@ -432,7 +445,7 @@ def _decode_entry(campaign_id: str, name: object, raw: object) -> BatchEntry:
 
 
 def _decode_batch(ref: KnowledgeRef, schema: object, payload: object) -> Batch:
-    if schema != BATCH_SCHEMA:
+    if schema not in (BATCH_SCHEMA, JOIN_BATCH_SCHEMA):
         raise _Refused("unsupported_schema")
     if not isinstance(payload, Mapping):
         raise _Refused("invalid_field")
@@ -443,7 +456,13 @@ def _decode_batch(ref: KnowledgeRef, schema: object, payload: object) -> Batch:
         raise _Refused("invalid_field")
     if (seq == 1) != ("previous" not in payload):
         raise _Refused("invalid_field")
-    if previous is not None and (type(previous) is not str or not _ETAG.fullmatch(previous)):
+    if schema == JOIN_BATCH_SCHEMA:  # a join: two or more distinct parents, sorted (one form per set)
+        if (not isinstance(previous, (list, tuple)) or len(previous) < 2  # a stored payload's lists are tuples
+                or not all(type(parent) is str and _ETAG.fullmatch(parent) for parent in previous)
+                or list(previous) != sorted(set(previous))):
+            raise _Refused("invalid_field")
+        previous = tuple(previous)
+    elif previous is not None and (type(previous) is not str or not _ETAG.fullmatch(previous)):
         raise _Refused("invalid_field")
     if not isinstance(records, Mapping) or not 1 <= len(records) <= BATCH_LIMIT:
         raise _Refused("invalid_field")
@@ -453,19 +472,27 @@ def _decode_batch(ref: KnowledgeRef, schema: object, payload: object) -> Batch:
     return Batch(seq, previous, MappingProxyType(entries))  # type: ignore[arg-type]
 
 
-def encode_batch(campaign_id: str, seq: int, previous: str | None,
-                 entries: Mapping[str, BatchEntry]) -> tuple[KnowledgeRef, str, dict[str, object]]:
+def encode_batch(campaign_id: str, seq: int, previous: str | tuple[str, ...] | list[str] | None,
+                 entries: Mapping[str, BatchEntry], tag: str = "") -> tuple[KnowledgeRef, str, dict[str, object]]:
+    """A batch's ref, schema and payload. ``previous`` is ``None`` for a root, one etag, or several (a join,
+    written sorted as ``/2``; a sequence of exactly one is the ``/1`` form). ``tag`` is the device tag (028)."""
+    joined = isinstance(previous, (tuple, list))
+    parents = tuple(sorted(previous)) if joined else previous  # type: ignore[arg-type]
+    if joined and len(parents) == 1:  # type: ignore[arg-type]
+        parents, joined = parents[0], False  # type: ignore[index]
+    schema = JOIN_BATCH_SCHEMA if joined else BATCH_SCHEMA
+
     def build() -> tuple[KnowledgeRef, dict[str, object]]:
-        ref = KnowledgeRef.batch(campaign_id, seq)
-        payload = _batch_payload(seq, previous, entries)
-        _decode_batch(ref, BATCH_SCHEMA, payload)  # write only what reads back
+        ref = KnowledgeRef.batch(campaign_id, seq, tag)
+        payload = _batch_payload(seq, parents, entries)  # type: ignore[arg-type]
+        _decode_batch(ref, schema, payload)  # write only what reads back
         return ref, payload
 
     ok, outcome = _attempt(build)
     if not ok:  # named "batch": the ref itself may be what is invalid
         raise EvidenceCodecError(outcome, "batch")  # type: ignore[arg-type]
     ref, payload = outcome  # type: ignore[misc]
-    return ref, BATCH_SCHEMA, payload
+    return ref, schema, payload
 
 
 def decode_batch(ref: KnowledgeRef, schema: object, payload: object) -> Batch:

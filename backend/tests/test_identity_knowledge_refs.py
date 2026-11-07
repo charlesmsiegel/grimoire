@@ -30,6 +30,19 @@ def test_batch_refs_are_ten_digit_sequence_numbers_from_one():
         KnowledgeRef("c1", "event", "e1").seq
 
 
+def test_a_batch_may_carry_its_devices_tag():
+    """028: on an identified library a batch id is its sequence number and the device tag."""
+    ref = KnowledgeRef.batch("c1", 7, "3f2a91c0")
+    assert str(ref) == "campaign:c1#batch/0000000007-3f2a91c0" and ref.seq == 7 and ref.tag == "3f2a91c0"
+    assert KnowledgeRef.parse(str(ref)) == ref and KnowledgeRef.batch("c1", 7).tag == ""
+    for bad in ("0000000007-3F2A91C0", "0000000007-3f2a91c", "0000000007-", "0000000000-3f2a91c0",
+                "0000000007_3f2a91c0", "0000000007-3f2a91c0-1"):
+        with pytest.raises(ValueError):
+            KnowledgeRef("c1", "batch", bad)
+    with pytest.raises(ValueError):
+        KnowledgeRef.batch("c1", 7, "xyz")
+
+
 @pytest.mark.parametrize("text", [
     "campaign:c1#chat/t", "campaign:c1#Event/e1", "campaign:c1#event/E1", "campaign:c1#event/",
     "campaign:c1#event/e1/x", " campaign:c1#event/e1", "campaign:C1#event/e1", "campaign:c1/event/e1",
