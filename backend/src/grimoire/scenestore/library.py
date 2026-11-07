@@ -138,16 +138,18 @@ class SceneLibrary:
             problems.append((str(chat), "turn_fork"))
         if lineage.orphans:  # a turn whose predecessor is missing or cannot be told
             problems.append((str(chat), "turn_gap"))
-        conflicted, kept_pauses = self._conflicts(chat)
+        own = [*("/".join(address_parts(ref)) for ref in found.records if _chat_of(ref.turn_id) == chat.chat_id),
+               *(path for path, _ in problems if "/" in path)]
+        conflicted, kept_pauses = self._conflicts(chat, own)
         return ChatTurns(chat, tuple(by_id[turn.turn_id] for turn in lineage.line), tuple(sorted(problems)),
                          tuple(by_id[turn.turn_id] for turn in lineage.set_aside), lineage.fork, conflicted,
                          kept_pauses)
 
-    def _conflicts(self, chat: ChatRef) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    def _conflicts(self, chat: ChatRef, paths: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """This chat's turns that sync left in a keep-both conflict (019), and who paused in another device's
         version kept beside one. Each device reads its own version until the conflict is resolved, so a pause,
         a take or a choice the other made is unseen here: no play write goes on meanwhile (``turn_conflict``)."""
-        found, complete = open_conflicts(self.store, f"{CAMPAIGNS}/{chat.campaign_id}/{TURNS}",
+        found, complete = open_conflicts(self.store, f"{CAMPAIGNS}/{chat.campaign_id}/{TURNS}", paths,
                                          ended=lambda peer: pairing_ended(self.store, peer))
         conflicted, pausers = [] if complete else [CONFLICT_RECORDS], []
         for path, kept in found.items():

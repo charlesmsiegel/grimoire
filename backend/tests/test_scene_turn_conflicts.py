@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import shutil
 
+import pytest
+
 from test_scene_turn_merge import (DESKTOP, PHONE, TABLET, built, devices, play, refused, synced, tag,  # noqa: F401
                                    turn_id)
 
@@ -20,7 +22,7 @@ from scene_fixtures import Table, say
 from grimoire.peersync import unpair
 from grimoire.scenestore.library import CONFLICT_RECORDS
 from grimoire.store import etag
-from grimoire.sync import dismiss, resolve, sync_until_quiet
+from grimoire.sync import ResolveRefused, dismiss, identify, resolve, sync_until_quiet
 from grimoire.sync.turns import open_conflicts
 
 
@@ -254,3 +256,84 @@ def test_a_library_that_never_synced_holds_nothing(built, tmp_path):
     shutil.copytree(folder, tmp_path / "solo")
     with Table(tmp_path / "solo") as table:  # no identity, no pair records
         assert table.runner.open(chat).turns.conflicted == ()
+
+
+# -- the conflict guard never vanishes with its metadata ------------------------------------------------------
+# Each piece of sync metadata the guard reads (or that stands beside it), missing or damaged while a turn
+# conflict stands and neither version changed: the chat still waits, as the conflict itself (the turn's id)
+# or, where the record that names it cannot be honoured, as ``<sync records unreadable>``.
+
+def _lose(root, kind: str, how: str, path: str) -> None:
+    pair = root / ".sync" / "peers" / DESKTOP
+    if kind == "pair":  # the record and the archive both: only the kept version is left to tell
+        for name in ("keeps.json", "archive.json"):
+            (pair / name).unlink()
+        return
+    target = {"keeps": pair / "keeps.json", "archive": pair / "archive.json", "pending": pair / "pending.json",
+              "identity": root / ".sync" / "device.json", "pairing": root / "secrets" / "peers" / f"{DESKTOP}.json",
+              "kept": None}[kind]
+    if kind == "kept":  # every kept version of the turn under .conflicts
+        (slot,) = [p for p in (root / ".conflicts").rglob("*") if p.is_file() and p.name.startswith(path.rsplit("/")[-1])]
+        target = slot
+    if how == "missing":
+        target.unlink(missing_ok=True)
+    elif how == "damaged":
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("{not json")
+    else:  # unreadable: a folder where the file belongs
+        target.unlink(missing_ok=True)
+        target.mkdir(parents=True)
+
+
+@pytest.mark.parametrize("kind,how,reads", [
+    ("keeps", "missing", "records"), ("keeps", "damaged", "records"), ("keeps", "unreadable", "records"),
+    ("pair", "missing", "records"),
+    ("identity", "missing", "records"), ("identity", "damaged", "records"),
+    ("archive", "missing", "turn"), ("archive", "damaged", "turn"),
+    ("pending", "missing", "turn"), ("pending", "damaged", "turn"),
+    ("kept", "missing", "turn"), ("kept", "unreadable", "records"),
+    ("pairing", "missing", "turn"), ("pairing", "damaged", "turn"),
+])
+def test_a_standing_conflict_survives_its_metadata_lost_or_damaged(built, tmp_path, kind, how, reads):
+    chat = devices(built, tmp_path)
+    with Table(tmp_path / DESKTOP) as desk, Table(tmp_path / PHONE, [say("Two."), say("Three.")]) as phone:
+        two, path = _paused_and_struck(desk, phone, chat)
+        _lose(tmp_path / PHONE, kind, how, path)
+        scene = phone.runner.open(chat)
+        if reads == "turn":
+            assert scene.turns.conflicted == (two,)
+        else:  # the turn itself too, where a valid record still names it
+            assert CONFLICT_RECORDS in scene.turns.conflicted
+        refused("turn_conflict", phone.runner.post, chat, phone.player(), '"Play on?"')
+
+
+def test_a_resolve_its_grant_refuses_leaves_the_conflict_standing(built, tmp_path):
+    """The deliveries are retired before the data commit; the conflict itself ends only once that lands."""
+    chat = devices(built, tmp_path)
+    with Table(tmp_path / DESKTOP) as desk, Table(tmp_path / PHONE, [say("Two."), say("Three.")]) as phone:
+        two, path = _paused_and_struck(desk, phone, chat)
+        expected = {name: etag((tmp_path / name / path).read_bytes()) for name in (DESKTOP, PHONE)}
+        with pytest.raises(ResolveRefused):  # the phone receives, under a handle that may not write the turn
+            resolve(desk.store, phone.store, path, expected[DESKTOP], expected,
+                    {DESKTOP: desk.owner, PHONE: phone.player()})
+        assert {name: etag((tmp_path / name / path).read_bytes()) for name in (DESKTOP, PHONE)} == expected
+        for table in (desk, phone):
+            _held(table, chat, two)
+        assert phone.runner.open(chat).turns.kept_pauses == (desk.player().principal,)
+
+
+def test_a_new_identity_keeps_a_standing_conflict(built, tmp_path):
+    chat = devices(built, tmp_path)
+    with Table(tmp_path / DESKTOP) as desk, Table(tmp_path / PHONE, [say("Two."), say("Three.")]) as phone:
+        two, _ = _paused_and_struck(desk, phone, chat)
+        identify(phone.store, "phone-two", replace=True)
+        _held(phone, chat, two)
+
+
+def test_a_pair_folder_that_never_synced_holds_nothing(built, tmp_path):
+    chat = devices(built, tmp_path)
+    with Table(tmp_path / DESKTOP) as desk, Table(tmp_path / PHONE, [say("Two.")]) as phone:
+        synced(desk, phone)
+        (tmp_path / PHONE / ".sync" / "peers" / TABLET).mkdir()  # no archive, no record: nothing to hold
+        assert phone.runner.open(chat).turns.conflicted == ()
+        play(phone, chat, "Goes on.")

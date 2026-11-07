@@ -201,7 +201,8 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         states = bookkeeping.changes(store, files, archive.files)
         # the conflicts this resolve ended take their kept-version entries with them (028): a dismissal
         # never outlives its conflict, even before the next sync completes
-        record = kept_record.without(kept_record.read_keeps(store, other[device], pair), other[device], pair, resolved)
+        record = kept_record.without(kept_record.read_keeps(store, other[device], pair), other[device], pair, resolved,
+                                     standing=False)  # the data landed and was verified: the conflict ends
         if record is not None:
             states.append(record)
         if states:
@@ -230,10 +231,11 @@ def _end_deliveries(stores: Mapping[str, LibraryStore], other: Mapping[str, str]
     and the archive steps the winner's own archive, marker and record still read as the open
     conflict: its kept copy of the receiver's former version (perhaps the only copy once the
     receiver holds the winner's) would be dismissable. Cleared first, it never is. If the resolve
-    then stops, the conflict stays open with those deliveries unrecorded: that only fails closed."""
+    then stops, the conflict stays open with those deliveries unrecorded: that only fails closed. Each
+    path's ``open`` stays: the conflict ends only in the archive steps, after the data commit landed."""
     for device in reversed(pair):
         state = kept_record.without(kept_record.read_keeps(stores[device], other[device], pair),
-                                    other[device], pair, resolved)
+                                    other[device], pair, resolved, standing=True)  # it ends after the data
         if state is not None:
             writes = stores[device].transaction()
             bookkeeping.stage(writes, [state])

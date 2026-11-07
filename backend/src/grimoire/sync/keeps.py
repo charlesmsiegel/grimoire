@@ -95,9 +95,11 @@ def _entries(view: KeepsView) -> dict[str, KeptEntry]:
     return dict(view.entries) if view.state == "valid" else {}  # an ignored record honoured nothing
 
 
-def _write(view: KeepsView, peer: str, devices: tuple[str, str], entries: Mapping[str, KeptEntry]) -> State | None:
+def _write(view: KeepsView, peer: str, devices: tuple[str, str], entries: Mapping[str, KeptEntry], *,
+           always: bool = False) -> State | None:
     entries, data = fit(view, devices, entries)
-    if (view.state == "valid" and dict(entries) == dict(view.entries)) or (view.state == "missing" and not entries):
+    if (view.state == "valid" and dict(entries) == dict(view.entries)) or (
+            view.state == "missing" and not entries and not always):
         return None
     return keeps_name(peer), data, None if view.data is None else etag(view.data)
 
@@ -266,7 +268,9 @@ def next_keeps(view: KeepsView, peer: str, devices: tuple[str, str], bases: Mapp
             entries[path] = entry
     for path, tag in opened.items():
         entries.setdefault(path, KeptEntry(None, frozenset(), open=tag))
-    return _write(view, peer, devices, entries)
+    # written even when it records nothing: once a pair has completed a sync its record always stands,
+    # so a record found missing beside a pair that synced was lost, not never needed (``open_conflicts``)
+    return _write(view, peer, devices, entries, always=True)
 
 
 def _same_conflict(before: str | None, base: str | None) -> bool:
@@ -277,9 +281,13 @@ def _same_conflict(before: str | None, base: str | None) -> bool:
     return before is None or before == base
 
 
-def without(view: KeepsView, peer: str, devices: tuple[str, str], paths: Iterable[str]) -> State | None:
+def without(view: KeepsView, peer: str, devices: tuple[str, str], paths: Iterable[str], *,
+            standing: bool) -> State | None:
     """The record with ``paths`` (conflicts ``resolve`` or a sync just ended) no longer in conflict, so
-    without their deliveries and dismissals, or ``None`` if it does not change. Held etags stay. A
+    without their deliveries and dismissals, or ``None`` if it does not change. ``standing`` keeps each
+    path's ``open``: ``resolve`` retires what could become dismissable before its data commit, but the
+    conflict itself stands until that commit has landed (a refused or failed one leaves both devices
+    disagreeing, and play must still wait). Held etags stay. A
     delivered version's slot stays too, but it is no longer the peer's version of an open conflict:
     once the devices agree it may be the last copy of a version neither holds any more, and a later
     conflict on the same path stands on another base, so it is never dismissable again."""
@@ -288,7 +296,7 @@ def without(view: KeepsView, peer: str, devices: tuple[str, str], paths: Iterabl
         return None
     entries = {}
     for path, entry in view.entries.items():
-        kept = _entry(None, (), (), entry.held) if path in paths else entry
+        kept = _entry(None, (), (), entry.held, entry.open if standing else None) if path in paths else entry
         if kept is not None:
             entries[path] = kept
     return _write(view, peer, devices, entries)
