@@ -26,7 +26,7 @@ from collections.abc import Set as AbstractSet
 
 from grimoire.core.identity import KnowledgeRef
 from grimoire.core.knowledge import Ruling
-from grimoire.evidence import ScannedFile, assemble
+from grimoire.evidence import EvidenceCodecError, ScannedFile, assemble, decode_batch
 from grimoire.store import InvalidEnvelope, etag
 from grimoire.store.layout import classify
 from grimoire.store.replica import CanonicalScan, parse_exact
@@ -52,12 +52,29 @@ def _scanned(path: str, data: bytes) -> ScannedFile:
     return ScannedFile(etag(data), record.schema, record.payload)  # type: ignore[union-attr]
 
 
+def _the_log(scanned: dict[KnowledgeRef, ScannedFile]) -> dict[KnowledgeRef, ScannedFile]:
+    """The union's batches and the records some batch lists: what the merge makes one log of.
+
+    A record no batch lists belongs to neither device's log (020 never reads it as knowledge, on either
+    device alone or after the merge), so it travels as an ordinary create-only copy, as before 028.
+    """
+    listed: set[str] = set()
+    for ref, file in scanned.items():
+        if ref.family == "batch" and file.damage is None:
+            try:
+                listed.update(decode_batch(ref, file.schema, file.payload).entries)
+            except EvidenceCodecError:
+                pass  # an unreadable batch still breaks the assembled log below
+    return {ref: file for ref, file in scanned.items() if ref.family == "batch" or ref.name in listed}
+
+
 def merge_refusal(campaign: str, scans: Iterable[CanonicalScan]) -> str | None:
     """Why the two devices' knowledge logs of ``campaign`` cannot become one, or ``None``.
 
-    The union of both devices' canonical knowledge files of the campaign must assemble clean, and no
-    proposition may hold a ruling from each device that the other lacks. A path both hold with
-    different bytes is never merged (a record or batch id both devices used: a conflict of its own).
+    The union of both devices' logs of the campaign (their batches and the records those list) must
+    assemble clean, and no proposition may hold a ruling from each device that the other lacks. A path
+    both hold with different bytes is never merged (a record or batch id both devices used: a conflict
+    of its own).
     The reason names records only, never their text.
     """
     sides = [_campaign_files(scan, campaign) for scan in scans]
@@ -67,7 +84,7 @@ def merge_refusal(campaign: str, scans: Iterable[CanonicalScan]) -> str | None:
             if union.setdefault(path, data) != data:
                 return f"{path} differs between the devices"
     scanned = {ref: _scanned(path, data) for path, data in union.items() if (ref := knowledge_ref(path)) is not None}
-    assembly = assemble(campaign, scanned)
+    assembly = assemble(campaign, _the_log(scanned))
     if not assembly.clean:
         found = ", ".join([*(f"{q.name} ({q.reason})" for q in assembly.quarantined[:3]), *assembly.problems[:3]])
         return f"the merged log would not read whole: {found}"
@@ -95,8 +112,8 @@ def diverged(copies: Mapping[str, Iterable[str]]) -> set[str]:
 def refused_merges(copies: Mapping[str, Iterable[str]], scans: Iterable[CanonicalScan],
                    stuck: AbstractSet[str | None]) -> dict[str, str]:
     """Every batch path copied either way for a diverged campaign whose merge is refused, with why
-    (every knowledge path copied for it, when no batch would cross: records no batch lists are damage,
-    and the refusal must still hold the whole unit).
+    (every knowledge path copied for it, when no batch would cross: the refusal must still hold the
+    log as one unit).
 
     ``copies`` lists, per receiving device, the paths it is to receive; ``stuck`` holds the campaigns
     already held back as a unit (``"*"``: every one), which need no check.

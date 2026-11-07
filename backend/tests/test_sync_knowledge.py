@@ -13,9 +13,9 @@ import shutil
 import pytest
 
 from grimoire.core import DIRECTOR, Belief, Event, Perception, Proposition, Ruling, Subject, actor_knowledge
-from grimoire.evidence import JOIN_BATCH_SCHEMA
+from grimoire.evidence import JOIN_BATCH_SCHEMA, encode
 from grimoire.evidencestore import EvidenceLibrary, EvidenceWriteError
-from grimoire.store import LibraryStore, etag
+from grimoire.store import KnowledgeRecord, LibraryStore, engine, etag
 from grimoire.sync import ResolveRefused, identify, resolve, sync
 from grimoire.testing.fileops import snapshot
 
@@ -315,7 +315,6 @@ def test_logs_both_devices_appended_before_tagged_batch_names_still_collide(tmp_
 
 
 def test_a_diverged_log_that_cannot_be_seen_whole_merges_nothing(tmp_path, monkeypatch):
-    from grimoire.store import engine
     desktop, phone = pair_with_log(tmp_path)
     try:
         offline_appends(desktop, phone)
@@ -354,24 +353,26 @@ def test_a_merge_one_device_may_not_write_still_lands_whole_on_the_other(tmp_pat
         phone.close()
 
 
-def test_diverged_records_no_batch_lists_are_held_too(tmp_path):
-    """A record put beside the log on each device (a store-level put that bypassed 020) never crosses:
-    the merged log would not read whole, and with no batch to blame every copy is the conflict."""
-    from grimoire.evidence import encode
-    from grimoire.store import KnowledgeRecord
+def test_records_no_batch_lists_travel_as_before_beside_a_merge(tmp_path):
+    """A record put beside the log on each device (a store-level put that bypassed 020) is in neither log:
+    it crosses as an ordinary create-only copy, as before 028, and does not hold the merge back."""
     desktop, phone = pair_with_log(tmp_path)
     try:
+        offline_appends(desktop, phone)  # first: 020 refuses to extend a log with a record beside it
         for store, event_id in ((desktop, "e-stray-d"), (phone, "e-stray-p")):
             txn = store.transaction()
             ref, schema, payload = encode(Event(C, event_id, "put beside the log", m(2), "director"))
             txn.put(KnowledgeRecord(ref, schema, payload), None)
             txn.commit(owner_handle(*SCOPES))
-        before = {DESKTOP: knowledge_files(desktop), PHONE: knowledge_files(phone)}
         report = sync(desktop, phone, handles())
-        assert not [path for path, _ in report.copied if "/events/" in path or "/evidence/" in path]
-        assert {c.path.rsplit("/", 1)[1] for c in report.conflicts} == {"e-stray-d.json", "e-stray-p.json"}
-        assert {c.code for c in report.conflicts} == {"unapplicable"}
-        assert {DESKTOP: knowledge_files(desktop), PHONE: knowledge_files(phone)} == before
+        assert report.conflicts == (), report.conflicts
+        copied = {path.rsplit("/", 1)[1] for path, _ in report.copied}
+        assert {"e-stray-d.json", "e-stray-p.json"} <= copied
+        assert knowledge_files(desktop) == knowledge_files(phone)
+        for store in (desktop, phone):
+            log = read(store)
+            assert {q.name for q in log.quarantined} == {"event:e-stray-d", "event:e-stray-p"}
+            assert {e.event_id for e in log.knowledge.events} == {"e1", "e-desk", "e-phone"}
     finally:
         desktop.close()
         phone.close()
