@@ -863,7 +863,7 @@ def _group_knowledge(plan: SyncPlan) -> None:
     incoming = {device: [copy.path for copy in plan.copies[device]] for device in plan.devices}
     for path, why in merge.refused_merges(incoming, plan.scans.values(), stuck).items():
         plan.conflicts[path] = Conflict(path, "unapplicable", why)
-        stuck.add(_knowledge_campaign(path))  # type: ignore[arg-type]
+        stuck.add(_knowledge_campaign(path))
     if not stuck:
         return
     for device in plan.devices:

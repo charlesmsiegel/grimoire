@@ -94,6 +94,7 @@ def _verify_log(files: Mapping[KnowledgeRef, ScannedFile]
     present = {ref: scanned for ref, scanned in files.items() if ref.family == "batch"}
     if not present:
         return [], [], False, ()
+    etags = {ref: scanned.etag for ref, scanned in present.items() if isinstance(scanned.etag, str)}
     decoded: dict[KnowledgeRef, Batch | None] = {}
     for ref, scanned in present.items():
         batch: Batch | None = None
@@ -106,14 +107,14 @@ def _verify_log(files: Mapping[KnowledgeRef, ScannedFile]
     by_etag: dict[str, list[KnowledgeRef]] = {}
     for ref, batch in decoded.items():
         if batch is not None:
-            by_etag.setdefault(present[ref].etag, []).append(ref)  # type: ignore[arg-type]
+            by_etag.setdefault(etags[ref], []).append(ref)
     bad: set[KnowledgeRef] = set()
     parents: dict[KnowledgeRef, tuple[KnowledgeRef, ...]] = {}
     for ref, batch in decoded.items():
         if batch is None:
             bad.add(ref)
             continue
-        found = [by_etag.get(parent, ()) for parent in batch.parents]
+        found = [by_etag.get(parent, []) for parent in batch.parents]
         if any(len(match) != 1 for match in found):  # a parent that is gone, edited or ambiguous
             bad.add(ref)
             continue
@@ -129,7 +130,7 @@ def _verify_log(files: Mapping[KnowledgeRef, ScannedFile]
         bad.update(refs[1:])  # listed again: the later listing is the break, as in a linear walk
     if not bad:
         named = {parent for found in parents.values() for parent in found}
-        heads = tuple(sorted((ref.seq, present[ref].etag) for ref in decoded if ref not in named))  # type: ignore[misc]
+        heads = tuple(sorted((ref.seq, etags[ref]) for ref in decoded if ref not in named))
         order = sorted(decoded, key=lambda ref: (ref.seq, ref.record_id))
         return [decoded[ref] for ref in order], [], False, heads  # type: ignore[misc]
     # A parent mismatch at k cannot tell whether k or the batch it should name was altered, so trust

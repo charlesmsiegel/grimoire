@@ -18,7 +18,7 @@ from grimoire.core import (
     actor_knowledge,
     player_knowledge, standing,
 )
-from grimoire.evidence import ScannedFile, assemble, batch_entry, decode_batch, encode, encode_batch
+from grimoire.evidence import EvidenceCodecError, ScannedFile, assemble, batch_entry, decode_batch, encode, encode_batch
 
 from grimoire.graph import ClaimSet, claims_about
 
@@ -607,7 +607,7 @@ def test_a_join_that_skips_a_sequence_number_breaks_the_log():
 def test_a_record_both_branches_list_breaks_the_log():
     files = forked_files()
     shared = decode_batch(FORK_A4, files[FORK_A4].schema, files[FORK_A4].payload).entries
-    name = "event:e3" if "event:e3" in shared else sorted(shared)[0]
+    name = "event:e3" if "event:e3" in shared else min(shared)
     entry = next(decode_batch(r, f.schema, f.payload).entries[name] for r, f in files.items()
                  if r.family == "batch" and name in decode_batch(r, f.schema, f.payload).entries)
     _rewrite(files, FORK_B4, add={name: entry})
@@ -622,7 +622,7 @@ def test_a_join_naming_one_parent_twice_or_unsorted_is_never_read():
     files = forked_files()
     old = decode_batch(JOIN, files[JOIN].schema, files[JOIN].payload)
     for bad in (list(old.parents[::-1]), [old.parents[0], old.parents[0]], [old.parents[0]]):
-        with pytest.raises(Exception):
+        with pytest.raises(EvidenceCodecError):
             decode_batch(JOIN, files[JOIN].schema, {**files[JOIN].payload, "previous": bad})
 
 

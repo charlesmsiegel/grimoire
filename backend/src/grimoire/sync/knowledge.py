@@ -22,6 +22,7 @@ Pure over the two scans: no clock, no randomness, no write.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from collections.abc import Set as AbstractSet
 
 from grimoire.core.identity import KnowledgeRef
 from grimoire.core.knowledge import Ruling
@@ -65,8 +66,8 @@ def merge_refusal(campaign: str, scans: Iterable[CanonicalScan]) -> str | None:
         for path, data in files.items():
             if union.setdefault(path, data) != data:
                 return f"{path} differs between the devices"
-    files = {knowledge_ref(path): _scanned(path, data) for path, data in union.items()}
-    assembly = assemble(campaign, files)  # type: ignore[arg-type]
+    scanned = {ref: _scanned(path, data) for path, data in union.items() if (ref := knowledge_ref(path)) is not None}
+    assembly = assemble(campaign, scanned)
     if not assembly.clean:
         found = ", ".join([*(f"{q.name} ({q.reason})" for q in assembly.quarantined[:3]), *assembly.problems[:3]])
         return f"the merged log would not read whole: {found}"
@@ -92,7 +93,7 @@ def diverged(copies: Mapping[str, Iterable[str]]) -> set[str]:
 
 
 def refused_merges(copies: Mapping[str, Iterable[str]], scans: Iterable[CanonicalScan],
-                   stuck: set[str]) -> dict[str, str]:
+                   stuck: AbstractSet[str | None]) -> dict[str, str]:
     """Every batch path copied either way for a diverged campaign whose merge is refused, with why
     (every knowledge path copied for it, when no batch would cross: records no batch lists are damage,
     and the refusal must still hold the whole unit).
