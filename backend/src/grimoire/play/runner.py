@@ -46,7 +46,9 @@ from grimoire.partystore import PartyLibrary
 from grimoire.play.accept import (
     approve_effect, effect_problems, endorse_effect, propose_effect, recover_effects,
 )
-from grimoire.play.adjudicate import check_decided, confirm_action, decide_action, outcome_lines, outcome_of
+from grimoire.play.adjudicate import (
+    FramedAction, check_decided, confirm_action, decide_action, framed_of, outcome_lines, outcome_of,
+)
 from grimoire.play.forks import choose_branch
 from grimoire.play.history import chat_history
 from grimoire.play.labels import label_action
@@ -828,11 +830,22 @@ class SceneRunner:
 
     @traced("decide")
     def decide(self, chat: ChatRef, by, result: str, *, basis: str = "adjudicated", cites=(),
-               consequences=()) -> Outcome:
+               consequences=(), fingerprint: str | None = None) -> Outcome:
         """Decide the open turn's framed, uncertain action: the director (the library owner) adjudicates
         it (``basis="adjudicated"``), or its player consents to a setback (``basis="consent"``), citing
-        the frame's factors and naming the stakes that come true. 029 checks every rule."""
-        return decide_action(self, chat, by, result, basis=basis, cites=cites, consequences=consequences)
+        the frame's factors and naming the stakes that come true. 029 checks every rule.
+
+        A consent is this call alone, by the acting player with their own trusted handle, and names the
+        ``fingerprint`` of the frame it was given for (``framed``): a consent for any other attempt, or an
+        earlier revision, is ``fingerprint_mismatch``. The director may name one too, and it is checked."""
+        return decide_action(self, chat, by, result, basis=basis, cites=cites, consequences=consequences,
+                             fingerprint=fingerprint)
+
+    @traced("framed")
+    def framed(self, chat: ChatRef) -> FramedAction | None:
+        """The open turn's framed action as 029 holds it (latest revision, assessed now) and its fingerprint,
+        which a consent names; ``None`` when nothing is framed (or 029 holds no frame for it yet)."""
+        return framed_of(self, self._context(chat).scene.pending)
 
     @traced("outcome")
     def outcome(self, chat: ChatRef) -> Outcome | None:
@@ -937,12 +950,15 @@ class SceneRunner:
             raise _refuse("paused", "play is paused")
         record = stored.record
         framed = record.framed
-        if framed is not None and framed.against is not None and outcome_of(self, record) is None:
-            pass_attempt(self, record)  # 040: refused, or withdrawn for good before the turn is written
-        if record.running is not None:
-            record = record.with_take(replace(record.running, state="superseded"))
-        record = replace(record, passed_by=principal)
-        self._write(record, stored, unpaused=True)
+        # 029's lock: a decision of this turn's action (``decide``, or ``confirm``'s by rule) re-reads the turn under
+        # it, so a pass and a decision are ordered: one decided before the pass stands, and one after is refused
+        with self.store.lock:
+            if framed is not None and framed.against is not None and outcome_of(self, record) is None:
+                pass_attempt(self, record)  # 040: refused, or withdrawn for good before the turn is written
+            if record.running is not None:
+                record = record.with_take(replace(record.running, state="superseded"))
+            record = replace(record, passed_by=principal)
+            self._write(record, stored, unpaused=True)
         return record
 
     @traced("request")
