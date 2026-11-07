@@ -23,6 +23,7 @@ from .decide import archive_candidate
 from .documents import ArchiveView, PendingView, syncable
 from .errors import ResolveRefused, SameDevice, SyncInterrupted
 from .model import ASSET_KINDS, HELD_BACK_KINDS
+from .turns import turn_needs
 from .session import (
     _HELD, PER_PATH_ERRORS, Copy, _archived, _blob_etag, _campaigns_with_state, _current, _held_campaigns,
     _held_relation, _home_scope, _kind, _knowledge_campaign, _locked, _manifest_heads, _named_paths, _owning_chat,
@@ -145,8 +146,8 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             if scans[winner].files.get(pinned) != scans[receiver].files.get(pinned) or any(
                     scans[device].blocked_reason(pinned) is not None for device in pair):
                 raise ResolveRefused(f"{pinned}, which {done} pins, differs between the devices; resolve it first")
-        owner = set(_owning_chat(done))
-        for named in [*_named_paths(tuple(done.split("/")), written), *_home_scope(done)]:
+        owner = {*_owning_chat(done), *turn_needs(done, written)}  # a turn's chain and chat (``sync.turns``)
+        for named in sorted({*_named_paths(tuple(done.split("/")), written), *_home_scope(done), *owner}):
             if ((named in scans[winner].files or named in owner) and named not in scans[receiver].files) or any(
                     scans[device].blocked_reason(named) is not None for device in pair):
                 raise ResolveRefused(f"{named}, which {done} names, is missing on {receiver}; sync or resolve it first")

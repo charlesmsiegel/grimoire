@@ -1,4 +1,4 @@
-"""035's turn records over a real store: the scenestore reader and writer, taken ids, and the sync hold.
+"""035's turn records over a real store: the scenestore reader and writer, taken ids, and what sync needs.
 
 The store-level guarantees every scope-record family shares (paths, CAS, authorization, collisions, links,
 containment, recovery) are covered with 021's families in ``test_store_effect_records.py``. Synthetic only.
@@ -141,7 +141,10 @@ def test_taken_ids_fail_closed_on_an_unreadable_turn(library):
         turn_instance_ids(library, C)
 
 
-def test_sync_holds_turns_back_and_never_hides_a_divergence(tmp_path):
+def test_sync_never_lands_a_turn_without_its_chat_and_scope_and_never_hides_it(tmp_path):
+    """028: turns sync, but a turn is history of one chat. Here no device holds the chat record or the play scope
+    (a bare store), so neither device's turn 1 lands on the other: each is a named ``head_dependency``
+    conflict, nothing is copied, and each device still reads its own turn."""
     desktop, phone = LibraryStore.create(tmp_path / DESKTOP), LibraryStore.create(tmp_path / PHONE)
     try:
         seed(desktop)
@@ -149,19 +152,14 @@ def test_sync_holds_turns_back_and_never_hides_a_divergence(tmp_path):
         identify(phone, PHONE)
         sync(desktop, phone, handles())
         scenes(desktop).write(post_turn(CHAT, 1, "From the desk.", device=tag(DESKTOP)), None)
-        report = sync(desktop, phone, handles())
-        path = f"campaigns/{C}/turns/{turn_id(CHAT, 1, tag(DESKTOP))}.json"
-        assert path not in {copied for copied, _ in report.copied}
-        assert path in report.skipped[DESKTOP]
-        assert [(c.path, c.code) for c in report.conflicts if c.path == path] == [(path, "held")]
-        assert scenes(phone).turns(CHAT).turns == ()
-        # both played turn 1 offline: two turn files with two ids, never one id with two contents; sync copies
-        # neither (both are held), so if both are ever in one library it is by a hand copy or 028's future merge
         scenes(phone).write(post_turn(CHAT, 1, "From the phone.", device=tag(PHONE)), None)
-        other = f"campaigns/{C}/turns/{turn_id(CHAT, 1, tag(PHONE))}.json"
         report = sync(desktop, phone, handles())
-        assert sorted((c.path, c.code) for c in report.conflicts if "/turns/" in c.path) == sorted(
-            [(path, "held"), (other, "held")])
+        paths = [f"campaigns/{C}/turns/{turn_id(CHAT, 1, tag(device))}.json" for device in (DESKTOP, PHONE)]
+        assert not [copied for copied, _ in report.copied if "/turns/" in copied]
+        for path in paths:
+            conflict = report.conflict(path)
+            assert conflict.code == "head_dependency" and f"campaigns/{C}/chats/{CHAT.chat_id}.json" in conflict.detail
+            assert f"campaigns/{C}/scope.json" in conflict.detail
         assert scenes(desktop).turns(CHAT).last.record.post.text == "From the desk."
         assert scenes(phone).turns(CHAT).last.record.post.text == "From the phone."
     finally:

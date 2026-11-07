@@ -356,8 +356,9 @@ def _walk(access: Access, parts: Parts, files: dict[str, bytes], blocked: dict[s
             files[text] = data
 
 
+#: ``turns``: a 035 turn's lines pin the revisions they were spoken under.
 _RECORD_FOLDERS = frozenset({"instances", "chats", "relations", "events", "evidence", "accepted", "wrapups",
-                             "holdings", "transcripts"})
+                             "holdings", "transcripts", "turns"})
 
 
 def _may_hold_records(access: Access, original: Parts) -> bool:

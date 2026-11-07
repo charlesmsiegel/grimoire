@@ -3,17 +3,22 @@
 A turn is created once (create-only, so two posts can never both become turn n) and then changed only by
 compare-and-swap against the etag it was read at. A turn file that cannot be read or decoded makes the
 chat's turns incomplete: every write to that chat is refused (``turns_unreadable``) rather than renumber
-or overwrite history it cannot see.
+or overwrite history it cannot see. Two devices' turns of one number make it forked (028's turn merge,
+``grimoire.scene.branches``): ``choose`` sets the other branches aside, and play goes on.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 
 from grimoire.core.identity import ChatRef, InstanceRef, TurnRef
-from grimoire.scene import TURN_SCHEMA, SceneRefused, TurnRecord, parse_turn_id, turn_from_payload, turn_to_payload
+from grimoire.scene import (
+    TURN_SCHEMA, Fork, SceneRefused, SetAside, TurnRecord, arrange, parse_turn_id, turn_from_payload, turn_id,
+    turn_to_payload,
+)
+from grimoire.scene.branches import is_mine, tag_for
 from grimoire.store import LibraryStore, ScopeRecord, StaleWrite, TakenIdsUnlisted
 from grimoire.store.layout import address_parts
 
@@ -31,11 +36,17 @@ class StoredTurn:
 
 @dataclass(frozen=True)
 class ChatTurns:
-    """One chat's turns in order, and the problems that make the list incomplete (paths and reasons)."""
+    """One chat's turns in order, and the problems that make the list incomplete (paths and reasons).
+
+    ``turns`` is the chat's line as play reads it: up to its first fork, then every branch not set aside (028).
+    ``set_aside`` holds the turns a choice set aside (kept, heard by no one); ``fork`` the first fork, if any.
+    """
 
     chat: ChatRef
     turns: tuple[StoredTurn, ...]
     problems: tuple[tuple[str, str], ...]
+    set_aside: tuple[StoredTurn, ...] = ()
+    fork: Fork | None = None
 
     @property
     def complete(self) -> bool:
@@ -63,16 +74,6 @@ def _other_chat(path: str, chat: ChatRef) -> bool:
     return parsed is not None and parsed[0] != chat.chat_id
 
 
-def _numbered(records: Mapping[TurnRef, object], chat: ChatRef) -> list[tuple[int, TurnRef]]:
-    """The number of every turn file of ``chat`` among a campaign's listed turns, whatever device made it."""
-    found = []
-    for ref in records:
-        parsed = parse_turn_id(ref.turn_id)
-        if parsed is not None and parsed[0] == chat.chat_id:
-            found.append((parsed[1], ref))
-    return found
-
-
 class SceneLibrary:
     """Turn records of one open library. ``handle`` must be able to write ``campaigns/``."""
 
@@ -82,7 +83,9 @@ class SceneLibrary:
         self.owner = owner
 
     def turns(self, chat: ChatRef) -> ChatTurns:
-        found = self.store.campaign_turns(chat.campaign_id)
+        return self._view(chat, self.store.campaign_turns(chat.campaign_id))
+
+    def _view(self, chat: ChatRef, found) -> ChatTurns:  # type: ignore[no-untyped-def]
         problems = [(problem.path, problem.code) for problem in found.problems if not _other_chat(problem.path, chat)]
         turns = []
         for ref, stored in found.records.items():
@@ -94,16 +97,34 @@ class SceneLibrary:
                 problems.append((str(ref), error.reason))
                 continue
             turns.append(StoredTurn(record, stored.etag, stored.record.owner, stored.record.extra))
-        # one order on every device: by number, then an untagged turn before tagged ones, then by device tag
-        turns.sort(key=lambda stored: (stored.record.number, stored.record.device or ""))
-        numbers = [stored.record.number for stored in turns]
-        if len(set(numbers)) != len(numbers):
-            # two devices' turn n in one library (a hand copy, or 028's future merge; sync copies no turn
-            # file): both are kept and read, never one silently dropped, and play waits for 028's turn merge.
+        by_id = {stored.record.turn_id: stored for stored in turns}
+        lineage = arrange(stored.record for stored in turns)  # in one order on every device
+        if lineage.fork is not None:
+            # two devices' turn n after one turn (sync brought both): both are kept and read, never one silently
+            # dropped, and every write waits until someone chooses which goes on (``choose``)
             problems.append((str(chat), "turn_fork"))
-        if sorted(set(numbers)) != list(range(1, len(set(numbers)) + 1)):
+        if lineage.orphans:  # a turn whose predecessor is missing or cannot be told
             problems.append((str(chat), "turn_gap"))
-        return ChatTurns(chat, tuple(turns), tuple(sorted(problems)))
+        return ChatTurns(chat, tuple(by_id[turn.turn_id] for turn in lineage.line), tuple(sorted(problems)),
+                         tuple(by_id[turn.turn_id] for turn in lineage.set_aside), lineage.fork)
+
+    def fork_problems(self, turns: ChatTurns) -> list[tuple[str, str]]:
+        """``("turn_fork", <which turns, which devices, from which number>)`` for a forked chat, else nothing."""
+        if turns.fork is None:
+            return []
+        try:
+            own = self.device()
+        except SceneRefused:  # a damaged identity: no branch is called this device's
+            return [("turn_fork", turns.fork.describe())]
+        replays = len(turns.turns) + len(turns.set_aside)
+        return [("turn_fork", turns.fork.describe(lambda device: is_mine(own, device, replays)))]
+
+    def tag_for(self, turns: ChatTurns, number: int) -> str | None:
+        """The device tag a new turn ``number`` of ``turns.chat`` takes here: this library's own (``device``), or,
+        where this device's turn ``number`` is set aside (it chose another device's branch), the first free
+        replay tag (``grimoire.scene.branches.replay_tag``), so a turn id is never used twice."""
+        taken = [stored.record.turn_id for stored in (*turns.turns, *turns.set_aside)]
+        return tag_for(self.device(), taken, lambda tag: turn_id(turns.chat, number, tag))
 
     def device(self) -> str | None:
         """This library's device tag for new turns (028's ``device_tag``, without its ``-``), or ``None`` for a
@@ -135,18 +156,24 @@ class SceneLibrary:
         else:
             envelope = ScopeRecord(record.ref, TURN_SCHEMA, payload, owner=base.owner, extra=base.extra)
         with self.store.lock:
-            listed = (self.store.campaign_turns(record.chat.campaign_id).records
-                      if base is None or last or after is not None else {})  # one read for every check
+            view = (self._view(record.chat, self.store.campaign_turns(record.chat.campaign_id))
+                    if base is None or last or after is not None else None)  # one read for every check
+            line = view.turns if view is not None else ()  # turns set aside take no number (028)
             if base is None:
-                if record.device != self.device():  # identified (or re-identified) since the turn was planned
+                assert view is not None
+                if record.device != self.tag_for(view, record.number):
+                    # identified (or re-identified) since the turn was planned, or its id was taken meanwhile
                     raise SceneRefused("turn_changed", "this library's device identity changed; read it again")
-                if any(number == record.number for number, _ in _numbered(listed, record.chat)):
+                if any(stored.record.number == record.number for stored in line):
                     # this library already holds turn n under another device's tag (made before identify)
                     raise SceneRefused("turn_changed", "this turn was played since it was read; read it again")
-            if last and any(number > record.number for number, _ in _numbered(listed, record.chat)):
+                if record.follows is not None and (view.fork is not None or view.last is None
+                                                   or view.last.record.turn_id != record.follows):
+                    raise SceneRefused("turn_changed", "the chat's line changed since it was read; read it again")
+            if last and any(stored.record.number > record.number for stored in line):
                 raise SceneRefused("turn_changed", "a later turn was played since this one was read; read it again")
             if after is not None:
-                current = listed.get(after.record.ref)
+                current = next((stored for stored in line if stored.record.ref == after.record.ref), None)
                 if current is None or current.etag != after.etag:
                     raise SceneRefused("turn_changed", "the chat's last turn changed since it was read; read it again")
             if before_commit is not None:
@@ -161,6 +188,41 @@ class SceneLibrary:
                 on_commit()
         etag = result.etags["/".join(address_parts(record.ref))]
         return StoredTurn(record, etag, envelope.owner, envelope.extra)
+
+    def choose(self, turns: ChatTurns, chosen: str, by: str) -> ChatTurns:
+        """028: at the chat's fork, as read in ``turns``, the branch headed by ``chosen`` goes on; the chat's turns
+        afterwards. Every other branch head is marked ``set_aside`` (naming ``chosen``) and a mark on ``chosen``
+        is cleared, in one commit, each file by compare-and-swap: two devices making the same choice write the
+        same bytes. Refused (nothing written): ``not_forked``, ``not_a_branch``, or ``turn_changed`` when the
+        fork or any of its heads changed since ``turns`` was read."""
+        fork = turns.fork
+        if fork is None:
+            raise SceneRefused("not_forked", "this chat is not forked")
+        heads = [branch.head for branch in fork.branches]
+        if chosen not in heads:
+            raise SceneRefused("not_a_branch", "choose the first turn of one of the fork's branches")
+        by_id = {stored.record.turn_id: stored for stored in (*turns.turns, *turns.set_aside)}
+        changes = []
+        for head in heads:
+            stored = by_id[head]
+            wanted = None if head == chosen else SetAside(chosen, by)
+            if stored.record.set_aside != wanted:
+                changes.append((replace(stored.record, set_aside=wanted), stored))
+        with self.store.lock:
+            now = self.turns(turns.chat)
+            if now.fork != fork or now.problems != turns.problems:
+                raise SceneRefused("turn_changed", "the fork changed since it was read; read it again")
+            if not changes:
+                return now
+            txn = self.store.transaction()
+            for record, stored in changes:
+                txn.put(ScopeRecord(record.ref, TURN_SCHEMA, turn_to_payload(record), owner=stored.owner,
+                                    extra=stored.extra), stored.etag)
+            try:
+                txn.commit(self.handle)
+            except StaleWrite:
+                raise SceneRefused("turn_changed", "a turn of the fork changed since it was read") from None
+            return self.turns(turns.chat)
 
 
 def turn_instance_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:

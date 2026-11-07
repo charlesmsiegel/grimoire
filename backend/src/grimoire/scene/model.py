@@ -294,13 +294,30 @@ class Take:
 
 
 @dataclass(frozen=True, slots=True)
+class SetAside:
+    """028's choice at a fork, written on a branch head that does not go on: the chat goes on from ``chosen``
+    (the id of another turn of the same number, after the same turn), as ``by`` (a principal) chose. The head
+    and every turn played after it are set aside: kept, heard by no one, outside the chat's numbering."""
+
+    chosen: str
+    by: str
+
+    def __post_init__(self) -> None:
+        if type(self.chosen) is not str or parse_turn_id(self.chosen) is None:
+            raise _fail("invalid_field", "a set-aside mark names the turn the chat goes on from")
+        _text(self.by, "set_aside.by", limit=MAX_PRINCIPAL)
+
+
+@dataclass(frozen=True, slots=True)
 class TurnRecord:
     """One turn of one chat: ``post`` (or none), its takes, and whether the table closed it.
 
     Open while no take is kept and nobody passed it. While the last turn is ``paused`` no new turn is
     posted, begun or generated; who paused is kept for ``resume`` only and never shown. ``device`` is the
     tag of the device that created it (028), or ``None`` for a turn created on a library with no identity;
-    a turn keeps it for good.
+    a turn keeps it for good. ``follows`` is the id of the turn it was played after (``None`` for turn 1, and
+    for a turn written before 028's turn merge, whose place is inferred), so two devices' branches stay apart
+    after either chooses one. ``set_aside`` is 028's mark on a branch head that does not go on.
     """
 
     chat: ChatRef
@@ -312,6 +329,8 @@ class TurnRecord:
     paused_by: str | None = None
     passed_by: str | None = None
     device: str | None = None
+    follows: str | None = None
+    set_aside: SetAside | None = None
     extras: dict[str, object] = field(default_factory=dict, compare=False)
 
     def __post_init__(self) -> None:
@@ -339,6 +358,14 @@ class TurnRecord:
         _optional(self.passed_by, "passed_by", MAX_PRINCIPAL)
         if self.passed_by is not None and self.kept is not None:
             raise _fail("invalid_field", "a turn is either kept or passed")
+        if self.follows is not None:
+            parent = parse_turn_id(self.follows) if type(self.follows) is str else None
+            if parent is None or self.number == 1 or parent[:2] != (self.chat.chat_id, self.number - 1):
+                raise _fail("invalid_field", "a turn follows a turn of its chat numbered one less")
+        if self.set_aside is not None:
+            chosen = parse_turn_id(self.set_aside.chosen) if type(self.set_aside) is SetAside else None
+            if chosen is None or chosen[:2] != (self.chat.chat_id, self.number) or chosen[2] == self.device:
+                raise _fail("invalid_field", "a set-aside turn names another turn of its number to go on from")
         prefix = self.turn_id + "."
         campaign = self.chat.campaign_id
         if self.post is not None and any(actor.campaign_id != campaign for actor in self.post.audience):
@@ -410,6 +437,6 @@ def usage_totals(attempts: Iterable[CallAttempt]) -> dict[str, int]:
 __all__ = [
     "CALL_STATES", "CallRecord", "LINE_STATES", "MAX_CHAT_ID", "MAX_TAGGED_CHAT_ID", "MAX_TAKES", "ORIGINS",
     "POST_KINDS", "Post",
-    "SceneLine", "SceneRefused", "TAKE_STATES", "Take", "TokenUsage", "TurnRecord", "parse_turn_id", "turn_id",
+    "SceneLine", "SceneRefused", "SetAside", "TAKE_STATES", "Take", "TokenUsage", "TurnRecord", "parse_turn_id", "turn_id",
     "usage_totals",
 ]

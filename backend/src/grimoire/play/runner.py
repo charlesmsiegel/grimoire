@@ -50,6 +50,8 @@ from grimoire.security import is_human
 from grimoire.store import LibraryStore, RecordNotFound
 from grimoire.voice import ResolvedVoice, VoiceCatalog
 
+from .forks import choose_branch
+
 #: 033 relations are sequenced by the campaign's moments; membership "now" is after every one of them.
 NOW = 2**62
 #: Room for a turn's context: each speaker's pack, and the director's lore.
@@ -193,6 +195,7 @@ class SceneRunner:
                      if resolution.broken is not None]
         turns = self.scenes.turns(chat)
         problems += [("turns", f"{path}:{code}") for path, code in turns.problems]
+        problems += self.scenes.fork_problems(turns)  # 028: which turns, which devices, from which number
         history, history_problems = chat_history(self.store, chat, captured.chat, captured.snapshot)
         problems += history_problems
         controls = tuple(self.sovereignty.load(chat.campaign_id).controls)
@@ -286,7 +289,7 @@ class SceneRunner:
         if stored is None and (scene.imported is not None or _has_imported(scene)):
             raise _refuse("already_begun", "the chat goes on from its imported history; post or generate")
         if stored is None:
-            record = TurnRecord(chat, 1, "opening", device=self.scenes.device())
+            record = TurnRecord(chat, 1, "opening", device=self.scenes.tag_for(scene.turns, 1))
         elif len(scene.turns.turns) == 1 and stored.record.origin == "opening" and stored.record.open:
             record = stored.record  # the opening again, for the cast as it is now (an earlier one went stale)
             if len(record.takes) >= MAX_TAKES:
@@ -347,7 +350,7 @@ class SceneRunner:
             raise _refuse("persona_absent", "the player character is not present in this scene")
         last = scene.last
         number = 1 if last is None else last.number + 1
-        device = self.scenes.device()
+        device = self.scenes.tag_for(scene.turns, number)
         tid = turn_id(chat, number, device)
         if not isinstance(text, str) or not text.strip():
             raise _refuse("no_content", "a post needs text")
@@ -390,7 +393,7 @@ class SceneRunner:
             if last.post == post and not last.takes:
                 return last  # the same post retried: it is already saved
             raise _refuse("turn_open", "the last turn is still open: keep a take, or pass it")
-        record = TurnRecord(chat, number, "post", post, device=device)
+        record = TurnRecord(chat, number, "post", post, device=device, follows=_follows(last))
         self.scenes.write(record, None, after=scene.turns.last)
         return record
 
@@ -422,8 +425,9 @@ class SceneRunner:
             raise _refuse("nothing_to_generate", "no NPC here can speak; ask for a director reply")
         pending = scene.pending
         stored = scene.turns.last if pending is not None else None
+        following = 1 if scene.last is None else scene.last.number + 1
         record = pending if pending is not None else TurnRecord(
-            chat, 1 if scene.last is None else scene.last.number + 1, "prompt", device=self.scenes.device())
+            chat, following, "prompt", device=self.scenes.tag_for(scene.turns, following), follows=_follows(scene.last))
         number = len(record.takes) + 1
         if number > MAX_TAKES:
             raise _refuse("too_many_takes", f"a turn holds at most {MAX_TAKES} takes")
@@ -720,6 +724,11 @@ class SceneRunner:
         self.scenes.write(record, stored)
         return record
 
+    def choose(self, chat: ChatRef, by, turn: str) -> Scene:
+        """028: at a forked chat, the branch whose first turn is ``turn`` goes on; the others are set aside.
+        Only the library's owner may choose (``play.forks``)."""
+        return choose_branch(self, chat, by, turn)
+
     # -- checks -----------------------------------------------------------------------------------
 
     def _ready(self, scene: Scene) -> None:
@@ -741,13 +750,18 @@ class SceneRunner:
 
 def _readable(scene: Scene) -> None:
     """Every write needs the chat's whole history: one unreadable turn file stops them all, and so does a fork
-    (two turns of one number, every file readable), which only 028's turn merge can settle."""
+    (two turns of one number after one turn, every file readable), until the owner chooses a branch (028)."""
     if scene.turns.complete:
         return
     if set(scene.turns.problems) == {(str(scene.chat), "turn_fork")}:
         raise _refuse("turn_fork", "this chat holds two devices' turns of one number; nothing is written until "
-                                   "they are merged")
+                                   "the owner chooses which goes on")
     raise _refuse("turns_unreadable", "a turn file of this chat cannot be read; nothing is written")
+
+
+def _follows(last: TurnRecord | None) -> str | None:
+    """The turn a new turn is played after (028: two devices' branches stay apart once one is chosen)."""
+    return None if last is None else last.turn_id
 
 
 class _Stale(Exception):
