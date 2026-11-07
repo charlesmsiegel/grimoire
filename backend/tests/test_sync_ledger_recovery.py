@@ -383,7 +383,10 @@ def test_an_unlistable_relations_folder_outside_the_ledger_never_stops_a_holding
             except (OSError, NotImplementedError):
                 pytest.skip("this system cannot make a directory link")
         else:
-            (folder.parent / "Relations").mkdir()
+            try:
+                (folder.parent / "Relations").mkdir()
+            except FileExistsError:  # a case-insensitive disk: the other spelling is the real relations folder
+                pytest.skip("this file system does not tell the spellings apart")
             if (folder.parent / "Relations").samefile(folder):
                 pytest.skip("this file system does not tell the spellings apart")
         made[DESKTOP].hand_op(Operation("hand-1", (Line.move(TAM, WREN, COIN, 1),)))  # a holdings-only change
