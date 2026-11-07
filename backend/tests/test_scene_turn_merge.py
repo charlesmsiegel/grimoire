@@ -293,7 +293,8 @@ def test_different_choices_with_pauses_stay_a_conflict_on_both_and_each_pause_st
         desk.runner.resume(chat, desk.owner)
         play(desk, chat, "Onward.")
         assert synced(desk, phone).conflicts == ()
-        assert [r.turn_id for r in phone.runner.open(chat).records] == [r.turn_id for r in desk.runner.open(chat).records]
+        lines = [[r.turn_id for r in table.runner.open(chat).records] for table in (desk, phone)]
+        assert lines[0] == lines[1]
 
 
 def test_a_pause_on_a_branch_a_choice_from_elsewhere_sets_aside_is_never_lifted_by_sync(built, tmp_path):
