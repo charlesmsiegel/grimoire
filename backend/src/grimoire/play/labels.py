@@ -24,7 +24,7 @@ from grimoire.core.perspective import player_knowledge
 from grimoire.labelling import LabelRefused, facts, label_messages, parse_labels
 from grimoire.play.accept import next_sequence
 from grimoire.play.adjudicate import outcome_lines
-from grimoire.play.scene import WRITE_RETRIES, _refuse
+from grimoire.play.scene import WRITE_RETRIES, _perceived, _refuse
 from grimoire.play.tracing import record_calls, span
 from grimoire.providers.meter import TurnMeter
 from grimoire.scene import MAX_LABELS, CallRecord, Label, SceneRefused, TurnRecord, heard_for, render
@@ -96,7 +96,7 @@ def label_action(runner, chat: ChatRef, by) -> Label:
     heard = heard_for(scene.records, post.actor, scene.names, before=scene.imported, narration=False,
                       outcomes=bare)
     built = actor_context(context.view, chat, ledger, post.actor, as_of=as_of, budget=runner.budget,
-                          present=scene.cast, scene_text=render(heard))
+                          present=_perceived(scene, post.actor), scene_text=render(heard))
     offered = facts(built.pack.items, own=own_propositions(ledger.knowledge, controller, scene.controls, post.actor,
                                                            as_of))
     messages = label_messages(scene.names.get(post.actor) or post.actor.instance_id, post.text, offered,

@@ -271,7 +271,12 @@ class Take:
 
     ``plan_turn`` is the id the generation was planned and billed under (``<turn_id>.<take>``), so two
     takes of one turn never share a call id. ``unscreened`` names director lore no reply screen covered
-    (027): keeping such a take needs the table to acknowledge it.
+    (027): keeping such a take needs the table to acknowledge it. ``on_stage`` is the part of ``cast`` a 041
+    stage had physically present when the take was written (the cast less the stage's absences), or ``None``
+    for a take written with no stage (every take before stages existed): then the whole cast was present.
+    ``players``, written only beside ``on_stage``, is the player characters by control when the take was
+    written (every narrator line's audience): who heard a line as a player character is judged by it, never
+    by control now. A staged take without it (an earlier build's) is in no one's table view.
     """
 
     take: int
@@ -285,6 +290,8 @@ class Take:
     unscreened: tuple[str, ...] = ()
     direction: str | None = None
     by: str | None = None
+    on_stage: tuple[InstanceRef, ...] | None = None
+    players: tuple[InstanceRef, ...] | None = None
 
     def __post_init__(self) -> None:
         if type(self.take) is not int or not 1 <= self.take <= MAX_TAKES:
@@ -305,6 +312,25 @@ class Take:
             raise _fail("invalid_field", f"a {self.state} take holds no lines")
         if self.cast:
             object.__setattr__(self, "cast", _actors(self.cast, "cast", self.cast[0].campaign_id))
+        if self.on_stage is not None:
+            if isinstance(self.on_stage, (str, bytes)) or not isinstance(self.on_stage, (tuple, list)):
+                raise _fail("invalid_field", "a take's on-stage cast is a list of actors")
+            if self.on_stage and not self.cast:
+                raise _fail("invalid_field", "a take's on-stage cast is part of its cast")
+            here = _actors(self.on_stage, "on_stage", self.cast[0].campaign_id) if self.on_stage else ()
+            if not set(here) <= set(self.cast):
+                raise _fail("invalid_field", "a take's on-stage cast is part of its cast")
+            object.__setattr__(self, "on_stage", here)
+        if self.players is not None:
+            if isinstance(self.players, (str, bytes)) or not isinstance(self.players, (tuple, list)):
+                raise _fail("invalid_field", "a take's player characters are a list of actors")
+            if self.on_stage is None or (self.players and not self.cast):
+                raise _fail("invalid_field", "a take records its player characters only on a stage, from its cast")
+            table = _actors(self.players, "players", self.cast[0].campaign_id) if self.players else ()
+            if not set(table) <= set(self.cast) or any(
+                    line.actor is None and set(line.audience) != set(table) for line in self.lines):
+                raise _fail("invalid_field", "a take's player characters are of its cast, and its narration's audience")
+            object.__setattr__(self, "players", table)
         for label in ("declined", "unscreened"):
             values = tuple(getattr(self, label))
             if not all(type(value) is str and value for value in values):
@@ -317,6 +343,11 @@ class Take:
 
     def shown(self) -> tuple[SceneLine, ...]:
         return tuple(line for line in self.lines if line.shown)
+
+    @property
+    def present(self) -> tuple[InstanceRef, ...]:
+        """Who was physically present for this take: its stage's ``on_stage``, else (no stage) its whole cast."""
+        return self.cast if self.on_stage is None else self.on_stage
 
     def attempts(self) -> tuple[CallAttempt, ...]:
         return tuple(attempt for call in self.calls for attempt in call.attempts)
@@ -536,11 +567,14 @@ class Intention:
 
     A record of a ``grimoire.goals.Choice``, never one itself: the agenda stays the director's input and is
     never read back from a turn. ``as_of`` is the knowledge sequence it was chosen from; ``present`` the cast as
-    the NPC recognised it and ``unrecognised`` the rest of the take's cast; ``goal_id`` and ``approach_id`` what
+    the NPC recognised it and ``unrecognised`` the rest of those present for the take (``Take.present``: with a
+    stage, its on-stage cast; without one, its whole cast); ``goal_id`` and ``approach_id`` what
     it pursued (``None`` for nothing it could pursue); ``refusals`` the limits it was refusing, ``considered``
     the approaches in the order tried, up to the chosen one, then those after it that a limit forbids (``omitted``
     counts the others after it, outranked or unmet, which are not recorded, so a turn file stays small) and
-    ``explanation`` 039's ``explain`` lines. Director-side text: it names
+    ``explanation`` 039's ``explain`` lines. ``perceived``, on a take played on a 041 stage, is who of the take's
+    scene the NPC perceived when it chose (041's sight; ``None`` without a stage): whoever it did not is
+    ``unrecognised``, so keeping the take re-checks it against the stage then. Director-side text: it names
     actors and propositions by id, so it is in no NPC's window and not in the table's view.
     """
 
@@ -555,6 +589,7 @@ class Intention:
     considered: tuple[IntentionOption, ...] = ()
     explanation: tuple[str, ...] = ()
     omitted: int = 0
+    perceived: tuple[InstanceRef, ...] | None = None
 
     def __post_init__(self) -> None:
         if type(self.take) is not int or not 1 <= self.take <= MAX_TAKES:
@@ -570,6 +605,13 @@ class Intention:
             raise _fail("invalid_field", "an intention's NPC is in its recognised cast, and no one is in both")
         object.__setattr__(self, "present", present)
         object.__setattr__(self, "unrecognised", unseen)
+        if self.perceived is not None:
+            if not isinstance(self.perceived, (tuple, list)):
+                raise _fail("invalid_field", "an intention's perceived cast is a list of actors")
+            perceived = _actors(self.perceived, "intention.perceived", campaign)
+            if not set(present) <= set(perceived) <= set(present) | set(unseen):
+                raise _fail("invalid_field", "an intention's NPC perceived everyone it recognised, and only its scene")
+            object.__setattr__(self, "perceived", perceived)
         considered = tuple(self.considered)
         if not considered or len(considered) > MAX_INTENTION_OPTIONS or not all(
                 type(option) is IntentionOption for option in considered):
@@ -728,8 +770,9 @@ class TurnRecord:
             raise _fail("invalid_field", "a turn holds one intention per take and actor, in order")
         for intention in intentions:  # 039: a choice is for the one scene its take was generated for
             take = self.takes[intention.take - 1] if intention.take <= len(self.takes) else None
-            if take is None or take.origin != "generated" or intention.scene != frozenset(take.cast):
-                raise _fail("invalid_field", "an intention is for a generated take of this turn, and its whole cast")
+            # with a stage, the scene is who was on it (041): an absent cast member is never Present to a choice
+            if take is None or take.origin != "generated" or intention.scene != frozenset(take.present):
+                raise _fail("invalid_field", "an intention is for a generated take of this turn, and everyone present")
         object.__setattr__(self, "intentions", intentions)
 
     @property

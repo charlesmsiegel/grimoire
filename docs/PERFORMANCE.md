@@ -37,6 +37,7 @@ No prices ship (013). Without a table every cost is `unpriced`.
 | `read.transcript` | the imported history's transcript pages (035 M2) | `posts` |
 | `read.control`, `read.party` | 010b's control, 033's party | |
 | `stage.cast`, `voices` | staging and voice resolution | |
+| `read.stage` | the app's 041 stage source, and checking its stage against the cast (only with `stages`) | |
 | `read.knowledge` | what each speaker knows | |
 | `brief.npc` / `pack` | one speaker's brief and its packed context (with an agenda, 039's check, choice and the brief rebuilt with it) | `heard`; `items`, `omitted` |
 | `brief.director` | the director's brief | |
