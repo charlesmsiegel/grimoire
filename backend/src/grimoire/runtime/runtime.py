@@ -10,7 +10,7 @@ No text reaches a consumer before it is accepted and screened.
 from __future__ import annotations
 
 import weakref
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -330,7 +330,8 @@ class GenerationRuntime:
 
     def run_turn(self, meter: TurnMeter, briefs: Iterable[NpcBrief], *, controls: Iterable[ControlAssignment],
                  director: DirectorBrief | None = None, token: FenceToken | None = None,
-                 cancel: CancelToken | None = None, scene_voices: Iterable[ResolvedVoice] = ()) -> TurnOutcome:
+                 cancel: CancelToken | None = None, scene_voices: Iterable[ResolvedVoice] = (),
+                 hears: Callable[[InstanceRef | None, InstanceRef | None], bool] | None = None) -> TurnOutcome:
         """Issue every planned call in order; see the module docstring and docs/GENERATION.md.
 
         Refused before any call: a ``decision`` call ``decide`` has not run on ``meter``
@@ -343,6 +344,10 @@ class GenerationRuntime:
         a stale run returns no lines. ``cancel`` cancels the in-flight call; nothing runs after it.
         ``scene_voices`` are the other voices present (silent NPCs): a line reproducing one of their
         authored examples is rejected as ``copied_example`` too, as 014 asks for every scene voice.
+        ``hears(listener, speaker)`` decides which earlier lines of this turn each later call is given (its
+        ``spoken``, also what its reply is screened against): ``listener`` is the brief's actor, ``None`` for
+        the director; ``speaker`` the line's actor, ``None`` for a narrator line. Without it every call hears
+        every earlier line, as before; a stage (041) gives a rule, so a line never crosses a shut door.
         """
         if not isinstance(meter, TurnMeter):
             raise GenerationError("bad_meter", "run_turn needs the turn's TurnMeter")
@@ -352,6 +357,8 @@ class GenerationRuntime:
             raise GenerationError("bad_token", "token must be a FenceToken from RunFence.claim")
         if cancel is not None and not isinstance(cancel, CancelToken):
             raise GenerationError("bad_cancel", "cancel must be a CancelToken")
+        if hears is not None and not callable(hears):
+            raise GenerationError("bad_hears", "hears must be a callable rule")
         briefs = _briefs(briefs)
         pairs = _assign(meter, briefs, director, checked_controls(controls), self._decided.get(meter, {}))
         scene_voices = tuple(scene_voices)
@@ -377,7 +384,9 @@ class GenerationRuntime:
                     return ended("stale")
                 if cancel.cancelled:
                     return ended("cancelled")
-                spoken = tuple(HeardLine(line.speaker, line.text, line.actor) for line in lines)
+                listener = brief.actor if isinstance(brief, NpcBrief) else None
+                spoken = tuple(HeardLine(line.speaker, line.text, line.actor) for line in lines
+                               if hears is None or hears(listener, line.actor) is True)
                 if isinstance(brief, NpcBrief):
                     messages = npc_messages(brief, spoken)
                 else:

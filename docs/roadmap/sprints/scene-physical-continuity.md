@@ -2,7 +2,7 @@
 
 **Outcome:** Maintain the immediate physical situation—presence, position, reachable objects, line of sight and local affordances—through ordinary dialogue and action.
 
-**Status:** **first slice implemented**, headless and pure: `grimoire.staging` (no store, no runner). The contract is in [STAGING.md](../../STAGING.md). Milestone 1 and the proving scenario are met on synthetic fixtures; milestone 2 (a stage kept across narrated turns, with 035) is next, and how a turn's several staged steps map to 021's one sequence per turn is an [open question](../../STAGING.md#open-design-question-one-sequence-per-change) for it.
+**Status:** **first slice implemented**, headless and pure: `grimoire.staging` (no store). The contract is in [STAGING.md](../../STAGING.md). Milestone 1 and the proving scenario are met on synthetic fixtures. 035's runner plays by a stage the app hands it (presences from the stage, absent members silent, `check_cast` every call: [SCENES](../../SCENES.md#the-stage-041)), and a turn's several staged steps take [one campaign sequence each](../../STAGING.md#sequences-one-per-staged-step-decided), its 021 effect after the last. Milestone 2's persisted stage, kept across narrated turns, is next.
 
 ## Scope and ownership
 - Track salient local positions, posture, held objects, barriers, exits, visibility, audibility, distance bands and object/door states only where gameplay or narration needs them.

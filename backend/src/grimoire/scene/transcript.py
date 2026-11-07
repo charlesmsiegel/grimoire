@@ -168,16 +168,23 @@ def heard_for(turns: Iterable[TurnRecord], actor: InstanceRef, names: Mapping[In
 
 def table_lines(turns: Iterable[TurnRecord], names: Mapping[InstanceRef, str], *,
                 limit: int = MAX_HEARD, before: ImportedHistory | None = None,
-                outcomes: Mapping[str, HeardLine] | None = None) -> tuple[HeardLine, ...]:
+                outcomes: Mapping[str, HeardLine] | None = None, as_heard: bool = False) -> tuple[HeardLine, ...]:
     """What the whole table saw (the director's view): every post but a private one, each decided action's
     outcome line (``outcomes``, by turn id) right after it, and every kept line, after the chat's imported
-    history (``before``)."""
+    history (``before``). With ``as_heard`` (035 asks it), a kept line of a take played on a 041 stage is in it
+    only when a player character as of its turn (``Take.players``, by control when the take was written, never
+    now) is in its audience, since the table sees only what a player character heard; a staged take that
+    recorded no players gives none (fail closed). A take with no stage, or without ``as_heard``, gives every line."""
     seen: list[HeardLine | None] = list(before.table) if before is not None else []
     for turn in _ordered(turns):
         if turn.post is not None and not turn.post.private:
             seen.append(_post_line(turn.post, names))
             seen.append((outcomes or {}).get(turn.turn_id))
-        seen.extend(_heard(line.speaker, line.text, line.actor) for line in turn.visible(None))
+        kept = turn.kept
+        staged = as_heard and kept is not None and kept.on_stage is not None
+        table = frozenset(kept.players or ()) if staged else None
+        seen.extend(_heard(line.speaker, line.text, line.actor) for line in turn.visible(None)
+                    if table is None or table.intersection(line.audience))
     found = [line for line in seen if line is not None]
     return tuple(found[-limit:]) if limit else ()
 

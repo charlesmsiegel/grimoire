@@ -52,8 +52,9 @@ from grimoire.play.labels import label_action
 from grimoire.play.scene import (
     DEFAULT_BUDGET, NOW, WRITE_RETRIES, Scene, _assigned, _audience, _Context, _declined, _find_line, _first_text,
     _follows, _has_imported, _human_of, _latest, _macros, _mark, _name_index, _no_clock, _no_id, _payload,
-    _readable, _refuse, _scenario_text, _stage, _Stale,
+    _perceived, _readable, _refuse, _room, _scenario_text, _seen, _stage, _stage_ok, _Stale,
 )
+from grimoire.play.stages import StageSource, stage_key, succession
 from grimoire.providers.meter import TurnMeter
 from grimoire.runtime import GenerationRuntime, LabelRuntime, RunFence
 from grimoire.scene import (
@@ -62,6 +63,7 @@ from grimoire.scene import (
 )
 from grimoire.scenestore import MAX_TURN_BYTES, SceneLibrary, StoredTurn
 from grimoire.security import is_human
+from grimoire.staging import Stage, StagingRefused, check_cast
 from grimoire.store import LibraryStore, RecordNotFound
 from grimoire.tracing import Trace
 from grimoire.voice import ResolvedVoice, VoiceCatalog
@@ -94,7 +96,10 @@ class SceneRunner:
     a turn's effect once it holds every key (``propose_effect``); without it no effect is proposed. ``agendas``
     are 039's director-authored ``Agenda`` values, at most one per NPC: each take chooses afresh what a speaking
     director NPC with one pursues, from the knowledge its brief is built from, and records the choice on the
-    turn. They are the app's configuration, never read from a turn, a post or a reply.
+    turn. They are the app's configuration, never read from a turn, a post or a reply. ``stages`` is the app's 041
+    ``StageSource`` (``play.stages``): each call reads the chat's latest stage from it, checks it against the cast
+    033 stages now, and plays who hears and sees whom by it (docs/SCENES.md#the-stage-041); without one, or for a
+    chat it has no stage for, the cast alone decides, as before.
     ``tracer`` receives one ``Trace`` per public call, timed with ``clock`` (048, docs/PERFORMANCE.md);
     without one nothing is timed.
     """
@@ -106,6 +111,7 @@ class SceneRunner:
                  labeller: LabelRuntime | None = None, label_handle=None,
                  adjudication: AdjudicationLibrary | None = None,
                  effects: TurnEffectsLibrary | None = None, agendas: Iterable[Agenda] = (),
+                 stages: StageSource | None = None,
                  tracer: Callable[[Trace], None] | None = None,
                  clock: Callable[[], float] = time.perf_counter) -> None:
         if not (authority.issued(handle) and getattr(handle, "trusted", False) is True
@@ -128,6 +134,8 @@ class SceneRunner:
         if effects is not None and not (isinstance(effects, TurnEffectsLibrary) and effects.store is store
                                         and effects.handle is handle):
             raise _refuse("bad_effects", "effects must be this library's TurnEffectsLibrary on the runner's handle")
+        if stages is not None and not callable(getattr(stages, "latest", None)):
+            raise _refuse("bad_stages", "stages must be a StageSource: latest(chat) gives a chat's latest stage")
         by_actor = _agendas(agendas)
         self.store = store
         self.authority = authority
@@ -145,6 +153,8 @@ class SceneRunner:
         self.effects = effects
         self.recovery = None if effects is None else EffectRecovery(effects)
         self._agendas = by_actor  # director-authored input, fixed here: nothing played can author or change one
+        self.stages = stages
+        self._stages: dict[tuple[str, str], Stage] = {}  # the latest stage this runner played each chat with
         self.tracer = tracer
         self.clock = clock
         self.scenes = SceneLibrary(store, handle, owner=owner)
@@ -209,6 +219,15 @@ class SceneRunner:
         with span("stage.cast"):
             staged, unstaged = _stage(party, chat, candidates)
         problems += unstaged
+        stage = None
+        played_staged = any(take.on_stage is not None for record in turns.records() for take in record.takes)
+        if self.stages is not None:
+            with span("read.stage"):
+                stage, refusal = self._latest_stage(chat, staged, party.state, played_staged)
+            if refusal is not None:
+                problems.append(("stage", refusal))
+        elif played_staged:  # its turns say it was played on a stage: no source now is not "no stage"
+            problems.append(("stage", "stage_lost"))
         cast_t = staged.present if staged is not None else ()
         persona_binding = captured.chat.persona
         persona = persona_binding.actor if persona_binding is not None else None
@@ -219,7 +238,7 @@ class SceneRunner:
                 names[actor] = snap.entity(actor).name
             except Exception as error:  # 022's refusals: the actor stays nameless, and says why
                 problems.append(("unnamed_actor", f"{actor}:{type(error).__name__}"))
-        scene = Scene(chat, turns, controls, cast_t, persona, names, (), staged, history)
+        scene = Scene(chat, turns, controls, cast_t, persona, names, (), staged, history, stage)
         with span("voices"):
             voices = imported_voices(snap, self.authored)
             for actor in scene.cast:
@@ -234,6 +253,44 @@ class SceneRunner:
         if scene.interrupted:
             problems.append(("interrupted", scene.pending.turn_id))
         return _Context(replace(scene, problems=tuple(problems)), view, captured, voices, party_problems)
+
+    def _latest_stage(self, chat: ChatRef, staged, state, played_staged: bool = False
+                      ) -> tuple[Stage | None, str | None]:
+        """The chat's latest stage from the source, once it holds: (the stage, ``None``), (``None``, ``None``) when
+        the source has none for the chat, or (``None``, why it is refused).
+
+        Refused, failing closed: a source that fails or gives no ``Stage`` (``stage_unreadable``), or none for a
+        chat played on a stage (``stage_lost``: this runner saw a stage for it, or one of its takes records an
+        on-stage cast, ``played_staged``, so a restart is no way round; whispers would otherwise pass shut doors
+        again), a stage of
+        another campaign or scene (``scene_mismatch``), one older than, or at the same sequence as but unlike, the
+        latest this runner played the chat with (``stale_stage``, ``stage_diverged``), no cast to check it against
+        (``cast_unstaged``), and every refusal of 041's ``check_cast`` against the cast 033 stages now: its actors
+        are not exactly that cast (``cast_mismatch``), or the cast no longer holds (``stale_cast``). The stage is
+        judged as the scene now, as the cast is (033's ``NOW``): the source's latest stage is its word that
+        nothing physical changed since its own sequence.
+        """
+        try:
+            found = self.stages.latest(chat)
+        except Exception:  # the app's source: whatever it raises, there is no stage to trust
+            return None, "stage_unreadable"
+        if found is None:  # a chat this runner played by a stage never falls back to the cast alone
+            return None, ("stage_lost" if played_staged or stage_key(chat) in self._stages else None)
+        if type(found) is not Stage or found.as_of > NOW:  # past "now", it could never be judged as the scene now
+            return None, "stage_unreadable"
+        if (found.campaign_id, found.scene_id) != stage_key(chat):
+            return None, "scene_mismatch"
+        refusal = succession(self._stages.get(stage_key(chat)), found)
+        if refusal is not None:
+            return None, refusal
+        self._stages[stage_key(chat)] = found  # kept even when the cast refuses it: an older one never comes back
+        if staged is None:
+            return None, "cast_unstaged"
+        try:
+            check_cast(found.at(NOW), staged, state=state)
+        except StagingRefused as refused:
+            return None, refused.reason
+        return found, None
 
     # -- control ----------------------------------------------------------------------------------
 
@@ -303,7 +360,8 @@ class SceneRunner:
             raise _refuse("already_begun", "the chat has turns; it opens only once")
         number = len(record.takes) + 1
         line = self._opening(context, record, number, opening)
-        take = Take(number, "proposed", "opening", scene.cast, lines=(line,), by=principal)
+        take = Take(number, "proposed", "opening", scene.cast, lines=(line,), by=principal, on_stage=_here(scene),
+                    players=_table(scene))
         record = record.with_take(take)
         self._write(record, stored, unpaused=True)
         return record
@@ -326,9 +384,14 @@ class SceneRunner:
                 card = payload.get("card")
                 greetings = card.get("greetings") if isinstance(card, Mapping) else None
                 text = _first_text(greetings, wanted=chosen or "first", chosen=chosen is not None)
+                if text and binding.actor not in scene.on_stage:
+                    if chosen is not None:  # an off-stage character greets no one; the premise may still open
+                        raise _refuse("not_on_stage", "the character of that greeting is not on stage")
+                    continue
                 if text:
                     name = scene.names.get(binding.actor, binding.actor.instance_id)
-                    return SceneLine(line_id, binding.actor, name, _macros(text, name, user), scene.cast)
+                    return SceneLine(line_id, binding.actor, name, _macros(text, name, user),
+                                     _room(scene, binding.actor))
         if chosen is not None:
             raise _refuse("unknown_opening", "this chat has no greeting or opening with that id")
         if launch.premise and launch.premise.strip():
@@ -352,6 +415,8 @@ class SceneRunner:
             raise _refuse("no_persona", "this chat has no player character; ask the cast to go on with generate")
         if persona not in scene.cast:
             raise _refuse("persona_absent", "the player character is not present in this scene")
+        if persona not in scene.on_stage:  # 041: in the cast, but physically gone; it speaks in no room
+            raise _refuse("not_on_stage", "the player character has left the scene's stage")
         last = scene.last
         number = 1 if last is None else last.number + 1
         device = self.scenes.tag_for(scene.turns, number)
@@ -386,7 +451,7 @@ class SceneRunner:
             if kind == "speech" or read.reason not in ("not_directed", "unresolved_private"):
                 raise _refuse(read.reason, "the line cannot be read as a message; say who it is for, and what")
             withheld = read.reason == "unresolved_private"
-            post = Post(principal, persona, "action", intent.text, (persona,) if withheld else scene.cast,
+            post = Post(principal, persona, "action", intent.text, (persona,) if withheld else _seen(scene, persona),
                         withheld=withheld)
         else:
             post = Post(principal, persona, kind, read.text, _audience(read, scene, chat, tid, number),
@@ -428,6 +493,7 @@ class SceneRunner:
         chosen = self._speakers(context, speakers)
         if not chosen and not director:
             raise _refuse("nothing_to_generate", "no NPC here can speak; ask for a director reply")
+        rooms = {actor: _room(scene, actor) for actor, _ in chosen}  # who hears each speaker, before any call
         pending = scene.pending
         check_decided(self, pending)
         stored = scene.turns.last if pending is not None else None
@@ -442,7 +508,8 @@ class SceneRunner:
         heard_turns = (*history, record)
         try:
             with span("plan"):
-                plan = plan_generation_turn(chat.campaign_id, plan_turn, present=[a.instance_id for a in scene.cast],
+                plan = plan_generation_turn(chat.campaign_id, plan_turn,
+                                            present=[a.instance_id for a in scene.on_stage],
                                             speakers=[a.instance_id for a, _ in chosen], controls=scene.controls,
                                             director_reply=director, policy=self.policy)
         except GenerationError as error:
@@ -456,7 +523,8 @@ class SceneRunner:
             raise _refuse(error.reason, "a brief cannot be built") from None
         planned = tuple(CallRecord(call.call_id.phase, call.stage, call.call_id.actor_id, call.call_id.ordinal,
                                    "planned") for call in plan.calls)
-        running = Take(number, "running", "generated", scene.cast, calls=planned, declined=_declined(plan), by=principal)
+        running = Take(number, "running", "generated", scene.cast, calls=planned, declined=_declined(plan),
+                       by=principal, on_stage=_here(scene), players=_table(scene))
         superseded = record.running
         if superseded is not None:
             record = record.with_take(replace(superseded, state="superseded"))
@@ -476,7 +544,7 @@ class SceneRunner:
                 try:
                     outcome = self.runtime.run_turn(meter, briefs, controls=scene.controls,
                                                     director=director_view[0] if director_view else None,
-                                                    token=token, scene_voices=silent)
+                                                    token=token, scene_voices=silent, hears=_hearing(scene, rooms))
                 finally:
                     record_calls(meter)
         except GenerationError as error:
@@ -486,7 +554,7 @@ class SceneRunner:
             failure = None
         with span("review"):
             take = self._finished(record, running, plan, meter, outcome, failure, scene,
-                                  director_view[1] if director_view else ())
+                                  director_view[1] if director_view else (), rooms)
         return self._land(chat, stored, take, token, intentions)
 
     # -- generation helpers -----------------------------------------------------------------------
@@ -503,14 +571,16 @@ class SceneRunner:
     def _speakers(self, context: _Context, speakers) -> list[tuple[InstanceRef, ResolvedVoice]]:
         scene = context.scene
         voiced = dict(self._voices(context))
-        if speakers is None:
-            return [(actor, voiced[actor]) for actor in scene.npcs if actor in voiced]
+        if speakers is None:  # 041: a cast member off the stage is not a speaker
+            return [(actor, voiced[actor]) for actor in scene.npcs if actor in voiced and actor in scene.on_stage]
         chosen = []
         for actor in speakers:
             if type(actor) is not InstanceRef or actor not in scene.cast:
                 raise _refuse("not_present", f"{actor} is not present in this scene")
             if scene.controller(actor) != DIRECTOR:
                 raise _refuse("not_an_npc", f"{actor} is a player character; its player speaks for it")
+            if actor not in scene.on_stage:
+                raise _refuse("not_on_stage", f"{actor} has left the scene's stage; it speaks in no room")
             if actor not in voiced:
                 raise _refuse("no_voice", f"{actor} has no voice to speak with")
             if actor in dict(chosen):
@@ -536,9 +606,10 @@ class SceneRunner:
         for actor, voice in chosen:
             with span("brief.npc") as timed:
                 heard = heard_for(turns, actor, scene.names, before=scene.imported, outcomes=bare)
+                seen = _perceived(scene, actor)  # 041: who is present to this NPC, not the whole cast
                 with span("pack") as packed:
                     built = actor_context(context.view, chat, ledger, actor, as_of=as_of, budget=self.budget,
-                                          present=scene.cast, scene_text=render(heard))
+                                          present=seen, scene_text=render(heard))
                     packed.count(items=len(built.pack.items), omitted=len(built.pack.omitted))
                 knowledge = actor_knowledge(ledger.knowledge, actor, as_of=as_of)
                 view = snapshot_actor_view(snap.instance(actor), snap, knowledge)
@@ -547,20 +618,24 @@ class SceneRunner:
                 agenda = self._agendas.get(actor)
                 if agenda is not None:
                     # 039: from the very projection the brief is built from, the cast split by whom it recognises
-                    choice = self._choose(context, ledger, agenda, knowledge, brief)
+                    choice = self._choose(context, ledger, agenda, knowledge, brief, seen)
                     brief = npc_brief(view, voice, heard=heard, secrets=self.secrets, names=scene.names,
                                       context=built.pack, snapshot=snap, intention=choice)
-                    intentions.append(_intention(take, choice))
+                    intentions.append(_intention(take, choice, _sight(scene, actor)))
                 briefs.append(brief)
                 timed.count(heard=len(heard))
         return briefs, tuple(intentions)
 
-    def _choose(self, context: _Context, ledger, agenda: Agenda, knowledge, brief) -> Choice:
+    def _choose(self, context: _Context, ledger, agenda: Agenda, knowledge, brief,
+                seen: Sequence[InstanceRef]) -> Choice:
         """039's choice for ``agenda``'s NPC, once its agenda checks against this campaign's ledger and actors.
 
         Fail closed: a ledger with a quarantined record or a problem may hide the very belief a limit watches
         for, and an agenda naming what the campaign lacks would let a limit lapse silently, so neither is used
-        (refused ``ledger_damaged``, or by 039's own reason, such as ``unknown_proposition``).
+        (refused ``ledger_damaged``, or by 039's own reason, such as ``unknown_proposition``). The cast split is the
+        take's on-stage cast (``Scene.on_stage``), so an actor who has left the stage is never ``Present``; of it,
+        whoever the NPC does not perceive (``seen``: hidden, or behind a shut door) is ``unrecognised``, which no
+        039 condition sees, so ``Present`` of them is unmet and a limit watching for them does not apply.
         """
         scene = context.scene
         if ledger.quarantined or ledger.problems:
@@ -569,8 +644,10 @@ class SceneRunner:
         try:
             check_agenda(agenda, propositions=[p.proposition_id for p in ledger.knowledge.propositions],
                          actors=[ref for ref in context.view.instances if ref.campaign_id == scene.chat.campaign_id])
-            unseen = unrecognised(brief, scene.cast)
-            return choose(agenda, knowledge, present=[actor for actor in scene.cast if actor not in unseen],
+            here = scene.on_stage  # 041: the take's scene is who is on stage, as 027's plan and 047's referee hold
+            # ...but no condition sees whom the NPC cannot perceive (hidden, behind a shut door): 039's unrecognised
+            unseen = unrecognised(brief, here) | (frozenset(here) - frozenset(seen))
+            return choose(agenda, knowledge, present=[actor for actor in here if actor not in unseen],
                           unrecognised=unseen, controls=scene.controls)
         except GoalError as error:
             raise _refuse(error.reason, f"the agenda of {agenda.actor} cannot be used") from None
@@ -584,20 +661,23 @@ class SceneRunner:
         scenario = _scenario_text(context)
         if not scenario:
             raise _refuse("no_scenario", "a director reply needs a bound scenario or a premise")
-        table = table_lines(turns, scene.names, before=scene.imported,
-                            outcomes=outcome_lines(self, turns, scene.names)[0])
+        table = table_lines(turns, scene.names, before=scene.imported,  # 041: on a stage, what a PC heard then
+                            outcomes=outcome_lines(self, turns, scene.names)[0], as_heard=True)
         with span("pack") as packed:
             lore = chat_lore(context.view, chat, table_text=render(table), budget=self.budget).lore
             packed.count(items=len(lore.items), omitted=len(lore.omitted))
         names = {actor.instance_id: name for actor, name in scene.names.items()}
-        brief = director_brief(scenario, campaign_id=chat.campaign_id, present=[a.instance_id for a in scene.cast],
+        here = [a.instance_id for a in scene.on_stage]  # 041: a cast member off stage is not in the scene's present
+        brief = director_brief(scenario, campaign_id=chat.campaign_id, present=here,
                                controls=scene.controls, names=names, heard=table, secrets=self.secrets, lore=lore,
                                snapshot=context.captured.snapshot)
         return brief, tuple(f"{ref}#{name}" for ref, name in brief.unscreened)
 
     def _finished(self, record: TurnRecord, running: Take, plan, meter: TurnMeter, outcome, failure: str | None,
-                  scene: Scene, unscreened: tuple[str, ...]) -> Take:
-        """The take a run ended with: every call's outcome and attempts, and the lines it kept."""
+                  scene: Scene, unscreened: tuple[str, ...],
+                  rooms: Mapping[InstanceRef, tuple[InstanceRef, ...]]) -> Take:
+        """The take a run ended with: every call's outcome and attempts, and the lines it kept. An NPC's line is
+        heard by ``rooms``' audience of its speaker, judged before the run; a line by anyone else is rejected."""
         by_call = {}
         for attempt in meter.ledger.attempts:
             by_call.setdefault(attempt.call_id, []).append(attempt)
@@ -615,7 +695,10 @@ class SceneRunner:
                     if review.rejected:
                         rejected[line.call_id] = f"review_{review.rejected[0].reason}"
                         continue
-                    audience = scene.cast
+                    if line.actor not in rooms:
+                        rejected[line.call_id] = "not_a_speaker"
+                        continue
+                    audience = rooms[line.actor]
                 else:
                     audience = scene.players
                 lines.append(SceneLine(line_id, line.actor, line.speaker, line.text, audience,
@@ -784,12 +867,17 @@ class SceneRunner:
         if found.unscreened and not acknowledge_unscreened:
             raise _refuse("unscreened_lore", "this take was written with director lore no screen covered; "
                                             "keep it only after reading it")
-        if set(found.cast) != set(scene.cast) or any(
-                set(line.audience) != set(scene.players if line.actor is None else scene.cast)
-                or (line.actor is not None and line.actor not in scene.npcs)  # a player's character now
+        _stage_ok(scene)
+        if set(found.cast) != set(scene.cast) or set(found.present) != set(scene.on_stage) or _differs(
+                found.players, _table(scene)) or any(
+                (line.actor is not None and line.actor not in scene.npcs)  # a player's character now
+                or set(line.audience) != set(scene.players if line.actor is None else _heard_now(scene, line.actor))
                 for line in found.shown()):
-            raise _refuse("cast_changed", "who is present, or who plays them, changed since this take was written; "
-                                          "ask again")
+            raise _refuse("cast_changed", "who is present, who plays them, or who is in earshot changed since this "
+                                          "take was written; ask again")
+        if any(_differs(intention.perceived, _sight(scene, intention.actor))
+               for intention in record.intentions if intention.take == take):  # 039 chose by whom it could see
+            raise _refuse("cast_changed", "who an NPC can see changed since it chose what to pursue; ask again")
         if record.running is not None:  # a run still in flight loses: its take lands stale
             record = record.with_take(replace(record.running, state="superseded"))
         record = record.with_take(replace(found, state="kept", by=principal))
@@ -898,6 +986,7 @@ class SceneRunner:
         _readable(scene)
         if scene.staged is None:
             raise _refuse("party_unreadable", "who is present cannot be staged; nobody is on stage")
+        _stage_ok(scene)
         if scene.paused:
             raise _refuse("paused", "play is paused")
         if scene.persona is not None and scene.persona in scene.cast and scene.controller(scene.persona) == DIRECTOR:
@@ -932,10 +1021,11 @@ def _agendas(agendas: object) -> dict[InstanceRef, Agenda]:
     return by_actor
 
 
-def _intention(take: int, choice: Choice) -> Intention:
+def _intention(take: int, choice: Choice, perceived: tuple[InstanceRef, ...] | None = None) -> Intention:
     """The turn record's account of ``choice``: what was pursued and refused, the approaches weighed up to the
     chosen one and those after it a limit forbids, and why. The rest after the choice (outranked, or unmet)
-    are only counted, so an agenda's size never multiplies into every take's turn file."""
+    are only counted, so an agenda's size never multiplies into every take's turn file. ``perceived`` is
+    ``_sight``'s answer for its NPC when it chose."""
     goal, approach = choice.goal, choice.approach
     entries = choice.considered
     cut = next((index for index, entry in enumerate(entries) if entry.outcome == "chosen"), len(entries))
@@ -946,7 +1036,58 @@ def _intention(take: int, choice: Choice) -> Intention:
     return Intention(take, choice.actor, choice.as_of, tuple(choice.present), tuple(choice.unrecognised),
                      goal.goal_id if goal is not None else None, approach.approach_id if approach is not None else None,
                      tuple(limit.limit_id for limit in choice.refusals), considered, explain(choice),
-                     len(entries) - len(kept))
+                     len(entries) - len(kept), perceived)
+
+
+def _sight(scene: Scene, actor: InstanceRef) -> tuple[InstanceRef, ...] | None:
+    """Who of the take's on-stage cast ``actor`` perceives now, which 039's choice is judged against (``None``
+    without a stage, where the whole cast is)."""
+    if scene.stage is None:
+        return None
+    seen = set(_perceived(scene, actor))
+    return tuple(other for other in scene.on_stage if other in seen)
+
+
+def _differs(then: tuple[InstanceRef, ...] | None, now: tuple[InstanceRef, ...] | None) -> bool:
+    return (then is None) != (now is None) or set(then or ()) != set(now or ())
+
+
+def _hearing(scene: Scene, rooms: Mapping[InstanceRef, tuple[InstanceRef, ...]]):
+    """027's rule for which earlier lines of a take each later call is given, on a stage (``None`` without one:
+    everyone hears everything, as before). An NPC is given a line only when it is in that line's speaker's room;
+    the director only lines some player character heard as of its turn (the players by control as this take is
+    written, which the take records as ``Take.players``), since it narrates to the table and sees only what the
+    table saw (across turns too: ``table_lines(as_heard=True)`` judges each kept line by its own take's
+    ``players``, never by control now, for its brief and its lore); a narrator line is the table's, never an
+    NPC's."""
+    if scene.stage is None:
+        return None
+    players = frozenset(scene.players)
+
+    def hears(listener: InstanceRef | None, speaker: InstanceRef | None) -> bool:
+        if speaker is None:
+            return listener is None
+        audience = rooms.get(speaker, ())
+        return bool(players.intersection(audience)) if listener is None else listener in audience
+    return hears
+
+
+def _table(scene: Scene) -> tuple[InstanceRef, ...] | None:
+    """A staged take's player characters, by control as it is written (``Take.players``); ``None`` with no stage."""
+    return None if scene.stage is None else scene.players
+
+
+def _here(scene: Scene) -> tuple[InstanceRef, ...] | None:
+    """A take's on-stage cast: who the stage has present, or ``None`` with no stage (the whole cast is)."""
+    return None if scene.stage is None else scene.on_stage
+
+
+def _heard_now(scene: Scene, speaker: InstanceRef) -> tuple[InstanceRef, ...]:
+    """Who would hear ``speaker`` speak to the room now; nobody when it cannot (off stage, or on a guess)."""
+    try:
+        return _room(scene, speaker)
+    except SceneRefused:
+        return ()
 
 
 def _unlined(take: Take) -> Take:

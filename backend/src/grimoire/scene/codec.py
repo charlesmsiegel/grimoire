@@ -32,6 +32,9 @@ _IDENTITY_KEYS = frozenset({"schema", "address", "campaign_id", "ref"})
 _POST_KEYS = frozenset({"submitted_by", "actor", "kind", "text", "audience", "channel", "addressees", "withheld"})
 _TAKE_KEYS = frozenset({"take", "state", "origin", "cast", "lines", "calls", "outcome", "declined", "unscreened",
                         "direction", "by"})
+#: written only on a take played on a 041 stage (its on-stage cast); a take written without one has none and reads
+#: as its whole cast present
+_OPTIONAL_TAKE_KEYS = frozenset({"on_stage", "players"})
 _LINE_KEYS = frozenset({"line", "actor", "speaker", "text", "audience", "state", "by", "actor_revision",
                         "voice_profile", "review"})
 _CALL_KEYS = frozenset({"phase", "stage", "actor_id", "ordinal", "status", "reason", "attempts"})
@@ -46,6 +49,8 @@ _EFFECT_KEYS = frozenset({"effect", "state", "proposal", "endorsers", "approved_
 _OPTIONAL_EFFECT_KEYS = frozenset({"controls_at", "accepted_on"})
 _INTENTION_KEYS = frozenset({"take", "actor", "as_of", "present", "unrecognised", "goal", "approach", "refusals",
                              "considered", "explanation", "omitted"})
+#: written only on an intention chosen on a 041 stage (whom the NPC perceived); one without it read as no stage
+_OPTIONAL_INTENTION_KEYS = frozenset({"perceived"})
 _OPTION_KEYS = frozenset({"goal", "approach", "outcome", "unmet", "forbidden_by"})
 _ENDORSER_KEYS = frozenset({"contribution_id", "principal"})
 _ENDORSEMENT_KEYS = _ENDORSER_KEYS | {"fingerprint"}
@@ -86,7 +91,8 @@ def _intention(intention: Intention) -> dict[str, object]:
             "considered": [{"goal": o.goal_id, "approach": o.approach_id, "outcome": o.outcome,
                             "unmet": list(o.unmet), "forbidden_by": list(o.forbidden_by)}
                            for o in intention.considered],
-            "explanation": list(intention.explanation), "omitted": intention.omitted}
+            "explanation": list(intention.explanation), "omitted": intention.omitted,
+            **({} if intention.perceived is None else {"perceived": [str(a) for a in intention.perceived]})}
 
 
 def _effect(effect: TurnEffect) -> dict[str, object]:
@@ -123,10 +129,16 @@ def _post(post: Post) -> dict[str, object]:
 
 
 def _take(take: Take) -> dict[str, object]:
-    return {"take": take.take, "state": take.state, "origin": take.origin, "cast": [str(a) for a in take.cast],
-            "lines": [_line(line) for line in take.lines], "calls": [_call(call) for call in take.calls],
-            "outcome": take.outcome, "declined": list(take.declined), "unscreened": list(take.unscreened),
-            "direction": take.direction, "by": take.by}
+    found: dict[str, object] = {
+        "take": take.take, "state": take.state, "origin": take.origin, "cast": [str(a) for a in take.cast],
+        "lines": [_line(line) for line in take.lines], "calls": [_call(call) for call in take.calls],
+        "outcome": take.outcome, "declined": list(take.declined), "unscreened": list(take.unscreened),
+        "direction": take.direction, "by": take.by}
+    if take.on_stage is not None:  # written only for a take played on a 041 stage
+        found["on_stage"] = [str(a) for a in take.on_stage]
+    if take.players is not None:  # beside it, the player characters by control when the take was written
+        found["players"] = [str(a) for a in take.players]
+    return found
 
 
 def _line(line: SceneLine) -> dict[str, object]:
@@ -235,7 +247,16 @@ def _decode_post(value: object) -> Post:
 
 
 def _decode_take(value: object, address: TurnRef) -> Take:
-    data = _mapping(value, "take", _TAKE_KEYS)
+    data = _mapping(value, "take", _TAKE_KEYS, open_keys=True)
+    unknown = set(data) - _TAKE_KEYS - _OPTIONAL_TAKE_KEYS
+    if unknown:
+        raise _invalid(f"take has unknown fields {sorted(unknown)}")
+    on_stage = None
+    if "on_stage" in data:
+        on_stage = tuple(_actor(item, "take.on_stage") for item in _list(data["on_stage"], "take.on_stage"))
+    players = None
+    if "players" in data:
+        players = tuple(_actor(item, "take.players") for item in _list(data["players"], "take.players"))
     number = _int(data["take"], "take")
     plan_turn = f"{address.turn_id}.{number}"  # the id its calls were planned and billed under
     return Take(number, data["state"], data["origin"],  # type: ignore[arg-type]
@@ -245,7 +266,7 @@ def _decode_take(value: object, address: TurnRef) -> Take:
                       for item in _list(data["calls"], "take.calls")),
                 data["outcome"], tuple(_list(data["declined"], "take.declined")),  # type: ignore[arg-type]
                 tuple(_list(data["unscreened"], "take.unscreened")),  # type: ignore[arg-type]
-                data["direction"], data["by"])  # type: ignore[arg-type]
+                data["direction"], data["by"], on_stage, players)  # type: ignore[arg-type]
 
 
 def _decode_label(value: object, address: TurnRef) -> Label:
@@ -265,7 +286,13 @@ def _decode_label(value: object, address: TurnRef) -> Label:
 
 
 def _decode_intention(value: object) -> Intention:
-    data = _mapping(value, "intention", _INTENTION_KEYS)
+    data = _mapping(value, "intention", _INTENTION_KEYS, open_keys=True)
+    unknown = set(data) - _INTENTION_KEYS - _OPTIONAL_INTENTION_KEYS
+    if unknown:
+        raise _invalid(f"intention has unknown fields {sorted(unknown)}")
+    perceived = None
+    if "perceived" in data:
+        perceived = tuple(_actor(a, "intention.perceived") for a in _list(data["perceived"], "intention.perceived"))
     options = []
     for item in _list(data["considered"], "intention.considered"):
         found = _mapping(item, "intention option", _OPTION_KEYS)
@@ -281,7 +308,7 @@ def _decode_intention(value: object) -> Intention:
                      data["goal"], data["approach"],  # type: ignore[arg-type]
                      tuple(_list(data["refusals"], "intention.refusals")), tuple(options),  # type: ignore[arg-type]
                      tuple(_list(data["explanation"], "intention.explanation")),  # type: ignore[arg-type]
-                     data["omitted"])  # type: ignore[arg-type]
+                     data["omitted"], perceived)  # type: ignore[arg-type]
 
 
 def _decode_effect(value: object, address: TurnRef) -> TurnEffect:

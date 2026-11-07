@@ -18,6 +18,8 @@ from grimoire.core.identity import ChatRef, InstanceRef
 from grimoire.party import PartyRefused, SceneCast, stage
 from grimoire.scene import ImportedHistory, SceneLine, SceneRefused, Take, TurnRecord
 from grimoire.scenestore import ChatTurns, StoredTurn
+from grimoire.staging import Stage, StagingRefused, hears, sees, where
+from grimoire.staging import presence as stage_presence
 
 #: 033 relations are sequenced by the campaign's moments; membership "now" is after every one of them.
 NOW = 2**62
@@ -46,6 +48,10 @@ class Scene:
     ``imported`` is the chat's imported history (036/026's transcript pages), heard before turn 1 by the cast
     the chat was imported with; ``None`` when the chat has none, or when its pages cannot all be read (then
     nobody heard any of it, and ``problems`` says why).
+    ``stage`` is the chat's latest 041 ``Stage`` as the runner's stage source gave it, once it checked against
+    ``staged`` (``None`` when the runner has no source, the source has no stage for the chat, or the stage was
+    refused: then ``problems`` holds a ``stage`` entry and play waits). With a stage, who is physically here is
+    ``on_stage`` and who hears or sees what follows the stage, not the cast alone.
     """
 
     chat: ChatRef
@@ -57,6 +63,15 @@ class Scene:
     problems: tuple[tuple[str, str], ...]
     staged: SceneCast | None = None
     imported: ImportedHistory | None = None
+    stage: Stage | None = None
+
+    @property
+    def on_stage(self) -> tuple[InstanceRef, ...]:
+        """The cast members physically in the scene: the cast less the stage's absences (the cast with no stage)."""
+        if self.stage is None:
+            return self.cast
+        here = set(self.stage.on_stage())
+        return tuple(actor for actor in self.cast if actor in here)
 
     @property
     def records(self) -> tuple[TurnRecord, ...]:
@@ -206,9 +221,82 @@ def _name_index(scene: Scene) -> dict[str, InstanceRef]:
     return index
 
 
+#: How a refused stage stops play: the source's own failures by name, every refusal of ``check_cast`` as a mismatch.
+_STAGE_REFUSALS = {"stale_stage": "stale_stage", "stage_diverged": "stage_diverged",
+                   "stage_unreadable": "stage_unreadable", "stage_lost": "stage_lost"}
+
+
+def _stage_ok(scene: Scene) -> None:
+    """Fail closed on a stage the runner refused: who hears whom cannot be told, so nothing is spoken or kept."""
+    for code, detail in scene.problems:
+        if code == "stage":
+            raise _refuse(_STAGE_REFUSALS.get(detail, "stage_mismatch"),
+                          f"this chat's stage cannot be used ({detail}); stage the scene again")
+
+
+def _staged(answers, *chains: tuple[str, ...]) -> None:
+    """Who hears or sees a line decides what each actor later knows: never on a guess (041's rule)."""
+    if any(answer.assumed for answer in answers) or any(chains):
+        raise _refuse("rests_on_assumption", "who would hear or see this rests on assumed staging; establish it "
+                                             "first")
+
+
+def _off_stage(stage: Stage, actor: InstanceRef) -> bool:
+    return where(stage, actor).status == "off_stage"
+
+
+def _room(scene: Scene, speaker: InstanceRef) -> tuple[InstanceRef, ...]:
+    """Who hears ``speaker`` speak to the room: the cast with no stage; with one, the speaker and every actor in
+    earshot (its area, and the next through an open way). An actor off stage speaks to no room (``not_on_stage``)."""
+    stage = scene.stage
+    if stage is None:
+        return scene.cast
+    if speaker not in stage.actors or _off_stage(stage, speaker):
+        raise _refuse("not_on_stage", f"{speaker} is not on stage")
+    answers = [(actor, hears(stage, actor, speaker, "speech")) for actor in stage.actors if actor != speaker]
+    _staged([answer for _, answer in answers], where(stage, speaker).assumed)
+    return tuple(sorted({speaker, *(actor for actor, answer in answers if answer.ok)}, key=str))
+
+
+def _seen(scene: Scene, actor: InstanceRef) -> tuple[InstanceRef, ...]:
+    """Who sees ``actor``'s visible action: everyone present with no stage; with one, the actor and every actor
+    who can see it (041's sight rule: not through a shut door, not inside a thing)."""
+    stage = scene.stage
+    if stage is None:
+        return scene.cast
+    if actor not in stage.actors or _off_stage(stage, actor):
+        raise _refuse("not_on_stage", f"{actor} is not on stage")
+    answers = [(viewer, sees(stage, viewer, actor)) for viewer in stage.actors if viewer != actor]
+    _staged([answer for _, answer in answers], where(stage, actor).assumed)
+    return tuple(sorted({actor, *(viewer for viewer, answer in answers if answer.ok)}, key=str))
+
+
+def _perceived(scene: Scene, actor: InstanceRef) -> tuple[InstanceRef, ...]:
+    """The cast ``actor`` perceives as present: the whole cast with no stage; with one, the actor and every actor it
+    can see by 041's sight rule (its own area, the next through an open way, nobody inside a thing, nobody off
+    stage). So someone behind a shut door is not present to it: not in its pack's ``present``, not in 039's cast.
+    An actor off stage perceives only itself. Never on a guess (``rests_on_assumption``)."""
+    stage = scene.stage
+    if stage is None:
+        return scene.cast
+    if actor not in stage.actors or _off_stage(stage, actor):
+        return (actor,)
+    answers = [(other, sees(stage, actor, other)) for other in stage.actors if other != actor]
+    _staged([answer for _, answer in answers], where(stage, actor).assumed)
+    return tuple(sorted({actor, *(other for other, answer in answers if answer.ok)}, key=str))
+
+
 def _audience(message: Message, scene: Scene, chat: ChatRef, tid: str, number: int) -> tuple[InstanceRef, ...]:
-    """Who hears a message: 032's receivers and the sender; in an empty room, the sender alone."""
-    presence = Presence(chat.campaign_id, chat.chat_id, scene.cast)
+    """Who hears a message: 032's receivers and the sender; in an empty room, the sender alone. With a stage,
+    032's presence is the stage's (041's ``presence``): only those within earshot on the message's own channel,
+    so a whisper to someone behind a shut door is ``addressee_absent``."""
+    if scene.stage is None:
+        presence = Presence(chat.campaign_id, chat.chat_id, scene.cast)
+    else:
+        try:
+            presence = stage_presence(scene.stage, message)
+        except StagingRefused as refused:
+            raise _refuse(refused.reason, "the message cannot be placed on this chat's stage") from None
     try:
         sent = transmit(message, presence, sequence=number, provenance=f"chat:{chat.chat_id}", turn_id=tid)
     except TransmissionError as error:

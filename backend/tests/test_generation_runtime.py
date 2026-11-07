@@ -155,6 +155,26 @@ def test_c_a_director_after_speakers_hears_their_lines():
     assert ODA_LINE in harness.prompts()[2] and BELLAMY_LINE in harness.prompts()[2]
 
 
+def test_a_hearing_rule_decides_which_earlier_lines_each_later_call_is_given():
+    controls, voices = world()
+    asked = []
+
+    def hears(listener, speaker):  # Bellamy is out of Oda's earshot; the director hears only Bellamy
+        asked.append((listener, speaker))
+        return speaker == BELLAMY if listener is None else False
+    harness = Harness([say(ODA_LINE), say(BELLAMY_LINE), say("The candles gutter.")])
+    _plan, meter, briefs = two_speakers(harness, controls, voices, director_reply=True, policy=DIRECTOR_POLICY)
+    outcome = harness.runtime.run_turn(meter, briefs, controls=controls, director=scene("A guild dinner.", controls),
+                                       hears=hears)
+    assert [line.speaker for line in outcome.lines] == ["Oda", "Bellamy", NARRATOR]
+    _oda, bellamy, director = harness.prompts()
+    assert ODA_LINE not in bellamy and ODA_LINE not in director and BELLAMY_LINE in director
+    assert asked == [(BELLAMY, ODA), (None, ODA), (None, BELLAMY)]
+    with pytest.raises(GenerationError) as error:
+        harness.runtime.run_turn(meter, briefs, controls=controls, hears="everyone")
+    assert error.value.reason == "bad_hears"
+
+
 # -- D. world-less Mara ---------------------------------------------------------------------------
 
 BASE_VOICE = VoiceProfile(BASE, (VoiceAnchor("cadence", "cadence", "Answers questions with questions."),
