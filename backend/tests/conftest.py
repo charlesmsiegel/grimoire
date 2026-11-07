@@ -10,9 +10,10 @@ pytest_plugins = ["pytester"]
 #: CI shards (docs/TESTING.md#ci-gate): the crash and fault explorations (files named ``*recovery*``
 #: or ``*faults*``) run in two shards, ``GRIMOIRE_TEST_SHARD=store-explorations`` for the store-backed
 #: ones (also named ``*store*``) and ``explorations`` for the others; ``sync`` runs the other
-#: replica-sync files (named ``*sync*``), and ``rest`` runs every other file. Each file belongs to
-#: exactly one shard by its name, so together they always run the whole suite; unset runs everything.
-SHARDS = ("store-explorations", "explorations", "sync", "rest")
+#: replica-sync files (named ``*sync*``), ``stores`` the other store files (named ``*store*``), and
+#: ``rest`` runs every other file. Each file belongs to exactly one shard by its name, so together
+#: they always run the whole suite; unset runs everything.
+SHARDS = ("store-explorations", "explorations", "sync", "stores", "rest")
 
 
 def is_exploration(name: str) -> bool:
@@ -21,10 +22,13 @@ def is_exploration(name: str) -> bool:
 
 def shard_of(name: str) -> str:
     """The one shard a test file runs in; explorations win, so ``test_sync_faults.py`` is one, and a
-    store-backed exploration such as ``test_store_recovery.py`` runs in ``store-explorations``."""
+    store-backed exploration such as ``test_store_recovery.py`` runs in ``store-explorations``. Sync
+    wins over store, so a file named for both stays with the replica-sync files."""
     if is_exploration(name):
         return "store-explorations" if "store" in name else "explorations"
-    return "sync" if "sync" in name else "rest"
+    if "sync" in name:
+        return "sync"
+    return "stores" if "store" in name else "rest"
 
 
 def pytest_configure(config):
