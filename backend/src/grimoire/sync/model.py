@@ -14,20 +14,23 @@ Action = Literal["agreed", "copy", "conflict"]
 #: 107's campaign-local play-scope and chat records; ``relation`` is 017's typed relation record;
 #: ``blob``, ``image`` and ``placement`` are 018's art; ``transcript`` is 036's chat transcript pages.
 SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge",
-                          "blob", "image", "placement", "transcript"})
+                          "blob", "image", "placement", "transcript", "accepted", "wrapup", "holdings"})
 #: 018's art: own units, never source-coarse, never grouped with a definition. A blob is binary and
 #: content-addressed (listed by name and size, hashed only when copied or first seen).
 ASSET_KINDS = frozenset({"blob", "image", "placement"})
 #: Campaign-local kinds: independent of sources and of each other at commit time.
 CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge", "transcript"})
+#: 028's ledger: 021's accepted events and wrap-ups and 023's holder files, which their own stores commit
+#: several at a time. They are never decided file by file: a campaign's ledger files (with its 017
+#: relations, see ``HOLDS_RELATIONS``) are one unit that ``grimoire.ledgermerge`` merges (``units``).
+LEDGER_KINDS = frozenset({"accepted", "wrapup", "holdings"})
 #: Families whose own stores commit several files as one unit and whose cross-device merge rule is
-#: a later milestone (docs/EFFECTS.md, docs/HOLDINGS.md): never copied file by file, always reported
-#: as skipped. 021's accepted events and wrap-ups, 023's holdings, and 035's played chat turns (two devices
-#: playing one chat offline would both write its next turn; turn merges are 028's milestone before 044).
-HELD_BACK_KINDS = frozenset({"accepted", "wrapup", "holdings", "turn"})
-#: A campaign holding any record of this kind on either device has its 017 relations held back too,
-#: because 021 changes relations in the same commit as an event: a relation must never arrive
-#: without the event that changed it.
+#: a later milestone: never copied file by file, always reported as skipped. 035's played chat turns
+#: (two devices playing one chat offline would both write its next turn; turn merges come before 044).
+HELD_BACK_KINDS = frozenset({"turn"})
+#: A campaign holding any record of this kind on either device has its 017 relations in its ledger
+#: unit too, because 021 changes relations in the same commit as an event: a relation must never
+#: arrive without the event that changed it, so they are merged together.
 HOLDS_RELATIONS = "accepted"
 #: Create-only kinds: copied only onto an absent file, and a changed one is a conflict, never a copy.
 #: ``knowledge`` is 020's events, evidence and knowledge-log batches; ``image`` and ``blob`` are 018's;
@@ -36,9 +39,11 @@ IMMUTABLE_KINDS = frozenset({"definition", "knowledge", "image", "blob", "transc
 
 #: Conflict codes, each named in docs/SYNC.md. ``held``: a held-back path whose two devices hold
 #: different bytes (nothing is copied or kept for it; it ends only when both hold identical bytes).
+#: ``merge_review``: a ledger file whose campaign's merge stopped (``Conflict.review`` names why); nothing
+#: of that campaign's ledger is copied or kept until ``resolve_ledger`` or a later sync settles it.
 CONFLICT_CODES = frozenset({
     "blocked", "missing_ancestor", "deleted", "edit_delete", "concurrent", "resurrected",
-    "revision_modified", "head_dependency", "name_collision", "unapplicable", "denied", "held",
+    "revision_modified", "head_dependency", "name_collision", "unapplicable", "denied", "held", "merge_review",
 })
 
 

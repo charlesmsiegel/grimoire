@@ -48,6 +48,11 @@ SYNC_MAX_SHARD_WIDTH = 2
 #: 028's shards of a pair's archive and pending marker, ``archive.<prefix>.json``: the store accepts the
 #: names; ``grimoire.sync`` decides which of them the root document trusts.
 _SYNC_SHARD = re.compile(r"(?:archive|pending)\.[0-9a-f]{1,%d}\.json" % SYNC_MAX_SHARD_WIDTH)
+#: 028's base cache: ``peers/<device>/bases/<ledger path>`` holds the exact bytes of a ledger file (an
+#: accepted event, wrap-up, relation or holder file) as the pair last agreed on it, which a merge needs once
+#: both devices changed that file. The name mirrors the record's own path.
+SYNC_BASES = "bases"
+SYNC_BASE_KINDS = frozenset({"accepted", "wrapup", "relation", "holdings"})
 #: Device credentials (028): one pairing record per peer device under ``secrets/peers/``. Trusted
 #: bookkeeping like ``.sync``: written without a grant, never a record, never transferred.
 SECRETS = "secrets"
@@ -419,7 +424,8 @@ def is_kept_target(parts: Parts) -> bool:
 
 def sync_state_parts(name: str) -> Parts:
     """``device.json`` or ``peers/<device>/<file>`` under ``.sync``, where ``<file>`` is ``archive.json``,
-    ``pending.json``, ``keeps.json`` or a shard ``{archive,pending}.<hex>.json``; refuses anything else."""
+    ``pending.json``, ``keeps.json``, a shard ``{archive,pending}.<hex>.json`` or a base ``bases/<ledger
+    path>`` (``SYNC_BASES``); refuses anything else."""
     if name == SYNC_DEVICE:
         return (SYNC, SYNC_DEVICE)
     pieces = name.split("/") if isinstance(name, str) else []
@@ -431,6 +437,15 @@ def sync_state_parts(name: str) -> Parts:
         except (ValueError, InvalidResourcePath):
             pass
         else:
+            return (SYNC, *pieces)
+    if len(pieces) > 3 and pieces[0] == SYNC_PEERS and pieces[2] == SYNC_BASES:
+        try:
+            validate_segment(pieces[1], "device")
+            ResourcePath((pieces[1],))
+            found = classify(tuple(pieces[3:]))
+        except (ValueError, InvalidResourcePath):
+            found = None
+        if found is not None and found[0] in SYNC_BASE_KINDS:
             return (SYNC, *pieces)
     raise ValueError(f"not a sync state name: {name!r}")
 

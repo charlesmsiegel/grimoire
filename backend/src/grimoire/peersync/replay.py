@@ -311,6 +311,17 @@ class StepBuffer:
             # resolve's record step adds a hold, and only of the version that resolve replaces here.
             raise PeerRefused("invalid", "a peer may not dismiss, add or drop a hold, or record a version it "
                                          "did not deliver")
+        base = name.startswith(f"peers/{self.peer}/bases/")
+        if base:  # 028: a base cache entry holds this device's own agreed file, so it is checked against it
+            path = name[len(f"peers/{self.peer}/bases/"):]
+            try:
+                current = store.read_exact(path)
+            except (StoreError, OSError):
+                current = None
+            if current is None or current != body:
+                raise PeerRefused("invalid", f"{name} is not this device's own {path}")
+            held = store.read_sync_state(name)  # the client's mirror may not hold it: this device's own decides
+            return None if held is None else etag(held)
         for kind in ("archive", "pending"):
             if not is_shard(name, kind, self.peer):
                 continue

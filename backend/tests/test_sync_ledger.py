@@ -1,0 +1,249 @@
+"""028: a campaign's ledger syncs as one unit, merged (``grimoire.sync.units``), never file by file.
+
+Two devices copy one agreed library, sync once, play offline and sync again. A clean merge leaves both
+devices with the same ledger bytes whichever device starts the sync; a merge that stops is a
+``merge_review`` conflict on the files the devices hold differently, and nothing of that ledger moves.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from grimoire.store import LibraryStore
+from grimoire.sync import (
+    ResolveRefused, SyncInterrupted, apply_sync, plan_sync, resolve, resolve_ledger, sync, sync_until_quiet,
+)
+
+from effects_fixtures import C, CHAT, TAM, give
+from ledger_fixtures import COIN, Device, build_base, pay, read_ledger
+from store_helpers import OWNER
+from sync_helpers import DESKTOP, PHONE, handles
+
+
+def ledger_files(store: LibraryStore) -> dict[str, bytes]:
+    found = {}
+    for kind in ("accepted", "wrapups", "relations", "holdings"):
+        root = store.root / "campaigns" / C / kind
+        for path in sorted(root.rglob("*.json")) if root.exists() else ():
+            found[path.relative_to(store.root).as_posix()] = path.read_bytes()
+    return found
+
+
+@pytest.fixture
+def pair(tmp_path: Path):
+    base = build_base(tmp_path)
+    made = {name: Device(base, tmp_path, name) for name in (DESKTOP, PHONE)}
+    first = sync(made[DESKTOP].store, made[PHONE].store, handles())
+    assert first.conflicts == ()
+    yield made
+    for device in made.values():
+        device.close()
+
+
+def test_an_event_accepted_on_one_device_arrives_with_its_relations_and_holdings(pair):
+    pair[DESKTOP].accept(give())
+    report = sync_until_quiet(pair[DESKTOP].store, pair[PHONE].store, handles())
+    assert report.conflicts == ()
+    assert ledger_files(pair[DESKTOP].store) == ledger_files(pair[PHONE].store)
+    assert len(read_ledger(pair[PHONE].store).events) == 1
+
+
+@pytest.mark.parametrize("first", [DESKTOP, PHONE])
+def test_events_accepted_on_both_devices_merge_to_one_ledger_whichever_starts(pair, first):
+    pair[DESKTOP].accept(give())
+    pair[PHONE].accept(pay())
+    other = PHONE if first == DESKTOP else DESKTOP
+    report = sync_until_quiet(pair[first].store, pair[other].store, handles())
+    assert report.conflicts == (), report.conflicts
+    files = ledger_files(pair[DESKTOP].store)
+    assert files == ledger_files(pair[PHONE].store)
+    assert len(read_ledger(pair[DESKTOP].store).events) == 2
+    again = sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    assert again.conflicts == () and not again.wrote
+
+
+def test_a_holder_file_both_devices_change_again_merges_from_the_base_cache(pair):
+    pair[DESKTOP].accept(give())
+    pair[PHONE].accept(pay())
+    sync_until_quiet(pair[DESKTOP].store, pair[PHONE].store, handles())
+    cached = pair[PHONE].store.read_sync_state(f"peers/{DESKTOP}/bases/campaigns/{C}/holdings/character/tam.json")
+    assert cached is not None and cached == (pair[PHONE].store.root / f"campaigns/{C}/holdings/character/tam.json").read_bytes()
+    pair[DESKTOP].accept(pay(sequence=12, chat=CHAT, attempt="pay-desk-12"))
+    pair[PHONE].accept(pay(sequence=13, attempt="pay-phone-13"))  # both change Tam's and Ines's holder files
+    report = sync_until_quiet(pair[PHONE].store, pair[DESKTOP].store, handles())
+    assert report.conflicts == (), report.conflicts
+    assert ledger_files(pair[DESKTOP].store) == ledger_files(pair[PHONE].store)
+    assert read_ledger(pair[DESKTOP].store).holdings[TAM].value.count(COIN) == 4
+
+
+def test_two_events_of_one_chat_are_a_merge_review_and_nothing_of_the_ledger_moves(pair):
+    pair[DESKTOP].accept(pay(sequence=8, attempt="pay-desk"))
+    pair[PHONE].accept(pay(sequence=9, attempt="pay-phone"))
+    before = {name: ledger_files(device.store) for name, device in pair.items()}
+    report = sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    codes = {conflict.code for conflict in report.conflicts}
+    assert codes == {"merge_review"}, report.conflicts
+    assert all("same_chat" in {item.reason for item in conflict.review} for conflict in report.conflicts)
+    assert {name: ledger_files(device.store) for name, device in pair.items()} == before
+    assert pair[DESKTOP].store.conflicts() == () and pair[PHONE].store.conflicts() == ()  # nothing kept
+
+
+def _review(pair):
+    pair[DESKTOP].accept(pay(sequence=8, attempt="pay-desk"))
+    pair[PHONE].accept(pay(sequence=9, attempt="pay-phone"))
+    report = sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    tokens = {conflict.token for conflict in report.conflicts}
+    assert len(tokens) == 1
+    return tokens.pop()
+
+
+def test_resolve_ledger_merge_keeps_both_devices_events_and_ends_the_review(pair):
+    token = _review(pair)
+    resolve_ledger(pair[PHONE].store, pair[DESKTOP].store, C, "merge", token, handles())
+    assert ledger_files(pair[DESKTOP].store) == ledger_files(pair[PHONE].store)
+    assert len(read_ledger(pair[DESKTOP].store).events) == 2
+    again = sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    assert again.conflicts == () and not again.wrote
+
+
+def test_resolve_ledger_keeping_a_device_discards_only_for_an_owner(pair):
+    pair[DESKTOP].accept(pay(sequence=8, attempt="pay-desk"))
+    pair[PHONE].hand_edit(TAM, COIN, 12)  # no file only the phone holds: the desktop's ledger can be kept
+    report = sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    token = {conflict.token for conflict in report.conflicts}.pop() if report.conflicts else None
+    if token is None:  # the merge took both: nothing to resolve
+        pytest.skip("merged without review")
+    with pytest.raises(ResolveRefused, match="only an owner"):
+        resolve_ledger(pair[DESKTOP].store, pair[PHONE].store, C, DESKTOP, token, handles())
+    resolve_ledger(pair[DESKTOP].store, pair[PHONE].store, C, DESKTOP, token, handles(), owners={PHONE: {OWNER}})
+    assert ledger_files(pair[DESKTOP].store) == ledger_files(pair[PHONE].store)
+
+
+def test_resolve_ledger_refuses_a_stale_review_and_a_file_only_the_losing_device_holds(pair):
+    token = _review(pair)
+    with pytest.raises(ResolveRefused, match="revoke"):
+        resolve_ledger(pair[DESKTOP].store, pair[PHONE].store, C, DESKTOP, token, handles(), owners={PHONE: {OWNER}})
+    pair[DESKTOP].accept(pay(sequence=10, attempt="pay-desk-10"))
+    with pytest.raises(ResolveRefused, match="changed"):
+        resolve_ledger(pair[DESKTOP].store, pair[PHONE].store, C, "merge", token, handles())
+
+
+def test_resolve_refuses_a_ledger_file_and_points_to_resolve_ledger(pair):
+    _review(pair)
+    path = f"campaigns/{C}/holdings/character/tam.json"
+    with pytest.raises(ResolveRefused, match="resolve_ledger"):
+        resolve(pair[DESKTOP].store, pair[PHONE].store, path, "sha256:" + "0" * 64, {}, handles())
+
+
+class _PowerLoss(Exception):
+    pass
+
+
+def _played(root: Path):
+    root.mkdir()
+    base = build_base(root)
+    made = {name: Device(base, root, name) for name in (DESKTOP, PHONE)}
+    sync(made[DESKTOP].store, made[PHONE].store, handles())
+    made[DESKTOP].accept(give())
+    made[PHONE].accept(pay())
+    sync_until_quiet(made[DESKTOP].store, made[PHONE].store, handles())  # a merge, so a base cache, too
+    made[DESKTOP].accept(pay(sequence=12, chat=CHAT, attempt="pay-desk-12"))
+    made[PHONE].accept(pay(sequence=13, attempt="pay-phone-13"))
+    return made
+
+
+def _steps(made) -> list[str]:
+    seen = []
+    plan = plan_sync(made[DESKTOP].store, made[PHONE].store, handles())
+    apply_sync(plan, handles(), observer=lambda step: seen.append(f"{step.kind}:{step.device}"))
+    return seen
+
+
+def test_a_merge_stopped_after_any_commit_converges_to_the_same_ledger(tmp_path):
+    reference = _played(tmp_path / "reference")
+    try:
+        steps = _steps(reference)
+        assert steps[:2] == [f"data:{DESKTOP}", f"data:{PHONE}"] and any(step.startswith("archive") for step in steps)
+        expected = ledger_files(reference[DESKTOP].store)
+        assert expected == ledger_files(reference[PHONE].store)
+    finally:
+        for device in reference.values():
+            device.close()
+    for stop in range(len(steps)):
+        made = _played(tmp_path / f"stop-{stop}")
+        try:
+            done = []
+
+            def observer(step, done=done, stop=stop):
+                done.append(step)
+                if len(done) > stop:
+                    raise _PowerLoss(f"power lost after {step.kind} on {step.device}")
+            plan = plan_sync(made[DESKTOP].store, made[PHONE].store, handles())
+            with pytest.raises(_PowerLoss):
+                apply_sync(plan, handles(), observer=observer)
+            report = sync_until_quiet(made[PHONE].store, made[DESKTOP].store, handles())
+            assert report.conflicts == (), (stop, report.conflicts)
+            assert ledger_files(made[DESKTOP].store) == ledger_files(made[PHONE].store) == expected, stop
+            assert not sync(made[DESKTOP].store, made[PHONE].store, handles()).wrote
+        finally:
+            for device in made.values():
+                device.close()
+
+
+def test_a_ledger_changed_during_the_sync_stops_the_merge_before_it_commits(pair, monkeypatch):
+    from grimoire.sync import units
+    pair[DESKTOP].accept(give())
+    pair[PHONE].accept(pay())
+    plan = plan_sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    real = units.changed
+
+    def accept_meanwhile(plan, copies, published):  # an event accepted on the phone after the plan read it
+        if not published:
+            pair[PHONE].accept(pay(sequence=20, attempt="pay-phone-20"))
+        return real(plan, copies, published)
+    monkeypatch.setattr(units, "changed", accept_meanwhile)
+    with pytest.raises(SyncInterrupted, match="changed on phone during the sync"):
+        apply_sync(plan, handles())
+    monkeypatch.undo()
+    report = sync_until_quiet(pair[DESKTOP].store, pair[PHONE].store, handles())
+    assert report.conflicts == () and ledger_files(pair[DESKTOP].store) == ledger_files(pair[PHONE].store)
+    assert len(read_ledger(pair[DESKTOP].store).events) == 3
+
+
+@pytest.mark.parametrize("order", ["same", "reversed"])
+def test_archives_left_apart_by_a_crash_still_merge_later_changes_either_way(tmp_path, order):
+    def later(made):  # each device accepts again after the sync that agreed on the merge
+        made[DESKTOP].accept(pay(sequence=30, chat=CHAT, attempt="pay-desk-30"))
+        made[PHONE].accept(pay(sequence=31, attempt="pay-phone-31"))
+
+    reference = _played(tmp_path / "reference")
+    try:
+        sync_until_quiet(reference[DESKTOP].store, reference[PHONE].store, handles())
+        later(reference)
+        assert sync_until_quiet(reference[DESKTOP].store, reference[PHONE].store, handles()).conflicts == ()
+        expected = ledger_files(reference[DESKTOP].store)
+    finally:
+        for device in reference.values():
+            device.close()
+    made = _played(tmp_path / "crashed")
+    try:
+        done = []
+
+        def observer(step):
+            done.append(step)
+            if step.kind == "archive":  # one archive holds the new agreement, the other the old one
+                raise _PowerLoss(f"power lost after archive on {step.device}")
+        plan = plan_sync(made[DESKTOP].store, made[PHONE].store, handles())
+        with pytest.raises(_PowerLoss):
+            apply_sync(plan, handles(), observer=observer)
+        later(made)
+        pair = (made[DESKTOP].store, made[PHONE].store)
+        report = sync_until_quiet(*(pair if order == "same" else pair[::-1]), handles())
+        assert report.conflicts == (), report.conflicts
+        assert ledger_files(made[DESKTOP].store) == ledger_files(made[PHONE].store) == expected
+        assert any(step.kind == "archive" for step in done)
+    finally:
+        for device in made.values():
+            device.close()

@@ -31,18 +31,18 @@ from grimoire.store.replica import (
     SHADOWED, CanonicalScan, chats_named, instances_named, parse_exact, pinned_by, previous_of,
 )
 
-from . import bookkeeping, keeps as kept_record, knowledge as merge
+from . import bookkeeping, keeps as kept_record, knowledge as merge, units as ledger_units
 from .art import art_needs, art_unmet
 from .decide import archive_candidate, decide, derive_base
 from .documents import ArchiveView, KeepsView, PendingView, parse_keeps, syncable
 from .errors import ArchiveTooLarge, SameDevice, SyncInterrupted, SyncNotQuiet
 from .identity import device_of, identify
-from .model import ASSET_KINDS, CAMPAIGN_LOCAL, HELD_BACK_KINDS, HOLDS_RELATIONS, Base, Side
+from .model import ASSET_KINDS, CAMPAIGN_LOCAL, HELD_BACK_KINDS, HOLDS_RELATIONS, LEDGER_KINDS, Base, Side
 
 _SLOT = re.compile(r"~[0-9a-f]{12}(?:\.([1-9][0-9]*))?$")
 #: Folders of the held-back families (021 accepted events and wrap-ups, 023 holdings, 035 turns).
-_HELD_FOLDERS = frozenset({"accepted", "wrapups", "holdings", "turns"})
-_HELD = "held back until 028's merge rules exist"
+_HELD_FOLDERS = frozenset({"turns"})  # 028's ledger folders are the units' (``units.LEDGER_FOLDERS``)
+_HELD = "held back until its merge rule exists"
 
 #: Store refusals that concern one path or unit: that unit becomes ``unapplicable``.
 #: ``InstanceIdConflict``: a copy that would form a cross-kind instance id pair on its receiver (A2).
@@ -66,6 +66,7 @@ class Copy:
     expected: str | None
     size: int | None = None
     source: LibraryStore | None = field(default=None, repr=False, compare=False)
+    unit: str | None = None  # 028: the campaign whose ledger unit this copy is part of (all or none lands)
 
     @property
     def etag(self) -> str:
@@ -99,6 +100,10 @@ class Conflict:
     #: devices that dismissed the other device's current version (``dismiss``): not kept for them again
     #: while the conflict stands on the same archive base
     dismissed: tuple[str, ...] = ()
+    #: ``merge_review`` (028): every reason the campaign's ledger merge stopped (``ledgermerge.ReviewItem``)
+    review: tuple = ()
+    #: ``merge_review``: what the review was made on (``units.token``); ``resolve_ledger`` must name it
+    token: str = ""
 
 
 @dataclass(frozen=True)
@@ -138,6 +143,10 @@ class SyncPlan:
     exclusions: dict[str, frozenset[str]] = field(default_factory=dict)
     #: per device, the peer's versions kept there for open conflicts, and those it dismissed (028)
     kept_records: dict[str, KeepsView] = field(default_factory=dict)
+    #: 028: each ledger file's campaign (``units``), and per device the paths each unit's merge copies there
+    units: dict[str, str] = field(default_factory=dict)
+    unit_copies: dict[str, dict[str, set[str]]] = field(default_factory=dict)
+    choices: dict[str, str] = field(default_factory=dict)  # 028: ``resolve_ledger``'s decision, by campaign
 
     def other(self, device: str) -> str:
         return self.devices[1] if device == self.devices[0] else self.devices[0]
@@ -168,14 +177,15 @@ def _current(side: Side) -> str | None:
     return side.etag if side.state == "present" else None
 
 
-def plan_sync(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object] | None = None) -> SyncPlan:
+def plan_sync(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object] | None = None, *,
+              choices: Mapping[str, str] | None = None) -> SyncPlan:
     """Decide every path; read only. Raises ``SameDevice``/``NoDeviceIdentity`` or ``SyncInterrupted``.
 
     With the ``handles`` the sync will commit with, a blob copy its receiver's durable authority
     grants no write for is ``denied`` here, without reading the blob (``_ungranted``)."""
     first, second = _lock_order((left, right))
     with first.cached_reads(), second.cached_reads():
-        return _plan(left, right, handles or {})
+        return _plan(left, right, handles or {}, dict(choices or {}))
 
 
 def _lock_order(stores) -> list[LibraryStore]:  # type: ignore[no-untyped-def]
@@ -198,7 +208,8 @@ def _locked(*stores: LibraryStore):  # type: ignore[no-untyped-def]
         yield
 
 
-def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]) -> SyncPlan:
+def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object],
+          choices: dict[str, str] | None = None) -> SyncPlan:
     ids = device_of(left), device_of(right)
     if ids[0] == ids[1]:
         raise SameDevice(f"both libraries are device {ids[0]!r}; give one a new identity")
@@ -222,10 +233,10 @@ def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]
         paths |= {path for path in (*scan.files, *scan.blocked, *scan.blobs) if syncable(path)}
         paths |= set(archives[device].entries) | set(pendings[device].entries)
         paths |= archives[device].named | pendings[device].named  # ignored: uncertain, never forgotten
-    held = _held_campaigns(scans.values())
+    ledgers = _held_campaigns(scans.values())  # 028: campaigns whose relations are in their ledger unit
     skipped = {device: tuple(sorted({*scans[device].skipped, *(
         path for path in (*scans[device].files, *scans[device].blocked)
-        if _kind(path) in HELD_BACK_KINDS or _held_relation(path, held))})) for device in pair}
+        if _kind(path) in HELD_BACK_KINDS)})) for device in pair}
     ordered = tuple(sorted(paths))  # held relations stay: no decision, but their bookkeeping is kept
     _check_archive_size(pair, ordered)
     sides = {path: {device: _side(scans[device], path) for device in pair} for path in ordered}
@@ -233,10 +244,13 @@ def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]
                                (_current(sides[path][a]), _current(sides[path][b]))) for path in ordered}
     plan = SyncPlan(pair, stores, scans, archives, pendings, ordered, sides, bases,
                     copies={a: [], b: []}, keeps={a: [], b: []}, ungranted={a: [], b: []}, notices=notices,
-                    skipped=skipped, held={path for path in ordered if _held_relation(path, held)},
-                    kept_records=records)
+                    skipped=skipped, held=set(), kept_records=records,
+                    units={path: unit for path in ordered if (unit := ledger_units.unit_of(path, ledgers)) is not None},
+                    choices=choices or {})
     ungranted = _verify_blobs(plan, handles)
     for path in ordered:
+        if path in plan.units:  # 028: merged as its campaign's ledger unit (below), never decided alone
+            continue
         if path in plan.held:  # never decided, copied or archived; an uncertain base stays pending
             if not _identical(sides[path].values()):  # but a divergence is never silent (C1)
                 plan.conflicts[path] = Conflict(path, "held", f"{_HELD}: its campaign has accepted events (021)")
@@ -264,8 +278,10 @@ def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]
                 plan.copies[dest].append(Copy(path, origin, dest, scans[origin].files[path],
                                               _current(sides[path][dest])))
     _held_families(plan)
+    ledger_units.plan_units(plan)
     for device in pair:
         _admit(plan, device)
+        ledger_units.whole(plan, device)
     _group_knowledge(plan)
     for device in pair:
         _plan_keeps(plan, device)
@@ -597,13 +613,15 @@ def _admit_units(store: LibraryStore, copies: list[Copy]) -> tuple[list[Copy], l
     (manifest units first), so two units that are each acceptable but not together are never both
     admitted. Manifests that link to other sources are then admitted cumulatively in sorted order, so
     a cross-source link cycle is caught. Each art file is checked once, over the accepted copies its
-    owner needs. The caller runs one combined check of everything admitted.
+    owner needs. A campaign's merged ledger (028) is one unit, admitted whole or not at all. The caller
+    runs one combined check of everything admitted.
     """
+    ledger, rejected = ledger_units.admit(store, [copy for copy in copies if copy.unit is not None], _stage, _preflight)
+    copies = [copy for copy in copies if copy.unit is None]
     by_path = {copy.path: copy for copy in copies}
     heads = {copy.path: [path for path in _manifest_heads(copy) if path in by_path]
              for copy in copies if syncable(copy.path) == "manifest"}
-    admitted: list[Copy] = []
-    rejected: list[tuple[Copy, BaseException]] = []
+    admitted: list[Copy] = list(ledger)
 
     def admit(copy: Copy, over: list[Copy], what: str) -> bool:
         txn = store.transaction()
@@ -726,8 +744,9 @@ def _plan_keeps(plan: SyncPlan, device: str) -> None:
     other, store = plan.other(device), plan.stores[device]
     keeps: list[Keep] = []
     for path, conflict in sorted(plan.conflicts.items()):
-        if conflict.code in ("held", "denied") or syncable(path) == "blob":
-            continue  # held: nothing is kept until 028 (C1); denied: never kept; a blob's name is its content
+        if conflict.code in ("held", "denied") or syncable(path) == "blob" or path in plan.units:
+            continue  # held: nothing is kept (C1); denied: never kept; a blob's name is its content; a ledger
+            # file is merged again by every sync, from the versions both devices still hold (028)
         side = plan.sides[path][other]
         mine = plan.sides[path][device]
         if side.state != "present" or (mine.state == "blocked" and mine.reason == "unreadable"):
@@ -991,12 +1010,14 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
     def on_denied(keys: frozenset[str]) -> dict[str, bytes | None]:
         denied = {key for key in keys if not key.startswith("kept/")}
         own_units = CAMPAIGN_LOCAL | ASSET_KINDS  # never source-coarse: art is denied only for itself
-        sources = {_source_of(path) for path in denied if syncable(path) not in own_units}
+        sources = {_source_of(path) for path in denied if syncable(path) not in own_units | LEDGER_KINDS}
         logs = {_knowledge_campaign(path) for path in denied} - {None}  # a log is one unit, too
+        ledgers = ledger_units.denied(copies, denied)  # and a campaign's merged ledger (028)
         changes: dict[str, bytes | None] = {}
         for copy in copies:
-            if copy.path in denied or (syncable(copy.path) not in own_units
-                                       and _source_of(copy.path) in sources) or _knowledge_campaign(copy.path) in logs:
+            if copy.path in denied or (copy.unit is None and syncable(copy.path) not in own_units
+                                       and _source_of(copy.path) in sources) or _knowledge_campaign(copy.path) in logs \
+                    or (copy.unit is not None and copy.unit in ledgers):
                 dropped.add(copy.path)
                 if copy.path not in denied:
                     changes[copy.path] = None
@@ -1023,6 +1044,10 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
                          if copy.path not in held and _knowledge_campaign(copy.path) in broken})
             for path, why in held.items():
                 drop(path, why)
+            broken_units = {copy.unit for copy in copies if copy.unit is not None and copy.path in dropped}
+            for copy in copies:  # a campaign's merged ledger lands whole or not at all (028)
+                if copy.unit in broken_units and copy.path not in dropped:
+                    drop(copy.path, f"campaign {copy.unit}'s merged ledger did not land whole")
             if len(dropped) == before:
                 break
         refused = [keep for keep in keeps if str(_kept_key(keep)) in keys]
@@ -1041,6 +1066,9 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
 
     try:
         with _locked(*plan.stores.values()):  # a blob copy loads from the origin inside this commit
+            stale = ledger_units.changed(plan, copies, applied.published)  # 028: rechecked under the locks
+            if stale is not None:
+                raise SyncInterrupted(f"the data commit on {device} stopped: {stale}", _report(plan, applied))
             result = txn.commit(handle, dict(approvals), on_denied=on_denied)
     except (StaleWrite, WriteConflict, SyncInterrupted, *PER_PATH_ERRORS) as error:
         applied.consumed.extend(getattr(error, "consumed_approvals", ()))  # spent without a write (R16)
@@ -1190,7 +1218,9 @@ def _commit_keeps(plan: SyncPlan, applied: _Applied) -> None:
 
 def _commit_archive(plan: SyncPlan, device: str, entries: Mapping[str, tuple[str, str]], applied: _Applied) -> None:
     files, _ = bookkeeping.render_files("archive", plan.other(device), plan.devices, entries, ARCHIVE_LIMIT)
-    _commit_states(plan, device, "archive", bookkeeping.changes(plan.stores[device], files, plan.archives[device].files), applied)
+    states = bookkeeping.changes(plan.stores[device], files, plan.archives[device].files)
+    states += ledger_units.base_states(plan, device, entries, applied.published.get(device, ()))  # 028
+    _commit_states(plan, device, "archive", states, applied)
 
 
 def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object],

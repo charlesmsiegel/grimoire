@@ -10,6 +10,7 @@ with 019's ``resolve`` (``resolve_conflict``). See docs/DEVICE_SYNC.md for the c
 from .errors import (
     AuthenticationFailed, MirrorMismatch, NotPaired, PairingError, PeerRefused, PeerSyncError, TransportError,
 )
+from .ledger import resolve_ledger_with
 from .pairing import PEER_SCOPES, Pairing, new_pairing_key, pair, peer_principal, read_pairing, unpair
 from .resolving import ResolveReport, resolve_conflict
 from .server import PeerServer
@@ -19,5 +20,5 @@ from .snapshot import Limits
 __all__ = [
     "AuthenticationFailed", "Limits", "MirrorMismatch", "NotPaired", "PEER_SCOPES", "Pairing", "PairingError",
     "PeerRefused", "PeerServer", "PeerSyncError", "ResolveReport", "TransferReport", "TransportError",
-    "new_pairing_key", "pair", "peer_principal", "read_pairing", "resolve_conflict", "transfer", "unpair",
+    "new_pairing_key", "pair", "peer_principal", "read_pairing", "resolve_conflict", "resolve_ledger_with", "transfer", "unpair",
 ]

@@ -23,13 +23,14 @@ from pathlib import Path
 from types import MappingProxyType
 
 from grimoire.security import Authorizer, Grant, Permission, ResourcePath
-from grimoire.store import LibraryStore, etag
+from grimoire.store import LibraryStore, StoreError, etag
 from grimoire.store.diskops import is_link
 from grimoire.store.jsonfmt import MAX_FILE_BYTES
 from grimoire.store.layout import name_key
 from grimoire.store.media import MAX_BLOB_BYTES
 from grimoire.store.replica import CanonicalScan
 from grimoire.sync.bookkeeping import pair_files, read_document
+from grimoire.sync import units as ledger_units
 from grimoire.sync.documents import DEVICE_FILE, keeps_name, pair_state, parse_device
 
 from .errors import MirrorMismatch, TransportError
@@ -250,6 +251,29 @@ def _walk(root: Path, parts: tuple[str, ...], depth: int,
         yield from _walk(root, (*parts, name), depth + 1, blocked)
 
 
+def base_files(store: LibraryStore, peer: str, device: str | None) -> dict[str, bytes]:
+    """028: the pair's base cache entries a merge may need from this device: each ledger file its archive
+    records as agreed that it no longer holds as agreed (an unchanged one is its own base, sent as itself)."""
+    if device is None:
+        return {}
+    view = read_document(store, "archive", peer, tuple(sorted((device, peer))))  # type: ignore[arg-type]
+    found: dict[str, bytes] = {}
+    for path, (kind, tag) in sorted(getattr(view, "entries", {}).items()):
+        if kind != "agreed" or not ledger_units.is_unit_path(path):
+            continue
+        try:
+            current = store.read_exact(path)
+        except (StoreError, OSError):
+            current = None  # unreadable here: the client's plan sees it blocked and stops that merge anyway
+        if current is not None and etag(current) == tag:
+            continue
+        name = ledger_units.base_name(peer, path)
+        data = store.read_sync_state(name)
+        if data is not None and etag(data) == tag:
+            found[name] = data
+    return found
+
+
 def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -> None:  # type: ignore[no-untyped-def]
     """Stream this library's snapshot for the pair (this device, ``peer``) to the authenticated peer."""
     principal = peer_principal(peer)
@@ -271,6 +295,7 @@ def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -
         # sent as they stand, so the mirror's document is ignored with the same paths uncertain
         states.update(pair_files(store, kind, peer) if device is None  # the mirror refuses it anyway
                       else read_document(store, kind, peer, tuple(sorted((device, peer)))).files)  # type: ignore[arg-type]
+    states.update(base_files(store, peer, device))
     for name, data in states.items():
         channel.send({"t": "state", "name": name}, data)
     summary = scan_summary(store)  # before the walk: a file changed after it fails the client's check

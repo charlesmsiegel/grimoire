@@ -134,16 +134,17 @@ def test_021_an_accepted_folder_that_cannot_be_listed_still_holds_relations_back
         phone.close()
 
 
-def test_021_resolve_refuses_a_held_relation(tmp_path):
+def test_021_an_event_and_the_relation_it_ended_arrive_together_and_resolve_refuses_the_relation(tmp_path):
     desktop, phone, keys, _ = _effects_pair(tmp_path)
     try:
         path = f"campaigns/{EFFECTS_C}/relations/r-seed-1.json"
         _accept(desktop, keys)  # the event ends this relation on the desktop
-        assert path in sync(desktop, phone, handles()).skipped[DESKTOP]
-        mine, theirs = (desktop.root / path).read_bytes(), (phone.root / path).read_bytes()
-        with pytest.raises(ResolveRefused, match="held back"):
-            resolve(desktop, phone, path, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
-        assert (phone.root / path).read_bytes() == theirs
+        report = sync(desktop, phone, handles())  # 028: one campaign's ledger, merged as one unit
+        assert (path, PHONE) in report.copied and report.conflicts == ()
+        mine = (desktop.root / path).read_bytes()
+        assert (phone.root / path).read_bytes() == mine
+        with pytest.raises(ResolveRefused, match="resolve_ledger"):
+            resolve(desktop, phone, path, etag(mine), {DESKTOP: etag(mine), PHONE: etag(mine)}, handles())
         assert effects_library(phone, keys).continuity(EFFECTS_C, as_of=8, requested_by=DIRECTOR).problems == ()
     finally:
         desktop.close()
@@ -342,10 +343,10 @@ def test_resolve_of_a_manifest_refuses_a_head_whose_own_pin_still_differs(tmp_pa
 
 
 @pytest.mark.parametrize("crash", [False, True])
-def test_021_a_relation_held_on_a_first_sync_is_recorded_as_agreed(tmp_path, monkeypatch, crash):
-    """Two copies of one library with an accepted event: the held relations already agree, and that is recorded
+def test_021_a_relation_agreed_on_a_first_sync_is_recorded_as_agreed(tmp_path, monkeypatch, crash):
+    """Two copies of one library with an accepted event: the ledger relations already agree, and that is recorded
     (in the archives and in the data commits' markers, should the first sync stop before its archives), so a
-    later one-sided deletion stays a deletion once the hold lifts."""
+    later one-sided deletion is reviewed, and stays a deletion once the campaign has no accepted event."""
     from grimoire.sync import session as sync_session
     keys = Handles()
     desktop = LibraryStore.create(tmp_path / DESKTOP)
@@ -367,13 +368,15 @@ def test_021_a_relation_held_on_a_first_sync_is_recorded_as_agreed(tmp_path, mon
             monkeypatch.undo()
         else:
             first = sync(desktop, phone, handles())
-            assert relations and set(relations) <= set(first.skipped[DESKTOP])
+            assert relations and not set(relations) & set(first.skipped[DESKTOP]) and first.conflicts == ()
         victim = relations[0]
         (phone.root / victim).unlink()
-        sync(desktop, phone, handles())  # still held
+        # 028: a ledger file is never deleted, nor copied back over a deletion: the merge stops for review
+        assert sync(desktop, phone, handles()).conflict(victim).code == "merge_review"
+        assert not (phone.root / victim).exists()
         for store, where in ((desktop, "d"), (phone, "p")):
             shutil.move(str(store.root / "campaigns" / EFFECTS_C / "accepted"), str(tmp_path / f"away-{where}"))
-        report = sync(desktop, phone, handles())  # the hold lifts
+        report = sync(desktop, phone, handles())  # no accepted event: relations are decided one by one again
         assert not (phone.root / victim).exists(), report.copied
         assert report.conflict(victim).code == ("missing_ancestor" if crash else "deleted")  # never a silent copy
     finally:
@@ -434,9 +437,9 @@ def test_021_an_unlistable_campaigns_folder_holds_every_relation(tmp_path):
         shutil.move(str(phone.root / "campaigns"), str(tmp_path / "phone-campaigns"))
         make_dir_link(phone.root / "campaigns", tmp_path / "phone-campaigns")
         report = sync(desktop, phone, handles())
-        assert set(relations) <= set(report.skipped[DESKTOP])
-        # C1: never decided, but reported: the phone's side is unknown, so each relation is a held conflict
-        assert {conflict.code for conflict in report.conflicts if conflict.path in relations} == {"held"}
+        # C1: never decided, but reported: the phone's side is unknown, so its ledger merge stops for review
+        assert {conflict.code for conflict in report.conflicts if conflict.path in relations} == {"merge_review"}
+        assert not [path for path, _ in report.copied if "/relations/" in path]
         assert not any("/relations/" in str(path) for path in phone.conflicts())
     finally:
         desktop.close()

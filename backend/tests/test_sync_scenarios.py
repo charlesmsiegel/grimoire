@@ -1259,9 +1259,9 @@ def test_re_identifying_both_devices_is_a_true_first_sync(pair):
     assert report.copied == ((PATHS["wren_b"], "laptop"),)
 
 
-def test_021_an_accepted_effect_and_the_relations_it_changed_are_held_back_together(tmp_path):
-    """021 commits an event with its relation changes, and its merge rule is a later milestone
-    (docs/EFFECTS.md): sync carries neither, so the phone never sees one without the other."""
+def test_021_an_accepted_effect_and_the_relations_it_changed_arrive_together(tmp_path):
+    """021 commits an event with its relation changes; 028 merges a campaign's ledger as one unit, so the
+    phone receives the event and the relations it changed in one commit, never one without the other."""
     from grimoire.core import DIRECTOR
     from effects_fixtures import C, CONTROLS, Handles, contribution, effects_library, give
     from effects_fixtures import seed as seed_effects
@@ -1278,17 +1278,13 @@ def test_021_an_accepted_effect_and_the_relations_it_changed_are_held_back_toget
         proposal = give()
         effects_library(desktop, keys).accept(proposal, controls=CONTROLS, contributions=[contribution()],
                                               endorsements=[keys.endorse(proposal)]).commit()
-        report = sync(desktop, phone, handles())
-        assert not [path for path, _ in report.copied if "/accepted/" in path or "/relations/" in path]
-        # C1: the divergence is reported as held conflicts (the event, the relations it changed), never silent
-        changed = {path for path in desktop.scan().files if "/relations/" in path
+        changed = {path for path in desktop.scan().files if ("/relations/" in path or "/accepted/" in path)
                    and (not (phone.root / path).exists()
                         or (desktop.root / path).read_bytes() != (phone.root / path).read_bytes())}
-        assert changed and {(found.path, found.code) for found in report.conflicts} == {
-            (path, "held") for path in {*changed, *(p for p in report.skipped[DESKTOP] if "/accepted/" in p)}}
-        assert not phone.conflicts() and not desktop.conflicts()  # nothing kept for a held path
-        held = set(report.skipped[DESKTOP])
-        assert any("/accepted/" in path for path in held) and relations <= held
+        report = sync(desktop, phone, handles())
+        assert report.conflicts == () and changed == {path for path, dest in report.copied if dest == PHONE}
+        assert any("/accepted/" in path for path in changed) and any("/relations/" in path for path in changed)
+        assert not phone.conflicts() and not desktop.conflicts()
         assert effects_library(phone, keys).continuity(C, as_of=8, requested_by=DIRECTOR).problems == ()
         assert not sync(desktop, phone, handles()).wrote
     finally:
@@ -1484,18 +1480,18 @@ def test_a_manifest_whose_head_is_missing_on_its_origin_is_a_head_dependency(pai
     assert (desktop.root / PATHS["manifest"]).read_bytes() == before
 
 
-def test_023_holdings_are_held_back(pair):
-    """One operation spans several holder files and the count merge rule is a later milestone
-    (docs/HOLDINGS.md): holdings are reported as skipped, never copied file by file, and (C1) a
-    divergence is a ``held`` conflict."""
+def test_023_a_holder_file_no_merge_can_read_is_a_merge_review(pair):
+    """One operation spans several holder files: 028 merges a campaign's holdings with its ledger, never
+    file by file, and a holder file it cannot read stops that merge for review (C1: never silent)."""
     from grimoire.core.identity import HoldingsRef
     from grimoire.store import ScopeRecord
     desktop, phone = pair
     path = "campaigns/c1/holdings/character/wren-a.json"
     put(desktop, ScopeRecord(HoldingsRef("c1", "character", "wren-a"), "grimoire.holdings/1", {"coins": 3}), None)
     report = sync(desktop, phone, handles())
-    assert path in report.skipped[DESKTOP] and not (phone.root / path).exists()
-    assert [(found.path, found.code) for found in report.conflicts] == [(path, "held")]
+    assert not (phone.root / path).exists()
+    assert [(found.path, found.code) for found in report.conflicts] == [(path, "merge_review")]
+    assert {item.reason for item in report.conflicts[0].review} == {"unreadable"}
     assert not sync(desktop, phone, handles()).wrote
 
 
@@ -1612,14 +1608,14 @@ def test_sync_until_quiet_reports_what_landed_even_when_the_last_attempt_fails_w
     assert (PATHS["wren_a"], PHONE) in caught.value.report.copied
 
 
-def test_021_wrapups_are_held_back(pair):
+def test_021_a_wrapup_no_merge_can_read_is_a_merge_review(pair):
     from grimoire.core.identity import WrapUpRef
     from grimoire.store import ScopeRecord
     desktop, phone = pair
     path = "campaigns/c1/wrapups/w-1.json"
     put(desktop, ScopeRecord(WrapUpRef("c1", "w-1"), "grimoire.wrapup/1", {"through": 1}), None)
     report = sync(desktop, phone, handles())
-    assert path in report.skipped[DESKTOP] and not (phone.root / path).exists()
+    assert not (phone.root / path).exists() and report.conflict(path).code == "merge_review"
 
 
 # -- brutal-review round 9 -------------------------------------------------------------------------------

@@ -22,7 +22,7 @@ from .art import art_needs, art_unmet
 from .decide import archive_candidate
 from .documents import ArchiveView, PendingView, syncable
 from .errors import ResolveRefused, SameDevice, SyncInterrupted
-from .model import ASSET_KINDS, HELD_BACK_KINDS
+from .model import ASSET_KINDS, HELD_BACK_KINDS, LEDGER_KINDS
 from .session import (
     _HELD, PER_PATH_ERRORS, Copy, _archived, _blob_etag, _campaigns_with_state, _current, _held_campaigns,
     _held_relation, _home_scope, _kind, _knowledge_campaign, _locked, _manifest_heads, _named_paths, _owning_chat,
@@ -46,8 +46,11 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     in one transaction; both archives then record the agreement. See docs/SYNC.md for refusals.
     """
     if _kind(path) in HELD_BACK_KINDS:  # before anything else: these paths are never synced at all
-        raise ResolveRefused(f"{path} is {_HELD} (021/023 commit several files as one unit); the conflict "
+        raise ResolveRefused(f"{path} is {_HELD} (035 turns of one chat need a merge rule); the conflict "
                              "ends when both devices hold identical bytes")
+    if _kind(path) in LEDGER_KINDS:  # 028: a campaign's ledger is one unit, never resolved file by file
+        raise ResolveRefused(f"{path} is a ledger file: its campaign's ledger is merged as one unit; end its "
+                             "conflict with resolve_ledger")
     kind = syncable(path)
     if kind is None:
         raise ResolveRefused(f"{path} is not a synchronized record")
@@ -58,9 +61,8 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
     pair: tuple[str, str] = tuple(sorted(ids))  # type: ignore[assignment]
     scans = {device: stores[device].scan() for device in pair}
     if kind == "relation" and _held_relation(path, _held_campaigns(scans.values())):  # the scans decided from
-        raise ResolveRefused(f"{path} is {_HELD}: its campaign has accepted events (021), and a relation they "
-                             "changed must never arrive without them; the conflict ends when both devices hold "
-                             "identical bytes")
+        raise ResolveRefused(f"{path} is a ledger file: its campaign has accepted events (021), and a relation "
+                             "they changed must never arrive without them; end its conflict with resolve_ledger")
     sides = {device: _side(scans[device], path) for device in pair}
     for device, side in sides.items():
         if side.state == "blocked":

@@ -245,10 +245,11 @@ def test_a_gift_between_party_members_and_two_devices_forging_offline_keep_two_l
         handles = {DESKTOP: table.owner, PHONE: full_handle(*FULL)}
         identify(desktop, DESKTOP)
         identify(phone, PHONE)
-        # Both imports and the party arrive. Only 023's holdings stay behind until 028 has merge rules for
-        # them (docs/DEVICE_SYNC.md, "Still owed by 028"): Sola's sunstones, in another campaign.
-        held = {(f"campaigns/{Q}/holdings/character/sola-1.json", "held")}
+        # Both imports, the party and 023's holdings arrive (028 merges ledgers): Sola's sunstones, too.
+        held: set = set()
         assert {(c.path, c.code) for c in sync(desktop, phone, handles).conflicts} == held
+        assert (phone.root / f"campaigns/{Q}/holdings/character/sola-1.json").read_bytes() == \
+            (desktop.root / f"campaigns/{Q}/holdings/character/sola-1.json").read_bytes()
 
         # offline on the desktop: Mara forges a longsword and gives it to Winifred, who wears it
         items = possession_library(desktop, table.owner)

@@ -179,14 +179,14 @@ def test_h1_an_accepted_folder_spelled_differently_still_holds_relations(tmp_pat
 
 @pytest.mark.parametrize("where", ["campaign", "campaigns"])
 def test_resolve_never_writes_a_held_relation_after_a_listing_error(tmp_path, monkeypatch, where):
-    """resolve decides the hold from the same scans it writes from; an unlistable campaign folder holds."""
+    """resolve decides whether a relation is a ledger file from the same scans it writes from; an unlistable
+    campaign folder fails closed (028: a ledger relation is resolved with its campaign's ledger only)."""
     from grimoire.store import engine
     from test_sync_families import EFFECTS_C, _accept, _effects_pair
     desktop, phone, keys, _ = _effects_pair(tmp_path)
     try:
         path = f"campaigns/{EFFECTS_C}/relations/r-seed-1.json"
-        _accept(desktop, keys)
-        assert path in sync(desktop, phone, handles()).skipped[DESKTOP]
+        _accept(desktop, keys)  # not synced: the relation differs, and only the desktop holds the event
         mine, theirs = (desktop.root / path).read_bytes(), (phone.root / path).read_bytes()
         folder = ("campaigns", EFFECTS_C) if where == "campaign" else ("campaigns",)
         real, fired = engine.Access.list_dir, []
@@ -197,7 +197,7 @@ def test_resolve_never_writes_a_held_relation_after_a_listing_error(tmp_path, mo
                 raise PermissionError(13, "held by another program")
             return real(self, parts)
         monkeypatch.setattr(engine.Access, "list_dir", busy_once)
-        with pytest.raises(ResolveRefused, match="held back"):
+        with pytest.raises(ResolveRefused, match="resolve_ledger"):
             resolve(desktop, phone, path, etag(mine), {DESKTOP: etag(mine), PHONE: etag(theirs)}, handles())
         monkeypatch.undo()
         assert (phone.root / path).read_bytes() == theirs

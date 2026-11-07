@@ -344,34 +344,36 @@ def test_one_library_holds_every_wave3_family_and_survives_a_reopen(tmp_path):
 
 # -- synced to a fresh device ---------------------------------------------------------------------
 
-def test_a_fresh_device_receives_what_has_merge_rules_and_reports_the_rest_held(tmp_path):
+def test_a_fresh_device_receives_everything_its_ledger_included(tmp_path):
     desktop, phone, report = _paired(tmp_path)
     with desktop, phone:
         origin = desktop.scan()
-        held = {path for path in origin.files
-                if classify(tuple(path.split("/")))[0] in ("accepted", "holdings", "relation")}
-        assert {classify(tuple(path.split("/")))[0] for path in held} == {"accepted", "holdings", "relation"}
-        assert {(conflict.path, conflict.code) for conflict in report.conflicts} == {(path, "held") for path in held}
-        assert held <= set(report.skipped[DESKTOP])
-        assert {path for path, device in report.copied if device == PHONE} == \
-            (set(origin.files) - held) | set(origin.blobs)
+        ledger = {path for path in origin.files
+                  if classify(tuple(path.split("/")))[0] in ("accepted", "holdings", "relation")}
+        assert {classify(tuple(path.split("/")))[0] for path in ledger} == {"accepted", "holdings", "relation"}
+        assert report.conflicts == ()  # 028: one device's ledger is the merge, whole
+        assert not ledger & set(report.skipped[DESKTOP])
+        assert {path for path, device in report.copied if device == PHONE} == set(origin.files) | set(origin.blobs)
         assert not [path for path, device in report.copied if device == DESKTOP]
-        assert desktop.conflicts() == () and phone.conflicts() == ()  # a held path keeps nothing
+        assert desktop.conflicts() == () and phone.conflicts() == ()
         again = sync(phone, desktop, HANDLES)
-        assert not again.wrote and {conflict.code for conflict in again.conflicts} == {"held"}
+        assert not again.wrote and again.conflicts == ()
 
         mine, theirs = _agree(desktop), _agree(phone)
-        assert {kind for kind in theirs} == {kind for kind in mine} - {"accepted", "holdings", "relation"}
+        assert set(theirs) == set(mine)
         arrived = phone.scan()
-        assert {path: data for path, data in origin.files.items() if path not in held} == dict(arrived.files)
+        assert dict(origin.files) == dict(arrived.files)
         assert dict(arrived.blobs) == dict(origin.blobs)
         assert _resolved(phone) == _resolved(desktop)  # 107, instances, 020 and art resolve identically
 
-        # held back: the phone has no accepted gift, no holdings and no relations.
-        assert effects_library(phone, Handles()).continuity(Q, as_of=8, requested_by=DIRECTOR).events == ()
-        assert holdings_library(phone).read(MARA).counts() == {}
-        assert _relations(phone).graph(Q, requested_by=DIRECTOR).index.relations(
-            MARA, as_of=9, requested_by=DIRECTOR) == ()
+        # the ledger arrived: the accepted gift, its holdings and its relations read as on the desktop.
+        assert len(effects_library(phone, Handles()).continuity(Q, as_of=8, requested_by=DIRECTOR).events) == 1
+        assert (holdings_library(phone).read(MARA).counts(), holdings_library(phone).read(ANYA).counts()) == \
+            ({"coin": 3}, {"coin": 5})
+        graph = _relations(phone).graph(Q, requested_by=DIRECTOR).index
+        assert graph.relations(MARA, as_of=9, requested_by=DIRECTOR) == \
+            _relations(desktop).graph(Q, requested_by=DIRECTOR).index.relations(MARA, as_of=9, requested_by=DIRECTOR)
+        assert graph.recorded("carries", MARA, KEY, as_of=8, requested_by=DIRECTOR)
 
 
 def test_a_concurrent_chat_edit_is_kept_as_a_conflict_on_both_devices(tmp_path):
