@@ -272,7 +272,11 @@ def replay(campaign_id: str, events: Mapping[str, AcceptedEvent], order: Iterabl
         if not event.active:
             continue
         later = frozenset(other for other in order[number:] if events[other].active)
-        index = GraphIndex.build(campaign_id, _before(relations, later, undone), instances)
+        try:  # the graph as it stood before this event; rolling a hand-edited relation back can break it
+            index = GraphIndex.build(campaign_id, _before(relations, later, undone), instances)
+        except GraphError as error:
+            items.append(ReviewItem("receipt_mismatch", event_id, f"the relations before it: {error.reason}"))
+            continue
         proposal = _proposal(event)
         try:
             steps = () if proposal is None else plan(proposal, index)

@@ -75,17 +75,21 @@ def _ref(holder: InstanceRef) -> str:
     return str(HoldingsRef.of(holder))
 
 
-def _extension(base: Holdings, side: Holdings) -> list[LogEntry] | str:
-    """The side's entries after the agreed seq, in order, or why its log is not the agreed log extended."""
+def _extension(base: Holdings, side: Holdings, *, evicted: bool = False) -> list[LogEntry] | str:
+    """The side's entries after the agreed seq, in order, or why its log is not the agreed log extended.
+
+    ``evicted`` allows entries after the agreed seq to be evicted already (a file taken whole, which is
+    never replayed, so only what its log still shows is checked).
+    """
     if side.seq < base.seq:
         return "its seq went back below the agreed one (a restored or recreated file)"
-    if side.evicted_through > base.seq:
+    if side.evicted_through > base.seq and not evicted:
         return "entries after the agreed seq were already evicted"
     logged = {entry.seq: entry for entry in side.log}
     for entry in base.log:
         if entry.seq > side.evicted_through and logged.get(entry.seq) != entry:
             return f"agreed seq {entry.seq} is missing or rewritten"
-    fresh = [logged.get(seq) for seq in range(base.seq + 1, side.seq + 1)]
+    fresh = [logged.get(seq) for seq in range(max(base.seq, side.evicted_through) + 1, side.seq + 1)]
     if None in fresh:
         return "a seq after the agreed one is missing"
     return fresh  # type: ignore[return-value]
@@ -126,19 +130,41 @@ def merge_holdings(base: Mapping[InstanceRef, Version], sides: Mapping[str, Mapp
     holders = sorted(set(base) | {holder for device in devices for holder in sides[device]}, key=str)
     starts = {holder: base[holder].value if holder in base else Holdings.empty(holder) for holder in holders}
     items: list[ReviewItem] = []
-    new: dict[str, dict[InstanceRef, list[LogEntry]]] = {device: {} for device in devices}
     for holder in holders:
+        for device in devices:
+            if holder not in sides[device] and holder in base:  # 023 has no delete: a hand deletion, never merged away
+                items.append(ReviewItem("deleted", _ref(holder), device))
+    if items:
+        return Review(tuple(items))
+    whole = _whole(base, sides, holders, devices, order)
+    new: dict[str, dict[InstanceRef, list[LogEntry]]] = {device: {} for device in devices}
+    replayed: set[InstanceRef] = set()
+    pending = [holder for holder in holders if holder not in whole]
+    while pending:  # a holder an operation shares with a replayed holder is replayed too, never taken whole
+        holder = pending.pop()
+        if holder in replayed:
+            continue
+        replayed.add(holder)
+        starts.setdefault(holder, Holdings.empty(holder))
         for device in devices:
             version = sides[device].get(holder)
             if version is None:
-                if holder in base:  # 023 has no delete: a missing agreed file is a hand deletion, never merged away
-                    items.append(ReviewItem("deleted", _ref(holder), device))
                 continue
             found = _extension(starts[holder], version.value)
             if isinstance(found, str):
                 items.append(ReviewItem("log_diverged", _ref(holder), f"{device}: {found}"))
-            else:
-                new[device][holder] = found
+                continue
+            new[device][holder] = found
+            pending += [peer for entry in found for peer in entry.operation.holders if peer not in replayed]
+    for holder, (source, version) in whole.items():
+        if holder in replayed or source == BASE:
+            continue
+        found = _extension(starts[holder], version.value, evicted=True)
+        if isinstance(found, str):
+            items.append(ReviewItem("log_diverged", _ref(holder), f"{source}: {found}"))
+    if items:
+        return Review(tuple(items))
+    holders = sorted(replayed, key=str)
     ops, held_by, at = _operations(new, devices, items)
     after = _constraints(new, devices)
     envelopes, extras = _envelopes(base, sides, holders, devices, order, items)
@@ -161,7 +187,7 @@ def merge_holdings(base: Mapping[InstanceRef, Version], sides: Mapping[str, Mapp
             return Review((ReviewItem("id_collision", op_id, "already logged by the agreed holder files"),))
         for holder, value in result.values.items():
             state[holder] = value
-            seqs[(holder, op_id)] = value.log[-1].seq
+            seqs[(holder, op_id)] = value.seq  # the entry just logged (eviction only takes older ones)
 
     for holder in holders:
         try:
@@ -171,9 +197,38 @@ def merge_holdings(base: Mapping[InstanceRef, Version], sides: Mapping[str, Mapp
             items.append(ReviewItem(error.reason, _ref(holder), error.detail[:_DETAIL]))
     if items:
         return Review(tuple(items))
-    files = {HoldingsRef.of(holder): _output(holder, state[holder], envelopes[holder], base, sides, devices)
-             for holder in holders}
-    return HoldingsMerge(files, state, seqs, tuple(sequence))
+    files: dict[HoldingsRef, Output] = {
+        HoldingsRef.of(holder): _output(holder, state[holder], envelopes[holder], base, sides, devices)
+        for holder in holders}
+    for holder, (source, version) in whole.items():
+        if holder not in replayed:
+            files[HoldingsRef.of(holder)] = Kept(version.etag, source)
+            state[holder] = version.value
+    files = {ref: files[ref] for ref in sorted(files, key=str)}
+    return HoldingsMerge(files, {holder: state[holder] for holder in sorted(state, key=str)}, seqs, tuple(sequence))
+
+
+def _whole(base: Mapping[InstanceRef, Version], sides: Mapping[str, Mapping[InstanceRef, Version]],
+           holders: list[InstanceRef], devices: list[str], order: Mapping[str, int]
+           ) -> dict[InstanceRef, tuple[str, Version]]:
+    """The holder files one device changed and the other did not (or both alike): taken whole, unreplayed.
+
+    Why: a file only one device wrote is already that device's consistent result, and replaying it could
+    only lose what its log no longer shows (entries evicted after the agreed seq), so a merged file merged
+    again, or merged with a device that did not touch it, stays as it is. Only files both devices changed
+    differently, and those sharing an operation with them, are replayed.
+    """
+    def same(a: Version, b: Version) -> bool:
+        return a.value == b.value and a.meta == b.meta
+
+    found = {}
+    for holder in holders:
+        versions = {device: sides[device][holder] for device in devices if holder in sides[device]}
+        agreed = base.get(holder)
+        pick = choose(agreed, versions, order, same)
+        if pick is not None:
+            found[holder] = (pick, agreed if pick == BASE else versions[pick])
+    return found  # type: ignore[return-value]
 
 
 def _operations(new: Mapping[str, Mapping[InstanceRef, list[LogEntry]]], devices: list[str],

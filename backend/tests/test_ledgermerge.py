@@ -362,3 +362,39 @@ def test_a_merge_takes_exactly_two_devices_of_the_bases_campaign(base, devices):
         ReviewItem("not a reason", "x", "y")
     with pytest.raises(ValueError):
         Review(())
+
+
+def test_a_wrap_up_that_misses_the_other_devices_event_is_a_new_problem(base, devices):
+    # desktop wraps the scene up with nothing to cite; phone accepted an event in that scene meanwhile
+    devices["desktop"].effects.wrap_up(CHAT, "s1", through=moment(7), summary="A quiet night.", cites=[],
+                                       written_by="director", requested_by="director").commit()
+    devices["phone"].accept(pay(chat=CHAT, sequence=5))
+    result = merge(base, stores(devices))
+    assert isinstance(result, LedgerReview) and result.candidate is None
+    assert reasons(result) == {"new_problem"}  # a wrap-up is not an event: only 021's check catches this
+    assert "wrapup" in result.items[0].detail or "cite" in result.items[0].detail
+
+
+def test_a_merge_evicts_as_any_write_would_and_stays_put_once_both_devices_hold_it(base, devices):
+    for name, device in devices.items():
+        for number in range(5):
+            device.hand_op(Operation(f"{name}-{number}", (Line.add(INES, COIN, 1),)))
+    size = len(next((devices["desktop"].store.root / "campaigns" / C / "holdings").rglob("ines.json")).read_bytes())
+    tight = size + 600  # room for about six entries of the ten
+    result = merge(base, stores(devices), max_file=tight)
+    assert isinstance(result, Merged), result
+    files = file_bytes(result, base, stores(devices))
+    shutil.copytree(devices["phone"].store.root, devices["phone"].store.root.parent / "phone-before")
+    for device in devices.values():
+        write_back(device.store, files)
+    ines = read_ledger(devices["desktop"].store).holdings[INES].value
+    assert ines.count(COIN) == 10 and ines.seq == 10 and ines.evicted_through > 0
+    again = merge(base, stores(devices), max_file=tight)
+    assert isinstance(again, Merged) and file_bytes(again, base, stores(devices)) == files
+    # a device that missed the merge cannot be replayed against a log that no longer shows those entries
+    before = LibraryStore.open(devices["phone"].store.root.parent / "phone-before")
+    try:
+        lagging = merge(base, {"desktop": devices["desktop"].store, "phone": before}, max_file=tight)
+        assert reasons(lagging) == {"log_diverged"}
+    finally:
+        before.close()

@@ -23,7 +23,7 @@ It is pure: it uses no store, clock, randomness or JSON. The caller reads each l
 
 An event, relation, holder or logged operation either device had is never missing from a `Merged`. Anything the merge cannot keep stops it as a review.
 
-The merge is idempotent. Merging a merged ledger with itself, or with either side before it took the merge, gives the same bytes.
+The merge is idempotent. Merging a merged ledger with itself gives the same bytes, and so does merging it with either side before that side took the merge, unless the merge evicted log entries (see the limits below).
 
 ## Events
 
@@ -54,24 +54,27 @@ After all of that, the merged ledger is checked as 021's `continuity` would chec
 
 ## Holdings
 
-1. **Extension.** Each device's holder file must be the agreed file plus new log entries, numbered contiguously after the agreed seq. Anything else is `log_diverged`.
-2. **Collection.** The new operations of both devices are collected once each, keyed by op id.
+1. **Whole files.** A holder file only one device changed, or both changed alike, is taken whole, unless an operation it shares with a replayed file pulls it into the replay. Its log must still extend the agreed one (entries it already evicted aside).
+   - So a merged file stays as it is when merged again, even once eviction dropped entries its log no longer shows.
+   - Every other file is replayed, as below.
+2. **Extension.** A replayed device file must be the agreed file plus new log entries, numbered contiguously after the agreed seq, with none of them evicted yet. Anything else is `log_diverged`.
+3. **Collection.** The new operations of both devices are collected once each, keyed by op id.
    - The same op id with different lines, note or cause is `id_collision`.
    - An operation logged on only some of its holders on one device is `partial_op`.
-3. **Order.** Operations are put in one order:
+4. **Order.** Operations are put in one order:
    - each device's order on each holder is kept, and a cycle between the two devices' orders is `log_diverged`;
    - ties go by the event merge's position for an effect's operation (an inverse after its event);
    - then by the lower device id;
    - then by op id.
-4. **Replay.** The operations are replayed from the agreed stacks with 023's own `plan`, all or nothing.
+5. **Replay.** The operations are replayed from the agreed stacks with 023's own `plan`, all or nothing.
    - `seq`, `peers` and `after` are recomputed, and each entry keeps its original `at`.
    - The log is evicted as any write would evict it, against the exact envelope size.
    - A refusal comes back under 023's reason, such as `insufficient`, `count_limit` or `missing_holder`. An operation is never dropped.
-5. **Hand edits.** A device's final count, less the agreed count, less the replay of its own new operations, is a hand edit.
+6. **Hand edits.** A device's final count, less the agreed count, less the replay of its own new operations, is a hand edit.
    - It is kept on top of the replay when the other device neither edited that count nor changed it by an operation only it logged.
    - Two equal edits of a count that no one-sided operation touched count as one edit.
    - Anything else is `hand_edit_overlap`.
-6. **Receipts.** The events' holdings receipts are rewritten from the replayed seqs.
+7. **Receipts.** The events' holdings receipts are rewritten from the replayed seqs.
 
 ## Not settled here
 
@@ -82,5 +85,7 @@ Known limits:
 - A hand edit that a later operation on the same device depended on (an edit that made a removal possible) refuses on replay, because the edit is applied after the replay.
 - Domain conflicts beyond 017's preconditions are not detected, for example two devices each moving a scene on.
 - An undecodable file is the caller's to report before the merge.
+- A device that missed a merge whose replay evicted entries cannot be merged against it automatically: the merged log no longer shows those entries (`log_diverged`). Once both devices hold the merge, it is stable.
+- Operations a device logged offline past 023's log bounds (1000 entries, or the file size) were evicted on that device, so that holder is `log_diverged` when both devices changed it.
 
 Proved in `backend/tests/test_ledgermerge.py` and `backend/tests/test_ledgermerge_properties.py`. The second runs seeded random offline play: both side orders agree, nothing is dropped, the merged library reads clean, and a second merge, including against a lagging side, gives the same bytes.
