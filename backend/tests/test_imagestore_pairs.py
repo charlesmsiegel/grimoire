@@ -52,7 +52,8 @@ SET = Placement("set", "portrait", WREN_IMG)
 ADJUST = Placement("adjust", image=WREN_IMG, crop=Crop(100, 100, 5000, 5000))
 
 
-@pytest.mark.parametrize(("slot", "placement"), [("portrait", SET), ("avatar", ADJUST)], ids=["set", "adjust"])
+@pytest.mark.parametrize(("slot", "placement"), [("portrait", SET), ("avatar", ADJUST),
+                                                ("avatar", Placement("inherit"))], ids=["set", "adjust", "inherit"])
 def test_art_naming_either_member_of_a_pair_is_refused_when_added(images, store, slot, placement):
     creature = hand_pair(store, WREN_A)  # a hand edit or a second device gave a creature Wren's id
     before = snapshot(store.root)

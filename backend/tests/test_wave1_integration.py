@@ -140,7 +140,7 @@ def test_v2_purposes_are_inference_stages():
     from grimoire.evals.format2 import MEASUREMENTS, STAGES_V2
 
     # 027 added director_generation; /2 stays frozen without it (a /3 bump records director calls).
-    assert set(STAGES_V2) == {stage.value for stage in InferenceStage} - {"director_generation"}
+    assert set(STAGES_V2) == {stage.value for stage in InferenceStage} - {"director_generation", "labelling"}
     assert evals_format.NARRATION not in STAGES_V2
     assert set(MEASUREMENTS) == {m.value for m in Measurement}
     baseline = load_json(benchmark_file("guild_betrayal", "baseline.v2.json"))

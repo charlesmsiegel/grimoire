@@ -471,9 +471,10 @@ def test_f4_blocked_paths_are_never_copied_or_overwritten(pair, tmp_path):
     report = sync(desktop, phone, handles())
     assert report.copied == ((unrelated, PHONE),)
     assert (phone.root / unrelated).read_bytes() == (desktop.root / unrelated).read_bytes()
-    # C1: the linked campaign folder cannot be listed, so its held-back families are a held conflict
-    assert {found.code for found in report.conflicts} == {"blocked", "held"}
-    assert [found.path for found in report.conflicts if found.code == "held"] == ["campaigns/c9"]
+    # nothing is held back since 028 (a ledger in the unlistable folder would be a merge_review, ``unlistable``):
+    # the blocked paths are blocked conflicts, the linked campaign's instance among them
+    assert {(found.path, found.code) for found in report.conflicts} == {
+        (PATHS["wren_a"], "blocked"), (PATHS["wren_b"], "blocked"), ("campaigns/c9/instances/character/x.json", "blocked")}
     assert (phone.root / PATHS["wren_a"]).read_bytes() == b"{not json"
     assert list((outside / "instances" / "character").iterdir()) == []
 

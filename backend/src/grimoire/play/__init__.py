@@ -4,6 +4,7 @@ An adapter: it joins 022's chat snapshot, 003's sovereignty ledger, 033's party,
 transmission, 031's context packs, 027's briefs and runtime and the ``turns/`` family. See docs/SCENES.md.
 """
 
-from .runner import DEFAULT_BUDGET, Scene, SceneRunner
+from .runner import SceneRunner
+from .scene import DEFAULT_BUDGET, Scene
 
 __all__ = ["DEFAULT_BUDGET", "Scene", "SceneRunner"]

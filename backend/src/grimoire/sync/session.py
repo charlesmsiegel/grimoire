@@ -38,10 +38,12 @@ from .documents import ArchiveView, KeepsView, PendingView, parse_keeps, syncabl
 from .errors import ArchiveTooLarge, SameDevice, SyncInterrupted, SyncNotQuiet
 from .identity import device_of, identify
 from .model import ASSET_KINDS, CAMPAIGN_LOCAL, HELD_BACK_KINDS, HOLDS_RELATIONS, LEDGER_KINDS, Base, Side
+from .turns import turn_named, turn_needs
 
 _SLOT = re.compile(r"~[0-9a-f]{12}(?:\.([1-9][0-9]*))?$")
-#: Folders of the held-back families (021 accepted events and wrap-ups, 023 holdings, 035 turns).
-_HELD_FOLDERS = frozenset({"turns"})  # 028's ledger folders are the units' (``units.LEDGER_FOLDERS``)
+#: Folders of the held-back families: none since 028 (its ledger folders are the units',
+#: ``units.LEDGER_FOLDERS``; 035's turns merge as rows, ``turns``).
+_HELD_FOLDERS: frozenset[str] = frozenset()
 _HELD = "held back until its merge rule exists"
 
 #: Store refusals that concern one path or unit: that unit becomes ``unapplicable``.
@@ -379,18 +381,18 @@ def _ungranted(store: LibraryStore, handle: object, path: str) -> bool:
 
 
 def _held_families(plan: SyncPlan) -> None:
-    """021 accepted events and wrap-ups, 023 holdings and 035 turns are never copied (their merge rules are 028's),
-    but a path the two devices hold differently is a ``held`` conflict, never silent (C1). A held-family
-    folder that cannot be listed (in any spelling, or a campaign folder, ``campaigns`` or the root) is a
+    """A held-back family (``HELD_BACK_KINDS``; none since 028) is never copied, but a path the two devices
+    hold differently is a ``held`` conflict, never silent (C1). A held-family folder that cannot be listed (in any spelling, or a campaign folder, ``campaigns`` or the root) is a
     ``held`` conflict on that folder: what diverged there is unknowable. Nothing is decided, copied, kept
     or archived for them; they stay listed in ``skipped`` too."""
+    if not HELD_BACK_KINDS:  # 028: no family is held back any more
+        return
     scans = [plan.scans[device] for device in plan.devices]
     family = sorted({path for scan in scans for path in (*scan.files, *scan.blocked)
                      if _kind(path) in HELD_BACK_KINDS})
     for path in family:
         if not _identical(_side(scan, path) for scan in scans):
-            plan.conflicts[path] = Conflict(path, "held", f"{_HELD}: 021/023 commit several files as one "
-                                                                 "unit, and 035 turns of one chat need a merge rule")
+            plan.conflicts[path] = Conflict(path, "held", f"{_HELD}: 021/023 commit several files as one unit")
     for scan in scans:
         for path in scan.blocked:
             parts = path.split("/")
@@ -492,8 +494,10 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
             pins = {"/".join(definition_parts(ref)) for ref in pinned_by(parts, copy.data)}  # type: ignore[arg-type]
             missing = sorted(path for path in pins | heads if final(path) != origin_files.get(path) or blocked(path)
                              or (path in heads and origin_files.get(path) is None))
-            owner = set(_owning_chat(copy.path))  # needed on the receiver even when the origin lost it
-            actors = sorted(path for path in [*_named_paths(parts, copy.data), *_home_scope(copy.path)]
+            # needed on the receiver even when the origin lost it (a turn's chain and chat too: ``sync.turns``)
+            owner = {*_owning_chat(copy.path), *turn_needs(copy.path, copy.data),
+                     *turn_named(copy.path, copy.data, origin_scan)}
+            actors = sorted(path for path in {*_named_paths(parts, copy.data), *_home_scope(copy.path), *owner}
                             if ((path in origin_files or path in owner) and final(path) is None) or blocked(path))
             campaign = _knowledge_campaign(copy.path)
             if campaign is not None and campaign not in here and (
@@ -1217,7 +1221,8 @@ def _commit_states(plan: SyncPlan, device: str, kind: str, states: list, applied
 def _commit_keeps(plan: SyncPlan, applied: _Applied) -> None:
     """keeps(b), keeps(a): each conflict this sync ended out of conflict before either archive records it (028)."""
     for device in reversed(plan.devices):
-        record = kept_record.ended(plan.kept_records[device], plan.other(device), plan.devices, plan.conflicts)
+        record = kept_record.ended(plan.kept_records[device], plan.other(device), plan.devices, plan.conflicts,
+                                   kept_record.opened(plan, device))
         if _commit_states(plan, device, "keeps", [record], applied):  # the pending step's record replaces it
             plan.kept_records[device] = parse_keeps(record[1], plan.devices)  # type: ignore[index]
 
@@ -1247,7 +1252,8 @@ def _commit_pending(plan: SyncPlan, device: str, resolved: Mapping[str, object],
     bases = {path: kept_record.archived_token(*(archived[d].get(path) for d in plan.devices))  # what the next sync reads
              for path in plan.conflicts}
     record = kept_record.next_keeps(plan.kept_records[device], peer, plan.devices, bases,
-                                    functools.partial(kept_record.slot_stands, plan.stores[device]))
+                                    functools.partial(kept_record.slot_stands, plan.stores[device]),
+                                    kept_record.opened(plan, device))
     _commit_states(plan, device, "pending", [*states, record], applied)
 
 

@@ -16,6 +16,7 @@ V0.2.1's quality baseline is **one independent RP-generation call per speaking N
 | `graph_lookup` | optional | Model-assisted graph query |
 | `critique` | optional | Model critique or continuity review |
 | `director_generation` | optional, scene-level | One director/narrator reply for the scene (027). Never an actor; at most one per turn. |
+| `labelling` | optional | Framing a player character's action for 029 (035): which offered facts bear on it and what is at stake. Planned for the scene (`actor_id` null: no model call decides for a player character), never spoken; its reply is read on an untrusted handle ([SCENES](SCENES.md#labelling-an-action)). |
 
 **Unlisted work cannot be planned.** Narration is `director_generation` (below). Embeddings, image generation and authoring/import jobs have no stage yet. They must not be issued during a turn until an enum member is added for them with an explicit baseline or optional status.
 

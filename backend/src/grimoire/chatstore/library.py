@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from grimoire.adjudicationstore import adjudication_actor_ids
 from grimoire.cards import scenario_lorebook
@@ -39,7 +39,7 @@ from grimoire.evidencestore import evidence_instance_ids
 from grimoire.scenestore import turn_instance_ids
 from grimoire.graphstore import relation_endpoint_ids
 from grimoire.holdingstore import holdings_holder_ids, holdings_peer_ids
-from grimoire.imagestore import placement_subject_ids
+from grimoire.imagestore import ART_PIN, freeze_art, pinned_base, placement_subject_ids
 from grimoire.ledgers import security_campaign_ids, security_instance_ids, sovereignty_actor_ids
 from grimoire.library import LibraryPathError
 from grimoire.obstaclestore import obstacle_actor_ids
@@ -49,6 +49,7 @@ from grimoire.store import (
     CampaignRecords, LibraryStore, LibraryView, LinkRefused, MalformedRecord, RecordEnvelope, RecordNotFound, ScopeRecord,
     StaleWrite, StoreError, TakenIdsUnlisted, UnstorableIdentifier,
 )
+from grimoire.store.jsonfmt import thaw
 from grimoire.store.layout import address_parts, classify
 
 #: (role, entity key) -> an existing campaign actor to reuse instead of creating one
@@ -539,12 +540,14 @@ class ChatLibrary:
             binding, envelope, etag = self._prepare(scope.campaign_id, ref, role,
                                                     reuse.pop((role, ref.entity_key), None), taken, follow, reads)
             bindings.append(binding)
-            if envelope is not None:
+            if envelope is not None and etag is None:
                 actors.append(binding.actor)
                 actor_puts.append((envelope, None))
             elif binding.actor is not None:
                 assert etag is not None  # _check_reuse returned it
                 reused[binding.actor] = etag
+                if envelope is not None:  # a reused actor a pinned chat pins (046)
+                    actor_puts.append((envelope, etag))
         if reuse:
             raise InvalidBinding(f"actors to reuse match no binding: {sorted(map(str, reuse.values()))}",
                                  "reuse_unmatched")
@@ -692,7 +695,8 @@ class ChatLibrary:
                  taken: set[str] | _LazyTaken, follow: bool = False,
                  reads: list[dict[ChatRef, str]] | None = None
                  ) -> tuple[NewBinding, RecordEnvelope | None, str | None]:
-        """The binding, a new actor's envelope (or ``None``) and a reused actor's etag as checked (or ``None``).
+        """The binding, a new actor's envelope (or a reused actor's rewrite with its pinned art, 046; or
+        ``None``) and a reused actor's etag as checked (or ``None``).
 
         An unpinned ``ref`` is pinned to the revision it resolves to now, the very revision whose bytes
         were checked (and a new actor is based on), unless the caller asked to ``follow`` the head. For a
@@ -711,7 +715,8 @@ class ChatLibrary:
             revision, _ = self._resolve(ref, role)
             if not follow and not ref.pinned:
                 ref = ref.at(revision)
-            return NewBinding(ref, role, revision, reuse, CAMPAIGN_CONTINUITY), None, etag
+            rewrite = self._pin_reused(stored) if ref.pinned else None
+            return NewBinding(ref, role, revision, reuse, CAMPAIGN_CONTINUITY), rewrite, etag
         revision, definition_etag = self._resolve(ref, role)
         if not follow and not ref.pinned:
             ref = ref.at(revision)
@@ -722,10 +727,14 @@ class ChatLibrary:
             number += 1
         actor = InstanceRef(campaign, "character", f"{base}-{number}")
         taken.add(actor.instance_id)
+        extra: dict[str, object] = {"schema": ENTITY_SCHEMA}
+        if ref.pinned:  # 046: a pinned actor keeps the pictures its revision shows now, until a reviewed rebase
+            pin = freeze_art(self.store, ref.at(revision))
+            if pin is not None:
+                extra[ART_PIN] = pin
         envelope = RecordEnvelope(
             actor, instance_to_payload(EntityInstance(actor, source=ref)), owner=self._owner,
-            derived_from=str(ref), base=str(ref.at(revision)), base_etag=definition_etag,
-            extra={"schema": ENTITY_SCHEMA})
+            derived_from=str(ref), base=str(ref.at(revision)), base_etag=definition_etag, extra=extra)
         return NewBinding(ref, role, revision, actor, NOT_WITNESSED), envelope, None
 
     def _plays(self, actor: InstanceRef, ref: SourceRef, stored: RecordEnvelope,
@@ -743,6 +752,24 @@ class ChatLibrary:
         if bound is not None and len(bound) == 1:
             return next(iter(bound))
         return instance_plays(stored, ref)
+
+    def _pin_reused(self, envelope: RecordEnvelope) -> RecordEnvelope | None:
+        """A reused actor bound by a pinned chat, rewritten with the art it shows now when it has no
+        pin for its own ``base`` (a following chat made it, or a build before 046 did), so the pinned
+        chat's pictures hold still too (046). ``None``: it is already pinned, or cannot be. The put is
+        guarded by the etag of the very file ``_check_reuse`` read as ``envelope``."""
+        if envelope.base is None:
+            return None
+        if pinned_base(envelope.extra.get(ART_PIN)) == envelope.base:
+            return None
+        try:
+            base = SourceRef.parse(envelope.base)
+        except ValueError:
+            return None
+        pin = freeze_art(self.store, base) if base.pinned else None
+        if pin is None:
+            return None
+        return replace(envelope, extra={**thaw(envelope.extra), ART_PIN: pin})
 
     def _device_tag(self) -> str:
         """This library's ``device_tag``; an unusable identity refuses the binding (``device_identity``)."""
@@ -790,13 +817,15 @@ class ChatLibrary:
         actors: tuple[InstanceRef, ...] = ()
         reused: tuple[InstanceRef, ...] = ()
         etags: dict[InstanceRef, str] = {}
-        if envelope is not None:
+        if envelope is not None and bound_etag is None:
             puts.append((envelope, None))
             actors = (envelope.address,)  # type: ignore[assignment]
         elif bound is not None:
             reused = (bound,)
             if bound_etag is not None:
                 etags[bound] = bound_etag
+                if envelope is not None:  # a reused actor a pinned chat pins (046)
+                    puts.append((envelope, bound_etag))
         return ChatChange(self, tuple(puts), chat.scope, chat, actors, reused_actors=reused, reused_etags=etags,
                           played_from=played_from)
 

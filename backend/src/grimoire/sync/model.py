@@ -12,22 +12,24 @@ Action = Literal["agreed", "copy", "conflict"]
 #: The record kinds sync owns (the store's ``classify`` kinds); later families extend this set,
 #: and archive and pending documents accept exactly these paths. ``scope`` and ``chat`` are
 #: 107's campaign-local play-scope and chat records; ``relation`` is 017's typed relation record;
-#: ``blob``, ``image`` and ``placement`` are 018's art; ``transcript`` is 036's chat transcript pages.
+#: ``blob``, ``image`` and ``placement`` are 018's art; ``transcript`` is 036's chat transcript pages; ``turn`` is
+#: 035's played chat turns (028's turn merge: mutable, so ordinary rows; ``sync.turns`` names what one needs).
 SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge",
-                          "blob", "image", "placement", "transcript", "accepted", "wrapup", "holdings"})
+                          "blob", "image", "placement", "transcript", "turn", "accepted", "wrapup", "holdings"})
 #: 018's art: own units, never source-coarse, never grouped with a definition. A blob is binary and
 #: content-addressed (listed by name and size, hashed only when copied or first seen).
 ASSET_KINDS = frozenset({"blob", "image", "placement"})
 #: Campaign-local kinds: independent of sources and of each other at commit time.
-CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge", "transcript"})
+CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge", "transcript", "turn"})
 #: 028's ledger: 021's accepted events and wrap-ups and 023's holder files, which their own stores commit
 #: several at a time. They are never decided file by file: a campaign's ledger files (with its 017
 #: relations, see ``HOLDS_RELATIONS``) are one unit that ``grimoire.ledgermerge`` merges (``units``).
 LEDGER_KINDS = frozenset({"accepted", "wrapup", "holdings"})
-#: Families whose own stores commit several files as one unit and whose cross-device merge rule is
-#: a later milestone: never copied file by file, always reported as skipped. 035's played chat turns
-#: (two devices playing one chat offline would both write its next turn; turn merges come before 044).
-HELD_BACK_KINDS = frozenset({"turn"})
+#: Families whose own stores commit several files as one unit and whose cross-device merge rule is a later
+#: milestone: never copied file by file, always reported as skipped. None is left: 021's and 023's ledger
+#: merges as units (``LEDGER_KINDS``), and 035's played turns left with 028's turn merge (two devices' turn
+#: n are two files, and a forked chat waits for its owner's choice). Kept for a family that comes later.
+HELD_BACK_KINDS: frozenset[str] = frozenset()
 #: A campaign holding any record of this kind on either device has its 017 relations in its ledger
 #: unit too, because 021 changes relations in the same commit as an event: a relation must never
 #: arrive without the event that changed it, so they are merged together.

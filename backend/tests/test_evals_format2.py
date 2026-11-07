@@ -41,9 +41,9 @@ def test_minimal_v2_parses():
 def test_stage_vocabulary_is_frozen_and_matches_core():
     assert STAGES_V2 == ("npc_generation", "planning", "decision", "epistemic_inference",
                          "recall", "graph_lookup", "critique")
-    # A new InferenceStage must not silently change /2: that is /3. 027's director stage is the
-    # one stage /2 does not know (docs/evals/STORY_QUALITY.md), so a /2 run refuses it.
-    assert set(STAGES_V2) == {stage.value for stage in InferenceStage} - {"director_generation"}
+    # A new InferenceStage must not silently change /2: that is /3. 027's director stage and 035's
+    # labelling are the stages /2 does not know (docs/evals/STORY_QUALITY.md), so a /2 run refuses them.
+    assert set(STAGES_V2) == {stage.value for stage in InferenceStage} - {"director_generation", "labelling"}
 
 
 def test_director_stage_is_not_a_v2_stage():

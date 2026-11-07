@@ -1,4 +1,4 @@
-"""035's turn records over a real store: the scenestore reader and writer, taken ids, and the sync hold.
+"""035's turn records over a real store: the scenestore reader and writer, taken ids, and what sync needs.
 
 The store-level guarantees every scope-record family shares (paths, CAS, authorization, collisions, links,
 containment, recovery) are covered with 021's families in ``test_store_effect_records.py``. Synthetic only.
@@ -6,13 +6,14 @@ containment, recovery) are covered with 021's families in ``test_store_effect_re
 
 from __future__ import annotations
 
+from dataclasses import replace
 from hashlib import sha256
 
 import pytest
 
 from grimoire.chatstore import campaign_taken_ids
 from grimoire.core.identity import ChatRef, InstanceRef, TurnRef
-from grimoire.scene import Post, SceneRefused, TurnRecord, turn_id
+from grimoire.scene import TURN_SCHEMA, Post, SceneRefused, TurnRecord, turn_id, turn_to_payload
 from grimoire.scenestore import SceneLibrary, turn_instance_ids
 from grimoire.store import LibraryStore, ScopeRecord, TakenIdsUnlisted
 from grimoire.sync import identify, sync
@@ -141,7 +142,10 @@ def test_taken_ids_fail_closed_on_an_unreadable_turn(library):
         turn_instance_ids(library, C)
 
 
-def test_sync_holds_turns_back_and_never_hides_a_divergence(tmp_path):
+def test_sync_never_lands_a_turn_without_its_chat_and_scope_and_never_hides_it(tmp_path):
+    """028: turns sync, but a turn is history of one chat. Here no device holds the chat record or the play scope
+    (a bare store), so neither device's turn 1 lands on the other: each is a named ``head_dependency``
+    conflict, nothing is copied, and each device still reads its own turn."""
     desktop, phone = LibraryStore.create(tmp_path / DESKTOP), LibraryStore.create(tmp_path / PHONE)
     try:
         seed(desktop)
@@ -149,24 +153,37 @@ def test_sync_holds_turns_back_and_never_hides_a_divergence(tmp_path):
         identify(phone, PHONE)
         sync(desktop, phone, handles())
         scenes(desktop).write(post_turn(CHAT, 1, "From the desk.", device=tag(DESKTOP)), None)
-        report = sync(desktop, phone, handles())
-        path = f"campaigns/{C}/turns/{turn_id(CHAT, 1, tag(DESKTOP))}.json"
-        assert path not in {copied for copied, _ in report.copied}
-        assert path in report.skipped[DESKTOP]
-        assert [(c.path, c.code) for c in report.conflicts if c.path == path] == [(path, "held")]
-        assert scenes(phone).turns(CHAT).turns == ()
-        # both played turn 1 offline: two turn files with two ids, never one id with two contents; sync copies
-        # neither (both are held), so if both are ever in one library it is by a hand copy or 028's future merge
         scenes(phone).write(post_turn(CHAT, 1, "From the phone.", device=tag(PHONE)), None)
-        other = f"campaigns/{C}/turns/{turn_id(CHAT, 1, tag(PHONE))}.json"
         report = sync(desktop, phone, handles())
-        assert sorted((c.path, c.code) for c in report.conflicts if "/turns/" in c.path) == sorted(
-            [(path, "held"), (other, "held")])
+        paths = [f"campaigns/{C}/turns/{turn_id(CHAT, 1, tag(device))}.json" for device in (DESKTOP, PHONE)]
+        assert not [copied for copied, _ in report.copied if "/turns/" in copied]
+        for path in paths:
+            conflict = report.conflict(path)
+            assert conflict.code == "head_dependency" and f"campaigns/{C}/chats/{CHAT.chat_id}.json" in conflict.detail
+            assert f"campaigns/{C}/scope.json" in conflict.detail
         assert scenes(desktop).turns(CHAT).last.record.post.text == "From the desk."
         assert scenes(phone).turns(CHAT).last.record.post.text == "From the phone."
     finally:
         desktop.close()
         phone.close()
+
+
+def test_a_turn_this_version_cannot_read_arriving_before_a_create_refuses_it(library):
+    """028: sync can bring a peer's turn this version cannot decode at any time; a create (or a pause) checked
+    against a chat read before it arrived is refused, never written beside a turn n it could not see."""
+    lib = scenes(library)
+    first = lib.write(post_turn(CHAT, 1), None)
+    read = lib.turns(CHAT)
+    txn = library.transaction()
+    txn.put(ScopeRecord(TurnRef(C, turn_id(CHAT, 2, tag(PHONE))), "grimoire.scene-turn/9", {"future": True},
+                        owner=OWNER), None)
+    txn.commit(owner_handle("campaigns"))
+    for call in (lambda: lib.write(post_turn(CHAT, 2, "Racing."), None, after=read.last),
+                 lambda: lib.write(post_turn(CHAT, 1, "Pause."), first, last=True)):
+        with pytest.raises(SceneRefused) as error:
+            call()
+        assert error.value.reason == "turn_changed"
+    assert [t.record.number for t in lib.turns(CHAT).turns] == [1]
 
 
 def test_a_last_turn_write_waits_for_no_later_turn(library):
@@ -177,3 +194,20 @@ def test_a_last_turn_write_waits_for_no_later_turn(library):
         lib.write(post_turn(CHAT, 1, "Paused."), first, last=True)
     assert error.value.reason == "turn_changed"
     assert lib.turns(CHAT).turns[0].record.post.text == "Hello."
+
+
+def test_a_play_write_over_an_existing_turn_waits_for_no_pause_anywhere_in_the_chat(library):
+    """016: a keep, a pass or a run's start on the open turn is refused under the lock while any turn of the
+    chat holds a pause written since it was read (by sync, say, on an earlier turn); a mark still goes on."""
+    lib = scenes(library)
+    first = lib.write(post_turn(CHAT, 1), None)
+    second = lib.write(post_turn(CHAT, 2), None, after=first)
+    txn = library.transaction()
+    paused = replace(first.record, paused=True, paused_by=OWNER)
+    txn.put(ScopeRecord(first.record.ref, TURN_SCHEMA, turn_to_payload(paused), owner=first.owner), first.etag)
+    txn.commit(owner_handle("campaigns"))
+    with pytest.raises(SceneRefused) as error:
+        lib.write(post_turn(CHAT, 2, "Kept over a pause."), second, unpaused=True)
+    assert error.value.reason == "turn_changed"
+    lib.write(post_turn(CHAT, 2, "A mark."), second)
+    assert lib.turns(CHAT).paused

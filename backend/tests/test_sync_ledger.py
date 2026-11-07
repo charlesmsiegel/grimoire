@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.store import LibraryStore
+from grimoire.store import LibraryStore, etag
 from grimoire.sync import (
     ResolveRefused, SyncInterrupted, apply_sync, plan_sync, resolve, resolve_ledger, sync, sync_until_quiet,
 )
@@ -248,3 +248,36 @@ def test_archives_left_apart_by_a_crash_still_merge_later_changes_either_way(tmp
     finally:
         for device in made.values():
             device.close()
+
+
+def test_a_ledger_review_and_a_keep_both_conflict_in_one_sync_end_each_on_its_own(pair):
+    from grimoire.chatstore import ChatLibrary
+    from grimoire.core.identity import ChatRef
+    from chat_fixtures import Clock, Ids
+    from grimoire.sync.documents import keeps_name, parse_keeps
+    from sync_helpers import kept
+    lighthouse = ChatRef(C, "t-3")
+    path = f"campaigns/{C}/chats/{lighthouse.chat_id}.json"
+    for name, label in ((DESKTOP, "At the desk"), (PHONE, "On the road")):  # one chat renamed on both devices
+        chats = ChatLibrary(pair[name].store, pair[name].handles.app, clock=Clock(), new_id=Ids(), owner=OWNER)
+        chats.set_label(lighthouse, label, expected=chats.open_chat(lighthouse).etag).commit()
+    pair[DESKTOP].accept(pay(sequence=8, attempt="pay-desk"))  # and both devices' events in one chat: a review
+    pair[PHONE].accept(pay(sequence=9, attempt="pay-phone"))
+    report = sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    tokens = {conflict.token for conflict in report.conflicts if conflict.code == "merge_review"}
+    assert len(tokens) == 1
+    token = tokens.pop()
+    assert report.conflict(path).code == "concurrent"
+    ours, theirs = (pair[DESKTOP].store.root / path).read_bytes(), (pair[PHONE].store.root / path).read_bytes()
+    assert kept(pair[DESKTOP].store) == [theirs] and kept(pair[PHONE].store) == [ours]
+    resolve_ledger(pair[DESKTOP].store, pair[PHONE].store, C, "merge", token, handles())  # only the ledger
+    for name, peer in ((DESKTOP, PHONE), (PHONE, DESKTOP)):  # the chat's conflict still stands in keeps.json
+        record = parse_keeps(pair[name].store.read_sync_state(keeps_name(peer)), tuple(sorted((DESKTOP, PHONE))))
+        assert record.entries[path].open is not None
+    after = sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    assert {(conflict.path, conflict.code) for conflict in after.conflicts} == {(path, "concurrent")}
+    assert kept(pair[DESKTOP].store) == [theirs] and kept(pair[PHONE].store) == [ours]  # never duplicated
+    assert ledger_files(pair[DESKTOP].store) == ledger_files(pair[PHONE].store)
+    resolve(pair[DESKTOP].store, pair[PHONE].store, path, etag(ours), {DESKTOP: etag(ours), PHONE: etag(theirs)},
+            handles())
+    assert sync_until_quiet(pair[DESKTOP].store, pair[PHONE].store, handles()).conflicts == ()

@@ -30,6 +30,7 @@ from grimoire.core.identity import (
 )
 from grimoire.core.portrayal import EffectiveDefinition, PortrayalError, compose
 from grimoire.effective import entity_decoder, explainer
+from grimoire.imagestore import ART_PIN, ArtChange, art_review, freeze_art, pinned_base
 from grimoire.rebase import EXTRA_PREFIX, FieldReview, RebaseError, rebase_instance, review_fields
 from grimoire.store import (
     CommitResult, LibraryStore, LibraryView, RecordEnvelope, ScopeRecord, StaleWrite, StoreError,
@@ -103,6 +104,10 @@ class RebaseReview:
     _upstream_etag: str = field(repr=False)
     _chats: tuple[_PinnedChat, ...] = field(repr=False, default=())
     _chat_etags: tuple[tuple[ChatRef, str], ...] = field(repr=False, default=())
+    #: 046: every slot whose picture the rebase changes, now and after (pinned art moves with the review)
+    art: tuple[ArtChange, ...] = ()
+    #: the art snapshot the rebase writes (``None``: the actor's art follows its entity live)
+    _art_pin: dict | None = field(repr=False, default=None)
 
     @property
     def decisions_needed(self) -> tuple[str, ...]:
@@ -251,14 +256,27 @@ class SourceRebase:
             raise _fail(f"{actor} follows the head of {source} (in its instance or a chat binding); only the head "
                         "can be adopted", "follows_head")
         full = [chat.ref for chat in pinned if len(chat.record.bindings) >= MAX_BINDINGS]
-        if full:
+        if full and upstream_ref != ancestor:  # an art-only review re-pins no chat
             raise _fail(f"{[str(ref) for ref in full]} already hold {MAX_BINDINGS} bindings, so they cannot be "
                         "re-pinned", "binding_limit")
         read = _reader(view)
         explain = explainer(view)
         old = compose(ancestor, index, read, explain)
         new = compose(upstream_ref, index, read, explain)
-        rows = review_fields(old, new, instance, read_extras=lambda ref: read(ref)[0].extras)
+        # 046: a pinned actor's pictures move only with this review; one that follows its head shows live
+        # art. An actor shared by pinned and following chats stays pinned, so no pinned chat's pictures move
+        # unreviewed (a following chat sees them move with each reviewed rebase instead).
+        pins = bool(pinned) or (source.pinned and not following)
+        art_pin = freeze_art(self.store, upstream_ref) if pins else None
+        art = art_review(self.store, actor, upstream_ref, art_pin)
+        # an actor with no pin for its own base (a following chat or a build before 046 made it) can be
+        # pinned by a review of no change at all: the pictures it shows now become its pinned art
+        unpinned = art_pin is not None and pinned_base(envelope.extra.get(ART_PIN)) != envelope.base
+        if upstream_ref == ancestor and (art or unpinned):
+            rows: tuple[FieldReview, ...] = ()  # the art alone: the actor and its chats keep their revision
+            pinned = []
+        else:
+            rows = review_fields(old, new, instance, read_extras=lambda ref: read(ref)[0].extras)
         history = self._history(view, actor)
         authored = any(row.field == "description" or row.field.startswith(("section:", EXTRA_PREFIX))
                        for row in rows)
@@ -266,7 +284,8 @@ class SourceRebase:
             notices.append(HISTORY_REVIEW)
         return RebaseReview(actor, instance, etag, old, new, rows, tuple(chat.ref for chat in pinned), following,
                             history, tuple(notices), envelope, ancestor_etag,
-                            index.resolve(upstream_ref).etag, tuple(pinned), chat_etags)  # type: ignore[attr-defined]
+                            index.resolve(upstream_ref).etag, tuple(pinned), chat_etags,  # type: ignore[attr-defined]
+                            art, art_pin)
 
     def _instance(self, view: LibraryView, actor: InstanceRef) -> tuple[RecordEnvelope, str, EntityInstance]:
         stored = view.instances.get(actor)
@@ -376,9 +395,12 @@ class SourceRebase:
                 followed = None
             if followed is not None and followed.pinned and followed.entity_key == upstream.entity_key:
                 derived_from = str(upstream)  # it named the pinned revision the actor was made from
+        extra = {key: value for key, value in old.extra.items() if key != ART_PIN}
+        if review._art_pin is not None:  # exactly the pictures the review showed, never newer ones
+            extra[ART_PIN] = review._art_pin
         envelope = RecordEnvelope(review.actor, instance_to_payload(rebased), name=old.name, owner=old.owner,
                                   derived_from=derived_from, base=str(upstream), base_etag=review._upstream_etag,
-                                  extra=old.extra)
+                                  extra=extra)
         puts: list[tuple[RecordEnvelope | ScopeRecord, str | None]] = [(envelope, review.instance_etag)]
         for chat in review._chats:
             at = self._clock()
