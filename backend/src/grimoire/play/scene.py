@@ -384,3 +384,21 @@ def _table_audience(scene: Scene, principal: str) -> frozenset[str]:
     authenticated as one of them or the library owner. Never a name from a post, a reply or the caller."""
     controllers = {scene.controller(pc) for pc in scene.players}
     return frozenset(each for each in controllers if isinstance(each, str) and is_human(each)) | {principal}
+
+
+#: Problems that leave who may be at the table unknown: no cast staged at all (membership unreadable), a member
+#: left out whose membership cannot be told (uncertain, conflicting, an id two kinds use), a relation file the
+#: store cannot read. A member left out as stored away or with no instance file is not at the table.
+_PRESENCE_UNKNOWN = frozenset({"cast_unstaged", "party", "party_uncertain", "conflicting_membership",
+                               "instance_id_conflict"})
+
+
+def _table_known(scene: Scene) -> bool:
+    """Whether ``_table_audience`` names everyone who may be at the table: a cast was staged, no member who may be
+    present was left out for membership that cannot be told, and no member of it has two controllers recorded
+    (``Scene.controller`` then names none, so that player would be missing too)."""
+    if scene.staged is None or any(code in _PRESENCE_UNKNOWN for code, _ in scene.problems):
+        return False
+    return all(len({c.controller_id for c in scene.controls
+                    if c.campaign_id == actor.campaign_id and c.actor_id == actor.instance_id}) <= 1
+               for actor in scene.cast)

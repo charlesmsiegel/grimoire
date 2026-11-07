@@ -12,7 +12,7 @@ Boundaries control how the fiction is **depicted** and which **proposals** may g
 
 - **Player-input channel only:** `Boundary` (through `BoundaryChange`), `BoundaryRequest` and `CheckInConsent`. Model output must never be turned into any of these. `set_by`, `requested_by` and `given_by` name the authenticated speaker, and none of them may be `DIRECTOR`.
 - **Caller duties (035):**
-  - `BoundaryContext.audience` must be the authenticated scene audience. 035 passes every human the sovereignty ledger records as controlling a present player character, plus the authenticated requester, read again under the store lock where narration is shown or a change written, so a player seated while a model call was in flight is in it.
+  - `BoundaryContext.audience` must be the authenticated scene audience. 035 passes every human the sovereignty ledger records as controlling a present player character, plus the authenticated requester, read again under the store lock where narration is shown or a change written, so a player seated while a model call was in flight is in it. When who is present cannot be read in full, 035 adds every player with a boundary to the audience rather than judging by the part it could read.
   - The viewer passed to `owner_boundaries` must be the authenticated user. 035's `boundaries` passes the principal its handle authenticates.
   - Boundary ids must be opaque. 035's `change_boundaries` accepts a `set` only with an id of `new_boundary_id()`'s form (`b-` and 32 random hex digits).
   - A change's `requested_by` must be the authenticated speaker. 035 refuses any other (`not_your_boundary`).

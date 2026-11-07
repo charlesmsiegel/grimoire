@@ -595,3 +595,129 @@ def test_the_owners_withdrawal_is_judged_for_the_table_as_it_is_written(cards, m
         refused("not_your_boundary", table.runner.change_boundaries, chat, table.owner, withdrawing(OWNER, "b-camp"))
         monkeypatch.undo()
         assert [b["boundary"] for b in stored(folder, chat)["boundaries"]] == [opaque("b-camp")]
+
+
+# -- who is at the table cannot be read: never judged against the requester alone ----------------------------
+
+def membership(table: Table, chat):
+    """A party relation of the chat's two characters, so membership is read from a relation file."""
+    from chat_fixtures import Ids
+    from grimoire.core import Moment
+    from grimoire.partystore import PartyLibrary
+    scene = table.runner.open(chat)
+    (mara,) = [actor for actor in scene.cast if actor != scene.persona and actor.instance_id.startswith("mara")]
+    PartyLibrary(table.store, table.owner, clock=Clock(), new_id=Ids(), owner=OWNER).join(
+        scene.persona, mara, at=Moment(1), provenance="director").commit()
+
+
+def damage_membership(folder, chat) -> None:
+    """A relation file whose store envelope reads but whose payload 033 cannot decode: no ``LoadProblem``,
+    yet membership is unknown, so no cast is staged (``cast_unstaged``)."""
+    (relation,) = folder.joinpath("campaigns", chat.campaign_id, "relations").glob("*.json")
+    document = json.loads(relation.read_text(encoding="utf-8"))
+    document["payload"]["since"] = {"sequence": "soon"}
+    relation.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def test_unreadable_membership_never_lets_the_owner_withdraw_a_seated_players_group_limit(cards):
+    folder, chat = cards
+    with Table(folder, [say("Safe as the tide.")]) as table:
+        tamsin = attach_tamsin(table.store, table.owner, chat)
+        hand(table, chat, tamsin, BOB)
+        asking(table, chat)
+        membership(table, chat)
+        table.runner.change_boundaries(chat, table.player(BOB), setting(
+            BOB, "b-camp", "storms", "check_in", scope="campaign", scope_id=chat.campaign_id))
+        damage_membership(folder, chat)
+        scene = table.runner.open(chat)
+        assert scene.staged is None and ("cast_unstaged", "relations_unreadable") in scene.problems
+        assert not [code for code, _ in scene.problems if code == "party"]  # no LoadProblem says so
+        refused("not_your_boundary", table.runner.change_boundaries, chat, table.owner, withdrawing(OWNER, "b-camp"))
+        assert [b["boundary"] for b in stored(folder, chat)["boundaries"]] == [opaque("b-camp")]
+        assert table.runner.boundaries(chat, table.owner).held
+
+
+def test_a_cast_that_cannot_be_read_as_a_take_lands_holds_any_players_limit(cards, monkeypatch):
+    folder, chat = cards
+    with Table(folder, [say("Safe as the tide.")]) as table:
+        tamsin = attach_tamsin(table.store, table.owner, chat)
+        asking(table, chat)
+        mara = next(actor for actor in table.runner.open(chat).npcs if actor != tamsin)
+        membership(table, chat)
+        write_raw(table, chat, session_zero_to_payload(SessionZero((
+            Boundary(opaque("b-bob"), "player", BOB, "spiders", "avoid", BOB),)), 1))  # Bob is not seated
+        run_turn = table.harness.runtime.run_turn
+
+        def then_damaged(*args, **kwargs):
+            outcome = run_turn(*args, **kwargs)
+            damage_membership(folder, chat)  # who is present can no longer be told: Bob may be at the table
+            return outcome
+
+        monkeypatch.setattr(table.harness.runtime, "run_turn", then_damaged)
+        take = table.runner.generate(chat, table.player(), speakers=[mara])
+        monkeypatch.undo()
+        assert (take.lines, take.outcome) == ((), "halted")
+        assert [(c.status, c.reason) for c in take.calls] == [("rejected", "held_by_boundary")]
+
+
+def test_a_cast_that_cannot_be_read_holds_nothing_without_a_limit(cards, monkeypatch):
+    folder, chat = cards
+    with Table(folder, [say("Safe as the tide.")]) as table:
+        asking(table, chat)
+        membership(table, chat)
+        run_turn = table.harness.runtime.run_turn
+
+        def then_damaged(*args, **kwargs):
+            outcome = run_turn(*args, **kwargs)
+            damage_membership(folder, chat)
+            return outcome
+
+        monkeypatch.setattr(table.harness.runtime, "run_turn", then_damaged)
+        take = table.runner.generate(chat, table.player())
+        monkeypatch.undo()
+        assert take.lines  # no configuration: an unknown table changes nothing session zero decides
+
+
+def test_a_character_with_two_recorded_controllers_leaves_the_table_unknown():
+    from types import SimpleNamespace
+    from grimoire.core.identity import InstanceRef
+    from grimoire.play.scene import _table_known
+    actor = InstanceRef("c-1", "character", "pc-1")
+    control = [SimpleNamespace(campaign_id="c-1", actor_id="pc-1", controller_id=who) for who in (ANA, BOB)]
+    scene = SimpleNamespace(staged=object(), problems=(), cast=(actor,), controls=tuple(control[:1]))
+    assert _table_known(scene)
+    assert not _table_known(SimpleNamespace(**{**vars(scene), "controls": tuple(control)}))  # neither is named
+    assert not _table_known(SimpleNamespace(**{**vars(scene), "staged": None}))
+    assert not _table_known(SimpleNamespace(**{**vars(scene), "problems": (("party_uncertain", str(actor)),)}))
+    assert _table_known(SimpleNamespace(**{**vars(scene), "problems": (("missing_actor", str(actor)),)}))
+
+
+# -- a standing scope conflict whose kept version is lost -----------------------------------------------------
+
+@pytest.mark.parametrize("damage", ["lost", "corrupted"])
+def test_a_standing_scope_conflict_whose_kept_version_is_gone_fails_closed(cards, tmp_path, damage):
+    from test_scene_turn_merge import DESKTOP, PHONE, devices, synced
+    folder, chat = cards
+    with Table(folder) as table:
+        table.runner.seat(chat, ANA)
+    chat = devices((folder, chat), tmp_path)
+    with Table(tmp_path / DESKTOP, [say("Desk.")]) as desk, Table(tmp_path / PHONE, [say("Phone.")]) as phone:
+        synced(desk, phone)
+        desk.runner.change_boundaries(chat, desk.player(), setting(ANA, "b-desk", "storms", "avoid"))
+        phone.runner.change_boundaries(chat, phone.player(), setting(
+            ANA, "b-phone", "sea_peril", "allow", scope="campaign", scope_id=chat.campaign_id))
+        path = "/".join(address_parts(chat.scope))
+        assert synced(desk, phone).conflict(path).code == "concurrent"
+        phone.runner.post(chat, phone.player(), '"Well?"')
+        refused("held_by_boundary", phone.runner.generate, chat, phone.player())
+        (slot,) = [slot for slot in phone.store.conflicts() if path.rsplit("/", 1)[-1].removesuffix(".json") in slot]
+        kept = (tmp_path / PHONE).joinpath(*slot.split("/"))
+        if damage == "lost":
+            kept.unlink()
+        else:
+            kept.write_bytes(kept.read_bytes().replace(b"avoid", b"allow"))
+        # the conflict still stands, unresolved and undismissed: the desk's limit may be the one in force
+        refused("session_zero_unreadable", phone.runner.generate, chat, phone.player())
+        assert phone.runner.boundaries(chat, phone.player()).held
+        assert ("session_zero", "session_zero_unreadable") in phone.runner.open(chat).problems
+        assert not phone.harness.transport.sends

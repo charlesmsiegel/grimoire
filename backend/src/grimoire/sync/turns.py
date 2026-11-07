@@ -86,7 +86,8 @@ def _turn_name(path: str) -> tuple[str, int, str | None] | None:
 
 
 def open_conflicts(store: LibraryStore, folder: str, paths: Iterable[str] = (), *,
-                   ended: Callable[[str], bool] = lambda peer: False) -> tuple[dict[str, tuple[bytes, ...]], bool]:
+                   ended: Callable[[str], bool] = lambda peer: False,
+                   require_kept: bool = False) -> tuple[dict[str, tuple[bytes, ...]], bool]:
     """The files under ``folder`` that a pair's last sync found in conflict on this device and that no
     ``resolve`` or later sync has ended (019's keep-both, as this device's kept-version records hold it),
     each with the peer's versions kept here that can be read; and whether the records are complete.
@@ -105,7 +106,12 @@ def open_conflicts(store: LibraryStore, folder: str, paths: Iterable[str] = (), 
     library with no identity holds nothing only while it has no pair records at all.
 
     ``folder`` is a folder of one campaign (``campaigns/<id>/turns``), or one file directly in a campaign's
-    folder (``campaigns/<id>/scope.json``, 035's session zero), which is then the only path looked at."""
+    folder (``campaigns/<id>/scope.json``, 035's session zero), which is then the only path looked at.
+
+    ``require_kept``: a standing version the peer did not delete must have its bytes here, readable, or the
+    records are not complete (``False``): a caller that reads what the peer's version says (035's session zero)
+    would otherwise take a lost or damaged kept file for a version that says nothing. 028's turns need only to
+    know the conflict stands, which the path's entry says without its bytes."""
     try:
         device = device_of(store)
     except NoDeviceIdentity:
@@ -142,8 +148,9 @@ def open_conflicts(store: LibraryStore, folder: str, paths: Iterable[str] = (), 
             kept = list(found.get(path, ()))
             for tag in sorted(standing - {NO_VERSION}):  # type: ignore[type-var]  # the peer deleted it: none kept
                 slots, unreadable = kept_slots(store, path, tag)  # type: ignore[arg-type]
-                complete = complete and not unreadable
-                kept += [data for slot in slots if (data := _read(store, slot)) is not None]
+                read = [data for slot in slots if (data := _read(store, slot)) is not None]
+                complete = complete and not unreadable and (bool(read) or not require_kept)
+                kept += read
             found[path] = tuple(kept)
     return found, complete
 

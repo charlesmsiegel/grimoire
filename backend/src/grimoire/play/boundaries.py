@@ -126,10 +126,11 @@ def in_force(runner, chat: ChatRef) -> tuple[_InForce, ...]:
     found = [] if stored is None else [_InForce(stored.config, _world(scope))]
     path = _scope_path(chat)
     # the scope file alone: its campaign's turns are 028's (``turn_conflict``), and their kept bytes are not read here
-    kept, complete = open_conflicts(runner.store, path, [path], ended=lambda peer: pairing_ended(runner.store, peer))
+    kept, complete = open_conflicts(runner.store, path, [path], ended=lambda peer: pairing_ended(runner.store, peer),
+                                    require_kept=True)
     if not complete:
-        raise _unreadable("this device's sync records cannot be read, so another version of the chat's session "
-                          "zero may stand; nothing is shown")
+        raise _unreadable("this device's sync records cannot be read, or a version they keep is gone, so another "
+                          "version of the chat's session zero may stand; nothing is shown")
     for data in kept.get(path, ()):
         try:
             record = parse_exact(tuple(path.split("/")), data)
@@ -154,13 +155,17 @@ def _segments(chat: ChatRef, lines: Iterable[SceneLine] | None) -> tuple[Narrati
 
 
 def _held(versions: tuple[_InForce, ...], chat: ChatRef, audience: frozenset[str],
-          lines: Iterable[SceneLine] | None) -> bool:
+          lines: Iterable[SceneLine] | None, complete: bool = True) -> bool:
+    """Whether any version holds ``lines`` for ``audience``. A table that could not be read in full (``complete``
+    false) may seat anyone: every player with a boundary in that version is then taken as at the table."""
     segments = _segments(chat, lines)
     if not segments:
         return False
     for version in versions:
+        table = audience if complete else audience | {b.scope_id for b in version.config.boundaries
+                                                       if b.scope == "player"}
         try:
-            context = BoundaryContext(chat.campaign_id, audience, world_id=version.world_id)
+            context = BoundaryContext(chat.campaign_id, table, world_id=version.world_id)
             decisions = decide_presentation(version.config, context, segments)
         except ValueError:  # a world or setting boundary this chat is in no context for: 016 fails closed
             raise _unreadable("the chat's session zero names a world or setting it is not in; nothing is shown") \
@@ -171,19 +176,22 @@ def _held(versions: tuple[_InForce, ...], chat: ChatRef, audience: frozenset[str
 
 
 def check_presented(runner, chat: ChatRef, audience: frozenset[str],
-                    lines: Iterable[SceneLine] | None = None) -> None:
+                    lines: Iterable[SceneLine] | None = None, *, complete: bool = True) -> None:
     """Refuse ``held_by_boundary`` unless 016 presents every one of ``lines`` (``None``: any narration at all) to
     ``audience`` under every version of the chat's configuration; ``session_zero_unreadable`` when one cannot be
-    read. Read from the store each time, so under the store lock it is the configuration a commit lands over."""
+    read. Read from the store each time, so under the store lock it is the configuration a commit lands over.
+    ``complete`` false: who is at the table could not be read in full, so it is never judged by ``audience``
+    alone (``_held``)."""
     with span("read.session_zero"):
-        held = _held(in_force(runner, chat), chat, audience, lines)
+        held = _held(in_force(runner, chat), chat, audience, lines, complete)
     if held:
         raise _refuse(HELD, "a session-zero limit is in force for this table, and no theme labeller labels "
                             "narration yet: 016 holds unlabelled narration while any limit applies")
 
 
-def view(runner, chat: ChatRef, principal: str, audience: frozenset[str]) -> Boundaries:
-    """``Boundaries`` for ``principal`` at a table of ``audience``, from this device's configuration."""
+def view(runner, chat: ChatRef, principal: str, audience: frozenset[str], complete: bool = True) -> Boundaries:
+    """``Boundaries`` for ``principal`` at a table of ``audience`` (read in full, or not: ``complete``), from this
+    device's configuration."""
     scope, _, stored = _own(runner, chat)
     config = SessionZero() if stored is None else stored.config
     try:
@@ -192,7 +200,7 @@ def view(runner, chat: ChatRef, principal: str, audience: frozenset[str]) -> Bou
     except ValueError:
         raise _unreadable("the chat's session zero names a world or setting it is not in") from None
     try:
-        held = _held(in_force(runner, chat), chat, audience, None)
+        held = _held(in_force(runner, chat), chat, audience, None, complete)
     except SceneRefused:  # another version cannot be read: narration is held (fail closed), the view still shows
         held = True
     return Boundaries(0 if stored is None else stored.revision, visible, owner_boundaries(config, principal), held)
@@ -250,7 +258,7 @@ def change(runner, chat: ChatRef, principal: str, table: Callable[[], tuple[froz
             library.set_session_zero(chat.scope, payload, expected=etag).commit()
         except StaleWrite:  # written by another process since this read: nothing landed
             raise _refuse("scope_changed", "the chat's play scope changed meanwhile; ask again") from None
-    return view(runner, chat, principal, table()[0])
+    return view(runner, chat, principal, *table())
 
 
 def _no_clock() -> str:  # a scope change records no time

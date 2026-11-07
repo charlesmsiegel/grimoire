@@ -27,7 +27,7 @@ from grimoire.play.adjudicate import frame_of, outcome_lines
 from grimoire.play.obstacles import attempt_labels, check_moment, fixed_attempt, open_obstacle, refuse_live_link
 from grimoire.play.obstacles import offered as obstacle_offer
 from grimoire.play.boundaries import HELD, UNREADABLE, check_presented
-from grimoire.play.scene import WRITE_RETRIES, _perceived, _refuse, _table_audience
+from grimoire.play.scene import WRITE_RETRIES, _perceived, _refuse, _table_audience, _table_known
 from grimoire.play.tracing import record_calls, span
 from grimoire.providers.meter import TurnMeter
 from grimoire.scene import MAX_LABELS, Against, CallRecord, Label, SceneRefused, TurnRecord, heard_for, render
@@ -60,7 +60,7 @@ def label_action(runner, chat: ChatRef, by, obstacle: str | None = None) -> Labe
     if runner.labeller is None or runner.label_handle is None:
         raise _refuse("no_labeller", "no labeller is configured")
     # 016, as for generation and before any call: the labeller's stakes are model text the table reads
-    check_presented(runner, chat, _table_audience(scene, principal))
+    check_presented(runner, chat, _table_audience(scene, principal), complete=_table_known(scene))
     record = scene.pending
     post = record.post if record is not None else None
     if post is None or post.kind != "action":

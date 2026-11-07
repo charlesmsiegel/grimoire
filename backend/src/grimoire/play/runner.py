@@ -59,6 +59,7 @@ from grimoire.play.scene import (
     DEFAULT_BUDGET, NOW, WRITE_RETRIES, Scene, _assigned, _audience, _Context, _declined, _find_line, _first_text,
     _follows, _has_imported, _human_of, _latest, _macros, _mark, _name_index, _no_clock, _no_id, _payload,
     _perceived, _readable, _refuse, _room, _scenario_text, _seen, _stage, _stage_ok, _Stale, _table_audience,
+    _table_known,
 )
 from grimoire.play.stages import StageSource, stage_key, succession
 from grimoire.providers.meter import TurnMeter
@@ -336,22 +337,21 @@ class SceneRunner:
 
     def _table_now(self, chat: ChatRef, principal: str) -> tuple[frozenset[str], bool]:
         """016's audience as the table stands now, read again from the store (a fence calls it under the store
-        lock, so a player seated while a call was in flight is in it), and whether who is present could be read
-        in full."""
+        lock, so a player seated while a call was in flight is in it), and whether who may be present could be
+        read in full (``_table_known``: no cast staged, membership that cannot be told, two controllers of one
+        character are not)."""
         with span("read.table"):
             context = self._context(chat)
-        return _table_audience(context.scene, principal), not context.party_problems
+        return _table_audience(context.scene, principal), not context.party_problems and _table_known(context.scene)
 
     def _check_now(self, chat: ChatRef, principal: str, lines=None) -> None:
-        """``check_presented`` for the table as it stands now (``_table_now``): a table that cannot be read in
-        full is held, never presented to the part of it that could be."""
+        """``check_presented`` for the table as it stands now (``_table_now``). A table that cannot be read in full,
+        or at all, is never judged by the part of it that could be: every player with a boundary counts as seated."""
         try:
             audience, complete = self._table_now(chat, principal)
-        except SceneRefused:
-            complete = False
-        if not complete:
-            raise _refuse(HELD, "who is at the table cannot be read in full now, so narration is held")
-        check_presented(self, chat, audience, lines)
+        except Exception:  # the chat, its ledger or its party cannot be read now: who is seated is unknown
+            audience, complete = frozenset({principal}), False
+        check_presented(self, chat, audience, lines, complete=complete)
 
     def _write(self, *args, **kwargs) -> StoredTurn:
         with span("write.turn"):
@@ -534,7 +534,7 @@ class SceneRunner:
         if self.runtime is None:
             raise _refuse("no_runtime", "no model is configured")
         # 016, before any call is billed: a held table gets no narration
-        check_presented(self, chat, _table_audience(scene, principal))
+        check_presented(self, chat, _table_audience(scene, principal), complete=_table_known(scene))
         if context.party_problems:
             raise _refuse("party_unreadable", "who is present cannot be read in full")
         unseated = [str(actor) for actor in scene.cast if scene.controller(actor) is None]
@@ -1107,7 +1107,7 @@ class SceneRunner:
         anonymised, the member's own in full, its revision, and whether narration is held now. Nothing is written."""
         scene = self._context(chat).scene
         principal = self._principal(scene, by)
-        return boundary_view(self, chat, principal, _table_audience(scene, principal))
+        return boundary_view(self, chat, principal, _table_audience(scene, principal), _table_known(scene))
 
     @traced("change_boundaries")
     def change_boundaries(self, chat: ChatRef, by, change: BoundaryChange) -> Boundaries:
