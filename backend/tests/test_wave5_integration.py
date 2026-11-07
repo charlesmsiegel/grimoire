@@ -17,8 +17,9 @@ crosses an app restart it closes the store and opens it again:
   briefs the NPC from that revision's description, in its unchanged voice, while still hearing its earlier
   turns; a chat
   pinned to the old revision in another campaign is untouched and keeps it;
-- 043 -> 035: a World Change Set changes what a world-based chat's NPC is briefed with only once applied:
-  never from a rejected set, nor from one aborted because the world changed under its review;
+- 043 -> 035: a World Change Set changes what a world-based chat's NPC is briefed with only once applied
+  and, since chats pin by default, once a reviewed 042 rebase takes it: never from a rejected set, nor
+  from one aborted because the world changed under its review, nor from an applied one nobody reviewed;
 - 020 -> 039 -> 027: an NPC's intention, chosen from its stored knowledge, rides in its one ordinary
   generation call; the turn plans exactly one call per speaker, and another NPC's call carries none of it
   (at the library level, since 035's runner does not call 039 yet);
@@ -338,12 +339,12 @@ def _world_chat(root: Path):
         put(store, SourceManifest(WORLD, OWNER, "Harbor", {"character/wren": "r1", "character/toma": "r1"}),
             envelope(wren()), envelope(toma))
         chats = ChatLibrary(store, owner_handle(), clock=Clock(), new_id=Tagged("w"), owner=OWNER)
-        started = chats.start_chat(Launch("character", WREN), persona=TOMA).commit()  # Wren follows the head
+        started = chats.start_chat(Launch("character", WREN), persona=TOMA).commit()  # pinned to r1 by default
         _, etag = chats.read_scope(started.scope)
         chats.attach_world(started.scope, WORLD, expected=etag).commit()
         assert chat_snapshot(store.load(), started.chat).scope.world.source == WORLD
     secure(root)
-    return started.chat
+    return started
 
 
 def _revise_wren(lib: ChangeSetLibrary, changeset_id: str) -> ChangeSet:
@@ -353,9 +354,11 @@ def _revise_wren(lib: ChangeSetLibrary, changeset_id: str) -> ChangeSet:
     return ChangeSet(changeset_id, WORLD, "Wren's eye", "human:owner", (change,))
 
 
-def test_a_world_change_set_reaches_a_world_based_chats_npc_only_once_applied(tmp_path):
+def test_a_world_change_set_reaches_a_pinned_world_chats_npc_only_once_applied_and_rebased(tmp_path):
     root = tmp_path / "lib"
-    chat = _world_chat(root)
+    started = _world_chat(root)
+    chat = started.chat
+    [wren_here] = [actor for actor in started.actors if actor.instance_id.startswith("wren")]
     world = f"sources/{WORLD.replace(':', '/')}/"
     with Table(root, [say(f"Turn {n}.") for n in range(1, 5)], voices=WREN_VOICES) as table:
         runner, ana = table.runner, table.player()
@@ -391,8 +394,15 @@ def test_a_world_change_set_reaches_a_world_based_chats_npc_only_once_applied(tm
 
         lib.apply(lib.review(_revise_wren(lib, "cs-applied")))
         prompt = turn('"Wren, your eye!"')
-        assert WREN_AFTER in prompt and WREN_BEFORE not in prompt  # the next turn is briefed from the new head
-        assert "Turn 2." in prompt  # and the chat's history stands as played
+        assert WREN_BEFORE in prompt and WREN_AFTER not in prompt  # the chat is pinned: an applied set waits for review
+
+        rebase = SourceRebase(table.store, table.owner, clock=Clock())
+        review = rebase.review(wren_here)
+        assert [(row.field, row.status) for row in review.rows] == [("description", "upstream")]
+        rebase.apply(review, {"description": "take"}).commit()
+        prompt = turn('"Wren, can you see?"')
+        assert WREN_AFTER in prompt and WREN_BEFORE not in prompt  # once reviewed, the next turn has the new revision
+        assert "Turn 3." in prompt  # and the chat's history stands as played
 
 
 # -- 020 -> 039 -> 027 ----------------------------------------------------------------------------
@@ -516,11 +526,12 @@ def test_the_stage_not_the_cast_decides_who_hears_and_each_pack_holds_what_it_he
     root = tmp_path / "lib"
     with LibraryStore.create(root) as store:
         build_library(store)  # the q-1 chat: Mara, Iris and Sola
-        cast = party_library(store).stage(Q, "the-study", (MARA, IRIS, SOLA), as_of=1)  # 033: all three present
+        parties = party_library(store)
+        cast = parties.stage(Q, "the-study", (MARA, IRIS, SOLA), as_of=1)  # 033: all three present
         stage = Stage(Q, "the-study", 1, (Area("study"), Area("hall")),
                       (Way("study-door", ("study", "hall"), "closed"),), (MARA, IRIS, SOLA),
                       (Placement(MARA, area="study"), Placement(IRIS, area="study"), Placement(SOLA, area="hall")), ())
-        check_cast(stage, cast)  # 041's stage is of exactly 033's cast
+        check_cast(stage, cast, state=parties.view(Q, as_of=1).state)  # 041's stage is of exactly 033's cast
         stage = stage.at(2)
         whisper = Message("m-1", MARA, "whisper", SECRET_WHISPER, (SOLA,))
         # 033's cast alone would carry the whisper to Sola; the stage knows a shut door is between them
