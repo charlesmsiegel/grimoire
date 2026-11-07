@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+import enum
 from dataclasses import dataclass
 from typing import Literal
 
 from grimoire.store.journal import DELETABLE_KINDS
 
 SideState = Literal["absent", "present", "blocked"]
+
+
+class LedgerMerge(enum.Enum):
+    """``resolve_ledger``'s ``keep`` that takes the review's merge (028). A device id is always a ``str``, and
+    no ``str`` equals this, so a request to merge can never select a device (one may be named ``merge``)."""
+
+    MERGE = "merge"
+
+    def __repr__(self) -> str:
+        return "MERGE"
+
+
+#: ``keep=MERGE``: the merge a policy-only ledger review would make; nothing is discarded.
+MERGE = LedgerMerge.MERGE
 BaseKind = Literal["first", "none", "uncertain", "agreed", "deleted"]
 Action = Literal["agreed", "copy", "conflict", "delete"]
 

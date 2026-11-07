@@ -16,7 +16,7 @@ import pytest
 from grimoire.holdings import Line, Operation
 from grimoire.store import LibraryStore
 from grimoire.store.guard import path_length
-from grimoire.sync import apply_sync, identify, plan_sync, resolve_ledger, sync, sync_until_quiet
+from grimoire.sync import MERGE, ResolveRefused, apply_sync, identify, plan_sync, resolve_ledger, sync, sync_until_quiet
 from grimoire.sync.ledger_resolve import plan_resolution
 
 from effects_fixtures import C, CHAT, TAM, WREN, give
@@ -107,7 +107,7 @@ def test_a_merge_decision_stopped_after_any_commit_needs_no_second_decision(tmp_
         made[PHONE].accept(pay(sequence=9, attempt="pay-phone"))
         tokens = {conflict.token for conflict in sync(made[DESKTOP].store, made[PHONE].store, handles()).conflicts}
         assert len(tokens) == 1
-        plan = plan_resolution(made[DESKTOP].store, made[PHONE].store, C, "merge", tokens.pop(), handles())
+        plan = plan_resolution(made[DESKTOP].store, made[PHONE].store, C, MERGE, tokens.pop(), handles())
         observer, done = _stop_after(stop)
         try:
             apply_sync(plan, handles(), observer=observer)
@@ -147,7 +147,7 @@ def test_a_review_after_a_stop_at_any_commit_offers_a_merge_the_owner_can_take(t
         again = sync(desktop, phone, handles())
         assert _reasons(again) == ["same_chat"] and not again.wrote, done
         token = {conflict.token for conflict in again.conflicts if conflict.code == "merge_review"}.pop()
-        resolve_ledger(desktop, phone, C, "merge", token, handles())
+        resolve_ledger(desktop, phone, C, MERGE, token, handles())
         assert ledger_files(desktop) == ledger_files(phone)
         assert sync(desktop, phone, handles()).conflicts == ()
     finally:
@@ -320,3 +320,48 @@ def test_an_agreed_relation_of_an_unknown_predicate_never_stops_its_ledger_and_i
         assert (made[PHONE].store.root / path).read_bytes() == original == (made[DESKTOP].store.root / path).read_bytes()
     finally:
         _close(made)
+
+
+@pytest.mark.parametrize("folder", ["accepted", "holdings", "wrapups", "Accepted", "campaign"])
+def test_a_blocked_ledger_folder_is_a_review_though_the_campaign_has_no_ledger_file(tmp_path, folder):
+    """Two libraries whose campaign holds no ledger file anywhere, and neither archive names one: a ledger
+    folder (or the campaign folder) the desktop cannot list, or a look-alike spelling of one, may hold any
+    ledger at all, so it is a folder-level ``unlistable`` review, never silence."""
+    from sync_helpers import make_pair
+    desktop, phone = make_pair(tmp_path / "pair")
+    try:
+        campaign = desktop.root / "campaigns" / "c1"
+        assert not any((campaign / name).exists() for name in ("accepted", "holdings", "wrapups"))
+        (tmp_path / "elsewhere").mkdir()
+        if folder == "Accepted":  # a look-alike spelling: what it holds is never read
+            (campaign / "Accepted").mkdir()
+            if (campaign / "accepted").exists():
+                pytest.skip("this file system does not tell the spellings apart")
+            subject = "campaigns/c1/Accepted"
+        else:
+            if folder == "campaign":
+                shutil.move(str(campaign), str(tmp_path / "elsewhere" / "c1"))
+                link, subject = campaign, "campaigns/c1"
+            else:
+                link, subject = campaign / folder, f"campaigns/c1/{folder}"
+            try:
+                link.symlink_to(tmp_path / "elsewhere" / ("c1" if folder == "campaign" else ""), target_is_directory=True)
+            except (OSError, NotImplementedError):
+                pytest.skip("this system cannot make a directory link")
+        report = sync(desktop, phone, handles())
+        found = report.conflict(subject)
+        assert found is not None and found.code == "merge_review", report.conflicts
+        assert ("unlistable", subject) in {(item.reason, item.subject) for item in found.review}
+        assert not sync(desktop, phone, handles()).wrote  # the review stands, and writes nothing again
+        with pytest.raises(ResolveRefused):
+            resolve_ledger(desktop, phone, "c1", MERGE, found.token, handles())
+        if folder == "Accepted":  # listable again: the review ends by itself
+            (campaign / "Accepted").rmdir()
+        else:
+            link.unlink()
+            if folder == "campaign":
+                shutil.move(str(tmp_path / "elsewhere" / "c1"), str(campaign))
+        assert sync_until_quiet(desktop, phone, handles()).conflicts == ()
+    finally:
+        desktop.close()
+        phone.close()

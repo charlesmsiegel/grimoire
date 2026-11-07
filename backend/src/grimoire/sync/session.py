@@ -37,7 +37,9 @@ from .decide import archive_candidate, decide, derive_base
 from .documents import ArchiveView, KeepsView, PendingView, parse_keeps, syncable
 from .errors import ArchiveTooLarge, SameDevice, SyncInterrupted, SyncNotQuiet
 from .identity import device_of, identify
-from .model import ASSET_KINDS, CAMPAIGN_LOCAL, HELD_BACK_KINDS, HOLDS_RELATIONS, LEDGER_KINDS, Base, Side
+from .model import (
+    ASSET_KINDS, CAMPAIGN_LOCAL, HELD_BACK_KINDS, HOLDS_RELATIONS, LEDGER_KINDS, Base, LedgerMerge, Side,
+)
 from .turns import turn_named, turn_needs
 
 _SLOT = re.compile(r"~[0-9a-f]{12}(?:\.([1-9][0-9]*))?$")
@@ -150,7 +152,7 @@ class SyncPlan:
     units: dict[str, str] = field(default_factory=dict)
     unit_copies: dict[str, dict[str, set[str]]] = field(default_factory=dict)
     #: 028: ``plan_resolution``'s checked decision, by campaign (only it passes one to ``_plan``)
-    choices: dict[str, str] = field(default_factory=dict)
+    choices: dict[str, str | LedgerMerge] = field(default_factory=dict)
     ledger_campaigns: frozenset[str] = frozenset()  # 028: whose relations are in their unit ("*": every one)
     #: per device, the agreed versions it deletes because the other device deleted them (028, row 9)
     deletes: dict[str, list[deletion.Delete]] = field(default_factory=dict)
@@ -217,7 +219,7 @@ def _locked(*stores: LibraryStore):  # type: ignore[no-untyped-def]
 
 
 def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object],
-          choices: dict[str, str] | None = None) -> SyncPlan:
+          choices: dict[str, str | LedgerMerge] | None = None) -> SyncPlan:
     ids = device_of(left), device_of(right)
     if ids[0] == ids[1]:
         raise SameDevice(f"both libraries are device {ids[0]!r}; give one a new identity")
@@ -802,9 +804,10 @@ def _plan_keeps(plan: SyncPlan, device: str) -> None:
     other, store = plan.other(device), plan.stores[device]
     keeps: list[Keep] = []
     for path, conflict in sorted(plan.conflicts.items()):
-        if conflict.code in ("held", "denied") or syncable(path) == "blob" or path in plan.units:
+        if conflict.code in ("held", "denied", "merge_review") or syncable(path) == "blob" or path in plan.units:
             continue  # held: nothing is kept (C1); denied: never kept; a blob's name is its content; a ledger
-            # file is merged again by every sync, from the versions both devices still hold (028)
+            # file (or a ledger folder that cannot be listed) is merged again by every sync, from the versions
+            # both devices still hold (028)
         side = plan.sides[path][other]
         mine = plan.sides[path][device]
         if side.state != "present" or (mine.state == "blocked" and mine.reason == "unreadable"):

@@ -469,10 +469,12 @@ def test_f4_blocked_paths_are_never_copied_or_overwritten(pair, tmp_path):
     report = sync(desktop, phone, handles())
     assert report.copied == ((unrelated, PHONE),)
     assert (phone.root / unrelated).read_bytes() == (desktop.root / unrelated).read_bytes()
-    # nothing is held back since 028 (a ledger in the unlistable folder would be a merge_review, ``unlistable``):
-    # the blocked paths are blocked conflicts, the linked campaign's instance among them
+    # nothing is held back since 028: the blocked paths are blocked conflicts, the linked campaign's instance
+    # among them, and the linked campaign folder, which may hide a ledger, is a folder-level ``unlistable`` review
     assert {(found.path, found.code) for found in report.conflicts} == {
-        (PATHS["wren_a"], "blocked"), (PATHS["wren_b"], "blocked"), ("campaigns/c9/instances/character/x.json", "blocked")}
+        (PATHS["wren_a"], "blocked"), (PATHS["wren_b"], "blocked"), ("campaigns/c9/instances/character/x.json", "blocked"),
+        ("campaigns/c9", "merge_review")}
+    assert "unlistable" in {item.reason for item in report.conflict("campaigns/c9").review}
     assert (phone.root / PATHS["wren_a"]).read_bytes() == b"{not json"
     assert list((outside / "instances" / "character").iterdir()) == []
 

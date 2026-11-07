@@ -45,7 +45,7 @@ from grimoire.store.layout import SYNC_BASES, SYNC_PEERS, address_parts, classif
 
 from .decide import archive_candidate, derive_base
 from .documents import syncable
-from .model import FIRST, LEDGER_KINDS, UNCERTAIN, Base
+from .model import FIRST, LEDGER_KINDS, MERGE, UNCERTAIN, Base, LedgerMerge
 
 #: The folders of a campaign a ledger unit is read from; one of them that cannot be listed, in any
 #: spelling, stops that campaign's merge (what it holds is unknown).
@@ -243,19 +243,20 @@ def base_bytes(plan, path: str, tag: str) -> bytes | None:  # type: ignore[no-un
     return None
 
 
-def plan_unit(plan, campaign: str, paths: Iterable[str], choice: str | None = None,  # type: ignore[no-untyped-def]
+def plan_unit(plan, campaign: str, paths: Iterable[str], choice: str | LedgerMerge | None = None,  # type: ignore[no-untyped-def]
               bases: Mapping[str, Base] | None = None) -> UnitResult:
     """Merge one campaign's ledger unit as the plan's two devices hold it.
 
-    ``choice`` is an owner's decision (``resolve_ledger``): ``"merge"`` takes the merge a policy-only
-    review would make (its ``candidate``); a device id takes that device's ledger files as they stand.
+    ``choice`` is an owner's decision (``resolve_ledger``): ``MERGE`` takes the merge a policy-only review
+    would make (its ``candidate``); a device id (a ``str``, whatever it spells) takes that device's ledger
+    files as they stand.
     """
     paths = tuple(sorted(paths))
     differ = tuple(path for path in paths if not _same(plan, path))
     items: list[ReviewItem] = list(_unlistable(plan, campaign))  # first: a folder never listed may differ
     if not differ and not items:
         return UnitResult(campaign, paths, differ)
-    if choice in plan.devices:
+    if type(choice) is str and choice in plan.devices:
         return _taken(plan, campaign, paths, differ, choice, items)
     for path in paths:
         for device in plan.devices:
@@ -278,7 +279,7 @@ def plan_unit(plan, campaign: str, paths: Iterable[str], choice: str | None = No
         result = merge_ledger(base, sides, instances=instances, sizer=_Sizer())  # type: ignore[arg-type]
     except ValueError as error:  # inputs the merge refuses outright (an id of another campaign, say)
         return UnitResult(campaign, paths, differ, review=Review((ReviewItem("invalid", campaign, str(error)[:_DETAIL]),)))
-    if isinstance(result, LedgerReview) and choice == "merge" and result.candidate is not None:
+    if isinstance(result, LedgerReview) and choice is MERGE and result.candidate is not None:
         return UnitResult(campaign, paths, differ, files=merged_bytes(plan, result.candidate, found))
     if isinstance(result, Review):
         return UnitResult(campaign, paths, differ, review=result)
@@ -353,6 +354,10 @@ def plan_units(plan) -> None:  # type: ignore[no-untyped-def]
                 plan.copies[device].append(Copy(path, plan.other(device), device, data, current, unit=campaign))
                 plan.unit_copies[device].setdefault(campaign, set()).add(path)
                 plan.units.setdefault(path, campaign)
+    for subject, (campaign, review) in _folder_reviews(plan, groups).items():  # no file to hang it on
+        what = "every campaign's ledger" if campaign == "*" else f"campaign {campaign}'s ledger"
+        plan.conflicts[subject] = Conflict(subject, "merge_review", f"{what} cannot be read: "
+                                           f"{', '.join(sorted(review.reasons))}", review=review.items)
 
 
 def whole(plan, device: str) -> None:  # type: ignore[no-untyped-def]
@@ -475,23 +480,41 @@ def expected_listing(plan, device: str, campaign: str, published: Iterable = ())
 
 
 def unit_listing(store, campaign: str, relations: bool) -> dict[str, str | None]:  # type: ignore[no-untyped-def]
-    """The campaign's unit as ``store`` holds it now: each file's etag, ``None`` for one it cannot read."""
+    """The campaign's unit as ``store`` holds it now: each file's etag, ``None`` for one it cannot read. A
+    folder of the unit that is a link or cannot be listed is ``None`` under its own name: never followed,
+    it hides what it holds, so the unit is never the one the plan read (``stale_listing``)."""
     found: dict[str, str | None] = {}
     for folder in sorted(LEDGER_FOLDERS):
         if folder == "relations" and not relations:
             continue
         root = store.root / "campaigns" / campaign / folder
-        if not root.exists():
-            continue
-        for path in sorted(root.rglob("*")):
-            relative = path.relative_to(store.root).as_posix()
-            if not (path.is_symlink() or path.is_file()) or not of_unit(relative, campaign, relations):
-                continue
+        if root.is_symlink() or root.exists():
+            _list_folder(store.root, root, campaign, relations, found)
+    return found
+
+
+def _list_folder(top, folder, campaign: str, relations: bool, found: dict[str, str | None]) -> None:  # type: ignore[no-untyped-def]
+    name = folder.relative_to(top).as_posix()
+    if folder.is_symlink():
+        found[name] = None
+        return
+    try:
+        entries = sorted(folder.iterdir())
+    except OSError:
+        found[name] = None
+        return
+    for path in entries:
+        relative = path.relative_to(top).as_posix()
+        if path.is_symlink():  # a link is never read: a linked file of the unit, or a linked folder
+            if of_unit(relative, campaign, relations) or path.is_dir():
+                found[relative] = None
+        elif path.is_dir():
+            _list_folder(top, path, campaign, relations, found)
+        elif path.is_file() and of_unit(relative, campaign, relations):
             try:
-                found[relative] = None if path.is_symlink() else etag(path.read_bytes())  # a link is never read
+                found[relative] = etag(path.read_bytes())
             except OSError:
                 found[relative] = None
-    return found
 
 
 def step_listings(plan, device: str, copies: Iterable, published: Iterable = ()) -> list[dict]:  # type: ignore[no-untyped-def,type-arg]
@@ -536,21 +559,56 @@ def _same(plan, path: str) -> bool:  # type: ignore[no-untyped-def]
     return left.state == right.state != "blocked" and left.etag == right.etag
 
 
-def _unlistable(plan, campaign: str) -> list[ReviewItem]:  # type: ignore[no-untyped-def]
-    """A ledger folder of the campaign (or the campaign, ``campaigns``, the root) that cannot be listed."""
-    items = []
+def unlistable_folders(plan) -> list[tuple[str, ReviewItem]]:  # type: ignore[no-untyped-def]
+    """Every folder a ledger unit is read from that cannot be listed, on either device, with its campaign:
+    a ledger folder of a campaign (or one below it), the campaign folder, or ``campaigns`` or the root
+    (campaign ``"*"``: they hide every campaign's ledger); and a look-alike spelling of a ledger folder,
+    which hides what it holds. The one list ``_unlistable`` and ``plan_units`` both read, so no route
+    drops a folder the other reports."""
+    found = []
     for device in plan.devices:
         for path in plan.scans[device].blocked:
             parts = path.split("/")
-            if (path in ("", "campaigns") or (parts[0] == "campaigns" and len(parts) >= 2 and parts[1] == campaign and (
-                    len(parts) == 2 or parts[2].casefold() in LEDGER_FOLDERS)) and syncable(path) is None):
-                items.append(ReviewItem("unlistable", path or ".", f"{device}: {plan.scans[device].blocked_reason(path)}"[:_DETAIL]))
+            if syncable(path) is not None:
+                continue  # a file: ``unreadable``, with its unit
+            if path in ("", "campaigns"):
+                campaign = "*"
+            elif parts[0] == "campaigns" and len(parts) >= 2 and (len(parts) == 2 or parts[2].casefold() in LEDGER_FOLDERS):
+                campaign = parts[1]
+            else:
+                continue
+            found.append((campaign, ReviewItem("unlistable", path or ".",
+                                               f"{device}: {plan.scans[device].blocked_reason(path)}"[:_DETAIL])))
         for path in plan.scans[device].skipped:  # a look-alike spelling of a ledger folder hides what it holds
             parts = path.split("/")
-            if (parts[0] == "campaigns" and len(parts) >= 3 and parts[1] == campaign
-                    and parts[2].casefold() in LEDGER_FOLDERS and parts[2] not in LEDGER_FOLDERS):
-                items.append(ReviewItem("unlistable", "/".join(parts[:3]), f"{device}: another spelling of a ledger folder"))
-    return items
+            if (parts[0] == "campaigns" and len(parts) >= 3 and parts[2].casefold() in LEDGER_FOLDERS
+                    and parts[2] not in LEDGER_FOLDERS):
+                found.append((parts[1], ReviewItem("unlistable", "/".join(parts[:3]),
+                                                   f"{device}: another spelling of a ledger folder")))
+    return found
+
+
+def _unlistable(plan, campaign: str, folders: list[tuple[str, ReviewItem]] | None = None) -> list[ReviewItem]:  # type: ignore[no-untyped-def]
+    """A ledger folder of the campaign (or the campaign, ``campaigns``, the root) that cannot be listed."""
+    return [item for key, item in (unlistable_folders(plan) if folders is None else folders) if key in ("*", campaign)]
+
+
+def _folder_reviews(plan, groups: Mapping[str, object]) -> dict[str, tuple[str, Review]]:  # type: ignore[no-untyped-def]
+    """Reviews hung on unlistable folders themselves, by folder, with their campaign, where no file of a
+    unit can carry one: a campaign with no ledger file on either device (nor in either archive) whose ledger
+    folder, or campaign folder, cannot be listed; and ``campaigns`` or the root while no campaign has a
+    unit. A ``relations`` folder counts only where the campaign's relations are its ledger's."""
+    folders = unlistable_folders(plan)
+    found: dict[str, tuple[str, Review]] = {}
+    for campaign, item in folders:
+        if campaign in groups or (campaign == "*" and groups):
+            continue  # that unit's review (``plan_unit``), or every unit's, already names it
+        parts = item.subject.split("/")
+        if (campaign != "*" and len(parts) >= 3 and parts[2].casefold() == "relations"
+                and not relations_in_unit(plan, campaign)):
+            continue  # an ordinary relations folder: 019 decides what it can see of it
+        found[item.subject] = (campaign, Review(tuple(_unlistable(plan, campaign, folders))))
+    return found
 
 
 def _base_file(plan, path: str, base: Base, items: list[ReviewItem]) -> bytes | None:  # type: ignore[no-untyped-def]

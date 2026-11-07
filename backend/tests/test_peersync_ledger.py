@@ -16,7 +16,7 @@ import pytest
 from grimoire.peersync import transfer
 from grimoire.security import Grant, Permission, ResourcePath
 from grimoire.store import LibraryStore
-from grimoire.sync import identify
+from grimoire.sync import MERGE, identify
 from grimoire.sync.units import base_name
 
 from grimoire.effectstore import TurnEffectsLibrary
@@ -113,7 +113,7 @@ def test_resolve_ledger_over_the_connection_merges_and_never_sends_a_discard(pai
         with pytest.raises(ResolveRefused, match="not_on_kept_device"):  # the desktop's own event: revoke it first
             resolve_ledger_with(desktop.store, desktop.authority, PHONE, server.address, C, PHONE, token,
                                 decided_by=OWNER)
-        resolve_ledger_with(desktop.store, desktop.authority, PHONE, server.address, C, "merge", token,
+        resolve_ledger_with(desktop.store, desktop.authority, PHONE, server.address, C, MERGE, token,
                             decided_by=OWNER)
         assert ledger_files(desktop.store) == ledger_files(phone.store)
         assert len(read_ledger(phone.store).events) == 2
@@ -214,7 +214,7 @@ def test_resolve_ledger_over_the_connection_never_deletes_on_the_serving_device(
         report = transfer(desktop.store, desktop.authority, PHONE, server.address)
         token = {conflict.token for conflict in report.conflicts}.pop()
         (desktop.store.root / chat).unlink()  # an unrelated chat removed on the desktop after the review
-        resolve_ledger_with(desktop.store, desktop.authority, PHONE, server.address, C, "merge", token,
+        resolve_ledger_with(desktop.store, desktop.authority, PHONE, server.address, C, MERGE, token,
                             decided_by=OWNER)
         assert (phone.store.root / chat).exists()  # only campaign c's ledger was written
         assert ledger_files(desktop.store) == ledger_files(phone.store)
@@ -269,3 +269,14 @@ def test_the_serving_device_reads_a_steps_archive_once_however_many_base_entries
         assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
     assert any(bases > 1 for _, bases in per_step), per_step
     assert all(reads <= 1 for reads, _ in per_step), per_step  # indexed once per step, not once per entry
+
+
+def test_resolve_ledger_over_the_connection_reads_the_string_merge_as_a_device_id(pair):
+    """A peer may be named ``merge``: keeping it discards this device's changes, so only an owner decides it
+    (refused before anything is dialled). Taking the review's merge is ``MERGE``."""
+    from grimoire.peersync import resolve_ledger_with
+    from grimoire.sync import ResolveRefused
+    desktop = pair[DESKTOP]
+    with pytest.raises(ResolveRefused, match="only an owner"):
+        resolve_ledger_with(desktop.store, desktop.authority, "merge", ("127.0.0.1", 9), C, "merge", "token",
+                            decided_by="human:guest")

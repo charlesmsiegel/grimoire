@@ -13,7 +13,7 @@ import pytest
 
 from grimoire.store import LibraryStore, etag
 from grimoire.sync import (
-    ResolveRefused, SyncInterrupted, apply_sync, plan_sync, resolve, resolve_ledger, sync, sync_until_quiet,
+    MERGE, ResolveRefused, SyncInterrupted, apply_sync, plan_sync, resolve, resolve_ledger, sync, sync_until_quiet,
 )
 from grimoire.sync.units import base_name
 
@@ -102,7 +102,7 @@ def _review(pair):
 
 def test_resolve_ledger_merge_keeps_both_devices_events_and_ends_the_review(pair):
     token = _review(pair)
-    resolve_ledger(pair[PHONE].store, pair[DESKTOP].store, C, "merge", token, handles())
+    resolve_ledger(pair[PHONE].store, pair[DESKTOP].store, C, MERGE, token, handles())
     assert ledger_files(pair[DESKTOP].store) == ledger_files(pair[PHONE].store)
     assert len(read_ledger(pair[DESKTOP].store).events) == 2
     again = sync(pair[DESKTOP].store, pair[PHONE].store, handles())
@@ -138,13 +138,50 @@ def test_an_ordinary_sync_plan_never_takes_a_ledger_decision(pair):
     assert {conflict.code for conflict in again.conflicts} == {"merge_review"} and not again.wrote
 
 
+def test_a_device_named_merge_is_kept_only_as_a_device_with_the_discard_checks(tmp_path):
+    """``"merge"`` is a valid device id: the string always names a device, so keeping it is a discard an
+    owner decides. Taking the review's merge is ``MERGE``, which no device id can equal."""
+    from sync_helpers import handle
+    base = build_base(tmp_path)
+    made = {name: Device(base, tmp_path, name) for name in ("merge", PHONE)}
+    merge_device, phone = made["merge"].store, made[PHONE].store
+    both = {"merge": handle(), PHONE: handle()}
+    try:
+        assert sync(merge_device, phone, both).conflicts == ()
+        made["merge"].accept(pay(sequence=8, attempt="pay-merge"))
+        made[PHONE].hand_edit(TAM, COIN, 12)
+        report = sync(merge_device, phone, both)
+        assert "hand_edit_overlap" in {item.reason for conflict in report.conflicts for item in conflict.review}
+        token = {conflict.token for conflict in report.conflicts}.pop()
+        tam = phone.root / f"campaigns/{C}/holdings/character/tam.json"
+        edited = tam.read_bytes()
+        with pytest.raises(ResolveRefused, match="only an owner"):  # keeping device "merge" discards the edit
+            resolve_ledger(merge_device, phone, C, "merge", token, both)
+        assert tam.read_bytes() == edited
+        with pytest.raises(ResolveRefused, match="hand_edit_overlap"):  # no merge for a non-policy review
+            resolve_ledger(merge_device, phone, C, MERGE, token, both)
+        assert tam.read_bytes() == edited
+        resolve_ledger(merge_device, phone, C, "merge", token, both, owners={PHONE: {OWNER}})
+        assert ledger_files(merge_device) == ledger_files(phone) and tam.read_bytes() != edited
+    finally:
+        for device in made.values():
+            device.close()
+
+
+def test_keep_is_the_merge_sentinel_or_a_device_id_and_nothing_else(pair):
+    token = _review(pair)
+    for keep in ("merge", None, 0):  # no device is named "merge" here: the string is no request to merge
+        with pytest.raises(ResolveRefused, match="keep must be"):
+            resolve_ledger(pair[DESKTOP].store, pair[PHONE].store, C, keep, token, handles())
+
+
 def test_resolve_ledger_refuses_a_stale_review_and_a_file_only_the_losing_device_holds(pair):
     token = _review(pair)
     with pytest.raises(ResolveRefused, match="revoke"):
         resolve_ledger(pair[DESKTOP].store, pair[PHONE].store, C, DESKTOP, token, handles(), owners={PHONE: {OWNER}})
     pair[DESKTOP].accept(pay(sequence=10, attempt="pay-desk-10"))
     with pytest.raises(ResolveRefused, match="changed"):
-        resolve_ledger(pair[DESKTOP].store, pair[PHONE].store, C, "merge", token, handles())
+        resolve_ledger(pair[DESKTOP].store, pair[PHONE].store, C, MERGE, token, handles())
 
 
 def test_resolve_refuses_a_ledger_file_and_points_to_resolve_ledger(pair):
@@ -286,7 +323,7 @@ def test_a_ledger_review_and_a_keep_both_conflict_in_one_sync_end_each_on_its_ow
     assert report.conflict(path).code == "concurrent"
     ours, theirs = (pair[DESKTOP].store.root / path).read_bytes(), (pair[PHONE].store.root / path).read_bytes()
     assert kept(pair[DESKTOP].store) == [theirs] and kept(pair[PHONE].store) == [ours]
-    resolve_ledger(pair[DESKTOP].store, pair[PHONE].store, C, "merge", token, handles())  # only the ledger
+    resolve_ledger(pair[DESKTOP].store, pair[PHONE].store, C, MERGE, token, handles())  # only the ledger
     for name, peer in ((DESKTOP, PHONE), (PHONE, DESKTOP)):  # the chat's conflict still stands in keeps.json
         record = parse_keeps(pair[name].store.read_sync_state(keeps_name(peer)), tuple(sorted((DESKTOP, PHONE))))
         assert record.entries[path].open is not None
@@ -313,3 +350,24 @@ def test_a_review_names_its_unit_once_however_many_of_its_files_differ(pair, mon
     report = sync(pair[DESKTOP].store, pair[PHONE].store, handles())
     assert len({conflict.path for conflict in report.conflicts if conflict.code == "merge_review"}) > 1
     assert calls == [C]  # each token lists every file of the unit: once per unit, never once per file
+
+
+@pytest.mark.parametrize("where", ["wrapups", "holdings/location"])
+def test_a_ledger_folder_linked_away_during_the_sync_stops_the_merge_before_it_commits(pair, tmp_path, where):
+    """The recheck under the sync's locks lists the unit again: a ledger folder (or one below) that became a
+    link meanwhile hides what it holds, so the unit is no longer the one merged, and nothing of it lands."""
+    pair[DESKTOP].accept(give())
+    pair[PHONE].accept(pay())
+    plan = plan_sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "dock.json").write_bytes(b"{}")
+    link = pair[PHONE].store.root / "campaigns" / C / where
+    try:
+        link.symlink_to(elsewhere, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this system cannot make a directory link")
+    before = ledger_files(pair[PHONE].store)
+    with pytest.raises(SyncInterrupted, match="changed on phone during the sync"):
+        apply_sync(plan, handles())
+    assert ledger_files(pair[PHONE].store) == before

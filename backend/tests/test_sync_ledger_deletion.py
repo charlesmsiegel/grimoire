@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from grimoire.store import LibraryStore
-from grimoire.sync import ResolveRefused, apply_sync, plan_sync, resolve, resolve_ledger, sync, sync_until_quiet
+from grimoire.sync import MERGE, ResolveRefused, apply_sync, plan_sync, resolve, resolve_ledger, sync, sync_until_quiet
 from grimoire.sync.ledger_resolve import plan_resolution
 
 from effects_fixtures import C, KEY2, give
@@ -177,7 +177,7 @@ def test_resolve_ledger_never_carries_out_a_deletion_outside_its_unit(pair):
     assert (phone.root / chat).exists()
     (desktop.root / chat).unlink()  # after the review, the owner removes an unrelated chat on the desktop
     steps: list[tuple[str, str, tuple[str, ...]]] = []
-    plan = plan_resolution(desktop, phone, C, "merge", token, handles())
+    plan = plan_resolution(desktop, phone, C, MERGE, token, handles())
     apply_sync(plan, handles(), observer=lambda step: steps.append(
         (step.kind, step.device, tuple(gone.path for gone in step.deletes))))
     assert (phone.root / chat).exists()  # that deletion waits for the next sync
@@ -213,7 +213,7 @@ def test_resolve_ledger_is_not_stopped_by_a_deletion_that_depends_on_a_copy_it_l
         edited["previous"] = None
         _write(desktop.root, CHAT3, edited)
         (desktop.root / ZED).unlink()  # ... and deletes Zed: a sync takes both, since the edited chat lands too
-        resolve_ledger(desktop, phone, C, "merge", token, handles())
+        resolve_ledger(desktop, phone, C, MERGE, token, handles())
         assert ledger_files(desktop) == ledger_files(phone)
         assert (phone.root / ZED).exists() and (phone.root / CHAT3).read_bytes() != (desktop.root / CHAT3).read_bytes()
         report = sync(desktop, phone, handles())
@@ -240,10 +240,10 @@ def test_resolve_ledger_refuses_until_a_record_the_merged_ledger_names_is_on_the
     zed_holdings = f"campaigns/{C}/holdings/character/zed.json"
     before = ledger_files(phone)
     with pytest.raises(ResolveRefused, match="zed"):  # the handles now suffice, but Zed is not on the phone
-        resolve_ledger(desktop, phone, C, "merge", token, handles())
+        resolve_ledger(desktop, phone, C, MERGE, token, handles())
     assert ledger_files(phone) == before and not (phone.root / zed_holdings).exists()
     after = sync(desktop, phone, handles())  # Zed lands; the review still stands, on the same files
     assert (phone.root / ZED).exists() and {conflict.code for conflict in after.conflicts} == {"merge_review"}
-    resolve_ledger(desktop, phone, C, "merge", token, handles())
+    resolve_ledger(desktop, phone, C, MERGE, token, handles())
     assert ledger_files(desktop) == ledger_files(phone) and (phone.root / zed_holdings).exists()
     assert sync(desktop, phone, handles()).conflicts == ()

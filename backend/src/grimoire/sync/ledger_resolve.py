@@ -4,10 +4,11 @@
 campaign's ledger unit, through ``apply_sync``'s own steps (data, verify, archive, pending), so it is as
 crash-safe as a sync and the next sync finds the ledger agreed. Two decisions:
 
-- ``"merge"``: the merge the review would make once its policy reasons (``ledgermerge.POLICY``: one chat
+- ``MERGE`` (``grimoire.sync.MERGE``): the merge the review would make once its policy reasons (``ledgermerge.POLICY``: one chat
   on both devices, a revocation the other device built on) are accepted. Nothing is discarded: every
   event of both devices is kept. A review with any other reason has no such merge, and is refused.
-- a device id: that device's ledger files as they stand, for both devices. The other device's changes
+- a device id (a ``str``; ``"merge"`` too names a device, never the merge): that device's ledger files as
+  they stand, for both devices. The other device's changes
   to this ledger are **discarded**, so only an owner of the library that loses them may decide it (the
   handle of that device's commit must be an owner's). There is no delete in 021 or 023: a file only the
   losing device holds (an event it accepted) is refused; revoke it on that device first.
@@ -25,14 +26,15 @@ from collections.abc import Iterable, Mapping
 from grimoire.store import LibraryStore
 
 from .errors import ResolveRefused
+from .model import MERGE, LedgerMerge
 from .session import SyncPlan, SyncReport, _dependencies, _lock_order, _plan, apply_sync
 from . import units as ledger_units
 
 
-def resolve_ledger(left: LibraryStore, right: LibraryStore, campaign: str, keep: str, token: str,
+def resolve_ledger(left: LibraryStore, right: LibraryStore, campaign: str, keep: str | LedgerMerge, token: str,
                    handles: Mapping[str, object], *, owners: Mapping[str, Iterable[str]] | None = None,
                    approvals: Mapping[str, Mapping[str, str]] | None = None) -> SyncReport:
-    """Decide campaign ``campaign``'s ledger review: ``keep`` is ``"merge"`` or the device id to keep.
+    """Decide campaign ``campaign``'s ledger review: ``keep`` is ``MERGE`` or the device id to keep.
 
     ``owners`` are each device's library owners (its ``DurableAuthority.owners``): keeping a device
     discards the other device's changes, so that device's handle must be an owner's. Returns the
@@ -42,24 +44,26 @@ def resolve_ledger(left: LibraryStore, right: LibraryStore, campaign: str, keep:
     return apply_sync(plan, handles, approvals)
 
 
-def plan_resolution(left: LibraryStore, right: LibraryStore, campaign: str, keep: str, token: str,
+def plan_resolution(left: LibraryStore, right: LibraryStore, campaign: str, keep: str | LedgerMerge, token: str,
                     handles: Mapping[str, object], *, owners: Mapping[str, Iterable[str]] | None = None,
                     decided_by: str | None = None) -> SyncPlan:
     """``resolve_ledger``'s plan, checked: only that campaign's ledger unit is written (028's peer
     transport applies it with its own replay, as it applies a sync's plan). A discard is decided by
     ``decided_by``, or else by the principal of the losing device's handle."""
+    if keep is not MERGE and type(keep) is not str:
+        raise ResolveRefused(f"keep must be MERGE or a device id, not {keep!r}")
     first, second = _lock_order((left, right))
     with first.cached_reads(), second.cached_reads():
         plan = _plan(left, right, handles, {campaign: keep})
-    if keep != "merge" and keep not in plan.devices:
-        raise ResolveRefused(f"keep must be 'merge' or one of the devices {list(plan.devices)}, not {keep!r}")
+    if keep is not MERGE and keep not in plan.devices:
+        raise ResolveRefused(f"keep must be MERGE or one of the devices {list(plan.devices)}, not {keep!r}")
     if campaign not in set(plan.units.values()):
         raise ResolveRefused(f"campaign {campaign} has no ledger files on either device")
     if token != ledger_units.token(plan, campaign):
         raise ResolveRefused(f"campaign {campaign}'s ledger changed on a device since its review was reported; "
                              "sync again to see the review as it stands")
-    if keep != "merge":
-        loser = plan.other(keep)
+    if keep is not MERGE:  # a device id, whatever it spells: a discard, decided only by an owner
+        loser = plan.other(keep)  # type: ignore[arg-type]
         principal = decided_by if decided_by is not None else getattr(handles.get(loser), "principal", None)
         if principal is None or principal not in set((owners or {}).get(loser, ())):
             raise ResolveRefused(f"keeping {keep}'s ledger discards {loser}'s changes to campaign {campaign}'s "

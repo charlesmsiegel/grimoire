@@ -65,8 +65,8 @@ A transfer merges two devices' ledgers exactly as a local sync does ([SYNC](SYNC
 A data step that lands a merged ledger on the serving device also carries, for each unit, the unit as the client's plan read it there (`unit` checks: paths and etags, and the blocked paths by name). The serving device lists its own unit under its lock, just before it commits, and refuses the step as `stale` if they differ, so an event it accepted after the snapshot is never merged past. The client plans again, as after a local `SyncInterrupted`. Proved in `backend/tests/test_peersync_ledger.py`.
 
 `resolve_ledger_with(store, authority, peer, address, campaign, keep, token, decided_by=...)` ends a `merge_review` over the connection. It plans 019's `resolve_ledger` against the stand-in and replays its steps:
-- `keep="merge"` discards nothing.
-- `keep=<peer>` discards this device's own changes to that ledger, so `decided_by` must be one of this library's owners.
+- `keep=MERGE` (`grimoire.sync.MERGE`) discards nothing.
+- `keep=<peer>` (a device id, a string; `"merge"` is a device id too) discards this device's own changes to that ledger, so `decided_by` must be one of this library's owners.
 - Keeping this device's ledger would discard the peer's changes, so it is refused here: decide it on the peer. The serving device therefore never receives a discard.
 
 Limits:
