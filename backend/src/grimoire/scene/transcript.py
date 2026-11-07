@@ -5,15 +5,23 @@ A line's ``audience`` was fixed when it was spoken, so these are filters, never 
 hears a post or a line only if it was in that audience. Narration's audience is the table's player
 characters, so an NPC never hears it (031: ``scene_text`` holds no director narration). A private
 message (a whisper) is in the table transcript of no one but its audience, and never the director's.
+
+A chat's **imported history** (036/026's transcript pages) comes before its first played turn. Its pages
+record who wrote each post, never who heard it, so who heard it is decided here, once, by one rule:
+the actors the chat was imported with (its roster at sequence 0) heard every shown post; an actor
+attached later heard none of it, exactly as a card attached mid-chat hears nothing said before it came.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 
 from grimoire.core.boundaries import NarrationSegment
 from grimoire.core.identity import InstanceRef
 from grimoire.generation import MAX_HEARD, MAX_LINE_CHARS, GenerationError, HeardLine
+from grimoire.transcripts import Post as ImportedPost
+from grimoire.transcripts import TranscriptPage
 
 from .model import Post, TurnRecord
 
@@ -50,10 +58,96 @@ def _ordered(turns: Iterable[TurnRecord]) -> list[TurnRecord]:
     return sorted(turns, key=lambda turn: turn.number)
 
 
+@dataclass(frozen=True)
+class ImportedHistory:
+    """A chat's imported posts as lines: what its imported cast heard, and what the table saw.
+
+    ``listeners`` are the actors the chat was imported with. ``heard`` is what each of them heard: every
+    shown post written by the player, a character, or a source's generated reply that names its speaker.
+    ``table`` is the director's view: those posts and the narrator's. A narrator post is never heard by an
+    NPC (as in play); V0.2.1 writes its narrator (the reserved ``**Grimoire:**`` speaker) as an
+    ``assistant`` post with no label, so such a post is narration too. A source's own ``system`` notice
+    (a V0.2.1 synthetic post, a dice roll), a ``hidden`` post, an unchosen variant and a post with no
+    chosen text are in neither. Each keeps only its last ``MAX_HEARD`` lines, the most any window holds.
+    ``posts`` counts the posts the pages hold.
+    """
+
+    listeners: frozenset[InstanceRef]
+    heard: tuple[HeardLine, ...]
+    table: tuple[HeardLine, ...]
+    posts: int
+
+
+#: who an imported post's role says wrote it, and whether an NPC of the imported cast heard it
+_HEARD_ROLES = frozenset({"user", "character", "assistant"})
+_TABLE_ROLES = _HEARD_ROLES | {"narrator"}
+PLAYER = "Player"
+
+
+def _narrated(post: ImportedPost) -> bool:
+    """Whether a post is narration: the source says so, or it is V0.2.1's unlabelled narrator."""
+    return post.speaker.role == "narrator" or (post.speaker.role == "assistant" and post.speaker.actor is None
+                                               and not (post.speaker.label or "").strip())
+
+
+def _imported_line(post: ImportedPost, names: Mapping[InstanceRef, str], player: str | None,
+                   ) -> tuple[HeardLine, bool] | None:
+    """A post's line and whether the imported cast heard it (``False``: the table's only)."""
+    if post.hidden or post.active is None or post.speaker.role not in _TABLE_ROLES:
+        return None
+    text = post.variants[post.active].text
+    if _narrated(post):
+        line = _heard(NARRATOR, text, None)
+        return None if line is None else (line, False)
+    actor = post.speaker.actor
+    fallback = (player or PLAYER) if post.speaker.role == "user" else post.speaker.role.capitalize()
+    # a label is display text, kept as the source wrote it; it never names an actor. One with no words
+    # (``???``, an emoji) cannot be a heard speaker, so the post falls back rather than vanish.
+    for speaker in (names.get(actor) if actor is not None else None, (post.speaker.label or "").strip(), fallback):
+        line = _heard(speaker, text, actor) if speaker else None
+        if line is not None:
+            return line, True
+    return None
+
+
+def imported_history(pages: Iterable[TranscriptPage], listeners: Iterable[InstanceRef],
+                     names: Mapping[InstanceRef, str], *, player: str | None = None,
+                     limit: int = MAX_HEARD) -> ImportedHistory:
+    """The history ``pages`` hold, in page and post order, heard by ``listeners`` (the imported cast).
+
+    ``player`` names the player's posts that carry neither an actor nor a label (V0.2.1's ``**You:**``).
+    Posts are read newest first and only until both views hold ``limit`` lines: no window holds more, and a
+    long SillyTavern chat need not become lines it never shows.
+    """
+    heard: list[HeardLine] = []
+    table: list[HeardLine] = []
+    ordered = sorted(pages, key=lambda found: found.ref.seq)
+    count = sum(len(page.posts) for page in ordered)
+    for page in reversed(ordered):
+        for post in reversed(page.posts):
+            if len(table) >= limit and len(heard) >= limit:
+                break
+            found = _imported_line(post, names, player)
+            if found is None:
+                continue
+            line, cast_heard = found
+            if len(table) < limit:
+                table.append(line)
+            if cast_heard and len(heard) < limit:
+                heard.append(line)
+    return ImportedHistory(frozenset(listeners), tuple(reversed(heard)), tuple(reversed(table)), count)
+
+
 def heard_for(turns: Iterable[TurnRecord], actor: InstanceRef, names: Mapping[InstanceRef, str], *,
-              limit: int = MAX_HEARD) -> tuple[HeardLine, ...]:
-    """What ``actor`` heard, oldest first: posts in its audience and kept lines it heard (the last ``limit``)."""
+              limit: int = MAX_HEARD, before: ImportedHistory | None = None) -> tuple[HeardLine, ...]:
+    """What ``actor`` heard, oldest first: posts in its audience and kept lines it heard (the last ``limit``).
+
+    ``before`` is the chat's imported history: an actor it was imported with heard it before turn 1. It holds
+    only its own last ``MAX_HEARD`` lines, so a ``limit`` above that gets no more imported lines.
+    """
     heard: list[HeardLine | None] = []
+    if before is not None and actor in before.listeners:
+        heard.extend(before.heard)
     for turn in _ordered(turns):
         if turn.post is not None and actor in turn.post.audience:
             heard.append(_post_line(turn.post, names))
@@ -63,9 +157,10 @@ def heard_for(turns: Iterable[TurnRecord], actor: InstanceRef, names: Mapping[In
 
 
 def table_lines(turns: Iterable[TurnRecord], names: Mapping[InstanceRef, str], *,
-                limit: int = MAX_HEARD) -> tuple[HeardLine, ...]:
-    """What the whole table saw (the director's view): every post but a private one, and every kept line."""
-    seen: list[HeardLine | None] = []
+                limit: int = MAX_HEARD, before: ImportedHistory | None = None) -> tuple[HeardLine, ...]:
+    """What the whole table saw (the director's view): every post but a private one, and every kept line,
+    after the chat's imported history (``before``)."""
+    seen: list[HeardLine | None] = list(before.table) if before is not None else []
     for turn in _ordered(turns):
         if turn.post is not None and not turn.post.private:
             seen.append(_post_line(turn.post, names))
@@ -93,4 +188,5 @@ def segments(turn: TurnRecord) -> tuple[NarrationSegment, ...]:
     return tuple(found)
 
 
-__all__ = ["NARRATOR", "audible", "heard_for", "render", "segments", "table_lines"]
+__all__ = ["NARRATOR", "ImportedHistory", "audible", "heard_for", "imported_history", "render", "segments",
+           "table_lines"]

@@ -38,11 +38,12 @@ from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import ControlChange
 from grimoire.party import PartyRefused, SceneCast, stage
 from grimoire.partystore import PartyLibrary
+from grimoire.play.history import chat_history
 from grimoire.providers.meter import TurnMeter
 from grimoire.runtime import GenerationRuntime, RunFence
 from grimoire.scene import (
-    MAX_TAKES, NARRATOR, CallRecord, Post, SceneLine, SceneRefused, Take, TurnRecord, audible, heard_for, render,
-    segments, table_lines, turn_id,
+    MAX_TAKES, NARRATOR, CallRecord, ImportedHistory, Post, SceneLine, SceneRefused, Take, TurnRecord, audible,
+    heard_for, render, segments, table_lines, turn_id,
 )
 from grimoire.scenestore import ChatTurns, SceneLibrary, StoredTurn
 from grimoire.security import is_human
@@ -73,6 +74,9 @@ class Scene:
     ``(code, detail)`` pairs from the snapshot, the turn files, the party and the voices, never hidden.
     ``staged`` is 033's ``SceneCast`` the cast was staged as (``cast`` is its ``present``), or ``None`` when
     no cast could be staged (membership unreadable): then nobody is present and play waits.
+    ``imported`` is the chat's imported history (036/026's transcript pages), heard before turn 1 by the cast
+    the chat was imported with; ``None`` when the chat has none, or when its pages cannot all be read (then
+    nobody heard any of it, and ``problems`` says why).
     """
 
     chat: ChatRef
@@ -83,6 +87,7 @@ class Scene:
     names: Mapping[InstanceRef, str]
     problems: tuple[tuple[str, str], ...]
     staged: SceneCast | None = None
+    imported: ImportedHistory | None = None
 
     @property
     def records(self) -> tuple[TurnRecord, ...]:
@@ -188,13 +193,8 @@ class SceneRunner:
                      if resolution.broken is not None]
         turns = self.scenes.turns(chat)
         problems += [("turns", f"{path}:{code}") for path, code in turns.problems]
-        imported = self.store.chat_transcript(chat)
-        if imported.records or imported.problems:
-            # 036/026's imported pages are not read as history yet (milestone 2): no NPC heard any of them.
-            # Say so rather than play on as if the chat began here. Nothing is read from the pages.
-            unreadable = f", {len(imported.problems)} unreadable" if imported.problems else ""
-            count = len(imported.records)
-            problems.append(("imported_history_unread", f"{count} page{'' if count == 1 else 's'}{unreadable}"))
+        history, history_problems = chat_history(self.store, chat, captured.chat, captured.snapshot)
+        problems += history_problems
         controls = tuple(self.sovereignty.load(chat.campaign_id).controls)
         party = PartyLibrary(self.store, self.handle, clock=_no_clock, new_id=_no_id).view(chat.campaign_id, as_of=NOW)
         party_problems = tuple(f"{problem.path}:{problem.code}" for problem in party.problems)
@@ -221,7 +221,7 @@ class SceneRunner:
             except Exception as error:  # 022's refusals: the actor stays nameless, and says why
                 problems.append(("unnamed_actor", f"{actor}:{type(error).__name__}"))
         voices = imported_voices(snap, self.authored)
-        scene = Scene(chat, turns, controls, cast_t, persona, names, (), staged)
+        scene = Scene(chat, turns, controls, cast_t, persona, names, (), staged, history)
         for actor in scene.cast:
             if actor == persona or _human_of(scene, actor) is not None:
                 continue  # a player character speaks through its player
@@ -277,6 +277,8 @@ class SceneRunner:
         principal = self._principal(scene, by)
         self._ready(scene)
         stored = scene.turns.last
+        if stored is None and (scene.imported is not None or _has_imported(scene)):
+            raise _refuse("already_begun", "the chat goes on from its imported history; post or generate")
         if stored is None:
             record = TurnRecord(chat, 1, "opening", device=self.scenes.device())
         elif len(scene.turns.turns) == 1 and stored.record.origin == "opening" and stored.record.open:
@@ -500,7 +502,7 @@ class SceneRunner:
         ledger, as_of = self._knowledge(chat)
         briefs = []
         for actor, voice in chosen:
-            heard = heard_for(turns, actor, scene.names)
+            heard = heard_for(turns, actor, scene.names, before=scene.imported)
             built = actor_context(context.view, chat, ledger, actor, as_of=as_of, budget=self.budget,
                                   present=scene.cast, scene_text=render(heard))
             knowledge = actor_knowledge(ledger.knowledge, actor, as_of=as_of)
@@ -514,7 +516,7 @@ class SceneRunner:
         scenario = _scenario_text(context)
         if not scenario:
             raise _refuse("no_scenario", "a director reply needs a bound scenario or a premise")
-        table = table_lines(turns, scene.names)
+        table = table_lines(turns, scene.names, before=scene.imported)
         lore = chat_lore(context.view, chat, table_text=render(table), budget=self.budget).lore
         names = {actor.instance_id: name for actor, name in scene.names.items()}
         brief = director_brief(scenario, campaign_id=chat.campaign_id, present=[a.instance_id for a in scene.cast],
@@ -762,6 +764,10 @@ def _stage(party, chat: ChatRef, candidates: Sequence[InstanceRef]
                 return None, problems
             problems += [(refused.reason, str(member)) for member in members]
             chosen = [actor for actor in chosen if actor not in members]
+
+
+def _has_imported(scene: Scene) -> bool:
+    return any(code == "imported_history_unreadable" for code, _ in scene.problems)
 
 
 def _no_clock() -> str:
