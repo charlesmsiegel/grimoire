@@ -88,6 +88,7 @@ class Harness:
             self.approved.append(approval_id)
             return approval_id
 
+        self.approvals = approvals if approve else None
         self.runtime = GenerationRuntime(self.adapter, (RouteChoice("primary", "model-a"),), self.handle,
                                          approvals=approvals if approve else None, max_output_tokens=64)
 

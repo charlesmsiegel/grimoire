@@ -168,6 +168,7 @@ Ancestry is walked separately from field composition (`portrayal.derivation_chai
   - **Problems** (never failures): `orphan_chat`, `undecodable_scope`, `missing_actor:<ref>`, `undecodable_actor:<ref>` and `invalid_scenario_lorebook:<ref>` (a scenario whose `lorebook` is not a pinned lorebook ref: no lorebook is selected for it).
   - **Raises** `RecordNotFound` when the view has no readable chat at that ref, and `ChatCodecError` when this version cannot interpret the chat.
   - `chat_selection(chat, scope)` is the bindings' selection alone (without scenario lorebooks), exposed on its own for 035.
+- `compose_in(view, ref)` composes one revision over `view`, and `inspect_definition(view, ref)` names every field's inherited, pinned, overridden, restated, local, cleared or missing state and its source diff against the base's head ([INHERITANCE](INHERITANCE.md), 046).
 
 ## Not in this slice
 
@@ -175,8 +176,8 @@ Ancestry is walked separately from field composition (`portrayal.derivation_chai
 |---|---|
 | A compiled or persisted projection, and the virtual-vs-compiled comparison (milestone 3) | 022 later milestones |
 | Follow-head derivation, multiple bases, `overrides` | 022 later, 046 |
-| Reviewed rebase (first slice: one instance onto a newer revision of its entity, [REBASE](REBASE.md)) and inheritance UI | 042, 046 |
+| Reviewed rebase (first slice: one instance onto a newer revision of its entity, [REBASE](REBASE.md)); an inheritance UI (the inspector and one-field edits are [INHERITANCE](INHERITANCE.md)) | 042, 046 later |
 | Relationship remapping between portrayals | 017 |
-| Voice item composition, and cross-source art inheritance and placement merging | 027, 038 |
+| Voice item composition, and placement merging (art inheritance down a base chain is [INHERITANCE](INHERITANCE.md#art-down-a-base-chain)) | 027, 038 |
 | Snapshot-aware control and damage, and prompt assembly | 035, 027, 031 |
 | Derivation-aware navigation filters | 065 |

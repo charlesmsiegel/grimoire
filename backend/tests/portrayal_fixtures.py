@@ -107,3 +107,34 @@ def seed_elderfen(store, handle) -> None:
     txn.put(manifest(ELSEWHERE), None)
     txn.put(envelope(namesake()), None)
     txn.commit(handle)
+
+
+# -- 046: two more portrayals of the same Mara ------------------------------------------------------
+
+REGENCY, MECHA = "world:elderfen-regency", "world:elderfen-mecha"
+REGENCY_MARA = SourceRef(REGENCY, "character", "mara", "r1")
+MECHA_MARA = SourceRef(MECHA, "character", "mara", "r1")
+
+
+def regency() -> EntityDefinition:
+    """Inherits almost everything; replaces her occupation and restates her period customs."""
+    return derived(REGENCY_MARA, sections={"occupation": "Archivist to the county court.",
+                                           "period-customs": "Seals her letters with wax."})
+
+
+def mecha() -> EntityDefinition:
+    """Replaces the description and appearance; clears the period and family facts."""
+    return derived(MECHA_MARA, description="A salvage-frame pilot who logs everything.",
+                   sections={"appearance": "Grey eyes, a pilot's scar.", "occupation": "Frame pilot."},
+                   clear_sections=["period-customs", "mortal-family"])
+
+
+def seed_four_portrayals(store, handle) -> None:
+    """``seed_elderfen`` plus the Regency and Mecha portrayals, each linked by its own world."""
+    seed_elderfen(store, handle)
+    txn = store.transaction()
+    txn.put(manifest(REGENCY, derives(REGENCY_MARA)), None)
+    txn.put(envelope(regency()), None)
+    txn.put(manifest(MECHA, derives(MECHA_MARA)), None)
+    txn.put(envelope(mecha()), None)
+    txn.commit(handle)

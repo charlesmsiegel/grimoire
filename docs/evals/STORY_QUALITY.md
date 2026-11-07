@@ -130,7 +130,8 @@ so a shipped `/2` file keeps its meaning and is still read as `/2`. A `/2` file 
 or the reverse (`run.format` is a located error), and the gate refuses to compare one with the
 other. Everything in `/2` holds, and additionally:
 
-- **Stages** are every `InferenceStage`, including `director_generation`. Like any optional stage
+- **Stages** are `/2`'s and `director_generation` (frozen as `STAGES_V3`; 035's later `labelling` stage is in
+  neither, so a run holding one is refused until a later format names it). Like any optional stage
   it must have a cap in the run's `policy`; a director call the policy does not enable is a
   located error, never an implicit extra. It speaks for the scene (`actor_id` `null`) and at most
   once per turn, whatever the cap.

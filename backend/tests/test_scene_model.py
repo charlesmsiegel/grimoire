@@ -6,14 +6,17 @@ All content is synthetic. No store, provider or clock.
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 
 import pytest
 
+from grimoire.adjudication import Factor, Stake
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TurnRef
 from grimoire.core.inference import CallAttempt, CallId, InferenceStage, TokenUsage
 from grimoire.generation import MAX_HEARD, MAX_LINE_CHARS
 from grimoire.scene import (
-    MAX_CHAT_ID, MAX_TAGGED_CHAT_ID, MAX_TAKES, NARRATOR, TURN_SCHEMA, CallRecord, Post, SceneLine, SceneRefused, Take, TurnRecord,
+    MAX_CHAT_ID, MAX_TAGGED_CHAT_ID, MAX_TAKES, NARRATOR, TURN_SCHEMA, CallRecord, Label, Post, SceneLine,
+    SceneRefused, Take, TurnRecord,
     heard_for, parse_turn_id, render, segments, table_lines, turn_from_payload, turn_id, turn_to_payload,
     usage_totals,
 )
@@ -258,3 +261,48 @@ def test_a_withheld_action_round_trips_and_reaches_only_its_sender():
     assert [h.text for h in heard_for((turn,), PC, NAMES)] == ["*I slip a note under the door.*", "Mara speaks."]
     assert [h.text for h in heard_for((turn,), MARA, NAMES)] == ["Mara speaks."]
     assert [h.text for h in table_lines((turn,), NAMES)] == ["Mara speaks."]
+
+
+# -- labellings (035 M2) ----------------------------------------------------------------------------
+
+def _labelled() -> TurnRecord:
+    action = Post("human:ana", PC, "action", "I climb the rigging", (PC, MARA, SERA), "speech")
+    record = TurnRecord(CHAT, 4, "post", action)
+    call_id = CallId(C, record.label_turn(2), "main", InferenceStage.LABELLING, None, 1)
+    used = CallAttempt(call_id, 1, TokenUsage(input_tokens=9, output_tokens=4), "synthetic", "completed", "primary")
+    proposed = Label(2, "proposed", 7, (Factor("f1", "hinders", "The rigging is slick.", 3, "perception:p1"),),
+                     (Stake("s1", "She falls."),),
+                     (CallRecord("main", InferenceStage.LABELLING, None, 1, "accepted", None, (used,)),),
+                     by="human:ana")
+    return record.with_label(Label(1, "superseded", 7, by="human:ana")).with_label(proposed)
+
+
+def test_a_turns_labellings_round_trip_and_an_unlabelled_turn_writes_no_key():
+    record = _labelled()
+    payload = turn_to_payload(record)
+    assert turn_from_payload(record.ref, TURN_SCHEMA, copy.deepcopy(payload)) == record
+    assert "labels" not in turn_to_payload(full_turn())
+
+
+@pytest.mark.parametrize("change", [
+    lambda p: p["labels"][1].update(state="decided"),
+    lambda p: p["labels"][1]["factors"][0].update(established=7),  # not before the action
+    lambda p: p["labels"][1]["factors"][0].update(weight=3),
+    lambda p: p["labels"].reverse(),
+    lambda p: p["labels"][0].update(state="running") or p["labels"][1].update(state="running", factors=[],
+                                                                                    stakes=[]),
+    lambda p: p["post"].update(kind="speech"),  # only an action is labelled
+])
+def test_a_malformed_labelling_is_refused(change):
+    record = _labelled()
+    payload = copy.deepcopy(turn_to_payload(record))
+    change(payload)
+    with pytest.raises(SceneRefused):
+        turn_from_payload(record.ref, TURN_SCHEMA, payload)
+
+
+def test_a_labelling_call_billed_under_another_labelling_is_refused():
+    record = _labelled()
+    stray = replace(record.labels[1], label=1)  # its attempt was planned under the turn's second labelling
+    with pytest.raises(SceneRefused, match="planned under"):
+        TurnRecord(CHAT, 4, "post", record.post, labels=(stray,))

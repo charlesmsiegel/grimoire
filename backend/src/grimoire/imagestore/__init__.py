@@ -3,10 +3,12 @@
 An adapter over ``grimoire.store`` and the pure ``grimoire.images``. See docs/IMAGES.md.
 """
 
+from .artpin import ART_PIN, ArtChange, pinned_base
 from .library import (
-    ImageBatch, ImageCommit, ImageLibrary, InvalidBatch, InvalidImage, InvalidPlacement, derivation,
-    placement_subject_ids,
+    ImageBatch, ImageCommit, ImageLibrary, InvalidBatch, InvalidImage, InvalidPlacement, art_review, derivation,
+    freeze_art, placement_subject_ids,
 )
 
-__all__ = ["ImageBatch", "ImageCommit", "ImageLibrary", "InvalidBatch", "InvalidImage", "InvalidPlacement", "derivation",
+__all__ = ["ART_PIN", "ArtChange", "ImageBatch", "ImageCommit", "ImageLibrary", "InvalidBatch", "InvalidImage",
+           "InvalidPlacement", "art_review", "derivation", "freeze_art", "pinned_base",
            "placement_subject_ids"]
