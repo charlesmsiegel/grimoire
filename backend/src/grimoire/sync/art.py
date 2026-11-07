@@ -137,6 +137,8 @@ def art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes], blobs:
         refused = _placement_refusal(ref, data, derived=head_data is not None and definition_is_derived(head_data))
         if refused is not None:
             return done(refused)
+        if mode == "hide":  # valid only on a derived head: the receiver must select that same head
+            identical.add("/".join(manifest_parts(subject.source)))
         if mode in ("adjust", "inherit"):  # both read the base chain, which sync does not compare
             return done(f"{subject}'s {mode} shows what its base chain shows, which sync does not compare "
                         "yet (046 later): a concurrent change up the chain could show another picture there")

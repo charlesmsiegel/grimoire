@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import pytest
 from image_fixtures import PNG, WREN_A, handle, seed
-from portrayal_fixtures import BASE, CAST, VAMPIRE_MARA, seed_elderfen
+from portrayal_fixtures import BASE, CAST, VAMPIRE, VAMPIRE_MARA, base, derives, envelope, manifest, seed_elderfen
 from store_helpers import OWNER
 from sync_helpers import DESKTOP, PHONE
 
+from grimoire.core.entity import EntityDefinition
 from grimoire.core.identity import PlacementRef
 from grimoire.images import Hidden, Placement
 from grimoire.imagestore import ImageLibrary
@@ -20,7 +21,7 @@ from grimoire.store import LibraryStore
 from grimoire.store.layout import address_parts
 from grimoire.sync import identify, sync_until_quiet
 
-VAMPIRE = VAMPIRE_MARA.unpinned()
+VAMPIRE_ENTITY = VAMPIRE_MARA.unpinned()
 FULL = ("sources", "campaigns", "assets", "kept")
 H = {DESKTOP: handle(*FULL), PHONE: handle(*FULL)}
 
@@ -40,7 +41,7 @@ def devices(tmp_path):
     batch = images.change()
     portrait = batch.add_image(CAST, "mara-portrait", PNG)
     batch.place(BASE.unpinned(), "portrait", Placement("set", "portrait", portrait), None)
-    batch.place(VAMPIRE, "portrait", Placement("hide"), None)
+    batch.place(VAMPIRE_ENTITY, "portrait", Placement("hide"), None)
     batch.place(WREN_A, "avatar", Placement("hide"), None)
     batch.commit()
     assert sync_until_quiet(desktop, phone, H).conflicts == ()
@@ -56,11 +57,11 @@ def _reset(images, subject, slot):  # type: ignore[no-untyped-def]
 
 def test_a_portrayals_clear_syncs(devices):
     desktop, phone, _ = devices
-    shown = ImageLibrary(phone, H[PHONE], owner=OWNER).effective_placements(VAMPIRE).slot("portrait")
+    shown = ImageLibrary(phone, H[PHONE], owner=OWNER).effective_placements(VAMPIRE_ENTITY).slot("portrait")
     assert isinstance(shown, Hidden)
 
 
-@pytest.mark.parametrize(("subject", "slot"), [(VAMPIRE, "portrait"), (WREN_A, "avatar")],
+@pytest.mark.parametrize(("subject", "slot"), [(VAMPIRE_ENTITY, "portrait"), (WREN_A, "avatar")],
                          ids=["portrayal", "campaign"])
 def test_a_reset_is_held_because_it_shows_what_the_chain_shows(devices, subject, slot):
     desktop, phone, images = devices
@@ -70,3 +71,19 @@ def test_a_reset_is_held_because_it_shows_what_the_chain_shows(devices, subject,
     assert {conflict.path: conflict.code for conflict in report.conflicts} == {held: "head_dependency"}
     assert "inherit" in report.conflict(held).detail
     assert isinstance(ImageLibrary(phone, H[PHONE], owner=OWNER).effective_placements(subject).slot(slot), Hidden)
+
+
+def test_a_clear_waits_until_both_devices_select_the_same_derived_head(devices):
+    """A ``hide`` is valid only on a derived head; if the phone now selects a standalone one, the
+    desktop's new clear is never copied to where it would read as broken."""
+    desktop, phone, images = devices
+    standalone = EntityDefinition(VAMPIRE_ENTITY.at("r2"), "Mara", "individual", base({}).traits, "Alone now")
+    txn = phone.transaction()
+    txn.put(manifest(VAMPIRE, derives(VAMPIRE_MARA), heads={"character/mara": "r2"}), phone.check_source(VAMPIRE).etag)
+    txn.put(envelope(standalone), None)
+    txn.commit(H[PHONE])
+    images.place(VAMPIRE_ENTITY, "avatar", Placement("hide"), None).commit()  # valid on the desktop's head
+    report = sync_until_quiet(desktop, phone, H)
+    held = _path(PlacementRef(VAMPIRE_ENTITY, "avatar"))
+    assert held in {conflict.path for conflict in report.conflicts}
+    assert not (phone.root / held).exists()
