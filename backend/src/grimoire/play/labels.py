@@ -22,6 +22,7 @@ from grimoire.core.authority import AuthorityError
 from grimoire.core.knowledge import KnowledgeError
 from grimoire.core.perspective import player_knowledge
 from grimoire.labelling import LabelRefused, facts, label_messages, parse_labels
+from grimoire.play.accept import next_sequence
 from grimoire.play.adjudicate import outcome_lines
 from grimoire.play.scene import WRITE_RETRIES, _refuse
 from grimoire.play.tracing import record_calls, span
@@ -102,14 +103,16 @@ def label_action(runner, chat: ChatRef, by) -> Label:
                               render(heard[-12:]))
 
     planned = CallRecord(call.call_id.phase, call.stage, call.call_id.actor_id, call.call_id.ordinal, "planned")
-    running = Label(number, "running", as_of + 1, calls=(planned,), by=principal)
     stored = scene.turns.last
     current = stored.record
     for previous in current.labels:
         if previous.state in ("running", "proposed"):
             current = current.with_label(replace(previous, state="superseded"))
-    # a call starts only on a turn still on the chat's line with no pause or sync conflict standing (028, 016)
-    stored = runner._write(current.with_label(running), stored, unpaused=True)
+    with runner.store.lock:  # one campaign sequence, after every one used, taken and written in one step
+        running = Label(number, "running", next_sequence(runner, chat.campaign_id, as_of), calls=(planned,),
+                        by=principal)
+        # a call starts only on a turn still on the chat's line with no pause or sync conflict standing (028, 016)
+        stored = runner._write(current.with_label(running), stored, unpaused=True)
 
     meter = TurnMeter(TurnUsageLedger(plan))
     try:

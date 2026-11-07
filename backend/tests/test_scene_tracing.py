@@ -119,6 +119,29 @@ def test_a_labelling_trace_holds_its_one_call_and_both_turn_writes(cards):
     assert [labelled.spans[i].operation for i in labelled.children(0)].count("write.turn") == 2  # running, then landed
 
 
+def test_a_confirm_traces_its_framing_write_and_the_write_that_sends_a_refused_frame_back(cards):
+    from test_scene_labelling import UNOPPOSED, failing_once
+
+    from grimoire.adjudication import AdjudicationError
+
+    folder, chat, _ = cards
+    log = TraceLog()
+    with Table(folder, policy=LABEL_POLICY, labels=[say(UNOPPOSED), say(UNOPPOSED)], adjudicate=True,
+               tracer=log.record) as table:
+        table.runner.seat(chat, ANA)
+        table.runner.post(chat, table.player(), "*I climb the rigging*")
+        table.runner.label(chat, table.player())
+        failing_once(table.adjudication, "frame", AdjudicationError("refused", "unresolved_actor"))
+        with pytest.raises(SceneRefused):
+            table.runner.confirm(chat, table.player())  # marked framed, then sent back: two turn writes
+        table.runner.label(chat, table.player())
+        table.runner.confirm(chat, table.player())  # marked framed, and decided by rule
+    refused_confirm, confirmed = log.of("confirm")
+    assert refused_confirm.status != "ok" and confirmed.status == "ok"
+    assert [span.operation for span in refused_confirm.spans].count("write.turn") == 2
+    assert [span.operation for span in confirmed.spans].count("write.turn") == 1
+
+
 def test_a_trace_names_no_actor_campaign_or_chat(tmp_path):
     folder = v1_library(tmp_path)  # imported actors whose instance ids are their characters' names
     log = TraceLog()

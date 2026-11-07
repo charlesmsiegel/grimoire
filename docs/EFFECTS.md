@@ -7,7 +7,7 @@
 - an additive amendment to [017](GRAPH.md#reopening-an-ending-021): reopening a relation's ending in place;
 - an additive 023 read, `HoldingsLibrary.view(holder)` ([HOLDINGS](HOLDINGS.md#service-grimoireholdingstoreholdingslibrary)).
 
-There is **no app and no model call**, and 035's text runner ([SCENES](SCENES.md)) does not accept effects yet: its kept lines are transcript, and 021 acceptance is its milestone 2. The scenarios are synthetic.
+There is **no app and no model call**, and 035's text runner accepts only structured effect proposals, with every key ([SCENES](SCENES.md#accepting-an-effect)): its kept lines are transcript, and no model proposes an effect yet. The scenarios are synthetic.
 
 ## What it means
 
@@ -136,9 +136,9 @@ Examples: "Wren pays Tam 2 coins while Tam hands Wren a knife" is two `move` lin
 
 Narration holds neither key. A player alone can never make their character's action succeed (a theft, joining a guild that refuses): the outcome needs the director key.
 
-**Strength, stated plainly.** An `Endorsement` is a statement, not a one-time token. Code that kept one could present it again to re-accept the *same* operations after they were revoked (an effect with an attempt is then refused `attempt_revoked`). It can never be used to revoke: revocation needs a separate endorsement, over a fingerprint bound to that event (see Revoking). As with 010b, the guarantee is only as strong as 035's handle minting: any trusted code that holds the authorizer can mint `human:ana`, and the library itself cannot. In **solo play** one human holds both keys. The rule then guarantees two explicit, separately recorded decisions (endorse the mapping, approve the outcome), not two people.
+**Strength, stated plainly.** An `Endorsement` is a statement, not a one-time token. Code that kept one could present it again to re-accept the *same* operations after they were revoked (an effect with an attempt is then refused `attempt_revoked`). It can never be used to revoke: revocation needs a separate endorsement, over a fingerprint bound to that event (see Revoking). As with 010b, the guarantee is only as strong as 035's handle minting: any trusted code that holds the authorizer can mint `human:ana`, and the library itself cannot. 035's runner mints one only to present again an endorsement that the authority's own audit records as given with that player's own handle ([TOOL_AUTHORITY](TOOL_AUTHORITY.md)). In **solo play** one human holds both keys. The rule then guarantees two explicit, separately recorded decisions (endorse the mapping, approve the outcome), not two people.
 
-**Recorded for audit:** the backing contributions, the endorsements, and the control in force for every agent (`controls`). `controls` comes from the caller. **Obligation on 035:** load it from 010b's `SovereigntyLedger`.
+**Recorded for audit:** the backing contributions, the endorsements, and the control in force for every agent (`controls`). `controls` comes from the caller. **Obligation on 035:** load it from 010b's `SovereigntyLedger`. 035's runner does, and for 030's `adopt` after a restart it replays the ledger to the position the acceptance recorded, so the retry is checked under the control it was first authorized under ([SCENES](SCENES.md#accepting-an-effect)).
 
 003 delegations (`auto_complete` …) are **not** honoured here: a PC's voluntary act always needs its player's own contribution.
 

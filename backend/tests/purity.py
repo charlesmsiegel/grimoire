@@ -192,11 +192,12 @@ PURE_PACKAGES = (
     PurePackage("grimoire.labelling", ("grimoire.labelling", "grimoire.adjudication", "grimoire.context",
                                        "grimoire.graph", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
-    # Played chat turns (035): posts, takes, labellings (029's factor and stake values), who heard what, and
-    # their codec; the runner is an adapter.
+    # Played chat turns (035): posts, takes, labellings (029's factor and stake values), proposed effects (021's
+    # proposal and endorsement values and the proposal's codec), recorded 039 intentions (039's caps and outcomes),
+    # who heard what, and their codec; the runner is an adapter.
     PurePackage("grimoire.scene", ("grimoire.scene", "grimoire.core", "grimoire.core.inference",
                                    "grimoire.comms", "grimoire.generation", "grimoire.transcripts",
-                                   "grimoire.adjudication")),
+                                   "grimoire.adjudication", "grimoire.effects", "grimoire.goals")),
     # Operational tracing (048): spans, call samples and cost attribution; the clock and prices are passed in.
     PurePackage("grimoire.tracing", ("grimoire.tracing", "grimoire.core.inference")),
     # Offline evaluation: of the domain core it uses only the inference contracts (sprint 015);

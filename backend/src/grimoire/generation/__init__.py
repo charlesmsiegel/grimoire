@@ -17,6 +17,7 @@ from .voice import VOICE_SECTION, SnapshotVoices, resolve_snapshot_voice
 from .brief import (
     CONTEXT_CHARS, KNOWLEDGE_CHARS, MAX_HEARD, MAX_LINE_CHARS, MIN_LORE_MARKER_WORDS, SCENARIO_CHARS,
     DirectorBrief, HeardLine, NpcBrief, director_brief, director_messages, known_ids, npc_brief, npc_messages,
+    unrecognised,
 )
 from .screen import REJECTIONS, screen_reply
 from .decision import MAX_OPTIONS, decision_messages, decision_options, read_pick
@@ -30,7 +31,7 @@ __all__ = [
     "VOICE_SECTION", "SnapshotVoices", "resolve_snapshot_voice",
     "CONTEXT_CHARS", "KNOWLEDGE_CHARS", "MAX_HEARD", "MAX_LINE_CHARS", "MIN_LORE_MARKER_WORDS", "SCENARIO_CHARS",
     "DirectorBrief", "HeardLine", "NpcBrief", "director_brief", "director_messages", "known_ids", "npc_brief",
-    "npc_messages",
+    "npc_messages", "unrecognised",
     "REJECTIONS", "screen_reply",
     "MAX_OPTIONS", "decision_messages", "decision_options", "read_pick",
 ]

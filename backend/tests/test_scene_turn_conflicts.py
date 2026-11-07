@@ -122,6 +122,41 @@ def test_a_run_in_flight_keeps_its_usage_when_its_turn_is_resolved_to_the_peers_
         assert phone.runner.scenes.turns(chat).last.record == mine
 
 
+def test_a_run_in_flight_keeps_its_intentions_when_its_turn_is_resolved_to_the_peers_version_mid_run(built,
+                                                                                                    tmp_path):
+    from grimoire.goals import Agenda, Approach, Goal
+
+    chat = devices(built, tmp_path)
+    with Table(tmp_path / DESKTOP, runtime=False) as desk:
+        (npc,) = desk.runner.open(chat).npcs
+    plan = Agenda(chat.campaign_id, npc, goals=(Goal("cargo", "Get the cargo past the harbour", 50, (
+        Approach("wait", "Tell the pilot the cargo can wait"),)),))
+    with Table(tmp_path / DESKTOP, [say("Desk two.")], agendas=[plan]) as desk, Table(tmp_path / PHONE) as phone:
+        synced(desk, phone)
+        desk.runner.post(chat, desk.player(), '"The desk asks."')
+        synced(desk, phone)
+        two = turn_id(chat, 2, tag(DESKTOP))
+        path = f"campaigns/{chat.campaign_id}/turns/{two}.json"
+        real = desk.runner.runtime.run_turn
+
+        def run_turn(*args, **kwargs):  # meanwhile the owner resolves the turn to the phone's paused version
+            result = real(*args, **kwargs)
+            phone.runner.request(chat, phone.player(), "pause")
+            assert synced(desk, phone).conflict(path).code == "concurrent"
+            theirs = etag((tmp_path / PHONE / path).read_bytes())
+            resolve(desk.store, phone.store, path, theirs, {DESKTOP: etag((tmp_path / DESKTOP / path).read_bytes()),
+                                                            PHONE: theirs}, {DESKTOP: desk.owner, PHONE: phone.owner})
+            return result
+        desk.runner.runtime.run_turn = run_turn
+        take = desk.runner.generate(chat, desk.player())
+        chosen = phone.runner.scenes.turns(chat).last.record
+        mine = desk.runner.scenes.turns(chat).last.record
+        (intention,) = mine.intentions_of(take.take)
+        assert take.state == "stale" and mine.takes == (take,) and take.attempts()
+        assert (intention.actor, intention.approach_id) == (npc, "wait") and chosen.intentions == ()
+        assert replace(mine, takes=(), intentions=()) == chosen  # the phone's version, plus this run's record
+
+
 def test_a_run_never_starts_on_a_turn_a_fork_choice_set_aside_after_it_was_read(built, tmp_path):
     chat = devices(built, tmp_path)
     with Table(tmp_path / DESKTOP, [say("Desk two."), say("Desk three.")]) as desk, \
