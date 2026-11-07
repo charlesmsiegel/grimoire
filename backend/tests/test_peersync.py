@@ -498,3 +498,29 @@ def test_pairing_keys_and_ledgers_never_leave_their_device(tmp_path):
     assert secrets == [f"{DESKTOP}.json"]  # its own record of the pairing, never the desktop's
     for path, data in _files(phone.store.root).items():
         assert key.hex().encode() not in data, path
+
+
+# -- 028: deletions over the transport ---------------------------------------------------------------
+
+@pytest.mark.parametrize("deleter", [DESKTOP, PHONE])
+def test_a_deletion_on_either_device_is_made_on_the_other_and_its_version_kept_there(tmp_path, deleter):
+    """The phone serves. Deleted on the desktop, the phone deletes it in a replayed step under the
+    desktop's peer principal; deleted on the phone, the desktop deletes it in its own library."""
+    desktop, phone, _ = paired(tmp_path)
+    start_scene(desktop)
+    _add_source(desktop, "catalog:extra")
+    path = "sources/catalog/extra/_source/manifest.json"
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+        original = (desktop.store.root / path).read_bytes()
+        source, receiver = (desktop, phone) if deleter == DESKTOP else (phone, desktop)
+        (source.store.root / path).unlink()
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+        assert report.status == "synced" and (path, receiver.name) in report.deleted, report
+        assert not (receiver.store.root / path).exists()
+        assert original in [data for where, data in _files(receiver.store.root).items() if where.startswith(".conflicts/")]
+        assert "catalog:extra" not in receiver.store.load().sources
+        again = transfer(desktop.store, desktop.authority, PHONE, server.address)
+    assert again.status == "synced" and again.copied == () and again.deleted == (), again
+    assert {key: value for key, value in _files(desktop.store.root).items() if not key.startswith(".conflicts/")} == {
+        key: value for key, value in _files(phone.store.root).items() if not key.startswith(".conflicts/")}

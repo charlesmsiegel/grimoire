@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Protocol
 
-from .model import FIRST, IMMUTABLE_KINDS, NONE, UNCERTAIN, Base, Decision, Side
+from .model import FIRST, IMMUTABLE_KINDS, NONE, PROPAGATED_DELETIONS, UNCERTAIN, Base, Decision, Side
 
 AGREED = Decision("agreed")
 
@@ -19,7 +19,8 @@ def _copy(origin: str) -> Decision:
 
 
 def decide(kind: str, base: Base, left: Side, right: Side) -> Decision:
-    """Rows 1-14 of the decision table, plus the immutable-revision override.
+    """Rows 1-14 of the decision table, plus the immutable-revision override and (028) row 9's
+    propagated deletion.
 
     ``kind`` is the canonical record kind (``syncable``); ``definition`` and ``knowledge`` records
     are immutable (create-only).
@@ -49,7 +50,9 @@ def decide(kind: str, base: Base, left: Side, right: Side) -> Decision:
         if unchanged:
             other = "right" if "left" in unchanged else "left"
             if (right if other == "right" else left).state == "absent":            # 9
-                return _conflict("deleted")
+                # 028: the other device deleted exactly the agreed version: delete it here too
+                # (kept as a hold), except for the families that never delete
+                return Decision("delete", origin=other) if kind in PROPAGATED_DELETIONS else _conflict("deleted")  # type: ignore[arg-type]
             if kind in IMMUTABLE_KINDS:                                               # 8 (immutable)
                 return _conflict("revision_modified")
             return _copy(other)                                                    # 8
@@ -90,7 +93,9 @@ def derive_base(path: str, archives: tuple[ArchiveLike, ArchiveLike], pendings: 
     copy verifiably landed: ``agreed to``. If both archives already agree on that ``to`` (archives
     are written only after verification), the marker is stale and the archive base stands.
     Anything else (a revert, an edit racing the copy, disagreeing entries, an unreadable marker)
-    is ``uncertain``.
+    is ``uncertain``. A deletion's entry (028, ``"to": null``) works the same way: when every entry
+    for the path deletes the same ``from`` and each device holding one is still absent, the base
+    is ``deleted from``, the tombstone an uninterrupted sync records.
     """
     candidate = archive_candidate(path, *archives)
     entries = []
@@ -101,6 +106,14 @@ def derive_base(path: str, archives: tuple[ArchiveLike, ArchiveLike], pendings: 
         if entry is not None:
             entries.append((entry, etag))
     if entries:
+        removals = {entry.get("from") for entry, _ in entries if _is_removal(entry)}
+        if removals:  # 028: a sync or resolve deleted ``from`` here, and the peer was absent
+            removed = next(iter(removals))
+            if candidate == Base("deleted", removed):
+                return candidate  # both archives already record the tombstone: the marker is stale
+            if len(removals) == 1 and all(_is_removal(entry) and etag is None for entry, etag in entries):
+                return Base("deleted", removed)  # the deletion verifiably landed: absent wherever marked
+            return UNCERTAIN  # a restore, a re-creation or disagreeing entries
         targets = {entry.get("to") for entry, _ in entries}
         to = next(iter(targets)) if len(targets) == 1 else None
         if to is not None and candidate == Base("agreed", to) and all(entry.get("base") != to for entry, _ in entries):
@@ -112,6 +125,11 @@ def derive_base(path: str, archives: tuple[ArchiveLike, ArchiveLike], pendings: 
             return Base("agreed", targets.pop())
         return UNCERTAIN
     return candidate
+
+
+def _is_removal(entry: Mapping[str, object]) -> bool:
+    """A pending entry that records a deletion (028): ``{"from": E, "to": null}``, never ``{"uncertain"}``."""
+    return "to" in entry and entry["to"] is None and entry.get("from") is not None
 
 
 class ArchiveLike(Protocol):  # documents.ArchiveView

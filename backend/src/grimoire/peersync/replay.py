@@ -19,14 +19,15 @@ from pathlib import Path
 
 from grimoire.store import LibraryStore, StaleWrite, StoreError, WriteConflict, WriteDenied, etag
 from grimoire.store.layout import conflict_parts
-from grimoire.sync import Step, device_of
+from grimoire.sync import Step, device_of, syncable
 from grimoire.sync import keeps as kept_record
 from grimoire.sync.bookkeeping import is_shard, listed_shards, root_name
 from grimoire.sync.bookkeeping import parse as parse_document
 from grimoire.sync.bookkeeping import stage as stage_states
 from grimoire.sync.documents import keeps_name, pair_state
-from grimoire.sync.keeps import (State, first_copies, not_delivered_elsewhere, peer_may_write, records_hold,
+from grimoire.sync.keeps import (State, first_copies, not_delivered_elsewhere_many, peer_may_write, records_hold,
                                  slot_stands)
+from grimoire.sync.model import PROPAGATED_DELETIONS
 
 from .errors import MirrorMismatch, PeerRefused
 from .wire import Channel
@@ -53,13 +54,17 @@ def send_step(channel: Channel, step: Step, blob_reader: Callable[[str, int], by
         for keep in step.keeps:
             yield ({"op": "keep", "path": keep.path, "slot": keep.slot}, keep.data,
                    kept_target(keep.path, keep.data, keep.slot), etag(keep.data))
+        for gone in step.deletes:  # 028: the agreed version the peer deletes, held beside the path there
+            yield ({"op": "delete", "path": gone.path, "expected": gone.expected, "slot": gone.slot}, gone.data,
+                   gone.path, None)
         for name, data, old in step.states:
             yield {"op": "state", "name": name, "expected": old}, data, f".sync/{name}", etag(data)
     send_ops(channel, step.kind, ops())
 
 
-#: One write of a step: its ``op`` header, its body, and the file it lands in with the etag it must then hold.
-Op = tuple[dict, bytes, str, str]  # type: ignore[type-arg]
+#: One write of a step: its ``op`` header, its body, and the file it lands in with the etag it must then hold
+#: (``None``: a deletion, after which the file must be gone).
+Op = tuple[dict, bytes, str, "str | None"]  # type: ignore[type-arg]
 
 
 def send_ops(channel: Channel, kind: str, ops: Iterable[Op]) -> None:
@@ -67,7 +72,7 @@ def send_ops(channel: Channel, kind: str, ops: Iterable[Op]) -> None:
 
     ``ops`` is consumed as it is sent, so a step of many blobs never holds them all in memory.
     """
-    expected: dict[str, str] = {}
+    expected: dict[str, str | None] = {}
     for header, body, target, tag in ops:
         channel.send({"t": "op", **header}, body)
         expected[target] = tag
@@ -82,7 +87,7 @@ def kept_target(path: str, data: bytes, slot: int) -> str:
     return "/".join(conflict_parts(tuple(path.split("/")), etag(data), slot))
 
 
-def confirmation(etags: dict[str, str]) -> str:
+def confirmation(etags: dict[str, str | None]) -> str:
     """One digest over every ``path -> etag`` a step wrote, as the serving device re-read them.
 
     The commit reply carries this rather than the etags themselves: a step may hold up to
@@ -156,7 +161,7 @@ class StepBuffer:
         self.reset()
         self.poisoned = refusal
 
-    def commit(self, store: LibraryStore, handle: object, *, may_hold: str | None = None) -> dict[str, str]:
+    def commit(self, store: LibraryStore, handle: object, *, may_hold: str | None = None) -> dict[str, str | None]:
         """Commit every write as one transaction; return each written file's etag as re-read.
 
         ``may_hold`` is the etag of the one version this step's record may newly hold at the resolving
@@ -170,12 +175,13 @@ class StepBuffer:
         finally:
             self.reset()
 
-    def _commit(self, store: LibraryStore, handle: object, may_hold: str | None) -> dict[str, str]:
+    def _commit(self, store: LibraryStore, handle: object, may_hold: str | None) -> dict[str, str | None]:
         ops = self.ops
         if not ops:
             raise PeerRefused("empty", "a step with no writes")
         txn = store.transaction()
         targets: list[tuple[str, str, Callable[[], bytes | None]]] = []
+        removals: list[tuple[str, str, str]] = []  # 028: (path, etag it removed, the hold's file)
         records = False
         # the roots this step writes, by name: a shard is accepted only as its own root lists it
         roots = {header.get("name"): body for header, body in ops
@@ -187,9 +193,15 @@ class StepBuffer:
             # which an earlier step's record must already hold (``_held_beforehand``), and the one
             # version a resolve's record step may add as held
             recordable = set() if may_hold is None or self.resolving is None else {(self.resolving, may_hold)}
+            # 028: a sync's holds step, a commit of this pair's record alone before the data commit that
+            # deletes, may hold this device's own current version of a record a deletion removes
+            holds_step = self.resolving is None and all(
+                header.get("op") == "state" and header.get("name") == keeps_name(self.peer) for header, _ in ops)
             holds = {(header["path"], etag(body)) for header, body in ops if header.get("op") == "keep"
                      and header.get("hold") is True and header.get("path") == self.resolving
                      and isinstance(body, bytes)}
+            holds |= {(header["path"], etag(body)) for header, body in ops if header.get("op") == "delete"
+                      and type(header.get("path")) is str and isinstance(body, bytes)}
             # the keeps of this step that write the first copy of the peer's bytes at their path, read
             # before anything is staged: only those may this step's record add as delivered. A keep of
             # bytes some slot already holds writes nothing new, or a second copy of what may be a hold;
@@ -212,6 +224,16 @@ class StepBuffer:
                     txn.put_exact(path, body, header.get("expected"), regenerable=True)
                     targets.append((path, path, _reader(store, path)))
                     records = True
+                elif (op == "delete" and type(path) is str and type(header.get("slot")) is int
+                      and isinstance(body, bytes) and header.get("expected") == etag(body)):
+                    if self.resolving is not None:  # only the device that holds a record deletes it in a resolve
+                        raise PeerRefused("invalid", "a resolve over the transport never deletes on this device")
+                    # 028: the peer deleted the agreed version; this device removes it too, holding it
+                    # beside the path (it may exist nowhere else), recorded held beforehand (``holds``)
+                    txn.keep_version(path, body, slot=header["slot"], regenerable=False)
+                    txn.delete_exact(path, header["expected"])
+                    removals.append((path, header["expected"], kept_target(path, body, header["slot"])))
+                    records = True
                 elif op == "keep" and type(path) is str and type(header.get("slot")) is int:
                     target = kept_target(path, body, header["slot"])
                     # A sync keeps the peer's version, which the peer still holds; resolve holds the
@@ -223,7 +245,7 @@ class StepBuffer:
                 elif op == "state" and pair_state(header.get("name"), self.peer) and _etag_or_none(header.get("expected")):
                     name = header["name"]
                     expected = self._state_expected(store, name, body, header.get("expected"), roots, first,
-                                                    recordable)
+                                                    recordable, holds_step)
                     txn.put_sync_state(name, body, expected)
                     targets.append((f".sync/{name}", name, lambda name=name: store.read_sync_state(name)))
                 else:  # only this pair's own .sync files, and records the peer's grants then decide
@@ -246,12 +268,23 @@ class StepBuffer:
             raise PeerRefused("denied", f"a write was not authorized: {error}") from error
         except (StoreError, ValueError) as error:
             raise PeerRefused("refused", f"{type(error).__name__}: {error}") from error
-        found: dict[str, str] = {}
+        found: dict[str, str | None] = {}
         for key, _, read in targets:
             data = read()
             if data is None:
                 raise PeerRefused("verification", f"{key} is missing after the commit")
             found[key] = etag(data)
+        for path, removed, hold in removals:  # gone, and its version kept beside it
+            kept = _reader(store, hold)()
+            if kept is None or etag(kept) != removed:
+                raise PeerRefused("verification", f"{hold} does not hold the version removed from {path}")
+            try:
+                still = store.read_exact(path)
+            except (StoreError, OSError):
+                still = b""  # a look-alike, or unreadable: not verifiably gone
+            if still is not None:
+                raise PeerRefused("verification", f"{path} is still there after the commit")
+            found[path] = None
         return found
 
     def _resolve_power(self, header: dict, name: str, path: str) -> bool:  # type: ignore[type-arg]
@@ -291,11 +324,11 @@ class StepBuffer:
             if not all(records_hold(record, devices, path, tag) for record in (standing, *written)):
                 raise PeerRefused("invalid", f"a resolve's hold of {path} is recorded as held in a commit before "
                                              "the one that writes it")
-            states.extend(not_delivered_elsewhere(store, device, self.peer, path, tag))
-        return states
+        return [*states, *not_delivered_elsewhere_many(store, device, self.peer, holds)]
 
     def _state_expected(self, store: LibraryStore, name: str, body: bytes, expected: str | None, roots: dict,  # type: ignore[type-arg]
-                        first: set[tuple[str, str]], recordable: set[tuple[str, str]]) -> str | None:
+                        first: set[tuple[str, str]], recordable: set[tuple[str, str]],
+                        holds_step: bool = False) -> str | None:
         """The etag a state write of the pair must replace, after checking the write is one a sync makes."""
         if name == keeps_name(self.peer) and len(body) > kept_record.RECORD_LIMIT:
             # this device writes no record past the cap (``keeps.fit`` leaves excess deliveries
@@ -304,7 +337,7 @@ class StepBuffer:
         if name == keeps_name(self.peer) and not peer_may_write(
                 store.read_sync_state(name), body, tuple(sorted((device_of(store), self.peer))),  # type: ignore[arg-type]
                 lambda path, tag: (path, tag) in first, lambda path, tag: slot_stands(store, path, tag),
-                lambda path, tag: (path, tag) in recordable):
+                lambda path, tag: (path, tag) in recordable or (holds_step and _own(store, path, tag))):
             # a sync records as delivered only the first copies its own keeps write in the same commit, keeps
             # a held version recorded while its slot stands, and never dismisses one: dismissing is this
             # device's own decision, authorized here (``grimoire.sync.dismiss``), never the peer's. Only a
@@ -342,6 +375,18 @@ class StepBuffer:
             view = parse_document(kind, files, self.peer, devices)  # type: ignore[arg-type]
             if view.state != "valid":
                 raise PeerRefused("invalid", f"the {kind} this step writes is not valid for this pair: {view.reason}")
+
+
+def _own(store: LibraryStore, path: str, tag: str) -> bool:
+    """Whether ``tag`` is this device's own current version of ``path``, a record a deletion may remove (028):
+    the one version a sync's holds step may record as held here. Holding it only ever fails closed."""
+    if syncable(path) not in PROPAGATED_DELETIONS:
+        return False
+    try:
+        data = store.read_exact(path)
+    except (StoreError, OSError):
+        return False
+    return data is not None and etag(data) == tag
 
 
 def _spooled(path: Path) -> Callable[[], bytes | None]:

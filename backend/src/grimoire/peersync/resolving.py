@@ -26,6 +26,11 @@ serving device in the step ``resolve`` relays for that record (this pair's recor
 no hold but its own current version: ``check_step``), and in a commit of its own for its other
 pairs' records, which the peer never sees, just before the hold's step; the hold's step itself
 is refused unless the pair's record already holds it (``peersync.replay``).
+
+Choosing the deletion (``keep=None``) is started only on the device that holds the record: that
+device receives (it holds its version, deletes the record and marks it, in its own library), and
+the serving device is the winner, written only bookkeeping, as for any other choice of the
+serving device's version. The serving device refuses a deletion it would have to make itself.
 """
 
 from __future__ import annotations
@@ -76,11 +81,12 @@ class ResolveReport:
 
 
 def resolve_conflict(store: LibraryStore, authority, peer: str, address: tuple[str, int], path: str,  # type: ignore[no-untyped-def]
-                     keep: str, expected: Mapping[str, str | None], *, timeout: float = 600.0,
+                     keep: str | None, expected: Mapping[str, str | None], *, timeout: float = 600.0,
                      workdir: str | Path | None = None, limits: Limits = Limits()) -> ResolveReport:
     """End the conflict at ``path`` with the paired device ``peer`` at ``address`` by keeping the
-    version whose current etag is ``keep``; ``expected`` gives each device's etag (``None``:
-    absent) as the conflict was reported, exactly as 019's ``resolve`` takes them.
+    version whose current etag is ``keep`` (``None``: the deletion, started on the device that holds
+    the record); ``expected`` gives each device's etag (``None``: absent) as the conflict was
+    reported, exactly as 019's ``resolve`` takes them.
 
     Raises ``NotPaired`` or ``AuthenticationFailed`` before anything is exchanged, as ``transfer``
     does; every other outcome is a report.
@@ -119,18 +125,18 @@ def resolve_conflict(store: LibraryStore, authority, peer: str, address: tuple[s
 def _unusable(local: str, peer: str, path: object, keep: object, expected: object) -> str | None:
     """Why the request cannot be a resolve at all, before anything is sent.
 
-    ``keep=None`` would choose a deletion: resolve delivers a version, and an absent one is no
-    version to deliver (deletion propagation belongs to a later 028 slice).
+    ``keep=None`` chooses the deletion (028). The device that holds the record deletes it, and a
+    serving device never deletes a record for a peer, so it is started there.
     """
     if type(path) is not str or syncable(path) is None:
         return f"{path!r} is not a synchronized record"
-    if keep is None:
-        return "a deletion cannot be chosen: keep must be the current etag of one device's version"
-    if not is_etag(keep):
-        return "keep must be the current etag of one device's version"
+    if keep is not None and not is_etag(keep):
+        return "keep must be the current etag of one device's version, or None for the deletion"
     if not isinstance(expected, Mapping) or set(expected) != {local, peer} or not all(
             value is None or is_etag(value) for value in expected.values()):
         return f"expected must give the etag (or None) of {local} and {peer}"
+    if keep is None and expected[local] is None and expected[peer] is not None:
+        return f"{path} is held by {peer}, which deletes it: start this resolve on {peer}"
     return None
 
 
@@ -270,6 +276,11 @@ class _RelayedTransaction(Transaction):
         self._ops.append(("put", lambda: (header, body, path, etag(body))))
         return key
 
+    def delete_exact(self, path: str, expected: str) -> str:
+        # resolve_conflict lets only the device holding the record choose its deletion, so the
+        # mirror (the serving device) is never the one that deletes; never relayed
+        raise ResolveRefused(f"{path} would be deleted on the serving device; start this resolve on that device")
+
     def put_blob_exact(self, path: str, read: Callable[[], bytes | None], *, size: int) -> str:
         key = super().put_blob_exact(path, read, size=size)
 
@@ -378,7 +389,7 @@ class ResolveRequest:
     etags expected here and on the requesting device."""
 
     path: str
-    keep: str
+    keep: str | None  # None: the deletion, which only the requester (holding the record) makes
     expected: str | None
     theirs: str | None
     device: str
@@ -389,8 +400,9 @@ class ResolveRequest:
         path, keep, expected = header.get("path"), header.get("keep"), header.get("expected")
         if type(path) is not str or syncable(path) is None:
             raise PeerRefused("invalid", "a resolve request names a synchronized record")
-        if not is_etag(keep):  # a deletion (None) is never a version to keep
-            raise PeerRefused("invalid", "a resolve request keeps the current etag of one device's version")
+        if keep is not None and not is_etag(keep):  # None: the deletion (028)
+            raise PeerRefused("invalid", "a resolve request keeps the current etag of one device's version, "
+                                         "or none for the deletion")
         if not isinstance(expected, dict) or set(expected) != {device, peer} or not all(
                 value is None or is_etag(value) for value in expected.values()):
             raise PeerRefused("invalid", "a resolve request gives the expected etag of both devices")
@@ -408,11 +420,15 @@ class ResolveRequest:
         device that made it), or a blob, whose name is its content. A kept version counts only when
         its file reads (an unreadable one may hold anything). When this device receives, the chosen
         version must also be the requester's own current one: it is the version resolve copies.
-        Anything else would let a paired device write chosen bytes over a record.
+        Anything else would let a paired device write chosen bytes over a record. The deletion
+        (``keep=None``) is admitted only where this device lacks the record: it is the winner.
         """
         found = _current(store, self.path)
         if found != self.expected:
             raise PeerRefused("stale", f"{self.path} changed on this device since the conflict was reported")
+        if self.keep is None and found is not None:  # a peer never deletes a record here (028)
+            raise PeerRefused("invalid", f"{self.path} is held on this device, which deletes it: start this "
+                                         "resolve here")
         if self.keep == found:
             if self.theirs == found:
                 raise PeerRefused("no_conflict", f"{self.path} is identical on both devices")
@@ -463,7 +479,7 @@ class ResolveRequest:
         held = [body for header, body in writes if header.get("op") == "keep" and header.get("hold") is True]
         if any(found is None or type(body) is not bytes or etag(body) != found for body in held):
             raise PeerRefused("invalid", f"a resolve holds only this device's own version of {self.path}")
-        record = [(header, body) for header, body in writes if header.get("op") in ("put", "blob")]
+        record = [(header, body) for header, body in writes if header.get("op") in ("put", "blob", "delete")]
         if not record:
             if held:
                 raise PeerRefused("invalid", f"a resolve holds this device's own version of {self.path} only in "

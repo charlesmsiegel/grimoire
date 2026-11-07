@@ -298,6 +298,18 @@ def with_held(view: KeepsView, peer: str, devices: tuple[str, str], path: str, t
                     lambda before: _entry(before.base, before.delivered, before.dismissed, {*before.held, tag}))
 
 
+def with_holds(view: KeepsView, peer: str, devices: tuple[str, str], items: Iterable[tuple[str, str]]) -> State | None:
+    """``with_held`` for several ``(path, etag)`` at once, in one write (028: the versions a sync's
+    deletions hold, recorded just before the data commit that deletes them)."""
+    entries = _entries(view)
+    for path, tag in sorted(items):
+        before = entries.get(path) or KeptEntry(None, frozenset())
+        entry = _entry(before.base, before.delivered, before.dismissed, {*before.held, tag})
+        if entry is not None:
+            entries[path] = entry
+    return _write(view, peer, devices, entries)
+
+
 def not_delivered(view: KeepsView, peer: str, devices: tuple[str, str], path: str, tag: str) -> State | None:
     """Another pair's record without ``tag`` delivered: ``resolve`` held those bytes here (in a slot
     that pair's sync may have written), so no pair may ever have them dismissed."""
@@ -319,6 +331,35 @@ def not_delivered_elsewhere(store: LibraryStore, device: str, peer: str, path: s
             state = not_delivered(read_keeps(store, other, devices), other, devices, path, tag)
             if state is not None:
                 states.append(state)
+    return states
+
+
+def not_delivered_elsewhere_many(store: LibraryStore, device: str, peer: str,
+                                 items: Iterable[tuple[str, str]]) -> list[State]:
+    """``not_delivered_elsewhere`` for several ``(path, etag)`` at once: one write per other pair's record."""
+    items = sorted(set(items))
+    states = []
+    for other in other_peers(store, device):
+        if other == peer:
+            continue
+        devices: tuple[str, str] = tuple(sorted((device, other)))  # type: ignore[assignment]
+        view = read_keeps(store, other, devices)
+        if view.state != "valid":
+            continue
+        entries, changed = dict(view.entries), False
+        for path, tag in items:
+            before = entries.get(path)
+            if before is None or tag not in before.delivered:
+                continue
+            changed = True
+            entry = _entry(before.base, before.delivered - {tag}, before.dismissed, before.held)
+            if entry is None:
+                entries.pop(path)
+            else:
+                entries[path] = entry
+        state = _write(view, other, devices, entries) if changed else None
+        if state is not None:
+            states.append(state)
     return states
 
 

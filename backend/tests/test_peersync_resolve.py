@@ -242,23 +242,53 @@ def test_a_stale_expected_etag_is_refused_and_nothing_changes(tmp_path, changed)
     assert (_tree(case.desktop.store.root), _tree(case.phone.store.root)) == before
 
 
-def test_choosing_a_deletion_is_refused(tmp_path):
+def test_the_deletion_is_chosen_only_on_the_device_that_holds_the_record(tmp_path):
+    """028: the device still holding the record deletes it (keeping its version as a hold), so a
+    deletion chosen on the other device is sent there; the serving device only writes bookkeeping."""
     case = Conflict(tmp_path)
     (case.desktop.store.root / case.path).unlink()  # the desktop's user deletes the chat by hand
+    expected = {DESKTOP: None, PHONE: case.expected[PHONE]}
     with serving(case.phone) as server:
         report = transfer(case.desktop.store, case.desktop.authority, PHONE, server.address)
         assert report.passes[-1].conflict(case.path) is not None, report
         before = _tree(case.desktop.store.root), _tree(case.phone.store.root)
-        expected = {DESKTOP: None, PHONE: case.expected[PHONE]}
-        for keep in (None, etag(b"")):  # the absent version, or an etag no device holds
-            refused = case.resolve(server, keep, expected=expected)  # type: ignore[arg-type]
-            # refused by 019's own rule, or first by the phone, which holds no such version
-            assert refused.status == "refused" and ("ResolveRefused" in refused.reason
-                                                    or refused.reason.startswith("unknown_version")), refused
+        refused = case.resolve(server, None, expected=expected)  # type: ignore[arg-type]
+        assert refused.status == "refused" and refused.reason.endswith(f"start this resolve on {PHONE}"), refused
+        unknown = case.resolve(server, etag(b""), expected=expected)  # an etag no device holds
+        assert unknown.status == "refused", unknown
         assert (_tree(case.desktop.store.root), _tree(case.phone.store.root)) == before
-        # keeping the version that still exists restores it
-        assert case.resolve(server, PHONE, expected=expected).status == "resolved"
-    assert case.bytes(case.desktop) == case.versions[PHONE]
+    with serving(case.desktop) as server:
+        chosen = case.resolve(server, None, start=case.phone, expected=expected)  # type: ignore[arg-type]
+    assert (chosen.status, chosen.receiver) == ("resolved", PHONE), chosen
+    assert not (case.phone.store.root / case.path).exists()
+    assert case.versions[PHONE] in _kept(case.phone.store.root)
+    again = case.sync_again()
+    assert again.status == "synced" and again.conflicts == () and again.copied == () and again.deleted == (), again
+
+
+def test_a_serving_device_never_deletes_its_own_record_for_a_peer(tmp_path):
+    """A request that would have the serving device delete (it holds the record) is refused there,
+    and no step of a resolve may delete anything on it."""
+    case = Conflict(tmp_path)
+    theirs = case.versions[PHONE]
+    (case.desktop.store.root / case.path).unlink()
+    with serving(case.phone) as server:
+        transfer(case.desktop.store, case.desktop.authority, PHONE, server.address)
+    before = _tree(case.phone.store.root)
+    expected = {DESKTOP: None, PHONE: case.expected[PHONE]}
+    with serving(case.phone) as server:
+        channel = _connect(case.desktop, server)
+        with pytest.raises(PeerRefused) as refused:  # past the client's own check, as a modified client would
+            _request(channel, {"t": "resolve", "path": case.path, "keep": None, "expected": expected})
+        assert refused.value.code == "invalid" and "start this resolve here" in str(refused.value)
+        channel.close()
+        channel = _connect(case.desktop, server)
+        _request(channel, {"t": "resolve", "path": case.path, "keep": etag(theirs), "expected": expected})
+        with pytest.raises(PeerRefused) as refused:  # the winner's steps write bookkeeping only
+            _step(channel, ({"op": "delete", "path": case.path, "expected": etag(theirs), "slot": 0}, theirs))
+        assert refused.value.code == "invalid"
+        channel.close()
+    assert _tree(case.phone.store.root) == before
 
 
 def test_a_pending_marker_the_peer_ignores_refuses_the_resolve(tmp_path):

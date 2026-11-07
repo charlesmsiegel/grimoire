@@ -13,6 +13,12 @@ present    = new        = new       drop the temp
 present    = new        other       preserve (external edit is kept)
 =========  ===========  ==========  =====================================
 
+A ``remove`` entry (028) deletes its target only while it still holds ``old``; absent means
+already done, and other bytes are an external edit, kept (the entry is dropped). Removals are
+settled after every other entry (revision removals before manifest removals), so the ``hold`` of
+the removed bytes in the same journal is published or preserved first, and an ``abort`` journal
+never removes anything.
+
 "Preserve" applies to ``publish`` and ``hold`` entries. A ``replica`` (another
 library's exact bytes), ``keep`` (a kept copy of another library's version) or
 ``state`` (``.sync``) entry that would be preserved is *dropped* instead: its bytes
@@ -217,6 +223,7 @@ class Settlement:
     incomplete: list[str] = field(default_factory=list)  # targets not written (vanished or held back)
     vanished: bool = False  # some staged file was gone (not only kept aside)
     dropped: list[str] = field(default_factory=list)  # keep/state targets set aside unpublished
+    removed: list[str] = field(default_factory=list)  # targets a ``remove`` entry deleted (028)
     aborted: bool = False
 
 
@@ -321,6 +328,20 @@ def _publish(access: Access, entry: Entry, settlement: Settlement) -> None:
     settlement.published.append((_text(entry.target), entry.new))
 
 
+def _landed(entry: Entry, current: str | None) -> bool:
+    """Whether an entry's effect is on disk: its new bytes, or (a removal) the old bytes gone."""
+    return current != entry.old if entry.kind == "remove" else current == entry.new
+
+
+def _remove(access: Access, entry: Entry, settlement: Settlement) -> None:
+    """Delete a removal's target, durably, before its temp goes (``DiskOps.remove`` syncs the folder)."""
+    staging = lstat_or_none(access.path((TXN,)))
+    access.guard.check_write(entry.target, staging_device=staging.st_dev if staging else None)
+    access.ops.remove(access.path(entry.target))
+    access.ops.remove(access.path((TXN, entry.temp)))
+    settlement.removed.append(_text(entry.target))
+
+
 def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlement:
     """Finish or preserve a committed journal, then remove it and any leftover staging.
 
@@ -341,7 +362,8 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
 
     if journal.state == "commit" and all(entry.temp in staged for entry in journal.entries):
         for entry in journal.entries:  # pre-publish guard: all or nothing while nothing is published
-            if temp_digest(entry) != entry.new or access.etag_of(entry.target) not in (entry.old, entry.new):
+            allowed = (entry.old, None) if entry.kind == "remove" else (entry.old, entry.new)
+            if temp_digest(entry) != entry.new or access.etag_of(entry.target) not in allowed:
                 journal = journal.aborted()
                 _replace_journal(access, journal)
                 break
@@ -355,8 +377,8 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
         # unpublished while another entry is still staged proves nothing was published either.
         current = {entry.target: access.etag_of(entry.target) for entry in journal.entries}
         missing = [entry for entry in journal.entries
-                   if entry.temp not in staged and current[entry.target] != entry.new]
-        published = any(entry.temp not in staged and current[entry.target] == entry.new
+                   if entry.temp not in staged and not _landed(entry, current[entry.target])]
+        published = any(entry.temp not in staged and _landed(entry, current[entry.target])
                         for entry in journal.entries)
         held = (any(entry.kind == "hold" for entry in missing)
                 and any(entry.temp in staged for entry in journal.entries))
@@ -365,12 +387,14 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
             _replace_journal(access, journal)
     unwritten = set()  # targets of entries that will never be published
     pending_manifests = {_manifest_source(entry.target) for entry in journal.entries
-                         if entry.temp in staged} - {None}
+                         if entry.temp in staged and entry.kind != "remove"} - {None}
     for entry in journal.entries:
         if entry.temp not in staged:
             current_etag = access.etag_of(entry.target)
             vanished = current_etag != entry.new if live else (entry.old != entry.new and current_etag == entry.old)
-            if (not live and journal.state == "commit" and current_etag != entry.new
+            if entry.kind == "remove":  # its temp is gone: done unless the target still holds what it removes
+                vanished = current_etag == entry.old
+            elif (not live and journal.state == "commit" and current_etag != entry.new
                     and _source_of_revision(entry.target) in pending_manifests):
                 # A revision an earlier recovery kept aside (its slot held other bytes) still holds
                 # back its head move: that decision lived only in memory and the recovery crashed.
@@ -380,7 +404,8 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
                 settlement.vanished = True
                 unwritten.add(entry.target)
     held_sources = {_source_of_revision(entry.target) for entry in journal.entries
-                    if entry.target in unwritten} - {None}
+                    if entry.target in unwritten and entry.kind != "remove"} - {None}
+    kept_revisions: set[str] = set()  # sources a revision removal of which did not happen (028)
     def hold_back(entry: Entry, digest: str | None) -> None:
         _preserve(access, entry, settlement, digest)
         source = _source_of_revision(entry.target)
@@ -389,11 +414,28 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
             held_sources.add(source)
             settlement.incomplete.append(_text(entry.target))
 
-    # Manifests last, whatever order the journal lists them in, so every revision is decided first.
-    for entry in sorted(journal.entries, key=lambda entry: _manifest_source(entry.target) is not None):
+    # Manifests last, whatever order the journal lists them in, so every revision is decided first;
+    # removals after everything else (028), so the hold of what they remove is settled before them.
+    for entry in sorted(journal.entries, key=lambda entry: (entry.kind == "remove",
+                                                            _manifest_source(entry.target) is not None)):
         if entry.temp not in staged:
             continue
         digest = temp_digest(entry)
+        if entry.kind == "remove":
+            source = _source_of_revision(entry.target)
+            if journal.state == "abort" or digest != entry.new or _manifest_source(entry.target) in kept_revisions:
+                _preserve(access, entry, settlement, digest)  # dropped: nothing is removed
+                kept_revisions |= {source} - {None}
+                continue
+            current = access.etag_of(entry.target)  # per-entry guard, immediately before acting
+            if current == entry.old:
+                _remove(access, entry, settlement)
+            elif current is None:
+                access.ops.remove(access.path((TXN, entry.temp)))
+            else:  # an external edit: the human's file is kept, and a manifest never loses a revision it keeps
+                _preserve(access, entry, settlement, digest)
+                kept_revisions |= {source} - {None}
+            continue
         if journal.state == "abort" or digest != entry.new:
             hold_back(entry, digest)
             continue

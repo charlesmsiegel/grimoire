@@ -196,7 +196,10 @@ def test_an_agreement_on_a_base_that_does_not_say_so_survives_a_crash_before_the
         (phone.root / ZZ_PATH).unlink()
         report = sync(desktop, phone, handles())
         assert not (phone.root / ZZ_PATH).exists(), report.copied
-        assert report.conflict(ZZ_PATH) is not None
+        if crash:
+            assert report.conflict(ZZ_PATH) is not None
+        else:  # the archives record the agreement: the deletion propagates (028)
+            assert (ZZ_PATH, DESKTOP) in report.deleted and not (desktop.root / ZZ_PATH).exists()
     finally:
         desktop.close()
         phone.close()

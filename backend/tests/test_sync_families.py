@@ -279,7 +279,9 @@ def test_an_interrupted_first_sync_never_undoes_a_later_deletion(tmp_path, monke
             sync(desktop, phone, handles())
         (phone.root / PATHS["wren_b"]).unlink()  # a record both devices agreed on
         report = sync(desktop, phone, handles())
-        assert not (phone.root / PATHS["wren_b"]).exists() and report.conflict(PATHS["wren_b"]) is not None
+        assert not (phone.root / PATHS["wren_b"]).exists()
+        # uncertain after the crash: a conflict; agreed in the archives: the deletion propagates (028)
+        assert report.conflict(PATHS["wren_b"]) is not None if crash else (PATHS["wren_b"], DESKTOP) in report.deleted
     finally:
         desktop.close()
         phone.close()
@@ -375,7 +377,10 @@ def test_021_a_relation_held_on_a_first_sync_is_recorded_as_agreed(tmp_path, mon
             shutil.move(str(store.root / "campaigns" / EFFECTS_C / "accepted"), str(tmp_path / f"away-{where}"))
         report = sync(desktop, phone, handles())  # the hold lifts
         assert not (phone.root / victim).exists(), report.copied
-        assert report.conflict(victim).code == ("missing_ancestor" if crash else "deleted")  # never a silent copy
+        if crash:  # never a silent copy
+            assert report.conflict(victim).code == "missing_ancestor"
+        else:  # agreed while held: once the hold lifts, the deletion propagates (028)
+            assert (victim, DESKTOP) in report.deleted and not (desktop.root / victim).exists()
     finally:
         desktop.close()
         phone.close()

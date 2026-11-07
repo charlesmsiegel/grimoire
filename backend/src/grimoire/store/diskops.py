@@ -83,7 +83,10 @@ class DiskOps:
         _sync_directory(os.path.dirname(os.path.abspath(dst)))
 
     def remove(self, path: PathArg) -> None:
+        """Remove a file durably: a record a ``remove`` entry deletes (028) must stay gone once
+        its temp and journal are removed after it, so the folder is synced first."""
         os.remove(path)
+        _sync_directory(os.path.dirname(os.path.abspath(path)))
 
     def make_dirs(self, path: PathArg) -> None:
         missing = []

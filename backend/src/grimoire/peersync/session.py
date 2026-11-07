@@ -49,6 +49,11 @@ class TransferReport:
     def copied(self) -> tuple[tuple[str, str], ...]:
         return tuple(sorted({entry for report in self.passes for entry in report.copied}))
 
+    @property
+    def deleted(self) -> tuple[tuple[str, str], ...]:
+        """(path, device that deleted it) for every propagated deletion of every pass (028)."""
+        return tuple(sorted({entry for report in self.passes for entry in report.deleted}))
+
 
 def transfer(store: LibraryStore, authority, peer: str, address: tuple[str, int], *,  # type: ignore[no-untyped-def]
              attempts: int = 4, timeout: float = 600.0, workdir: str | Path | None = None,

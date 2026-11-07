@@ -127,10 +127,12 @@ def test_a_dismissal_ends_with_its_conflict_and_never_costs_the_other_devices_re
     assert report.conflicts == ()
     # forgotten with its conflict; only the desktop's own replaced version, which resolve held, stays recorded
     assert _entries(desktop) == {PATH: {"base": None, "delivered": [], "dismissed": [], "held": [etag(mine)]}}
-    # the same bytes in a later conflict belong to that conflict: kept again
+    # the same bytes in a later conflict belong to that conflict: kept again (a deletion the phone
+    # holds back, since a record there it cannot read might need wren-a)
     (desktop.root / PATH).unlink()
+    (phone.root / PATH).with_name("odd.json").write_bytes(b"not json")
     conflict = sync(desktop, phone, handles()).conflict(PATH)
-    assert conflict.code == "deleted" and conflict.dismissed == () and theirs in kept(desktop)
+    assert conflict.code == "delete_dependency" and conflict.dismissed == () and theirs in kept(desktop)
 
 
 def test_a_version_of_a_path_no_longer_in_conflict_is_never_dismissable(tmp_path):
