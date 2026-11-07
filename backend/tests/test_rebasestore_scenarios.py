@@ -190,7 +190,7 @@ def test_chats_that_pin_different_revisions_must_be_resolved_first(store, chats,
 
 
 def test_a_chat_that_follows_the_head_is_reported_and_not_rewritten(store, chats, rebase):
-    started, actor = start(chats, WREN)
+    started, actor = start(chats, WREN, follow=True)  # the explicit opt-in (or a chat stored by an earlier build)
     publish(store, wren(R2, name="Wren Tidewater"))
     review = rebase.review(actor)
     assert review.ancestor.ref == R1 and review.repinned == () and review.following == (started.chat,)

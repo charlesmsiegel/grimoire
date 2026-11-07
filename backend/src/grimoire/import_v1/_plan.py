@@ -26,7 +26,7 @@ from grimoire.chats import (
     CAMPAIGN_CONTINUITY, CHAT_SCHEMA, NOT_WITNESSED, SCOPE_SCHEMA, ChatModelError, ChatRecord, Launch, NewBinding,
     PlayScope, WorldBinding, chat_from_payload, chat_to_payload, scope_to_payload,
 )
-from grimoire.chatstore import campaign_taken_ids
+from grimoire.chatstore import campaign_plays, campaign_taken_ids, instance_plays
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import ENTITY_SCHEMA, definition_to_payload, instance_to_payload
 from grimoire.core.identity import (
@@ -189,6 +189,9 @@ class ImportPlan:
     bound: dict[str, set[InstanceRef]] = field(default_factory=dict)  # campaign -> actors this run's new chats bind
     transcripts: dict[object, int] = field(default_factory=dict)  # chat -> pages this run plans for it (036)
     _paired: dict[str, frozenset[InstanceRef]] = field(default_factory=dict)
+    _played: dict[InstanceRef, SourceRef] = field(default_factory=dict)  # actor -> revision ``_plays`` found
+    #: campaign -> its chats at the etags read when a played revision was taken from them; re-checked at apply
+    played_from: dict[str, dict[ChatRef, str]] = field(default_factory=dict)
     _probe: object = None
     _review: dict = field(default_factory=dict)
     _preview: dict = field(default_factory=dict)
@@ -438,10 +441,7 @@ class ImportPlan:
             self._unresolve(legacy, "actor_base_not_imported", str(actor.ref))
             return
         base = self.targets[base_path]
-        source = actor.definition.unpinned()
-        instance = EntityInstance(actor.ref, source=source, extras=actor.extras)
-        envelope = RecordEnvelope(actor.ref, instance_to_payload(instance), owner=self.owner, derived_from=str(source),
-                                  base=str(actor.definition), base_etag=base.etag, extra={"schema": ENTITY_SCHEMA})
+        envelope = self._actor_envelope(actor, actor.definition, base.etag)
         path = _path_of(actor.ref)
         if path not in self.receipts.written and actor.ref.instance_id in taken:
             try:
@@ -456,10 +456,65 @@ class ImportPlan:
         rendered = self._rendered(path, "actor", legacy, envelope)
         if rendered is None:
             return
-        target = self._decide(path, "actor", legacy, rendered, envelope, etag(rendered))
+        desired = etag(rendered)
+        if path in self.receipts.written and self.receipts.desired.get(path) != desired:
+            # an actor an earlier build wrote follows its source (unpinned): the same V1 content, recorded
+            # under that rendering's digest, so it is not ``v1_changed`` (and a real V1 change still is)
+            earlier = self._rendered(path, "actor", legacy,
+                                     self._actor_envelope(actor, actor.definition.unpinned(), base.etag))
+            if earlier is not None and self.receipts.desired.get(path) == etag(earlier):
+                desired = etag(earlier)
+        target = self._decide(path, "actor", legacy, rendered, envelope, desired)
         if target.outcome == WRITE:
             self.new_actors.setdefault(campaign.campaign_id, set()).add(actor.ref.instance_id)
         self._put(target)
+
+    def _actor_envelope(self, actor, source: SourceRef, base_etag: str | None) -> RecordEnvelope:  # type: ignore[no-untyped-def]
+        """The actor's instance file with ``source`` (and ``derived_from``) as given: pinned to the imported
+        revision, so the campaign plays it until a reviewed rebase (042); unpinned only to recognise what an
+        earlier build wrote."""
+        instance = EntityInstance(actor.ref, source=source, extras=actor.extras)
+        return RecordEnvelope(actor.ref, instance_to_payload(instance), owner=self.owner, derived_from=str(source),
+                              base=str(actor.definition), base_etag=base_etag, extra={"schema": ENTITY_SCHEMA})
+
+    def _plays(self, actor) -> SourceRef:  # type: ignore[no-untyped-def]
+        """The revision a chat binds ``actor`` at: the imported one for an actor this run writes, otherwise the
+        one the campaign plays it at, by 042's ancestor rule (``ChatLibrary`` keeps the same rule): the one
+        revision its active pinned chat bindings agree on, so an explicit rebind in a kept chat counts; with
+        none, the stored instance's pinned ``source``, else its pinned ``base``. A scene first imported after
+        a reviewed rebase so never pins the actor back to the old revision. When the bindings disagree or a
+        chat cannot be read, the instance's own revision, never an unreviewed head. When the instance follows
+        its head (an earlier build), or the revision it plays no longer resolves, the revision the head
+        resolves to now: what such an actor plays today."""
+        if self.targets[_path_of(actor.ref)].outcome == WRITE:
+            return actor.definition
+        if actor.ref not in self._played:  # one read of the campaign's chats per actor, not per scene
+            self._played[actor.ref] = self._played_now(actor)
+        return self._played[actor.ref]
+
+    def _played_now(self, actor) -> SourceRef:  # type: ignore[no-untyped-def]
+        reads: list[dict[ChatRef, str]] = []
+        bound = campaign_plays(self.store, actor.ref, actor.definition, reads)
+        for read in reads:  # a rebind in one of them before apply would pin this scene beside it
+            chats = self.played_from.setdefault(actor.ref.campaign_id, {})
+            for chat, chat_etag in read.items():
+                chats.setdefault(chat, chat_etag)
+        plays: SourceRef | None = None
+        if bound is not None and len(bound) == 1:
+            plays = next(iter(bound))
+        else:
+            try:
+                envelope = self.store.read(actor.ref).envelope  # type: ignore[union-attr]
+            except (StoreError, ValueError, OSError):
+                return actor.definition
+            payload = envelope.payload if isinstance(envelope.payload, Mapping) else {}
+            source = payload.get("source")
+            if not (isinstance(source, str) and _follows(source)):
+                plays = instance_plays(envelope, actor.definition) or actor.definition
+        if plays is not None and not isinstance(self.store.check_definition(plays), str):
+            return plays
+        found = self.store.check_definition(actor.definition.unpinned())
+        return actor.definition if isinstance(found, str) else found.ref  # type: ignore[union-attr]
 
     def _plan_chats(self, campaign: Campaign) -> None:
         seen: set[InstanceRef] = set()
@@ -478,7 +533,10 @@ class ImportPlan:
                         dropped.append(str(ref))
                     continue
                 prior = CAMPAIGN_CONTINUITY if ref in seen else NOT_WITNESSED
-                binding = NewBinding(actor.definition.unpinned(), "character", actor.definition.revision, ref, prior)
+                # pinned to the revision the campaign plays (the imported one, or what a reviewed rebase took):
+                # a later world revision (a 043 change set, say) reaches the chat only through 042's rebase
+                plays = self._plays(actor)
+                binding = NewBinding(plays, "character", plays.revision, ref, prior)
                 if actor.role == "player":
                     if persona is not None:  # V2 chats have one persona: the chat starts with the first
                         self._unresolve(scene.legacy_id, "second_persona", str(ref))
@@ -618,15 +676,24 @@ class ImportPlan:
         return source is not None and source.entity_key == definition.entity_key
 
     def _cast_bound(self, ref: ChatRef, legacy_id: str, cast: list[InstanceRef]) -> None:
-        """An imported chat keeps the cast it started with: an actor imported since is reported, never bound."""
+        """An imported chat keeps the cast it started with: an actor imported since is reported, never bound.
+
+        A chat that binds a source unpinned (one an earlier build imported, or one made to follow with
+        ``follow=True``) is never rewritten here: each such binding is reported (``binding_follows_head``),
+        so a human can re-pin it (detach and re-attach in 107) or leave it following. 042's rebase
+        re-pins only chats that are already pinned."""
         try:
             stored = self.store.read(ref)
-            bound = {b.actor for b in chat_from_payload(ref, stored.record.schema, stored.record.payload).bindings}
+            record = chat_from_payload(ref, stored.record.schema, stored.record.payload)
         except (StoreError, ValueError, ChatModelError):
             return  # a V2 edit that no longer parses is the chat's own business
+        bound = {b.actor for b in record.bindings}
         for actor in cast:
             if actor not in bound:
                 self._unresolve(legacy_id, "cast_not_bound", str(actor))
+        for binding in record.active_bindings():
+            if not binding.ref.pinned:
+                self._unresolve(legacy_id, "binding_follows_head", f"{ref} {binding.ref}")
 
     # -- pictures ---------------------------------------------------------------------------
     def _need_ok(self, need: object) -> bool:
@@ -836,6 +903,14 @@ class ImportPlan:
                 clash = sorted(str(ref) for ref in actors & paired_instances(store.campaign_instances(cid)))
                 if clash:
                     raise StaleWrite([(ref, "id also used by another kind") for ref in clash])
+            for cid, chats in sorted(self.played_from.items()):  # what an existing actor's played revision rests on
+                found = store.campaign_chats(cid)
+                moved = [problem.path for problem in found.problems]
+                current = {ref: stored.etag for ref, stored in found.records.items()}
+                moved += ["/".join(address_parts(ref)) for ref in sorted(set(chats) | set(current), key=str)
+                          if chats.get(ref) != current.get(ref)]
+                if moved:
+                    raise StaleWrite([(path, "chat changed since the plan") for path in moved])
             for chat, count in sorted(self.transcripts.items(), key=lambda item: str(item[0])):
                 found = store.chat_transcript(chat)  # a page added since the plan would join this history
                 beyond = [problem.path for problem in found.problems]
@@ -884,3 +959,11 @@ def plan_import(store: LibraryStore, source, manifest: Mapping, *, handle: objec
 
 __all__ = ["ImportPlan", "ImportResult", "RECEIPT_SCHEMA", "Receipts", "legacy_map", "plan_import", "read_receipts",
            "receipt_source"]
+
+
+def _follows(text: str) -> bool:
+    """Whether a stored ``source`` names an entity without a revision (it follows the head)."""
+    try:
+        return not SourceRef.parse(text).pinned
+    except ValueError:
+        return False

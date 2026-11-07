@@ -51,14 +51,14 @@ There is **no app yet**. Chats are played headlessly by Sprint 035's runner, whi
 ### Launch
 
 `Launch(kind, ref | premise)` is immutable.
-- A launch ref is bound at sequence 0 under the role of the same name.
+- A launch ref is bound at sequence 0 under the role of the same name. `start_chat` records the launch with the ref its binding holds, so a default launch names the pinned revision it began with ([pin by default](REBASE.md#pin-by-default)).
 - A premise is bounded text (≤ 4000 chars) with no source.
 - A bound imported scenario (`grimoire.scenario/1`) is not followed by a `lorebook` binding: its chat's snapshot selects the lorebook that the scenario's selected revision names, so its lore follows the scenario through updates, re-pins and detaching ([CARDS](CARDS.md#chats)). `detach_source` on such an implied lorebook is the player's opt-out: it records a binding of it, already detached, and a chat with a `lorebook` tombstone and no active binding for that entity never selects it again until it is attached.
 
 ### `SourceBinding`
 
 A binding stores:
-- the reference exactly as chosen: a pinned revision, or unpinned to follow the head explicitly;
+- its reference: a pinned revision (the default: `ChatLibrary` pins an unpinned ref to the revision it resolves to when it is bound, see [pin by default](REBASE.md#pin-by-default)), or unpinned to follow the head, only when the caller asks with `follow=True`. A chat stored unpinned by an earlier build keeps reading and following, and is never rewritten;
 - `resolved_revision`: what it meant when introduced;
 - `introduced_seq` / `introduced_at`;
 - its actor, if any;
@@ -130,13 +130,14 @@ Every mutating method returns a `ChatChange`:
 
 ### Methods
 
-- `start_chat(launch, attach=…, persona=…, label=…, scope=None, reuse_actors=None)`:
+- **Pinning.** `start_chat`, `attach_source` and `set_persona` pin every unpinned ref to the revision `check_definition` resolves it to then (the revision whose bytes were checked and that a new actor is based on), the launch included. A reused actor (`actor=`, `reuse_actors`, or the same persona chosen again) given an unpinned ref is pinned to the revision it plays, by 042's ancestor rule: the one revision its active pinned bindings in the campaign's chats agree on (so an explicit rebind counts); otherwise (no chat binds it pinned, the chats disagree, or a chat of the campaign cannot be read) its instance's pinned `source`, else, with no `source`, its `base`; the same persona chosen again keeps its current pinned revision. When the instance's `source` follows its head, or the revision it plays no longer resolves (a broken reference, which detach and re-attach repair), the ref is pinned to the revision it resolves to now. The played revision is read from the same instance file whose etag the commit re-checks, and when it rests on the campaign's chats the commit also re-checks every chat of the campaign at the etag it read, as 042's rebase does: a chat added, removed, damaged or rebound since is `StaleWrite`. It is never a newer head nobody reviewed for that actor. A pinned ref is bound as given. `follow=True` (keyword) binds unpinned refs as given instead, following their heads; no product path passes it. A later revision reaches a pinned chat only through 042's reviewed rebase ([REBASE](REBASE.md#pin-by-default)).
+- `start_chat(launch, attach=…, persona=…, label=…, scope=None, reuse_actors=None, follow=False)`:
   - **New scope:** the campaign id is drawn until both `campaign_presence` and `campaign_authority_presence` are `absent` and no grant or approval in the security ledger names it (`grimoire.ledgers.security_campaign_ids`); a look-alike folder counts as taken. Both ledgers outlive a hand-deleted `campaigns/<id>` folder: a new campaign given that id would inherit the sovereignty ledger's (`authority/campaigns/<id>`) controls, and a grant scoped to `campaigns/<id>`, or to anything under it, would cover the new campaign. So the id stays taken while either names it. The security ledger is scanned as the sovereignty ledger is for [taken instance ids](#taken-instance-ids): raw, revoked grants included, failing closed with `TakenIdsUnlisted`. It is read once when planning a new scope, and only once a drawn id is otherwise free, and once more at commit; a campaign id it was just found not to name cannot have its individuals named either, so the new scope's actor numbering does not read it again. New actors in the new scope are then numbered outside `campaign_taken_ids` as in an existing one.
   - **Continuing a scope:** pass `scope=`. A campaign without `scope.json` (one from before 107, or from 026) gets one lazily. To reuse existing campaign actors instead of creating new ones, pass `reuse_actors={(role, entity_key): InstanceRef}`. A reused actor must be a character instance of the same entity.
 - `read_chat(chat)` / `read_scope(scope)` return the decoded record and its etag, the `expected` value for an edit.
-- `attach_source(chat, ref, role, expected=…, actor=None)`: `actor=` explicitly reuses an existing campaign actor of the same entity, for example when re-attaching a detached character. The default is a new actor.
+- `attach_source(chat, ref, role, expected=…, actor=None, follow=False)`: `actor=` explicitly reuses an existing campaign actor of the same entity, for example when re-attaching a detached character. The default is a new actor.
 - `detach_source(…)`: works on a broken reference; it is the repair path.
-- `set_persona(chat, ref | None, expected=…, actor=None)`: detaches the current persona and binds the new one. Choosing the same persona entity again keeps its actor while that actor's instance exists; if the file has vanished, a new actor is minted.
+- `set_persona(chat, ref | None, expected=…, actor=None, follow=False)`: detaches the current persona and binds the new one. Choosing the same persona entity again keeps its actor while that actor's instance exists; if the file has vanished, a new actor is minted.
 - `set_label(…)`.
 - Edits keep the stored envelope's unknown top-level fields and original `owner`, including an absent one. Only new records get the library's `owner`.
 - `name_scope`, `attach_world`, `detach_world`, `set_session_zero`.
@@ -178,7 +179,7 @@ A file or folder that could name ids but cannot be read or listed (malformed, a 
 Actor instances are written as `grimoire.record/1` with:
 - the 009 payload;
 - the preserved top-level `"schema": "grimoire.entity/0"`;
-- `derived_from` set to the binding ref;
+- its `source` and `derived_from` set to the binding ref (pinned by default; unpinned only with `follow=True`);
 - `base` / `base_etag` set to the resolved revision.
 
 ## Boundaries and deferrals
