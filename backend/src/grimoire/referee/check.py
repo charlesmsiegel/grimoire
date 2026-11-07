@@ -126,12 +126,16 @@ def _check_staging(claim: ContinuityClaim, facts: Facts):
 # -- possessions --------------------------------------------------------------------------------------------
 
 def _custody(facts: Facts, holder):
-    """The holders of ``holder`` up through 034 custody, or ``None`` when the chain loops or runs too deep."""
+    """The holders of ``holder`` up through 034 custody, or ``None`` when the chain is not known to its end.
+
+    It is not known when it loops, runs too deep, or stops at an item whose own possession record is
+    missing: that container may well be in the actor's hands.
+    """
     chain, seen = [holder], {holder}
     for _ in range(_CUSTODY_DEPTH + 1):  # up to _CUSTODY_DEPTH containers, then the holder's own lookup
         container = facts.possession(holder)
         if container is None:
-            return chain
+            return None if holder.kind == "item" else chain
         holder = container.state.holder
         if holder in seen:
             return None
@@ -141,15 +145,19 @@ def _custody(facts: Facts, holder):
 
 
 def _carried_stacks(facts: Facts, actor: InstanceRef, item: str) -> tuple[int, list[Evidence]]:
-    """Stacks of ``item`` held by something the actor carries (draughts in her satchel), per 034 custody."""
+    """Stacks of ``item`` the actor may carry (draughts in her satchel), per 034 custody, in a canonical order.
+
+    A stack whose holder's custody is not known to its end counts as possibly carried.
+    """
     total, found = 0, []
-    for holdings in facts.holdings:
+    for holdings in sorted(facts.holdings, key=lambda h: str(h.holder)):
         if holdings.holder == actor or not holdings.stacks.get(item, 0):
             continue
         chain = _custody(facts, holdings.holder)
-        if chain is not None and actor in chain[1:]:
+        if chain is None or actor in chain[1:]:
             total += holdings.stacks[item]
-            found.append(Evidence("holdings", f"{holdings.holder}#{item}", f"count={holdings.stacks[item]}:carried"))
+            how = "carried" if chain is not None else "custody_unknown"
+            found.append(Evidence("holdings", f"{holdings.holder}#{item}", f"count={holdings.stacks[item]}:{how}"))
     return total, found
 
 

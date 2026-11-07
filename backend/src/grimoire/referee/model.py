@@ -208,8 +208,16 @@ class LabelledClaim:
         _span(self.span)
         if type(self.quote) is not str or len(self.quote) != self.span[1] - self.span[0]:
             raise _fail("invalid_field")
+        if self.claim.text != self.quote:  # 003 reviews exactly the anchored words, never other text
+            raise _fail("invalid_field")
         if self.voiced_by is not None:
             _segment(self.voiced_by)
+
+
+def _record_key(record) -> tuple[str, ...]:
+    def text(value) -> str:
+        return repr(sorted(value)) if isinstance(value, frozenset) else repr(value)
+    return tuple(text(getattr(record, field)) for field in record.__dataclass_fields__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,10 +234,13 @@ class Authority:
     def __post_init__(self) -> None:
         if type(self.context) is not NarrationContext:
             raise _fail("invalid_field")
+        # Canonical order: 003 takes the first matching record (a delegation's id becomes a claim's basis),
+        # so the same records in another order must give the same review.
         for name, kind in (("controls", ControlAssignment), ("contributions", PlayerContribution),
                            ("delegations", Delegation), ("revocations", Revocation),
                            ("conditions", ImposedCondition)):
-            object.__setattr__(self, name, _tuple(getattr(self, name), kind))
+            records = _tuple(getattr(self, name), kind)
+            object.__setattr__(self, name, tuple(sorted(records, key=_record_key)))
 
 
 @dataclass(frozen=True)

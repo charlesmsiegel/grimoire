@@ -124,6 +124,12 @@ def test_a_stack_in_a_container_the_actor_carries_makes_a_shortfall_uncertain():
     assert Evidence("holdings", f"{SATCHEL}#{DRAUGHT}", "count=3:carried") in finding.evidence
     too_few = one("spends", item=DRAUGHT, count=4, f=facts(holdings=(holdings(), in_satchel)))
     assert too_few.classification == "contradiction"  # 0 of her own and 3 carried still fall short of 4
+    pouch = Holdings(ref("pouch", "item"), 1, 0, {DRAUGHT: 1}, ())  # no 034 record: possibly carried
+    stacks = (holdings(), in_satchel, pouch)
+    forward = one("spends", item=DRAUGHT, count=4, f=facts(holdings=stacks))
+    assert forward == one("spends", item=DRAUGHT, count=4, f=facts(holdings=stacks[::-1]))
+    assert forward.classification == "uncertain"
+    assert Evidence("holdings", f"{ref('pouch', 'item')}#{DRAUGHT}", "count=1:custody_unknown") in forward.evidence
 
 
 def test_a_unique_item_is_wielded_only_from_the_actors_own_custody():
@@ -136,6 +142,8 @@ def test_a_unique_item_is_wielded_only_from_the_actors_own_custody():
     assert one("wields", target=KEY) == "no_possession"
     looped = facts(possessions=(dagger(), satchel(DAGGER)))  # inconsistent records prove nothing
     assert one("wields", target=DAGGER, actor=MARA, f=looped) == "custody_unreadable"
+    no_satchel = facts(possessions=(dagger(),))  # the satchel's own record is missing: maybe she carries it
+    assert one("wields", target=DAGGER, f=no_satchel) == "custody_unreadable"
 
 
 # -- knowledge --------------------------------------------------------------------------------------------
@@ -327,11 +335,29 @@ def test_pc_speech_bundled_into_an_outcome_is_routed_and_npc_voices_are_not():
         ("a-1", "not_controller"), ("a-2", "unknown_claim"), ("a-1", "not_controller")]
 
 
+def test_authorship_reviews_exactly_the_anchored_words():
+    from grimoire.core.authority import NarrationClaim
+    from grimoire.referee import LabelledClaim
+    text = "Mara says she will pay double."
+    with pytest.raises(RefereeError, match="invalid_field"):
+        LabelledClaim(NarrationClaim(C, "a-1", "voluntary_speech", "No, I will not pay.", subject_id="mara"),
+                      (0, len(text)), text)
+
+
+def test_the_same_authority_in_another_order_gives_the_same_review():
+    from grimoire.core.authority import Delegation
+    grants = [Delegation(C, f"d{i}", "mara", ANA, frozenset({"commitment"}), "campaign", "custom") for i in (1, 2)]
+    text = "Mara agrees to pay double."
+    authored = (labelled(text, text, "a-1", "commitment", "mara"),)
+    reports = [referee(text, facts=facts(), authorship=authored, authority=authority(delegations=order))
+               for order in (grants, grants[::-1])]
+    assert reports[0] == reports[1]
+    assert [a.basis for a in reports[0].authorship.accepted] == ["delegation:d1"]
+
+
 def test_unanchored_authorship_claims_are_not_reviewed():
     text = "Oda grumbles."
-    item = labelled(text, "Oda grumbles.", "a-1", "voluntary_speech", "oda")
-    from dataclasses import replace
-    moved = replace(item, quote="Oda rumbles!.")
+    moved = labelled("Oda rumbles!.", "Oda rumbles!.", "a-1", "voluntary_speech", "oda")  # other words
     report = referee(text, facts=facts(), authorship=(moved,), authority=authority())
     assert report.unchecked == (("a-1", "bad_anchor"),) and report.authorship.accepted == ()
 
