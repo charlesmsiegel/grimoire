@@ -39,6 +39,7 @@ from grimoire.runtime import LabelRuntime
 from grimoire.scene import MAX_LABELS, SceneRefused
 from grimoire.staging import Area, Placement, Stage, Way
 from grimoire.testing.providers import ConnectFail, Status
+from grimoire.tracing import TraceLog
 
 REPLY = json.dumps({"factors": [{"fact": "f1", "bearing": "favours"}], "stakes": ["She falls to the deck"]})
 
@@ -530,9 +531,281 @@ def test_the_player_may_consent_to_a_setback_for_their_own_action(cards):
         acting(table, chat)
         table.runner.label(chat, table.player())
         table.runner.confirm(chat, table.player())
-        refused("not_controller", table.runner.decide, chat, table.owner, "failure", basis="consent")
-        outcome = table.runner.decide(chat, table.player(), "failure", basis="consent", consequences=("s1",))
+        shown = table.runner.framed(chat).fingerprint
+        refused("not_controller", table.runner.decide, chat, table.owner, "failure", basis="consent",
+                fingerprint=shown)
+        outcome = table.runner.decide(chat, table.player(), "failure", basis="consent", consequences=("s1",),
+                                      fingerprint=shown)
         assert (outcome.decision.basis, outcome.consented_by) == ("consent", ANA)
+
+
+# -- consent is the player's own live choice, for the frame they were shown (029) --------------------
+
+def framed_hindered(table: Table, chat, text: str = "*I climb the rigging*"):
+    """Post, label and confirm an uncertain action; what the table is shown of its frame."""
+    table.runner.post(chat, table.player(), text)
+    table.runner.label(chat, table.player())
+    assert table.runner.confirm(chat, table.player()) is None
+    return table.runner.framed(chat)
+
+
+def test_the_framed_action_is_read_from_029_with_the_fingerprint_a_consent_names(cards):
+    from grimoire.play.adjudicate import frame_fingerprint
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        table.runner.seat(chat, ANA)
+        assert table.runner.framed(chat) is None  # nothing posted, nothing framed
+        table.runner.post(chat, table.player(), "*I climb the rigging*")
+        table.runner.label(chat, table.player())
+        assert table.runner.framed(chat) is None  # labelled, not yet confirmed
+        assert table.runner.confirm(chat, table.player()) is None
+        shown = table.runner.framed(chat)
+        record = table.runner.open(chat).pending
+        entry = table.adjudication.state(chat.campaign_id).frame(record.turn_id)
+        assert shown.frame == entry.frame and shown.assessment.classification == "uncertain"
+        assert shown.fingerprint == frame_fingerprint(entry.frame, entry.contribution, entry.revision)
+        assert shown.fingerprint.startswith("sha256:") and len(shown.fingerprint) == 71
+    log = TraceLog()
+    with Table(folder, policy=LABEL_POLICY, adjudicate=True, tracer=log.record) as again:  # the same after a restart
+        assert again.runner.framed(chat).fingerprint == shown.fingerprint
+    assert [trace.operation for trace in log.traces] == ["framed"]  # one trace (048)
+
+
+def test_a_consent_that_names_no_frame_decides_nothing(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        assert table.runner.confirm(chat, table.player()) is None
+        # a setback with nothing to say which frame it was chosen for (before this slice, it decided the action)
+        refused("fingerprint_mismatch", table.runner.decide, chat, table.player(), "failure", basis="consent",
+                consequences=("s1",))
+        for fingerprint in (None, "sha256:" + "0" * 64):
+            refused("fingerprint_mismatch", table.runner.decide, chat, table.player(), "failure", basis="consent",
+                    consequences=("s1",), fingerprint=fingerprint)
+        refused("invalid_field", table.runner.decide, chat, table.player(), "failure", basis="consent",
+                consequences=("s1",), fingerprint=7)
+        turn_id = table.runner.open(chat).pending.turn_id
+        assert table.adjudication.outcome(chat.campaign_id, turn_id) is None  # nothing reached 029
+
+
+def test_a_consent_given_for_an_earlier_action_never_decides_a_later_one(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED, HINDERED) as table:
+        table.runner.seat(chat, ANA)
+        first = framed_hindered(table, chat)
+        table.runner.pass_turn(chat, table.player())  # left undecided; the table plays on
+        second = framed_hindered(table, chat, "*I leap for the yard*")
+        assert first.frame.attempt_id != second.frame.attempt_id and first.fingerprint != second.fingerprint
+        # the player's setback for the first action, replayed now, would land on the open (second) action
+        refused("fingerprint_mismatch", table.runner.decide, chat, table.player(), "failure", basis="consent",
+                consequences=("s1",), fingerprint=first.fingerprint)
+        state = table.adjudication.state(chat.campaign_id)
+        assert first.frame.attempt_id not in state.decisions and second.frame.attempt_id not in state.decisions
+        outcome = table.runner.decide(chat, table.player(), "failure", basis="consent", consequences=("s1",),
+                                      fingerprint=second.fingerprint)
+        assert (outcome.frame.attempt_id, outcome.consented_by) == (second.frame.attempt_id, ANA)
+
+
+def test_a_consent_given_for_an_earlier_revision_never_decides_the_frame_now_on_record(cards):
+    from dataclasses import replace as _replace
+    from grimoire.play.adjudicate import frame_of
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        table.runner.seat(chat, ANA)
+        shown = framed_hindered(table, chat)
+        record = table.runner.open(chat).pending
+        frame, contribution = frame_of(record, record.framed)
+        # Another holder of the adjudication key revises the frame (it drops the stake) after the player saw it.
+        table.adjudication.frame(_replace(frame, stakes=()), contribution=contribution, author=table.player())
+        refused("fingerprint_mismatch", table.runner.decide, chat, table.player(), "failure", basis="consent",
+                fingerprint=shown.fingerprint)
+        assert table.adjudication.outcome(chat.campaign_id, record.turn_id) is None
+        now = table.runner.framed(chat)
+        assert now.fingerprint != shown.fingerprint and now.frame.stakes == ()
+        refused("fingerprint_mismatch", table.runner.decide, chat, table.owner, "success", cites=("f1",),
+                fingerprint=shown.fingerprint)  # a director who names a stale frame is refused too
+        assert table.adjudication.outcome(chat.campaign_id, record.turn_id) is None
+
+
+def test_a_consent_for_revision_1_does_not_decide_revision_3_after_a_round_trip(cards):
+    from dataclasses import replace as _replace
+    from grimoire.play.adjudicate import frame_of
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        table.runner.seat(chat, ANA)
+        shown = framed_hindered(table, chat)  # revision 1: the player sees this and chooses a setback
+        record = table.runner.open(chat).pending
+        frame, contribution = frame_of(record, record.framed)
+        favour = _replace(frame.factors[0], factor_id="f9", text="a rope hangs within reach")
+        assert favour.bearing == "favours"
+        # 029 compares each revision with the first, so A, then A with a favour, then A again is allowed
+        table.adjudication.frame(_replace(frame, factors=frame.factors + (favour,)), contribution=contribution,
+                                 author=table.player())  # revision 2
+        table.adjudication.frame(frame, contribution=contribution, author=table.player())  # revision 3 reads as 1
+        entry = table.adjudication.state(chat.campaign_id).frame(record.turn_id)
+        assert entry.revision == 3 and entry.frame == shown.frame
+        now = table.runner.framed(chat)
+        assert now.fingerprint != shown.fingerprint  # the revision is part of what a consent names
+        refused("fingerprint_mismatch", table.runner.decide, chat, table.player(), "failure", basis="consent",
+                consequences=("s1",), fingerprint=shown.fingerprint)
+        assert table.adjudication.outcome(chat.campaign_id, record.turn_id) is None
+        outcome = table.runner.decide(chat, table.player(), "failure", basis="consent", consequences=("s1",),
+                                      fingerprint=now.fingerprint)  # chosen again, for revision 3 as shown
+        assert outcome.consented_by == ANA
+
+
+def test_no_revision_lands_between_the_fingerprint_check_and_the_decision(cards):
+    import threading
+    from dataclasses import replace as _replace
+    from grimoire.play.adjudicate import frame_of
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        table.runner.seat(chat, ANA)
+        shown = framed_hindered(table, chat)
+        assert table.adjudication.authority.lock is table.runner.store.lock
+        record = table.runner.open(chat).pending
+        frame, contribution = frame_of(record, record.framed)
+        better = _replace(frame, factors=frame.factors + (_replace(frame.factors[0], factor_id="f9"),))
+        state, outcome = table.adjudication.state, {}
+
+        def revise():
+            try:
+                table.adjudication.frame(better, contribution=contribution, author=table.player())
+                outcome["revised"] = True
+            except AdjudicationError as error:
+                outcome["revised"] = error.reason
+
+        def racing_state(*args, **kwargs):  # another key holder revises while the consent is checked
+            if "thread" not in outcome:
+                outcome["thread"] = worker = threading.Thread(target=revise)
+                worker.start()
+                worker.join(0.5)
+                outcome["blocked"] = worker.is_alive()
+            return state(*args, **kwargs)
+        table.adjudication.state = racing_state
+        decided = table.runner.decide(chat, table.player(), "failure", basis="consent", consequences=("s1",),
+                                      fingerprint=shown.fingerprint)
+        outcome["thread"].join(5)
+        assert outcome["blocked"] is True  # it waited for the lock the check held
+        assert decided.frame == frame and outcome["revised"] == "already_decided"
+
+
+def test_a_confirm_cut_short_leaves_nothing_to_consent_to(cards):
+    from grimoire.store.errors import StoreError
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        failing_once(table.adjudication, "frame", StoreError("down"))
+        refused("adjudication_unavailable", table.runner.confirm, chat, table.player())
+        assert table.runner.open(chat).pending.framed is not None  # the turn says framed; 029 holds nothing
+        assert table.runner.framed(chat) is None
+        refused("unknown_attempt", table.runner.decide, chat, table.player(), "failure", basis="consent",
+                consequences=("s1",), fingerprint="sha256:" + "0" * 64)
+        refused("unknown_attempt", table.runner.decide, chat, table.owner, "failure", cites=("f2",),
+                consequences=("s1",), fingerprint="sha256:" + "0" * 64)
+
+
+def test_only_the_acting_players_own_trusted_handle_consents_and_it_reaches_029_as_given(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        table.runner.seat(chat, ANA)
+        shown = framed_hindered(table, chat).fingerprint
+        scene = table.runner.open(chat)
+        (mara,) = [actor for actor in scene.cast if actor != scene.persona]
+        table.runner.sovereignty.record(chat.campaign_id, ControlChange(chat.campaign_id, mara.instance_id, BOB),
+                                        table.owner)  # Bob plays Mara: at the table, but not Anya's player
+        setback = dict(basis="consent", consequences=("s1",), fingerprint=shown)
+        refused("not_controller", table.runner.decide, chat, table.player(BOB), "failure", **setback)
+        refused("not_controller", table.runner.decide, chat, table.owner, "failure", **setback)  # not on her behalf
+        untrusted = table.authority.handle_for(ANA, trusted=False)
+        refused("not_authenticated", table.runner.decide, chat, untrusted, "failure", **setback)
+        decide, given = table.adjudication.decide, []
+
+        def recorded(*args, consent=None, **kwargs):
+            given.append(consent)
+            return decide(*args, consent=consent, **kwargs)
+        table.adjudication.decide = recorded
+        mine = table.player()
+        outcome = table.runner.decide(chat, mine, "failure", **setback)
+        assert given == [mine] and given[0] is mine and outcome.consented_by == ANA  # this call's own handle
+
+
+def test_a_consent_fails_closed_when_029_cannot_be_read(cards):
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        table.runner.seat(chat, ANA)
+        shown = framed_hindered(table, chat).fingerprint
+        failing_once(table.adjudication, "state", LedgerInvalid("poisoned"))
+        refused("adjudication_unreadable", table.runner.decide, chat, table.player(), "failure", basis="consent",
+                consequences=("s1",), fingerprint=shown)
+        turn_id = table.runner.open(chat).pending.turn_id
+        assert table.adjudication.outcome(chat.campaign_id, turn_id) is None
+        outcome = table.runner.decide(chat, table.player(), "failure", basis="consent", consequences=("s1",),
+                                      fingerprint=shown)
+        assert outcome.consented_by == ANA
+
+
+def test_the_turn_file_never_says_what_frame_a_consent_is_for(cards):
+    from dataclasses import replace as _replace
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        table.runner.seat(chat, ANA)
+        shown = framed_hindered(table, chat)
+        stored = table.runner.open(chat).turns.last
+        # the turn file is rewritten to say the frame had no stake: the fingerprint is still 029's
+        table.runner._write(stored.record.with_label(_replace(stored.record.framed, stakes=())), stored)
+        assert table.runner.open(chat).pending.framed.stakes == ()
+        assert table.runner.framed(chat).fingerprint == shown.fingerprint
+        outcome = table.runner.decide(chat, table.player(), "failure", basis="consent", consequences=("s1",),
+                                      fingerprint=shown.fingerprint)
+        assert [stake.stake_id for stake in outcome.frame.stakes] == ["s1"]
+
+
+def _passed_meanwhile(table: Table, chat, monkeypatch, passed: dict) -> None:
+    """The director passes the turn after a decision read it and before 029 decides, under the lock."""
+    import grimoire.play.adjudicate as adjudicate
+    original = adjudicate._refuse_void
+
+    def pass_first(runner, record):
+        if not passed:
+            passed["record"] = table.runner.pass_turn(chat, table.owner)
+        return original(runner, record)
+    monkeypatch.setattr(adjudicate, "_refuse_void", pass_first)
+
+
+@pytest.mark.parametrize("basis", ["consent", "adjudicated"])
+def test_a_decision_never_lands_on_a_turn_passed_after_it_was_read(cards, monkeypatch, basis):
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        table.runner.seat(chat, ANA)
+        shown = framed_hindered(table, chat)
+        turn_id = table.runner.open(chat).pending.turn_id
+        passed: dict = {}
+        _passed_meanwhile(table, chat, monkeypatch, passed)
+        if basis == "consent":
+            call = (table.player(), "failure")
+            options = dict(basis="consent", consequences=("s1",), fingerprint=shown.fingerprint)
+        else:
+            call = (table.owner, "partial")
+            options = dict(cites=("f1", "f2"), consequences=("s1",))
+        refused("no_open_turn", table.runner.decide, chat, *call, **options)
+        assert passed["record"].passed_by == OWNER  # the pass landed, "nothing kept"
+        assert table.adjudication.outcome(chat.campaign_id, turn_id) is None  # and 029 records no outcome for it
+
+
+def test_a_rule_decision_never_lands_on_a_turn_passed_after_it_was_read(cards, monkeypatch):
+    folder, chat = cards
+    with judged(folder, UNOPPOSED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        turn_id = table.runner.open(chat).pending.turn_id
+        passed: dict = {}
+        _passed_meanwhile(table, chat, monkeypatch, passed)
+        refused("no_open_turn", table.runner.confirm, chat, table.player())
+        assert passed["record"].passed_by == OWNER
+        assert table.adjudication.outcome(chat.campaign_id, turn_id) is None
 
 
 def test_an_action_that_may_carry_a_private_message_is_not_labelled(cards):

@@ -27,7 +27,7 @@ No prices ship (013). Without a table every cost is `unpriced`.
 
 ## The runner's hook
 
-`SceneRunner(..., tracer=None, clock=time.perf_counter)`. With a `tracer` (any callable taking a `Trace`, such as a `TraceLog(keep=64).record`), every public call (`open`, `seat`, `begin`, `post`, `generate`, `label`, `confirm`, `decide`, `outcome`, `propose_effect`, `approve_effect`, `endorse_effect`, `recover_effects`, `keep`, `strike`, `pass_turn`, `request`, `resume`, `choose`) is one trace whose root span is the call. Inside it:
+`SceneRunner(..., tracer=None, clock=time.perf_counter)`. With a `tracer` (any callable taking a `Trace`, such as a `TraceLog(keep=64).record`), every public call (`open`, `seat`, `begin`, `post`, `generate`, `label`, `confirm`, `decide`, `framed`, `outcome`, `propose_effect`, `approve_effect`, `endorse_effect`, `recover_effects`, `keep`, `strike`, `pass_turn`, `request`, `resume`, `choose`) is one trace whose root span is the call. Inside it:
 
 | Span | What it times | Counts |
 |---|---|---|

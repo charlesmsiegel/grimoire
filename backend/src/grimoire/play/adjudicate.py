@@ -8,14 +8,23 @@ adjudication key is the app's own trusted handle, never the labeller's and never
 An action the rules decide (``straightforward``: success; ``impossible``: failure) is decided at once, by
 rule. An ``uncertain`` one waits: the director (the library owner) adjudicates it, or its player consents
 to a setback. Until it is decided, no narration is generated or kept for its turn (``undecided_attempt``).
+
+A consent is the acting player's own live choice: their own call to ``decide``, with their own trusted handle,
+naming the fingerprint of the exact frame 029 holds for the attempt (``framed`` shows it). It is checked and
+decided under the lock 029 records under, so a consent given for an earlier attempt or an earlier revision of
+this one never decides the frame now on record; nothing else (a turn file, a reply, the owner) can give one.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
+import hashlib
+import json
+from dataclasses import dataclass, replace
 from functools import partial
 
-from grimoire.adjudication import PROSE_MAX, ActionFrame, AdjudicationError, Decision, Outcome
+from grimoire.adjudication import (
+    PROSE_MAX, ActionAssessment, ActionFrame, AdjudicationError, Decision, Outcome, frame_to_payload,
+)
 from grimoire.core.authority import PlayerContribution
 from grimoire.core.identity import ChatRef
 from grimoire.core.knowledge import Moment
@@ -67,6 +76,27 @@ def _action(runner, chat: ChatRef, by):
     if post.private:
         raise _refuse("private_action", "a withheld action is not framed: the table never saw it")
     return scene, principal, record, post
+
+
+@dataclass(frozen=True, slots=True)
+class FramedAction:
+    """The open turn's action as 029 holds it: the latest frame revision, its assessment now, and the
+    fingerprint a player's consent names (``SceneRunner.decide(..., fingerprint=)``)."""
+
+    frame: ActionFrame
+    assessment: ActionAssessment
+    fingerprint: str
+
+
+def frame_fingerprint(frame: ActionFrame, contribution: PlayerContribution | None, revision: int) -> str:
+    """``sha256:`` over 029's revision number and exact frame payload (the attempt, its moment, factors, stakes
+    and the contribution behind it): a consent given for one frame revision never matches another attempt or
+    another revision, even one whose frame reads the same (revision 3 put back to revision 1's frame)."""
+    if type(revision) is not int or revision < 1:
+        raise ValueError("a frame revision counts from 1")
+    payload = json.dumps(frame_to_payload(frame, contribution), sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(f"029 frame\n{revision}\n{payload}".encode("utf-8")).hexdigest()
 
 
 def frame_of(record: TurnRecord, label) -> tuple[ActionFrame, PlayerContribution]:
@@ -157,6 +187,7 @@ def confirm_action(runner, chat: ChatRef, by) -> Outcome | None:
         with runner.store.lock:  # 029's and 040's lock: an attempt withdrawn from its obstacle is never decided
             _in_play(runner, chat, record)
             _refuse_void(runner, record)
+            _still_open(runner, chat, record)  # nor one whose turn was passed meanwhile
             return _029(library.decide, chat.campaign_id, record.turn_id, Decision(result, "rule", frozenset(cites)))
     except SceneRefused as error:
         decided = _029(library.outcome, chat.campaign_id, record.turn_id)
@@ -233,12 +264,18 @@ def _mark_framed(runner, chat: ChatRef, record: TurnRecord, number: int, princip
 
 
 def decide_action(runner, chat: ChatRef, by, result: str, *, basis: str = "adjudicated", cites=(),
-                  consequences=()) -> Outcome:
-    """See ``SceneRunner.decide``."""
+                  consequences=(), fingerprint: str | None = None) -> Outcome:
+    """See ``SceneRunner.decide``.
+
+    A consent is ``by`` itself, the acting player's own live handle on this call, never one minted or read back,
+    and only for the frame whose fingerprint it names: checked against 029's latest revision and decided under
+    the lock 029 records under, so no revision or other attempt can come between the check and the decision."""
     library = _library(runner)
     scene, principal, record, post = _action(runner, chat, by)
     if record.framed is None:
         raise _refuse("not_framed", "only a confirmed (framed) action is decided")
+    if fingerprint is not None and type(fingerprint) is not str:
+        raise _refuse("invalid_field", "a fingerprint is the text framed() shows")
     if basis == "adjudicated":
         if principal not in runner.authority.owners:
             raise _refuse("not_director", "the director (the library owner) adjudicates an uncertain action")
@@ -250,9 +287,20 @@ def decide_action(runner, chat: ChatRef, by, result: str, *, basis: str = "adjud
     else:
         raise _refuse("invalid_field", "basis is adjudicated or consent; the rules decide the rest at confirm")
     decision = _029(Decision, result, basis, _ids(cites, "cites"), _ids(consequences, "consequences"))
-    with runner.store.lock:  # 029's and 040's lock: an attempt withdrawn from its obstacle is never decided
+    # 029's and 040's lock: an attempt withdrawn from its obstacle is never decided, and the frame checked is the
+    # frame decided. A withdrawn attempt is refused first, whatever the call names: there is nothing to consent to.
+    with runner.store.lock:
         _in_play(runner, chat, record)
         _refuse_void(runner, record)
+        if consent is not None and fingerprint is None:
+            raise _refuse("fingerprint_mismatch", "a consent names the fingerprint of the frame it was given for")
+        if fingerprint is not None:
+            entry = _029(library.state, chat.campaign_id).frame(record.turn_id)
+            if entry is None:
+                raise _refuse("unknown_attempt", "029 holds no frame for this action yet; confirm again")
+            if frame_fingerprint(entry.frame, entry.contribution, entry.revision) != fingerprint:
+                raise _refuse("fingerprint_mismatch", "decide the action as it was shown: its frame differs")
+        _still_open(runner, chat, record)
         return _029(library.decide, chat.campaign_id, record.turn_id, decision, consent=consent)
 
 
@@ -280,6 +328,35 @@ def _refuse_void(runner, record: TurnRecord) -> None:
     """``attempt_withdrawn`` when the obstacle ledger holds ``record``'s attempt void (040)."""
     from grimoire.play.obstacles import refuse_void_attempt  # it imports this module
     refuse_void_attempt(runner, record)
+
+
+def _still_open(runner, chat: ChatRef, record: TurnRecord) -> None:
+    """Under the store lock, just before 029 decides: the chat's last turn is still ``record``'s, open, framed
+    and not paused. The turn was read before the lock was taken; a pass (written under the same lock) or a pause
+    landing meanwhile refuses the decision (``no_open_turn``, ``paused``), so 029 never records an outcome for a
+    turn the table passed."""
+    turns = runner.scenes.turns(chat)
+    last = turns.last
+    if last is None or last.record.ref != record.ref or not last.record.open or last.record.framed is None:
+        raise _refuse("no_open_turn", "the turn closed while its action was decided")
+    if turns.paused:
+        raise _refuse("paused", "play was paused while the action was decided")
+
+
+def framed_of(runner, record: TurnRecord | None) -> FramedAction | None:
+    """029's latest frame of ``record``'s framed action, assessed now, with its fingerprint; ``None`` when the
+    turn frames nothing or 029 holds no frame for it yet, and ``attempt_withdrawn`` when its attempt at an
+    obstacle was withdrawn (040): there is nothing left to consent to. Read from 029, never from the turn file."""
+    if record is None or record.framed is None:
+        return None
+    library, campaign = _library(runner), record.chat.campaign_id
+    with runner.store.lock:
+        _refuse_void(runner, record)
+        entry = _029(library.state, campaign).frame(record.turn_id)
+        if entry is None:
+            return None
+        assessment = _029(library.assess, campaign, record.turn_id)
+    return FramedAction(entry.frame, assessment, frame_fingerprint(entry.frame, entry.contribution, entry.revision))
 
 
 def _ids(values, field: str) -> frozenset[str]:
@@ -358,5 +435,6 @@ def outcome_line(outcome: Outcome, names) -> HeardLine:
     return HeardLine(OUTCOME_SPEAKER, text)
 
 
-__all__ = ["OUTCOME_SPEAKER", "PROVENANCE", "check_decided", "confirm_action", "decide_action", "frame_of",
-           "heard_outcome", "outcome_line", "outcome_lines", "outcome_of"]
+__all__ = ["OUTCOME_SPEAKER", "PROVENANCE", "FramedAction", "check_decided", "confirm_action", "decide_action",
+           "frame_fingerprint", "frame_of", "framed_of", "heard_outcome", "outcome_line", "outcome_lines",
+           "outcome_of"]

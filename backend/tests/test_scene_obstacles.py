@@ -743,6 +743,40 @@ def test_an_attempt_passed_while_undecidable_stays_void_when_control_comes_back(
         assert [(a.attempt.attempt_id, a.status) for a in state.attempts] == [(turn, "void"), (later, "overcame")]
 
 
+def test_an_attempt_withdrawn_by_a_pass_cut_short_is_never_framed_for_consent_or_decided(cards):
+    from grimoire.ledgers.codec import ControlChange
+    from scene_fixtures import BOB
+    folder, chat = cards
+    with table(folder, reply("sneak")) as at:
+        turn, anya, mara = acting(at, chat, "*I slip past the lantern*")
+        at.runner.label(chat, at.player(), obstacle="hold")
+        assert at.runner.confirm(chat, at.player()) is None  # uncertain
+        shown = at.runner.framed(chat).fingerprint  # what the player saw, and could consent to
+        at.runner.sovereignty.record(chat.campaign_id, ControlChange(chat.campaign_id, anya.instance_id, BOB),
+                                     at.owner)
+        write = at.runner.scenes.write
+
+        def cut_short(*args, **kwargs):  # the withdrawal lands, the turn write after it does not
+            at.runner.scenes.write = write
+            raise OSError("disk gone")
+        at.runner.scenes.write = cut_short
+        with pytest.raises(OSError):
+            at.runner.pass_turn(chat, at.owner)
+        assert stored(at, chat, turn).open  # the turn is still open, its attempt void at its obstacle
+        at.runner.sovereignty.record(chat.campaign_id, ControlChange(chat.campaign_id, anya.instance_id, ANA),
+                                     at.owner)
+        assert at.runner.adjudication.undecidable(chat.campaign_id, turn) is None  # 029 alone would decide it
+        refused("attempt_withdrawn", at.runner.framed, chat)
+        refused("attempt_withdrawn", at.runner.decide, chat, at.player(), "failure", basis="consent",
+                consequences=("seen",), fingerprint=shown)
+        refused("attempt_withdrawn", at.runner.decide, chat, at.owner, "failure", cites=("lantern",),
+                consequences=("seen",))
+        assert at.runner.confirm(chat, at.player()) is None  # nothing is decided by rule either
+        assert at.adjudication.outcome(chat.campaign_id, turn) is None
+        at.runner.pass_turn(chat, at.owner)  # the retried pass finds it void and only passes the turn
+        assert stored(at, chat, turn).passed_by == at.owner.principal
+
+
 def test_a_withdrawal_is_refused_while_029_can_decide_the_attempt_and_written_once(cards):
     from grimoire.ledgers.codec import ControlChange
     from grimoire.obstacles import ObstacleError
