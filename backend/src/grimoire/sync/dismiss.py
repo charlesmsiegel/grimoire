@@ -164,7 +164,8 @@ def dismiss(store: LibraryStore, peer: str, path: str, kept: str, handle: object
         _authorize_slot(store, path, slot, kept, handle, approvals)
     if already:
         return Dismissal(peer, path, kept, slots, False)
-    entries = {**view.entries, path: KeptEntry(entry.base, entry.delivered, entry.dismissed | {kept}, entry.held)}
+    entries = {**view.entries, path: KeptEntry(entry.base, entry.delivered, entry.dismissed | {kept}, entry.held,
+                                        entry.open)}
     try:  # a full record makes room by leaving deliveries unrecorded, never a hold or an earlier dismissal
         entries, data = keeps.fit(view, devices, entries)
     except StoreError as error:  # larger than any reader accepts

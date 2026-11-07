@@ -167,6 +167,7 @@ Fields:
 - `classify` recognises exactly the new path, so recovery accepts journals that name it, and the replica treats it as an exact kind.
 - **`load()` skips `turns/`**, as it skips `accepted/`: one file is written per played turn. It is read through `campaign_turns(id)` (`CampaignRecords`, contained per file) and `read(TurnRef)`.
 - 107's allocators treat every actor id a turn names as taken (`grimoire.scenestore.turn_instance_ids`, fail closed on an unreadable file).
+- 019 synchronizes turn files as a mutable campaign-local kind since 028's turn merge ([SYNC](SYNC.md#played-turns-035-028s-turn-merge)); a turn's lines pin revisions, so an unlistable `turns/` folder means the store's reference check cannot prove a revision unreferenced.
 
 **Rollback:** a pre-035 build reports `turns/` as an `unrecognized` load problem (no crash) and never writes it. Its allocators do not protect the actor ids turns name. It **cannot recover a journal that names a turn**: recover with a 035+ build, or run `LibraryStore.discard_journal`.
 
