@@ -448,6 +448,11 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
         # (then 010's R7 window).
         if held_sources or settlement.preserved or settlement.incomplete or settlement.dropped:
             return False
+        # Those lists know only this run. In recovery an earlier run may have dropped a copy or kept
+        # one aside and died (its temp gone, its target edited): only the disk still says so, so every
+        # other entry must hold exactly its planned bytes, whichever run settled it.
+        if any(entry.kind != "remove" and access.etag_of(entry.target) != entry.new for entry in journal.entries):
+            return False
         # the bytes each landed hold keeps, by the folder it keeps them in (one per record)
         held = {(entry.target[:-1], entry.new) for entry in journal.entries
                 if entry.kind == "hold" and access.etag_of(entry.target) == entry.new}

@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from grimoire.core.identity import (
     ChatRef, ImageRef, InstanceRef, PlacementRef, RelationRef, ScopeRef, SourceRef, TurnRef,
 )
-from grimoire.store import LibraryStore, NameCollision, StaleWrite, StoreError, UnstorableIdentifier, etag
+from grimoire.store import LibraryStore, NameCollision, StaleWrite, StoreError, UnstorableIdentifier, WriteDenied, etag
 from grimoire.store.jsonfmt import JsonError, parse_strict
 from grimoire.store.layout import (
     CAMPAIGNS, SCOPE, SOURCES, address_parts, chat_parts, classify, conflict_parts, definition_parts, kept_address,
@@ -75,6 +75,30 @@ def stage(txn, deletes: Iterable[Delete]) -> None:  # type: ignore[no-untyped-de
     for delete in deletes:
         txn.keep_version(delete.path, delete.data, slot=delete.slot, regenerable=False)  # may be the only copy
         txn.delete_exact(delete.path, delete.expected)
+
+
+#: The refusals a partial data commit drops only their own path for (the store's ``_PATH_DENIALS``):
+#: any other refuses the whole commit, which the data commit itself then reports.
+PATH_DENIALS = frozenset({"not_granted", "approval_required", "reserved_resource"})
+
+
+def refused(store: LibraryStore, handle: object, deletes: Iterable[Delete]) -> frozenset[str]:
+    """Before holds(d): the keys of these deletions and their holds that ``handle`` refuses with no
+    approval (``Transaction.check(handle)``, read-only). Denied at the data commit instead, a deletion
+    would first record its hold, which that commit then drops: every later sync would write both
+    again and never go quiet. Anything else the check raises is left to the data commit to decide."""
+    try:
+        txn = store.transaction()
+        stage(txn, deletes)  # a planned slot taken meanwhile (``StaleWrite``) is the data commit's to report
+        txn.check(handle)
+    except WriteDenied as error:
+        denied = [decision for decision in error.decisions if not getattr(decision, "allowed", False)]
+        if any(str(getattr(decision, "reason", "")) not in PATH_DENIALS for decision in denied):
+            return frozenset()
+        return frozenset(str(getattr(decision, "resource", "")) for decision in denied)
+    except (StoreError, ValueError):
+        return frozenset()
+    return frozenset()
 
 
 def keys_of(delete: Delete) -> tuple[str, str]:

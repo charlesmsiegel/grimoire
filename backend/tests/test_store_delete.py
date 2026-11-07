@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import replace
 
 import pytest
@@ -18,7 +19,9 @@ from grimoire.testing import (
 )
 from grimoire.testing.fileops import snapshot
 
-from store_helpers import OWNER, WREN_A, drop_empty_dirs, owner_handle, seed
+from store_helpers import (
+    HARBOR, OWNER, WREN, WREN_A, WREN_B, WREN_R2, drop_empty_dirs, harbor_manifest, instance, owner_handle, seed, wren,
+)
 
 ALL = ("sources", "campaigns", "kept")
 WREN_A_PATH = "campaigns/c1/instances/character/wren-a.json"
@@ -366,3 +369,106 @@ def test_a_completed_removal_whose_record_is_recreated_cancels_the_rest(tmp_path
     report = run_plans(scenario, [[Crash(index, "after")] for index in after], tmp_path / "crashed")
     report.assert_ok()
     assert sum(run.recovered.get(f"lib/{WREN_A_PATH}") == human for run in report.runs[1:]) >= 2
+
+
+def _moved_scenario(tmp_path, invariants):
+    """A sync batch over a source whose head moved to r2, one entry of every journal kind: both
+    instances copied onto r2 (replicas), a regenerable kept version of the old wren-a (keep), a copy
+    of the manifest (publish), the peer's archive (state), and r1, which nothing pins once the copies
+    land, deleted (remove) with its hold. Returns the scenario, the library before it and the bytes
+    each copy plans."""
+    locker = ProcessLocker()
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    with LibraryStore.create(tmp_path / "lib", locker=locker) as library:
+        seed(library)
+        txn = library.transaction()
+        txn.put(wren("r2", bio="a captain"), None)
+        txn.put(harbor_manifest(heads={"character/wren": "r2"}), library.read_source(HARBOR).etag)
+        txn.commit(owner_handle())
+    template = snapshot(tmp_path / "lib")
+    shutil.copytree(tmp_path / "lib", tmp_path / "planned")  # the other device, where the copies come from
+    with LibraryStore.open(tmp_path / "planned", locker=locker) as other:
+        txn = other.transaction()
+        txn.put(instance(WREN_A, WREN_R2, base=WREN_R2), other.read(WREN_A).etag)
+        txn.put(instance(WREN_B, WREN, base=WREN_R2), other.read(WREN_B).etag)
+        txn.put(harbor_manifest(heads={"character/wren": "r2"}, **{"x-notes": "moved on"}),
+                other.read_source(HARBOR).etag)
+        txn.commit(owner_handle())
+    planned = {path: (tmp_path / "planned" / path).read_bytes() for path in (WREN_A_PATH, WREN_B_PATH, MANIFEST_PATH)}
+
+    def action(ops, root):
+        with LibraryStore.open(root / "lib", ops=ops, locker=locker) as library:
+            txn = library.transaction()
+            for path in (WREN_A_PATH, WREN_B_PATH):
+                txn.put_exact(path, planned[path], etag(template[path]), regenerable=True)
+            txn.put_exact(MANIFEST_PATH, planned[MANIFEST_PATH], etag(template[MANIFEST_PATH]))
+            txn.keep_version(WREN_A_PATH, template[WREN_A_PATH], regenerable=True)
+            txn.keep_version(R1_PATH, template[R1_PATH], regenerable=False)
+            txn.put_sync_state("peers/phone/archive.json", b'{"format": "x"}\n', None)
+            txn.delete_exact(R1_PATH, etag(template[R1_PATH]))
+            try:
+                txn.commit(owner_handle(*ALL))
+            except WriteConflict:  # an edit racing the batch: the commit reports what it kept
+                pass
+
+    scenario = CrashScenario(
+        "delete-moved", lambda ops, root: _replay(ops, root, template), action,
+        lambda ops, root: LibraryStore.open(root / "lib", ops=ops, locker=locker).close(),
+        invariants, normalize=drop_empty_dirs)
+    return scenario, template, planned
+
+
+def test_a_copy_edited_while_its_batch_settles_cancels_the_batchs_removals(tmp_path):
+    """Recovery revalidates every other effect of the batch on disk before any removal: wren-a is
+    edited (still pinning r1, other hp) while the app is down, or while the batch settles so its
+    copy is dropped, and the app dies at every step after. The edit is kept, and r1, which it pins,
+    is never deleted: the in-memory record that the copy did not land dies with the process."""
+    scenario, template, planned = _moved_scenario(tmp_path / "setup", ())
+    human = template[WREN_A_PATH].replace(b'"hp": 3', b'"hp": 11')
+    assert human != template[WREN_A_PATH] and b"wren@r1" in human
+
+    def edit(ops, root):
+        ops.write_bytes(root / "lib" / WREN_A_PATH, human)
+
+    def pinned_kept(outcome):
+        if outcome.recovered.get(f"lib/{R1_PATH}") is not None:
+            return None
+        if outcome.after_action.get(f"lib/{R1_PATH}") is None:
+            return None  # the batch was done before the crash: the edit is then made after it
+        if any(outcome.recovered.get(f"lib/{path}") != planned[path] for path in (WREN_A_PATH, WREN_B_PATH)):
+            return "r1 was deleted though a record that did not move off it still pins it"
+        return None
+
+    def kept_somewhere(outcome):
+        if outcome.recovered.get(f"lib/{R1_PATH}") == template[R1_PATH]:
+            return None
+        held = [value for key, value in outcome.recovered.items() if key.startswith("lib/.conflicts/")]
+        return None if template[R1_PATH] in held else "r1 is gone and its bytes are kept nowhere"
+
+    kinds = set()
+
+    def journaled(outcome):  # which journal kinds the crashes left for recovery to settle
+        journal = outcome.after_action.get("lib/.txn/journal.json")
+        if journal is not None:
+            kinds.update(entry.kind for entry in parse(journal).entries)
+
+    common = (idempotent_recovery(), Invariant("pinned_kept", pinned_kept), Invariant("kept", kept_somewhere),
+              Invariant("journaled", journaled))
+    meddled = replace(scenario, meddle=edit, invariants=(preserves_meddle(), *common))
+    explore_crashes(meddled, tmp_path / "down", torn=False, recovery_crashes=True).assert_ok()
+    assert kinds == {"publish", "replica", "keep", "hold", "state", "remove"}  # every kind, crashed between each step
+    racing = replace(scenario, invariants=(preserves_interleave(), *common))
+    trace = run_plans(scenario, [], tmp_path / "base").runs[0].action_trace
+    first = next(op.index for op in trace if op.kind == "replace" and op.target == f"lib/{WREN_A_PATH}")
+    later = next(op.index for op in trace if op.kind == "replace" and op.target == f"lib/{WREN_B_PATH}")
+    assert first < later  # past the all-or-nothing check, before wren-b's copy: that copy is dropped
+    human_b = template[WREN_B_PATH].replace(b'"hp": 3', b'"hp": 12')
+    assert human_b != template[WREN_B_PATH] and b"wren@r1" in human_b
+
+    def edit_b(ops, root):
+        ops.write_bytes(root / "lib" / WREN_B_PATH, human_b)
+    report = explore_crashes(racing, tmp_path / "racing", torn=False, recovery_crashes=True,
+                             interleaves=[Interleave(first + 1, edit_b)])
+    report.assert_ok()
+    assert any(run.recovered.get(f"lib/{WREN_B_PATH}") == human_b and run.recovered.get(f"lib/{R1_PATH}")
+               == template[R1_PATH] for run in report.runs[1:])

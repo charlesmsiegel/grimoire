@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef
+from grimoire.security import Approval, Authorizer, Grant, Permission, ResourcePath, payload_digest
 from grimoire.store import InvalidEnvelope, LibraryStore, ProcessLocker, RecordEnvelope, SourceManifest, etag
 from grimoire.store.layout import address_parts, conflict_parts, turn_parts
 from grimoire.sync import ResolveRefused, SyncInterrupted, apply_sync, plan_sync, resolve, sync, sync_until_quiet
@@ -26,7 +27,7 @@ from grimoire.testing import CrashScenario, Invariant, explore_crashes, idempote
 from grimoire.testing.fileops import snapshot
 
 from evidence_fixtures import MARA
-from store_helpers import HARBOR, WREN_R2, drop_empty_dirs, harbor_manifest, instance, owner_handle
+from store_helpers import HARBOR, OWNER, WREN_R2, drop_empty_dirs, harbor_manifest, instance, owner_handle
 from sync_helpers import (
     DESKTOP, PATHS, PHONE, WREN_A, WREN_B, canonical, chat_record, converged, edit_instance, handle, handles, kept,
     make_pair, new_revision, put,
@@ -164,6 +165,51 @@ def test_a_deletion_the_grant_refuses_is_denied_and_nothing_is_removed(pair):
     assert report.conflicts == () and not (phone.root / path).exists()
 
 
+def test_a_deletion_the_grant_refuses_settles_as_a_stable_conflict(pair):
+    """Denied each time, the deletion must not write a tentative hold for the commit to drop again:
+    the syncs go quiet, with the one ``denied`` conflict, the record kept and no hold left behind."""
+    desktop, phone = pair
+    path = "sources/catalog/extra/_source/manifest.json"
+    put(desktop, SourceManifest("catalog:extra", OWNER, "Extra cards"), None)
+    assert sync(desktop, phone, handles()).conflicts == ()
+    original = (phone.root / path).read_bytes()
+    (desktop.root / path).unlink()
+    refused = {DESKTOP: handle(), PHONE: owner_handle("campaigns", "kept")}  # the phone's grant on sources revoked
+    report = sync_until_quiet(desktop, phone, refused)
+    assert {conflict.path: conflict.code for conflict in report.conflicts} == {path: "denied"}
+    assert (phone.root / path).read_bytes() == original and report.deleted == ()
+    before = _tree(phone.root), _tree(desktop.root)
+    again = sync(desktop, phone, refused)
+    assert not again.wrote and again.conflict(path).code == "denied"
+    assert (_tree(phone.root), _tree(desktop.root)) == before
+    assert _held(phone, DESKTOP) == {}  # the pair's kept-version record holds nothing for it
+    report = sync(desktop, phone, handles())  # granted again: the deletion is made, its hold first
+    assert report.conflicts == () and not (phone.root / path).exists()
+    assert original in [data for where, data in _tree(phone.root).items() if where.startswith(".conflicts/")]
+
+def test_a_deletion_only_an_approval_allows_is_left_to_the_data_commit_and_made(pair):
+    """The check before holds(d) authorizes with no approval, so it never denies a deletion the data
+    commit's approval allows: that one is held, then made."""
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    original = (phone.root / path).read_bytes()
+    (desktop.root / path).unlink()
+    authority = Authorizer([OWNER])
+    for number, scope in enumerate(("sources", "campaigns", "kept")):  # untrusted: each write needs an approval
+        authority.add_grant(Grant(f"g{number}", "app:sync", frozenset({Permission.APPLY}), ResourcePath.parse(scope),
+                                  OWNER))
+    plan = plan_sync(desktop, phone)
+    keys, preview = deletion.keys_of(plan.deletes[PHONE][0]), plan.preview()[PHONE]
+    approvals = {}
+    for number, key in enumerate(keys):  # the deletion and its hold
+        authority.register_approval(Approval(f"a{number}", "app:sync", Permission.APPLY, ResourcePath.parse(key),
+                                             payload_digest(preview[key]), OWNER))
+        approvals[key] = f"a{number}"
+    report = apply_sync(plan, {DESKTOP: handle(), PHONE: authority.handle_for("app:sync")}, {PHONE: approvals})
+    assert report.conflicts == () and sorted(report.consumed_approvals) == ["a0", "a1"]
+    assert not (phone.root / path).exists()
+    assert original in [data for where, data in _tree(phone.root).items() if where.startswith(".conflicts/")]
+
 def test_a_denied_deletion_drops_only_itself_never_the_rest_of_its_source(pair):
     """A denied revision deletion is not a denied write of its source: the other changes to that
     source (a new entity and its manifest) still land (028; denial is source-coarse only for writes)."""
@@ -242,8 +288,8 @@ def test_a_record_written_after_the_plan_that_needs_a_deletion_stops_its_commit(
     (desktop.root / path).unlink()
     holds = sync_session._commit_holds
 
-    def then_a_new_chat(plan, device, applied):  # the person keeps playing on the phone meanwhile
-        holds(plan, device, applied)
+    def then_a_new_chat(*args):  # type: ignore[no-untyped-def]  # the person keeps playing on the phone meanwhile
+        holds(*args)
         put(phone, RecordEnvelope(InstanceRef("c2", "chat", "dockside"), {"participants": [str(WREN_B)], "history": []}))
     monkeypatch.setattr(sync_session, "_commit_holds", then_a_new_chat)
     with pytest.raises(SyncInterrupted):

@@ -1005,7 +1005,7 @@ def apply_sync(plan: SyncPlan, handles: Mapping[str, object],
     approvals = approvals or {}
     applied = _Applied(observer)
     for device in plan.devices:
-        _commit_holds(plan, device, applied)
+        _commit_holds(plan, device, handles[device], approvals.get(device, {}), applied)
         _commit_data(plan, device, handles[device], approvals.get(device, {}), applied)
     _verify(plan, applied)
     resolved = _resolved(plan, applied)
@@ -1139,10 +1139,22 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
                                  tuple(applied.deleted[device])))
 
 
-def _commit_holds(plan: SyncPlan, device: str, applied: _Applied) -> None:
-    """holds(d) (028): before the data commit that deletes on ``device`` (``deletion.commit_holds``)."""
+def _commit_holds(plan: SyncPlan, device: str, handle: object, approvals: Mapping[str, str],
+                  applied: _Applied) -> None:
+    """holds(d) (028): before the data commit that deletes on ``device`` (``deletion.commit_holds``).
+
+    A deletion ``handle`` refuses is denied here, before its hold is recorded (``deletion.refused``),
+    so a sync that cannot delete it writes nothing for it; one an approval may allow is left to the
+    data commit, which decides with the approval."""
     if not plan.deletes[device]:
         return
+    denied = deletion.refused(plan.stores[device], handle, plan.deletes[device]) - set(approvals)
+    if denied:
+        gone: set[str] = set()
+        _deny_deletes(plan, device, plan.deletes[device], frozenset(denied), list(plan.copies[device]), gone)
+        plan.deletes[device] = [delete for delete in plan.deletes[device] if delete.path not in gone]
+        if not plan.deletes[device]:
+            return
     peer = plan.other(device)
     try:
         committed, own = deletion.commit_holds(plan.stores[device], plan.kept_records[device], device, peer,

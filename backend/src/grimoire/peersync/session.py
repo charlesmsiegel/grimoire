@@ -172,7 +172,10 @@ def _one_pass(store: LibraryStore, channel: Channel, local: str, local_handle: o
 
             def confirm(paths: list[str]) -> None:  # this device deletes what the peer deleted (028)
                 _check_paired(store, peer, key)
-                ask_absent(channel, paths)
+                # asked with this library locked (019's data commit), so this library's own server
+                # waits for it only ``BUSY_WAIT`` meanwhile, as for a replayed deleting step
+                with outgoing(store):
+                    ask_absent(channel, paths)
             mirror.store.peer_check = confirm  # type: ignore[attr-defined]
 
             def replay(step) -> None:  # type: ignore[no-untyped-def]
