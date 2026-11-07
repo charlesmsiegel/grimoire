@@ -23,6 +23,7 @@ from grimoire.core.knowledge import KnowledgeError
 from grimoire.core.perspective import player_knowledge
 from grimoire.labelling import LabelRefused, facts, label_messages, parse_labels
 from grimoire.play.scene import WRITE_RETRIES, _refuse
+from grimoire.play.tracing import record_calls, span
 from grimoire.providers.meter import TurnMeter
 from grimoire.scene import MAX_LABELS, CallRecord, Label, SceneRefused, TurnRecord, heard_for, render
 from grimoire.scene.codec import turn_to_payload
@@ -103,15 +104,17 @@ def label_action(runner, chat: ChatRef, by) -> Label:
         if previous.state in ("running", "proposed"):
             current = current.with_label(replace(previous, state="superseded"))
     # a call starts only on a turn still on the chat's line with no pause or sync conflict standing (028, 016)
-    stored = runner.scenes.write(current.with_label(running), stored, unpaused=True)
+    stored = runner._write(current.with_label(running), stored, unpaused=True)
 
     meter = TurnMeter(TurnUsageLedger(plan))
     try:
-        reply = runner.labeller.label(meter, call, messages)
+        with span("provider", calls=1):
+            reply = runner.labeller.label(meter, call, messages)
     except Exception as error:  # an approvals callback or adapter bug: the usage so far is still recorded
         status, reason, decoded = "failed", type(error).__name__, None
     else:
         status, reason, decoded = reply.status, reply.reason, reply.decoded
+    record_calls(meter)  # 048: one sample per booked attempt, when the call is traced
     finished = replace(running, state="refused", reason=reason or status)
     if status == "decoded":
         try:
@@ -157,7 +160,7 @@ def _land(runner, chat: ChatRef, stored: StoredTurn, label: Label) -> Label:
             label = replace(label, state="refused", factors=(), stakes=(), reason="not_authorized")
             record = stored.record.with_label(label)
         try:  # like a finished take: a labelling in flight always lands, so its call's usage is never lost (028)
-            runner.scenes.write(record, stored, landing=True)
+            runner._write(record, stored, landing=True)
             return label
         except SceneRefused as error:
             if error.reason != "turn_changed":

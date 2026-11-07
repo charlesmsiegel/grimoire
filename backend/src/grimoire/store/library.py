@@ -728,16 +728,22 @@ class LibraryStore:
         """One campaign's scene wrap-up records (021) and their problems, as ``load()`` reports them."""
         return self._campaign_family(campaign_id, WRAPUPS)
 
-    def campaign_turns(self, campaign_id: str) -> CampaignRecords:
-        """One campaign's played chat turns (035) and their problems, as ``load()`` would report them."""
-        return self._campaign_family(campaign_id, TURNS)
+    def campaign_turns(self, campaign_id: str, *, skip: Callable[[str], bool] | None = None,
+                       known: Mapping[object, StoredScopeRecord] | None = None) -> CampaignRecords:
+        """One campaign's played chat turns (035) and their problems, as ``load()`` would report them.
 
-    def _campaign_family(self, campaign_id: str, family: str) -> CampaignRecords:
+        ``skip`` leaves out files by name (never read, never reported) and ``known`` reuses records an earlier
+        read returned for files whose bytes are unchanged: see ``loader.campaign_family`` (048).
+        """
+        return self._campaign_family(campaign_id, TURNS, skip=skip, known=known)
+
+    def _campaign_family(self, campaign_id: str, family: str, *, skip: Callable[[str], bool] | None = None,
+                         known: Mapping[object, StoredScopeRecord] | None = None) -> CampaignRecords:
         validate_segment(campaign_id, "campaign_id")
         with self.lock:
             self._require_consistent()
             with self._access.cached_listings():
-                return loader.campaign_family(self._access, campaign_id, family)
+                return loader.campaign_family(self._access, campaign_id, family, skip=skip, known=known)
 
     def chat_transcript(self, chat: ChatRef) -> CampaignRecords:
         """One chat's transcript pages (036) and their problems, contained per file as ``load()`` contains

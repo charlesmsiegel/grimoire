@@ -151,7 +151,7 @@ class Table:
 
     def __init__(self, folder: Path, steps=(), *, voices: VoiceCatalog | None = None, runtime: bool = True,
                  policy: InferencePolicy = POLICY, secrets=(), fence=None, labels=None,
-                 propose: bool = True) -> None:
+                 propose: bool = True, **traced) -> None:
         self.store = LibraryStore.open(folder)
         self.authority = DurableAuthority.open(self.store, [OWNER], clock=fixed_clock())
         self.owner = self.authority.handle_for(OWNER, trusted=True)
@@ -167,7 +167,8 @@ class Table:
             self.label_handle = self.authority.handle_for(LABELLER, trusted=False)
         self.runner = SceneRunner(self.store, self.authority, self.owner, owner=OWNER,
                                   runtime=self.harness.runtime if runtime else None, policy=policy, secrets=secrets,
-                                  voices=voices, fence=fence, labeller=labeller, label_handle=self.label_handle)
+                                  voices=voices, fence=fence, labeller=labeller, label_handle=self.label_handle,
+                                  **traced)  # 048: ``tracer`` and ``clock``
 
     def player(self, principal: str = ANA):
         return self.authority.handle_for(principal, trusted=True)

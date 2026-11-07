@@ -18,7 +18,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import stat
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
@@ -173,8 +173,8 @@ def _text(parts: Parts) -> str:
 
 # -- reading one file ----------------------------------------------------------
 
-def _document(access: Access, parts: Parts) -> tuple[Mapping[str, object], str]:
-    """Parsed JSON and its etag; ``MalformedRecord`` for anything unreadable."""
+def _bytes(access: Access, parts: Parts) -> bytes:
+    """The file's exact bytes; ``MalformedRecord`` for anything unreadable, ``RecordNotFound`` if absent."""
     try:
         if access.too_large(parts):
             raise MalformedRecord(f"{_text(parts)} is too large to read", None)
@@ -185,10 +185,19 @@ def _document(access: Access, parts: Parts) -> tuple[Mapping[str, object], str]:
         raise MalformedRecord(str(error), None) from error
     if data is None:
         raise RecordNotFound(_text(parts))
+    return data
+
+
+def _parsed(parts: Parts, data: bytes) -> tuple[Mapping[str, object], str]:
     try:
         return parse_strict(data), etag(data)
     except JsonError as error:
         raise MalformedRecord(f"{_text(parts)}: {error}", etag(data)) from None
+
+
+def _document(access: Access, parts: Parts) -> tuple[Mapping[str, object], str]:
+    """Parsed JSON and its etag; ``MalformedRecord`` for anything unreadable."""
+    return _parsed(parts, _bytes(access, parts))
 
 
 def read_record(access: Access, parts: Parts) -> StoredRecord:
@@ -206,9 +215,19 @@ def read_record(access: Access, parts: Parts) -> StoredRecord:
     return StoredRecord(envelope, tag, previous)
 
 
-def read_scope_record(access: Access, parts: Parts) -> StoredScopeRecord:
-    """The scope, chat, relation or holdings record at ``parts``; its address must be the one its path implies."""
-    document, tag = _document(access, parts)
+def read_scope_record(access: Access, parts: Parts, *, known: StoredScopeRecord | None = None) -> StoredScopeRecord:
+    """The scope, chat, relation or holdings record at ``parts``; its address must be the one its path implies.
+
+    ``known`` is what an earlier read of this same path returned: the file is still read and hashed, and
+    when its bytes are unchanged (the same content etag) that record is returned without decoding again
+    (048). Decoding is a function of the path and the bytes alone, so the result is the same either way.
+    """
+    data = _bytes(access, parts)
+    if known is not None and known.etag == etag(data):
+        found = classify(parts)
+        if found is not None and found[1] == known.record.address:  # never another path's record
+            return known
+    document, tag = _parsed(parts, data)
     try:
         record, previous = parse_scope_record(document)
     except EnvelopeError as error:
@@ -679,9 +698,10 @@ def walk_assets(access: Access, folder: Parts, levels: int, kind: str, problems:
     return found
 
 
-def _read_scoped(access: Access, parts: Parts, into: dict, problems: list[LoadProblem]) -> None:
+def _read_scoped(access: Access, parts: Parts, into: dict, problems: list[LoadProblem],
+                 known: StoredScopeRecord | None = None) -> None:
     try:
-        stored = read_scope_record(access, parts)
+        stored = read_scope_record(access, parts, known=known)
     except (StoreError, ValueError, OSError) as error:
         problems.append(LoadProblem(_text(parts), _code(error), str(error)))
         return
@@ -707,22 +727,29 @@ _HISTORY = frozenset({ACCEPTED, WRAPUPS, TURNS, TRANSCRIPTS})  # 036's transcrip
 
 
 def _discover_family(access: Access, base: Parts, family: str, found: _Campaigns,
-                     problems: list[LoadProblem]) -> None:
+                     problems: list[LoadProblem], *, skip: Callable[[str], bool] | None = None,
+                     known: Mapping[object, StoredScopeRecord] | None = None) -> None:
     kind, attribute = _FAMILIES[family]
     folder = base + (family,)
     for name in _listing(access, folder, problems, None):
+        if skip is not None and skip(name):
+            continue
         parts = folder + (name,)
         hit = classify(parts)
         if hit is None or hit[0] != kind:
             _unrecognized(access, parts, problems, None)
             continue
-        _read_scoped(access, parts, getattr(found, attribute), problems)
+        _read_scoped(access, parts, getattr(found, attribute), problems, None if known is None else known.get(hit[1]))
 
 
-def campaign_family(access: Access, campaign: str, family: str) -> CampaignRecords:
+def campaign_family(access: Access, campaign: str, family: str, *, skip: Callable[[str], bool] | None = None,
+                    known: Mapping[object, StoredScopeRecord] | None = None) -> CampaignRecords:
     """One campaign's records of one family, contained per file exactly as ``load()`` contains them.
 
-    Reads only ``campaigns/<campaign>/<family>``; links are reported, never followed.
+    Reads only ``campaigns/<campaign>/<family>``; links are reported, never followed. ``skip`` names files of
+    the folder the caller does not want, never read or reported (048: one chat's turns are read without
+    another chat's). ``known`` maps a record's address to what an earlier read of its file returned, reused
+    when the file's bytes are unchanged (``read_scope_record``).
     """
     _, attribute = _FAMILIES[family]
     base = (CAMPAIGNS, campaign)
@@ -738,7 +765,7 @@ def campaign_family(access: Access, campaign: str, family: str) -> CampaignRecor
             problems.append(LoadProblem(_text(folder), "link", "links are never followed"))
         elif access.presence(folder) == "present":
             if _is_dir(access, folder):
-                _discover_family(access, base, family, found, problems)
+                _discover_family(access, base, family, found, problems, skip=skip, known=known)
             else:
                 _unrecognized(access, folder, problems, None)
         for name in access.list_dir(base):  # a look-alike ("Relations") is reported, as load() reports it

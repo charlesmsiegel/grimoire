@@ -5,10 +5,18 @@ compare-and-swap against the etag it was read at. A turn file that cannot be rea
 chat's turns incomplete: every write to that chat is refused (``turns_unreadable``) rather than renumber
 or overwrite history it cannot see. Two devices' turns of one number make it forked (028's turn merge,
 ``grimoire.scene.branches``): ``choose`` sets the other branches aside, and play goes on.
+
+Reading a chat's history is the runner's main cost (048): every call reads it once, and every write reads it
+again under the lock. So only this chat's files are read (a file named as another chat's turn is skipped),
+and a file whose bytes are unchanged since this library last read it (the same content etag) is not decoded
+again. Every file is still read and hashed on every call, so a change made by another program, a sync or a
+hand copy is seen at once; what is reused is a function of the path and the bytes alone.
 """
 
 from __future__ import annotations
 
+import copy
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
@@ -19,7 +27,9 @@ from grimoire.scene import (
     turn_to_payload,
 )
 from grimoire.scene.branches import is_mine, tag_for
-from grimoire.store import LibraryStore, ScopeRecord, StaleWrite, StoreError, TakenIdsUnlisted
+from grimoire.store import (
+    CampaignRecords, LibraryStore, ScopeRecord, StaleWrite, StoredScopeRecord, StoreError, TakenIdsUnlisted,
+)
 from grimoire.store.layout import CAMPAIGNS, TURNS, address_parts
 from grimoire.store.replica import parse_exact
 from grimoire.peersync.pairing import pairing_ended
@@ -37,12 +47,28 @@ class StoredTurn:
     extra: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
 
+#: How many chats' decoded turns one library keeps between reads (048); a chat read after it fell out decodes again.
+CACHED_CHATS = 16
+
+
+@dataclass(frozen=True)
+class TurnReads:
+    """What one read of a chat's history cost (048): the chat's turn files found (each one readable is read
+    and hashed; a link or an oversized file is counted but refused unread), how many records were decoded, and
+    how many were reused unchanged from this library's previous read."""
+
+    files: int = 0
+    decoded: int = 0
+    reused: int = 0
+
+
 @dataclass(frozen=True)
 class ChatTurns:
     """One chat's turns in order, and the problems that make the list incomplete (paths and reasons).
 
     ``turns`` is the chat's line as play reads it: up to its first fork, then every branch not set aside (028).
     ``set_aside`` holds the turns a choice set aside (kept, heard by no one); ``fork`` the first fork, if any.
+    ``reads`` says what reading them cost (048); it is not part of the history and is never compared.
     """
 
     chat: ChatRef
@@ -54,6 +80,7 @@ class ChatTurns:
     #: records of them cannot be read), and the players whose pause another device's kept version holds
     conflicted: tuple[str, ...] = ()
     kept_pauses: tuple[str, ...] = ()
+    reads: TurnReads = field(default=TurnReads(), compare=False, repr=False)
 
     @property
     def complete(self) -> bool:
@@ -97,6 +124,27 @@ def _chat_of(turn_id: str) -> str:
     return turn_id.rsplit(".", 1)[0]
 
 
+def _another_chats(name: str, chat: ChatRef) -> bool:
+    """Whether a file name in ``turns/`` spells another chat's turn (``<other chat>.<6 digits>[-<device>].json``).
+    Such a file is never read for ``chat``: whatever it holds, ``turns`` would drop it (a record of another chat,
+    or a problem ``_other_chat`` leaves out). Any other name is read, and counts against every chat."""
+    if not name.endswith(".json"):
+        return False
+    parsed = parse_turn_id(name[:-len(".json")])
+    return parsed is not None and parsed[0] != chat.chat_id
+
+
+def _handed(turn: TurnRecord | str) -> TurnRecord | str:
+    """A decoded turn as handed to a caller: its own copy of ``extras`` (the one mutable field; its values are
+    frozen payload values), so a change a caller makes without writing it never reaches what this library
+    reuses on its next read."""
+    if not isinstance(turn, TurnRecord):
+        return turn
+    handed = copy.copy(turn)
+    object.__setattr__(handed, "extras", dict(turn.extras))  # an empty dict is as mutable as a full one
+    return handed
+
+
 def _other_chat(path: str, chat: ChatRef) -> bool:
     """Whether an unreadable file is plainly another chat's turn (``<other chat>.<6 digits>[-<device>].json``).
     Anything else (the folder itself, a name that does not parse) counts against every chat: fail closed."""
@@ -114,20 +162,56 @@ class SceneLibrary:
         self.store = store
         self.handle = handle
         self.owner = owner
+        # Per chat: each turn's address -> (the stored record last read from its file, its decoded turn or the
+        # reason it could not be decoded). Replaced whole on every read, so a file gone from the folder is forgotten;
+        # only the chats read most recently are kept, so a long-lived library never holds every chat it has seen.
+        self._read_cache: dict[ChatRef, dict[TurnRef, tuple[StoredScopeRecord, TurnRecord | str]]] = {}
+        self._cache_lock = threading.Lock()
 
-    def turns(self, chat: ChatRef) -> ChatTurns:
-        return self._view(chat, self.store.campaign_turns(chat.campaign_id))
-
-    def _view(self, chat: ChatRef, found) -> ChatTurns:  # type: ignore[no-untyped-def]
-        problems = [(problem.path, problem.code) for problem in found.problems if not _other_chat(problem.path, chat)]
-        turns = []
+    def _read(self, chat: ChatRef) -> tuple[CampaignRecords, list[tuple[object, StoredScopeRecord, TurnRecord | str]],
+                                            TurnReads]:
+        """This chat's turn files as stored (records and problems, others' files skipped) and each record of this
+        chat with its decoded turn, reusing what the previous read decoded from the same bytes."""
+        with self._cache_lock:
+            previous = self._read_cache.get(chat, {})
+        found = self.store.campaign_turns(chat.campaign_id, skip=lambda name: _another_chats(name, chat),
+                                          known={ref: entry[0] for ref, entry in previous.items()})
+        entries, current, decoded, reused = [], {}, 0, 0
         for ref, stored in found.records.items():
             if _chat_of(ref.turn_id) != chat.chat_id:
                 continue
-            try:
-                record = turn_from_payload(ref, stored.record.schema, stored.record.payload)
-            except SceneRefused as error:
-                problems.append((str(ref), error.reason))
+            entry = previous.get(ref)
+            if entry is not None and entry[0] is stored:  # the same bytes as last time: the same turn
+                turn = entry[1]
+                reused += 1
+            else:
+                try:
+                    turn = turn_from_payload(ref, stored.record.schema, stored.record.payload)
+                except SceneRefused as error:
+                    turn = error.reason
+                decoded += 1
+            current[ref] = (stored, turn)
+            entries.append((ref, stored, _handed(turn)))
+        with self._cache_lock:
+            self._read_cache.pop(chat, None)
+            self._read_cache[chat] = current  # newest last
+            while len(self._read_cache) > CACHED_CHATS:
+                del self._read_cache[next(iter(self._read_cache))]
+        reads = TurnReads(len(found.records) + sum(1 for problem in found.problems if problem.path.endswith(".json")),
+                          decoded, reused)
+        return found, entries, reads
+
+    def turns(self, chat: ChatRef) -> ChatTurns:
+        return self._view(chat, *self._read(chat))
+
+    def _view(self, chat: ChatRef, found: CampaignRecords, entries: list[tuple[object, StoredScopeRecord,
+                                                                                 TurnRecord | str]],
+              reads: TurnReads) -> ChatTurns:
+        problems = [(problem.path, problem.code) for problem in found.problems if not _other_chat(problem.path, chat)]
+        turns = []
+        for ref, stored, record in entries:
+            if isinstance(record, str):
+                problems.append((str(ref), record))
                 continue
             turns.append(StoredTurn(record, stored.etag, stored.record.owner, stored.record.extra))
         by_id = {stored.record.turn_id: stored for stored in turns}
@@ -143,7 +227,7 @@ class SceneLibrary:
         conflicted, kept_pauses = self._conflicts(chat, own)
         return ChatTurns(chat, tuple(by_id[turn.turn_id] for turn in lineage.line), tuple(sorted(problems)),
                          tuple(by_id[turn.turn_id] for turn in lineage.set_aside), lineage.fork, conflicted,
-                         kept_pauses)
+                         kept_pauses, reads)
 
     def _conflicts(self, chat: ChatRef, paths: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """This chat's turns that sync left in a keep-both conflict (019), and who paused in another device's
@@ -235,7 +319,7 @@ class SceneLibrary:
     def _admits(self, record: TurnRecord, base: StoredTurn | None, *, after: StoredTurn | None, last: bool,
                 unpaused: bool) -> None:
         """``write``'s checks of the chat as it now stands, under the store lock: refuses, or returns."""
-        view = self._view(record.chat, self.store.campaign_turns(record.chat.campaign_id))  # one read
+        view = self.turns(record.chat)  # one read (048: this chat's files, unchanged ones not decoded again)
         line = view.turns  # turns set aside take no number (028)
         if view.conflicted and not (last and record.paused):
             raise SceneRefused("turn_conflict", "a turn of this chat is in a sync conflict; resolve it first")
