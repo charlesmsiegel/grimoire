@@ -49,15 +49,16 @@ The merge is idempotent. Merging a merged ledger with itself gives the same byte
    - one chat took new events on both (`same_chat`);
    - an event the merge keeps revoked is held in force by the other device, which accepted new events after it, directly or through others (`revoked_vs_extended`). The event is either agreed, or new and revoked on its way to only one of the two (above). Only events the other device recorded as accepted after it count: an event a third device gave it, accepted without the revoked one, does not, and neither does a device that already has the revocation;
    - one fingerprint was accepted as two events (`same_effect`);
-   - one attempt was spent twice (`attempt_reused`).
+   - one attempt was spent twice (`attempt_reused`). As when one device accepts in turn (021's attempt check), an event revoked in full releases its attempts to a revision with another fingerprint, so the pair is not a conflict when either event was revoked that way (`attempt_refusal`, and `undo_unconfirmed` on that event's device's holder files).
 
-Wrap-ups and relation files merge three-way, as whole files. One file changed differently on both devices is `both_changed`. Two relations under one new id are `id_collision`. The exception is a relation file that one device holds as the other's with only the revocation of an event the merge keeps revoked applied: 021 retracts a relation the event began and reopens one it ended, each under the event's `revoked` token. That version is kept (`revoked_relation`), as the event's revoked version is.
+Wrap-ups and relation files merge three-way, as whole files. A relation of a predicate this version does not know is kept byte for byte: replay and the checks below index it as unsupported, as `continuity` does, and never roll it back or read it. One file changed differently on both devices is `both_changed`. Two relations under one new id are `id_collision`. The exception is a relation file that one device holds as the other's with only the revocation of an event the merge keeps revoked applied: 021 retracts a relation the event began and reopens one it ended, each under the event's `revoked` token. That version is kept (`revoked_relation`), as the event's revoked version is.
 
 After all of that, the merged ledger is checked with 021's ledger checks: the problems `continuity` reports from the accepted events, relations, wrap-ups and holder files. Its 020 bridge check and store problems are not run, since the merge does not read `events/` or other files. The merged ledger may show no such problem that neither device showed already (`new_problem`).
 
 ## Holdings
 
 1. **Whole files.** A holder file only one device changed, or both changed alike, is taken whole, unless an operation it shares with a replayed file pulls it into the replay. Its log must still extend the agreed one (entries it already evicted aside).
+   - Each new entry it still logs names an operation that every other holder's merged file must log too, or have evicted already (its `evicted_through` reaches that entry's peer seq). Otherwise it is `partial_op`, as in a replay: a holder file restored to the agreed one while its peer kept the change.
    - So a merged file stays as it is when merged again, even once eviction dropped entries its log no longer shows.
    - Every other file is replayed, as below.
 2. **Extension.** A replayed device file must be the agreed file plus new log entries, numbered contiguously after the agreed seq, with none of them evicted yet. Anything else is `log_diverged`.

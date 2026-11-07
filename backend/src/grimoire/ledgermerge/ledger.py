@@ -20,7 +20,7 @@ from grimoire.effects import (
     AcceptedEvent, EffectProblem, edited_effects, holdings_orphans, holdings_partials, holdings_problems,
     ledger_problems, orphans, partial_revocations, verify_receipts, wrapup_problems,
 )
-from grimoire.graph import GraphError, GraphIndex, Relation
+from grimoire.graph import GraphError, GraphIndex, Relation, UnsupportedRelation
 from grimoire.holdings import MAX_FILE, Holdings
 
 from . import events as _events
@@ -95,13 +95,18 @@ def merge_ledger(base: Ledger, sides: Mapping[str, Ledger], *, instances: Iterab
     return result
 
 
-def problems(campaign_id: str, events: Iterable[AcceptedEvent], relations: Iterable[Relation],
+def problems(campaign_id: str, events: Iterable[AcceptedEvent], relations: Iterable[Relation | UnsupportedRelation],
              wrapups: Iterable, holdings: Mapping[InstanceRef, Holdings],
              instances: frozenset[InstanceRef]) -> set[EffectProblem]:
-    """The 021 problems ``continuity`` would report for this ledger (its 020 bridge and store problems aside)."""
-    events, relations = list(events), list(relations)
+    """The 021 problems ``continuity`` would report for this ledger (its 020 bridge and store problems aside).
+
+    As ``continuity``, a relation of a predicate this version does not know is indexed as unsupported and is
+    otherwise not read.
+    """
+    events = list(events)
+    relations, unsupported = _events.split_relations(relations)
     try:
-        index = GraphIndex.build(campaign_id, relations, instances)
+        index = GraphIndex.build(campaign_id, relations, instances, unsupported=unsupported)
     except GraphError as error:
         return {EffectProblem("undecodable_relation", detail=error.reason)}
     holders: dict[InstanceRef, Holdings | str] = dict(holdings)

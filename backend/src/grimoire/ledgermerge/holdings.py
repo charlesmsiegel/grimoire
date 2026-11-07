@@ -167,6 +167,7 @@ def merge_holdings(base: Mapping[InstanceRef, Version], sides: Mapping[str, Mapp
         for entry in found:
             if kept.setdefault(entry.op, entry.operation) != entry.operation:
                 items.append(ReviewItem("id_collision", entry.op, "one operation id with two contents"))
+            items += _unshared(holder, source, entry, whole, replayed, starts)
     if items:
         return Review(tuple(items))
     holders = sorted(replayed, key=str)
@@ -243,6 +244,34 @@ def _whole(base: Mapping[InstanceRef, Version], sides: Mapping[str, Mapping[Inst
         if pick is not None:
             found[holder] = (pick, agreed if pick == BASE else versions[pick])
     return found  # type: ignore[return-value]
+
+
+def _unshared(holder: InstanceRef, source: str, entry: LogEntry, whole: Mapping[InstanceRef, tuple[str, Version]],
+              replayed: set[InstanceRef], starts: Mapping[InstanceRef, Holdings]) -> list[ReviewItem]:
+    """``partial_op`` when a file taken whole newly logs an operation that a merged peer file does not.
+
+    The replayed path checks this per device (``_operations``); a file taken whole is never replayed, so its
+    retained new entries are checked against the peers' merged files instead: the one taken whole, or for a
+    replayed peer its agreed file (a replayed peer logging this operation would have made this holder replayed
+    too). A peer that already evicted the operation's entry (its ``evicted_through`` reaches the entry's peer
+    seq) is not missing it: eviction is how 023 keeps a file within its bound.
+    """
+    peers = dict(entry.peers)
+    missing = []
+    for peer in sorted(set(entry.operation.holders) - {holder}, key=str):
+        if peer in replayed:
+            value = starts[peer]
+        elif peer in whole:
+            value = whole[peer][1].value
+        else:
+            value = Holdings.empty(peer)
+        seq = peers.get(peer)
+        logged = any(other.op == entry.op for other in value.log)
+        if not logged and (seq is None or value.evicted_through < seq):
+            missing.append(str(peer))
+    if not missing:
+        return []
+    return [ReviewItem("partial_op", entry.op, f"{source} does not log it on {', '.join(missing)}")]
 
 
 def _operations(new: Mapping[str, Mapping[InstanceRef, list[LogEntry]]], devices: list[str],
