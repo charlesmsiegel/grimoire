@@ -12,18 +12,14 @@ from __future__ import annotations
 
 from grimoire.core.identity import ChatRef
 from grimoire.scene import SceneRefused
-from grimoire.security import is_human
 
 
 def choose_branch(runner, chat: ChatRef, by, turn: str):  # type: ignore[no-untyped-def]
     """Set aside every branch of ``chat``'s fork but the one ``turn`` heads; the ``Scene`` afterwards."""
     if type(chat) is not ChatRef:
         raise SceneRefused("invalid_field", "chat must be a ChatRef")
-    if not (runner.authority.issued(by) and getattr(by, "trusted", False) is True):
-        raise SceneRefused("not_authenticated", "a choice is made with a trusted handle this library's authority issued")
-    principal = getattr(by, "principal", None)
-    if not isinstance(principal, str) or not is_human(principal):
-        raise SceneRefused("not_authenticated", "only a human chooses how a chat goes on")
+    scene = runner.open(chat)  # an unknown chat is refused before anything is written
+    principal = runner._principal(scene, by)  # the same authentication as every other act at the table
     if principal not in runner.authority.owners:
         raise SceneRefused("not_owner", "only the library's owner chooses which branch of a forked chat goes on")
     if not isinstance(turn, str):
@@ -31,8 +27,8 @@ def choose_branch(runner, chat: ChatRef, by, turn: str):  # type: ignore[no-unty
     turns = runner.scenes.turns(chat)
     other = [code for _, code in turns.problems if code != "turn_fork"]
     if other:
-        raise SceneRefused("turns_unreadable", f"this chat's turns are incomplete ({', '.join(sorted(set(other)))}); "
-                                               "nothing is written")
+        raise SceneRefused("turns_unreadable", f"this chat's turns are incomplete "
+                                               f"({', '.join(sorted(set(other)))}); nothing is written")
     runner.scenes.choose(turns, turn, principal)
     return runner.open(chat)
 

@@ -17,9 +17,9 @@ import pytest
 
 from scene_fixtures import ANA, Table, card_library, say
 
-from grimoire.scene import SceneRefused, turn_id
+from grimoire.scene import TURN_SCHEMA, SceneRefused, turn_id, turn_to_payload
 from grimoire.scene.branches import replay_tag
-from grimoire.store import etag
+from grimoire.store import ScopeRecord, etag
 from grimoire.sync import identify, resolve, sync_until_quiet
 
 DESKTOP, PHONE, TABLET = "desktop", "phone", "tablet"
@@ -91,7 +91,15 @@ def test_two_offline_devices_sync_fork_the_owner_chooses_and_play_goes_on_hearin
             assert [(b.head, b.device, b.set_aside) for b in fork.branches] == sorted(
                 [(ours, tag(DESKTOP), False), (theirs, tag(PHONE), False)], key=lambda b: b[1])
             refused("turn_fork", table.runner.post, chat, table.player(), '"Hello?"')
-        # nothing is chosen automatically, and only the owner chooses
+        # nothing is chosen automatically, and only the owner chooses, in a chat this library can read
+        chat_file = tmp_path / DESKTOP / "campaigns" / chat.campaign_id / "chats" / f"{chat.chat_id}.json"
+        saved, before = chat_file.read_bytes(), turn_files(tmp_path / DESKTOP, chat)
+        chat_file.write_bytes(b"{not json")
+        with pytest.raises(SceneRefused) as unread:
+            desk.runner.choose(chat, desk.owner, ours)
+        assert unread.value.reason == "no_chat"
+        assert turn_files(tmp_path / DESKTOP, chat) == before  # refused before anything is written
+        chat_file.write_bytes(saved)
         refused("not_owner", desk.runner.choose, chat, desk.player(), ours)
         refused("not_a_branch", desk.runner.choose, chat, desk.owner, turn_id(chat, 1))
         scene = desk.runner.choose(chat, desk.owner, ours)
@@ -268,3 +276,35 @@ def test_a_turn_never_lands_without_its_chat_or_the_turn_it_follows(built, tmp_p
         phone_two.write_bytes(played)
         assert synced(desk, phone).conflicts == ()
         assert [r.turn_id for r in desk.runner.open(chat).records][-1] == turn_id(chat, 3, tag(PHONE))
+
+
+def test_a_turn_written_before_follows_never_lands_without_the_turn_its_device_played_before(built, tmp_path):
+    """A turn with no ``follows`` (written before 028) is placed after its own device's turn before it. The
+    phone has a turn 2 of its own, so the desktop's turn 3 landing alone would read as played after the phone's
+    turn 2: it waits until the desktop's own turn 2 can land with it."""
+    chat = devices(built, tmp_path)
+    turns = f"campaigns/{chat.campaign_id}/turns"
+    with Table(tmp_path / DESKTOP, [say("Desk two."), say("Desk three.")]) as desk, \
+            Table(tmp_path / PHONE, [say("Phone two.")]) as phone:
+        play(desk, chat, "Second, on the desktop.")
+        play(desk, chat, "Third, on the desktop.")
+        stored = desk.runner.scenes.turns(chat).last
+        payload = {key: value for key, value in turn_to_payload(stored.record).items()
+                   if key not in ("follows", "set_aside")}  # as a turn written before 028
+        txn = desk.store.transaction()
+        txn.put(ScopeRecord(stored.record.ref, TURN_SCHEMA, payload, owner=stored.owner, extra=stored.extra),
+                stored.etag)
+        txn.commit(desk.owner)
+        play(phone, chat, "Second, on the phone.")
+        two, three = (f"{turns}/{turn_id(chat, n, tag(DESKTOP))}.json" for n in (2, 3))
+        desk_two = tmp_path / DESKTOP / two
+        played = desk_two.read_bytes()
+        desk_two.write_bytes(b"{not json")  # the desktop's own turn 2 cannot be read there, so it cannot travel
+        report = synced(desk, phone)
+        assert report.conflict(three).code == "head_dependency" and two in report.conflict(three).detail
+        assert [r.turn_id for r in phone.runner.open(chat).records] == [turn_id(chat, 1), turn_id(chat, 2, tag(PHONE))]
+        desk_two.write_bytes(played)
+        assert synced(desk, phone).conflicts == ()
+        fork = phone.runner.open(chat).turns.fork
+        assert {b.head: b.turns for b in fork.branches}[turn_id(chat, 2, tag(DESKTOP))] == (
+            turn_id(chat, 2, tag(DESKTOP)), turn_id(chat, 3, tag(DESKTOP)))

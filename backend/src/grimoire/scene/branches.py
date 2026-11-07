@@ -114,7 +114,7 @@ def arrange(records: Iterable[TurnRecord]) -> Lineage:
         else:
             children.setdefault(above, []).append(turn)
 
-    def subtree(head: TurnRecord) -> list[TurnRecord]:
+    def subtree(head: TurnRecord) -> list[TurnRecord]:  # a set-aside head and every turn played after it
         found, stack = [], [head]
         while stack:
             turn = stack.pop()
@@ -122,38 +122,57 @@ def arrange(records: Iterable[TurnRecord]) -> Lineage:
             stack.extend(children.get(turn.turn_id, ()))
         return sorted(found, key=order)
 
-    line: list[TurnRecord] = []
     set_aside: list[TurnRecord] = []
+
+    def settle(level: list[TurnRecord]) -> tuple[list[TurnRecord], bool]:
+        """The turns of one level that go on, and whether its marks are a valid choice (what they set aside,
+        with every turn played after it, joins ``set_aside``). Invalid marks choose nothing: all go on."""
+        unmarked = [turn for turn in level if turn.set_aside is None]
+        marked = [turn for turn in level if turn.set_aside is not None]
+        named = {turn.turn_id for turn in unmarked}
+        valid = bool(unmarked) and all(turn.set_aside.chosen in named for turn in marked)  # type: ignore[union-attr]
+        if not valid:
+            return level, False
+        for turn in marked:
+            set_aside.extend(subtree(turn))
+        return unmarked, True
+
+    def live(head: TurnRecord) -> list[TurnRecord]:
+        """``head`` and every turn played after it that no valid choice set aside: a choice made further down
+        one branch still holds when an earlier fork opens again (a third device's turn arriving late)."""
+        found, stack = [], [head]
+        while stack:
+            turn = stack.pop()
+            found.append(turn)
+            stack.extend(settle(children.get(turn.turn_id, []))[0])
+        return sorted(found, key=order)
+
+    line: list[TurnRecord] = []
     fork = None
     after: str | None = None
     while True:
         level = children.get(after, [])
         if not level:
             break
-        unmarked = [turn for turn in level if turn.set_aside is None]
-        marked = [turn for turn in level if turn.set_aside is not None]
-        named = {turn.turn_id for turn in unmarked}
-        valid = bool(unmarked) and all(turn.set_aside.chosen in named for turn in marked)  # type: ignore[union-attr]
-        if valid:
-            for turn in marked:
-                set_aside.extend(subtree(turn))
-        if valid and len(unmarked) == 1:
-            line.append(unmarked[0])
-            after = unmarked[0].turn_id
+        going, valid = settle(level)
+        if valid and len(going) == 1:
+            line.append(going[0])
+            after = going[0].turn_id
             continue
-        state = "open" if valid else "conflict"
-        heads = unmarked if valid else level
-        fork = Fork(level[0].number, after, state, tuple(
-            Branch(head.turn_id, head.device, tuple(turn.turn_id for turn in subtree(head)),
-                   valid and head.set_aside is not None) for head in level))
-        for head in heads:
-            line.extend(subtree(head))
+        branches = {head.turn_id: live(head) for head in going}
+        fork = Fork(level[0].number, after, "open" if valid else "conflict", tuple(
+            Branch(head.turn_id, head.device,
+                   tuple(turn.turn_id for turn in branches.get(head.turn_id) or subtree(head)),
+                   head.turn_id not in branches) for head in level))
+        for found in branches.values():
+            line.extend(found)
         break
     for turn in orphans:  # shown as they are, with what follows them, so nothing silently disappears
         line.extend(subtree(turn))
     seen: set[str] = set()
     shown = [turn for turn in sorted(line, key=order) if not (turn.turn_id in seen or seen.add(turn.turn_id))]
-    return Lineage(tuple(shown), tuple(sorted(set_aside, key=order)), fork, tuple(orphans))
+    aside = {turn.turn_id: turn for turn in set_aside}
+    return Lineage(tuple(shown), tuple(sorted(aside.values(), key=order)), fork, tuple(orphans))
 
 
 def replay_tag(tag: str | None, k: int) -> str:

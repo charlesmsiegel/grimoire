@@ -38,7 +38,7 @@ from .documents import ArchiveView, KeepsView, PendingView, parse_keeps, syncabl
 from .errors import ArchiveTooLarge, SameDevice, SyncInterrupted, SyncNotQuiet
 from .identity import device_of, identify
 from .model import ASSET_KINDS, CAMPAIGN_LOCAL, HELD_BACK_KINDS, HOLDS_RELATIONS, Base, Side
-from .turns import turn_needs
+from .turns import turn_named, turn_needs
 
 _SLOT = re.compile(r"~[0-9a-f]{12}(?:\.([1-9][0-9]*))?$")
 #: Folders of the held-back families (021 accepted events and wrap-ups, 023 holdings).
@@ -494,9 +494,11 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
 
 
 def _named_paths(parts: tuple[str, ...], data: bytes) -> list[str]:
-    """The instance and chat files a record names (``replica.instances_named``/``chats_named``)."""
+    """The instance and chat files a record names (``replica.instances_named``/``chats_named``), and the turns
+    a turn written before ``follows`` existed is placed after (``sync.turns.turn_named``)."""
     return sorted({*("/".join(instance_parts(ref)) for ref in instances_named(parts, data)),
-                   *("/".join(chat_parts(ref)) for ref in chats_named(parts, data))})
+                   *("/".join(chat_parts(ref)) for ref in chats_named(parts, data)),
+                   *turn_named("/".join(parts), data)})
 
 
 def _home_scope(path: str) -> list[str]:

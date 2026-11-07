@@ -80,6 +80,21 @@ def test_a_later_fork_of_the_chosen_branch_is_a_fork_again():
     assert found.fork.number == 3 and found.fork.after == desk.turn_id and found.fork.state == "open"
 
 
+def test_a_choice_further_down_a_branch_still_holds_when_an_earlier_fork_opens_again():
+    one = turn(1, None)
+    desk = turn(2, DESK, one)
+    phone = turn(2, PHONE, one, aside=desk)
+    three = turn(3, DESK, desk)
+    four = turn(4, DESK, three)
+    other = turn(4, PHONE, three, aside=four)
+    tablet = turn(2, TABLET, one)  # a third device's turn 2 arrives after both choices
+    found = arrange([one, desk, phone, three, four, other, tablet])
+    assert found.fork.number == 2 and found.fork.state == "open"
+    assert ids(found.line) == ids([one, tablet, desk, three, four])
+    assert ids(found.set_aside) == ids([phone, other])
+    assert [b.turns for b in found.fork.branches if b.head == desk.turn_id] == [tuple(ids([desk, three, four]))]
+
+
 @pytest.mark.parametrize("marks", ["each_other", "both_for_a_turn_set_aside", "for_an_absent_turn"])
 def test_marks_that_choose_nothing_are_a_conflict_showing_every_branch(marks):
     one = turn(1, None)
