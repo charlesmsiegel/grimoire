@@ -329,3 +329,40 @@ def test_a_removal_recovery_cannot_finish_is_restored_from_its_hold(tmp_path):
     assert sum(run.recovered.get(f"lib/{MANIFEST_PATH}") == human for run in report.runs[1:]) >= 3
     explore_crashes(scenario, tmp_path / "recovery", torn=False, recovery_crashes=True,
                     select=lambda op: {"after"} if op.kind == "remove" and op.index >= first else False).assert_ok()
+
+
+def test_a_completed_removal_whose_record_is_recreated_cancels_the_rest(tmp_path):
+    """All or none across a crash, the other way: the app dies once an instance's removal is done,
+    and the instance is written again (other bytes) while it is down. Recovery keeps that record and
+    removes nothing more of the batch, putting back what it removed from the holds: never the
+    manifest and the revision the recreated instance pins deleted under it. (A crash after the
+    batch's last removal leaves nothing to decide: the instance is then written after it.)"""
+    paths = (R1_PATH, MANIFEST_PATH, WREN_A_PATH, WREN_B_PATH)
+    probe, template = _scenario(tmp_path / "setup", paths, ())
+    human = template[WREN_A_PATH].replace(b'"hp": 3', b'"hp": 11')
+    assert human != template[WREN_A_PATH]
+
+    def recreate(ops, root):
+        if not (root / "lib" / WREN_A_PATH).exists():
+            ops.write_bytes(root / "lib" / WREN_A_PATH, human)
+
+    def all_or_none(outcome):
+        present = {path: outcome.recovered.get(f"lib/{path}") for path in paths}
+        if present[WREN_A_PATH] is None:  # crashed before the instance's removal: nothing recreated
+            return None
+        if all(outcome.after_action.get(f"lib/{path}") is None for path in paths):
+            return None  # the whole batch went before the crash: the instance is written after it
+        wanted = {**{path: template[path] for path in paths}, WREN_A_PATH: present[WREN_A_PATH]}
+        if present != wanted:
+            return f"part of the batch is gone: {sorted(path for path in paths if present[path] != wanted[path])}"
+        kept = [value for key, value in outcome.recovered.items() if key.startswith("lib/.conflicts/")]
+        return None if all(template[path] in kept for path in paths) else "a hold is gone"
+
+    scenario = replace(probe, meddle=recreate, invariants=(
+        preserves_meddle(), idempotent_recovery(), Invariant("all_or_none", all_or_none)))
+    trace = run_plans(probe, [], tmp_path / "base").runs[0].action_trace
+    removal = next(op.index for op in trace if op.kind == "remove" and op.path == f"lib/{WREN_A_PATH}")
+    after = [op.index for op in trace if op.kind == "remove" and op.index >= removal]
+    report = run_plans(scenario, [[Crash(index, "after")] for index in after], tmp_path / "crashed")
+    report.assert_ok()
+    assert sum(run.recovered.get(f"lib/{WREN_A_PATH}") == human for run in report.runs[1:]) >= 2

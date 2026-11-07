@@ -19,7 +19,9 @@ from grimoire.store import InvalidEnvelope, LibraryStore, ProcessLocker, RecordE
 from grimoire.store.layout import address_parts, conflict_parts, turn_parts
 from grimoire.sync import ResolveRefused, SyncInterrupted, apply_sync, plan_sync, resolve, sync, sync_until_quiet
 from grimoire.sync import deletion, keeps as kept_record, resolution, session as sync_session
+from grimoire.sync.decide import decide
 from grimoire.sync.documents import keeps_name, parse_keeps, render_keeps
+from grimoire.sync.model import PROPAGATED_DELETIONS, Base, Side
 from grimoire.testing import CrashScenario, Invariant, explore_crashes, idempotent_recovery, no_residue, run_plans
 from grimoire.testing.fileops import snapshot
 
@@ -662,3 +664,14 @@ def test_a_turn_deleted_on_one_device_is_never_deleted_on_the_other(pair):
     report = sync(desktop, phone, handles())
     assert report.deleted == () and (phone.root / path).exists()
     assert all(conflict.code == "held" for conflict in report.conflicts if conflict.path == path)
+
+
+def test_a_turn_never_takes_part_in_deletion_propagation_even_once_turns_sync():
+    """Row 9 on a turn is never a propagated deletion, whatever holds turns back today: a turn missing
+    on one device and unchanged on the other stays a conflict that keeps it (the turn merge's own
+    standing turn conflict), so a chat never loses a played turn to a sync."""
+    played = etag(b"turn")
+    assert "turn" not in PROPAGATED_DELETIONS
+    for left, right in ((Side.present(played), Side.absent()), (Side.absent(), Side.present(played))):
+        decision = decide("turn", Base("agreed", played), left, right)
+        assert decision.action != "delete" and decision.code == "deleted", decision

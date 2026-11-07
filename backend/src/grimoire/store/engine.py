@@ -440,7 +440,8 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
         # 028: a commit's removals happen all or none (a source deleted as a whole, the records that used
         # it, a campaign's chat with its scope), decided before anything is removed: none if any of them
         # cannot happen (its target holds other bytes, its staged document is damaged, or its temp is
-        # gone while the target still holds what it removes), if the hold of what one removes is not in
+        # gone while its target is there again: a record recreated since an earlier run removed it may
+        # need what the rest removes), if the hold of what one removes is not in
         # place (it may be the only copy), or if any other entry of the commit did not land as staged
         # (held back, preserved or dropped: what the deletions were planned over is not there). Read
         # after every other entry is settled, so an external edit is seen up to the removals themselves
@@ -455,7 +456,7 @@ def settle(access: Access, journal: Journal, *, live: bool = False) -> Settlemen
                 continue
             current = access.etag_of(entry.target)
             if entry.temp not in staged:
-                if current == entry.old:
+                if current is not None:  # done by an earlier run, and there again (its bytes or others)
                     return False
             elif (current not in (entry.old, None) or temp_digest(entry) != entry.new
                   or (conflict_parts(entry.target, entry.old)[:-1], entry.old) not in held):  # its own hold

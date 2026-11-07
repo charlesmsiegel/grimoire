@@ -782,6 +782,15 @@ def test_two_devices_resolving_against_each_other_at_once_neither_hangs_nor_half
         monkeypatch.setattr(resolving_module, "dial", dial_together)
     else:  # both requests were accepted, and each device's first served step waits on the other's library
         monkeypatch.setattr(server_module, "resolving_out", lambda store: False)
+        # Both snapshots are read first: a resolve waiting below holds its own library, which the other
+        # device's snapshot of it would otherwise wait for, until this barrier timed out.
+        snapshots = threading.Barrier(2, timeout=120)
+        real_resolve = resolving_module.resolve
+
+        def resolve_together(*args, **kwargs):  # type: ignore[no-untyped-def]
+            snapshots.wait()
+            return real_resolve(*args, **kwargs)
+        monkeypatch.setattr(resolving_module, "resolve", resolve_together)
         real_relay = resolving_module._Relay.__call__
 
         def relay_together(self, ops):  # type: ignore[no-untyped-def]
