@@ -18,6 +18,9 @@ from grimoire.contextstore import actor_context
 from grimoire.core import DIRECTOR
 from grimoire.core.identity import ChatRef
 from grimoire.core.inference import InferencePlanError, InferenceStage, OptionalRequest, TurnUsageLedger, plan_turn
+from grimoire.core.authority import AuthorityError
+from grimoire.core.knowledge import KnowledgeError
+from grimoire.core.perspective import player_knowledge
 from grimoire.labelling import LabelRefused, facts, label_messages, parse_labels
 from grimoire.play.scene import WRITE_RETRIES, _refuse
 from grimoire.providers.meter import TurnMeter
@@ -31,6 +34,19 @@ from grimoire.store.layout import address_parts
 PURPOSE = "frame a player action"
 
 
+def own_propositions(knowledge, controller: str, controls, actor, as_of: int) -> frozenset[str]:
+    """The propositions ``actor`` believes on ``controller``'s own authority (020's ``player_knowledge``): a
+    belief authored by anyone else (an NPC-era conclusion the player inherited) is not the player's. Control
+    that is ambiguous, or knowledge that cannot be projected, offers none (fail closed)."""
+    try:
+        projected = player_knowledge(knowledge, controller, controls, as_of=as_of)
+    except (AuthorityError, KnowledgeError):
+        return frozenset()
+    return frozenset(belief.proposition_id for known in projected.actors
+                     if known.actor.instance_id == actor.instance_id
+                     for belief in known.current if belief.stance == "believed")
+
+
 def label_action(runner, chat: ChatRef, by) -> Label:
     """See ``SceneRunner.label``."""
     context = runner._context(chat)
@@ -39,6 +55,9 @@ def label_action(runner, chat: ChatRef, by) -> Label:
     runner._ready(scene)
     if runner.labeller is None or runner.label_handle is None:
         raise _refuse("no_labeller", "no labeller is configured")
+    scope = context.captured.scope
+    if scope is not None and scope.session_zero is not None:  # as for generation: its boundaries are unread
+        raise _refuse("session_zero_unreadable", "this slice cannot read a session zero yet; labelling waits")
     record = scene.pending
     post = record.post if record is not None else None
     if post is None or post.kind != "action":
@@ -72,7 +91,8 @@ def label_action(runner, chat: ChatRef, by) -> Label:
     heard = heard_for(scene.records, post.actor, scene.names, before=scene.imported)
     built = actor_context(context.view, chat, ledger, post.actor, as_of=as_of, budget=runner.budget,
                           present=scene.cast, scene_text=render(heard))
-    offered = facts(built.pack.items)
+    offered = facts(built.pack.items, own=own_propositions(ledger.knowledge, controller, scene.controls, post.actor,
+                                                           as_of))
     messages = label_messages(scene.names.get(post.actor) or post.actor.instance_id, post.text, offered,
                               render(heard[-12:]))
 

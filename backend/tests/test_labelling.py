@@ -167,3 +167,26 @@ def test_a_reply_that_029_could_not_record_is_refused_not_raised():
 def test_a_fact_whose_source_029_could_not_record_is_never_offered():
     long = SourceRef("card:" + "a" * 120, "lorebook", "b" * 128, "r" * 128)
     assert facts([item("lore", "A fact.", source=long, name="c" * 128, audience="common")]) == ()
+
+
+def test_only_the_controllers_own_beliefs_are_offered():
+    pack = [item("proposition", "The crew is loyal.", sequence=2, stance="believed", record="q2"),
+            item("description", "A harbor pilot.", source=ANYA)]
+    assert [f.text for f in facts(pack, own=frozenset())] == ["A harbor pilot."]
+    assert [f.text for f in facts(pack, own=frozenset({"q2"}))] == ["The crew is loyal.", "A harbor pilot."]
+
+
+def test_a_belief_the_player_never_authored_is_inherited_not_theirs():
+    from knowledge_fixtures import C, TAVI, betrayal_knowledge, believes, betrayal_records
+
+    from grimoire.core import ControlAssignment, Knowledge
+    from grimoire.play.labels import own_propositions
+
+    controls = (ControlAssignment(C, "tavi", "human:ana"),)
+    assert own_propositions(betrayal_knowledge(), "human:ana", controls, TAVI, 4) == frozenset()  # the director's
+    records = betrayal_records()
+    beliefs = [*records["beliefs"][:2], believes("b-tavi-3", TAVI, "duke-betrayed", "believed", 4, ["r-ines-tavi"],
+                                                 authored_by="human:ana")]
+    authored = Knowledge(C, **(records | {"beliefs": beliefs}))
+    assert own_propositions(authored, "human:ana", controls, TAVI, 4) == frozenset({"duke-betrayed"})
+    assert own_propositions(betrayal_knowledge(), "human:bob", controls, TAVI, 4) == frozenset()  # fails closed

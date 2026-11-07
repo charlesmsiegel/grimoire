@@ -14,7 +14,7 @@ are offered: a suspicion or a rejected claim is not something the fiction has es
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 
 from grimoire.adjudication import MAX_FACTORS, MAX_STAKES, PROSE_MAX
@@ -54,8 +54,12 @@ def _source(item: PackedItem) -> str | None:
     return None
 
 
-def facts(items: Iterable[PackedItem]) -> tuple[Fact, ...]:
-    """The citable facts of a 031 pack, in pack order, numbered from 1 (at most ``MAX_FACTS``)."""
+def facts(items: Iterable[PackedItem], *, own: Collection[str] | None = None) -> tuple[Fact, ...]:
+    """The citable facts of a 031 pack, in pack order, numbered from 1 (at most ``MAX_FACTS``).
+
+    ``own`` names the propositions the acting character believes on its present controller's authority
+    (020's ``player_knowledge``); a believed proposition outside it (an NPC-era belief the player inherited
+    and never adopted) is not offered. ``None`` offers every believed proposition."""
     found: list[Fact] = []
     for item in items:
         if len(found) >= MAX_FACTS:
@@ -64,6 +68,8 @@ def facts(items: Iterable[PackedItem]) -> tuple[Fact, ...]:
             continue
         if item.origin.kind == "proposition" and item.stance != "believed":
             continue  # a suspicion or a rejected claim is not part of the fiction for this actor
+        if item.origin.kind == "proposition" and own is not None and item.origin.record not in own:
+            continue  # inherited, not the player's own: never a fact against or for their action
         if item.origin.kind == "lore" and item.audience not in (None, "common"):
             continue  # an actor's pack holds no director lore; never offer any
         source = _source(item)
