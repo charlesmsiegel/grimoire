@@ -10,15 +10,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from grimoire.adjudication import Factor, Stake
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TurnRef
 from grimoire.core.inference import TOKEN_FIELDS, CallAttempt, CallId, InferenceStage, TokenUsage
 
-from .model import CallRecord, Post, SceneLine, SceneRefused, Take, TurnRecord, turn_id
+from .model import CallRecord, Label, Post, SceneLine, SceneRefused, Take, TurnRecord, turn_id
 
 TURN_SCHEMA = "grimoire.scene-turn/1"
 _TURN_KEYS = frozenset({"chat", "number", "origin", "post", "takes", "paused", "paused_by", "passed_by"})
-#: Written on every turn; a turn written before turn ids carried a device tag has none (read as untagged).
-_OPTIONAL_TURN_KEYS = frozenset({"device"})
+#: ``device`` is written on every turn; a turn written before turn ids carried a device tag has none (read as
+#: untagged). ``labels`` is written only on a turn whose action was labelled (035 milestone 2); an older build
+#: keeps it as an unknown field when it rewrites the turn.
+_OPTIONAL_TURN_KEYS = frozenset({"device", "labels"})
 _IDENTITY_KEYS = frozenset({"schema", "address", "campaign_id", "ref"})
 _POST_KEYS = frozenset({"submitted_by", "actor", "kind", "text", "audience", "channel", "addressees", "withheld"})
 _TAKE_KEYS = frozenset({"take", "state", "origin", "cast", "lines", "calls", "outcome", "declined", "unscreened",
@@ -27,6 +30,9 @@ _LINE_KEYS = frozenset({"line", "actor", "speaker", "text", "audience", "state",
                         "voice_profile", "review"})
 _CALL_KEYS = frozenset({"phase", "stage", "actor_id", "ordinal", "status", "reason", "attempts"})
 _ATTEMPT_KEYS = frozenset({"attempt", "outcome", "measurement", "route", "usage"})
+_LABEL_KEYS = frozenset({"label", "state", "sequence", "factors", "stakes", "calls", "reason", "by"})
+_FACTOR_KEYS = frozenset({"factor", "bearing", "text", "established", "source"})
+_STAKE_KEYS = frozenset({"stake", "text"})
 
 
 def _invalid(message: str) -> SceneRefused:
@@ -46,7 +52,17 @@ def turn_to_payload(record: TurnRecord) -> dict[str, object]:
         "paused": record.paused, "paused_by": record.paused_by, "passed_by": record.passed_by,
         "device": record.device,
     })
+    if record.labels:
+        payload["labels"] = [_label(label) for label in record.labels]
     return payload
+
+
+def _label(label: Label) -> dict[str, object]:
+    return {"label": label.label, "state": label.state, "sequence": label.sequence,
+            "factors": [{"factor": f.factor_id, "bearing": f.bearing, "text": f.text, "established": f.established,
+                         "source": f.source} for f in label.factors],
+            "stakes": [{"stake": s.stake_id, "text": s.text} for s in label.stakes],
+            "calls": [_call(call) for call in label.calls], "reason": label.reason, "by": label.by}
 
 
 def _post(post: Post) -> dict[str, object]:
@@ -141,7 +157,9 @@ def turn_from_payload(address: TurnRef, schema: str, payload: object) -> TurnRec
                           None if data["post"] is None else _decode_post(data["post"]),
                           tuple(_decode_take(item, address) for item in _list(data["takes"], "takes")),
                           data["paused"], data["paused_by"], data["passed_by"],  # type: ignore[arg-type]
-                          device, extras=extras)  # type: ignore[arg-type]
+                          device,  # type: ignore[arg-type]
+                          tuple(_decode_label(item, address) for item in _list(data.get("labels", []), "labels")),
+                          extras=extras)
     except SceneRefused:
         raise
     except (ValueError, TypeError) as error:
@@ -170,6 +188,22 @@ def _decode_take(value: object, address: TurnRef) -> Take:
                 data["outcome"], tuple(_list(data["declined"], "take.declined")),  # type: ignore[arg-type]
                 tuple(_list(data["unscreened"], "take.unscreened")),  # type: ignore[arg-type]
                 data["direction"], data["by"])  # type: ignore[arg-type]
+
+
+def _decode_label(value: object, address: TurnRef) -> Label:
+    data = _mapping(value, "label", _LABEL_KEYS)
+    number = _int(data["label"], "label")
+    plan_turn = f"{address.turn_id}.l{number}"
+    factors = []
+    for item in _list(data["factors"], "label.factors"):
+        found = _mapping(item, "factor", _FACTOR_KEYS)
+        factors.append(Factor(found["factor"], found["bearing"], found["text"],  # type: ignore[arg-type]
+                              found["established"], found["source"]))  # type: ignore[arg-type]
+    stakes = [Stake(found["stake"], found["text"])  # type: ignore[arg-type]
+              for found in (_mapping(item, "stake", _STAKE_KEYS) for item in _list(data["stakes"], "label.stakes"))]
+    calls = tuple(_decode_call(item, address.campaign_id, plan_turn) for item in _list(data["calls"], "label.calls"))
+    return Label(number, data["state"], data["sequence"], tuple(factors), tuple(stakes),  # type: ignore[arg-type]
+                 calls, data["reason"], data["by"])  # type: ignore[arg-type]
 
 
 def _decode_line(value: object) -> SceneLine:

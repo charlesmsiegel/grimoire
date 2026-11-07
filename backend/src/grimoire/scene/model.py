@@ -14,6 +14,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 
+from grimoire.adjudication import MAX_FACTORS, MAX_STAKES, Factor, Stake
 from grimoire.comms import CHANNELS
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TurnRef, validate_segment
 from grimoire.core.inference import TOKEN_FIELDS, CallAttempt, CallId, InferenceStage, TokenUsage
@@ -30,6 +31,12 @@ POST_KINDS = ("speech", "action")
 #: 027's call outcomes, and ``planned`` for a call of a running take that has not ended.
 CALL_STATES = ("planned", "accepted", "rejected", "incomplete", "failed", "cancelled", "refused", "not_issued")
 TURN_OUTCOMES = ("complete", "halted", "cancelled", "stale")
+#: A labelling of a turn's action: ``running`` (written before its call, so a crash leaves the planned call on record),
+#: ``proposed`` (labels to confirm), ``refused`` (the call or its reply gave no labels), ``superseded`` (a running
+#: or proposed labelling a newer one replaced) and ``framed`` (recorded as the action's 029 frame).
+LABEL_STATES = ("running", "proposed", "refused", "superseded", "framed")
+#: Labellings per turn: each is a metered call, kept for good.
+MAX_LABELS = 8
 #: Takes per turn: rerolls are cheap to ask for, and each one is stored for good.
 MAX_TAKES = 16
 #: 032's channels that reach only their addressees.
@@ -294,6 +301,55 @@ class Take:
 
 
 @dataclass(frozen=True, slots=True)
+class Label:
+    """One labelling of a turn's action for 029: the facts that bear on it and what is at stake (035 M2).
+
+    ``sequence`` is the campaign sequence the action is framed at: every factor was established before it.
+    Factors and stakes are proposals read from a labeller's reply on an untrusted handle; a factor's text,
+    sequence and source were offered to the labeller, never written by it. ``reason`` says why a ``refused``
+    labelling gave no labels (a call status, or ``grimoire.labelling``'s refusal). ``by`` is who asked.
+    """
+
+    label: int
+    state: str
+    sequence: int
+    factors: tuple[Factor, ...] = ()
+    stakes: tuple[Stake, ...] = ()
+    calls: tuple[CallRecord, ...] = ()
+    reason: str | None = None
+    by: str | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.label) is not int or not 1 <= self.label <= MAX_LABELS:
+            raise _fail("invalid_field", f"a labelling is numbered 1..{MAX_LABELS}")
+        if self.state not in LABEL_STATES:
+            raise _fail("invalid_field", f"a labelling is one of {LABEL_STATES}")
+        if type(self.sequence) is not int or self.sequence < 1:
+            raise _fail("invalid_field", "an action is framed at a positive sequence")
+        object.__setattr__(self, "factors", tuple(self.factors))
+        object.__setattr__(self, "stakes", tuple(self.stakes))
+        object.__setattr__(self, "calls", tuple(self.calls))
+        if not all(type(factor) is Factor for factor in self.factors) or len(self.factors) > MAX_FACTORS:
+            raise _fail("invalid_field", f"a labelling holds at most {MAX_FACTORS} Factor values")
+        if not all(type(stake) is Stake for stake in self.stakes) or len(self.stakes) > MAX_STAKES:
+            raise _fail("invalid_field", f"a labelling holds at most {MAX_STAKES} Stake values")
+        if len({f.factor_id for f in self.factors}) != len(self.factors) or len(
+                {s.stake_id for s in self.stakes}) != len(self.stakes):
+            raise _fail("invalid_field", "a labelling repeats a factor or stake id")
+        if any(factor.established >= self.sequence for factor in self.factors):
+            raise _fail("invalid_field", "a factor was established before the action")
+        if self.state in ("running", "refused") and (self.factors or self.stakes):
+            raise _fail("invalid_field", f"a {self.state} labelling holds no labels")
+        if not all(type(call) is CallRecord and call.stage is InferenceStage.LABELLING for call in self.calls):
+            raise _fail("invalid_field", "a labelling's calls are labelling CallRecord values")
+        _optional(self.reason, "reason", 200)
+        _optional(self.by, "by", MAX_PRINCIPAL)
+
+    def attempts(self) -> tuple[CallAttempt, ...]:
+        return tuple(attempt for call in self.calls for attempt in call.attempts)
+
+
+@dataclass(frozen=True, slots=True)
 class TurnRecord:
     """One turn of one chat: ``post`` (or none), its takes, and whether the table closed it.
 
@@ -312,6 +368,7 @@ class TurnRecord:
     paused_by: str | None = None
     passed_by: str | None = None
     device: str | None = None
+    labels: tuple[Label, ...] = ()
     extras: dict[str, object] = field(default_factory=dict, compare=False)
 
     def __post_init__(self) -> None:
@@ -339,6 +396,21 @@ class TurnRecord:
         _optional(self.passed_by, "passed_by", MAX_PRINCIPAL)
         if self.passed_by is not None and self.kept is not None:
             raise _fail("invalid_field", "a turn is either kept or passed")
+        object.__setattr__(self, "labels", tuple(self.labels))
+        if not all(type(label) is Label for label in self.labels):
+            raise _fail("invalid_field", "a turn's labellings are Label values")
+        if self.labels and (self.post is None or self.post.kind != "action"):
+            raise _fail("invalid_field", "only a turn whose post is an action is labelled")
+        if [label.label for label in self.labels] != list(range(1, len(self.labels) + 1)):
+            raise _fail("invalid_field", "labellings are numbered 1, 2, ... in order")
+        for state in ("running", "framed"):
+            if sum(label.state == state for label in self.labels) > 1:
+                raise _fail("invalid_field", f"a turn holds at most one {state} labelling")
+        for label in self.labels:
+            planned = self.label_turn(label.label)
+            if any(a.call_id.campaign_id != self.chat.campaign_id or a.call_id.turn_id != planned
+                   for a in label.attempts()):
+                raise _fail("invalid_field", "a labelling's calls were planned under <turn_id>.l<label>")
         prefix = self.turn_id + "."
         campaign = self.chat.campaign_id
         if self.post is not None and any(actor.campaign_id != campaign for actor in self.post.audience):
@@ -380,6 +452,20 @@ class TurnRecord:
         """The id a take's generation is planned and billed under."""
         return f"{self.turn_id}.{take}"
 
+    def label_turn(self, label: int) -> str:
+        """The id a labelling's call is planned and billed under: never a take's (``<turn_id>.<take>``)."""
+        return f"{self.turn_id}.l{label}"
+
+    def with_label(self, label: Label) -> TurnRecord:
+        """The turn with ``label`` added, or replacing the labelling of the same number."""
+        labels = [existing for existing in self.labels if existing.label != label.label]
+        labels.append(label)
+        return replace(self, labels=tuple(sorted(labels, key=lambda each: each.label)))
+
+    @property
+    def framed(self) -> Label | None:
+        return next((label for label in self.labels if label.state == "framed"), None)
+
     def with_take(self, take: Take) -> TurnRecord:
         """The turn with ``take`` added, or replacing the take of the same number."""
         takes = [existing for existing in self.takes if existing.take != take.take]
@@ -408,7 +494,8 @@ def usage_totals(attempts: Iterable[CallAttempt]) -> dict[str, int]:
 
 
 __all__ = [
-    "CALL_STATES", "CallRecord", "LINE_STATES", "MAX_CHAT_ID", "MAX_TAGGED_CHAT_ID", "MAX_TAKES", "ORIGINS",
+    "CALL_STATES", "CallRecord", "LABEL_STATES", "LINE_STATES", "Label", "MAX_CHAT_ID", "MAX_LABELS",
+    "MAX_TAGGED_CHAT_ID", "MAX_TAKES", "ORIGINS",
     "POST_KINDS", "Post",
     "SceneLine", "SceneRefused", "TAKE_STATES", "Take", "TokenUsage", "TurnRecord", "parse_turn_id", "turn_id",
     "usage_totals",

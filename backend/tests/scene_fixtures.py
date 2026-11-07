@@ -31,6 +31,8 @@ from grimoire.core.inference import InferencePolicy
 from grimoire.import_v1 import chat_id_of
 from grimoire.ledgers import DurableAuthority
 from grimoire.play import SceneRunner
+from grimoire.providers import RouteChoice
+from grimoire.runtime import LabelRuntime
 from grimoire.security import Grant, Permission, ResourcePath
 from grimoire.store import LibraryStore
 from grimoire.voice import VoiceAnchor, VoiceCatalog, VoiceExample, VoiceProfile
@@ -38,6 +40,8 @@ from grimoire.voice import VoiceAnchor, VoiceCatalog, VoiceExample, VoiceProfile
 ANA, BOB = "human:ana", "human:bob"
 SCOPES = ("sources", "campaigns", "assets", "kept")
 POLICY = InferencePolicy({"director_generation": 1}, max_attempts_per_call=1)
+LABELLER = "app:labeller"
+LABEL_POLICY = InferencePolicy({"director_generation": 1, "labelling": 1}, max_attempts_per_call=1)
 
 # -- V1 ---------------------------------------------------------------------------------------------
 
@@ -146,14 +150,24 @@ class Table:
     """One open library: its durable authority, the owner's and players' handles, and a runner."""
 
     def __init__(self, folder: Path, steps=(), *, voices: VoiceCatalog | None = None, runtime: bool = True,
-                 policy: InferencePolicy = POLICY, secrets=(), fence=None) -> None:
+                 policy: InferencePolicy = POLICY, secrets=(), fence=None, labels=None,
+                 propose: bool = True) -> None:
         self.store = LibraryStore.open(folder)
         self.authority = DurableAuthority.open(self.store, [OWNER], clock=fixed_clock())
         self.owner = self.authority.handle_for(OWNER, trusted=True)
         self.harness = Harness(list(steps))
+        labeller = self.label_handle = self.labels = None
+        if labels is not None:  # the labeller's own untrusted provider handle, and the library's label handle
+            self.labels = Harness(list(labels), approve=True)
+            labeller = LabelRuntime(self.labels.adapter, (RouteChoice("primary", "model-a"),), self.labels.handle,
+                                    approvals=self.labels.approvals)
+            if propose:
+                self.authority.add_grant(Grant("labeller-campaigns", LABELLER, frozenset({Permission.PROPOSE}),
+                                               ResourcePath.parse("campaigns"), OWNER))
+            self.label_handle = self.authority.handle_for(LABELLER, trusted=False)
         self.runner = SceneRunner(self.store, self.authority, self.owner, owner=OWNER,
                                   runtime=self.harness.runtime if runtime else None, policy=policy, secrets=secrets,
-                                  voices=voices, fence=fence)
+                                  voices=voices, fence=fence, labeller=labeller, label_handle=self.label_handle)
 
     def player(self, principal: str = ANA):
         return self.authority.handle_for(principal, trusted=True)
@@ -170,7 +184,8 @@ class Table:
 
 
 __all__ = [
-    "ANA", "ANYA", "BOB", "LIGHTHOUSE", "MARA", "MARA_EXAMPLE", "MARA_LORE", "MARA_VELL", "MARA_VOICE", "POLICY",
+    "ANA", "ANYA", "BOB", "LABEL_POLICY", "LABELLER", "LIGHTHOUSE", "MARA", "MARA_EXAMPLE", "MARA_LORE", "MARA_VELL",
+    "MARA_VOICE", "POLICY",
     "SERAPHINE", "SERAPHINE_EXAMPLE", "STORM", "TAMSIN", "Table", "V1_CHAT", "VELL_EXAMPLE", "WINIFRED",
     "attach_tamsin", "card_library", "say", "secure", "v1_library",
 ]
