@@ -6,9 +6,9 @@ crosses an app restart it closes the store and opens it again:
 - 036 -> 035: a SillyTavern chat imported by 036 and continued by the runner. What was never part of the
   conversation (an unchosen swipe, an edited line's pre-edit text, hidden and narrator ``is_system`` lines,
   the header's author's note) never reaches an NPC prompt. The conversation itself (the greeting, a
-  whispered secret, a chosen swipe, an edited line) does not reach one either, but only until 035's
-  milestone 2 reads ``transcripts/``: that is milestone 1's pinned limit (fail closed). Play writes no
-  imported text outside the transcript, and never rewrites the transcript;
+  whispered secret, a chosen swipe, an edited line) reaches the imported cast's NPC as history before
+  turn 1 (035 milestone 2, #628), before and after a restart. Play writes no imported text outside the
+  transcript, and never rewrites the transcript;
 - 037/038 -> 035: a card imported with its art and lorebook plays in a world-less chat. The art placements
   the chat's actor inherits survive play and a restart; card lore reaches an NPC only through its own
   context pack, when its own window holds a key (a key whispered to one NPC triggers that NPC's lore
@@ -118,14 +118,14 @@ NEVER = {
     "narrator": "Rain hammers the harbor shutters.",
     "note": "Author's note: keep the smuggler evasive.",
 }
-#: The conversation itself: 035's milestone 2 will read it as history and decide who heard it.
-UNTIL_M2 = {
+#: The conversation itself: 035's milestone 2 reads it as history that the cast the chat was imported with heard.
+HEARD = {
     "greeting": "The lamps are low tonight, friend.",
     "secret": "The key is under the blue boat.",
     "chosen": "Noted, and never repeated.",
     "edited": "A line as the player edited it afterwards.",
 }
-IMPORTED = {**NEVER, **UNTIL_M2}
+IMPORTED = {**NEVER, **HEARD}
 ST_ROWS = [
     {"user_name": "Anya Rook", "character_name": "Mara Vell", "chat_metadata": {"note_prompt": IMPORTED["note"]}},
     {"name": "Mara Vell", "is_user": False, "mes": IMPORTED["greeting"]},
@@ -154,7 +154,7 @@ def _imported_st_chat(root: Path):
     return plan.chat, plan.actors
 
 
-def test_an_imported_chat_continued_by_the_runner_never_shows_an_npc_its_unspoken_lines_nor_yet_its_history(
+def test_an_imported_chat_continued_by_the_runner_shows_its_npc_the_history_but_never_its_unspoken_lines(
         tmp_path):
     root = tmp_path / "lib"
     chat, actors = _imported_st_chat(root)
@@ -167,9 +167,9 @@ def test_an_imported_chat_continued_by_the_runner_never_shows_an_npc_its_unspoke
         runner, ana = table.runner, table.player()
         runner.seat(chat, ANA)
         scene = runner.open(chat)
-        # The actors 036 bound. Scene.problems is not pinned here: 035's ``imported_history_unread`` there is
-        # the flag milestone 2 reads, and whether it is raised yet is no part of this seam.
+        # The actors 036 bound; every page reads, so nothing is reported unread or unreadable.
         assert set(scene.cast) == set(actors.values())
+        assert [code for code, _ in scene.problems if code.startswith("imported_history")] == []
         (mara,) = scene.npcs
         assert scene.persona in scene.players and scene.records == ()  # no imported line is a turn
         runner.post(chat, ana, asked)
@@ -178,7 +178,7 @@ def test_an_imported_chat_continued_by_the_runner_never_shows_an_npc_its_unspoke
         (prompt,) = table.harness.prompts()
         assert VELL_EXAMPLE in prompt and "Where did I say the key was?" in prompt  # her voice, the live post
         assert [name for name, text in NEVER.items() if text in prompt] == []
-        assert [name for name, text in UNTIL_M2.items() if text in prompt] == []  # 035 M1's pinned limit
+        assert [name for name, text in HEARD.items() if text not in prompt] == []  # the imported history, heard
         runner.keep(chat, ana, 1)
 
     with Table(root, [say("Charts drown, like ledgers.")]) as table:  # a restart
@@ -188,7 +188,7 @@ def test_an_imported_chat_continued_by_the_runner_never_shows_an_npc_its_unspoke
         (prompt,) = table.harness.prompts()
         assert "I keep no such ledger." in prompt  # what the runner's own turns said is heard
         assert [name for name, text in NEVER.items() if text in prompt] == []
-        assert [name for name, text in UNTIL_M2.items() if text in prompt] == []  # 035 M1's pinned limit
+        assert [name for name, text in HEARD.items() if text not in prompt] == []  # the imported history, heard
     assert _files(root, pages) == transcript  # play never rewrites the imported history
     # and no imported text was copied anywhere else in the campaign: not into a turn, evidence or other record
     played = {path: data for path, data in _files(root, f"campaigns/{chat.campaign_id}/").items()
