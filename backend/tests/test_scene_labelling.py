@@ -433,6 +433,26 @@ def failing_once(owner, name: str, error: Exception) -> None:
     setattr(owner, name, call)
 
 
+def test_a_keep_closing_the_turn_while_it_is_confirmed_leaves_nothing_framed(cards):
+    folder, chat = cards
+    with judged(folder, UNOPPOSED, steps=[say("You reach the top.")]) as table:
+        acting(table, chat)
+        early = table.runner.generate(chat, table.player())
+        table.runner.label(chat, table.player())
+        check = table.adjudication.check
+
+        def kept_meanwhile(*args, **kwargs):  # the table keeps the take while 029 checks the frame
+            table.adjudication.check = check
+            result = check(*args, **kwargs)
+            table.runner.keep(chat, table.player(), early.take)
+            return result
+        table.adjudication.check = kept_meanwhile
+        refused("no_open_turn", table.runner.confirm, chat, table.player())
+        record = table.runner.open(chat).turns.last.record
+        assert record.kept.take == early.take and record.framed is None
+        assert table.adjudication.state(chat.campaign_id).frame(record.turn_id) is None
+
+
 def test_a_confirm_cut_short_after_framing_finishes_on_the_next_confirm(cards):
     folder, chat = cards
     with judged(folder, UNOPPOSED) as table:

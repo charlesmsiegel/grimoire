@@ -183,6 +183,8 @@ def _mark_framed(runner, chat: ChatRef, record: TurnRecord, number: int, princip
         if stored is None:
             break
         labels = stored.record.labels
+        if not stored.record.open:  # a take was kept, or the turn passed, meanwhile: nothing is left to frame
+            raise _refuse("no_open_turn", "the turn closed while its action was confirmed")
         if stored.record.framed is not None:
             if stored.record.framed.label == number:  # a concurrent confirm framed it
                 return stored.record
