@@ -122,23 +122,32 @@ class QuickStart:
         begun = bool(records) and not (len(records) == 1 and records[0].origin == "opening" and records[0].open)
         if begun and opening is not None:
             raise QuickStartRefused("already_begun", "the chat is under way; it opens only once")
-        if opening is not None and opening not in self._chat_openings(self._read(chat)[0]):
+        offered = self._chat_offered(self._read(chat)[0])
+        if opening is not None and opening not in {o.opening_id for o in offered}:
             raise QuickStartRefused("unknown_opening", "that greeting or opening is not offered here")
         if begun:
+            # a card added while playing may have lost its seat after its binding was committed: seat it now
             first = records[0]
-            return Started(chat, first if first.origin == "opening" else None)
+            kept = first if first.origin == "opening" else None
+            unfinished = self._seat(chat, player)
+            return Started(chat, kept, unfinished.unfinished if unfinished is not None else None)
         if not records and self._imported(chat):
             if opening is not None:
                 raise QuickStartRefused("already_begun", "an imported conversation is this chat's beginning")
             # 036/026's pages are the history before turn 1: a fresh greeting would follow the conversation
             return self._seat(chat, player) or Started(chat)
-        return self._launch(chat, by, player, opening)
+        # the same default ``start`` chose, so a launch cut off before its opening resumes with it
+        return self._launch(chat, by, player, opening, default=_default(offered))
 
-    def _launch(self, chat: ChatRef, by, player: str, opening: str | None) -> Started:
-        """Seat, then open and keep: each a 035 commit of its own, so a refusal leaves a chat to continue."""
+    def _launch(self, chat: ChatRef, by, player: str, opening: str | None, *, default: str | None = None) -> Started:
+        """Seat, then open and keep: each a 035 commit of its own, so a refusal leaves a chat to continue.
+
+        ``opening`` is the player's choice; ``default`` is what opens a chat with no opening turn yet when
+        nothing was chosen. A take already proposed and not chosen against is kept as it is."""
         unfinished = self._seat(chat, player)
         if unfinished is not None:
             return unfinished
+        wanted = opening if opening is not None else default
         try:
             scene = self.runner.open(chat)
             pending = scene.records[0] if scene.records else None
@@ -146,9 +155,9 @@ class QuickStart:
             if pending is None or opening is not None or not proposed:
                 # a take for the chosen opening (or the default) for the cast as it is now
                 try:
-                    pending = self.runner.begin(chat, by, opening=opening)
+                    pending = self.runner.begin(chat, by, opening=wanted)
                 except SceneRefused as error:
-                    if error.reason == "no_opening" and opening is None and not scene.records:
+                    if error.reason == "no_opening" and wanted is None and not scene.records:
                         return Started(chat)  # nothing to open with: the player speaks first
                     raise
                 proposed = [pending.takes[-1]]
@@ -158,7 +167,7 @@ class QuickStart:
                 if error.reason not in _ASK_AGAIN:
                     raise
             # the cast changed since that take was written: ask once more, for the cast as it is now
-            pending = self.runner.begin(chat, by, opening=opening)
+            pending = self.runner.begin(chat, by, opening=wanted)
             return Started(chat, self.runner.keep(chat, by, pending.takes[-1].take))
         except SceneRefused as error:
             return Started(chat, unfinished=error.reason)
@@ -277,19 +286,22 @@ class QuickStart:
         pages = self.store.chat_transcript(chat)
         return bool(pages.records or pages.problems)
 
-    def _chat_openings(self, record: ChatRecord) -> set[str]:
-        """Every opening id 035's ``begin`` could find for this chat: its scenarios' and its launch card's."""
-        ids: set[str] = set()
+    def _chat_offered(self, record: ChatRecord) -> tuple[Opening, ...]:
+        """The openings 035's ``begin`` could find for this chat, in its order: its scenarios', then the
+        launch card's, read from the active binding (a reviewed rebase re-pins that binding, never the
+        launch, which stays the immutable provenance)."""
         refs = [(b.ref, "scenario") for b in record.active_bindings("scenario")]
-        if record.launch.kind == "character" and record.launch.ref is not None:
-            refs.append((record.launch.ref, "character"))
+        launch = record.launch
+        if launch.kind == "character" and launch.ref is not None:
+            refs += [(b.ref, "character") for b in record.active_bindings("character")
+                     if b.ref.unpinned() == launch.ref.unpinned()]
+        found: list[Opening] = []
         for ref, kind in refs:
-            found = self.store.check_definition(ref)
-            payload = found.envelope.payload if not isinstance(found, str) else None
+            stored = self.store.check_definition(ref)
+            payload = stored.envelope.payload if not isinstance(stored, str) else None
             payload = payload if isinstance(payload, Mapping) else {}
-            ids |= {o.opening_id for o in _offered(Selection(kind, ref) if kind == "scenario"
-                                                   else Selection.character(ref), payload)}
-        return ids
+            found += _offered(Selection(kind, ref), payload)
+        return tuple(found)
 
     def _pin(self, ref: SourceRef, role: str) -> SourceRef:
         """``ref`` at the revision it resolves to now, or a refusal with 010's reason."""

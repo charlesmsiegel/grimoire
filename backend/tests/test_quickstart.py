@@ -293,6 +293,56 @@ def test_a_kept_opening_lost_to_a_race_is_kept_by_continue(folder, monkeypatch):
         table.runner.post(started.chat, ana, '"Hello?"')  # play goes on
 
 
+def test_a_launch_cut_off_before_its_opening_resumes_with_the_default_start_chose(folder, monkeypatch):
+    with Table(folder) as table:
+        ana, qs = table.player(), quick(table)
+        reimport(table, card(V3, name="Early Ilse", first_mes=None, alternate_greetings=["Morning, stranger."],
+                             group_only_greetings=None, character_book=None))
+        ilse = SourceRef("card:early-ilse", "character", "early-ilse")
+        assert qs.options(Selection.character(ilse)).default_opening == "alt-1"  # no first greeting at all
+        monkeypatch.setattr(table.runner, "begin", lambda *_a, **_k: (_ for _ in ()).throw(SceneRefused("turn_changed")))
+        started = qs.start(Selection.character(ilse), ana, persona=ANYA)
+        assert started.unfinished == "turn_changed"
+        monkeypatch.undo()
+        resumed = qs.continue_chat(started.chat, ana)
+        assert resumed.unfinished is None and resumed.opening.takes[-1].lines[0].text == "Morning, stranger."
+
+
+def test_a_card_whose_seat_was_lost_while_playing_is_seated_by_continue(folder, monkeypatch):
+    with Table(folder) as table:
+        ana, qs = table.player(), quick(table)
+        started = qs.start(Selection.character(MARA_VELL), ana, persona=ANYA)
+        monkeypatch.setattr(table.runner, "seat", lambda *_a, **_k: (_ for _ in ()).throw(SceneRefused("not_seated")))
+        assert qs.add_card(started.chat, TAMSIN, ana).unfinished == "not_seated"
+        monkeypatch.undo()
+        record = qs.chats.read_chat(started.chat)[0]
+        (tamsin,) = [b.actor for b in record.active_bindings("character") if b.ref.entity_key == TAMSIN.entity_key]
+        assert tamsin not in table.runner.open(started.chat).npcs  # bound, but nobody plays it yet
+        resumed = qs.continue_chat(started.chat, ana)
+        assert resumed.unfinished is None and resumed.opening == started.opening
+        assert tamsin in table.runner.open(started.chat).npcs
+
+
+def test_continue_offers_the_greetings_of_the_revision_a_rebase_adopted(folder):
+    with Table(folder) as table:
+        owner, qs = table.owner, quick(table)
+        chat = qs.chats.start_chat(Launch("character", MARA_VELL.at("r1")), persona=ANYA.at("r1")).commit().chat
+        reimport(table, card(VOICED, alternate_greetings=["The tide is late tonight.", "Fog again, and no bell."]),
+                 target="card:mara-vell")
+        adopted = table.store.check_definition(MARA_VELL).ref
+        assert adopted != MARA_VELL.at("r1")
+        # 042's reviewed rebase re-pins the binding to the adopted revision and keeps the actor (a 107 rebind);
+        # the launch stays the immutable provenance
+        record, etag = qs.chats.read_chat(chat)
+        (binding,) = record.active_bindings("character")
+        qs.chats.detach_source(chat, binding.ref, "character", expected=etag).commit()
+        _record, etag = qs.chats.read_chat(chat)
+        qs.chats.attach_source(chat, adopted, "character", expected=etag, actor=binding.actor).commit()
+        assert qs.chats.read_chat(chat)[0].launch.ref == MARA_VELL.at("r1")
+        opened = qs.continue_chat(chat, owner, opening="alt-2")
+        assert opened.opening.takes[-1].lines[0].text == "Fog again, and no bell."
+
+
 def test_continue_refuses_a_bad_opening_before_writing(folder):
     with Table(folder) as table:
         owner, qs = table.owner, quick(table)  # a persona nobody controls yet is the owner's to seat
