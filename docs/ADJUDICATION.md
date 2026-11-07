@@ -4,7 +4,7 @@
 - `grimoire.adjudication` (pure): action frames, the deterministic assessment, decisions, outcomes and the ledger codecs;
 - `grimoire.adjudicationstore` (adapter): `AdjudicationLibrary`, which records frames, ability rulings and decisions in an authority ledger and hands decided ability uses to [accepted effects (021)](EFFECTS.md).
 
-There is no prompt, model call or dice, and 035's runner does not frame or decide attempts yet (milestone 2). Nothing labels prose yet: the labeller that produces frames is a caller obligation (035). All scenarios are synthetic.
+There is no prompt, model call or dice here, and 035's runner does not frame or decide attempts yet (milestone 2). 035's labeller proposes a player action's factors and stakes on the action's turn ([SCENES](SCENES.md#labelling-an-action)); nothing turns a proposal into a frame yet. All scenarios are synthetic.
 
 **First useful proof.** "Resolve a risky mechanics-free action without narrator fiat": Mara, a player character, vaults a collapsing bridge. Her training favours the vault, the gap and the falling span hinder it, and a fall or a lost satchel are at stake. The outcome may be a success, a failure or a success at a cost, but only one that a recorded cause supports, and every narration retry must agree with it.
 
@@ -103,7 +103,7 @@ Each campaign has one authority ledger, `authority/adjudication/<campaign_id>` (
 
 - **Factor sources are attributed, not verified.** Nothing checks that a factor's `source` exists or says what the factor claims, or that `established` matches it. Checking against 017 relations, 020 events and 021 accepted events is a later slice. Until then the guarantee rests on the labeller and on the order of records.
 - **The labeller is trusted.** As in 003 and 025, the classification is only as good as the labels. Under-labelling a hindrance makes an action straightforward.
-- **One key labels and decides.** The adjudication key records both frames and decisions. The order of records and `frame_worsened` stop a hindrance invented after the fact, but a caller holding the key could still frame an action thinly and decide it at once. Separating the labeller from the decider is 035's job.
+- **One key labels and decides.** The adjudication key records both frames and decisions. The order of records and `frame_worsened` stop a hindrance invented after the fact, but a caller holding the key could still frame an action thinly and decide it at once. 035's labeller now runs on its own untrusted handle and only proposes; giving framing and deciding separate keys is the rest of 035 milestone 2.
 - **A power is read at the decision.** The ability assessment is computed when the attempt is decided, from the entity as it is then, not as it was at the action's moment. An authored change, or an accepted effect, between framing and deciding can make a power uncertain or impossible. After the decision the finding is the pin (`assessment_changed` at hand-off). Pinning it at the frame is a later slice.
 - **Undecided attempts bind no narration.** `resolutions` lists only decided attempts, and 003 accepts outcome narration with no recorded resolution as the director's. Until 035's runner refuses outcome narration for a framed, undecided attempt, the guarantee holds from the decision on.
 - **Consent is the handle, not a record.** A consent decision needs the authoring player's trusted handle, but nothing the player wrote says which setback they chose. The runner (035) must take consent only from the player's own live choice.

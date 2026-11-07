@@ -284,8 +284,9 @@ def test_an_actor_re_sourced_in_v2_is_never_bound_to_its_v1_definition(env):
     env.plan(Selection({"saltmarch": SALTMARCH}, {"the-drowned-ledger": CAMPAIGN_ID}, frozenset({scene}))).apply()
     actor = env.store.root / CAMPAIGN_DIR / "instances" / "character" / "mara.json"
     text = actor.read_text(encoding="utf-8")
-    old = '"derived_from": "world:saltmarch/character/mara.default"'
-    new = '"derived_from": "world:saltmarch/character/mara.older"'
+    old = '"derived_from": "world:saltmarch/character/mara.default'  # pinned: "...mara.default@v1-..."
+    new = '"derived_from": "world:saltmarch/character/mara.older'
+    assert old in text
     actor.write_text(text.replace(old, new), encoding="utf-8")
     review = env.plan(WITH_CAMPAIGN).review()
     assert "actor_changed_in_v2" in reasons(review)

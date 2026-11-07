@@ -139,11 +139,16 @@ def imported_history(pages: Iterable[TranscriptPage], listeners: Iterable[Instan
 
 
 def heard_for(turns: Iterable[TurnRecord], actor: InstanceRef, names: Mapping[InstanceRef, str], *,
-              limit: int = MAX_HEARD, before: ImportedHistory | None = None) -> tuple[HeardLine, ...]:
+              limit: int = MAX_HEARD, before: ImportedHistory | None = None,
+              narration: bool = True) -> tuple[HeardLine, ...]:
     """What ``actor`` heard, oldest first: posts in its audience and kept lines it heard (the last ``limit``).
 
     ``before`` is the chat's imported history: an actor it was imported with heard it before turn 1. It holds
     only its own last ``MAX_HEARD`` lines, so a ``limit`` above that gets no more imported lines.
+
+    A player character is in narration's audience because its player sits at the table, not because the
+    character perceived it. ``narration=False`` is the character's own window: only spoken lines and posts,
+    with no narrator line (imported narration is never in ``before.heard``).
     """
     heard: list[HeardLine | None] = []
     if before is not None and actor in before.listeners:
@@ -151,7 +156,8 @@ def heard_for(turns: Iterable[TurnRecord], actor: InstanceRef, names: Mapping[In
     for turn in _ordered(turns):
         if turn.post is not None and actor in turn.post.audience:
             heard.append(_post_line(turn.post, names))
-        heard.extend(_heard(line.speaker, line.text, line.actor) for line in turn.visible(actor))
+        heard.extend(_heard(line.speaker, line.text, line.actor) for line in turn.visible(actor)
+                     if narration or line.actor is not None)
     found = [line for line in heard if line is not None]
     return tuple(found[-limit:]) if limit else ()
 

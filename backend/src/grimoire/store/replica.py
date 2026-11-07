@@ -616,6 +616,14 @@ def placement_target(data: bytes) -> tuple[str | None, ImageRef | None, bool]:
         return mode, None, False
 
 
+def definition_is_derived(data: bytes) -> bool:
+    """Whether a definition revision's raw bytes are a 022 derived delta (its payload has a
+    ``derivation`` key): 046's one rule for which source placements may clear, re-crop or reset a slot,
+    shared by ``grimoire.imagestore`` (``lineage.is_derived``) and sync."""
+    payload = _payload(data)
+    return payload is not None and "derivation" in payload
+
+
 def instance_derivation(derived_from: object, base: object) -> tuple[SourceRef | None, str | None]:
     """The unpinned entity an instance derives from (``derived_from``, else ``base``) or a problem
     code (``invalid_derivation``, ``ambiguous_derivation``): 018's one derivation rule (W7), shared
@@ -642,6 +650,7 @@ def instance_derivation_of(data: bytes) -> tuple[SourceRef | None, str | None]:
     return instance_derivation(document.get("derived_from"), document.get("base"))
 
 
-__all__ = ["ASSET_RECORD_KINDS", "CanonicalScan", "INSTANCE_ID_CONFLICT", "check_unreferenced", "image_blob",
+__all__ = ["ASSET_RECORD_KINDS", "CanonicalScan", "INSTANCE_ID_CONFLICT", "check_unreferenced", "definition_is_derived",
+           "image_blob",
            "instance_derivation", "instance_derivation_of", "instances_named", "parse_exact", "pinned_by",
            "placement_target", "previous_of", "scan"]

@@ -157,7 +157,8 @@ PURE_PACKAGES = (
                 never_import=("grimoire.core.inference",)),
     # Narration continuity referee (047): checks labelled claims against 041, 023, 034, 012, 029 and 040 values.
     PurePackage("grimoire.referee", ("grimoire.referee", "grimoire.core", "grimoire.staging", "grimoire.comms",
-                                      "grimoire.holdings", "grimoire.possessions", "grimoire.obstacles"),
+                                      "grimoire.holdings", "grimoire.possessions", "grimoire.obstacles",
+                                      "grimoire.goals"),
                 never_import=("grimoire.core.inference",)),
     # Voice evidence: shares the gate's text matcher so screening and scoring agree.
     PurePackage("grimoire.voice", ("grimoire.voice", "grimoire.core", "grimoire.evals.text",
@@ -177,9 +178,16 @@ PURE_PACKAGES = (
     PurePackage("grimoire.generation", ("grimoire.generation", "grimoire.core", "grimoire.core.inference",
                                         "grimoire.voice", "grimoire.evals.text", "grimoire.evals.checks",
                                         "grimoire.context", "grimoire.goals")),
-    # Played chat turns (035): posts, takes, who heard what, and their codec; the runner is an adapter.
+    # Labelling (035 milestone 2): the facts a labeller may cite, its prompt and a decoded reply bounded into
+    # 029 factors and stakes. The model call is the runtime's; JSON decoding stays in that adapter.
+    PurePackage("grimoire.labelling", ("grimoire.labelling", "grimoire.adjudication", "grimoire.context",
+                                       "grimoire.graph", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
+    # Played chat turns (035): posts, takes, labellings (029's factor and stake values), who heard what, and
+    # their codec; the runner is an adapter.
     PurePackage("grimoire.scene", ("grimoire.scene", "grimoire.core", "grimoire.core.inference",
-                                   "grimoire.comms", "grimoire.generation", "grimoire.transcripts")),
+                                   "grimoire.comms", "grimoire.generation", "grimoire.transcripts",
+                                   "grimoire.adjudication")),
     # Offline evaluation: of the domain core it uses only the inference contracts (sprint 015);
     # only its loader and CLI read files.
     PurePackage("grimoire.evals", ("grimoire.evals", "grimoire.core.inference"),

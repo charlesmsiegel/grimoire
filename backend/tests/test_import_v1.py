@@ -81,9 +81,10 @@ def test_first_apply_imports_world_cast_scene_and_shared_art(env):
     assert scope.world.observed_manifest_etag == view.sources[SALTMARCH].etag
     for actor, base in ((MARA, MARA_DEFAULT_REF), (SERAPHINE, SERAPHINE_REF), (WINIFRED, WINIFRED_REF)):
         stored = view.instances[actor]
-        assert (stored.envelope.derived_from, stored.envelope.base) == (str(base.unpinned()), str(base))
+        # pinned to the imported revision (pin by default): a later world revision waits for 042's rebase
+        assert (stored.envelope.derived_from, stored.envelope.base) == (str(base), str(base))
         assert stored.envelope.base_etag == view.index.resolve(base).etag
-        assert instance_from_payload(actor, "grimoire.entity/0", stored.envelope.payload).source == base.unpinned()
+        assert instance_from_payload(actor, "grimoire.entity/0", stored.envelope.payload).source == base
     controls = {row["ref"]: row["control"] for row in result.review["mapping"]["actors"]}
     assert controls == {str(MARA): "director", str(SERAPHINE): "director", str(WINIFRED): "player"}
 
@@ -91,7 +92,8 @@ def test_first_apply_imports_world_cast_scene_and_shared_art(env):
     captured = chat_snapshot(view, CHAT)
     assert captured.problems == () and captured.scope.world.source == SALTMARCH
     chat = captured.chat
-    assert chat.label == "The tide comes in" and chat.launch.ref == MARA_DEFAULT_REF.unpinned()
+    assert chat.label == "The tide comes in" and chat.launch.ref == MARA_DEFAULT_REF
+    assert all(b.ref.pinned and b.ref.revision == b.resolved_revision for b in chat.active_bindings())
     roles = {(b.role, b.actor) for b in chat.active_bindings()}
     assert roles == {("character", MARA), ("character", SERAPHINE), ("persona", WINIFRED)}
     assert {entry.prior_history for entry in chat.roster} == {NOT_WITNESSED}

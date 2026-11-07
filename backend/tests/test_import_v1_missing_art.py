@@ -301,9 +301,8 @@ def test_a_campaign_hide_never_lands_on_an_actor_re_sourced_in_v2(env):
     older = next(row["ref"] for row in first.review["mapping"]["definitions"] if "/mara.older@" in row["ref"])
     actor = env.store.root / "campaigns" / CAMPAIGN_ID / "instances" / "character" / "mara.json"
     text = actor.read_text(encoding="utf-8")
-    for old, new in (('"derived_from": "world:saltmarch/character/mara.default"',
-                      '"derived_from": "world:saltmarch/character/mara.older"'),
-                     (f'"base": "{MARA_DEFAULT_REF}"', f'"base": "{older}"')):
+    for field in ("derived_from", "base", "source"):  # all three pin the imported revision (pin by default)
+        old, new = f'"{field}": "{MARA_DEFAULT_REF}"', f'"{field}": "{older}"'
         assert old in text
         text = text.replace(old, new)
     actor.write_text(text, encoding="utf-8")  # a V2 edit: the actor now plays the older portrayal

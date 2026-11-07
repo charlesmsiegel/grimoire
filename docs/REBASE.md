@@ -15,6 +15,17 @@ There is no UI yet, and no model is called. Every write is one guarded store tra
   - Only new files under `sources/<world>/` are written. The chat, its scope, its actors and every history record are byte-identical.
   - Attaching the new world to the chat's scope is 107's `ChatLibrary.attach_world`, which changes no id.
 
+## Pin by default
+
+**Decision (owner, Wave 5 audit, Nov 6): pin by default.** New chats and imported scenes pin their card or world revision; updates arrive only through this reviewed take-or-keep rebase. Existing chats are never rewritten: a chat an earlier build stored following its head still follows.
+
+- **Every product path pins.** 107's `start_chat`, `attach_source` and `set_persona` bind an unpinned ref pinned to the revision it resolves to at that moment: the revision whose bytes were checked, and the one a new actor is based on. The launch names the same pinned ref, and a new actor's instance `source` and `derived_from` are pinned too. A **reused** actor (`actor=`, `reuse_actors`, or the same persona chosen again) given an unpinned ref is pinned to the revision it plays, by the review's own ancestor rule: the one revision its active pinned bindings in the campaign's chats agree on (an explicit rebind counts); otherwise (none, a disagreement, or a chat that cannot be read) its instance's pinned `source`, else, with no `source`, its `base`. The same persona chosen again keeps its current pinned revision. When the instance follows its head (an earlier build's), or the revision it plays no longer resolves (a broken reference being repaired), the ref is pinned to the revision it resolves to now, so a following actor stays on the head it already plays. Nothing picks one chat's revision in silence or an unreviewed head, and a disagreement or an unreadable chat still refuses the review (`binding_disagrees`, `chats_unreadable`). Naming another revision explicitly is 107's rebind (`actor_rebound`). That covers 035's card chats (the card, a lorebook, the persona, a second card attached mid-chat), 036's SillyTavern import (it writes through `start_chat`), and 026's V0.2.1 scene chats, whose bindings, launch and actors pin the imported revision ([IMPORT_V1](IMPORT_V1.md)). A scene a rerun imports later binds an existing actor at the revision it plays by the same rule, so a rebase or a rebind taken in the meantime is kept.
+- **Following is explicit.** `follow=True` on those three methods binds an unpinned ref as given, following its head (022's `binding_drift` notice shows when the head moves). No product path passes it.
+- **Back-compat.** A chat an earlier build stored with unpinned bindings is not rewritten. It still reads and still follows, and this review lists it under `following`. A rerun of 026 reports each following binding (`binding_follows_head`) and of 036 lists them (`StImport.following`), whether an earlier build wrote it or someone chose `follow=True` since; neither re-pins, and this rebase re-pins only chats that are already pinned. To pin one, detach the source and attach it again with `actor=` (107), which pins the revision it resolves to then.
+- **What this covers.** Only actors are rebased here. A pinned lorebook, scenario or other non-actor binding has no rebase review yet: it stays on its revision until it is detached and attached again. A scenario's own lorebook is the one its pinned revision names ([CARDS](CARDS.md#chats)).
+
+So a card update or an applied 043 world change set leaves every default chat on its revision, and `review` + `apply` with `take` is how the new revision reaches one chat's campaign. The scenarios are in `tests/test_pin_by_default.py`.
+
 ## Rebase review (`SourceRebase.review(actor, target=None)`)
 
 `target` defaults to the head of the actor's source. Both sides are 022 effective definitions (`compose`), so a derived revision is compared by its composed values, never by its raw delta.
@@ -41,7 +52,7 @@ The recorded `base_etag` must still match the ancestor's bytes. If it doesn't, t
 - **`keep`** keeps the campaign's value as an instance override: the ancestor value on an `upstream` row, the override on a `conflict` row.
   - A name goes to `local_name`.
   - A facet goes to `replaced` if upstream has that trait, otherwise to `added`. A converged or kept `added` facet that upstream now has moves to `replaced`, because 009 refuses an `added` facet that shadows a trait.
-  - Description, sections and payload extras have no instance-level override in this slice. An instance also cannot suppress a trait upstream adds. `keep` on those is `not_overridable`: take the change, or stay pinned. A campaign keeping its own voice or greeting is 046's design.
+  - Description, sections and payload extras have no instance-level override in this slice. An instance also cannot suppress a trait upstream adds. `keep` on those is `not_overridable`: take the change, or stay pinned. A campaign keeping its own voice or greeting is not built yet ([INHERITANCE](INHERITANCE.md#limits)); a world portrayal can already override, clear or reset one field at a time.
 
 **Uncomposed payload keys** get an `extra:<key>` row too. 022 does not compose them (`EffectiveDefinition.uncomposed`), but other sprints read them. The main one is 037's `card`, which holds a card's example dialogue, greetings and system prompt; 035 reads it for the actor's voice and its opening line.
 - The row compares the key's value in every layer of the chain, leaf first, because 035's voice reads a base's card too. `ancestor` and `upstream` hold those values (`None` where a layer lacks the key).
@@ -52,7 +63,7 @@ The rebased instance must compose over the upstream (009 `compose_instance`), an
 
 **Review also reports** (and never changes):
 - `repinned`: chats whose active binding pins the ancestor; the commit re-pins them.
-- `following`: chats whose binding follows the head. Those chats already show the new head; they are not rewritten.
+- `following`: chats whose binding follows the head (an explicit `follow=True`, or a chat an earlier build stored before [pin by default](#pin-by-default)). Those chats already show the new head; they are not rewritten.
 - `history`: read-only references to what names the actor (a raw scan for its id), all kept:
   - chats (107), relations (017) and accepted events (021);
   - played turns (035) and transcript pages (036);
@@ -60,6 +71,7 @@ The rebased instance must compose over the upstream (009 `compose_instance`), an
 
   `history.problems` lists files that could not be read for the list. It is reported, never a refusal, since the rebase writes none of them.
   A review is director-level: it names evidence ids whoever observed them, so it is for the campaign's owner and never goes into a character's prompt.
+- `art` (046): every slot whose picture the rebase changes, with what it shows now (`before`) and after (`after`). A pinned actor's [pinned art](INHERITANCE.md#pinned-art) moves only with the review. When only the art changed, a review of the ancestor itself is allowed: it has no rows and re-pins no chat.
 - `history_review`: upstream changes the description, a section or an uncomposed payload key, and the actor has history. Established events may contradict the new authored text, so a human reads both. This is a notice listing ids, not a contradiction check.
 
 **Refusals** (`RebaseError.reason`):
@@ -73,11 +85,11 @@ The rebased instance must compose over the upstream (009 `compose_instance`), an
 | `missing_ancestor` | the ancestor does not resolve |
 | `ancestor_edited` | the ancestor's bytes no longer match `base_etag` |
 | `other_entity` | the target is another entity: a namesake or any other definition is never a rebase target |
-| `missing_target`, `up_to_date` | the target does not resolve, or is the ancestor |
+| `missing_target`, `up_to_date` | the target does not resolve, or it is the ancestor and the actor's art would not change either |
 | `follows_head` | an instance that follows its head, or one a chat binds following the head, and a target that is not the head (a following chat would compose the result over the head) |
 | `chats_unreadable` | a chat file of the campaign cannot be read or interpreted, so its bindings cannot all be found |
 | `binding_disagrees` | the campaign's chats pin the actor to different revisions; rebind or detach one first |
-| `binding_limit` | a chat to re-pin already holds 107's maximum number of bindings |
+| `binding_limit` | a chat to re-pin already holds 107's maximum number of bindings (an art-only review re-pins none) |
 | `nature_changed` | an individual became a template or back: a different kind of thing, not a field change |
 
 Composition refusals of either side (`PortrayalError`) propagate.
@@ -90,6 +102,7 @@ The returned `RebaseChange` writes:
 - **the instance**, guarded by CAS on its reviewed etag.
   - A pinned `source` is re-pinned to the target; a following source stays unpinned. `derived_from` is re-pinned likewise if it named a pinned revision of the entity.
   - `base` becomes the target and `base_etag` the target's etag.
+  - `art_pin` becomes the snapshot the review showed, or is dropped once no pinned chat binds the actor (046). An actor that pinned and following chats share stays pinned.
   - Every other envelope field, the payload's unknown keys, state and individuality are kept.
 - **each chat with an active pinned binding of the actor.** The binding is tombstoned and a new pinned binding of the target, for the same actor, is added. The roster is unchanged.
 
@@ -141,11 +154,12 @@ What the chat's snapshot refuses for an actor (missing, undecodable, broken bind
 |---|---|
 | Rebasing a derived portrayal onto its base's new revision (source-level rebase) | 042 later |
 | Campaign-local overrides of description and sections, so one of two changed sections can be kept | 042 later (a 009 payload change) |
-| Keeping a campaign's own voice, greeting or system prompt when a card changes (`keep` on an `extra:` row) | 046 |
+| Keeping a campaign's own voice, greeting or system prompt when a card changes (`keep` on an `extra:` row) | 046 later |
 | Adopting a *different* entity for an existing actor (a world portrayal of its card), which needs a 107 roster change | 042 later |
 | A reviewed way to drop lived state when upstream removes the facet it needs | 042 later |
 | Checking at review that every layer of a derived ancestor is still what was adopted (`base_etag` covers the leaf; commit re-checks every layer against the review) | 042 later |
-| Review before a following chat sees a new head; pin, follow and detach modes beyond what bindings store | 042 later |
+| A reviewed re-pin of a chat an earlier build stored following the head (today: detach and re-attach), and modes beyond pin, explicit follow and detach. Default chats are [pinned](#pin-by-default) since the Wave 5 audit, so no default chat sees a new head unreviewed | 042 later |
+| A reviewed rebase of non-actor bindings (a pinned lorebook or scenario moves only by detach and re-attach) | 042 later |
 | Semantic contradiction checks between new authored text and established events | 042 later (`history_review` only lists ids) |
 | Promoting relations, lore, places and organizations | 042 later |
 | Redacting `promoted_from` when a world is released or shared | 056 |
