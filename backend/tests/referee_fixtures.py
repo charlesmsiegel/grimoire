@@ -114,6 +114,26 @@ def stairs_state(*, status: str = "open", overcome_by: str | None = None, winner
     return ObstacleState(obstacle, 1, status, attempts, (WARY, escalation(obstacle, REPORTED, 5)), overcome_by)
 
 
+def agenda():
+    from grimoire.goals import Agenda, Approach, Goal, Limit, Present
+    return Agenda(C, ODA, (Goal("keep", "Keep the house's stores for the house", 10, (
+        Approach("sell", "Sell Mara a cask", tags=frozenset({"trade"})),
+        Approach("pour", "Pour Mara a mug on the house", tags=frozenset({"hospitality"})),
+        Approach("bully", "Have Toma lean on Mara to leave", needs=(Present(TOMA),), tags=frozenset({"threat"})))),),
+        (Limit("no-sale", "Sell nothing to Mara tonight", frozenset({"trade"}), when=(Present(MARA),)),
+         Limit("no-threats", "Never threaten a guest", frozenset({"threat"})),))
+
+
+def intention(*, as_of: int = NOW, present=None, source=None):
+    """Oda's 039 choice this turn, for the cast on ``stage()``: briefed to refuse Mara a sale and to threaten no
+    one (Toma could lean on Mara), she pours Mara a mug instead."""
+    from grimoire.core.perspective import actor_knowledge
+    from grimoire.goals import choose
+    cast = stage(as_of=as_of).on_stage() if present is None else present
+    return choose(agenda(), actor_knowledge(knowledge() if source is None else source, ODA, as_of=as_of), present=cast,
+                  controls=CONTROLS)
+
+
 def facts(**changes) -> Facts:
     fields = dict(campaign_id=C, as_of=NOW, stage=stage(), holdings=(holdings(),),
                   possessions=(dagger(), satchel()), knowledge=knowledge(),

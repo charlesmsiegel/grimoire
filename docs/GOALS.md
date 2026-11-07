@@ -77,7 +77,7 @@ The sprint's proving scenario is `backend/tests/test_goals_scenarios.py`: the gu
 | Feasibility from abilities (025), holdings (023), possessions (034) and location (041) | 039, later |
 | Temporal and resource consequences of autonomous actions | 039 later (the sprint's scope; no milestone names them yet) |
 | Choosing an intention in play, every turn, and storing each turn's `Choice` and explanation in the turn record (035's runner calls neither `choose` nor `check_agenda` yet) | 035 milestone 2 |
-| Checking a reply against the NPC's briefed intention: a reply that breaks a refusal (the NPC does what a limit forbids) is kept today, like any other line | [Narration Continuity Referee](roadmap/sprints/narration-continuity-referee.md) (047) flags the breach for review; 045 never rewrites a recorded intention |
+| Checking a reply against the NPC's briefed intention: a reply that breaks a refusal (the NPC does what a limit forbids) is kept today, like any other line | [Narration Continuity Referee](roadmap/sprints/narration-continuity-referee.md) (047): its `acts` check flags the breach against the turn's `Choice` ([REFEREE](REFEREE.md#claims)); labelling replies and running it in play are 047 milestone 2. 045 never rewrites a recorded intention |
 | Longer personal plans and self-initiated scene hooks | 039 milestone 3 |
 | Who may see whom (disguises, hidden actors) | 041 |
 | Model-assisted planning or decisions | 045 |
