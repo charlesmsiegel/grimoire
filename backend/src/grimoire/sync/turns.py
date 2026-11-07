@@ -55,11 +55,11 @@ def turn_needs(path: str, data: bytes | None) -> list[str]:
 def turn_named(path: str, data: bytes | None, origin) -> list[str]:  # type: ignore[no-untyped-def]
     """For a turn written before ``follows`` existed, the turn the origin places it after (``origin``: its
     ``replica`` scan), by ``branches.parent``'s rule over file names: the one before it of its own device,
-    else the untagged one, else the only one. A blocked file there counts as present (never "absent on
-    both"), so the turn waits; nothing when the origin itself cannot tell (it reads a gap there too)."""
+    else the untagged one, else the only one. Short of the first two, every turn of that number the origin has
+    (readable or blocked) is needed, so the receiver places it as the origin does: after the only one, or
+    nowhere (a gap on both) when there are several. A blocked file counts as present, so the turn waits."""
     payload = _payload(path, data)
-    folder, _, name = path.rpartition("/")
-    found = parse_turn_id(name[:-len(".json")]) if name.endswith(".json") else None
+    folder, found = path.rpartition("/")[0], _turn_name(path)
     if payload is None or found is None or payload.get("follows") is not None or found[1] < 2:
         return []
     chat, number, device = found
@@ -70,16 +70,14 @@ def turn_named(path: str, data: bytes | None, origin) -> list[str]:  # type: ign
         candidate = f"{folder}/{chat}.{number - 1:06d}{'' if tag is None else '-' + tag}.json"
         if there(candidate):
             return [candidate]
-    prefix = f"{folder}/{chat}.{number - 1:06d}"
-    others = sorted({other for other in (*origin.files, *origin.blocked) if other.startswith(prefix)
-                     and _same_number(other, chat, number - 1)})
-    return others if len(others) == 1 else []
+    return sorted({other for other in (*origin.files, *origin.blocked) if other.rpartition("/")[0] == folder
+                   and (_turn_name(other) or ())[:2] == (chat, number - 1)})
 
 
-def _same_number(path: str, chat: str, number: int) -> bool:
+def _turn_name(path: str) -> tuple[str, int, str | None] | None:
+    """``(chat_id, number, device)`` of a turn file's name, or ``None``."""
     name = path.rpartition("/")[2]
-    found = parse_turn_id(name[:-len(".json")]) if name.endswith(".json") else None
-    return found is not None and found[:2] == (chat, number)
+    return parse_turn_id(name[:-len(".json")]) if name.endswith(".json") else None
 
 
 def _spell(parts) -> str | None:  # type: ignore[no-untyped-def]

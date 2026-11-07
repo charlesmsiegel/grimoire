@@ -16,11 +16,17 @@ from hashlib import sha256
 import pytest
 
 from scene_fixtures import ANA, Table, card_library, say
+from store_helpers import OWNER
 
 from grimoire.scene import TURN_SCHEMA, SceneRefused, turn_id, turn_to_payload
 from grimoire.scene.branches import replay_tag
+from grimoire.core.identity import TurnRef
 from grimoire.store import ScopeRecord, etag
+from grimoire.store.envelope import scope_record_document
+from grimoire.store.jsonfmt import render
+from grimoire.store.replica import CanonicalScan
 from grimoire.sync import identify, resolve, sync_until_quiet
+from grimoire.sync.turns import turn_named
 
 DESKTOP, PHONE, TABLET = "desktop", "phone", "tablet"
 
@@ -308,3 +314,24 @@ def test_a_turn_written_before_follows_never_lands_without_the_turn_its_device_p
         fork = phone.runner.open(chat).turns.fork
         assert {b.head: b.turns for b in fork.branches}[turn_id(chat, 2, tag(DESKTOP))] == (
             turn_id(chat, 2, tag(DESKTOP)), turn_id(chat, 3, tag(DESKTOP)))
+
+
+@pytest.mark.parametrize("origin, needed", [
+    (["c.000002-aaaaaaaa", "c.000002", "c.000002-bbbbbbbb"], ["c.000002-aaaaaaaa"]),  # its own device's
+    (["c.000002", "c.000002-bbbbbbbb"], ["c.000002"]),  # else the untagged one
+    (["c.000002-bbbbbbbb"], ["c.000002-bbbbbbbb"]),  # else the only one
+    (["c.000002-bbbbbbbb", "c.000002-dddddddd"], ["c.000002-bbbbbbbb", "c.000002-dddddddd"]),  # a gap on both
+])
+def test_a_turn_written_before_follows_needs_what_its_origin_places_it_after(origin, needed):
+    """Where the origin places such a turn, the receiver places it the same way: what that takes comes too, and
+    an unreadable turn there (the first of each list) counts as present, so the turn waits, never as absent."""
+    folder = "campaigns/q/turns"
+    path = f"{folder}/c.000003-aaaaaaaa.json"
+    ref = TurnRef("q", "c.000003-aaaaaaaa")
+    data = render(scope_record_document(ScopeRecord(ref, TURN_SCHEMA, {"chat": "c", "number": 3}, owner=OWNER), None))
+    paths = [f"{folder}/{name}.json" for name in origin]
+    scan = CanonicalScan({other: b"{}" for other in paths[1:]} | {"campaigns/r/turns/c.000002.json": b"{}"},
+                         {paths[0]: "unreadable"})
+    assert turn_named(path, data, scan) == [f"{folder}/{name}.json" for name in needed]
+    with_follows = ScopeRecord(ref, TURN_SCHEMA, {"chat": "c", "number": 3, "follows": "c.000002"}, owner=OWNER)
+    assert turn_named(path, render(scope_record_document(with_follows, None)), scan) == []
