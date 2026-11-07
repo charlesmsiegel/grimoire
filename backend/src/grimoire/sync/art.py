@@ -137,9 +137,9 @@ def art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes], blobs:
         refused = _placement_refusal(ref, data, derived=head_data is not None and definition_is_derived(head_data))
         if refused is not None:
             return done(refused)
-        if mode == "adjust":  # the picture it re-crops comes through the base chain, which sync does not compare
-            return done(f"{subject} re-crops a picture its base chain shows; a portrayal's adjust is not "
-                        "synced yet (046 later)")
+        if mode in ("adjust", "inherit"):  # both read the base chain, which sync does not compare
+            return done(f"{subject}'s {mode} shows what its base chain shows, which sync does not compare "
+                        "yet (046 later): a concurrent change up the chain could show another picture there")
         if image is not None:
             if image.scope != subject.source:
                 return done(f"{image} is not in scope for {subject}")
@@ -151,6 +151,9 @@ def art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes], blobs:
     assert isinstance(subject, InstanceRef)
     instance = "/".join(instance_parts(subject))
     present.add(instance)  # W5; a pair-blocked instance is unknown, so the placement is held (A2)
+    if mode == "inherit":  # a reset shows the whole lineage's slot, which sync does not compare yet (046)
+        return done(f"{subject}'s inherit shows what its lineage shows, which sync does not compare yet "
+                    "(046 later)")
     if mode != "adjust" and (image is None or image.scope == f"campaign:{subject.campaign_id}"):
         # a campaign's own picture (or a hide) never reads a source: no source admission is needed,
         # exactly as the resolver shows campaign-scope art on an instance whatever its derivation

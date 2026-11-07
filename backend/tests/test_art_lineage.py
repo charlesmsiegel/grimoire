@@ -222,3 +222,28 @@ def test_a_species_gets_new_art_children_follow_the_customized_one_keeps_its_pic
     _remove(store, species.ref)  # the species is gone: never the other source's goblin instead
     gone = [images.effective_placements(child).slot("avatar") for child in children]
     assert gone[:2] == [None, None] and gone[2].image == snik
+
+
+def test_a_later_put_cannot_leave_an_earlier_clear_on_a_standalone_head(store, images):
+    standalone = EntityDefinition(VAMPIRE_ENTITY.at("r2"), "Mara", "individual", base({}).traits, "Alone now")
+    batch = images.change()
+    batch.place(VAMPIRE_ENTITY, "portrait", Placement("hide"), None)  # allowed: the head is derived now
+    batch.put(manifest(VAMPIRE, derives(VAMPIRE_MARA), heads={"character/mara": "r2"}),
+              store.check_source(VAMPIRE).etag)
+    batch.put(envelope(standalone), None)
+    with pytest.raises(InvalidPlacement) as caught:
+        batch.commit()
+    assert caught.value.reason == "mode_not_allowed"
+    assert images.effective_placements(VAMPIRE_ENTITY).slot("portrait").image == PORTRAIT  # nothing written
+
+
+def test_an_adjust_through_a_damaged_portrayal_layer_is_refused(store, images):
+    txn = store.transaction()
+    txn.put(RecordEnvelope(FAN, {}, derived_from=str(VAMPIRE_ENTITY)), None)
+    txn.commit(handle())
+    folder = store.root.joinpath(*address_parts(PlacementRef(VAMPIRE_ENTITY, "portrait"))).parent
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "Portrait.json").write_text("{}")  # a look-alike: the layer might be hiding a clear
+    with pytest.raises(InvalidPlacement) as caught:
+        images.place(FAN, "portrait", Placement("adjust", image=PORTRAIT, crop=CROP), None)
+    assert caught.value.reason == "nothing_to_adjust"

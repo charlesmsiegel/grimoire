@@ -613,12 +613,14 @@ def _blob_fact(state: _State, disk: _Disk, image: ImageObject) -> BlobFact:
     return disk.blob_fact(key)
 
 
-def _source_layer(state: _State, disk: _Disk, entity: SourceRef) -> dict[str, PlacementEntry]:
-    layer = dict(disk.layer(entity)[0])
+def _source_layer(state: _State, disk: _Disk, entity: SourceRef) -> tuple[dict[str, PlacementEntry], bool]:
+    """``entity``'s placements on disk with this batch's over them, and whether its folder is trusted."""
+    own, _, trusted = disk.layer(entity)
+    layer = dict(own)
     for ref, placed in state.placements.items():
         if ref.subject == entity:
             layer[ref.slot] = PlacementEntry(ref, placed.placement, None, str(ref))
-    return layer
+    return layer, trusted
 
 
 def _lineage(state: _State, disk: _Disk, entity: SourceRef) -> Lineage:
@@ -666,8 +668,11 @@ def _below(state: _State, disk: _Disk, entities: tuple[SourceRef, ...], derived:
     an ``adjust`` layered above them must name (W9)."""
     if not entities:
         return None
-    layers = [Layer(entity, _source_layer(state, disk, entity), entity.source, flag)
-              for entity, flag in zip(entities, derived)]
+    layers: list[Layer] = []
+    for entity, flag in zip(entities, derived):  # guarded exactly as the reader guards them
+        entries, trusted = _source_layer(state, disk, entity)
+        layers.append(Layer(entity, _guarded(entity, entries, trusted, layers) if flag else entries,
+                            entity.source, flag))
     return resolve_lineage(entities[-1], layers, _facts(state, disk, [layer.entries for layer in layers])).slot(slot)
 
 
@@ -732,6 +737,10 @@ def _check_placement(state: _State, disk: _Disk, ref: PlacementRef, placement: P
     subject, slot = ref.subject, ref.slot
     if not _subject_exists(state, disk, subject):  # W5
         raise InvalidPlacement(f"{subject} does not exist", "missing_subject")
+    if isinstance(subject, SourceRef):  # W8 again: a later put may change whose head is derived (046)
+        problem = validate_placement(subject, slot, placement, derived=_lineage(state, disk, subject).derived[-1])
+        if problem is not None:
+            raise InvalidPlacement(problem[1], problem[0])
     entity = subject if isinstance(subject, SourceRef) else _instance_derivation(state, disk, subject)
     if isinstance(subject, SourceRef):
         allowed = {subject.source}

@@ -109,7 +109,7 @@ Before this slice, a source placement could only `set` or mark a picture `unreso
 ## Limits
 
 - **Pinned art.** Art follows the entity, not a chat's pinned revision. A pinned chat therefore sees new base art at once.
-- **Sync.** [Device sync](SYNC.md#art) holds a derived portrayal's `adjust` and does not copy it yet. Every other derived placement syncs like any source placement.
+- **Sync.** [Device sync](SYNC.md#art) holds a derived portrayal's `adjust` and `inherit`, and a campaign `inherit`: each shows what the base chain shows, which sync does not compare yet. Every other derived placement syncs like any source placement.
 - **Instance fields.** An individual still has no field-level override of description, sections or card extras ([REBASE](REBASE.md) `not_overridable`). Keeping a campaign's own voice, greeting or system prompt when a card changes is not built.
 - **Not in this slice:**
   - versioned sheets, mechanics baselines and nested content (milestone 3);
