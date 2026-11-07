@@ -13,7 +13,7 @@ One independent RP-model call **per speaking NPC contribution**, each prompt bui
 
 ## Planning a turn
 
-`plan_generation_turn(campaign_id, turn_id, *, present, speakers, controls, director_reply=False, policy=None)` returns 004's `TurnInferencePlan`.
+`plan_generation_turn(campaign_id, turn_id, *, present, speakers, controls, director_reply=False, policy=None, decisions=())` returns 004's `TurnInferencePlan`; `decisions` asks for 045's optional `decision` calls in a `select` phase first, decided with `GenerationRuntime.decide` before `run_turn` ([DECISIONS](DECISIONS.md#the-decision-call)).
 
 - **Player characters come from control.** `player_controlled_ids` is every present actor whose `ControlAssignment` names a human controller. The caller cannot pass it.
 - **Speakers are director NPCs.** A speaker must be present (`absent_speaker`) and controlled by `DIRECTOR`. A player character is `player_speaker` and an actor nobody controls is `unassigned_speaker`. Two controllers for any present actor is `ambiguous_control`, and an actor listed twice is `duplicate_present` or `duplicate_speaker`.
@@ -152,7 +152,7 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 
 `run_turn(meter, briefs, *, controls, director=None, token=None, cancel=None, scene_voices=()) -> TurnOutcome`:
 
-- **Checked before any call** (`GenerationError`): every planned call is `npc_generation` or `director_generation` (`unsupported_stage`), or a `decision` call that `decide` already ran on this meter (`decision_not_run`) and whose pick the NPC's brief carries (`decision_ignored`, [DECISIONS](DECISIONS.md#the-decision-call)), each `npc_generation` call has exactly one brief (`missing_brief`, `extra_brief`, `duplicate_brief`), a director brief is given exactly when a director reply is planned (`director_mismatch`), no planned call already ran on `meter` (`call_already_run`), every brief's actor is director-controlled **now**, so a hand-built plan cannot voice a player character, the director brief names the same player characters that the plan and control give now (`director_mismatch`; an unassigned present actor is `unassigned_actor`), and every NPC brief's intention was chosen for exactly the actors this plan has present (`intention_cast_mismatch`, 039).
+- **Checked before any call** (`GenerationError`): every planned call is `npc_generation` or `director_generation` (`unsupported_stage`), or a `decision` call that `decide` already ran or skipped on this meter (`decision_not_run`; one per NPC, `duplicate_decision`) and whose pick the NPC's brief carries (`decision_ignored`, [DECISIONS](DECISIONS.md#the-decision-call)), each `npc_generation` call has exactly one brief (`missing_brief`, `extra_brief`, `duplicate_brief`), a director brief is given exactly when a director reply is planned (`director_mismatch`), no planned call already ran on `meter` (`call_already_run`), every brief's actor is director-controlled **now**, so a hand-built plan cannot voice a player character, the director brief names the same player characters that the plan and control give now (`director_mismatch`; an unassigned present actor is `unassigned_actor`), and every NPC brief's intention was chosen for exactly the actors this plan has present (`intention_cast_mismatch`, 039).
 - **Calls run in plan order**, one `execute` each. Each later call hears the lines accepted before it; a planned director reply runs after the speakers, and a speaker planned after it (a later phase added on the meter) is refused before any call (`director_not_last`).
 - **An exception from the adapter or an approvals callback** ends the call `failed` (reason: the exception type) and the turn `halted`, keeping earlier lines.
 - **Only accepted, screened text becomes a line.** A provider status other than `accepted`, or a screen rejection, ends the turn: later calls are `not_issued`. A rejected call is still billed.
@@ -184,5 +184,5 @@ Every present actor hears every spoken line in this slice (no whispering), so a 
 | Detecting player-character authorship in generated text (035's first slice reviews each NPC line as that NPC's voluntary speech) | 035 M2 (`review_narration`) |
 | Richer retrieval behind the same pack seam (recent history, unbound world records, embeddings) | 031 |
 | Building each speaker's pack and the director's lore every turn, with the transcript window as scene text | 035 (done in its first slice, [SCENES](SCENES.md)) |
-| Other optional stages in a generation turn (`select`/`decision` phases) | later (045 for decisions) |
+| Other optional stages in a generation turn (`planning`, `summary`, ...) | later sprints; 045's `select`/`decision` phase is [DECISIONS](DECISIONS.md) |
 | Choosing an NPC's intention every turn and giving the turn to an NPC that acts on its goals | 035 M2 |

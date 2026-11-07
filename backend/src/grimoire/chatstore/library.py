@@ -34,6 +34,7 @@ from grimoire.chats import (
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import ENTITY_SCHEMA, instance_to_payload
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, paired_instances, validate_segment
+from grimoire.decisionstore import decision_actor_ids
 from grimoire.effectstore import accepted_instance_ids
 from grimoire.evidencestore import evidence_instance_ids
 from grimoire.scenestore import turn_instance_ids
@@ -42,7 +43,6 @@ from grimoire.holdingstore import holdings_holder_ids, holdings_peer_ids
 from grimoire.imagestore import ART_PIN, freeze_art, pinned_base, placement_subject_ids
 from grimoire.ledgers import security_campaign_ids, security_instance_ids, sovereignty_actor_ids
 from grimoire.library import LibraryPathError
-from grimoire.decisionstore import decision_actor_ids
 from grimoire.obstaclestore import obstacle_actor_ids
 from grimoire.possessions import POSSESSION_KEY, party_ids
 from grimoire.security import payload_digest

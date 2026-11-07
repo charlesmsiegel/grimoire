@@ -52,6 +52,8 @@ Every approach is recorded in `Choice.considered` in the order tried, as a `Cons
 
 `desired=(goal_id, approach_id)` names an approach a narrative planner would like (a confrontation, say). It is **recorded, never obeyed**: `Choice.desire` is a `Desire(goal_id, approach_id, outcome)` whose `outcome` is that approach's own `Considered` outcome, and `followed` is true only when it was chosen anyway. An approach the agenda does not have, or a malformed pair, is `unknown_approach`.
 
+`selected=(goal_id, approach_id)` is different: it is 045's decision call's pick ([DECISIONS](DECISIONS.md#selecting-among-permitted-approaches)), and it is obeyed, but only among approaches that are possible and permitted now. The selected approach is `chosen`, the authored order's pick `outranked` (`Choice.default` is that pick either way). A pair the agenda does not have is `unknown_approach`; one unmet or forbidden now is `infeasible_selection`.
+
 `explain(choice)` gives the choice in plain lines for the director and the table's tools: what the NPC pursues and, for a wish, that it follows it, cannot take it now (with the unmet conditions), refuses it (with each limit's id and rule), or prefers another approach. These lines name actors and propositions by id, so they are **director-side text**: never put them in an NPC prompt. Anything but a `Choice` is `bad_choice`; a `Choice` built by hand is `unsealed_choice`.
 
 The sprint's proving scenario is `backend/tests/test_goals_scenarios.py`: the guild's merchant refuses to sell the guest ledger to a buyer it was told carries tales to the river lords, although a planner wants the fight over it, and pursues its goal another way in its one call. Told nothing, it sells, even though canon says the buyer really is an informant; believing a rumour canon refutes, it still refuses. It acts on its own initiative: no one addresses it, and the turn's speakers are the NPCs whose `Choice.acts`, so another NPC with an agenda but nothing it can do now stays silent and costs nothing.
@@ -80,5 +82,5 @@ The sprint's proving scenario is `backend/tests/test_goals_scenarios.py`: the gu
 | Checking a reply against the NPC's briefed intention: a reply that breaks a refusal (the NPC does what a limit forbids) is kept today, like any other line | [Narration Continuity Referee](roadmap/sprints/narration-continuity-referee.md) (047): its `acts` check flags the breach against the turn's `Choice` ([REFEREE](REFEREE.md#claims)); labelling replies and running it in play are 047 milestone 2. 045 never rewrites a recorded intention |
 | Longer personal plans and self-initiated scene hooks | 039 milestone 3 |
 | Who may see whom (disguises, hidden actors) | 041 |
-| Model-assisted decisions (done in 045's first slice, [DECISIONS](DECISIONS.md)); model-assisted planning | 045; 039 milestone 3 |
+| Model-assisted planning | 039 milestone 3 |
 | Factions' goals | [Faction Decision Making](roadmap/sprints/faction-decision-making.md) |

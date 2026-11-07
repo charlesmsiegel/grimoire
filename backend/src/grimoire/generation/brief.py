@@ -148,6 +148,11 @@ class NpcBrief:
     cast: frozenset[str] | None = None
     #: 039's choice the brief carries, if any: 045's decision call offers its possible approaches
     intention: Choice | None = None
+    #: what the actor holds itself (not what it heard): the screen for the director's agenda text
+    held: tuple[str, ...] = ()
+    #: with an unselected intention, ``system`` without what the authored order would do: the decision
+    #: call (045) is not told the default it is choosing against, only the refusals that still hold
+    decision_system: str | None = None
     _seal: InitVar[object] = None
 
     __hash__ = None  # type: ignore[assignment]  # holds a ResolvedVoice
@@ -349,6 +354,10 @@ def _check_intention(intention: object, actor: InstanceRef, knowledge: ActorKnow
                               "projection of its knowledge")
 
 
+#: The heading of an intention's refusals: the one part of it a decision call (045) is shown too.
+REFUSALS_HEADING = "What you will not do here, whatever it would gain you:"
+
+
 def _intention(intention: Choice, actor: InstanceRef, hidden: tuple[SecretFact, ...],
                exposed: Sequence[str]) -> list[tuple[str, list[str]]]:
     """The intention's parts as (heading, lines); refused if any states a secret the actor has not learned.
@@ -364,7 +373,7 @@ def _intention(intention: Choice, actor: InstanceRef, hidden: tuple[SecretFact, 
         parts.append(("What you mean to do about it:", [_one_line(approach.action)]))
     rules = [_one_line(limit.rule) for limit in intention.refusals]
     if rules:
-        parts.append(("What you will not do here, whatever it would gain you:", rules))
+        parts.append((REFUSALS_HEADING, rules))
     for _heading, texts in parts:
         for text in texts:
             leak = leaks(text, hidden, exposed)
@@ -503,11 +512,17 @@ def npc_brief(view: ActorView, voice: ResolvedVoice, *, heard: Iterable[HeardLin
         parts.append(_listed("What you know, oldest first:" if context is None else "What you know:", shown))
     elif not rendered:
         parts.append("You know nothing yet beyond what you hear now.")
+    base = list(parts)
     parts.extend(_listed(heading, texts) for heading, texts in aims)
+    decision_system = None
+    if intention is not None and intention.selection is None:
+        decision_system = "\n\n".join(base + [_listed(heading, texts) for heading, texts in aims
+                                                 if heading == REFUSALS_HEADING])
     names[actor] = name
     cast = frozenset(ref.instance_id for ref in intention.scene) if intention is not None else None
     return NpcBrief(actor, name, voice, fragment, "\n\n".join(parts), heard, hidden,
-                    own + (name,) + tuple(line.text for line in heard), tuple(names.items()), cast, intention, _SEAL)
+                    own + (name,) + tuple(line.text for line in heard), tuple(names.items()), cast, intention,
+                    own + (name,), decision_system, _SEAL)
 
 
 def _check_lore(lore: object, campaign_id: str, snapshot: object) -> None:
@@ -639,14 +654,18 @@ def _transcript(lines: Sequence[HeardLine], names: Mapping[InstanceRef, str], hi
     return "\n".join(f"{_label(line, names, hidden, seen)}: {_one_line(line.text)}" for line in lines)
 
 
+def heard_transcript(brief: NpcBrief, spoken: Sequence[HeardLine] = ()) -> str:
+    """What the NPC has heard so far, as its calls show it ("Nothing has been said yet." when nothing)."""
+    lines = brief.heard + _spoken(spoken)
+    return (f"What was just said:\n{_transcript(lines, dict(brief.names), brief.hidden, brief.exposed)}"
+            if lines else "Nothing has been said yet.")
+
+
 def npc_messages(brief: NpcBrief, spoken: Sequence[HeardLine] = ()) -> tuple[tuple[str, str], ...]:
     """The (role, content) messages of one NPC call: its brief, then everything it heard so far."""
     if not isinstance(brief, NpcBrief):
         raise GenerationError("bad_brief", "npc_messages needs an NpcBrief")
-    lines = brief.heard + _spoken(spoken)
-    said = (f"What was just said:\n{_transcript(lines, dict(brief.names), brief.hidden, brief.exposed)}\n\n"
-            if lines else "Nothing has been said yet.\n\n")
-    return (("system", brief.system), ("user", f"{said}Give {brief.name}'s reply only."))
+    return (("system", brief.system), ("user", f"{heard_transcript(brief, spoken)}\n\nGive {brief.name}'s reply only."))
 
 
 def director_messages(brief: DirectorBrief, spoken: Sequence[HeardLine] = ()) -> tuple[tuple[str, str], ...]:

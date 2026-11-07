@@ -199,10 +199,6 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 - **043 first slice:** World Change Sets: create and revise one world source's definitions together, reviewed as exact bytes with per-file diffs, conflicts and the authority's decision, then applied all or nothing; a hand edit between review and apply aborts with nothing written, and approvals are bound to the reviewed bytes ([CHANGESETS](../CHANGESETS.md)). Worker submission, persisted proposals, undo, manifest links and campaign records are later 043 work.
 - **040 first slice:** an open obstacle (goal, actors, facts with per-approach bearings, stakes that escalate, suggested approaches with risks and costs) that never names a required approach or a result, with attempts framed and decided through 029. A novel approach is never refused and the obstacle's facts can never prevent it; a suggestion's frame carries the author's facts; a failure's stakes escalate into facts for later attempts, and a success brings the approach's costs ([OBSTACLES](../OBSTACLES.md)). Applying those costs as effects, group attempts and procedural obstacles (milestone 3) are later work.
 
-#### Wave 6 status
-
-- **045 first slice:** one NPC's tactics decision is recorded per scene turn with its evidence and replayed, never re-decided, when narration is retried; an optional, capped `decision` call may pick only among the approaches 039's policy allows, and only when the mode enables it ([DECISIONS](../DECISIONS.md)).
-
 <a id="wave-6"></a>
 
 ### Wave 6 — Phone play, synchronization and early UX
@@ -215,6 +211,10 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 | 046 | [Live Inheritance And Overrides](sprints/live-inheritance-and-overrides.md) | **P1** | [Source Rebase And Semantic Merge](sprints/source-rebase-and-semantic-merge.md), [Effective World Snapshots](sprints/effective-world-snapshots.md), [Image Identity And Placements](sprints/image-identity-and-placements.md), [World Optional Chat Scopes](sprints/world-optional-chat-scopes.md) | world / field inheritance | Show field/art inheritance and cleared/overridden Mara traits across alternative portrayals |
 | 047 | [Narration Continuity Referee](sprints/narration-continuity-referee.md) | **P1** | [Scene Physical Continuity](sprints/scene-physical-continuity.md), [Knowledge And Perspective](sprints/knowledge-and-perspective.md), [Fiction First Adjudication](sprints/fiction-first-adjudication.md) | generation / contradiction review | Check five continuity errors plus a separately labelled PC-authorship claim before a narration can become canonical |
 | 048 | [Performance And Tracing](sprints/performance-and-tracing.md) | **P1** | [Minimal Text Scene Runner](sprints/minimal-text-scene-runner.md), [Turn Costs And Feature Flags](sprints/turn-costs-and-feature-flags.md) | runtime / tracing | Measure cold and warm end-to-end cost and latency |
+
+#### Wave 6 status
+
+- **045 first slice:** one NPC's tactics decision is recorded per scene turn with its evidence and replayed, never re-decided, when narration is retried; an optional, capped `decision` call may pick only among the approaches 039's policy allows, and only when the mode enables it ([DECISIONS](../DECISIONS.md)).
 
 <a id="wave-7"></a>
 

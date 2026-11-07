@@ -7,9 +7,10 @@ its reply; it calls nothing. The options are only the brief's intention's ``feas
 one a condition rules out or a limit forbids is never offered, so no reply can reach it.
 
 The call sees the NPC's own brief (its knowledge, card and voice, built by ``npc_brief`` from its own
-view) and the options. An option's text is the director's authoring, so it is screened like the
-intention it extends: one stating a secret the NPC has not learned is refused (``option_leak``)
-before any call is made.
+view) without what the authored order would do (``NpcBrief.decision_system``; the refusals that hold
+are kept), what it has heard so far, and the options. An option's text is the director's authoring,
+so it is screened like the intention it extends, against what the NPC holds itself: one stating a
+secret the NPC has not learned is refused (``option_leak``) before any call is made.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import re
 
 from grimoire.goals import Choice
 
-from .brief import NpcBrief, leaks
+from .brief import NpcBrief, heard_transcript, leaks
 from .errors import GenerationError
 
 #: The most options one call is offered; 039's caps (16 goals of 8 approaches) allow more.
@@ -44,7 +45,7 @@ def decision_options(brief: NpcBrief) -> tuple[tuple[str, str], ...]:
     if type(choice) is not Choice:
         raise GenerationError("no_intention", f"the brief for {brief.actor} carries no 039 choice to decide on")
     if choice.selection is not None:
-        raise GenerationError("already_decided", f"the choice for {brief.actor} was already selected")
+        raise GenerationError("already_selected", f"the choice for {brief.actor} was already selected")
     options = tuple((entry.goal_id, entry.approach_id) for entry in choice.feasible)
     if len(options) < 2:
         raise GenerationError("nothing_to_decide", f"{brief.actor} has fewer than two possible approaches now")
@@ -65,15 +66,15 @@ def decision_messages(brief: NpcBrief) -> tuple[tuple[str, str], ...]:
     for number, pair in enumerate(options, start=1):
         goal, approach = choice.agenda.approach(*pair)
         text = f"{_one_line(goal.aim)}: {_one_line(approach.action)}"
-        leak = leaks(text, brief.hidden, brief.exposed)
+        leak = leaks(text, brief.hidden, brief.held)
         if leak is not None:
             raise GenerationError("option_leak", f"an option for {brief.actor} states secret {leak}, "
                                   "which it has not learned")
         lines.append(f"{number}. {text}")
-    ask = (f"Do not write {brief.name}'s reply yet. First decide what {brief.name} does now, as {brief.name} "
+    ask = (f"{heard_transcript(brief)}\n\nDo not write {brief.name}'s reply yet. First decide what {brief.name} does now, as {brief.name} "
            f"would, from what {brief.name} knows and wants. These are the only choices:\n" + "\n".join(lines)
            + "\n\nAnswer with the number of one choice and nothing else.")
-    return (("system", brief.system), ("user", ask))
+    return (("system", brief.decision_system or brief.system), ("user", ask))
 
 
 def read_pick(reply: object, options: tuple[tuple[str, str], ...]) -> tuple[str, str] | None:

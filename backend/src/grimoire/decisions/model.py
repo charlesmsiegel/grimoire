@@ -59,7 +59,7 @@ class Evidence:
         if self.actor is not None:
             if not isinstance(self.actor, InstanceRef) or self.proposition_id is not None or self.stance is not None:
                 raise DecisionError("invalid_field", "evidence of presence names one actor and nothing else")
-        elif type(self.proposition_id) is not str or self.stance not in STANCES:
+        elif type(self.proposition_id) is not str or not self.proposition_id or self.stance not in STANCES:
             raise DecisionError("invalid_field", "evidence of a belief names its proposition and a stance")
 
 
@@ -72,6 +72,26 @@ class Candidate:
     outcome: str
     unmet: tuple[str, ...] = ()
     forbidden_by: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not (_is_text(self.goal_id) and _is_text(self.approach_id)) or self.outcome not in OUTCOMES:
+            raise DecisionError("invalid_field", "a candidate names its goal, approach and a known outcome")
+        for value in (self.unmet, self.forbidden_by):
+            if type(value) is not tuple or not all(_is_text(item) for item in value):
+                raise DecisionError("invalid_field", "a candidate's unmet conditions and limits are tuples of text")
+        # As 039's policy has it: unmet if anything is unmet, else forbidden if a limit forbids it.
+        allowed = ("unmet",) if self.unmet else ("forbidden",) if self.forbidden_by else ("chosen", "outranked")
+        if self.outcome not in allowed:
+            raise DecisionError("invalid_field", f"a candidate whose outcome is {self.outcome} must match its "
+                                "unmet conditions and limits")
+
+
+def _is_text(value: object) -> bool:
+    return type(value) is str and bool(value)
+
+
+def _is_pair(value: object) -> bool:
+    return type(value) is tuple and len(value) == 2 and all(_is_text(item) for item in value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +124,10 @@ class DecisionRecord:
             raise DecisionError("invalid_field", "agenda_digest must be a sha256 digest")
         if not all(type(entry) is Candidate and entry.outcome in OUTCOMES for entry in self.candidates):
             raise DecisionError("invalid_field", "candidates must be Candidate values with known outcomes")
+        if len({(entry.goal_id, entry.approach_id) for entry in self.candidates}) != len(self.candidates):
+            raise DecisionError("invalid_field", "each approach is a candidate once")
+        if not all(value is None or _is_pair(value) for value in (self.chosen, self.default)):
+            raise DecisionError("invalid_field", "chosen and default are (goal id, approach id) pairs of text")
         chosen = [(entry.goal_id, entry.approach_id) for entry in self.candidates if entry.outcome == "chosen"]
         feasible = [(entry.goal_id, entry.approach_id) for entry in self.candidates
                     if entry.outcome in ("chosen", "outranked")]
@@ -117,6 +141,8 @@ class DecisionRecord:
         if self.method == "model":
             if not isinstance(self.call, str) or not self.call:
                 raise DecisionError("invalid_field", "a model decision names its call")
+            if len(feasible) < 2 or (self.fallback is None and self.chosen is None):
+                raise DecisionError("invalid_field", "a model decision chose among two or more possible approaches")
             if self.fallback is not None and (self.chosen != self.default or not isinstance(self.fallback, str)
                                               or not 0 < len(self.fallback) <= _MAX_REASON):
                 raise DecisionError("invalid_field", "a fallback keeps the authored order's pick, with a short reason")
@@ -260,7 +286,10 @@ def replay(record: DecisionRecord, agenda: Agenda, knowledge: ActorKnowledge, *,
         raise DecisionError(error.reason, error.message) from None
     goal, approach = choice.goal, choice.approach
     now = (goal.goal_id, approach.approach_id) if goal is not None and approach is not None else None
-    if now != record.chosen:
+    again = record_decision(choice, record.turn, call=record.call, fallback=record.fallback) \
+        if now == record.chosen else None
+    # The very choice: the same pick, the same authored-order pick, and every approach as it stood then.
+    if again is None or again.default != record.default or again.candidates != record.candidates:
         raise DecisionError("decision_changed", f"{record.actor} would now decide otherwise than it did in "
                             f"{record.turn}")
     return choice

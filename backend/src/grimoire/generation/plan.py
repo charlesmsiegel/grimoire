@@ -111,4 +111,9 @@ def plan_generation_turn(campaign_id: str, turn_id: str, *, present: Iterable[st
     asked = tuple(OptionalRequest(InferenceStage.DECISION, decider, DECISION_PURPOSE) for decider in deciders)
     select = plan_turn(campaign_id, turn_id, present_actor_ids=present, player_controlled_ids=players,
                        optional_requests=asked, phase=DECISION_PHASE, policy=policy)
+    if not select.calls:
+        # The mode declined every decision: the plan is the one without decisions, its declines kept as data.
+        return plan_turn(campaign_id, turn_id, present_actor_ids=present, speaking_npc_ids=speakers,
+                         player_controlled_ids=players, optional_requests=asked + requests, phase=phase,
+                         policy=policy)
     return select.add_phase(phase, speaking_npc_ids=speakers, optional_requests=requests)

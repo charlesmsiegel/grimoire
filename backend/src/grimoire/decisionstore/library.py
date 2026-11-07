@@ -42,7 +42,7 @@ def ledger_for(campaign_id: str) -> str:
 
 
 @dataclass(frozen=True)
-class DecisionEntry:
+class NpcDecisionEntry:
     """One recorded decision and who recorded it."""
 
     record: DecisionRecord
@@ -52,10 +52,10 @@ class DecisionEntry:
 @dataclass
 class _Builder:
     campaign_id: str
-    entries: dict[tuple[str, InstanceRef], DecisionEntry] = field(default_factory=dict)
+    entries: dict[tuple[str, InstanceRef], NpcDecisionEntry] = field(default_factory=dict)
     head: Head | None = None
 
-    def check(self, record: DecisionRecord) -> DecisionEntry | None:
+    def check(self, record: DecisionRecord) -> NpcDecisionEntry | None:
         """The entry already holding this exact decision, ``None`` for a new one, or a refusal."""
         if record.turn.campaign_id != self.campaign_id:
             raise DecisionError("campaign_mismatch", "the decision belongs to another campaign")
@@ -66,7 +66,7 @@ class _Builder:
             return existing
         raise DecisionError("already_decided", f"{record.actor} already decided {record.turn}")
 
-    def add(self, entry: DecisionEntry) -> None:
+    def add(self, entry: NpcDecisionEntry) -> None:
         self.entries[(entry.record.turn.turn_id, entry.record.actor)] = entry
 
 
@@ -89,7 +89,9 @@ def decision_actor_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
             stack.extend(value.values())
         elif isinstance(value, (list, tuple)):
             stack.extend(value)
-        elif isinstance(value, str) and value.startswith("campaign:") and "/" in value:
+        elif isinstance(value, str) and "campaign:" in value and "/" in value:
+            # A reference, or a condition that names one (``present:<ref>``).
+            value = value[value.index("campaign:"):]
             try:
                 ref = InstanceRef.parse(value)
             except ValueError:
@@ -111,14 +113,14 @@ class DecisionLibrary:
         self._authority = authority
         self._principal: str = handle.principal  # type: ignore[attr-defined]
 
-    def get(self, turn: TurnRef, actor: InstanceRef) -> DecisionEntry | None:
+    def get(self, turn: TurnRef, actor: InstanceRef) -> NpcDecisionEntry | None:
         """The decision ``actor`` recorded for ``turn``, or ``None``."""
         if not isinstance(turn, TurnRef) or not isinstance(actor, InstanceRef):
             raise DecisionError("invalid_field", "get needs a TurnRef and an InstanceRef")
         with self._authority.lock:
             return self._builder(turn.campaign_id).entries.get((turn.turn_id, actor))
 
-    def decisions(self, turn: TurnRef) -> tuple[DecisionEntry, ...]:
+    def decisions(self, turn: TurnRef) -> tuple[NpcDecisionEntry, ...]:
         """Every decision recorded for ``turn``, in recording order."""
         if not isinstance(turn, TurnRef):
             raise DecisionError("invalid_field", "decisions needs a TurnRef")
@@ -126,7 +128,7 @@ class DecisionLibrary:
             return tuple(entry for (turn_id, _actor), entry in self._builder(turn.campaign_id).entries.items()
                          if turn_id == turn.turn_id)
 
-    def record(self, record: DecisionRecord) -> DecisionEntry:
+    def record(self, record: DecisionRecord) -> NpcDecisionEntry:
         """Record ``record``; the same decision again returns it and writes nothing.
 
         Refused: ``already_decided`` (another decision for this NPC and turn), ``missing_campaign`` and
@@ -136,6 +138,8 @@ class DecisionLibrary:
             raise TypeError("expected a DecisionRecord")
         campaign_id = record.turn.campaign_id
         payload = decision_to_payload(record)
+        if decision_from_payload(payload) != record:  # what is written must read back as this very record
+            raise DecisionError("bad_record", "the decision does not read back as itself")
         with self._authority.lock:
             builder = self._builder(campaign_id)
             existing = builder.check(record)
@@ -149,7 +153,7 @@ class DecisionLibrary:
             if unknown:
                 raise DecisionError("unknown_actor", f"actors that are not instances of the campaign: "
                                     f"{', '.join(unknown)}")
-            entry = DecisionEntry(record, self._principal)
+            entry = NpcDecisionEntry(record, self._principal)
             self._append(builder, payload)
             builder.add(entry)
             return entry
@@ -190,6 +194,6 @@ def _replay(campaign_id: str, name: str, entries: Iterable[object], head: Head |
                 raise DecisionError("already_decided", "the same decision recorded twice")
         except DecisionError as error:
             raise LedgerInvalid(f"{name} entry {index}: {error} ({error.reason})") from None
-        builder.add(DecisionEntry(record, recorded_by))  # type: ignore[arg-type]
+        builder.add(NpcDecisionEntry(record, recorded_by))  # type: ignore[arg-type]
     builder.head = head
     return builder

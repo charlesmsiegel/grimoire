@@ -135,3 +135,34 @@ def test_the_ledger_reserves_the_ids_it_names_and_refuses_forgery(table):
     next(folder.iterdir()).write_bytes(b"not json")
     with pytest.raises(TakenIdsUnlisted):
         decision_actor_ids(table.store, Q)
+
+
+def test_an_actor_named_only_by_an_unmet_condition_is_reserved_too(table):
+    rescue = Agenda(Q, IRIS, (Goal("help", "See Sola safe", 5, (
+        Approach("pull", "Pull Sola back from the edge", needs=(Present(SOLA),)), Approach("wait", "Wait"))),))
+    record = record_decision(choose(rescue, iris_knows(), present=(IRIS, MARA), controls=CONTROLS), TURN)
+    assert record.candidates[0].unmet == (f"present:{SOLA}",) and not record.evidence
+    library(table).record(record)
+    assert decision_actor_ids(table.store, Q) == {"iris-1", "sola-1"}
+
+
+def test_a_decision_ledger_keeps_a_campaign_id_taken(tmp_path):
+    store = LibraryStore.create(tmp_path / "lib", locker=ProcessLocker())
+    entry = {"schema": 1, "kind": "decision", "recorded_at": "x", "recorded_by": "app:adjudicator", "value": {}}
+    parts, data = render_batches("decisions/q-7", None, [entry])[0]
+    path = store.root / "/".join(parts)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(data)
+    assert store.campaign_authority_presence("q-7") == "present"
+    store.close()
+
+
+def test_a_model_pick_is_stored_and_replayed_after_a_restart(table):
+    picked = iris_choice(selected=("live", "brace"))
+    record = record_decision(picked, TURN, call="decision-1")
+    library(table).record(record)
+    table = _reopen(table)
+    found = library(table).get(TURN, IRIS)
+    assert found.record == record and found.record.selected
+    again = replay(found.record, AGENDA, iris_knows(), present=(IRIS, MARA), controls=CONTROLS)
+    assert again.approach.approach_id == "brace" and again.default.approach_id == "fall-back"
