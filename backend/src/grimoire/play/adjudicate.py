@@ -19,7 +19,7 @@ from grimoire.core.authority import PlayerContribution
 from grimoire.core.identity import ChatRef
 from grimoire.core.knowledge import Moment
 from grimoire.generation import MAX_LINE_CHARS, HeardLine
-from grimoire.play.scene import WRITE_RETRIES, _refuse
+from grimoire.play.scene import WRITE_RETRIES, _mark, _refuse
 from grimoire.scene import SceneRefused, TurnRecord
 from grimoire.store.errors import LedgerInvalid, StoreError
 
@@ -114,7 +114,7 @@ def confirm_action(runner, chat: ChatRef, by) -> Outcome | None:
                 _unframe(runner, chat, record, label.label, error.reason)
             raise
         if marked is None:
-            record = _mark_framed(runner, chat, record, label.label)
+            record = _mark_framed(runner, chat, record, label.label, principal)
         try:
             _029(library.frame, frame, contribution=contribution, author=by)
         except SceneRefused as error:
@@ -174,8 +174,10 @@ def _unframe(runner, chat: ChatRef, record: TurnRecord, number: int, reason: str
                     return
 
 
-def _mark_framed(runner, chat: ChatRef, record: TurnRecord, number: int) -> TurnRecord:
-    """Write labelling ``number`` ``framed`` on the turn while it is still the latest and proposed; the turn."""
+def _mark_framed(runner, chat: ChatRef, record: TurnRecord, number: int, principal: str) -> TurnRecord:
+    """Write labelling ``number`` ``framed`` on the turn while it is still the latest and proposed; the turn.
+    The same write withdraws every proposed take and supersedes a running one: each was written without the
+    outcome this frame will settle, so none may be kept once it is decided (a run in flight lands stale)."""
     for _ in range(WRITE_RETRIES):
         stored = next((s for s in runner.scenes.turns(chat).turns if s.record.ref == record.ref), None)
         if stored is None:
@@ -189,6 +191,12 @@ def _mark_framed(runner, chat: ChatRef, record: TurnRecord, number: int) -> Turn
             break  # relabelled meanwhile: the player confirms what they saw, or nothing
         try:
             framed = stored.record.with_label(replace(labels[-1], state="framed"))
+            for take in framed.takes:
+                if take.state == "running":
+                    framed = framed.with_take(replace(take, state="superseded"))
+                elif take.state == "proposed":
+                    framed = framed.with_take(_mark(take, {line.line_id for line in take.lines}, "withdrawn",
+                                                    principal))
             runner.scenes.write(framed, stored)
             return framed
         except SceneRefused as error:

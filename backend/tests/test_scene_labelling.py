@@ -331,18 +331,45 @@ def test_an_uncertain_action_waits_and_no_narration_is_written_or_kept_until_it_
         table.runner.label(chat, table.player())
         assert table.runner.confirm(chat, table.player()) is None
         refused("undecided_attempt", table.runner.generate, chat, table.player())
-        refused("undecided_attempt", table.runner.keep, chat, table.player(), early.take)
+        refused("not_proposed", table.runner.keep, chat, table.player(), early.take)  # withdrawn at confirm
         refused("not_director", table.runner.decide, chat, table.player(), "partial", cites=("f1", "f2"),
                 consequences=("s1",))
         refused("uncited_result", table.runner.decide, chat, table.owner, "success")  # 029's own rules
         outcome = table.runner.decide(chat, table.owner, "partial", cites=("f1", "f2"), consequences=("s1",))
         assert (outcome.decision.basis, outcome.decision.result) == ("adjudicated", "partial")
+        # The take written before the confirm never heard the outcome, so it stays withdrawn once decided.
+        refused("not_proposed", table.runner.keep, chat, table.player(), early.take)
+        withdrawn = next(t for t in table.runner.open(chat).pending.takes if t.take == early.take)
+        assert withdrawn.state == "withdrawn" and not withdrawn.shown()
         take = table.runner.generate(chat, table.player())
         prompt = table.harness.prompts()[-1]
         # An NPC who saw the action hears the bare result: its causes are Anya's own facts, its stakes the
         # labeller's words, and her name is the action's own line's to give.
         assert "Anya Rook: *I climb the rigging*\nOutcome: The action succeeds at a cost.\n" in prompt
         assert "She falls to the deck" not in prompt and "Because" not in prompt
+        table.runner.keep(chat, table.player(), take.take)
+
+
+def test_a_run_in_flight_when_the_action_is_confirmed_lands_stale_and_is_never_kept(cards, monkeypatch):
+    folder, chat = cards
+    with judged(folder, UNOPPOSED, steps=[say("You reach the top."), say("The rope holds.")]) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        run_turn, decided = table.harness.runtime.run_turn, []
+
+        def confirmed_meanwhile(*args, **kwargs):
+            outcome = run_turn(*args, **kwargs)
+            if not decided:  # the player confirms while the take's call is out; the rules decide it
+                decided.append(table.runner.confirm(chat, table.player()))
+            return outcome
+
+        monkeypatch.setattr(table.harness.runtime, "run_turn", confirmed_meanwhile)
+        early = table.runner.generate(chat, table.player())
+        assert decided[0].decision.result == "success"
+        assert early.state == "stale" and early.lines == ()  # written without the outcome: dropped
+        refused("not_proposed", table.runner.keep, chat, table.player(), early.take)
+        take = table.runner.generate(chat, table.player())
+        assert "Outcome: The action succeeds." in table.harness.prompts()[-1]
         table.runner.keep(chat, table.player(), take.take)
 
 
