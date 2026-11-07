@@ -65,6 +65,10 @@ def _int(value: object, minimum: int) -> None:
         raise _invalid()
 
 
+#: at most this many events an acceptance names as ``after`` (one per device's concurrent line of play)
+AFTER_MAX = 256
+
+
 # -- provenance tokens --------------------------------------------------------------------------
 
 def accepted_token(event_id: str) -> str:
@@ -456,10 +460,23 @@ class AcceptedEvent:
     attempt_id: str | None = None
     holdings: AcceptedHoldings | None = None
     abilities: tuple[AbilityCharge, ...] = ()  # by attempt id
+    #: the events this one was accepted after: the frontier of the device's ledger when it was accepted, sorted
+    #: (028). ``None`` for an event accepted by an unidentified library or a build before 028's merge, whose
+    #: place is its ordinal. Outside the fingerprint, and never rewritten, so a merge can keep causal order.
+    after: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if type(self.ref) is not AcceptedRef or type(self.chat) is not ChatRef:
             raise _invalid()
+        if isinstance(self.after, list):
+            object.__setattr__(self, "after", tuple(self.after))
+        if self.after is not None:
+            if type(self.after) is not tuple or len(self.after) > AFTER_MAX:
+                raise _invalid()
+            for event_id in self.after:
+                _segment(event_id)
+            if list(self.after) != sorted(set(self.after)) or self.ref.event_id in self.after:
+                raise _invalid()  # one canonical form, and never after itself
         campaign = self.ref.campaign_id
         if self.chat.campaign_id != campaign:
             raise EffectError("campaign_mismatch")

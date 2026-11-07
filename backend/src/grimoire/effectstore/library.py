@@ -25,8 +25,10 @@ from grimoire.core.identity import (
 )
 from grimoire.core.knowledge import Event, Moment
 from grimoire.core.model import ControlAssignment
+from grimoire.devicetag import DeviceIdentityUnusable, device_tag
 from grimoire.effects import (
     WRAPUP_SCHEMA, AcceptedEvent, AcceptedOperation, EffectCodecError, EffectError, EffectProblem, EffectProposal,
+    accepted_frontier,
     EndorsementRecord, EndStep, Op, Receipt, Revocation, SceneWrapUp, Skipped, accepted_from_payload, accepted_schema,
     accepted_to_payload, accepted_token, authorize, bridge_problems, check_citations, edited_effects, holdings_orphans,
     holdings_partials, holdings_problems, ledger_problems, orphans, parse_token, partial_revocations, plan,
@@ -144,6 +146,8 @@ class EffectChange:
     relation_pins: Mapping = field(default_factory=dict)
     #: a further check of the decision (030: the 021 tokens naming the event, as read): why it no longer holds
     rests_on: Callable[[], list[tuple[str, str]]] | None = None
+    #: an acceptance: the device tag its new event and relation ids carry (028), re-checked at commit
+    device: str | None = None
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -191,6 +195,10 @@ class EffectChange:
                       for actor in sorted(self.actors & paired, key=str)]
         if self.rests_on is not None:
             found += self.rests_on()
+        if self.device is not None and self.library._current_tag() != self.device:
+            # 028: ids planned under one identity (or none) are never written under another, so an
+            # acceptance planned before ``identify`` never lands untagged ids that two devices could share
+            found.append((".sync/device.json", "device identity changed"))
         event_id = getattr(self.ref, "event_id", None)
         if self.checks_relations and not self.library._absent(KnowledgeRef(self.campaign_id, "event", event_id)):
             found.append((f"campaigns/{self.campaign_id}/events/{event_id}.json",
@@ -220,15 +228,20 @@ class EffectChange:
 
 
 class _UniqueIds:
-    """``new_id`` that never repeats a value within one change, even when the generator does."""
+    """``new_id`` that never repeats a value within one change, even when the generator does.
 
-    def __init__(self, new_id: Callable[[str], str]) -> None:
+    ``tag`` is this library's device tag (028), appended to every value: two paired devices that each
+    accept an effect offline never begin two different relations under one id.
+    """
+
+    def __init__(self, new_id: Callable[[str], str], tag: str = "") -> None:
         self._new_id = new_id
+        self._tag = tag
         self._taken: set[str] = set()
 
     def __call__(self, prefix: str) -> str:
         for _ in range(_ALLOCATION_ATTEMPTS):
-            value = self._new_id(prefix)
+            value = self._new_id(prefix) + self._tag
             if value not in self._taken:
                 self._taken.add(value)
                 return value
@@ -327,19 +340,21 @@ class TurnEffectsLibrary:
             if held_unread and proposal.holdings is not None:  # it could name an id, or hide a precondition
                 raise InvalidEffect("a holder file cannot be read, so the holdings cannot be checked",
                                     "undecodable_holdings")
-            ref = self._allocate(campaign, _token_ids(self.store, campaign) | held_tokens)
-            changes = self._relation_changes(proposal, steps, ref, snap)
+            tag = self._device_tag()
+            ref = self._allocate(campaign, _token_ids(self.store, campaign) | held_tokens, tag)
+            changes = self._relation_changes(proposal, steps, ref, snap, tag)
             receipts = [Receipt(step.op, change.relation) for step, change in zip(steps, changes)]
             planned = parts.plan_holdings(self._holdings(), proposal, snap.events.values(), ref.event_id,
                                           authorization.holdings_domains)
             ordinal = 1 + max((e.ordinal for e in snap.events.values()), default=0)
             event = self._event(ref, proposal, authorization, records, tuple(receipts),
-                                None if planned is None else planned[1], ordinal)
+                                None if planned is None else planned[1], ordinal, causal_after(snap, tag))
             record = ScopeRecord(ref, accepted_schema(event), accepted_to_payload(event), owner=self._owner)
             agents, actors = self._acting(proposal)
             return EffectChange(self, ref, ((record, None),), tuple(changes), campaign, snap.state, proposal.chat,
                                 checks_relations=True, agent_etags=agents, actors=actors,
-                                holdings_changes=() if planned is None else (planned[0],), holder_pins=pins)
+                                holdings_changes=() if planned is None else (planned[0],), holder_pins=pins,
+                                device=tag)
 
     def _duplicate(self, proposal: EffectProposal, snap: _Snapshot) -> EffectChange | None:
         """The no-op of an effect that is already accepted and applied; ``None`` when no active event has it.
@@ -403,22 +418,26 @@ class TurnEffectsLibrary:
         return authorization, records, pins
 
     def _event(self, ref: AcceptedRef, proposal: EffectProposal, authorization, records: tuple,  # type: ignore[no-untyped-def]
-               receipts: tuple[Receipt, ...], holdings, ordinal: int) -> AcceptedEvent:
-        """The accepted-event value of a new acceptance (or an adoption) under ``ref``."""
+               receipts: tuple[Receipt, ...], holdings, ordinal: int,
+               after: tuple[str, ...] | None = None) -> AcceptedEvent:
+        """The accepted-event value of a new acceptance (or an adoption) under ``ref``; ``after`` is what it
+        was accepted after (028), recorded on an identified library only."""
         charged = parts.charges(proposal, authorization.ability_domains)
         try:
             return AcceptedEvent(
                 ref, proposal.chat, proposal.moment, proposal.summary, proposal.proposed_by,
                 tuple(AcceptedOperation(op, domain) for op, domain in zip(proposal.operations, authorization.domains)),
                 authorization.contributions, records, authorization.controls, str(self.handle.principal),  # type: ignore[attr-defined]
-                self._clock(), ordinal, receipts, attempt_id=proposal.attempt_id, holdings=holdings, abilities=charged)
+                self._clock(), ordinal, receipts, attempt_id=proposal.attempt_id, holdings=holdings, abilities=charged,
+                after=after)
         except EffectError as error:
             raise _refused(error) from None
 
-    def _relation_changes(self, proposal: EffectProposal, steps: tuple, ref: AcceptedRef, snap: _Snapshot
-                          ) -> list[RelationChange]:
-        """The 017 change of each planned step, made in ``ref``'s name, in step order."""
-        token, relations = accepted_token(ref.event_id), self._relations()
+    def _relation_changes(self, proposal: EffectProposal, steps: tuple, ref: AcceptedRef, snap: _Snapshot,
+                          tag: str = "") -> list[RelationChange]:
+        """The 017 change of each planned step, made in ``ref``'s name, in step order; a begun relation's id
+        carries ``tag``, this library's device tag (028)."""
+        token, relations = accepted_token(ref.event_id), self._relations(tag)
         known = snap.relations()  # decoded once, under this lock; no per-operation re-read
         changes = []
         for step in steps:
@@ -575,9 +594,27 @@ class TurnEffectsLibrary:
     def _holdings(self) -> HoldingsLibrary:
         return HoldingsLibrary(self.store, self.handle, clock=self._clock, owner=self._owner)
 
-    def _relations(self) -> RelationLibrary:
-        return RelationLibrary(self.store, self.handle, clock=self._clock, new_id=_UniqueIds(self._new_id),
+    def _relations(self, tag: str = "") -> RelationLibrary:
+        return RelationLibrary(self.store, self.handle, clock=self._clock, new_id=_UniqueIds(self._new_id, tag),
                                owner=self._owner)
+
+    def _device_tag(self) -> str:
+        """This library's ``device_tag`` for new ids; an unusable identity refuses (``device_identity``).
+
+        028: like a new actor, item or turn, a new event or relation never falls back to an untagged id
+        when the identity is damaged, since that is the numbering two devices could both draw.
+        """
+        try:
+            return device_tag(self.store)
+        except DeviceIdentityUnusable as error:
+            raise InvalidEffect(str(error), "device_identity") from None
+
+    def _current_tag(self) -> str | None:
+        """The tag a commit re-checks: ``None`` when the identity can no longer be read."""
+        try:
+            return device_tag(self.store)
+        except DeviceIdentityUnusable:
+            return None
 
     def _require_campaign(self, campaign_id: str) -> None:
         validate_segment(campaign_id, "campaign_id")
@@ -620,10 +657,14 @@ class TurnEffectsLibrary:
             records.append(EndorsementRecord(contribution_id, principal, wanted))
         return tuple(records)
 
-    def _allocate(self, campaign_id: str, tokened: frozenset[str] = frozenset()) -> AcceptedRef:
-        """An unused event id: no accepted-event file, no 020 event file, no relation or holder token naming it."""
+    def _allocate(self, campaign_id: str, tokened: frozenset[str] = frozenset(), tag: str = "") -> AcceptedRef:
+        """An unused event id: no accepted-event file, no 020 event file, no relation or holder token naming it.
+
+        ``tag`` is this library's device tag (028): two paired devices that each accept an effect offline
+        never write one event id with two contents, which 028's ledger merge could not tell apart.
+        """
         for _ in range(_ALLOCATION_ATTEMPTS):
-            value = self._new_id("e")
+            value = self._new_id("e") + tag
             validate_segment(value, "generated id")
             ref = AcceptedRef(campaign_id, value)
             if not self._absent(ref) or not self._absent(KnowledgeRef(campaign_id, "event", value)):
@@ -724,6 +765,22 @@ class TurnEffectsLibrary:
         if ledger_problems(snap.events.values()):
             raise InvalidEffect("the accepted-event stack is inconsistent (duplicate ordinals or order)",
                                 "inconsistent_ledger")
+
+
+def causal_after(snap: _Snapshot, tag: str) -> tuple[str, ...] | None:
+    """What a new event on this library records it was accepted after (028): the frontier of every accepted
+    event it holds, revoked ones too.
+
+    An identified library records it, and so does one that holds any event recording it: a library whose
+    identity was lost for a while (its ``.sync`` deleted) and is identified again later still merges, and an
+    event it accepted meanwhile must not lose its place above the events it was accepted after. Only a
+    library that never took part in 028 (no identity and no event recording ``after``) writes its events
+    exactly as before, their place being their ordinal.
+    """
+    events = snap.events.values()
+    if tag or any(event.after is not None for event in events):
+        return accepted_frontier(events)
+    return None
 
 
 def _relations_unreadable(graph: CampaignGraph) -> bool:

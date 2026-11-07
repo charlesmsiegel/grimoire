@@ -37,7 +37,7 @@ from grimoire.store.layout import address_parts
 from . import parts
 from .errors import InvalidEffect
 from .errors import refused as _refused
-from .library import Endorsement, EffectChange, TurnEffectsLibrary, _relations_unreadable
+from .library import Endorsement, EffectChange, TurnEffectsLibrary, _relations_unreadable, causal_after
 
 #: 023 refusals meaning a holder no longer matches the receipt: it is not this operation's to finish
 _NOT_OURS = frozenset({"seq_moved", "op_id_reused"})
@@ -220,14 +220,16 @@ class EffectRecovery:
                 steps = plan(proposal, snap.graph.index, landed=frozenset(landed))
             except EffectError as error:
                 raise _refused(error) from None
-            changes = lib._relation_changes(proposal, steps, ref, snap)
+            tag = lib._device_tag()  # what adopt still begins is this device's, as accept's would be (028)
+            changes = lib._relation_changes(proposal, steps, ref, snap, tag)
             receipted: dict[int, RelationRef] = {number: relation.ref for number, (relation, _) in landed.items()}
             receipted.update({step.op: change.relation for step, change in zip(steps, changes)})
             receipts = tuple(Receipt(number, receipted[number]) for number in range(len(proposal.operations)))
             holdings_change, accepted, written = self._adopt_holdings(proposal, snap, orphan, landed, entries,
                                                                       holders, authorization.holdings_domains)
             ordinal = 1 + max((e.ordinal for e in snap.events.values()), default=0)
-            event = lib._event(ref, proposal, authorization, records, receipts, accepted, ordinal)
+            event = lib._event(ref, proposal, authorization, records, receipts, accepted, ordinal,
+                               causal_after(snap, tag))
             for number in landed:  # the very check continuity makes, on the changes this event now claims
                 why = receipt_failure(event, number, snap.graph.index)
                 if why is not None:
@@ -248,7 +250,7 @@ class EffectRecovery:
                 holdings_changes=() if holdings_change is None else (holdings_change,), holder_pins=pins,
                 relation_pins={relation.ref: snap.graph.etags[relation.ref]
                                for relation, _ in sorted(landed.values(), key=lambda pair: str(pair[0].ref))},
-                rests_on=_unchanged_tokens(lib, campaign, orphan, tokens))
+                rests_on=_unchanged_tokens(lib, campaign, orphan, tokens), device=tag)
 
     def _landed_entries(self, proposal: EffectProposal, recorded: set[str]) -> tuple[dict, dict]:
         """Each touched holder logging this effect's derived op id under an X with no event file:

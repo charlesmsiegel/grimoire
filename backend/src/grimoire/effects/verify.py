@@ -179,6 +179,32 @@ def orphans(events: Iterable[AcceptedEvent], relations: Iterable[Relation]) -> t
     return tuple(sorted(set(found), key=EffectProblem.sort_key))
 
 
+def predecessors(events: Iterable[AcceptedEvent]) -> dict[str, tuple[str, ...]]:
+    """Each event's direct predecessors in the campaign's acceptance order (028).
+
+    An event's ``after``, as it recorded it; for an event without one (accepted by an unidentified library or
+    before 028's merge) the event without one just before it by ordinal, so such events form one line in
+    ordinal order, as their library accepted them. Ids no event here has are kept: the caller decides.
+    """
+    events = list(events)
+    found = {event.event_id: event.after for event in events if event.after is not None}
+    previous: tuple[str, ...] = ()
+    for event in sorted((e for e in events if e.after is None), key=lambda e: (e.ordinal, e.event_id)):
+        found[event.event_id] = previous
+        previous = (event.event_id,)
+    return found  # type: ignore[return-value]
+
+
+def accepted_frontier(events: Iterable[AcceptedEvent]) -> tuple[str, ...]:
+    """The events no other event comes after, sorted: what a new acceptance records as its ``after`` (028).
+
+    Revoked events count: a revocation changes what is in force, not the order things were accepted in.
+    """
+    events = list(events)
+    named = {event_id for before in predecessors(events).values() for event_id in before}
+    return tuple(sorted(event.event_id for event in events if event.event_id not in named))
+
+
 def ledger_problems(events: Iterable[AcceptedEvent]) -> tuple[EffectProblem, ...]:
     """The event stack must be totally ordered: unique ordinals, and active sequences never decreasing."""
     events = list(events)
@@ -312,6 +338,35 @@ def never_applied(event: AcceptedEvent) -> bool:
     """A revoked event with holdings whose undo was skipped because no holder logged the forward change."""
     skipped = None if event.revocation is None else event.revocation.holdings_skipped
     return event.holdings is not None and skipped is not None and skipped.startswith(NEVER_APPLIED)
+
+
+def attempt_refusal(event: AcceptedEvent, fingerprint: str) -> str | None:
+    """Why ``event`` refuses a new acceptance of the effect ``fingerprint`` that shares one of its attempts, as
+    far as the event itself says (021): ``attempt_reused`` while it is in force; ``attempt_revoked`` when it was
+    revoked but the new one retries the very same effect or its revocation left its holdings change in force;
+    ``None`` once it is undone and the new effect is a revision. ``undo_unconfirmed`` is the holder files' half."""
+    if event.active:
+        return "attempt_reused"
+    assert event.revocation is not None
+    if event.fingerprint == fingerprint or event.revocation.holdings_left:
+        return "attempt_revoked"
+    return None
+
+
+def undo_unconfirmed(event: AcceptedEvent, holders: Mapping[InstanceRef, Holdings | str]) -> bool:
+    """A revoked event whose undo the holder files do not confirm, so it still holds its attempts: an applied undo
+    whose receipt some holder does not log (unless that holder was restored from before the forward change, so
+    holds none of it either), or a ``never applied`` skip where a holder logs the forward change after all."""
+    if event.holdings is None or event.revocation is None:
+        return False
+    failures = holdings_failures(event, holders)
+    if never_applied(event):
+        return bool(failures)
+    if not event.revocation.holdings_seqs:
+        return False
+    forward = event.holdings.seqs
+    return any(not (isinstance(held, Holdings) and held.seq < forward[holder])
+               for holder, _, _ in failures for held in (holders.get(holder),))
 
 
 def _undone(holdings: Holdings, op_id: str) -> bool:

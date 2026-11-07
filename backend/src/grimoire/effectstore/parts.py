@@ -12,7 +12,8 @@ from collections.abc import Iterable, Mapping
 from grimoire.core.identity import InstanceRef
 from grimoire.effects import (
     NEVER_APPLIED, AbilityCharge, AcceptedEvent, AcceptedHoldings, EffectError, EffectProblem, EffectProposal,
-    accepted_token, holdings_failures, holdings_op_id, holdings_orphans, never_applied, parse_token, revoked_token,
+    accepted_token, attempt_refusal, holdings_failures, holdings_op_id, holdings_orphans, never_applied, parse_token,
+    revoked_token, undo_unconfirmed,
 )
 from grimoire.holdings import Holdings, HoldingsCodecError, HoldingsRefused
 from grimoire.holdingstore import HoldingsChange, HoldingsLibrary
@@ -101,34 +102,27 @@ def check_attempts(proposal: EffectProposal, events: Iterable[AcceptedEvent], ho
         shared = sorted(wanted & event.attempts)
         if not shared:
             continue
-        if event.active:
+        why = attempt_refusal(event, fingerprint)
+        if why == "attempt_reused":
             raise InvalidEffect(f"attempt {shared[0][:64]!r} is already charged by {event.ref}", "attempt_reused",
                                 (event.event_id,))
-        if event.fingerprint == fingerprint or event.revocation.holdings_left \
-                or _undo_unconfirmed(event, holdings, consulted):  # type: ignore[union-attr]
+        if why is not None or _undo_unconfirmed(event, holdings, consulted):
             raise InvalidEffect(f"attempt {shared[0][:64]!r} was revoked with {event.ref}; a new acceptance needs "
                                 "a fresh attempt", "attempt_revoked", (event.event_id,))
     return frozenset(consulted)
 
 
 def _undo_unconfirmed(event: AcceptedEvent, holdings: HoldingsLibrary, consulted: set[InstanceRef]) -> bool:
-    if event.holdings is None:
+    """``undo_unconfirmed`` on the holder files as they stand, read only where the revocation has a receipt to
+    confirm (an applied undo, or a ``never applied`` skip one restored holder may contradict)."""
+    revocation = event.revocation
+    assert revocation is not None
+    if event.holdings is None or not (never_applied(event) or revocation.holdings_seqs):
         return False
-    if never_applied(event):  # no holder logged the forward change at the revoke; one restored since may
-        holders = read_holders(holdings, event.holdings.holdings.holders)
-        consulted.update(event.holdings.holdings.holders)
-        failures = holdings_failures(event, holders)
-        refuse_unreadable(failures)
-        return bool(failures)
-    if not event.revocation.holdings_seqs:  # type: ignore[union-attr]
-        return False
-    consulted.update(event.holdings.holdings.holders)
     holders = read_holders(holdings, event.holdings.holdings.holders)
-    failures = holdings_failures(event, holders)
-    refuse_unreadable(failures)
-    forward = event.holdings.seqs  # a holder restored from before the forward change holds none of it either
-    return any(not (isinstance(held, Holdings) and held.seq < forward[holder])
-               for holder, _, _ in failures for held in (holders[holder],))
+    consulted.update(event.holdings.holdings.holders)
+    refuse_unreadable(holdings_failures(event, holders))
+    return undo_unconfirmed(event, holders)
 
 
 def charges(proposal: EffectProposal, domains: tuple[str, ...]) -> tuple[AbilityCharge, ...]:

@@ -409,7 +409,10 @@ def _loaded(module: str, watched=NETWORK_MODULES) -> set[str]:
 
 def test_f12_no_provider_or_network_imports():
     assert _loaded("grimoire.effects") == set()
-    assert _loaded("grimoire.effectstore") == _loaded("grimoire.store")
+    # 028: new event and relation ids carry the device tag, read with 019's identity parser, which itself
+    # loads no network or provider module; nothing else is added to the store's own import set.
+    assert _loaded("grimoire.effectstore") == _loaded("grimoire.store") | {"grimoire.sync"}
+    assert _loaded("grimoire.sync") == _loaded("grimoire.store") | {"grimoire.sync"}
     assert _loaded("grimoire.effectstore", ("grimoire.providers", "grimoire.capture", "grimoire.testing")) == set()
 
 
