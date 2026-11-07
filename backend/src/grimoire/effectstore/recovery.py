@@ -220,7 +220,8 @@ class EffectRecovery:
                 steps = plan(proposal, snap.graph.index, landed=frozenset(landed))
             except EffectError as error:
                 raise _refused(error) from None
-            changes = lib._relation_changes(proposal, steps, ref, snap)
+            tag = lib._device_tag()  # what adopt still begins is this device's, as accept's would be (028)
+            changes = lib._relation_changes(proposal, steps, ref, snap, tag)
             receipted: dict[int, RelationRef] = {number: relation.ref for number, (relation, _) in landed.items()}
             receipted.update({step.op: change.relation for step, change in zip(steps, changes)})
             receipts = tuple(Receipt(number, receipted[number]) for number in range(len(proposal.operations)))
@@ -248,7 +249,7 @@ class EffectRecovery:
                 holdings_changes=() if holdings_change is None else (holdings_change,), holder_pins=pins,
                 relation_pins={relation.ref: snap.graph.etags[relation.ref]
                                for relation, _ in sorted(landed.values(), key=lambda pair: str(pair[0].ref))},
-                rests_on=_unchanged_tokens(lib, campaign, orphan, tokens))
+                rests_on=_unchanged_tokens(lib, campaign, orphan, tokens), device=tag)
 
     def _landed_entries(self, proposal: EffectProposal, recorded: set[str]) -> tuple[dict, dict]:
         """Each touched holder logging this effect's derived op id under an X with no event file:

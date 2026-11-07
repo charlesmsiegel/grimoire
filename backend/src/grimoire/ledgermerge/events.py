@@ -104,18 +104,32 @@ def order_events(base: Ledger, sides: Mapping[str, Ledger]) -> EventOrder:
             onesided[ref] = holding[0]
     tags = {device_tag(device): device for device in devices}
 
-    def origin(ref: AcceptedRef) -> str:  # the device that accepted it, by its id's tag (028)
-        head, _, tail = ref.event_id.rpartition("-")
-        if head and tail in tags:
-            return tags[tail]
-        return chosen[ref][0]
+    def origin(ref: AcceptedRef) -> tuple:
+        """Where the device that accepted it ranks, from the event id alone (028's tag), never from which
+        side holds it: a third device's event, held by one side now and by both after a merge, must sort the
+        same either way, or merging a merge would renumber it. The two devices by rank, then any other
+        device by its tag; only an untagged id (an unidentified library) falls back to its holder."""
+        tail = _tag_of(ref.event_id)
+        if tail is None:
+            return (0, rank[chosen[ref][0]], "")
+        if tail in tags:
+            return (0, rank[tags[tail]], "")
+        return (1, 0, tail)
 
     fresh = [ref for ref in chosen if ref not in base.events]
-    fresh.sort(key=lambda ref: (chosen[ref][1].value.moment.sequence, rank[origin(ref)],
+    fresh.sort(key=lambda ref: (chosen[ref][1].value.moment.sequence, origin(ref),
                                 chosen[ref][1].value.ordinal, ref.event_id))
     first = 1 + max((version.value.ordinal for version in base.events.values()), default=0)
     found = EventOrder(chosen, tuple(fresh), onesided, first, ())
     return replace(found, items=tuple(items + _policy(base, found, devices)))
+
+
+def _tag_of(event_id: str) -> str | None:
+    """The device tag a tagged id ends in (``e-<n>-<8 hex>``), or ``None`` for an untagged id."""
+    head, _, tail = event_id.rpartition("-")
+    if "-" not in head or len(tail) != 8 or any(c not in "0123456789abcdef" for c in tail):
+        return None
+    return tail
 
 
 def _policy(base: Ledger, found: EventOrder, devices: list[str]) -> list[ReviewItem]:
@@ -261,8 +275,12 @@ def replay(campaign_id: str, events: Mapping[str, AcceptedEvent], order: Iterabl
     items: list[ReviewItem] = []
     undone = frozenset(event_id for event_id in order if not events[event_id].active)
     for event_id in sorted(undone):
-        if events[event_id].revocation.skipped:  # type: ignore[union-attr]
+        revocation = events[event_id].revocation
+        assert revocation is not None
+        if revocation.skipped:
             items.append(ReviewItem("partial_revocation", event_id, "some relation changes were left in force"))
+        if revocation.holdings_left:
+            items.append(ReviewItem("partial_revocation", event_id, "its holdings change was left in force"))
     try:
         final = GraphIndex.build(campaign_id, relations, instances)
     except GraphError as error:

@@ -15,6 +15,7 @@ from grimoire.effectstore import InvalidEffect
 from grimoire.store import LibraryStore, StaleWrite
 from grimoire.sync import identify
 
+from capture_fixtures import allies, planned, problems, publish, recovery, seed_capture, throw
 from effects_fixtures import C, CONTROLS, KEY2, Handles, contribution, effects_library, give, seed
 
 
@@ -173,3 +174,39 @@ def test_an_id_too_long_for_its_tag_is_refused_not_cut(world):
     with pytest.raises(ValueError):
         accept(library, handles, give())
     assert not files(store, "accepted")
+
+
+# -- 030's adopt begins what is still missing under the same tagged ids --------------------------
+
+def capture_world(tmp_path):
+    store = LibraryStore.create(tmp_path / "capture")
+    handles = Handles()
+    seed_capture(store, handles)
+    identify(store, "desktop")
+    return store, handles
+
+
+def test_adopt_on_an_identified_library_begins_tagged_relations(tmp_path):
+    store, handles = capture_world(tmp_path)
+    try:
+        publish(store, planned(store, handles), holders=True)  # only the holder file landed: the event is orphaned
+        change = recovery(store, handles).adopt(throw(), controls=CONTROLS)
+        assert change.ref == AcceptedRef(C, f"e-1-{tag('desktop')}")
+        assert [r.relation for r in change.relation_changes] == [RelationRef(C, f"r-1-{tag('desktop')}")]
+        change.commit()
+        assert [r.ref for r in allies(store)] == [RelationRef(C, f"r-1-{tag('desktop')}")]
+        assert problems(store, handles) == []
+    finally:
+        store.close()
+
+
+def test_an_adoption_whose_identity_changes_before_commit_is_stale(tmp_path):
+    store, handles = capture_world(tmp_path)
+    try:
+        publish(store, planned(store, handles), holders=True)
+        change = recovery(store, handles).adopt(throw(), controls=CONTROLS)
+        (store.root / ".sync" / "device.json").write_bytes(b"{not json")
+        with pytest.raises(StaleWrite):
+            change.commit()
+    finally:
+        store.close()

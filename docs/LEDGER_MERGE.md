@@ -34,14 +34,14 @@ The merge is idempotent. Merging a merged ledger with itself gives the same byte
    - A new id with two contents is `id_collision`. Since 028 tags new ids with the device ([DEVICE_SYNC](DEVICE_SYNC.md#per-device-ids)), only untagged libraries collide.
 2. **Order.** The events the base lacks are ordered by:
    1. `moment.sequence`;
-   2. the device that accepted the event, lower device id first. This is read from the id's device tag, not from which side holds the event, so a side that already took the merge orders the same way;
+   2. the device that accepted the event, read from the id's device tag alone, never from which side holds it: the two merging devices first, lower device id first, then any other device's events (merged in earlier from a third device) by tag. Only an untagged id falls back to the side that holds it. So a side that already took the merge orders the same way;
    3. that device's ordinal;
    4. the id.
 
    They are numbered `max(base ordinals) + position`. Ids are kept.
-3. **Rewrite.** Only `ordinal`, `holdings.seqs` and `revocation.holdings_seqs` are rewritten (`REWRITTEN`). The fingerprint covers none of them, so every endorsement stays valid. Two versions that differ only there are one event.
+3. **Rewrite.** Only `ordinal`, `holdings.seqs` and `revocation.holdings_seqs` are rewritten (`REWRITTEN`). The fingerprint covers none of them, so every endorsement stays valid. Two versions that differ only there are one event, so a hand edit of only those fields of an agreed event is discarded: the agreed file is kept.
 4. **Replay.** Each new event is replayed, in merged order, with 021's planner against the merged relations as they stood just before it. It must reproduce the relation receipts it recorded (`receipt_mismatch`). A planner refusal comes back under the planner's reason, such as `precondition_failed`. An ability's actor must exist (`missing_agent`).
-   - A new event revoked on its device must have taken effect in full (`partial_revocation`).
+   - A new event revoked on its device must have been undone in full: no relation change skipped and no holdings change left in force (`partial_revocation`).
 5. **Policy.** These are checked across the two devices:
    - one chat took new events on both (`same_chat`);
    - an agreed event was revoked on one device while the other accepted new events (`revoked_vs_extended`);
@@ -50,7 +50,7 @@ The merge is idempotent. Merging a merged ledger with itself gives the same byte
 
 Wrap-ups and relation files merge three-way, as whole files. One file changed differently on both devices is `both_changed`. Two relations under one new id are `id_collision`.
 
-After all of that, the merged ledger is checked as 021's `continuity` would check it. It may show no problem that neither device showed already (`new_problem`).
+After all of that, the merged ledger is checked with 021's ledger checks: the problems `continuity` reports from the accepted events, relations, wrap-ups and holder files. Its 020 bridge check and store problems are not run, since the merge does not read `events/` or other files. The merged ledger may show no such problem that neither device showed already (`new_problem`).
 
 ## Holdings
 

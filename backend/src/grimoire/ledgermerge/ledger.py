@@ -97,7 +97,7 @@ def merge_ledger(base: Ledger, sides: Mapping[str, Ledger], *, instances: Iterab
 def problems(campaign_id: str, events: Iterable[AcceptedEvent], relations: Iterable[Relation],
              wrapups: Iterable, holdings: Mapping[InstanceRef, Holdings],
              instances: frozenset[InstanceRef]) -> set[EffectProblem]:
-    """The 021 problems ``continuity`` would report for this ledger (store problems aside)."""
+    """The 021 problems ``continuity`` would report for this ledger (its 020 bridge and store problems aside)."""
     events, relations = list(events), list(relations)
     try:
         index = GraphIndex.build(campaign_id, relations, instances)

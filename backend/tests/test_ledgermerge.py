@@ -398,3 +398,33 @@ def test_a_merge_evicts_as_any_write_would_and_stays_put_once_both_devices_hold_
         assert reasons(lagging) == {"log_diverged"}
     finally:
         before.close()
+
+
+def test_a_third_devices_events_keep_their_place_however_many_sides_hold_them(base_path, tmp_path):
+    # desktop accepted its own event, then merged a tablet's (same sequence); the phone did nothing
+    made = {name: Device(base_path, tmp_path, name) for name in ("a-phone", "desktop", "tablet")}
+    base = LibraryStore.open(base_path)
+    try:
+        own = made["desktop"].accept(give(sequence=8, turn="t8"))
+        theirs = made["tablet"].accept(pay(sequence=8))
+        first = merge(base, {"desktop": made["desktop"].store, "tablet": made["tablet"].store})
+        assert isinstance(first, Merged), first
+        write_back(made["desktop"].store, file_bytes(first, base, {"desktop": made["desktop"].store,
+                                                                    "tablet": made["tablet"].store}))
+        pair = {"a-phone": made["a-phone"].store, "desktop": made["desktop"].store}
+        result = merge(base, pair)
+        assert isinstance(result, Merged), result
+        assert result.order == (own.event_id, theirs.event_id)  # a device neither side is comes after both
+        files = file_bytes(result, base, pair)
+        write_back(made["a-phone"].store, files)  # the phone took the merge; the desktop has not yet
+        lagging = merge(base, pair)
+        assert isinstance(lagging, Merged) and lagging.order == result.order
+        assert file_bytes(lagging, base, pair) == files
+        write_back(made["desktop"].store, files)
+        settled = merge(base, pair)
+        assert isinstance(settled, Merged) and settled.order == result.order
+        assert file_bytes(settled, base, pair) == files
+    finally:
+        for device in made.values():
+            device.close()
+        base.close()
