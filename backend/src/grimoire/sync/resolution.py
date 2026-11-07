@@ -254,6 +254,11 @@ def _resolve_deletion(stores: Mapping[str, LibraryStore], scans: Mapping[str, Ca
         raise ResolveRefused(f"{path} cannot be deleted on {receiver}: {error}") from error
     try:
         with _locked(*stores.values()):
+            again = deletion.still_needed(store, {}, {}, paths)  # anything written there since the scan
+            if again:
+                what, why = min(again.items())
+                raise ResolveRefused(f"{what} cannot be deleted on {receiver} (delete_dependency): {why}; "
+                                     "resolve or delete that first")
             _end_deliveries(stores, other, pair, paths)
             _commit_holds(store, receiver, deletion.holds_state(
                 store, kept_record.read_keeps(store, winner, pair), receiver, winner, pair, deletes))

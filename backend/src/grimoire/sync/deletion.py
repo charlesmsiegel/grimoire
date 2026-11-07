@@ -18,6 +18,7 @@ versions, never a loss.
 
 from __future__ import annotations
 
+import functools
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -50,8 +51,8 @@ class Delete:
     data: bytes
     slot: int
 
-    @property
-    def expected(self) -> str:
+    @functools.cached_property
+    def expected(self) -> str:  # hashed once: a record may be up to 010's file cap, and this is read often
         return etag(self.data)
 
     @property
@@ -296,7 +297,9 @@ def needs_of(path: str, data: bytes, files: Mapping[str, bytes], blobs: Mapping[
         if kind == "chat":
             needs.files.add(f"{CAMPAIGNS}/{parts[1]}/{SCOPE}")
         elif kind == "transcript":
-            needs.files.add(f"{CAMPAIGNS}/{parts[1]}/chats/{parts[3]}.json")
+            target = _file_of_chat(parts[1], parts[3])  # a page is history of its chat
+            if target is not None:
+                needs.files.add(target)
         elif kind == "turn" and found is not None and isinstance(found[1], TurnRef):
             chat = found[1].turn_id.rsplit(".", 1)[0]  # ``<chat_id>.<n>[-tag]``: the chat it was played in
             target = _file_of_chat(parts[1], chat)

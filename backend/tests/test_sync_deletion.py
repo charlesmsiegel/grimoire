@@ -17,8 +17,8 @@ import pytest
 from grimoire.core.identity import InstanceRef, SourceRef
 from grimoire.store import InvalidEnvelope, LibraryStore, ProcessLocker, RecordEnvelope, SourceManifest, etag
 from grimoire.sync import ResolveRefused, SyncInterrupted, resolve, sync, sync_until_quiet
-from grimoire.sync import resolution, session as sync_session
-from grimoire.sync.documents import keeps_name, parse_keeps
+from grimoire.sync import deletion, keeps as kept_record, resolution, session as sync_session
+from grimoire.sync.documents import keeps_name, parse_keeps, render_keeps
 from grimoire.testing import CrashScenario, Invariant, explore_crashes, idempotent_recovery, no_residue, run_plans
 from grimoire.testing.fileops import snapshot
 
@@ -226,6 +226,19 @@ def test_a_record_written_after_the_plan_that_needs_a_deletion_stops_its_commit(
     assert report.conflict(path).code == "delete_dependency" and (phone.root / path).exists()
 
 
+def test_a_deletion_whose_hold_the_record_cannot_take_is_held_back(pair, monkeypatch):
+    """Each hold is recorded before its deletion: when the pair's kept-version record is full, the
+    deletion is ``unapplicable`` at planning and the record stays, instead of the sync failing."""
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    (desktop.root / path).unlink()
+    record = parse_keeps(phone.read_sync_state(keeps_name(DESKTOP)), PAIR)
+    current = render_keeps(PAIR, record.entries if record.state == "valid" else {})
+    monkeypatch.setattr(kept_record, "RECORD_LIMIT", len(current) + 20)  # room for no held version
+    report = sync(desktop, phone, handles())
+    assert report.conflict(path).code == "unapplicable" and (phone.root / path).exists()
+
+
 def test_a_record_that_cannot_be_read_on_the_receiver_holds_every_deletion_back(pair):
     desktop, phone = pair
     (desktop.root / PATHS["wren_b"]).unlink()
@@ -310,6 +323,28 @@ def test_resolve_can_end_an_edit_delete_conflict_toward_the_deletion(pair):
         assert _archive(store, peer)[path] == {"deleted": etag(edited)}
     report = sync(desktop, phone, handles())
     assert report.conflicts == () and report.copied == () and report.deleted == ()
+
+
+def test_resolve_toward_the_deletion_judges_again_under_its_lock(pair, monkeypatch):
+    """A record written on the deleting device after resolve read it, which needs the deletion,
+    refuses the resolve before anything is written: the record and the conflict stay."""
+    desktop, phone = pair
+    path = PATHS["wren_b"]
+    (desktop.root / path).unlink()
+    edit_instance(phone, WREN_B, 7)
+    edited = (phone.root / path).read_bytes()
+    assert sync(desktop, phone, handles()).conflict(path).code == "edit_delete"
+    stage = deletion.stage
+
+    def then_a_new_chat(txn, deletes):  # the person keeps playing on the phone meanwhile
+        stage(txn, deletes)
+        put(phone, RecordEnvelope(InstanceRef("c2", "chat", "dockside"), {"participants": [str(WREN_B)], "history": []}))
+    monkeypatch.setattr(deletion, "stage", then_a_new_chat)
+    with pytest.raises(ResolveRefused, match="delete_dependency"):
+        resolve(desktop, phone, path, None, _expected(desktop, phone, path), handles())
+    assert (phone.root / path).read_bytes() == edited and edited not in kept(phone)
+    monkeypatch.undo()
+    assert sync(desktop, phone, handles()).conflict(path).code == "edit_delete"
 
 
 def test_resolve_toward_the_deletion_of_a_manifest_takes_its_agreed_revisions_along(pair):

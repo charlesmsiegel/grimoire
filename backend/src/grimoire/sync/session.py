@@ -438,6 +438,13 @@ def _admit_deletes(plan: SyncPlan, dest: str, paths: list[str]) -> None:
     plan.deletes[dest], refused = deletion.admit(plan.stores[dest], plan.scans[dest].files, files, blobs,  # type: ignore[attr-defined]
                                                  plan.scans[dest].blocked, paths, _preflight,
                                                  functools.partial(_stage, copies=plan.copies[dest], keeps=[]))
+    try:  # each hold is recorded before its deletion (holds(d)): one the record cannot take holds them all back
+        deletion.holds_state(plan.stores[dest], plan.kept_records[dest], dest, plan.other(dest), plan.devices,
+                             plan.deletes[dest])
+    except InvalidEnvelope as error:
+        refused.update({delete.path: ("unapplicable", f"its version cannot be recorded as held: {error}")
+                        for delete in plan.deletes[dest]})
+        plan.deletes[dest] = []
     for path, (code, why) in refused.items():
         plan.conflicts[path] = Conflict(path, code, why)
 
