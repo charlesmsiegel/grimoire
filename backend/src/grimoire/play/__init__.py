@@ -5,8 +5,9 @@ transmission, 031's context packs, 027's briefs and runtime, 041's stage (from t
 ``turns/`` family. See docs/SCENES.md.
 """
 
+from .boundaries import Boundaries, new_boundary_id
 from .runner import SceneRunner
 from .scene import DEFAULT_BUDGET, Scene
 from .stages import StageBook, StageSource
 
-__all__ = ["DEFAULT_BUDGET", "Scene", "SceneRunner", "StageBook", "StageSource"]
+__all__ = ["DEFAULT_BUDGET", "Boundaries", "Scene", "SceneRunner", "StageBook", "StageSource", "new_boundary_id"]

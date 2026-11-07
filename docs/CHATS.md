@@ -87,7 +87,7 @@ A new actor is `prior_history: not_witnessed`: it saw none of the chat's earlier
 - `world`: a `WorldBinding(source, observed_manifest_etag, attached_at)`.
   - The etag is a **drift check only, not a pin**: the store keeps no old manifest content.
   - Pinning to a release (a frozen heads map) belongs to 042/056.
-- `session_zero`: 016's configuration, kept **verbatim and uninterpreted**. 035 executes it, and it **must authenticate the setter** (016's player-input channel) before calling `set_session_zero`. The service does not check who set it.
+- `session_zero`: 016's configuration, kept **verbatim and uninterpreted**. 035 executes it: `SceneRunner.change_boundaries` authenticates the setter (016's player-input channel) and writes it in `grimoire.session-zero/1` through `set_session_zero` ([SCENES](SCENES.md#session-zero-016)). The service does not check who set it, so a direct `set_session_zero` is owner repair tooling only, and a value 035's codec cannot read holds the chat's narration.
 
 ### Bounds
 

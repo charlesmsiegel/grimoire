@@ -102,7 +102,10 @@ def open_conflicts(store: LibraryStore, folder: str, paths: Iterable[str] = (), 
     of it, or the archive cannot be honoured), or kept versions of ``paths`` (the caller's own files
     under ``folder``) stand here: any path may be in conflict then, so callers fail closed. A record
     retired by ``identify`` holds nothing (it carries every open conflict to the new ID's record). A
-    library with no identity holds nothing only while it has no pair records at all."""
+    library with no identity holds nothing only while it has no pair records at all.
+
+    ``folder`` is a folder of one campaign (``campaigns/<id>/turns``), or one file directly in a campaign's
+    folder (``campaigns/<id>/scope.json``, 035's session zero), which is then the only path looked at."""
     try:
         device = device_of(store)
     except NoDeviceIdentity:
@@ -134,7 +137,7 @@ def open_conflicts(store: LibraryStore, folder: str, paths: Iterable[str] = (), 
             continue
         for path, entry in (view.entries.items() if view.state == "valid" else ()):
             standing = (({entry.open} - {None}) | entry.delivered) - entry.dismissed
-            if not standing or not path.startswith(folder + "/"):
+            if not standing or not (path == folder or path.startswith(folder + "/")):
                 continue
             kept = list(found.get(path, ()))
             for tag in sorted(standing - {NO_VERSION}):  # type: ignore[type-var]  # the peer deleted it: none kept

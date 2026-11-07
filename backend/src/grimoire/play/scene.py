@@ -18,6 +18,7 @@ from grimoire.core.identity import ChatRef, InstanceRef
 from grimoire.party import PartyRefused, SceneCast, stage
 from grimoire.scene import ImportedHistory, SceneLine, SceneRefused, Take, TurnRecord
 from grimoire.scenestore import ChatTurns, StoredTurn
+from grimoire.security import is_human
 from grimoire.staging import Stage, StagingRefused, hears, sees, where
 from grimoire.staging import presence as stage_presence
 
@@ -375,3 +376,11 @@ def _mark(take: Take, line_ids: set[str], state: str, principal: str) -> Take:
     if changed.state == "proposed" and not changed.shown():
         changed = replace(changed, state="withdrawn", by=principal)
     return changed
+
+
+def _table_audience(scene: Scene, principal: str) -> frozenset[str]:
+    """016's ``BoundaryContext.audience``, authenticated: every human 003's ledger records as controlling a present
+    player character (on stage or not: the table, not the room), and the requester, whom ``_principal``
+    authenticated as one of them or the library owner. Never a name from a post, a reply or the caller."""
+    controllers = {scene.controller(pc) for pc in scene.players}
+    return frozenset(each for each in controllers if isinstance(each, str) and is_human(each)) | {principal}

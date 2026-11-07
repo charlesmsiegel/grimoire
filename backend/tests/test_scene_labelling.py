@@ -1007,16 +1007,14 @@ def test_ids_given_as_a_generator_are_all_kept(cards):
 
 
 def test_nothing_is_labelled_while_a_session_zero_cannot_be_read(cards):
-    from dataclasses import replace as _replace
+    from chat_fixtures import Clock
+    from grimoire.chatstore import ChatLibrary
+    from scene_fixtures import Tagged
     folder, chat = cards
     with labelled(folder, REPLY) as table:
         acting(table, chat)
-        context = table.runner._context
-
-        def bounded(chat_ref):  # the chat's scope holds a session zero this slice cannot read
-            found = context(chat_ref)
-            scope = found.captured.scope
-            return _replace(found, captured=_replace(found.captured, scope=scope.with_session_zero({"lines": []})))
-        table.runner._context = bounded
+        chats = ChatLibrary(table.store, table.owner, clock=Clock(), new_id=Tagged("sz"), owner=OWNER)
+        _, etag = chats.read_scope(chat.scope)  # the chat's scope holds a session zero no codec can read
+        chats.set_session_zero(chat.scope, {"lines": []}, expected=etag).commit()
         refused("session_zero_unreadable", table.runner.label, chat, table.player())
         assert not table.runner.open(chat).pending.labels and not table.labels.prompts()

@@ -1,6 +1,6 @@
 # Session Zero, Narrative Boundaries and Consent Controls
 
-**Status:** milestone 1's headless policy is implemented; see [the session-zero contract](../../SESSION_ZERO.md). Executing pause/skip/redirect in play belongs to 035.
+**Status:** milestone 1's headless policy is implemented; see [the session-zero contract](../../SESSION_ZERO.md). 035 executes it in play: pause/skip/redirect ([SCENES](../../SCENES.md#pause-skip-and-redirect-016)) and a chat's stored configuration, through a codec, an authenticated change and `decide_presentation` on every narration shown ([SCENES](../../SCENES.md#session-zero-016)). Until a theme labeller exists, any limit in force holds all narration; milestone 2's enforcement in difficult genre situations needs that labeller.
 
 **Outcome:** Give players and groups explicit control over narrative themes, sensitive content, character relationships and permitted storytelling intensity.
 
