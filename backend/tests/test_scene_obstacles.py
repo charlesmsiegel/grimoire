@@ -1116,3 +1116,75 @@ def test_a_link_whose_frame_was_never_written_passes_once_its_actor_changed_hand
         bob = again.authority.handle_for(BOB, trusted=True)
         again.runner.post(chat, bob, "*I press five coins into Mara's hand*")
         assert again.runner.label(chat, bob, obstacle="hold").state == "proposed"  # the hold takes the next one
+
+
+def _fork_after_the_mark(at, chat, monkeypatch, *, choose: bool):
+    """Another device's turn 1 arrives just after confirm marks this device's turn framed (before the obstacle
+    link and the frame); the owner then chooses that device's branch at once, if ``choose``. The branch's head."""
+    from grimoire.play import adjudicate
+    real = adjudicate._mark_framed
+    theirs = []
+
+    def then_fork(*args, **kwargs):
+        record = real(*args, **kwargs)
+        theirs.append(_fork_first_turn(at, chat))
+        if choose:
+            at.runner.choose(chat, at.owner, theirs[0])
+        return record
+    monkeypatch.setattr(adjudicate, "_mark_framed", then_fork)
+    return theirs
+
+
+def test_a_turn_set_aside_while_it_was_confirmed_takes_no_attempt_at_its_obstacle(cards, monkeypatch):
+    folder, chat = cards
+    with table(folder, reply("sneak"), reply("bribe")) as at:
+        turn, anya, mara = acting(at, chat, "*I slip past the lantern*")
+        at.runner.label(chat, at.player(), obstacle="hold")
+        theirs = _fork_after_the_mark(at, chat, monkeypatch, choose=True)
+        refused("no_open_turn", at.runner.confirm, chat, at.player())  # set aside: nothing is linked or framed
+        monkeypatch.undo()
+        assert at.obstacles.state(chat.campaign_id, "hold").attempts == ()
+        assert at.runner.adjudication.state(chat.campaign_id).frame(turn) is None
+        assert at.runner.open(chat).turns.last.record.turn_id == theirs[0]
+        # the chosen branch's action attempts the hold: it is open to it
+        assert at.runner.label(chat, at.player(), obstacle="hold").state == "proposed"
+        assert at.runner.confirm(chat, at.player()).decision.result == "success"
+        assert at.obstacles.state(chat.campaign_id, "hold").status == "overcome"
+
+
+def test_a_fork_arriving_in_a_confirm_leaves_the_turn_framed_until_its_branch_is_chosen(cards, monkeypatch):
+    folder, chat = cards
+    with table(folder, reply("sneak")) as at:
+        turn, anya, mara = acting(at, chat, "*I slip past the lantern*")
+        at.runner.label(chat, at.player(), obstacle="hold")
+        theirs = _fork_after_the_mark(at, chat, monkeypatch, choose=False)
+        refused("turn_fork", at.runner.confirm, chat, at.player())  # nothing is linked while the fork waits
+        monkeypatch.undo()
+        assert theirs and at.obstacles.state(chat.campaign_id, "hold").attempts == ()
+        assert stored(at, chat, turn).framed is not None  # the mark stands: the confirm finishes later
+        at.runner.choose(chat, at.owner, turn)  # this device's branch goes on
+        assert at.runner.confirm(chat, at.player()) is None  # linked and framed now: uncertain, it waits
+        state = at.obstacles.state(chat.campaign_id, "hold")
+        assert [(a.attempt.attempt_id, a.status) for a in state.attempts] == [(turn, "pending")]
+
+
+def test_a_choice_racing_a_decide_withdraws_the_attempt_first_and_the_decide_is_refused(cards, monkeypatch):
+    folder, chat = cards
+    with table(folder, reply("sneak")) as at:
+        turn, anya, mara = acting(at, chat, "*I slip past the lantern*")
+        at.runner.label(chat, at.player(), obstacle="hold")
+        assert at.runner.confirm(chat, at.player()) is None
+        from grimoire.play import adjudicate
+        real = adjudicate._refuse_void
+        theirs = []
+
+        def chosen_first(*args, **kwargs):  # the fork and the choice land after decide read the open turn
+            if not theirs:
+                theirs.append(_fork_first_turn(at, chat))
+                at.runner.choose(chat, at.owner, theirs[0])
+            return real(*args, **kwargs)
+        monkeypatch.setattr(adjudicate, "_refuse_void", chosen_first)
+        refused("attempt_withdrawn", at.runner.decide, chat, at.owner, "success", cites=["dark"])
+        monkeypatch.undo()
+        assert at.runner.adjudication.outcome(chat.campaign_id, turn) is None
+        assert [a.status for a in at.obstacles.state(chat.campaign_id, "hold").attempts] == ["void"]

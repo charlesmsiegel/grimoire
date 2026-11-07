@@ -221,6 +221,11 @@ def pass_attempt(runner, record: TurnRecord) -> None:
     stays open with its attempt withdrawn, which is then never decided (``refuse_void_attempt``), and a retry
     finds the attempt void already and only passes the turn.
     """
+    with runner.store.lock:  # read and withdrawn as one step, as a fork choice retires and confirm frames
+        _pass_attempt(runner, record)
+
+
+def _pass_attempt(runner, record: TurnRecord) -> None:
     campaign_id = record.chat.campaign_id
     linked = None if runner.obstacles is None else _029(runner.obstacles.linked, campaign_id).get(record.turn_id)
     found = None
@@ -247,7 +252,8 @@ def retire_set_aside(runner, turns, chosen: str) -> None:
     would hold its obstacle pending for good. Withdrawn first, as a pass withdraws: if a withdrawal is refused,
     nothing is chosen; if the choice is then refused, choosing the same branch again finds the attempts void.
     A branch chosen later after all (a peer's conflicting marks chosen again) keeps its turn, whose withdrawn
-    attempt is never decided (``refuse_void_attempt``) and is passed."""
+    attempt is never decided (``refuse_void_attempt``) and is passed. Called under the store lock, with the choice
+    written in the same hold, so no confirm links an attempt on a set-aside turn between the two."""
     fork = turns.fork
     if runner.obstacles is None or fork is None or chosen not in {branch.head for branch in fork.branches}:
         return  # nothing to retire, or the choice is refused as it stands

@@ -132,14 +132,16 @@ def confirm_action(runner, chat: ChatRef, by) -> Outcome | None:
             raise
         if marked is None:
             record = _mark_framed(runner, chat, record, label.label, principal)
-        try:
-            _029(record_frame, frame, contribution=contribution, author=by)
-        except SceneRefused as error:
-            current = _029(library.state, chat.campaign_id).frame(record.turn_id)
-            if current is None or current.frame != frame:  # a concurrent confirm did not record it either
-                if error.reason not in _UNAVAILABLE:
-                    _unframe(runner, chat, record, label.label, error.reason)
-                raise
+        with runner.store.lock:  # a fork choice is written under it: a turn it set aside is never linked or framed
+            _in_play(runner, chat, record)  # refused, the mark stands: a confirm on this branch finishes it
+            try:
+                _029(record_frame, frame, contribution=contribution, author=by)
+            except SceneRefused as error:
+                current = _029(library.state, chat.campaign_id).frame(record.turn_id)
+                if current is None or current.frame != frame:  # a concurrent confirm did not record it either
+                    if error.reason not in _UNAVAILABLE:
+                        _unframe(runner, chat, record, label.label, error.reason)
+                    raise
     decided = _029(library.outcome, chat.campaign_id, record.turn_id)
     if decided is not None:  # a concurrent confirm decided it meanwhile
         return decided
@@ -153,6 +155,7 @@ def confirm_action(runner, chat: ChatRef, by) -> Outcome | None:
              if factor.bearing == ("prevents" if result == "failure" else "favours")}
     try:
         with runner.store.lock:  # 029's and 040's lock: an attempt withdrawn from its obstacle is never decided
+            _in_play(runner, chat, record)
             _refuse_void(runner, record)
             return _029(library.decide, chat.campaign_id, record.turn_id, Decision(result, "rule", frozenset(cites)))
     except SceneRefused as error:
@@ -248,8 +251,29 @@ def decide_action(runner, chat: ChatRef, by, result: str, *, basis: str = "adjud
         raise _refuse("invalid_field", "basis is adjudicated or consent; the rules decide the rest at confirm")
     decision = _029(Decision, result, basis, _ids(cites, "cites"), _ids(consequences, "consequences"))
     with runner.store.lock:  # 029's and 040's lock: an attempt withdrawn from its obstacle is never decided
+        _in_play(runner, chat, record)
         _refuse_void(runner, record)
         return _029(library.decide, chat.campaign_id, record.turn_id, decision, consent=consent)
+
+
+def _in_play(runner, chat: ChatRef, record: TurnRecord) -> None:
+    """Refuses unless ``record`` is still the open turn of the chat's line, every turn readable (call under the
+    store lock). A fork choice withdraws the set-aside branches' attempts and writes its marks under that lock
+    (028, 040), so a turn it set aside is never framed or decided after it, and while a fork waits for its choice
+    (``turn_fork``) nothing is: which branch goes on is not known yet."""
+    turns = runner.scenes.turns(chat)
+    if turns.problems:
+        if set(turns.problems) == {(str(chat), "turn_fork")}:
+            raise _refuse("turn_fork", "a fork arrived while the action was confirmed; the owner chooses a branch "
+                                       "first")
+        raise _refuse("turns_unreadable", "a turn file of this chat cannot be read; nothing is written")
+    if turns.conflicted:
+        raise _refuse("turn_conflict", "a turn of this chat is in a sync conflict; nothing is played until it is "
+                                       "resolved")
+    last = turns.last
+    if last is None or last.record.ref != record.ref or not last.record.open:
+        raise _refuse("no_open_turn", "the action's turn is no longer the open turn (closed, or set aside by a "
+                                      "fork choice)")
 
 
 def _refuse_void(runner, record: TurnRecord) -> None:
