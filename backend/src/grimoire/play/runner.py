@@ -206,9 +206,15 @@ class SceneRunner:
 
     # -- turns ------------------------------------------------------------------------------------
 
-    def begin(self, chat: ChatRef, by) -> TurnRecord:
+    def begin(self, chat: ChatRef, by, *, opening: str | None = None) -> TurnRecord:
         """The opening turn (number 1), as a proposed take: a card's first greeting spoken by its character,
-        or a scenario's first opening (or the chat's premise) narrated. Keep it with ``keep``."""
+        or a scenario's first opening (or the chat's premise) narrated. Keep it with ``keep``.
+
+        ``opening`` chooses another one by its imported id (052's Start Chat): a greeting of the launch card
+        (``first``, ``alt-2``, ``group-1``) or an opening of the bound scenario (``opening-alt-2``). An id the
+        chat does not have is refused ``unknown_opening``, never replaced by the first one."""
+        if opening is not None and (type(opening) is not str or not opening):
+            raise _refuse("invalid_field", "an opening is chosen by its id")
         context = self._context(chat)
         scene = context.scene
         principal = self._principal(scene, by)
@@ -227,19 +233,19 @@ class SceneRunner:
         else:
             raise _refuse("already_begun", "the chat has turns; it opens only once")
         number = len(record.takes) + 1
-        line = self._opening(context, record, number)
+        line = self._opening(context, record, number, opening)
         take = Take(number, "proposed", "opening", scene.cast, lines=(line,), by=principal)
         record = record.with_take(take)
         self.scenes.write(record, stored)
         return record
 
-    def _opening(self, context: _Context, record: TurnRecord, take: int) -> SceneLine:
+    def _opening(self, context: _Context, record: TurnRecord, take: int, chosen: str | None) -> SceneLine:
         scene, chat = context.scene, context.captured.chat
         user = scene.names.get(scene.persona) if scene.persona is not None else None
         line_id = f"{record.turn_id}.{take}.1"
         for binding in chat.active_bindings("scenario"):
             payload = _payload(context.captured.snapshot, binding.ref, "scenario")
-            text = _first_text(payload.get("openings"))
+            text = _first_text(payload.get("openings"), wanted=chosen, chosen=chosen is not None)
             if text:
                 return SceneLine(line_id, None, NARRATOR, _macros(text, None, user), scene.players)
         launch = chat.launch
@@ -250,10 +256,12 @@ class SceneRunner:
                 payload = _payload(context.captured.snapshot, binding.ref, "character")
                 card = payload.get("card")
                 greetings = card.get("greetings") if isinstance(card, Mapping) else None
-                text = _first_text(greetings, wanted="first")
+                text = _first_text(greetings, wanted=chosen or "first", chosen=chosen is not None)
                 if text:
                     name = scene.names.get(binding.actor, binding.actor.instance_id)
                     return SceneLine(line_id, binding.actor, name, _macros(text, name, user), scene.cast)
+        if chosen is not None:
+            raise _refuse("unknown_opening", "this chat has no greeting or opening with that id")
         if launch.premise and launch.premise.strip():
             return SceneLine(line_id, None, NARRATOR, _macros(launch.premise, None, user), scene.players)
         raise _refuse("no_opening", "this chat has no greeting or opening to begin with")
