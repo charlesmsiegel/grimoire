@@ -1,6 +1,6 @@
 """The store's deletion (028): ``Transaction.delete_exact``, always paired with a hold of what it removes.
 
-Its crash, torn-write, error and race explorations are in ``test_deletion_recovery.py``."""
+Its crash, torn-write, error and race explorations are in ``test_store_deletion_recovery.py``."""
 
 from __future__ import annotations
 

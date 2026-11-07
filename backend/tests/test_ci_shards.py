@@ -28,8 +28,8 @@ def test_the_shards_partition_every_test_file():
     parts = {shard: {name for name in files if shard_of(name) == shard} for shard in SHARDS}
     assert all(parts.values()) and set().union(*parts.values()) == files
     assert sum(len(part) for part in parts.values()) == len(files)
-    assert {"test_sync_faults.py", "test_import_v1_recovery.py", "test_deletion_recovery.py"} <= parts["explorations"]
-    assert {"test_store_recovery.py", "test_rebasestore_recovery.py"} <= parts["store-explorations"]
+    assert {"test_sync_faults.py", "test_import_v1_recovery.py"} <= parts["explorations"]
+    assert {"test_store_recovery.py", "test_rebasestore_recovery.py", "test_store_deletion_recovery.py"} <= parts["store-explorations"]
     assert {"test_sync_shards.py", "test_peersync.py"} <= parts["sync"]
     assert {"test_store_replica.py", "test_imagestore_scenarios.py", "test_store_delete.py"} <= parts["stores"]
     assert "test_ci_shards.py" in parts["rest"]
@@ -80,4 +80,16 @@ def test_the_workflow_runs_every_shard_on_every_sharded_os():
     text = WORKFLOW.read_text(encoding="utf-8")
     compat = text[text.index("\n  compat:"):]
     step = compat[compat.index("run: python -m pytest"):]
+    assert re.match(r"run: python -m pytest backend/tests -q\n\s+env:\n\s+GRIMOIRE_TEST_SHARD: \$\{\{ matrix.shard \}\}", step)
+
+
+def test_the_domain_job_runs_every_shard_once():
+    """The domain job (Ubuntu, Python 3.11) runs each shard exactly once and passes the shard on."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    domain = text[text.index("\n  domain:"):text.index("\n  compat:")]
+    shards = re.search(r"\n        shard: \[(.+?)\]", domain)
+    assert shards, "the domain job is not sharded"
+    listed = [value.strip() for value in shards.group(1).split(",")]
+    assert len(listed) == len(set(listed)) and sorted(listed) == sorted(SHARDS)
+    step = domain[domain.index("run: python -m pytest"):]
     assert re.match(r"run: python -m pytest backend/tests -q\n\s+env:\n\s+GRIMOIRE_TEST_SHARD: \$\{\{ matrix.shard \}\}", step)

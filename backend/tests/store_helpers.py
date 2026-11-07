@@ -61,7 +61,7 @@ def seed(store: LibraryStore, handle=None) -> dict[str, str]:
     return dict(txn.commit(handle or owner_handle()).etags)
 
 
-#: 028's deletion fixtures (``test_store_delete.py`` and ``test_deletion_recovery.py``): the scopes a
+#: 028's deletion fixtures (``test_store_delete.py`` and ``test_store_deletion_recovery.py``): the scopes a
 #: deletion is authorized on and the seeded records it deletes.
 DELETE_SCOPES = ("sources", "campaigns", "kept")
 WREN_A_PATH = "campaigns/c1/instances/character/wren-a.json"
