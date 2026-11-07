@@ -306,7 +306,9 @@ def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -
     encoded = json.dumps(summary, sort_keys=True).encode()  # a large library's runs past one frame
     for start in range(0, len(encoded), _SUMMARY_CHUNK):
         channel.send({"t": "scan"}, encoded[start:start + _SUMMARY_CHUNK])
-    channel.send({"t": "end", "entries": count})
+    # 028: whether this device can store its base cache entries (one name length for all, so one answer):
+    # the client's mirror then plans none this device would refuse, which would stop every transfer
+    channel.send({"t": "end", "entries": count, "bases": store.sync_state_fits(ledger_units.base_name(peer, ""))})
 
 
 # -- client side ------------------------------------------------------------------------------
@@ -322,6 +324,10 @@ class MirrorStore(LibraryStore):
     """
 
     peer_reasons: Mapping[str, str] = {}
+    peer_bases = True  # 028: whether the serving device can store its base cache entries (``sync_state_fits``)
+
+    def sync_state_fits(self, name: str) -> bool:
+        return self.peer_bases and super().sync_state_fits(name)
 
     def scan(self) -> CanonicalScan:
         found = super().scan()
@@ -440,6 +446,7 @@ def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Li
         if entries > limits.entries or total > limits.total_bytes:
             raise TransportError("the peer's snapshot is larger than this device accepts")
         if kind == "end":
+            bases = header.get("bases") is True
             break
         if kind == "scan":
             summary_bytes += len(body)
@@ -487,6 +494,7 @@ def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Li
         if not isinstance(reasons, Mapping) or not all(type(reason) is str for reason in reasons.values()):
             raise MirrorMismatch("the peer's scan gives no reason for a blocked entry")
         store.peer_reasons = dict(reasons)
+        store.peer_bases = bases
         handle = _grant_handle(grants, peer_principal(local))
     except BaseException:
         store.close()

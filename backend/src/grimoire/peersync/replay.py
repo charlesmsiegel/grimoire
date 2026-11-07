@@ -17,10 +17,12 @@ import tempfile
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 
+from grimoire.core.identity import validate_segment
 from grimoire.store import LibraryStore, StaleWrite, StoreError, WriteConflict, WriteDenied, etag
 from grimoire.store.layout import conflict_parts
 from grimoire.sync import Step, device_of
 from grimoire.sync import keeps as kept_record
+from grimoire.sync import units as ledger_units
 from grimoire.sync.bookkeeping import is_shard, listed_shards, root_name
 from grimoire.sync.bookkeeping import parse as parse_document
 from grimoire.sync.bookkeeping import stage as stage_states
@@ -40,8 +42,14 @@ MAX_STEP_MEMORY = 1024 * 1024 * 1024
 
 
 def send_step(channel: Channel, step: Step, blob_reader: Callable[[str, int], bytes | None]) -> None:
-    """Send ``step``'s writes and wait until the peer has committed and verified every one of them."""
+    """Send ``step``'s writes and wait until the peer has committed and verified every one of them.
+
+    A data step that lands a merged ledger (028) also carries each unit as the plan read it on the peer
+    (``Step.units``): the peer refuses the step (``stale``) when its own unit differs, read under its
+    lock just before it commits."""
     def ops() -> Iterator[Op]:
+        for listing in step.units:
+            yield {"op": "unit"}, json.dumps(listing, sort_keys=True).encode("utf-8"), None, None
         for copy in step.copies:
             if copy.data is None:  # a blob: the stand-in now holds the verified bytes
                 data = blob_reader(copy.path, copy.size)  # type: ignore[arg-type]
@@ -58,8 +66,9 @@ def send_step(channel: Channel, step: Step, blob_reader: Callable[[str, int], by
     send_ops(channel, step.kind, ops())
 
 
-#: One write of a step: its ``op`` header, its body, and the file it lands in with the etag it must then hold.
-Op = tuple[dict, bytes, str, str]  # type: ignore[type-arg]
+#: One write of a step: its ``op`` header, its body, and the file it lands in with the etag it must then hold
+#: (``None`` for a check that writes nothing).
+Op = tuple[dict, bytes, str | None, str | None]  # type: ignore[type-arg]
 
 
 def send_ops(channel: Channel, kind: str, ops: Iterable[Op]) -> None:
@@ -70,7 +79,8 @@ def send_ops(channel: Channel, kind: str, ops: Iterable[Op]) -> None:
     expected: dict[str, str] = {}
     for header, body, target, tag in ops:
         channel.send({"t": "op", **header}, body)
-        expected[target] = tag
+        if target is not None:  # a check the peer makes (``unit``), not a write it confirms
+            expected[target] = tag
     channel.send({"t": "commit", "step": kind})
     header, _ = channel.recv()
     if header.get("t") != "committed" or header.get("count") != len(expected) or header.get("digest") != confirmation(expected):
@@ -182,7 +192,7 @@ class StepBuffer:
                  if header.get("op") == "state" and header.get("name") in (
                      root_name("archive", self.peer), root_name("pending", self.peer))}
         try:
-            self._check_documents(store, roots, ops)
+            documents = self._check_documents(store, roots, ops)
             # 028: the versions a resolve step holds here (this device's own, as ``check_step`` found),
             # which an earlier step's record must already hold (``_held_beforehand``), and the one
             # version a resolve's record step may add as held
@@ -197,8 +207,11 @@ class StepBuffer:
             first = first_copies(store, [(header["path"], body) for header, body in ops if header.get("op") == "keep"
                                          and header.get("hold", False) is False
                                          and type(header.get("path")) is str and isinstance(body, bytes)])
+            units = _unit_checks(ops)
             for header, body in ops:
                 op, path = header.get("op"), header.get("path")
+                if op == "unit":
+                    continue  # checked under the lock, just before the commit
                 if isinstance(body, Path):  # a spooled blob: read back only when staged
                     if op != "blob" or type(path) is not str or type(header.get("size")) is not int:
                         raise PeerRefused("invalid", f"a write this device does not accept: {op!r}")
@@ -223,7 +236,7 @@ class StepBuffer:
                 elif op == "state" and pair_state(header.get("name"), self.peer) and _etag_or_none(header.get("expected")):
                     name = header["name"]
                     expected = self._state_expected(store, name, body, header.get("expected"), roots, first,
-                                                    recordable)
+                                                    recordable, documents)
                     txn.put_sync_state(name, body, expected)
                     targets.append((f".sync/{name}", name, lambda name=name: store.read_sync_state(name)))
                 else:  # only this pair's own .sync files, and records the peer's grants then decide
@@ -237,7 +250,17 @@ class StepBuffer:
                 early = store.transaction()
                 stage_states(early, elsewhere)
                 early.commit(None)
-            txn.commit(handle if records else None, {})  # the peer can never supply an approval
+            with store.lock:  # 028: a merged ledger lands only over the unit the client's plan read here
+                for campaign, relations, files, blocked in units:
+                    try:
+                        why = ledger_units.stale_listing(ledger_units.unit_listing(store, campaign, relations),
+                                                         files, blocked)
+                    except OSError as error:
+                        why = f"cannot be read again: {error}"
+                    if why is not None:
+                        raise PeerRefused("stale", f"campaign {campaign}'s ledger changed on this device since the "
+                                                   f"snapshot: {why}")
+                txn.commit(handle if records else None, {})  # the peer can never supply an approval
         except PeerRefused:
             raise
         except (StaleWrite, WriteConflict) as error:
@@ -295,7 +318,8 @@ class StepBuffer:
         return states
 
     def _state_expected(self, store: LibraryStore, name: str, body: bytes, expected: str | None, roots: dict,  # type: ignore[type-arg]
-                        first: set[tuple[str, str]], recordable: set[tuple[str, str]]) -> str | None:
+                        first: set[tuple[str, str]], recordable: set[tuple[str, str]],
+                        documents: dict | None = None) -> str | None:  # type: ignore[type-arg]
         """The etag a state write of the pair must replace, after checking the write is one a sync makes."""
         if name == keeps_name(self.peer) and len(body) > kept_record.RECORD_LIMIT:
             # this device writes no record past the cap (``keeps.fit`` leaves excess deliveries
@@ -311,17 +335,8 @@ class StepBuffer:
             # resolve's record step adds a hold, and only of the version that resolve replaces here.
             raise PeerRefused("invalid", "a peer may not dismiss, add or drop a hold, or record a version it "
                                          "did not deliver")
-        base = name.startswith(f"peers/{self.peer}/bases/")
-        if base:  # 028: a base cache entry holds this device's own agreed file, so it is checked against it
-            path = name[len(f"peers/{self.peer}/bases/"):]
-            try:
-                current = store.read_exact(path)
-            except (StoreError, OSError):
-                current = None
-            if current is None or current != body:
-                raise PeerRefused("invalid", f"{name} is not this device's own {path}")
-            held = store.read_sync_state(name)  # the client's mirror may not hold it: this device's own decides
-            return None if held is None else etag(held)
+        if name.startswith(f"peers/{self.peer}/bases/"):
+            return self._base_expected(store, name, body, (documents or {}).get("archive"))
         for kind in ("archive", "pending"):
             if not is_shard(name, kind, self.peer):
                 continue
@@ -335,12 +350,36 @@ class StepBuffer:
                 return None if current is None else etag(current)
         return expected
 
-    def _check_documents(self, store: LibraryStore, roots: dict, ops: list) -> None:  # type: ignore[type-arg]
+    def _base_expected(self, store: LibraryStore, name: str, body: bytes, archive) -> str | None:  # type: ignore[no-untyped-def]
+        """028: a base cache entry is written only with the archive that agrees on it, and holds this
+        device's own copy of that file. Its name is a digest of the path, so the path is the one the
+        archive this step writes records as agreed at the body's etag; this device must hold those bytes
+        there now. A file changed here since the snapshot is a race, not a lie (``stale``): the client
+        plans again, and this step, archive included, never lands."""
+        if archive is None:
+            raise PeerRefused("invalid", f"{name}: a base cache entry is written only with its pair's archive")
+        tag = etag(body)
+        paths = [path for path, entry in sorted(archive.entries.items())
+                 if tuple(entry) == ("agreed", tag) and ledger_units.base_name(self.peer, path) == name]
+        if not paths:
+            raise PeerRefused("invalid", f"{name} is no ledger file the archive this step writes agrees on")
+        for path in paths:
+            try:
+                current = store.read_exact(path)
+            except (StoreError, OSError):
+                current = None
+            if current != body:
+                raise PeerRefused("stale", f"{path} changed on this device since the snapshot")
+        held = store.read_sync_state(name)  # the client's mirror may not hold it: this device's own decides
+        return None if held is None else etag(held)
+
+    def _check_documents(self, store: LibraryStore, roots: dict, ops: list) -> dict:  # type: ignore[type-arg]
         """Each archive or marker this step writes must read, with its shards, as a valid document of
         this pair: the shards written now and the listed ones already here. A peer could otherwise
         leave a root that lists junk shards, which every later plan reads in full and then ignores."""
         written = {header.get("name"): body for header, body in ops if header.get("op") == "state"}
         devices = tuple(sorted((device_of(store), self.peer)))
+        views: dict = {}  # type: ignore[type-arg]
         for kind in ("archive", "pending"):
             name = root_name(kind, self.peer)
             if name not in roots:
@@ -353,6 +392,40 @@ class StepBuffer:
             view = parse_document(kind, files, self.peer, devices)  # type: ignore[arg-type]
             if view.state != "valid":
                 raise PeerRefused("invalid", f"the {kind} this step writes is not valid for this pair: {view.reason}")
+            views[kind] = view
+        return views
+
+
+def _unit_checks(ops: list) -> list[tuple[str, bool, dict, list]]:  # type: ignore[type-arg]
+    """The ``unit`` checks of a step (``send_step``), each for a campaign the step's own writes are in."""
+    written = {header.get("path") for header, _ in ops if header.get("op") == "put"}
+    checks = []
+    for header, body in ops:
+        if header.get("op") != "unit":
+            continue
+        try:
+            listing = json.loads(body) if isinstance(body, bytes) else None
+        except (ValueError, RecursionError):
+            listing = None
+        campaign = listing.get("campaign") if isinstance(listing, dict) else None
+        files = listing.get("files") if isinstance(listing, dict) else None
+        blocked = listing.get("blocked") if isinstance(listing, dict) else None
+        if (not set(header) <= {"t", "op"} or not isinstance(listing, dict) or set(listing) != {"campaign", "relations", "files", "blocked"}
+                or type(campaign) is not str or not _segment(campaign) or type(listing["relations"]) is not bool
+                or not isinstance(files, dict) or not all(type(path) is str and type(tag) is str for path, tag in files.items())
+                or not isinstance(blocked, list) or not all(type(path) is str for path in blocked)
+                or not any(type(path) is str and path.startswith(f"campaigns/{campaign}/") for path in written)):
+            raise PeerRefused("invalid", "a ledger check this device does not accept")
+        checks.append((campaign, listing["relations"], files, blocked))
+    return checks
+
+
+def _segment(name: str) -> bool:
+    try:
+        validate_segment(name, "campaign")
+    except ValueError:
+        return False
+    return True
 
 
 def _spooled(path: Path) -> Callable[[], bytes | None]:

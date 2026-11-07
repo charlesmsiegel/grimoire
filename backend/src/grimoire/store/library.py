@@ -1025,6 +1025,19 @@ class LibraryStore:
         """
         return self._read_state(sync_state_parts(name))
 
+    def sync_state_fits(self, name: str) -> bool:
+        """Whether ``.sync/<name>`` can be written here, within this system's path and name limits.
+
+        028's base cache asks before it plans an entry: an entry is an optional copy of what a merge may
+        need, so one that cannot be stored is left out rather than failing the archive commit with it."""
+        parts = sync_state_parts(name)
+        with self.lock:
+            try:
+                self._access.guard.check_write(parts, staging_device=None)
+            except UnstorableIdentifier:
+                return False
+        return True
+
     def read_secret(self, name: str) -> bytes | None:
         """The exact bytes of ``secrets/<name>`` (028's ``peers/<id>.json`` pairing records).
 

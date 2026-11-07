@@ -19,6 +19,7 @@ from grimoire.graphstore import RelationLibrary
 from grimoire.store import LibraryStore, ScopeRecord, engine, etag
 from grimoire.sync import ResolveRefused, identify, resolve, sync, sync_until_quiet
 from grimoire.sync.documents import parse_archive
+from grimoire.sync.units import base_name
 
 from chat_fixtures import Clock
 from effects_fixtures import C, INES, TAM, Handles
@@ -143,7 +144,7 @@ def test_identical_ledger_bytes_are_no_conflict_and_are_recorded_as_agreed(tmp_p
         archive = parse_archive(desktop.read_sync_state(f"peers/{PHONE}/archive.json"), (DESKTOP, PHONE))
         assert all(archive.entries[path][0] == "agreed" for path in ledger)
         # and each agreement's bytes are cached for the pair, for a later merge of both devices' changes
-        assert all(desktop.read_sync_state(f"peers/{PHONE}/bases/{path}") == _bytes(desktop, path) for path in ledger)
+        assert all(desktop.read_sync_state(base_name(PHONE, path)) == _bytes(desktop, path) for path in ledger)
     finally:
         desktop.close()
         phone.close()

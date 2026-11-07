@@ -5,26 +5,27 @@ relations when either device holds an accepted event (``model.HOLDS_RELATIONS``)
 every file of a unit identically there is nothing to do. Otherwise the unit is merged:
 
 - each device's files are decoded as that device's ledger, and the **base** is what the pair last agreed
-  on: for each file the archive entry both devices' archives hold, and its exact bytes from whichever
-  device still holds them, else from the pair's **base cache** (``.sync/peers/<peer>/bases/<path>``, written
-  with the archive whenever an agreement on a ledger file changes);
+  on (``unit_bases``), with its exact bytes from whichever device still holds them, else from the pair's
+  **base cache** (``.sync/peers/<peer>/bases/<key>.json``, keyed by a digest of the path, written with the
+  archive whenever an agreement on a ledger file changes, and left out where this system cannot store it);
 - ``merge_ledger`` gives either the files both devices store, which travel as ordinary copies to each
   device lacking them, all of a unit or none of it, or a review, which is a ``merge_review`` conflict on
   every file of the unit the devices hold differently, carrying the review's items.
 
-The base comes from the archives first, not from a pending marker: a merge's bytes are held by neither
-device before it lands, so a marker's ``to`` says less than an archive entry. A merge interrupted after
-one device took it is merged again from the archived base, which gives the same files (the merge is
-idempotent over either side). Where the two archives disagree (a crash between their commits), either
-entry is an agreement both devices held, and the newer is used: the one an unfinished sync's marker
-names, else the one whose bytes are at hand, else the lesser etag, never "the first device's", so the
-order of the pair never changes the merge (the merged files' ``previous`` is the base's). Only where no archive
-records an agreement (a first sync, or one interrupted before its archives) is a marker's verified
-agreement used, so a file both devices held when it was marked is never taken for a new one.
+The base is chosen for the unit as a whole, so its files never mix generations. A file's archived
+agreement is a generation both devices held. Where the two archives disagree (a crash between their
+commits), the newer entry is used: the one an unfinished sync's marker names, else the one whose bytes are
+at hand, else the lesser etag, never "the first device's", so the order of the pair never changes the merge
+(the merged files' ``previous`` is the base's). A sync stopped before its archives leaves markers whose
+``to`` is newer still; a merged file's ``to`` was held by neither device before it landed, so it is the
+base only where the merge landed on both devices (each device's marker names it, or the device holds it).
+A merge only one device took is merged again from the generation before, which gives the same files (the
+merge is idempotent over the side that already took it).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -54,8 +55,10 @@ _DETAIL = 300
 
 
 def base_name(peer: str, path: str) -> str:
-    """The base cache entry of ``path`` on a device, for its pair with ``peer``."""
-    return f"{SYNC_PEERS}/{peer}/{SYNC_BASES}/{path}"
+    """The base cache entry of ``path`` on a device, for its pair with ``peer``: keyed by a digest of the
+    path, so its length never depends on the path's (``layout.SYNC_BASES``). Its bytes are used only where
+    their etag is the agreed one, so two paths sharing a key (never, in practice) only lose a base."""
+    return f"{SYNC_PEERS}/{peer}/{SYNC_BASES}/{hashlib.sha256(path.encode('utf-8')).hexdigest()[:32]}.json"
 
 
 def unit_of(path: str, campaigns: set[str]) -> str | None:
@@ -101,8 +104,65 @@ class UnitResult:
     review: Review | None = None
 
 
+def unit_bases(plan, paths: Iterable[str]) -> dict[str, Base]:  # type: ignore[no-untyped-def]
+    """Each file's base for one ledger unit, chosen for the unit as a whole (see the module doc).
+
+    A file's archived agreement (``_archived``) is a generation both devices held. A sync stopped before
+    its archives leaves markers whose ``to`` is newer: for a merged file, bytes neither device held before
+    they landed. Those are the unit's base only where the merge landed on **both** devices: every marked
+    file is either named by each device's marker or held by it now. Then every marked file merges from its
+    ``to`` and every other from its archived agreement. Otherwise (a stop between the data commits) no
+    ``to`` is: every file merges from the generation before (its archived agreement, else the one its
+    marker was written over, else none), so the files of one unit never mix generations (an operation
+    agreed in one holder file and new in another would read as half of one), and merging the device that
+    took the merge with the one that did not gives the same files again (it is idempotent over the side
+    that already took it). An unreadable or uncertain marker leaves that file's agreement unknown.
+    """
+    paths = tuple(paths)
+    archived = {path: _archived(plan, path) for path in paths}
+    unknown = {path for path in paths if any(
+        plan.pendings[device].state == "ignored" or (plan.pendings[device].entries.get(path) or {}).get("uncertain")
+        for device in plan.devices)}
+    fresh: dict[str, str | None] = {}
+    landed = True
+    for path in paths:
+        entries = _entries(plan, path)
+        if path in unknown or not entries:
+            continue
+        targets = {entry.get("to") for entry in entries.values()}
+        to = next(iter(targets)) if len(targets) == 1 else None
+        if to is not None and archived[path] is not None and archived[path].etag == to:
+            continue  # stale: the archives already agree on what it published
+        fresh[path] = to
+        landed = landed and to is not None and all(
+            device in entries or (plan.sides[path][device].state == "present" and plan.sides[path][device].etag == to)
+            for device in plan.devices)
+    bases: dict[str, Base] = {}
+    for path in paths:
+        if path in unknown:
+            bases[path] = UNCERTAIN
+        elif landed and fresh.get(path) is not None:
+            bases[path] = Base("agreed", fresh[path])  # type: ignore[arg-type]
+        elif archived[path] is not None:
+            bases[path] = archived[path]  # type: ignore[assignment]
+        else:
+            bases[path] = _over(plan, path)
+    return bases
+
+
 def unit_base(plan, path: str) -> Base:  # type: ignore[no-untyped-def]
-    """The archived agreement a ledger file merges from (never a pending marker's; see the module doc)."""
+    """One file's base, as its whole unit chooses it (``unit_bases``)."""
+    campaign = plan.units.get(path)
+    paths = [other for other, unit in plan.units.items() if unit == campaign] if campaign is not None else [path]
+    return unit_bases(plan, paths)[path]
+
+
+def _entries(plan, path: str) -> dict[str, Mapping[str, object]]:  # type: ignore[no-untyped-def]
+    return {device: entry for device in plan.devices if (entry := plan.pendings[device].entries.get(path)) is not None}
+
+
+def _archived(plan, path: str) -> Base | None:  # type: ignore[no-untyped-def]
+    """The agreement the archives record for ``path``, or ``None`` where they record none."""
     a, b = plan.devices
     left, right = plan.archives[a], plan.archives[b]
     candidate = archive_candidate(path, left, right)
@@ -112,10 +172,19 @@ def unit_base(plan, path: str) -> Base:  # type: ignore[no-untyped-def]
         held = [Base(*entry) for entry in (left.entries.get(path), right.entries.get(path)) if entry]  # type: ignore[arg-type]
         if held:  # the archives disagree (a crash between their commits): both are agreements the pair had
             return held[0] if len(held) == 1 else _newer(plan, path, *held)
-    # No archived agreement (a first sync, a crash before the archives, a retired archive): a marker's
-    # verified agreement (``derive_base``) is the base. Over a merge only one device took, it can only
-    # stop the merge for review (that device's files are not the other's plus new ones), never drop.
-    return plan.bases[path]  # the archives' candidate with every marker's say: agreed, or uncertain
+    return None
+
+
+def _over(plan, path: str) -> Base:  # type: ignore[no-untyped-def]
+    """Where no archive records an agreement: the one the file's markers were written over, else none."""
+    candidate = archive_candidate(path, *(plan.archives[device] for device in plan.devices))
+    entries = _entries(plan, path)
+    if not entries:
+        return candidate
+    over = {entry.get("base") for entry in entries.values()}
+    if len(over) == 1 and None not in over:
+        return Base("agreed", over.pop())  # type: ignore[arg-type]
+    return candidate if over == {None} else UNCERTAIN  # written over no agreement; or over different ones
 
 
 def _newer(plan, path: str, one: Base, other: Base) -> Base:  # type: ignore[no-untyped-def]
@@ -177,8 +246,9 @@ def plan_unit(plan, campaign: str, paths: Iterable[str], choice: str | None = No
     sides = {device: _ledger(campaign, {path: plan.scans[device].files.get(path) for path in paths}, items, device)
              for device in plan.devices}
     found: dict[str, bytes | None] = {}
+    bases = unit_bases(plan, paths)
     for path in paths:
-        found[path] = _base_file(plan, path, items)
+        found[path] = _base_file(plan, path, bases[path], items)
     base = _ledger(campaign, found, items, "base")
     if items:
         return UnitResult(campaign, paths, differ, review=Review(tuple(items)))
@@ -308,6 +378,8 @@ def base_states(plan, device: str, entries: Mapping[str, tuple[str, str]], publi
     Written in the same commit as the archive that records the agreement, so the cache and the archive
     never disagree. The bytes are the device's own file, which the archive step found identical on both.
     """
+    if not plan.stores[device].sync_state_fits(base_name(plan.other(device), "")):
+        return []  # every entry's name has one length: none fits on this system (a merge may then need review)
     view = plan.archives[device]
     old = view.entries if view.state == "valid" else {}
     copied = {copy.path: copy.data for copy in published}
@@ -331,40 +403,86 @@ def changed(plan, copies: Iterable, published: Mapping[str, Iterable]) -> str | 
     Each copy's own compare-and-swap guards the files it writes; this guards the rest of each unit it
     merged: a ledger file either device added or changed since the plan read it (an event accepted on
     one device mid-sync, say) means the merge no longer covers both ledgers, so nothing of it lands.
+    Over the transport the serving device makes the same check of its own unit (``stale_listing``).
     """
     for campaign in sorted({copy.unit for copy in copies if copy.unit is not None}):
         for device in plan.devices:
-            expected = {path: etag(data) for path, data in plan.scans[device].files.items()
-                        if _in_unit_folders(path, campaign)}
-            expected.update({copy.path: copy.etag for copy in published.get(device, ())
-                             if _in_unit_folders(copy.path, campaign)})
+            relations, files, blocked = expected_listing(plan, device, campaign, published.get(device, ()))
             try:
-                found = _listed(plan.stores[device], campaign)
+                found = unit_listing(plan.stores[device], campaign, relations)
             except OSError as error:
                 return f"campaign {campaign}'s ledger on {device} cannot be read again: {error}"
-            if found != expected:
-                moved = min(set(found.items()) ^ set(expected.items()))[0]
-                return f"campaign {campaign}'s ledger changed on {device} during the sync: {moved}"
+            why = stale_listing(found, files, blocked)
+            if why is not None:
+                return f"campaign {campaign}'s ledger changed on {device} during the sync: {why}"
     return None
 
 
-def _in_unit_folders(path: str, campaign: str) -> bool:
+def relations_in_unit(plan, campaign: str) -> bool:  # type: ignore[no-untyped-def]
+    """Whether the campaign's relations are part of its ledger unit (it holds an accepted event, or which
+    campaigns do is unknown: ``session._held_campaigns`` fails closed)."""
+    return campaign in plan.ledger_campaigns or "*" in plan.ledger_campaigns
+
+
+def of_unit(path: str, campaign: str, relations: bool) -> bool:
+    """Whether ``path`` is a file of the campaign's ledger unit, by name (its kind, in the campaign's folder)."""
     parts = path.split("/")
-    return len(parts) > 3 and parts[0] == "campaigns" and parts[1] == campaign and parts[2] in LEDGER_FOLDERS
+    if not (len(parts) > 3 and parts[0] == "campaigns" and parts[1] == campaign and parts[2] in LEDGER_FOLDERS):
+        return False
+    kind = syncable(path)
+    return kind in LEDGER_KINDS or (relations and kind == "relation")
 
 
-def _listed(store, campaign: str) -> dict[str, str]:  # type: ignore[no-untyped-def]
-    found = {}
+def expected_listing(plan, device: str, campaign: str, published: Iterable = ()):  # type: ignore[no-untyped-def]
+    """The campaign's unit on ``device`` as the plan read it, with this sync's earlier copies there:
+    ``(relations, {path: etag}, blocked paths)``. A blocked file is compared by name only (``stale_listing``):
+    the scan never read it, and 019 decides it on its own."""
+    relations = relations_in_unit(plan, campaign)
+    scan = plan.scans[device]
+    files = {path: etag(data) for path, data in scan.files.items() if of_unit(path, campaign, relations)}
+    files.update({copy.path: copy.etag for copy in published if of_unit(copy.path, campaign, relations)})
+    blocked = sorted(path for path in scan.blocked if path not in files and of_unit(path, campaign, relations))
+    return relations, files, blocked
+
+
+def unit_listing(store, campaign: str, relations: bool) -> dict[str, str | None]:  # type: ignore[no-untyped-def]
+    """The campaign's unit as ``store`` holds it now: each file's etag, ``None`` for one it cannot read."""
+    found: dict[str, str | None] = {}
     for folder in sorted(LEDGER_FOLDERS):
+        if folder == "relations" and not relations:
+            continue
         root = store.root / "campaigns" / campaign / folder
         if not root.exists():
             continue
         for path in sorted(root.rglob("*")):
-            if path.is_file():
-                relative = path.relative_to(store.root).as_posix()
-                if syncable(relative) is not None:
-                    found[relative] = etag(path.read_bytes())
+            relative = path.relative_to(store.root).as_posix()
+            if not (path.is_symlink() or path.is_file()) or not of_unit(relative, campaign, relations):
+                continue
+            try:
+                found[relative] = None if path.is_symlink() else etag(path.read_bytes())  # a link is never read
+            except OSError:
+                found[relative] = None
     return found
+
+
+def step_listings(plan, device: str, copies: Iterable, published: Iterable = ()) -> list[dict]:  # type: ignore[no-untyped-def,type-arg]
+    """For a data commit that lands merged ledger ``copies`` on ``device``, each unit as the plan read it
+    there with this sync's ``published`` earlier copies (``expected_listing``). 028's transport sends them
+    with the step, and the serving device checks its own unit against them under its lock before it
+    commits (``stale_listing``): the client's own recheck (``changed``) reads only its stand-in."""
+    listings = []
+    for campaign in sorted({copy.unit for copy in copies if copy.unit is not None}):
+        relations, files, blocked = expected_listing(plan, device, campaign, published)
+        listings.append({"campaign": campaign, "relations": relations, "files": files, "blocked": blocked})
+    return listings
+
+
+def stale_listing(found: Mapping[str, str | None], files: Mapping[str, str], blocked: Iterable[str]) -> str | None:
+    """The first path where a unit as listed now differs from the one expected, or ``None``."""
+    blocked = set(blocked)
+    names = set(found) ^ (set(files) | blocked)
+    moved = names | {path for path, tag in files.items() if path in found and found[path] != tag}
+    return min(moved) if moved else None
 
 
 def merged_bytes(plan, result: Merged, base: Mapping[str, bytes | None]) -> dict[str, bytes]:  # type: ignore[no-untyped-def]
@@ -406,8 +524,7 @@ def _unlistable(plan, campaign: str) -> list[ReviewItem]:  # type: ignore[no-unt
     return items
 
 
-def _base_file(plan, path: str, items: list[ReviewItem]) -> bytes | None:  # type: ignore[no-untyped-def]
-    base = unit_base(plan, path)
+def _base_file(plan, path: str, base: Base, items: list[ReviewItem]) -> bytes | None:  # type: ignore[no-untyped-def]
     if base.kind in ("first", "none"):
         return None
     if base.kind == "agreed":
@@ -470,5 +587,21 @@ def _instances(files: Mapping[str, bytes], campaign: str) -> set[InstanceRef]:
     return found
 
 
-__all__ = ["FIRST", "LEDGER_FOLDERS", "UNCERTAIN", "LedgerReview", "UnitResult", "base_bytes", "base_name",
-           "is_unit_path", "merged_bytes", "plan_unit", "unit_base", "unit_of"]
+__all__ = [
+    "FIRST",
+    "LEDGER_FOLDERS",
+    "UNCERTAIN",
+    "LedgerReview",
+    "UnitResult",
+    "base_bytes",
+    "base_name",
+    "is_unit_path",
+    "merged_bytes",
+    "plan_unit",
+    "stale_listing",
+    "step_listings",
+    "unit_base",
+    "unit_bases",
+    "unit_listing",
+    "unit_of",
+]

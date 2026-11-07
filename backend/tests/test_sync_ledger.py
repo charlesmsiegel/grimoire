@@ -15,6 +15,7 @@ from grimoire.store import LibraryStore
 from grimoire.sync import (
     ResolveRefused, SyncInterrupted, apply_sync, plan_sync, resolve, resolve_ledger, sync, sync_until_quiet,
 )
+from grimoire.sync.units import base_name
 
 from effects_fixtures import C, CHAT, TAM, give
 from ledger_fixtures import COIN, Device, build_base, pay, read_ledger
@@ -68,7 +69,7 @@ def test_a_holder_file_both_devices_change_again_merges_from_the_base_cache(pair
     pair[DESKTOP].accept(give())
     pair[PHONE].accept(pay())
     sync_until_quiet(pair[DESKTOP].store, pair[PHONE].store, handles())
-    cached = pair[PHONE].store.read_sync_state(f"peers/{DESKTOP}/bases/campaigns/{C}/holdings/character/tam.json")
+    cached = pair[PHONE].store.read_sync_state(base_name(DESKTOP, f"campaigns/{C}/holdings/character/tam.json"))
     assert cached is not None and cached == (pair[PHONE].store.root / f"campaigns/{C}/holdings/character/tam.json").read_bytes()
     pair[DESKTOP].accept(pay(sequence=12, chat=CHAT, attempt="pay-desk-12"))
     pair[PHONE].accept(pay(sequence=13, attempt="pay-phone-13"))  # both change Tam's and Ines's holder files

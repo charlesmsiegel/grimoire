@@ -147,6 +147,7 @@ class SyncPlan:
     units: dict[str, str] = field(default_factory=dict)
     unit_copies: dict[str, dict[str, set[str]]] = field(default_factory=dict)
     choices: dict[str, str] = field(default_factory=dict)  # 028: ``resolve_ledger``'s decision, by campaign
+    ledger_campaigns: frozenset[str] = frozenset()  # 028: whose relations are in their unit ("*": every one)
 
     def other(self, device: str) -> str:
         return self.devices[1] if device == self.devices[0] else self.devices[0]
@@ -246,7 +247,7 @@ def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]
                     copies={a: [], b: []}, keeps={a: [], b: []}, ungranted={a: [], b: []}, notices=notices,
                     skipped=skipped, held=set(), kept_records=records,
                     units={path: unit for path in ordered if (unit := ledger_units.unit_of(path, ledgers)) is not None},
-                    choices=choices or {})
+                    choices=choices or {}, ledger_campaigns=frozenset(ledgers))
     ungranted = _verify_blobs(plan, handles)
     for path in ordered:
         if path in plan.units:  # 028: merged as its campaign's ledger unit (below), never decided alone
@@ -956,6 +957,9 @@ class Step:
     copies: tuple[Copy, ...] = ()
     keeps: tuple[Keep, ...] = ()
     states: tuple[tuple[str, bytes, str | None], ...] = ()
+    #: 028: for a data step that lands a merged ledger, each unit as the plan read it on this device
+    #: (``units.step_listings``), which a serving device checks of itself before it commits the step
+    units: tuple[Mapping[str, object], ...] = ()
 
 
 def apply_sync(plan: SyncPlan, handles: Mapping[str, object],
@@ -1068,13 +1072,14 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
         with _locked(*plan.stores.values()):  # a blob copy loads from the origin inside this commit
             stale = ledger_units.changed(plan, copies, applied.published)  # 028: rechecked under the locks
             if stale is not None:
-                raise SyncInterrupted(f"the data commit on {device} stopped: {stale}", _report(plan, applied))
+                raise SyncInterrupted(stale, _report(plan, applied))
             result = txn.commit(handle, dict(approvals), on_denied=on_denied)
     except (StaleWrite, WriteConflict, SyncInterrupted, *PER_PATH_ERRORS) as error:
         applied.consumed.extend(getattr(error, "consumed_approvals", ()))  # spent without a write (R16)
         raise SyncInterrupted(f"the data commit on {device} stopped: {error}", _report(plan, applied)) from error
     applied.consumed.extend(result.consumed_approvals)
     published = [copy for copy in copies if copy.path in result.etags]
+    units = ledger_units.step_listings(plan, device, published, applied.published.get(device, ()))
     applied.published[device] = published
     applied.kept[device] = [keep for keep in keeps if str(_kept_key(keep)) in result.etags]
     states = tuple((name, marker[0][1][name], None if old.get(name) is None else etag(old[name]))
@@ -1085,7 +1090,8 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
     plan.copies[device] = published
     plan.kept_records[device], recorded = delivery.committed(result.etags)
     if result.etags:
-        applied.observe(Step("data", device, tuple(published), tuple(applied.kept[device]), (*states, *recorded)))
+        applied.observe(Step("data", device, tuple(published), tuple(applied.kept[device]), (*states, *recorded),
+                             tuple(units)))
 
 
 def _marker_needed(plan: SyncPlan, device: str, entries: Mapping[str, object], files: Mapping[str, bytes]) -> bool:
