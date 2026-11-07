@@ -9,11 +9,12 @@ from __future__ import annotations
 import pytest
 from image_fixtures import GIF, JPEG, PNG, PNG_2, handle
 from portrayal_fixtures import (
-    BASE, CAST, ELSEWHERE, MODERN, MODERN_MARA, NAMESAKE, VAMPIRE, VAMPIRE_MARA, derived, derives, envelope,
+    BASE, CAST, ELSEWHERE, MODERN, MODERN_MARA, NAMESAKE, VAMPIRE, VAMPIRE_MARA, base, derived, derives, envelope,
     manifest, seed_elderfen,
 )
 from store_helpers import OWNER
 
+from grimoire.core.entity import EntityDefinition
 from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef
 from grimoire.images import Crop, Hidden, Placement, Shown, Unavailable
 from grimoire.imagestore import ImageLibrary, InvalidPlacement
@@ -128,6 +129,26 @@ def test_an_instance_inherits_through_the_whole_chain(store, images):
     # the campaign may re-crop a picture its lineage shows, wherever it is owned
     _set(images, FAN, "avatar", Placement("adjust", image=PORTRAIT, crop=CROP))
     assert images.effective_placements(FAN).slot("avatar").layer == "campaign_adjusted"
+
+
+def test_the_batch_judges_a_mode_by_the_head_it_will_leave(store, images):
+    """A batch that also puts a revision never writes a placement its own reader would refuse."""
+    standalone = EntityDefinition(VAMPIRE_ENTITY.at("r2"), "Mara", "individual", base({}).traits, "Alone now")
+    batch = images.change()
+    batch.put(manifest(VAMPIRE, derives(VAMPIRE_MARA), heads={"character/mara": "r2"}),
+              store.check_source(VAMPIRE).etag)
+    batch.put(envelope(standalone), None)
+    with pytest.raises(InvalidPlacement) as caught:  # the head it leaves is standalone: no clear
+        batch.place(VAMPIRE_ENTITY, "portrait", Placement("hide"), None)
+    assert caught.value.reason == "mode_not_allowed"
+    namesake_r2 = derived(NAMESAKE.unpinned().at("r2"), BASE)
+    batch = images.change()
+    batch.put(manifest(ELSEWHERE, derives(namesake_r2.ref), heads={"character/mara": "r1"}),
+              store.check_source(ELSEWHERE).etag)
+    batch.put(envelope(namesake_r2), None)  # derived, but not the head the batch leaves
+    with pytest.raises(InvalidPlacement) as caught:
+        batch.place(NAMESAKE.unpinned(), "avatar", Placement("hide"), None)
+    assert caught.value.reason == "mode_not_allowed"
 
 
 def _remove(store, ref):

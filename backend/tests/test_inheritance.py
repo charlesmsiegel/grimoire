@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import pytest
 from portrayal_fixtures import (
-    BASE, BASE_SECTIONS, CAST, MECHA_MARA, MODERN_MARA, REGENCY, REGENCY_MARA, VAMPIRE, VAMPIRE_MARA, base, derives,
-    envelope, manifest, seed_four_portrayals,
+    BASE, BASE_SECTIONS, CAST, MECHA_MARA, MODERN_MARA, REGENCY, REGENCY_MARA, VAMPIRE, VAMPIRE_MARA, base, derived,
+    derives, envelope, manifest, seed_four_portrayals,
 )
 from store_helpers import owner_handle
 
 from grimoire.core.entity_codec import ENTITY_SCHEMA, definition_from_payload
+from grimoire.core.identity import SourceRef
 from grimoire.core.inheritance import (
     OverrideError, clear_description, clear_facet, clear_section, inspect, override_description,
     override_section, reset_description, reset_facet, reset_section,
@@ -63,6 +64,16 @@ def _base_r2(store):
     txn.put(manifest(CAST, heads={"character/mara": "r2"}), store.check_source(CAST).etag)
     txn.put(envelope(r2), None)
     txn.commit(owner_handle())
+
+
+def test_a_clear_made_up_the_chain_is_inherited_not_this_revisions(store):
+    gothic = derived(SourceRef("world:gothic", "character", "mara", "r1"), VAMPIRE_MARA)
+    txn = store.transaction()
+    txn.put(manifest("world:gothic", derives(gothic.ref, VAMPIRE_MARA)), None)
+    txn.put(envelope(gothic), None)
+    txn.commit(owner_handle())
+    family = inspect_definition(store.load(), gothic.ref).field("section:mortal-family")
+    assert (family.state, family.source) == ("inherited", VAMPIRE_MARA)  # Vampire cleared it, not Gothic
 
 
 def test_a_base_update_is_pinned_and_shown_as_a_source_diff(store):

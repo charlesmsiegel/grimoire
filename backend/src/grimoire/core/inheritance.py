@@ -14,7 +14,8 @@ Field states (``FieldView.state``):
 - ``restated``: this revision repeats the inherited value, so it no longer follows the base;
 - ``local``: this revision authors a value the base never had;
 - ``cleared``: this revision explicitly clears an inherited value (a typed clear, never ``null``,
-  blank text or prose);
+  blank text or prose). An ancestor's clear is ``inherited`` (or ``pinned``), with ``source`` the
+  revision that cleared it;
 - ``missing``: the base's head has a value this revision neither shows nor cleared: the pinned base
   lacked it, so it arrives only with a rebase.
 
@@ -110,6 +111,8 @@ def inspect(leaf: EffectiveDefinition, base: EffectiveDefinition | None = None,
     views: list[FieldView] = []
     for origin in leaf.provenance:
         state = _STATE_OF[origin.origin]
+        if state == "cleared" and origin.source.ref != leaf.ref:
+            state = "inherited"  # 022 keeps an ancestor's clear as ``cleared``: here it is inherited
         if state == "inherited" and behind:
             state = "pinned"
         upstream = _upstream(origin.field, pinned_values, head_values)

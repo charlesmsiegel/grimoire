@@ -29,7 +29,7 @@ This call composes three things from one `LibraryView`: the revision, its pinned
 | `overridden` | This revision replaces an inherited value (022 `replaced`). |
 | `restated` | This revision repeats the inherited value. It no longer follows the base. |
 | `local` | This revision authors a value the base never had. A standalone definition is all `local`. |
-| `cleared` | This revision clears an inherited value with a typed clear. |
+| `cleared` | This revision clears an inherited value with a typed clear. A clear made further up the chain is `inherited` (or `pinned`), and its `source` is the revision that cleared it. |
 | `missing` | Only the base's head has this value. It arrives with a rebase. `source` is that head. |
 
 `source` is the pinned revision that authored, or cleared, the shown value.
@@ -91,7 +91,7 @@ Before this slice, a source placement could only `set` or mark a picture `unreso
   | `cleared` | The subject's own `hide`, over an inherited slot. |
   | `adjusted` | The subject's own `adjust` of the inherited picture (it may be `stale_adjust` or `nothing_to_adjust`). |
   | `missing` | The subject's own `unresolved`. |
-  | `broken` | The subject's own placement cannot be shown (`Unavailable` for another reason). |
+  | `broken` | The subject's own placement cannot be read, is not allowed where it sits, or sits in a damaged layer (`invalid_placement`, `unsupported_format`). A readable `set` whose picture is missing keeps its `local` or `replaced` origin, and its slot is `Unavailable` with the reason. |
   | `inherited` | An ancestor's placement decides the slot. `placed_by` names that ancestor. |
 
 - **Instances.** An individual layers its derivation entity's whole lineage beneath its campaign placements. A world's clear reaches its instances, and a campaign may re-crop any picture its lineage shows.

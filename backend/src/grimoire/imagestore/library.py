@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from weakref import WeakKeyDictionary
 
 from grimoire.core.identity import (
     ChatRef, ImageRef, InstanceRef, PlacementRef, ScopeRef, SourceRef, TranscriptRef, paired_instances,
@@ -114,6 +115,10 @@ def _unstorable_is_missing(check):  # type: ignore[no-untyped-def]
         return "missing_source"
 
 
+#: per store, the last library load and the ``SourceFacts`` it was read under (046 lineage)
+_PASS_VIEWS: WeakKeyDictionary[LibraryStore, tuple[SourceFacts, LibraryView]] = WeakKeyDictionary()
+
+
 class _Disk:
     """Facts read from the store, cached for one pass; the store lock is held by the caller.
 
@@ -146,8 +151,18 @@ class _Disk:
         return self._memo(("campaign", campaign), lambda: self.store.campaign_exists(campaign))
 
     def view(self) -> LibraryView:
-        """One library load for the pass (046): only a derived head's lineage needs it."""
-        return self._memo(("view",), self.store.load)  # type: ignore[no-any-return]
+        """One library load (046): only a derived head's lineage needs it. Inside one
+        ``store.read_pass()`` the verified ``SourceFacts`` stay the same object until a commit, so every
+        resolution in the pass shares one load, exactly as it shares one verification."""
+        def shared() -> LibraryView:
+            facts = self.facts()
+            cached = _PASS_VIEWS.get(self.store)
+            if cached is not None and cached[0] is facts:
+                return cached[1]
+            loaded = self.store.load()
+            _PASS_VIEWS[self.store] = (facts, loaded)
+            return loaded
+        return self._memo(("view",), shared)  # type: ignore[no-any-return]
 
     def lineage(self, entity: SourceRef) -> Lineage:
         return self._memo(("lineage", entity), lambda: lineage(entity, self.definition, self.view))
@@ -327,13 +342,14 @@ class _State:
     repairs: dict[BlobKey, tuple[ImageBlob, str]] = field(default_factory=dict)  # blob, actual etag
     placements: dict[PlacementRef, _Placed] = field(default_factory=dict)
     puts: set[tuple] = field(default_factory=set)
-    #: entities with a 022 derived revision put in this batch (046): their placements may clear or reset
-    derived: set[tuple[str, str, str]] = field(default_factory=set)
+    #: manifests and definition revisions put in this batch (046): they decide whose head is derived
+    staged_manifests: dict[str, SourceManifest] = field(default_factory=dict)
+    staged_definitions: dict[SourceRef, RecordEnvelope] = field(default_factory=dict)
 
     def copy(self) -> _State:
         return _State(set(self.manifests), set(self.definitions), dict(self.instances), set(self.campaigns),
                       dict(self.images), dict(self.blobs), dict(self.repairs), dict(self.placements),
-                      set(self.puts), set(self.derived))
+                      set(self.puts), dict(self.staged_manifests), dict(self.staged_definitions))
 
 
 class ImageBatch:
@@ -491,13 +507,13 @@ def _apply(library: ImageLibrary, state: _State, disk: _Disk, op: tuple) -> obje
         state.puts.add(key)
         if isinstance(envelope, SourceManifest):
             state.manifests.add(envelope.source)
+            state.staged_manifests[envelope.source] = envelope
         elif isinstance(envelope, ScopeRecord):
             if not isinstance(envelope.address, TranscriptRef):
                 state.campaigns.add(envelope.address.campaign_id)
         elif isinstance(envelope.address, SourceRef):
             state.definitions.add(envelope.address.entity_key)
-            if is_derived(envelope):
-                state.derived.add(envelope.address.entity_key)
+            state.staged_definitions[envelope.address] = envelope
         else:
             state.instances[envelope.address] = envelope
             state.campaigns.add(envelope.address.campaign_id)
@@ -606,12 +622,42 @@ def _source_layer(state: _State, disk: _Disk, entity: SourceRef) -> dict[str, Pl
 
 
 def _lineage(state: _State, disk: _Disk, entity: SourceRef) -> Lineage:
-    """``entity``'s art lineage on disk; a derived revision staged in this batch makes its own layer
-    derived (its staged base chain is not walked: nothing is inherited until it is committed)."""
+    """``entity``'s art lineage as this batch would leave it. When the batch puts a manifest or a
+    revision of any entity in it, only the entity's own layer is kept, derived exactly when the head
+    the batch leaves has a ``derivation``: its staged base chain is not walked, so nothing is inherited
+    (and nothing can be re-cropped) until it is committed, and the batch never writes a mode its own
+    reader would refuse."""
     found = disk.lineage(entity)
-    if entity.entity_key in state.derived and not found.derived[-1]:
-        return Lineage((entity,), (True,))
-    return found
+    if not any(_staged(state, member) for member in found.entities) and not _staged(state, entity):
+        return found
+    return Lineage((entity,), (_head_is_derived(state, disk, entity),))
+
+
+def _staged(state: _State, entity: SourceRef) -> bool:
+    return entity.source in state.staged_manifests or any(
+        ref.entity_key == entity.entity_key for ref in state.staged_definitions)
+
+
+def _head_is_derived(state: _State, disk: _Disk, entity: SourceRef) -> bool:
+    manifest = state.staged_manifests.get(entity.source)
+    if manifest is None:
+        stored = disk.source(entity.source)
+        manifest = stored.manifest if isinstance(stored, StoredSource) else None
+    head = manifest.heads.get(f"{entity.kind}/{entity.entity_id}") if manifest is not None else None
+    staged = [ref for ref in state.staged_definitions if ref.entity_key == entity.entity_key]
+    if head is not None:
+        ref: SourceRef | None = entity.at(head)
+    elif not staged:
+        ref = entity  # no declared head: the store follows the only revision
+    else:  # a staged revision is the head only if it will be the entity's only one
+        ref = staged[0] if len(staged) == 1 and not isinstance(disk.definition(entity), StoredDefinition) else None
+    if ref is None:
+        return False
+    envelope = state.staged_definitions.get(ref)
+    if envelope is None:
+        found = disk.definition(ref)
+        envelope = found.envelope if isinstance(found, StoredDefinition) else None
+    return envelope is not None and is_derived(envelope)
 
 
 def _below(state: _State, disk: _Disk, entities: tuple[SourceRef, ...], derived: tuple[bool, ...],
@@ -673,9 +719,10 @@ def _names_paired(disk: _Disk, subject: SourceRef | InstanceRef, placement: Plac
     slot (no op deletes a placement), so it is the repair a human needs to undo a ``set`` or
     ``adjust`` written before the pair formed, exactly as 017's ``end`` and 021's revocation stay
     allowed on a pair. An ``unresolved`` placement (038) is exempt for the same reason: it names no
-    picture and shows nothing. A definition subject is never in a pair: pairs are campaign instances only.
+    picture and shows nothing. An ``inherit`` (046) is not exempt: it can put the source's picture back.
+    A definition subject is never in a pair: pairs are campaign instances only.
     """
-    return (isinstance(subject, InstanceRef) and placement.mode not in ("hide", "unresolved", "inherit")
+    return (isinstance(subject, InstanceRef) and placement.mode not in ("hide", "unresolved")
             and subject in disk.paired(subject.campaign_id))
 
 
