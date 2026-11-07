@@ -38,7 +38,7 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 
 Still owed by this sprint, and due **before Sprint 044**:
 - **Merge rules for 021 accepted events and scene wrap-ups, and for 023 holdings.** Until then they stay `held`: never copied, reported whenever the devices differ.
-- **Merge rules for 035 played turns** (`turns/`, [SCENES](../../SCENES.md)): two devices that played one chat offline both wrote its next turn. Until then turns stay `held` like the families above.
+- ~~**Merge rules for 035 played turns**~~: done. Sync carries `turns/` as a mutable family, never landing a turn without its chat, play scope, preceding turn and chosen turn; two devices' turn *n* make the chat forked on both, and the library owner chooses which branch goes on (`SceneRunner.choose`): the others are set aside from that number on, kept but heard by no one, by a `set_aside` mark on each losing branch head that travels like any turn edit. Different offline choices are a conflict both devices show, never a flip ([SCENES](../../SCENES.md#forked-chats), [SYNC](../../SYNC.md#played-turns-035-028s-turn-merge)). A UI for the choice is 065's.
 - ~~**Merging 020 knowledge logs** that both devices appended to offline~~: done ([SYNC](../../SYNC.md#knowledge-logs-028)). Still owed by the allocators (021/029/032/035): device-tagged record ids and sequences taken from the merged high-water mark.
 - **Deletion propagation**, and resolving toward a deletion.
 

@@ -23,6 +23,7 @@ from .decide import archive_candidate
 from .documents import ArchiveView, PendingView, syncable
 from .errors import ResolveRefused, SameDevice, SyncInterrupted
 from .model import ASSET_KINDS, HELD_BACK_KINDS
+from .turns import turn_named, turn_needs
 from .session import (
     _HELD, PER_PATH_ERRORS, Copy, _archived, _blob_etag, _campaigns_with_state, _current, _held_campaigns,
     _held_relation, _home_scope, _kind, _knowledge_campaign, _locked, _manifest_heads, _named_paths, _owning_chat,
@@ -145,8 +146,9 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
             if scans[winner].files.get(pinned) != scans[receiver].files.get(pinned) or any(
                     scans[device].blocked_reason(pinned) is not None for device in pair):
                 raise ResolveRefused(f"{pinned}, which {done} pins, differs between the devices; resolve it first")
-        owner = set(_owning_chat(done))
-        for named in [*_named_paths(tuple(done.split("/")), written), *_home_scope(done)]:
+        owner = {*_owning_chat(done), *turn_needs(done, written),  # a turn's chain and chat (``sync.turns``)
+                 *turn_named(done, written, scans[winner])}
+        for named in sorted({*_named_paths(tuple(done.split("/")), written), *_home_scope(done), *owner}):
             if ((named in scans[winner].files or named in owner) and named not in scans[receiver].files) or any(
                     scans[device].blocked_reason(named) is not None for device in pair):
                 raise ResolveRefused(f"{named}, which {done} names, is missing on {receiver}; sync or resolve it first")
@@ -199,7 +201,8 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str, expec
         states = bookkeeping.changes(store, files, archive.files)
         # the conflicts this resolve ended take their kept-version entries with them (028): a dismissal
         # never outlives its conflict, even before the next sync completes
-        record = kept_record.without(kept_record.read_keeps(store, other[device], pair), other[device], pair, resolved)
+        record = kept_record.without(kept_record.read_keeps(store, other[device], pair), other[device], pair, resolved,
+                                     standing=False)  # the data landed and was verified: the conflict ends
         if record is not None:
             states.append(record)
         if states:
@@ -228,10 +231,11 @@ def _end_deliveries(stores: Mapping[str, LibraryStore], other: Mapping[str, str]
     and the archive steps the winner's own archive, marker and record still read as the open
     conflict: its kept copy of the receiver's former version (perhaps the only copy once the
     receiver holds the winner's) would be dismissable. Cleared first, it never is. If the resolve
-    then stops, the conflict stays open with those deliveries unrecorded: that only fails closed."""
+    then stops, the conflict stays open with those deliveries unrecorded: that only fails closed. Each
+    path's ``open`` stays: the conflict ends only in the archive steps, after the data commit landed."""
     for device in reversed(pair):
         state = kept_record.without(kept_record.read_keeps(stores[device], other[device], pair),
-                                    other[device], pair, resolved)
+                                    other[device], pair, resolved, standing=True)  # it ends after the data
         if state is not None:
             writes = stores[device].transaction()
             bookkeeping.stage(writes, [state])

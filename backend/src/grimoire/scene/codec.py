@@ -14,14 +14,16 @@ from grimoire.adjudication import Factor, Stake
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TurnRef
 from grimoire.core.inference import TOKEN_FIELDS, CallAttempt, CallId, InferenceStage, TokenUsage
 
-from .model import CallRecord, Label, Post, SceneLine, SceneRefused, Take, TurnRecord, turn_id
+from .model import CallRecord, Label, Post, SceneLine, SceneRefused, SetAside, Take, TurnRecord, turn_id
 
 TURN_SCHEMA = "grimoire.scene-turn/1"
 _TURN_KEYS = frozenset({"chat", "number", "origin", "post", "takes", "paused", "paused_by", "passed_by"})
-#: ``device`` is written on every turn; a turn written before turn ids carried a device tag has none (read as
-#: untagged). ``labels`` is written only on a turn whose action was labelled (035 milestone 2); an older build
-#: keeps it as an unknown field when it rewrites the turn.
-_OPTIONAL_TURN_KEYS = frozenset({"device", "labels"})
+#: Written on every turn. A turn written before turn ids carried a device tag has no ``device`` (read as
+#: untagged); one written before 028's turn merge has no ``follows`` (its place is inferred) or ``set_aside``.
+#: ``labels`` is written only on a turn whose action was labelled (035 milestone 2); an older build keeps it as
+#: an unknown field when it rewrites the turn.
+_OPTIONAL_TURN_KEYS = frozenset({"device", "follows", "set_aside", "labels"})
+_SET_ASIDE_KEYS = frozenset({"chosen", "by"})
 _IDENTITY_KEYS = frozenset({"schema", "address", "campaign_id", "ref"})
 _POST_KEYS = frozenset({"submitted_by", "actor", "kind", "text", "audience", "channel", "addressees", "withheld"})
 _TAKE_KEYS = frozenset({"take", "state", "origin", "cast", "lines", "calls", "outcome", "declined", "unscreened",
@@ -50,7 +52,9 @@ def turn_to_payload(record: TurnRecord) -> dict[str, object]:
         "post": None if record.post is None else _post(record.post),
         "takes": [_take(take) for take in record.takes],
         "paused": record.paused, "paused_by": record.paused_by, "passed_by": record.passed_by,
-        "device": record.device,
+        "device": record.device, "follows": record.follows,
+        "set_aside": None if record.set_aside is None else {"chosen": record.set_aside.chosen,
+                                                             "by": record.set_aside.by},
     })
     if record.labels:
         payload["labels"] = [_label(label) for label in record.labels]
@@ -152,12 +156,17 @@ def turn_from_payload(address: TurnRef, schema: str, payload: object) -> TurnRec
     if turn_id(chat, number, device) != address.turn_id:  # type: ignore[arg-type]
         raise SceneRefused("address_mismatch", "a turn's chat, number and device must spell its address")
     extras = {key: value for key, value in data.items() if key not in _TURN_KEYS | _OPTIONAL_TURN_KEYS}
+    follows = data.get("follows")
+    if follows is not None and type(follows) is not str:
+        raise _invalid("follows must be a turn id or null")
     try:
+        mark = None if data.get("set_aside") is None else _mapping(data["set_aside"], "set_aside", _SET_ASIDE_KEYS)
+        set_aside = None if mark is None else SetAside(mark["chosen"], mark["by"])  # type: ignore[arg-type]
         return TurnRecord(chat, number, data["origin"],  # type: ignore[arg-type]
                           None if data["post"] is None else _decode_post(data["post"]),
                           tuple(_decode_take(item, address) for item in _list(data["takes"], "takes")),
                           data["paused"], data["paused_by"], data["passed_by"],  # type: ignore[arg-type]
-                          device,  # type: ignore[arg-type]
+                          device, follows, set_aside,  # type: ignore[arg-type]
                           tuple(_decode_label(item, address) for item in _list(data.get("labels", []), "labels")),
                           extras=extras)
     except SceneRefused:

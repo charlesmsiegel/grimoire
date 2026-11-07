@@ -644,7 +644,8 @@ def test_more_deliveries_than_one_record_holds_never_stop_a_sync(tmp_path, monke
     kept-version record: the sync still completes, keeps every version and copies an unrelated
     record. The deliveries that fit stay dismissable; the rest go unrecorded, so those copies are
     never dismissable. A hold is never what gives way: resolve still records it in a full record."""
-    monkeypatch.setattr(sync_keeps, "RECORD_LIMIT", 8_000)  # about 25 deliveries: 010's cap, scaled down
+    # only some deliveries fit beside the 45 open conflicts (which never give way): 010's cap, scaled down
+    monkeypatch.setattr(sync_keeps, "RECORD_LIMIT", 12_000)
     desktop, phone = make_pair(tmp_path)
     crowd = [InstanceRef("c1", "character", f"crowd-{number:02d}") for number in range(45)]
     for ref in crowd:
