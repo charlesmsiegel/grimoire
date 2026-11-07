@@ -64,7 +64,7 @@ def ledger_bytes(store: LibraryStore) -> dict[str, bytes]:
     for kind in ("accepted", "wrapups", "relations", "holdings"):
         root = store.root / "campaigns" / C / kind
         for path in sorted(root.rglob("*.json")) if root.exists() else ():
-            found[str(path.relative_to(store.root))] = path.read_bytes()
+            found[path.relative_to(store.root).as_posix()] = path.read_bytes()
     return found
 
 
