@@ -34,6 +34,9 @@ def choose_branch(runner, chat: ChatRef, by, turn: str):  # type: ignore[no-unty
     if other:
         raise SceneRefused("turns_unreadable", f"this chat's turns are incomplete "
                                                f"({', '.join(sorted(set(other)))}); nothing is written")
+    # 040: an undecided obstacle attempt on a branch set aside is withdrawn first, or it would hold its obstacle
+    from grimoire.play.obstacles import retire_set_aside  # it imports the runner's modules
+    retire_set_aside(runner, turns, turn)
     with span("write.turn"):
         runner.scenes.choose(turns, turn, principal)
     return runner.open(chat)

@@ -280,7 +280,7 @@ class ObstacleLibrary:
         with self._authority.lock:
             self._admit(obstacle_id, frame, approach, contribution, author)
 
-    def withdraw(self, campaign_id: str, obstacle_id: str, attempt_id: str) -> None:
+    def withdraw(self, campaign_id: str, obstacle_id: str, attempt_id: str, *, set_aside: bool = False) -> None:
         """Withdraw the obstacle's undecided attempt ``attempt_id`` for good: it is ``void`` from now on.
 
         For an attempt whose turn passes while 029 cannot decide it (its actor changed hands, or its frame
@@ -290,6 +290,10 @@ class ObstacleLibrary:
         own frame (no revision of it can come once its turn has passed), and undecided (``not_pending``;
         ``already_withdrawn``), and only while 029 cannot decide it (``attempt_decidable``). 035 decides an attempt
         at an obstacle only under the same lock, after reading that it is not void (``refuse_void_attempt``).
+
+        ``set_aside``: the caller vouches that the attempt's turn is on a branch a fork choice sets aside (028), where
+        nothing in play can decide it however 029 stands, so 029's ``undecidable`` is not asked; one 029 decided
+        already is still ``attempt_decidable``.
         """
         with self._authority.lock:
             builder = self._builder(campaign_id)
@@ -299,7 +303,8 @@ class ObstacleLibrary:
                     last.status == "pending" or (last.status == "diverged" and last.problem != "attempt_out_of_turn")):
                 raise _refused(f"attempt {attempt_id!r} is not pending ({last.status})", "not_pending")
             if (self._adjudication.outcome(campaign_id, attempt_id) is not None
-                    or (last.frame is not None and self._adjudication.undecidable(campaign_id, attempt_id) is None)):
+                    or (not set_aside and last.frame is not None
+                        and self._adjudication.undecidable(campaign_id, attempt_id) is None)):
                 raise _refused(f"attempt {attempt_id!r} can be decided now", "attempt_decidable")
             self._append(builder, "withdrawal", withdrawal_to_payload(obstacle_id, attempt_id))
             builder.add_withdrawal(attempt_id)

@@ -1040,3 +1040,79 @@ def test_a_change_two_consequences_made_due_is_owed_twice_and_one_is_waived(card
         result = at.runner.approve_effect(chat, at.owner, turn, effect.number)
         assert (result.state, result.reason) == ("refused", "due_missing")
         assert at.effects.continuity(chat.campaign_id, as_of=NOW, requested_by=DIRECTOR).events == ()
+
+
+def _fork_first_turn(at, chat) -> str:
+    """Another device's turn 1 of this chat arrives (as a sync would bring it), the same action unlabelled: the
+    chat is forked at turn 1."""
+    from grimoire.scene import TURN_SCHEMA
+    from grimoire.store import ScopeRecord
+    from store_helpers import OWNER
+    first = at.runner.open(chat).turns.turns[0].record
+    theirs = replace(first, device="0badcafe", effects=(), labels=(), paused=False, paused_by=None)
+    txn = at.store.transaction()
+    txn.put(ScopeRecord(theirs.ref, TURN_SCHEMA, turn_to_payload(theirs), owner=OWNER), None)
+    txn.commit(at.owner)
+    return theirs.turn_id
+
+
+def test_an_undecided_attempt_on_a_branch_set_aside_is_withdrawn_and_the_hold_reopens(cards):
+    folder, chat = cards
+    with table(folder, reply("sneak"), reply("bribe")) as at:
+        turn, anya, mara = acting(at, chat, "*I slip past the lantern*")
+        at.runner.label(chat, at.player(), obstacle="hold")
+        assert at.runner.confirm(chat, at.player()) is None  # uncertain: waits for the director
+        theirs = _fork_first_turn(at, chat)
+        at.runner.choose(chat, at.owner, theirs)  # this device's turn, and its attempt, are set aside
+        state = at.obstacles.state(chat.campaign_id, "hold")
+        assert [(a.attempt.attempt_id, a.status) for a in state.attempts] == [(turn, "void")]
+        # the chosen branch's action attempts the hold: it is open to it, under unchanged control
+        assert at.runner.label(chat, at.player(), obstacle="hold").state == "proposed"
+        assert at.runner.confirm(chat, at.player()).decision.result == "success"
+        assert at.obstacles.state(chat.campaign_id, "hold").status == "overcome"
+
+
+def test_a_choice_whose_withdrawal_is_refused_chooses_nothing(cards, monkeypatch):
+    folder, chat = cards
+    with table(folder, reply("sneak")) as at:
+        turn, anya, mara = acting(at, chat, "*I slip past the lantern*")
+        at.runner.label(chat, at.player(), obstacle="hold")
+        at.runner.confirm(chat, at.player())
+        theirs = _fork_first_turn(at, chat)
+
+        def unavailable(*args, **kwargs):
+            from grimoire.store.errors import StoreError
+            raise StoreError("the ledger cannot be written")
+        monkeypatch.setattr(at.runner.obstacles, "withdraw", unavailable)
+        refused("adjudication_unavailable", at.runner.choose, chat, at.owner, theirs)
+        monkeypatch.undo()
+        assert at.runner.open(chat).turns.fork.state == "open"  # nothing chosen: the fork still waits
+        at.runner.choose(chat, at.owner, theirs)  # chosen again, the withdrawal and then the choice land
+        assert [a.status for a in at.obstacles.state(chat.campaign_id, "hold").attempts] == ["void"]
+
+
+def test_a_link_whose_frame_was_never_written_passes_once_its_actor_changed_hands(cards, monkeypatch):
+    from grimoire.ledgers.codec import ControlChange
+    from scene_fixtures import BOB
+    folder, chat = cards
+    with table(folder, reply("bribe")) as at:
+        turn, anya, mara = acting(at, chat)
+        at.runner.label(chat, at.player(), obstacle="hold")
+
+        def crash(*args, **kwargs):
+            raise Crash
+        monkeypatch.setattr(at.obstacles.adjudication, "frame", crash)
+        with pytest.raises(Crash):  # the turn is marked framed and the link written; 029's frame never is
+            at.runner.confirm(chat, at.player())
+    monkeypatch.undo()
+    with table(folder, reply("bribe"), propose=False) as again:
+        assert stored(again, chat, turn).framed is not None
+        assert again.runner.adjudication.state(chat.campaign_id).frame(turn) is None
+        again.runner.sovereignty.record(chat.campaign_id, ControlChange(chat.campaign_id, anya.instance_id, BOB),
+                                        again.owner)
+        again.runner.pass_turn(chat, again.owner)  # nothing 029 could decide: withdrawn, then passed
+        state = again.obstacles.state(chat.campaign_id, "hold")
+        assert [(a.attempt.attempt_id, a.status) for a in state.attempts] == [(turn, "void")]
+        bob = again.authority.handle_for(BOB, trusted=True)
+        again.runner.post(chat, bob, "*I press five coins into Mara's hand*")
+        assert again.runner.label(chat, bob, obstacle="hold").state == "proposed"  # the hold takes the next one

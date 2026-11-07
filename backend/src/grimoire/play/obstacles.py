@@ -229,13 +229,43 @@ def pass_attempt(runner, record: TurnRecord) -> None:
         found = next((each for each in state.attempts if each.attempt.attempt_id == record.turn_id), None)
         if found is not None and found.status == "void":
             return  # superseded or withdrawn already: nothing of it stands
-    if _029(runner.adjudication.undecidable, campaign_id, record.turn_id) is None:
+    # a link whose 029 frame was never written (a confirm cut short) holds nothing 029 could decide: 029's
+    # ``undecidable`` says None for it as for a decidable frame, so it is told apart here and withdrawn
+    frameless = found is not None and found.status == "pending" and found.frame is None
+    if not frameless and _029(runner.adjudication.undecidable, campaign_id, record.turn_id) is None:
         raise _refuse("attempt_undecided", "this action's attempt at an obstacle is undecided; the director "
                                            "decides it (or the player confirms it) first")
     if found is not None and (found.status == "pending"
                               or (found.status == "diverged" and found.problem != "attempt_out_of_turn")):
         with span("write.obstacle"):
             _029(runner.obstacles.withdraw, campaign_id, linked, record.turn_id)
+
+
+def retire_set_aside(runner, turns, chosen: str) -> None:
+    """Withdraw every undecided obstacle attempt of the branches a choice of ``chosen`` sets aside (028), before
+    the choice is written. Nothing in play decides a set-aside turn (decide is the open turn's), so its attempt
+    would hold its obstacle pending for good. Withdrawn first, as a pass withdraws: if a withdrawal is refused,
+    nothing is chosen; if the choice is then refused, choosing the same branch again finds the attempts void.
+    A branch chosen later after all (a peer's conflicting marks chosen again) keeps its turn, whose withdrawn
+    attempt is never decided (``refuse_void_attempt``) and is passed."""
+    fork = turns.fork
+    if runner.obstacles is None or fork is None or chosen not in {branch.head for branch in fork.branches}:
+        return  # nothing to retire, or the choice is refused as it stands
+    campaign_id = turns.chat.campaign_id
+    linked = _029(runner.obstacles.linked, campaign_id)
+    for branch in fork.branches:
+        if branch.head == chosen:
+            continue
+        for turn_id in branch.turns:
+            obstacle_id = linked.get(turn_id)
+            if obstacle_id is None:
+                continue
+            state = _029(runner.obstacles.state, campaign_id, obstacle_id)
+            found = next((each for each in state.attempts if each.attempt.attempt_id == turn_id), None)
+            if found is not None and (found.status == "pending"
+                                      or (found.status == "diverged" and found.problem != "attempt_out_of_turn")):
+                with span("write.obstacle"):
+                    _029(runner.obstacles.withdraw, campaign_id, obstacle_id, turn_id, set_aside=True)
 
 
 def due_changes(runner, scene, record: TurnRecord) -> tuple[Due, ...]:
