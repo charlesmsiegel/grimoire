@@ -11,8 +11,8 @@ from grimoire.core import Moment
 from grimoire.core.identity import AcceptedRef, WrapUpRef
 from grimoire.core.json_value import JsonObject
 from grimoire.effects import (
-    ACCEPTED_SCHEMA, WRAPUP_SCHEMA, EffectCodecError, EndorsementRecord, Revocation, SceneWrapUp, Skipped,
-    accepted_from_payload, accepted_to_payload, wrapup_from_payload, wrapup_id, wrapup_to_payload,
+    ACCEPTED_SCHEMA, ACCEPTED_SCHEMA_V2, WRAPUP_SCHEMA, EffectCodecError, EndorsementRecord, Revocation, SceneWrapUp,
+    Skipped, accepted_from_payload, accepted_schema, accepted_to_payload, wrapup_from_payload, wrapup_id, wrapup_to_payload,
 )
 from grimoire.effects import revocation_fingerprint
 
@@ -88,13 +88,32 @@ def test_accepted_decoding_is_strict(mutate, expected):
 
 def test_unknown_schema_and_identity():
     payload = accepted_to_payload(event())
-    assert decode_reason(payload, schema="grimoire.accepted-event/2") == "unsupported_schema"
+    assert decode_reason(payload, schema="grimoire.accepted-event/3") == "unsupported_schema"
     with pytest.raises(EffectCodecError) as caught:
         accepted_to_payload(event(extras=JsonObject({"receipts": 1})))
     assert caught.value.reason == "invalid_field"
     with pytest.raises(EffectCodecError) as caught:
         accepted_to_payload(event(extras=JsonObject({"address": 1})))
     assert caught.value.reason == "identity_in_payload"
+
+
+def test_an_event_recording_what_it_came_after_is_its_own_schema():
+    """028: ``after`` lives only in /2, so a build before it refuses the event rather than lose its place."""
+    item = replace(event(), after=("e-0-68693d02", "e-2-45569da5"))
+    assert accepted_schema(item) == ACCEPTED_SCHEMA_V2
+    payload = accepted_to_payload(item)
+    assert payload["after"] == ["e-0-68693d02", "e-2-45569da5"]
+    assert accepted_from_payload(REF, ACCEPTED_SCHEMA_V2, payload) == item
+    assert item.fingerprint == event().fingerprint  # outside the fingerprint: endorsements stay valid
+    assert decode_reason(payload, schema=ACCEPTED_SCHEMA) == "invalid_field"  # never an extra of /0 or /1
+    assert decode_reason(accepted_to_payload(event()), schema=ACCEPTED_SCHEMA_V2) == "missing_field"
+    for bad in (["e-2", "e-1"], ["e-1", "e-1"], [REF.event_id], ["no/slash"], [3]):
+        assert decode_reason({**payload, "after": bad}, schema=ACCEPTED_SCHEMA_V2) == "invalid_field", bad
+    with pytest.raises(EffectCodecError) as caught:
+        accepted_to_payload(event(extras=JsonObject({"after": []})))
+    assert caught.value.reason == "invalid_field"
+    empty = replace(event(), after=())  # the first event a paired library accepts: after nothing
+    assert accepted_from_payload(REF, ACCEPTED_SCHEMA_V2, accepted_to_payload(empty)) == empty
 
 
 def test_wrapup_round_trip_and_strictness():

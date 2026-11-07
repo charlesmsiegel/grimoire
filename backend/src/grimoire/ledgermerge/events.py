@@ -1,8 +1,9 @@
 """Merging one campaign's 021 accepted events, wrap-ups and their 017 relations from two devices (028).
 
-Every event is put in one global order, the same for any pair of devices and whichever side holds it
-(``merge_key``: sequence, the accepting device's tag read from the id, the id's allocation counter), and
-numbered by it, the agreed events too. Event ids are kept and nothing an endorsement covers changes: only ``ordinal``, ``holdings.seqs`` and
+Every event is put in one order, the same for any pair of devices and whichever side holds it, and numbered
+by it, the agreed events too (``causal_order``): never before an event it was accepted after (its ``after``),
+and otherwise by ``merge_key`` (sequence, the accepting device's tag read from the id, the id's allocation
+counter). Event ids are kept and nothing an endorsement covers changes: only ``ordinal``, ``holdings.seqs`` and
 ``revocation.holdings_seqs`` are rewritten, none of which the fingerprint covers (EFFECTS, Fingerprint).
 
 Each new event is then replayed with 021's own planner against the merged relations as they stood just
@@ -12,6 +13,7 @@ whole. Anything else stops the merge with a review value. Pure: no files, clocks
 
 from __future__ import annotations
 
+import heapq
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 
@@ -19,7 +21,7 @@ from grimoire.core.identity import AcceptedRef, InstanceRef, RelationRef
 from grimoire.core.json_value import freeze_object
 from grimoire.effects import (
     AcceptedEvent, EffectError, EffectHoldings, EffectProposal, EndStep, accepted_schema, accepted_to_payload,
-    inverse_op_id, parse_token, plan, verify_receipts,
+    inverse_op_id, parse_token, plan, predecessors, verify_receipts,
 )
 from grimoire.graph import GraphError, GraphIndex, Relation
 from grimoire.holdings import Operation
@@ -101,15 +103,18 @@ def order_events(base: Ledger, sides: Mapping[str, Ledger]) -> EventOrder:
         chosen[ref] = (holding[0], versions[holding[0]])
         if len(holding) == 1:
             onesided[ref] = holding[0]
-    fresh = [ref for ref in chosen if ref not in base.events]
-    fresh.sort(key=lambda ref: merge_key(ref.event_id, chosen[ref][1].value.moment.sequence))
-    # Why every event is renumbered, the agreed ones too: three paired devices merge pair by pair, each pair
-    # from its own agreed state, so numbering only the events a pair's base lacks would number the same events
-    # differently in each pair, and the pairs would rewrite each other's ordinals forever (028).
-    everything = sorted(chosen, key=lambda ref: merge_key(ref.event_id, chosen[ref][1].value.moment.sequence))
+    # Every event is renumbered, the agreed ones too: three paired devices merge pair by pair, each pair from its
+    # own agreed state, so numbering only what a pair's base lacks would number the same events differently in
+    # each pair, and the pairs would rewrite each other's ordinals forever (028).
+    by_id = {ref.event_id: ref for ref in chosen}
+    ordered, stuck = causal_order({event_id: chosen[ref][1].value for event_id, ref in by_id.items()})
+    if stuck:
+        items.append(ReviewItem("order_cycle", stuck[0], f"events accepted after each other: {', '.join(stuck)}"[:300]))
+    everything = [by_id[event_id] for event_id in ordered + stuck]
     numbering = {ref.event_id: number for number, ref in enumerate(everything, start=1)}
+    fresh = [ref for ref in everything if ref not in base.events]
     found = EventOrder(chosen, tuple(fresh), onesided, numbering, ())
-    return replace(found, items=tuple(items + _policy(base, found, devices)))
+    return replace(found, items=tuple(items + _policy(base, sides, found, devices)))
 
 
 def _split(event_id: str) -> tuple[str, str]:
@@ -121,8 +126,45 @@ def _split(event_id: str) -> tuple[str, str]:
     return head, tail
 
 
+def causal_order(events: Mapping[str, AcceptedEvent]) -> tuple[list[str], list[str]]:
+    """The merged order of ``events``: never an event before one it was accepted after, and otherwise the
+    smallest ``merge_key`` first (028).
+
+    Kahn's algorithm, always taking the ready event with the smallest key. Why that key and nothing else: an
+    event's predecessors are all held wherever it is (a device held them when it accepted it, and a merge keeps
+    every event), so what two devices hold is closed under predecessors, and on such a set this order is the
+    same as on any larger one restricted to it. Every pair of devices therefore orders the same events the same
+    way, whichever pair is merging and whichever side holds them. Predecessors nobody here holds are ignored.
+    The second list is what a cycle left unplaced (only a hand edit makes one), by key.
+    """
+    before = {event_id: [p for p in after if p in events and p != event_id]
+              for event_id, after in predecessors(events.values()).items()}
+    waiting = {event_id: len(set(before[event_id])) for event_id in events}
+    following: dict[str, list[str]] = {}
+    for event_id, earlier in before.items():
+        for previous in set(earlier):
+            following.setdefault(previous, []).append(event_id)
+
+    def key(event_id: str) -> tuple:
+        return merge_key(event_id, events[event_id].moment.sequence)
+
+    ready = [(key(event_id), event_id) for event_id, count in waiting.items() if count == 0]
+    heapq.heapify(ready)
+    ordered = []
+    while ready:
+        _, event_id = heapq.heappop(ready)
+        ordered.append(event_id)
+        for later in following.get(event_id, ()):
+            waiting[later] -= 1
+            if waiting[later] == 0:
+                heapq.heappush(ready, (key(later), later))
+    placed = set(ordered)
+    return ordered, sorted((event_id for event_id in events if event_id not in placed), key=key)
+
+
 def merge_key(event_id: str, sequence: int) -> tuple:
-    """Where an event the base lacks goes, the same for every pair of devices and whichever side holds it.
+    """How ``causal_order`` breaks a tie between events neither was accepted after: the same for every pair of
+    devices and whichever side holds them.
 
     By sequence; then by the accepting device's tag, read from the id (untagged ids, from libraries never
     identified, first); then by the id's allocation counter (``e-<n>``), which keeps one device's own accept
@@ -136,7 +178,7 @@ def merge_key(event_id: str, sequence: int) -> tuple:
     return (sequence, tag, counter is None, counter or 0, event_id)
 
 
-def _policy(base: Ledger, found: EventOrder, devices: list[str]) -> list[ReviewItem]:
+def _policy(base: Ledger, sides: Mapping[str, Ledger], found: EventOrder, devices: list[str]) -> list[ReviewItem]:
     """What both devices did offline that a merge must not settle alone (the owner's policy decides)."""
     items = []
     by_device: dict[str, list[AcceptedEvent]] = {device: [] for device in devices}
@@ -149,7 +191,9 @@ def _policy(base: Ledger, found: EventOrder, devices: list[str]) -> list[ReviewI
         agreed = base.events.get(ref)
         if agreed is None or not agreed.value.active or version.value.active:
             continue
-        others = [device for device in devices if device != source]
+        # only a device that still holds it in force: one that already has the revocation (synced from a third
+        # device, say) did not extend past an agreed event the other took back
+        others = [device for device in devices if device != source and sides[device].events[ref].value.active]
         if any(by_device[device] for device in others):
             items.append(ReviewItem("revoked_vs_extended", str(ref), f"revoked on {source}; the other device "
                                     "accepted new events"))

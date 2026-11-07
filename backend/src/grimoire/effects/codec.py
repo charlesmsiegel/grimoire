@@ -27,6 +27,9 @@ from .parts import AbilityCharge, AcceptedHoldings, ActedLine, EffectHoldings
 ACCEPTED_SCHEMA = "grimoire.accepted-event/0"
 #: an event that changes holdings or charges ability uses
 ACCEPTED_SCHEMA_V1 = "grimoire.accepted-event/1"
+#: an event that records what it was accepted after (028); it may hold the /1 parts. A build before it refuses
+#: the schema rather than read ``after`` as an unknown field and lose the event's place
+ACCEPTED_SCHEMA_V2 = "grimoire.accepted-event/2"
 WRAPUP_SCHEMA = "grimoire.scene-wrapup/0"
 _ACCEPTED_IDENTITY = frozenset({"ref", "address", "campaign_id", "event_id", "schema"})
 _WRAPUP_IDENTITY = frozenset({"ref", "address", "campaign_id", "wrapup_id", "schema"})
@@ -35,6 +38,8 @@ ACCEPTED_FIELDS = frozenset({"chat", "moment", "summary", "proposed_by", "operat
                              "revocation"})
 #: the next slice's fields: only a /1 payload may hold them (a /0 one holding them is refused)
 PART_FIELDS = frozenset({"attempt_id", "holdings", "abilities"})
+#: only a /2 payload holds it, and every /2 payload does
+AFTER_FIELD = "after"
 WRAPUP_FIELDS = frozenset({"chat", "scene_id", "through", "summary", "cites", "written_by", "written_at"})
 _MOMENT = frozenset({"sequence", "scene_id", "turn_id"})
 _OP = frozenset({"kind", "predicate", "subject", "object", "agent", "domain", "backed_by"})
@@ -138,7 +143,10 @@ def _ability(charge: AbilityCharge) -> dict:
 
 
 def accepted_schema(event: AcceptedEvent) -> str:
-    """The schema an event is stored under: /0 unless it changes holdings or charges an ability use."""
+    """The schema an event is stored under: /2 when it records ``after``; else /0 unless it changes holdings or
+    charges an ability use."""
+    if event.after is not None:
+        return ACCEPTED_SCHEMA_V2
     return ACCEPTED_SCHEMA_V1 if event.has_parts else ACCEPTED_SCHEMA
 
 
@@ -151,7 +159,7 @@ def _extras_clash(extras: JsonObject, identity: frozenset[str], fields: frozense
 
 def accepted_to_payload(event: AcceptedEvent) -> dict:
     """The payload of ``event``, to be stored under ``accepted_schema(event)``."""
-    _extras_clash(event.extras, _ACCEPTED_IDENTITY, ACCEPTED_FIELDS | PART_FIELDS)
+    _extras_clash(event.extras, _ACCEPTED_IDENTITY, ACCEPTED_FIELDS | PART_FIELDS | {AFTER_FIELD})
     payload: dict = {
         "chat": str(event.chat), "moment": _moment(event.moment), "summary": event.summary,
         "proposed_by": event.proposed_by, "operations": [_op(item) for item in event.operations],
@@ -179,6 +187,8 @@ def accepted_to_payload(event: AcceptedEvent) -> dict:
         payload["holdings"] = _holdings(event.holdings)
     if event.abilities:
         payload["abilities"] = [_ability(charge) for charge in event.abilities]
+    if event.after is not None:
+        payload[AFTER_FIELD] = list(event.after)
     return {**thaw(event.extras), **payload}  # type: ignore[dict-item]
 
 
@@ -354,10 +364,20 @@ def accepted_from_payload(ref: AcceptedRef, schema: str, payload: object) -> Acc
     with those fields as extras: no older writer wrote them, and ignoring a holdings part would hide it.
     A /1 payload with no holdings and no ability use is refused too: /0 is that event's one form.
     """
-    data = _start(payload, schema, frozenset({ACCEPTED_SCHEMA, ACCEPTED_SCHEMA_V1}), _ACCEPTED_IDENTITY)
-    v1 = schema == ACCEPTED_SCHEMA_V1
+    data = _start(payload, schema, frozenset({ACCEPTED_SCHEMA, ACCEPTED_SCHEMA_V1, ACCEPTED_SCHEMA_V2}),
+                  _ACCEPTED_IDENTITY)
+    v2 = schema == ACCEPTED_SCHEMA_V2
+    v1 = schema == ACCEPTED_SCHEMA_V1 or v2
     if not v1 and set(data) & PART_FIELDS:
         raise _invalid(f"schema {ACCEPTED_SCHEMA} may not hold {sorted(set(data) & PART_FIELDS)}")
+    if (AFTER_FIELD in data) != v2:  # never read as an extra: ignoring it would lose the event's place
+        raise _invalid(f"{AFTER_FIELD} is held by every {ACCEPTED_SCHEMA_V2} payload and no other",
+                       "invalid_field" if AFTER_FIELD in data else "missing_field")
+    after = None
+    if v2:
+        after = _list(data[AFTER_FIELD], AFTER_FIELD)
+        if not all(type(item) is str for item in after):
+            raise _invalid(f"{AFTER_FIELD} must list event ids")
     missing = sorted((ACCEPTED_FIELDS - {"revocation"}) - set(data))
     if missing:
         raise _invalid(f"missing {missing}", "missing_field")
@@ -406,11 +426,11 @@ def accepted_from_payload(ref: AcceptedRef, schema: str, payload: object) -> Acc
     chat = _ref(ChatRef.parse, data["chat"], "chat")
     moment = _decode_moment(data["moment"], "moment")
     endorsements = _decode_endorsements(data["endorsements"], "endorsements")
-    extras = _extras(data, ACCEPTED_FIELDS | PART_FIELDS)
+    extras = _extras(data, ACCEPTED_FIELDS | PART_FIELDS | {AFTER_FIELD})
     event = _build(lambda: AcceptedEvent(
         ref, chat, moment, data["summary"], data["proposed_by"], operations, tuple(contributions), endorsements,
         tuple(controls), data["committed_by"], data["accepted_at"], data["ordinal"], tuple(receipts), revocation,
-        extras, data.get("attempt_id"), holdings, abilities))
+        extras, data.get("attempt_id"), holdings, abilities, None if after is None else tuple(after)))
     if accepted_schema(event) != schema:
         raise _invalid(f"an event with no holdings or ability use is stored as {ACCEPTED_SCHEMA}")  # one form
     return event

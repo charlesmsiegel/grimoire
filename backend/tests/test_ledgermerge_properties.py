@@ -11,17 +11,21 @@ from __future__ import annotations
 
 import random
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from grimoire.core import Moment
 from grimoire.core.identity import AcceptedRef
+from grimoire.effects import AcceptedEvent, AcceptedOperation, accepted_frontier
 from grimoire.holdings import Line, Operation
-from grimoire.ledgermerge import LedgerReview, Merged, Review
+from grimoire.ledgermerge import LedgerReview, Merged, Review, causal_order, device_tag
 from grimoire.store import LibraryStore
 
 from effects_fixtures import C, CHAT, INES, KEY1, KEY2, TAM, WREN, Handles, effects_library, give
 from ledger_fixtures import COIN, OTHER, Device, build_base, file_bytes, merge, pay, read_ledger, write_back
+from test_effects_model import event as model_event
 
 TRIALS = 40
 PEOPLE = (WREN, TAM, INES)
@@ -135,3 +139,59 @@ def test_random_offline_play_merges_symmetrically_without_dropping_anything(seed
         for device in devices.values():
             device.close()
         base.close()
+
+
+# -- the merge order on its own: random acceptance histories --------------------------------------
+
+def _history(rng: random.Random, size: int) -> dict[str, AcceptedEvent]:
+    """Events as devices accept them: each after the frontier of what its device held, at a sequence never
+    behind that device's own last one; devices now and then take in everything another holds (a merge)."""
+    devices = ["a-tablet", "desktop", "phone"]
+    held: dict[str, set[str]] = {device: set() for device in devices}
+    floor = dict.fromkeys(devices, 1)
+    counter = dict.fromkeys(devices, 0)
+    events: dict[str, AcceptedEvent] = {}
+    director = give(backed=None, agent=None, proposed_by="director")  # no endorsement pins the moment
+    template = model_event(proposed_by="director", contributions=(), endorsements=(), controls=(),
+                           operations=tuple(AcceptedOperation(op, "director") for op in director.operations))
+    for _ in range(size):
+        device = rng.choice(devices)
+        if rng.random() < 0.3:
+            other = rng.choice([d for d in devices if d != device])
+            held[device] |= held[other]
+            floor[device] = max(floor[device], floor[other])
+            continue
+        counter[device] += 1
+        event_id = f"e-{counter[device]}-{device_tag(device)}"
+        floor[device] += rng.choice((0, 0, 1, 2))
+        mine = {event_id: events[event_id] for event_id in held[device]}
+        after = accepted_frontier(mine.values())
+        events[event_id] = replace(template, ref=AcceptedRef(C, event_id), moment=Moment(floor[device], "s1", "t1"),
+                                   after=after)
+        held[device].add(event_id)
+    return events
+
+
+def _closed(events: dict[str, AcceptedEvent], picked: set[str]) -> set[str]:
+    found, stack = set(), list(picked)
+    while stack:
+        event_id = stack.pop()
+        if event_id not in found:
+            found.add(event_id)
+            stack.extend(events[event_id].after or ())
+    return found
+
+
+@pytest.mark.parametrize("seed", range(60))
+def test_the_merge_order_of_what_two_devices_hold_is_the_order_of_everything_restricted(seed):
+    rng = random.Random(seed)
+    events = _history(rng, rng.randint(1, 24))
+    everything, stuck = causal_order(events)
+    assert not stuck and sorted(everything) == sorted(events)
+    place = {event_id: number for number, event_id in enumerate(everything)}
+    for event in events.values():  # never before an event it was accepted after
+        assert all(place[before] < place[event.event_id] for before in event.after or ())
+    for _ in range(5):  # what any device (or two together) holds is closed under "after"
+        subset = _closed(events, {event_id for event_id in events if rng.random() < 0.4})
+        part, stuck = causal_order({event_id: events[event_id] for event_id in subset})
+        assert not stuck and part == [event_id for event_id in everything if event_id in subset]

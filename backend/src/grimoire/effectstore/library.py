@@ -28,6 +28,7 @@ from grimoire.core.model import ControlAssignment
 from grimoire.devicetag import DeviceIdentityUnusable, device_tag
 from grimoire.effects import (
     WRAPUP_SCHEMA, AcceptedEvent, AcceptedOperation, EffectCodecError, EffectError, EffectProblem, EffectProposal,
+    accepted_frontier,
     EndorsementRecord, EndStep, Op, Receipt, Revocation, SceneWrapUp, Skipped, accepted_from_payload, accepted_schema,
     accepted_to_payload, accepted_token, authorize, bridge_problems, check_citations, edited_effects, holdings_orphans,
     holdings_partials, holdings_problems, ledger_problems, orphans, parse_token, partial_revocations, plan,
@@ -347,7 +348,7 @@ class TurnEffectsLibrary:
                                           authorization.holdings_domains)
             ordinal = 1 + max((e.ordinal for e in snap.events.values()), default=0)
             event = self._event(ref, proposal, authorization, records, tuple(receipts),
-                                None if planned is None else planned[1], ordinal)
+                                None if planned is None else planned[1], ordinal, causal_after(snap, tag))
             record = ScopeRecord(ref, accepted_schema(event), accepted_to_payload(event), owner=self._owner)
             agents, actors = self._acting(proposal)
             return EffectChange(self, ref, ((record, None),), tuple(changes), campaign, snap.state, proposal.chat,
@@ -417,15 +418,18 @@ class TurnEffectsLibrary:
         return authorization, records, pins
 
     def _event(self, ref: AcceptedRef, proposal: EffectProposal, authorization, records: tuple,  # type: ignore[no-untyped-def]
-               receipts: tuple[Receipt, ...], holdings, ordinal: int) -> AcceptedEvent:
-        """The accepted-event value of a new acceptance (or an adoption) under ``ref``."""
+               receipts: tuple[Receipt, ...], holdings, ordinal: int,
+               after: tuple[str, ...] | None = None) -> AcceptedEvent:
+        """The accepted-event value of a new acceptance (or an adoption) under ``ref``; ``after`` is what it
+        was accepted after (028), recorded on an identified library only."""
         charged = parts.charges(proposal, authorization.ability_domains)
         try:
             return AcceptedEvent(
                 ref, proposal.chat, proposal.moment, proposal.summary, proposal.proposed_by,
                 tuple(AcceptedOperation(op, domain) for op, domain in zip(proposal.operations, authorization.domains)),
                 authorization.contributions, records, authorization.controls, str(self.handle.principal),  # type: ignore[attr-defined]
-                self._clock(), ordinal, receipts, attempt_id=proposal.attempt_id, holdings=holdings, abilities=charged)
+                self._clock(), ordinal, receipts, attempt_id=proposal.attempt_id, holdings=holdings, abilities=charged,
+                after=after)
         except EffectError as error:
             raise _refused(error) from None
 
@@ -761,6 +765,13 @@ class TurnEffectsLibrary:
         if ledger_problems(snap.events.values()):
             raise InvalidEffect("the accepted-event stack is inconsistent (duplicate ordinals or order)",
                                 "inconsistent_ledger")
+
+
+def causal_after(snap: _Snapshot, tag: str) -> tuple[str, ...] | None:
+    """What a new event on this library records it was accepted after (028): the frontier of every accepted
+    event it holds, revoked ones too. Only an identified library records it, since only paired libraries merge;
+    an unidentified one writes its events exactly as before, their place being their ordinal."""
+    return accepted_frontier(snap.events.values()) if tag else None
 
 
 def _relations_unreadable(graph: CampaignGraph) -> bool:

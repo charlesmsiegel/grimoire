@@ -179,6 +179,32 @@ def orphans(events: Iterable[AcceptedEvent], relations: Iterable[Relation]) -> t
     return tuple(sorted(set(found), key=EffectProblem.sort_key))
 
 
+def predecessors(events: Iterable[AcceptedEvent]) -> dict[str, tuple[str, ...]]:
+    """Each event's direct predecessors in the campaign's acceptance order (028).
+
+    An event's ``after``, as it recorded it; for an event without one (accepted by an unidentified library or
+    before 028's merge) the event without one just before it by ordinal, so such events form one line in
+    ordinal order, as their library accepted them. Ids no event here has are kept: the caller decides.
+    """
+    events = list(events)
+    found = {event.event_id: event.after for event in events if event.after is not None}
+    previous: tuple[str, ...] = ()
+    for event in sorted((e for e in events if e.after is None), key=lambda e: (e.ordinal, e.event_id)):
+        found[event.event_id] = previous
+        previous = (event.event_id,)
+    return found  # type: ignore[return-value]
+
+
+def accepted_frontier(events: Iterable[AcceptedEvent]) -> tuple[str, ...]:
+    """The events no other event comes after, sorted: what a new acceptance records as its ``after`` (028).
+
+    Revoked events count: a revocation changes what is in force, not the order things were accepted in.
+    """
+    events = list(events)
+    named = {event_id for before in predecessors(events).values() for event_id in before}
+    return tuple(sorted(event.event_id for event in events if event.event_id not in named))
+
+
 def ledger_problems(events: Iterable[AcceptedEvent]) -> tuple[EffectProblem, ...]:
     """The event stack must be totally ordered: unique ordinals, and active sequences never decreasing."""
     events = list(events)

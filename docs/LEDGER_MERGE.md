@@ -32,19 +32,20 @@ The merge is idempotent. Merging a merged ledger with itself gives the same byte
    - Changed on both, it is `both_changed`.
    - Missing on a device, it is `deleted`. A deletion is never merged.
    - A new id with two contents is `id_collision`. Since 028 tags new ids with the device ([DEVICE_SYNC](DEVICE_SYNC.md#per-device-ids)), only untagged libraries collide.
-2. **Order.** Every kept event, agreed or new, goes in one global order (`merge_key`). It depends only on each event's sequence and id, never on which two devices are merging, which side holds the event, or its current ordinal (every merge rewrites those):
-   1. `moment.sequence`;
-   2. the tag of the device that accepted it, read from the id (`e-<n>-<tag>`). Untagged ids, from libraries never identified, come first, as the empty tag;
-   3. the id's allocation counter (`<n>`), which keeps one device's own accept order at one sequence. An id with no number after its prefix comes after the numbered ones;
-   4. the id.
+2. **Order.** Every kept event, agreed or new, goes in one order (`causal_order`), and ordinals are its positions, 1 to n, so agreed events are renumbered too:
+   - **Causal.** No event goes before one it was accepted after: an identified library records that as `after` ([EFFECTS](EFFECTS.md#records), `/2`). An event without `after`, accepted by an unidentified library or before this change, comes after the event without one just before it by ordinal, so such events keep the order their library accepted them in. 021's undo stack (latest first) therefore still takes back the last event a device accepted.
+   - **Otherwise by key** (`merge_key`): `moment.sequence`; then the tag of the device that accepted it, read from the id (`e-<n>-<tag>`; untagged ids first, as the empty tag); then the id's allocation counter (`<n>`; an id without one after those with one); then the id. Among the events ready to place, the smallest key goes first.
+   - **The same for every pair.** The order depends only on the events, never on which two devices are merging, which side holds an event, or its current ordinal. What a device holds always includes everything its events were accepted after, and on any such set the order is the larger order restricted to it. So with three or more paired devices merging pair by pair, each from its own agreed state, every pair numbers the same events the same way, and the numbering settles once every device holds every event.
+   - **Sequence order.** 021 requires active events in ordinal order to have non-decreasing sequences (`inconsistent_ledger`). A causal order can break that: a device can take back an event at a later sequence and then accept one at an earlier sequence after it, while the other device accepted one in between. The merge then stops with `new_problem` naming `inconsistent_ledger`, never a merged ledger that breaks it.
+   - Events that each say they came after the other (only a hand edit makes that) stop the merge as `order_cycle`.
 
-   Ordinals are that order's positions, 1 to n, so agreed events are renumbered too. With three or more paired devices merging pair by pair, each pair from its own agreed state, every pair then numbers the same events the same way, and the numbering settles once every device holds every event. Ordered by sequence first, active ordinals still follow sequences (021's `inconsistent_ledger`). A first merge may renumber a library's earlier events, for example a revoked event at a later sequence than an event accepted after it. Ids are kept.
+   A first merge may renumber a library's earlier events. Ids are kept.
 3. **Rewrite.** Only `ordinal`, `holdings.seqs` and `revocation.holdings_seqs` are rewritten (`REWRITTEN`). The fingerprint covers none of them, so every endorsement stays valid. Two versions that differ only there are one event, so a hand edit of only those fields of an agreed event is discarded: the agreed record is kept, renumbered as above.
 4. **Replay.** Each new event is replayed, in merged order, with 021's planner against the merged relations as they stood just before it. It must reproduce the relation receipts it recorded (`receipt_mismatch`). A planner refusal comes back under the planner's reason, such as `precondition_failed`. An ability's actor must exist (`missing_agent`).
    - A new event revoked on its device must have been undone in full: no relation change skipped and no holdings change left in force (`partial_revocation`).
 5. **Policy.** These are checked across the two devices:
    - one chat took new events on both (`same_chat`);
-   - an agreed event was revoked on one device while the other accepted new events (`revoked_vs_extended`);
+   - an agreed event was revoked on one device while the other, still holding it in force, accepted new events (`revoked_vs_extended`). A device that already has the revocation, synced from a third device, does not count;
    - one fingerprint was accepted as two events (`same_effect`);
    - one attempt was spent twice (`attempt_reused`).
 
@@ -85,8 +86,8 @@ Known limits:
 - A hand edit that a later operation on the same device depended on (an edit that made a removal possible) refuses on replay, because the edit is applied after the replay.
 - Domain conflicts beyond 017's preconditions are not detected, for example two devices each moving a scene on.
 - An undecodable file is the caller's to report before the merge.
+- Events without `after` form one line by the ordinals of the versions kept. Two unidentified libraries that each accepted events offline (which also collide on ids) would interleave by ordinal, not by what each accepted after.
 - Holder logs are still numbered per pair. With three or more devices that all change one holder, one pair's merge can put an entry between two that another pair agreed, and that pair's next merge is then `log_diverged`. That is a review, never a reordered log, but such devices do not converge on their own. How three devices share a holder is open.
-- One device's accept order at one sequence is kept through the id's counter. That holds while the app allocates `e-<n>` ids with increasing `<n>`, which the injected `new_id` must guarantee.
 - A device that missed a merge whose replay evicted entries cannot be merged against it automatically: the merged log no longer shows those entries (`log_diverged`). Once both devices hold the merge, it is stable.
 - Operations a device logged offline past 023's log bounds (1000 entries, or the file size) were evicted on that device, so that holder is `log_diverged` when both devices changed it.
 

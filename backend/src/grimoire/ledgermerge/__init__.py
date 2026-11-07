@@ -8,7 +8,7 @@ either the files both devices store, identical on both, or a review value naming
 Wiring it into sync and the owner's review are later steps. See docs/LEDGER_MERGE.md.
 """
 
-from .events import REWRITTEN, EventOrder, order_events, replay, same_event
+from .events import REWRITTEN, EventOrder, causal_order, merge_key, order_events, replay, same_event
 from .holdings import EnvelopeSizer, HoldingsMerge, merge_holdings
 from .ledger import POLICY, LedgerReview, merge_ledger, problems
 from .model import (
@@ -18,5 +18,6 @@ from .model import (
 __all__ = [
     "BASE", "POLICY", "REASONS", "REWRITTEN", "EnvelopeSizer", "EventOrder", "HoldingsMerge", "Kept", "Ledger",
     "LedgerReview", "Merged", "Output", "Review", "ReviewItem", "Rewrite", "Version", "device_tag",
-    "merge_holdings", "merge_ledger", "order_events", "problems", "ranks", "replay", "same_event",
+    "causal_order", "merge_holdings", "merge_key", "merge_ledger", "order_events", "problems", "ranks", "replay",
+    "same_event",
 ]

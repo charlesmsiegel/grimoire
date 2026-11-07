@@ -34,6 +34,7 @@ REASONS = frozenset({
     "hand_edit_overlap",    # a hand edit of a count that the other device also changed
     "partial_revocation",   # a new event revoked with some of its relation changes left in force
     "receipt_mismatch",     # an event whose replay does not reproduce what it recorded
+    "order_cycle",          # events that each say they were accepted after the other (a hand edit)
     "new_problem",          # the merged ledger reports a 021 problem neither device reported
 })
 #: the devices' own word for the agreed state in ``Kept.source``

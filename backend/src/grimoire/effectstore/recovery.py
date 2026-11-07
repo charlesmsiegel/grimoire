@@ -37,7 +37,7 @@ from grimoire.store.layout import address_parts
 from . import parts
 from .errors import InvalidEffect
 from .errors import refused as _refused
-from .library import Endorsement, EffectChange, TurnEffectsLibrary, _relations_unreadable
+from .library import Endorsement, EffectChange, TurnEffectsLibrary, _relations_unreadable, causal_after
 
 #: 023 refusals meaning a holder no longer matches the receipt: it is not this operation's to finish
 _NOT_OURS = frozenset({"seq_moved", "op_id_reused"})
@@ -228,7 +228,8 @@ class EffectRecovery:
             holdings_change, accepted, written = self._adopt_holdings(proposal, snap, orphan, landed, entries,
                                                                       holders, authorization.holdings_domains)
             ordinal = 1 + max((e.ordinal for e in snap.events.values()), default=0)
-            event = lib._event(ref, proposal, authorization, records, receipts, accepted, ordinal)
+            event = lib._event(ref, proposal, authorization, records, receipts, accepted, ordinal,
+                               causal_after(snap, tag))
             for number in landed:  # the very check continuity makes, on the changes this event now claims
                 why = receipt_failure(event, number, snap.graph.index)
                 if why is not None:
