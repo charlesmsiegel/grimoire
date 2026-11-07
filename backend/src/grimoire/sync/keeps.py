@@ -46,7 +46,7 @@ from grimoire.store.syncstate import sync_peers
 
 from .bookkeeping import read_state, stage as stage_states
 from .decide import archive_candidate
-from .documents import KeepsView, KeptEntry, check_device_id, keeps_name, parse_keeps, render_keeps
+from .documents import NO_VERSION, KeepsView, KeptEntry, check_device_id, keeps_name, parse_keeps, render_keeps
 from .model import Base
 
 State = tuple[str, bytes, "str | None"]
@@ -317,14 +317,28 @@ def ended(view: KeepsView, peer: str, devices: tuple[str, str], open_paths: Iter
     return _write(view, peer, devices, entries)
 
 
+#: the decision table's own conflicts (``decide``): the two devices disagree on the path itself
+_DISAGREE = frozenset({"blocked", "missing_ancestor", "deleted", "edit_delete", "concurrent", "resurrected",
+                       "revision_modified"})
+
+
 def opened(plan, device: str) -> dict[str, str]:  # type: ignore[no-untyped-def]
     """``open`` for ``device`` after ``plan``: each conflict path where it holds the peer's version kept, tried
     to keep it (``Conflict.kept``), or did not because it dismissed that version (``Conflict.dismissed``: the
-    entry also says so, and a sync after a dismissal rewrites nothing), by that version."""
-    other = plan.other(device)
-    return {path: tag for path, conflict in plan.conflicts.items()
-            if (device in conflict.kept or device in conflict.dismissed)
-            and (tag := plan.sides[path][other].etag) is not None}
+    entry also says so, and a sync after a dismissal rewrites nothing), by that version; and ``NO_VERSION`` for
+    each where the devices disagree but the peer holds no version to keep (it deleted the path, or cannot read
+    it): a standing conflict is recorded whether or not anything of the peer's is kept here. A conflict of
+    another kind (held, denied, a dependency not yet met, ...) is not a disagreement on the path's bytes."""
+    other, found = plan.other(device), {}
+    for path, conflict in plan.conflicts.items():
+        side = (plan.sides.get(path) or {}).get(other)
+        if side is None:
+            continue
+        if (device in conflict.kept or device in conflict.dismissed) and side.etag is not None:
+            found[path] = side.etag
+        elif conflict.code in _DISAGREE and side.state != "present":
+            found[path] = NO_VERSION
+    return found
 
 
 def with_held(view: KeepsView, peer: str, devices: tuple[str, str], path: str, tag: str) -> State | None:

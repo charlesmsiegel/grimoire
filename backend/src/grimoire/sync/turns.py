@@ -22,9 +22,10 @@ from grimoire.scene.model import parse_turn_id
 from grimoire.store import LibraryStore, StoreError, UnstorableIdentifier
 from grimoire.store.layout import chat_parts, scope_parts, turn_parts
 from grimoire.store.replica import parse_exact
+from grimoire.store.syncstate import sync_peers
 
 from .bookkeeping import read_document
-from .documents import KeepsView, named_paths, syncable
+from .documents import NO_VERSION, KeepsView, named_paths, syncable
 from .errors import NoDeviceIdentity, SyncInterrupted
 from .identity import device_of
 from .keeps import kept_slots, other_peers, read_keeps
@@ -102,7 +103,12 @@ def open_conflicts(store: LibraryStore, folder: str, *, ended: Callable[[str], b
     try:
         device = device_of(store)
     except NoDeviceIdentity:
-        return {}, True
+        # a library never identified never synced; one whose identity is damaged (or was deleted) beside
+        # pair records may hold conflicts it can no longer attribute: closed until it is identified again
+        try:
+            return {}, not sync_peers(store)
+        except (StoreError, OSError):
+            return {}, False
     except SyncInterrupted:
         return {}, False
     found: dict[str, tuple[bytes, ...]] = {}
@@ -127,7 +133,7 @@ def open_conflicts(store: LibraryStore, folder: str, *, ended: Callable[[str], b
             if not standing or not path.startswith(folder + "/"):
                 continue
             kept = list(found.get(path, ()))
-            for tag in sorted(standing):  # type: ignore[type-var]
+            for tag in sorted(standing - {NO_VERSION}):  # type: ignore[type-var]  # the peer deleted it: none kept
                 slots, unreadable = kept_slots(store, path, tag)  # type: ignore[arg-type]
                 complete = complete and not unreadable
                 kept += [data for slot in slots if (data := _read(store, slot)) is not None]

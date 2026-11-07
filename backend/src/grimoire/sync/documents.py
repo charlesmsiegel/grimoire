@@ -287,7 +287,8 @@ class KeptEntry:
     #: delivered, never dismissable, and recorded until their slot is gone, whatever the conflict does
     held: frozenset[str] = frozenset()
     #: the peer's version of this path that this device holds kept for a conflict that stands (or tried to keep,
-    #: or dismissed), as the last sync with the peer found it, whatever its base and whoever delivered its
+    #: or dismissed), or ``NO_VERSION`` when the peer holds none this device could keep (it deleted the path,
+    #: or cannot read it there), as the last sync with the peer found it, whatever its base and whoever delivered its
     #: bytes; ``None`` when there is none. Never a reason to dismiss or delete anything: it only says that the
     #: devices still disagree here (028's turns wait on it, ``grimoire.sync.turns.open_conflicts``)
     open: str | None = None
@@ -307,6 +308,10 @@ class KeepsView:
         entry = self.entries.get(path) if self.state == "valid" else None
         return (entry is not None and base is not None and entry.base == base and tag in entry.dismissed
                 and tag not in entry.held)
+
+
+#: ``KeptEntry.open`` for a conflict in which the peer holds no version to keep: never an etag, never dismissed
+NO_VERSION = "none"
 
 
 def is_base_token(value: object) -> bool:
@@ -334,7 +339,7 @@ def parse_keeps(data: bytes | None, devices: tuple[str, str]) -> KeepsView:
         valid = (_syncable(path) and isinstance(entry, Mapping)
                  and set(entry) - {"open"} == {"base", "delivered", "dismissed", "held"}
                  and all(_etag_list(entry[key]) for key in ("delivered", "dismissed", "held"))
-                 and ("open" not in entry or is_etag(entry["open"])))  # written only when there is one
+                 and ("open" not in entry or is_etag(entry["open"]) or entry["open"] == NO_VERSION))
         if valid:  # one spelling: a base only beside a delivered version, a dismissal only on a base
             delivered, dismissed, held = (set(entry[key]) for key in ("delivered", "dismissed", "held"))  # type: ignore[index]
             base = entry["base"]  # type: ignore[index]

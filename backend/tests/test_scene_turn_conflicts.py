@@ -11,6 +11,8 @@ choice set aside. Over the synthetic card library; every model call is a scripte
 
 from __future__ import annotations
 
+import shutil
+
 from test_scene_turn_merge import (DESKTOP, PHONE, TABLET, built, devices, play, refused, synced, tag,  # noqa: F401
                                    turn_id)
 
@@ -208,3 +210,47 @@ def test_a_conflict_in_a_first_sync_holds_the_chat(built, tmp_path):
         assert synced(desk, phone).conflict(f"campaigns/{chat.campaign_id}/turns/{one}.json") is not None
         for table in (desk, phone):
             _held(table, chat, one)
+
+
+def test_a_turn_the_peer_deleted_holds_the_chat_until_resolved(built, tmp_path):
+    """Sync never propagates a turn's deletion (turns take no part in it): a turn one device lost is a
+    `deleted` conflict, and the device that still holds it has nothing of the peer's to keep. It holds the
+    chat there too, until `resolve` gives the turn back to the other device."""
+    chat = devices(built, tmp_path)
+    with Table(tmp_path / DESKTOP, [say("Two.")]) as desk, Table(tmp_path / PHONE) as phone:
+        synced(desk, phone)
+        one = turn_id(chat, 1)
+        path = f"campaigns/{chat.campaign_id}/turns/{one}.json"
+        (tmp_path / PHONE / path).unlink()
+        assert synced(desk, phone).conflict(path).code == "deleted"
+        scene = desk.runner.open(chat)
+        assert scene.turns.conflicted == (one,) and ("turn_conflict", one) in scene.problems
+        refused("turn_conflict", desk.runner.post, chat, desk.player(), '"Play on?"')
+        mine = etag((tmp_path / DESKTOP / path).read_bytes())
+        resolve(desk.store, phone.store, path, mine, {DESKTOP: mine, PHONE: None},
+                {DESKTOP: desk.owner, PHONE: phone.owner})
+        assert desk.runner.open(chat).turns.conflicted == () and (tmp_path / PHONE / path).exists()
+        play(desk, chat, "Second, once resolved.")
+
+
+def test_a_damaged_identity_with_sync_records_fails_closed(built, tmp_path):
+    """A library whose device identity is damaged but that holds pair records may have turns in conflict:
+    the kept pause still holds play there, and nothing is played until it is identified again."""
+    chat = devices(built, tmp_path)
+    with Table(tmp_path / DESKTOP) as desk, Table(tmp_path / PHONE, [say("Two."), say("Three.")]) as phone:
+        two, _ = _paused_and_struck(desk, phone, chat)
+        identity = tmp_path / PHONE / ".sync" / "device.json"
+        saved = identity.read_bytes()
+        identity.write_text("{not json")
+        scene = phone.runner.open(chat)
+        assert scene.turns.conflicted == (CONFLICT_RECORDS,)
+        refused("turn_conflict", phone.runner.post, chat, phone.player(), '"Play on?"')
+        identity.write_bytes(saved)  # identified again (as itself): the conflict reads as before
+        _held(phone, chat, two)
+
+
+def test_a_library_that_never_synced_holds_nothing(built, tmp_path):
+    folder, chat = built
+    shutil.copytree(folder, tmp_path / "solo")
+    with Table(tmp_path / "solo") as table:  # no identity, no pair records
+        assert table.runner.open(chat).turns.conflicted == ()
