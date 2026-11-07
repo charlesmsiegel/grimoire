@@ -126,6 +126,11 @@ PURE_PACKAGES = (
                 never_import=("grimoire.core.inference",)),
     # Image identity and placements (018): values, codec and resolver; storage is an adapter.
     PurePackage("grimoire.images", ("grimoire.images", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # The ledger merge (028): merges two devices' 021 events, 017 relations and 023 holder files with their
+    # pure planners and codecs; sync wiring and the owner's review are adapters, later.
+    PurePackage("grimoire.ledgermerge", ("grimoire.ledgermerge", "grimoire.effects", "grimoire.graph",
+                                          "grimoire.holdings", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
     # Counted holdings (023): values, codec and the deterministic mutator; the service is an adapter.
     PurePackage("grimoire.holdings", ("grimoire.holdings", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
