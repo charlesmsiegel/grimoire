@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import replace
 
 import pytest
@@ -12,11 +13,14 @@ from grimoire.core.identity import AcceptedRef, WrapUpRef
 from grimoire.core.json_value import JsonObject
 from grimoire.effects import (
     ACCEPTED_SCHEMA, WRAPUP_SCHEMA, EffectCodecError, EndorsementRecord, Revocation, SceneWrapUp, Skipped,
-    accepted_from_payload, accepted_to_payload, wrapup_from_payload, wrapup_id, wrapup_to_payload,
+    accepted_from_payload, accepted_to_payload, proposal_from_payload, proposal_to_payload, wrapup_from_payload,
+    wrapup_id, wrapup_to_payload,
 )
 from grimoire.effects import revocation_fingerprint
 
-from effects_fixtures import ANA, C, CHAT
+from capture_fixtures import throw
+from effects_fixtures import ANA, C, CHAT, give
+from parts_fixtures import hop, pay
 from test_effects_model import event
 
 REF = AcceptedRef(C, "e-1")
@@ -112,3 +116,41 @@ def test_wrapup_round_trip_and_strictness():
     missing = dict(payload)
     del missing["cites"]
     assert decode_reason(missing, WRAPUP_SCHEMA, wrapup_from_payload, WREF) == "missing_field"
+
+
+# -- a proposal kept on its turn (035) --------------------------------------------------------------
+
+def proposal_reason(payload) -> str:
+    with pytest.raises(EffectCodecError) as caught:
+        proposal_from_payload(C, payload)
+    return caught.value.reason
+
+
+@pytest.mark.parametrize("build", [give, throw, pay])
+def test_a_proposal_round_trips_exactly_with_its_holdings(build):
+    proposal = build()
+    payload = proposal_to_payload(proposal)
+    assert proposal_from_payload(C, copy.deepcopy(payload)) == proposal
+    assert "domain" not in json.dumps(payload) and "campaign_id" not in payload
+
+
+def test_a_proposal_with_ability_uses_is_not_kept_in_this_slice():
+    with pytest.raises(EffectCodecError) as caught:
+        proposal_to_payload(hop())
+    assert caught.value.reason == "not_in_this_slice"
+
+
+@pytest.mark.parametrize("mutate, expected", [
+    (lambda p: p.update(abilities=[]), "unknown_field"),
+    (lambda p: p.update(fingerprint="sha256:0"), "unknown_field"),
+    (lambda p: p["operations"][0].update(domain="voluntary_action"), "unknown_field"),
+    (lambda p: p["operations"][0].update(agent=None), "invalid_field"),
+    (lambda p: p.pop("summary"), "missing_field"),
+    (lambda p: p.update(chat=7), "invalid_field"),
+    (lambda p: p["holdings"]["lines"][0].update(domain="director"), "unknown_field"),
+    (lambda p: p["holdings"].update(note=None), "invalid_field"),
+])
+def test_a_kept_proposal_is_read_strictly(mutate, expected):
+    payload = copy.deepcopy(proposal_to_payload(throw()))
+    mutate(payload)
+    assert proposal_reason(payload) == expected

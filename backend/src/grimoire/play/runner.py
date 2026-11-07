@@ -7,7 +7,8 @@ docs/SCENES.md for the contract.
 
 Authority is never passed in: who controls an actor comes from 003's sovereignty ledger, who may act
 is an authenticated handle the library's authority issued, and every generated line is a proposal
-until the table keeps it. Nothing here writes world state (events, evidence, effects, rulings).
+until the table keeps it. The only world state written here is an accepted effect (021), and only once
+it holds every key (``play/accept.py``); nothing writes events, evidence or rulings.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from grimoire.chats import ChatCodecError
 from grimoire.comms import TransmissionError, Unread, read_message
 from grimoire.context import Budget
 from grimoire.contextstore import actor_context, chat_lore
+from grimoire.effectstore import EffectRecovery, TurnEffectsLibrary
 from grimoire.core import DIRECTOR, snapshot_actor_view
 from grimoire.core.authority import (
     AuthorityError, ControlAssignment, NarrationClaim, NarrationContext, PlayerContribution, review_narration,
@@ -39,6 +41,9 @@ from grimoire.intent import RoutingContext, Utterance, route
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import ControlChange
 from grimoire.partystore import PartyLibrary
+from grimoire.play.accept import (
+    approve_effect, effect_problems, endorse_effect, propose_effect, recover_effects,
+)
 from grimoire.play.adjudicate import check_decided, confirm_action, decide_action, outcome_lines, outcome_of
 from grimoire.play.forks import choose_branch
 from grimoire.play.history import chat_history
@@ -75,9 +80,11 @@ class SceneRunner:
     ``label_handle`` is the untrusted handle this library's authority issued it, which must be allowed to
     propose each labelling before it is written; without both nothing is labelled. ``adjudication`` is the
     library's 029 ``AdjudicationLibrary`` over the app's own adjudication key: it frames a confirmed labelling
-    (``confirm``) and records its decision (``decide``); without it nothing is framed. ``tracer``
-    receives one ``Trace`` per public call, timed with ``clock`` (048, docs/PERFORMANCE.md); without one
-    nothing is timed.
+    (``confirm``) and records its decision (``decide``); without it nothing is framed. ``effects`` is the
+    library's 021 ``TurnEffectsLibrary`` on the same store and this runner's own (owner's) handle: it accepts
+    a turn's effect once it holds every key (``propose_effect``); without it no effect is proposed.
+    ``tracer`` receives one ``Trace`` per public call, timed with ``clock`` (048, docs/PERFORMANCE.md);
+    without one nothing is timed.
     """
 
     def __init__(self, store: LibraryStore, authority, handle, *, owner: str,
@@ -86,6 +93,7 @@ class SceneRunner:
                  fence: RunFence | None = None, budget: Budget = DEFAULT_BUDGET,
                  labeller: LabelRuntime | None = None, label_handle=None,
                  adjudication: AdjudicationLibrary | None = None,
+                 effects: TurnEffectsLibrary | None = None,
                  tracer: Callable[[Trace], None] | None = None,
                  clock: Callable[[], float] = time.perf_counter) -> None:
         if not (authority.issued(handle) and getattr(handle, "trusted", False) is True
@@ -105,6 +113,9 @@ class SceneRunner:
                 getattr(label_handle, "principal", None), getattr(getattr(labeller, "_handle", None), "principal", None)}):
             # the requester's call: the key is the app's own, never a player's, the owner's or the labeller's
             raise _refuse("bad_adjudication", "the adjudication key is the app's own, apart from the labeller's")
+        if effects is not None and not (isinstance(effects, TurnEffectsLibrary) and effects.store is store
+                                        and effects.handle is handle):
+            raise _refuse("bad_effects", "effects must be this library's TurnEffectsLibrary on the runner's handle")
         self.store = store
         self.authority = authority
         self.handle = handle
@@ -118,6 +129,8 @@ class SceneRunner:
         self.labeller = labeller
         self.label_handle = label_handle
         self.adjudication = adjudication
+        self.effects = effects
+        self.recovery = None if effects is None else EffectRecovery(effects)
         self.tracer = tracer
         self.clock = clock
         self.scenes = SceneLibrary(store, handle, owner=owner)
@@ -127,8 +140,14 @@ class SceneRunner:
 
     @traced("open")
     def open(self, chat: ChatRef) -> Scene:
-        """The chat as it stands now; nothing is written."""
-        return self._context(chat).scene
+        """The chat as it stands now; nothing is written. With an effects library, its problems also name
+        every 021 problem of the campaign (``effects``) and each acceptance cut short (``effect_unsettled``,
+        ``<turn id>:<event id>:<shape>``) for ``recover_effects``, or, one another device started, for that device
+        (``effect_elsewhere``, ``<turn id>:<event id>:<device tag>``), or one of unknown device for the owner's
+        word (``effect_untagged``, ``<turn id>:<event id>``)."""
+        scene = self._context(chat).scene
+        found = effect_problems(self, scene)
+        return replace(scene, problems=scene.problems + tuple(found)) if found else scene
 
     def _context(self, chat: ChatRef) -> _Context:
         if type(chat) is not ChatRef:
@@ -642,6 +661,39 @@ class SceneRunner:
     def outcome(self, chat: ChatRef) -> Outcome | None:
         """The recorded outcome of the open turn's framed action, if it was decided."""
         return outcome_of(self, self._context(chat).scene.pending)
+
+    # -- accepting an effect ---------------------------------------------------------------------------
+
+    @traced("propose_effect")
+    def propose_effect(self, chat: ChatRef, by, turn: str, summary: str, operations=(), holdings=None, *,
+                       abilities=()):
+        """Propose ``turn``'s effect as structured 021 operations and holdings lines, whole (no model call).
+
+        For a kept turn or a decided action, by the owner or the player whose post the turn is. It takes the
+        next campaign sequence, names who must endorse it (each acting player character's player), supersedes
+        the turn's earlier live proposal, and is written ``proposed``. Ability use is not in this slice.
+        """
+        return propose_effect(self, chat, by, turn, summary, operations, holdings, abilities=abilities)
+
+    @traced("approve_effect")
+    def approve_effect(self, chat: ChatRef, by, turn: str, number: int):
+        """The director's (owner's) key on a proposed effect; when it is the last key, the effect is accepted."""
+        return approve_effect(self, chat, by, turn, number)
+
+    @traced("endorse_effect")
+    def endorse_effect(self, chat: ChatRef, by, turn: str, number: int, fingerprint: str):
+        """A player's own key on the exact effect shown (its fingerprint); the last key accepts it."""
+        return endorse_effect(self, chat, by, turn, number, fingerprint)
+
+    @traced("recover_effects")
+    def recover_effects(self, chat: ChatRef, by, *, abort: bool = False, endorsers=(), own: bool = False):
+        """Settle every acceptance of this chat that was cut short, by what landed (030); the owner only.
+        ``abort`` undoes what landed instead, with every endorser of it present (``endorsers``: their handles).
+        An endorser present stands in for an endorsement the authority holds no record of (shape B only).
+        An acceptance another device started is never settled here (``accepted_elsewhere``, after this device's),
+        nor one that names no device and of which nothing is here, unless ``own`` says it is this library's
+        (``untagged_acceptance``)."""
+        return recover_effects(self, chat, by, abort=abort, endorsers=endorsers, own=own)
 
     # -- the table's choices ------------------------------------------------------------------------
 

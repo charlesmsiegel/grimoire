@@ -18,6 +18,7 @@ from grimoire.adjudication import MAX_FACTORS, MAX_STAKES, Factor, Stake
 from grimoire.comms import CHANNELS
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TurnRef, validate_segment
 from grimoire.core.inference import TOKEN_FIELDS, CallAttempt, CallId, InferenceStage, TokenUsage
+from grimoire.effects import EffectProposal, EndorsementRecord
 
 #: How a turn opened: a player's post, the table asking the cast to go on (no post), a card or scenario's
 #: opening, or (036, not written here) history imported from another app.
@@ -37,6 +38,14 @@ TURN_OUTCOMES = ("complete", "halted", "cancelled", "stale")
 LABEL_STATES = ("running", "proposed", "refused", "superseded", "framed")
 #: Labellings per turn: each is a metered call, kept for good.
 MAX_LABELS = 8
+#: A turn's proposed 021 effect (035 milestone 2): ``proposed`` (keys to collect), ``approved`` (the director's
+#: outcome key given), ``accepting`` (every key held and an event id allocated: written before the commit, so a
+#: crash leaves it for open-time recovery), ``accepted`` (the event is in force), ``refused`` (021 or 029 refused
+#: it, or recovery aborted it unpublished), ``superseded`` (a newer proposal replaced it) and ``revoked``
+#: (recovery aborted it after something landed, or its accepted event was revoked through 021 since).
+EFFECT_STATES = ("proposed", "approved", "accepting", "accepted", "refused", "superseded", "revoked")
+#: Effect proposals per turn, kept for good.
+MAX_EFFECTS = 8
 #: Takes per turn: rerolls are cheap to ask for, and each one is stored for good.
 MAX_TAKES = 16
 #: 032's channels that reach only their addressees.
@@ -365,6 +374,99 @@ class Label:
 
 
 @dataclass(frozen=True, slots=True)
+class TurnEffect:
+    """One structured 021 effect proposed for a turn, and the keys collected for it (035 milestone 2).
+
+    The proposal is kept whole, so a restart can present it again (030's obligation). ``endorsers`` are the
+    ``(contribution_id, principal)`` pairs 021 requires an endorsement from (a player character's voluntary
+    act), worked out when it was proposed; ``endorsements`` are those given so far, each over the proposal's
+    fingerprint. ``approved_by`` is the director who gave the outcome key. ``event_id`` names the accepted event
+    once the acceptance is under way (``accepting``) or done. ``reason`` says why it was refused or revoked.
+    ``controls_at`` is the position in the campaign's sovereignty ledger (003/010b) whose control the acceptance
+    was authorized under (the seq of its latest control change, 0 for none), recorded with ``accepting`` so a
+    recovery replays that control from the ledger rather than today's, and kept once the effect is ``accepted``
+    (and if it is later ``revoked``) as a record of that control. ``None`` on every other state, on an effect
+    accepted as a duplicate (nothing was published), and on an acceptance recorded before it existed.
+    ``accepted_on`` is the tag of the device whose library started the acceptance (028's device tag, as on its
+    turns), recorded and kept with ``controls_at``: 021's files of it are on that device (sync does not carry
+    them), so only that device settles it. ``None`` where ``controls_at`` is, and on a library with no device
+    identity; an effect without it is read as this device's.
+    """
+
+    number: int
+    state: str
+    proposal: EffectProposal
+    endorsers: tuple[tuple[str, str], ...] = ()
+    approved_by: str | None = None
+    endorsements: tuple[EndorsementRecord, ...] = ()
+    event_id: str | None = None
+    reason: str | None = None
+    controls_at: int | None = None
+    accepted_on: str | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.number) is not int or not 1 <= self.number <= MAX_EFFECTS:
+            raise _fail("invalid_field", f"an effect is numbered 1..{MAX_EFFECTS}")
+        if self.state not in EFFECT_STATES:
+            raise _fail("invalid_field", f"an effect is one of {EFFECT_STATES}")
+        if type(self.proposal) is not EffectProposal:
+            raise _fail("invalid_field", "an effect holds an EffectProposal")
+        endorsers = tuple(tuple(pair) for pair in self.endorsers)
+        if not all(len(pair) == 2 and all(type(part) is str and part.strip() for part in pair) for pair in endorsers):
+            raise _fail("invalid_field", "endorsers are (contribution id, principal) pairs")
+        if list(endorsers) != sorted(set(endorsers)) or len({cid for cid, _ in endorsers}) != len(endorsers):
+            raise _fail("invalid_field", "endorsers name each contribution once, in order")
+        object.__setattr__(self, "endorsers", endorsers)
+        endorsements = tuple(self.endorsements)
+        if not all(type(item) is EndorsementRecord for item in endorsements):
+            raise _fail("invalid_field", "endorsements are EndorsementRecord values")
+        given = [(item.contribution_id, item.principal) for item in endorsements]
+        if given != sorted(set(given)) or not set(given) <= set(endorsers):
+            raise _fail("invalid_field", "an endorsement is one endorser's, once, in order")
+        if any(item.fingerprint != self.proposal.fingerprint for item in endorsements):
+            raise _fail("invalid_field", "an endorsement is over the proposal's fingerprint")
+        object.__setattr__(self, "endorsements", endorsements)
+        _optional(self.approved_by, "approved_by", MAX_PRINCIPAL)
+        _optional(self.reason, "reason", 200)
+        if self.event_id is not None:
+            try:
+                validate_segment(self.event_id, "event_id")
+            except ValueError as error:
+                raise _fail("invalid_field", str(error)) from None
+        if self.state == "proposed" and self.approved_by is not None:
+            raise _fail("invalid_field", "a proposed effect is not approved yet")
+        if self.state in ("approved", "accepting") and self.approved_by is None:
+            raise _fail("invalid_field", "an approved effect names its director")
+        if self.state in ("accepting", "accepted", "revoked") and not self.complete:
+            raise _fail("invalid_field", "an effect is accepted only with every key")
+        if (self.event_id is not None) != (self.state in ("accepting", "accepted", "revoked")):
+            raise _fail("invalid_field", "an accepting, accepted or revoked effect names its event; no other does")
+        if self.reason is not None and self.state not in ("refused", "revoked"):
+            raise _fail("invalid_field", "only a refused or revoked effect has a reason")
+        if self.state == "refused" and self.reason is None:
+            raise _fail("invalid_field", "a refused effect says why")
+        if self.controls_at is not None and (type(self.controls_at) is not int or self.controls_at < 0):
+            raise _fail("invalid_field", "controls_at is a sovereignty ledger position (0 or more)")
+        if self.controls_at is not None and self.event_id is None:
+            raise _fail("invalid_field", "only an accepting, accepted or revoked effect records its control")
+        if self.accepted_on is not None and (type(self.accepted_on) is not str
+                                             or not _DEVICE.fullmatch(self.accepted_on)):
+            raise _fail("invalid_field", "accepted_on is a device tag (eight hex digits)")
+        if self.accepted_on is not None and self.event_id is None:
+            raise _fail("invalid_field", "only an accepting, accepted or revoked effect records its device")
+
+    @property
+    def complete(self) -> bool:
+        """Whether every key is held: the director's approval and each required endorsement."""
+        return self.approved_by is not None and len(self.endorsements) == len(self.endorsers)
+
+    @property
+    def live(self) -> bool:
+        """Still collecting keys (``proposed`` or ``approved``): a newer proposal supersedes it."""
+        return self.state in ("proposed", "approved")
+
+
+@dataclass(frozen=True, slots=True)
 class TurnRecord:
     """One turn of one chat: ``post`` (or none), its takes, and whether the table closed it.
 
@@ -388,6 +490,7 @@ class TurnRecord:
     follows: str | None = None
     set_aside: SetAside | None = None
     labels: tuple[Label, ...] = ()
+    effects: tuple[TurnEffect, ...] = ()
     extras: dict[str, object] = field(default_factory=dict, compare=False)
 
     def __post_init__(self) -> None:
@@ -438,6 +541,20 @@ class TurnRecord:
             if any(a.call_id.campaign_id != self.chat.campaign_id or a.call_id.turn_id != planned
                    for a in label.attempts()):
                 raise _fail("invalid_field", "a labelling's calls were planned under <turn_id>.l<label>")
+        object.__setattr__(self, "effects", tuple(self.effects))
+        if not all(type(effect) is TurnEffect for effect in self.effects):
+            raise _fail("invalid_field", "a turn's effects are TurnEffect values")
+        if [effect.number for effect in self.effects] != list(range(1, len(self.effects) + 1)):
+            raise _fail("invalid_field", "effects are numbered 1, 2, ... in order")
+        if sum(effect.live for effect in self.effects) > 1:
+            raise _fail("invalid_field", "a turn collects keys for at most one effect at a time")
+        if sum(effect.state in ("accepting", "accepted") for effect in self.effects) > 1:
+            raise _fail("invalid_field", "a turn has at most one accepted effect (021)")
+        for effect in self.effects:  # the effect of this turn, at this turn's moment
+            moment = effect.proposal.moment
+            if effect.proposal.chat != self.chat or (moment.scene_id, moment.turn_id) != (self.chat.chat_id,
+                                                                                        self.turn_id):
+                raise _fail("invalid_field", "a turn's effect is proposed for that turn of its chat")
         prefix = self.turn_id + "."
         campaign = self.chat.campaign_id
         if self.post is not None and any(actor.campaign_id != campaign for actor in self.post.audience):
@@ -493,6 +610,15 @@ class TurnRecord:
     def framed(self) -> Label | None:
         return next((label for label in self.labels if label.state == "framed"), None)
 
+    def with_effect(self, effect: TurnEffect) -> TurnRecord:
+        """The turn with ``effect`` added, or replacing the effect of the same number."""
+        effects = [existing for existing in self.effects if existing.number != effect.number]
+        effects.append(effect)
+        return replace(self, effects=tuple(sorted(effects, key=lambda each: each.number)))
+
+    def effect(self, number: int) -> TurnEffect | None:
+        return next((effect for effect in self.effects if effect.number == number), None)
+
     def with_take(self, take: Take) -> TurnRecord:
         """The turn with ``take`` added, or replacing the take of the same number."""
         takes = [existing for existing in self.takes if existing.take != take.take]
@@ -521,9 +647,11 @@ def usage_totals(attempts: Iterable[CallAttempt]) -> dict[str, int]:
 
 
 __all__ = [
-    "CALL_STATES", "CallRecord", "LABEL_STATES", "LINE_STATES", "Label", "MAX_CHAT_ID", "MAX_LABELS",
+    "CALL_STATES", "CallRecord", "EFFECT_STATES", "LABEL_STATES", "LINE_STATES", "Label", "MAX_CHAT_ID", "MAX_EFFECTS",
+    "MAX_LABELS",
     "MAX_TAGGED_CHAT_ID", "MAX_TAKES", "ORIGINS",
     "POST_KINDS", "Post",
-    "SceneLine", "SceneRefused", "SetAside", "TAKE_STATES", "Take", "TokenUsage", "TurnRecord", "parse_turn_id", "turn_id",
+    "SceneLine", "SceneRefused", "SetAside", "TAKE_STATES", "Take", "TokenUsage", "TurnEffect", "TurnRecord",
+    "parse_turn_id", "turn_id",
     "usage_totals",
 ]

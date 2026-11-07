@@ -6,7 +6,7 @@ The store-backed service is ``grimoire.effectstore``. Nothing here reads files o
 from .authorize import Authorization, authorize
 from .codec import (
     ACCEPTED_SCHEMA, ACCEPTED_SCHEMA_V1, WRAPUP_SCHEMA, EffectCodecError, accepted_from_payload, accepted_schema,
-    accepted_to_payload, wrapup_from_payload, wrapup_to_payload,
+    accepted_to_payload, proposal_from_payload, proposal_to_payload, wrapup_from_payload, wrapup_to_payload,
 )
 from .model import (
     DOMAINS, KINDS, MAX_OPERATIONS, NEVER_APPLIED, PROPOSERS, AcceptedEvent, AcceptedOperation, ContributionSnapshot,
@@ -31,7 +31,8 @@ __all__ = [
     "EffectHoldings", "EffectProblem", "EffectProposal", "EndorsementRecord", "EndStep", "entry_failure",
     "fingerprint", "holdings_failures", "holdings_op_id", "holdings_orphans", "holdings_partials", "holdings_problems",
     "holdings_receipt", "inverse_lines", "inverse_op_id", "KINDS", "ledger_problems", "MAX_OPERATIONS",
-    "NEVER_APPLIED", "never_applied", "Op", "orphans", "parse_token", "partial_revocations", "plan", "PROPOSERS",
+    "NEVER_APPLIED", "never_applied", "Op", "orphans", "parse_token", "partial_revocations", "plan",
+    "proposal_from_payload", "proposal_to_payload", "PROPOSERS",
     "Receipt",
     "receipt_failure", "records_fact", "Revocation", "revocation_fingerprint", "revoked_token", "scene_events",
     "SceneWrapUp", "Skipped", "verify_receipts", "wrapup_from_payload", "wrapup_id", "wrapup_problems",
