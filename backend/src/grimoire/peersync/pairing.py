@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from grimoire.security import Grant, Permission, ResourcePath, is_human, is_valid_principal
-from grimoire.store import LibraryStore, etag
+from grimoire.store import LibraryStore, StoreError, etag
 from grimoire.store.jsonfmt import JsonError, parse_strict, render
 from grimoire.sync import device_of
 from grimoire.sync.documents import check_device_id
@@ -94,6 +94,19 @@ def read_pairing(store: LibraryStore, peer: str) -> Pairing | None:
     return _parse(peer, store.read_secret(_secret_name(peer)))
 
 
+def pairing_ended(store: LibraryStore, peer: str) -> bool:
+    """Whether the owner ended this library's pairing with ``peer`` (``unpair``): its record reads as revoked.
+
+    No record (two libraries 019 syncs directly, never paired) or a damaged or unreadable one is not an
+    ended pairing: what reads it fails closed (028's turns still wait on that pair's conflicts)."""
+    try:
+        check_device_id(peer)
+        document = parse_strict(store.read_secret(_secret_name(peer)) or b"")
+    except (JsonError, StoreError, OSError, ValueError):
+        return False
+    return isinstance(document, Mapping) and dict(document) == {"format": PAIRING_FORMAT, "peer": peer, "revoked": True}
+
+
 def pair(store: LibraryStore, authority, peer: str, key: bytes, *, granted_by: str) -> Pairing:  # type: ignore[no-untyped-def]
     """Record a pairing with ``peer`` and grant its principal the synchronized roots.
 
@@ -148,10 +161,12 @@ def unpair(store: LibraryStore, authority, peer: str) -> None:  # type: ignore[n
     old = store.read_secret(name)
     current = _parse(peer, old)
     principal = peer_principal(peer)
-    if old is not None:
-        txn = store.transaction()
-        txn.put_secret(name, render({"format": PAIRING_FORMAT, "peer": peer, "revoked": True}), etag(old))
-        txn.commit(None)
+    # written even with no record (two libraries 019 synced directly): an ended pairing is also how the owner
+    # tells this library that a lost peer's open conflicts no longer hold its chats (``pairing_ended``)
+    txn = store.transaction()
+    txn.put_secret(name, render({"format": PAIRING_FORMAT, "peer": peer, "revoked": True}),
+                   None if old is None else etag(old))
+    txn.commit(None)
     _revoke(authority, {grant.grant_id for grant in authority.active_grants() if grant.principal == principal}
             | (set(current.grants) if current is not None else set()))
 

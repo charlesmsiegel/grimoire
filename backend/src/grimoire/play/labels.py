@@ -107,7 +107,8 @@ def label_action(runner, chat: ChatRef, by) -> Label:
     for previous in current.labels:
         if previous.state in ("running", "proposed"):
             current = current.with_label(replace(previous, state="superseded"))
-    stored = runner.scenes.write(current.with_label(running), stored)
+    # a call starts only on a turn still on the chat's line with no pause or sync conflict standing (028, 016)
+    stored = runner.scenes.write(current.with_label(running), stored, unpaused=True)
 
     meter = TurnMeter(TurnUsageLedger(plan))
     try:
@@ -143,23 +144,31 @@ def _proposed(runner, record: TurnRecord) -> bool:
 
 def _land(runner, chat: ChatRef, stored: StoredTurn, label: Label) -> Label:
     """Write the finished labelling over its running one, re-reading the turn if it changed meanwhile."""
+    published = next(each for each in stored.record.labels if each.label == label.label)  # as written, running
     for _ in range(WRITE_RETRIES):
         existing = next((each for each in stored.record.labels if each.label == label.label), None)
-        if existing is None:
-            break
-        if existing.state != "running":  # a newer labelling superseded this one: keep the usage only
+        if existing is None and len(stored.record.labels) + 1 == label.label:
+            # its turn now holds another version (a sync conflict resolved to the peer's meanwhile) with no
+            # labelling of this number: that version stands as chosen, and only this call's usage joins it,
+            # under the number it was billed under (``<turn_id>.l<n>``)
+            label = replace(label, state="superseded", factors=(), stakes=())
+        elif existing is None or existing.state not in ("running", "superseded") or \
+                replace(published, state=existing.state) != existing:
+            break  # another version's own labelling of this number (or a gap before it): nowhere to record it
+        elif existing.state != "running":  # a newer labelling superseded this one: keep the usage only
             label = replace(label, state="superseded", factors=(), stakes=())
         record = stored.record.with_label(label)
         if label.state == "proposed" and not _proposed(runner, record):
             label = replace(label, state="refused", factors=(), stakes=(), reason="not_authorized")
             record = stored.record.with_label(label)
-        try:
-            runner.scenes.write(record, stored)
+        try:  # like a finished take: a labelling in flight always lands, so its call's usage is never lost (028)
+            runner.scenes.write(record, stored, landing=True)
             return label
         except SceneRefused as error:
             if error.reason != "turn_changed":
                 raise
-        found = next((s for s in runner.scenes.turns(chat).turns if s.record.ref == stored.record.ref), None)
+        current = runner.scenes.turns(chat)  # its turn may have been set aside by a fork choice meanwhile
+        found = next((s for s in (*current.turns, *current.set_aside) if s.record.ref == stored.record.ref), None)
         if found is None:
             break
         stored = found

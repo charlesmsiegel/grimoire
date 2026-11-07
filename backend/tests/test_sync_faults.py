@@ -222,16 +222,18 @@ S9 = (CONVERGES, VERSIONS_SURVIVE, KEEPS_BOTH, idempotent_recovery(), RESIDUE)
 def test_s9_the_baseline_sync_does_everything_once():
     trace = _baseline_trace(quiet=False)
     commits = [op for op in trace if _is_journal_replace(op)]
-    assert len(commits) == 6  # data(a), data(b), archive(b), archive(a), pending(b), pending(a)
-    assert [op.target.split("/")[0] for op in commits] == [DESKTOP, PHONE, PHONE, DESKTOP, PHONE, DESKTOP]
-    assert sum(op.mutating for op in trace) < 80
+    # data(a), data(b), keeps(b), keeps(a) (028: the conflict recorded open before either archive moves),
+    # archive(b), archive(a), pending(b), pending(a)
+    assert len(commits) == 8
+    assert [op.target.split("/")[0] for op in commits] == [DESKTOP, PHONE, PHONE, DESKTOP] + [PHONE, DESKTOP] * 2
+    assert sum(op.mutating for op in trace) < 90
 
 
 def test_s9_a_crash_at_any_commit_boundary_converges(tmp_path):
     points = commit_boundaries(_baseline_trace(quiet=False))
     report = explore_crashes(_scenario(S9, quiet=False), tmp_path, torn=False, select=_select(points, {"before", "after"}))
     report.assert_ok()
-    assert report.points_explored == sum(len(timings - {"fail"}) for timings in points.values()) == 12
+    assert report.points_explored == sum(len(timings - {"fail"}) for timings in points.values()) == 16
 
 
 def test_s9_an_io_error_at_any_commit_boundary_converges(tmp_path):
@@ -239,7 +241,7 @@ def test_s9_an_io_error_at_any_commit_boundary_converges(tmp_path):
     report = explore_crashes(_scenario(S9, quiet=False), tmp_path, errors=True, torn=False,
                              select=_select(points, {"fail"}))
     report.assert_ok()
-    assert report.points_explored == 12
+    assert report.points_explored == 16
 
 
 @EXHAUSTIVE_RECOVERY  # about half a minute on Linux
@@ -327,9 +329,10 @@ def test_s9u_a_crash_or_error_at_any_commit_boundary_never_forgets_archive_borne
     points = commit_boundaries(_uncertain_trace())
     commits = [op for op in _uncertain_trace() if _is_journal_replace(op)]
     # no copies, but each device's data commit records the uncertainty before any archive is rewritten
-    # marker(a), marker(b), archive(b), archive(a); the markers already say it all, so the last step writes
-    # only (028) each device's kept-version record, marking the conflict's path in conflict on its new base
-    assert len(commits) == 6
+    # marker(a), marker(b), then (028) each device's kept-version record marking the conflict open, archive(b),
+    # archive(a); the markers already say it all, so the last step writes only each device's kept-version
+    # record, marking the conflict's path in conflict on its new base
+    assert len(commits) == 8
     crashes = explore_crashes(_uncertain_scenario(), tmp_path / "crash", torn=False,
                               select=_select(points, {"before", "after"}))
     crashes.assert_ok()

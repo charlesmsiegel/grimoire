@@ -78,9 +78,8 @@ class Scene:
         return pending is not None and pending.running is not None
 
     @property
-    def paused(self) -> bool:
-        last = self.last
-        return last is not None and last.paused
+    def paused(self) -> bool:  # any open pause: on the line, set aside (028), or kept beside a turn by sync
+        return self.turns.paused
 
     def controller(self, actor: InstanceRef) -> str | None:
         found = {c.controller_id for c in self.controls
@@ -107,15 +106,25 @@ class _Context:
     voices: object  # SnapshotVoices
     party_problems: tuple[str, ...]
 
-def _readable(scene: Scene) -> None:
+
+def _readable(scene: Scene, *, pausing: bool = False) -> None:
     """Every write needs the chat's whole history: one unreadable turn file stops them all, and so does a fork
-    (two turns of one number, every file readable), which only 028's turn merge can settle."""
-    if scene.turns.complete:
-        return
-    if set(scene.turns.problems) == {(str(scene.chat), "turn_fork")}:
-        raise _refuse("turn_fork", "this chat holds two devices' turns of one number; nothing is written until "
-                                   "they are merged")
-    raise _refuse("turns_unreadable", "a turn file of this chat cannot be read; nothing is written")
+    (two turns of one number after one turn, every file readable), until the owner chooses a branch (028), and
+    a turn sync left in a keep-both conflict (each device reads its own version), until it is resolved; a pause
+    still goes on then (016)."""
+    if not scene.turns.complete:
+        if set(scene.turns.problems) == {(str(scene.chat), "turn_fork")}:
+            raise _refuse("turn_fork", "this chat holds two devices' turns of one number; nothing is written "
+                                       "until the owner chooses which goes on")
+        raise _refuse("turns_unreadable", "a turn file of this chat cannot be read; nothing is written")
+    if scene.turns.conflicted and not pausing:
+        raise _refuse("turn_conflict", "a turn of this chat is in a sync conflict; nothing is played until it is "
+                                       "resolved")
+
+
+def _follows(last: TurnRecord | None) -> str | None:
+    """The turn a new turn is played after (028: two devices' branches stay apart once one is chosen)."""
+    return None if last is None else last.turn_id
 
 
 class _Stale(Exception):
