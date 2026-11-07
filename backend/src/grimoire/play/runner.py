@@ -111,9 +111,8 @@ class Scene:
         return pending is not None and pending.running is not None
 
     @property
-    def paused(self) -> bool:
-        last = self.last
-        return last is not None and last.paused
+    def paused(self) -> bool:  # any open pause, on the line or set aside by a fork choice (028)
+        return bool(self.turns.pauses)
 
     def controller(self, actor: InstanceRef) -> str | None:
         found = {c.controller_id for c in self.controls
@@ -683,7 +682,7 @@ class SceneRunner:
             stored = scene.turns.last
             if stored is None:
                 raise _refuse("nothing_to_pause", "the chat has no turn yet")
-            if stored.record.paused:
+            if scene.paused:
                 raise _refuse("already_paused", "play is already paused")
             decision = decide_request(request, boundary, ())
             if not decision.halt:
@@ -710,19 +709,15 @@ class SceneRunner:
         return record
 
     def resume(self, chat: ChatRef, by) -> TurnRecord:
-        """Lift a pause: the player who paused, or the library's owner (so a pauser who has left the table
-        never locks the chat)."""
+        """Lift a pause: the player who paused lifts their own, the library's owner every one (so a pauser who has
+        left the table never locks the chat). A pause on a turn a fork choice set aside is lifted the same way;
+        play goes on once no pause stands. Returns the chat's last turn."""
         scene = self._context(chat).scene
         principal = self._principal(scene, by)
         _readable(scene)
-        stored = scene.turns.last
-        if stored is None or not stored.record.paused:
-            raise _refuse("not_paused", "play is not paused")
-        if stored.record.paused_by != principal and principal not in self.authority.owners:
-            raise _refuse("not_yours", "only the player who paused, or the owner, may resume")
-        record = replace(stored.record, paused=False, paused_by=None)
-        self.scenes.write(record, stored)
-        return record
+        after = self.scenes.resume(scene.turns, principal, owner=principal in self.authority.owners)
+        assert after.last is not None  # a pause needs a turn, and a set-aside one a chosen line
+        return after.last.record
 
     def choose(self, chat: ChatRef, by, turn: str) -> Scene:
         """028: at a forked chat, the branch whose first turn is ``turn`` goes on; the others are set aside.

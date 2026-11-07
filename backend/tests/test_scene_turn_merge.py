@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import replace
 from hashlib import sha256
 
 import pytest
@@ -256,8 +257,93 @@ def test_a_pause_on_a_branch_set_aside_still_holds_the_chosen_line(built, tmp_pa
         scene = desk.runner.choose(chat, desk.owner, ours)
         assert scene.turns.fork is None and scene.paused and scene.last.turn_id == ours
         refused("paused", desk.runner.post, chat, desk.player(), '"Onward?"')
+        assert [s.record.paused for s in scene.turns.set_aside] == [True]  # the pause stays where it was made
         desk.runner.resume(chat, desk.player())  # the player who paused, on either device
+        assert not desk.runner.open(chat).paused
         play(desk, chat, "Onward.")
+        assert synced(desk, phone).conflicts == () and not phone.runner.open(chat).paused
+
+
+def test_different_choices_with_pauses_stay_a_conflict_on_both_and_each_pause_stays_its_makers(built, tmp_path):
+    """A choice writes only marks, so two different offline choices touch two files and conflict on both devices
+    even with pauses about; each pause stays until its maker or the owner lifts it."""
+    chat = devices(built, tmp_path)
+    with Table(tmp_path / DESKTOP, [say("Desk."), say("Desk again.")]) as desk, \
+            Table(tmp_path / PHONE, [say("Phone.")]) as phone:
+        synced(desk, phone)
+        play(desk, chat, "On the desktop.")
+        play(phone, chat, "On the phone.")
+        phone.runner.request(chat, phone.player(), "pause")  # the player, on the phone's turn 2
+        desk.runner.request(chat, desk.owner, "pause")  # the owner, on the desktop's
+        synced(desk, phone)
+        ours, theirs = turn_id(chat, 2, tag(DESKTOP)), turn_id(chat, 2, tag(PHONE))
+        desk.runner.choose(chat, desk.owner, ours)
+        phone.runner.choose(chat, phone.owner, theirs)
+        assert synced(desk, phone).conflicts == ()  # two marks on two files, both copied
+        for table in (desk, phone):
+            scene = table.runner.open(chat)
+            assert scene.turns.fork.state == "conflict" and scene.paused
+            refused("turn_fork", table.runner.resume, chat, table.owner)
+            refused("turn_fork", table.runner.post, chat, table.player(), '"Onward?"')
+        scene = desk.runner.choose(chat, desk.owner, ours)
+        assert scene.turns.fork is None and len(scene.turns.pauses) == 2
+        desk.runner.resume(chat, desk.player())  # lifts the player's own pause only
+        assert [s.record.paused_by for s in desk.runner.open(chat).turns.pauses] == [OWNER]
+        refused("paused", desk.runner.post, chat, desk.player(), '"Onward?"')
+        desk.runner.resume(chat, desk.owner)
+        play(desk, chat, "Onward.")
+        assert synced(desk, phone).conflicts == ()
+        assert [r.turn_id for r in phone.runner.open(chat).records] == [r.turn_id for r in desk.runner.open(chat).records]
+
+
+def test_a_pause_on_a_branch_a_choice_from_elsewhere_sets_aside_is_never_lifted_by_sync(built, tmp_path):
+    names = (DESKTOP, PHONE, TABLET)
+    chat = devices(built, tmp_path, names)
+    with Table(tmp_path / DESKTOP, [say("Desk.")]) as desk, Table(tmp_path / PHONE, [say("Phone.")]) as phone, \
+            Table(tmp_path / TABLET, [say("Tablet."), say("Tablet again.")]) as tablet:
+        tables = {DESKTOP: desk, PHONE: phone, TABLET: tablet}
+
+        def between(a: str, b: str):
+            return synced(tables[a], tables[b], (a, b))
+        for a, b in ((DESKTOP, PHONE), (DESKTOP, TABLET), (PHONE, TABLET)):
+            between(a, b)
+        play(phone, chat, "Phone two.")
+        between(PHONE, TABLET)
+        play(tablet, chat, "Tablet three, after the phone.")
+        tablet.runner.request(chat, tablet.player(), "pause")  # the tablet's player stops play
+        play(desk, chat, "Desk two.")
+        between(DESKTOP, PHONE)
+        desk.runner.choose(chat, desk.owner, turn_id(chat, 2, tag(DESKTOP)))
+        between(DESKTOP, PHONE)
+        between(PHONE, TABLET)
+        scene = tablet.runner.open(chat)
+        assert scene.turns.fork is None and scene.paused
+        assert turn_id(chat, 3, tag(TABLET)) in [s.record.turn_id for s in scene.turns.pauses]
+        refused("paused", tablet.runner.post, chat, tablet.player(), '"Play goes on?"')
+        tablet.runner.resume(chat, tablet.player())
+        play(tablet, chat, "Now it goes on.")
+
+
+def test_a_pause_landing_between_choose_reading_the_chat_and_committing_refuses_the_choice(built, tmp_path):
+    chat = devices(built, tmp_path)
+    with Table(tmp_path / DESKTOP, [say("Desk.")]) as desk, \
+            Table(tmp_path / PHONE, [say("P2."), say("P3.")]) as phone:
+        synced(desk, phone)
+        play(desk, chat, "On the desktop.")
+        play(phone, chat, "Phone two.")
+        play(phone, chat, "Phone three.")
+        synced(desk, phone)
+        library = desk.runner.scenes
+        stale = library.turns(chat)
+        three = next(s for s in stale.turns if s.record.turn_id == turn_id(chat, 3, tag(PHONE)))
+        txn = desk.store.transaction()  # a pause deep in the phone's branch lands (a peer's transfer, say)
+        txn.put(ScopeRecord(three.record.ref, TURN_SCHEMA,
+                            turn_to_payload(replace(three.record, paused=True, paused_by=OWNER)),
+                            owner=three.owner, extra=three.extra), three.etag)
+        txn.commit(desk.owner)
+        refused("turn_changed", library.choose, stale, turn_id(chat, 2, tag(DESKTOP)), OWNER)
+        scene = desk.runner.choose(chat, desk.owner, turn_id(chat, 2, tag(DESKTOP)))
+        assert scene.turns.fork is None and scene.paused
 
 
 def test_a_turn_never_lands_without_its_chat_or_the_turn_it_follows(built, tmp_path):

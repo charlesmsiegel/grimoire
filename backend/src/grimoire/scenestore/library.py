@@ -18,7 +18,7 @@ from grimoire.scene import (
     TURN_SCHEMA, Fork, SceneRefused, SetAside, TurnRecord, arrange, parse_turn_id, turn_from_payload, turn_id,
     turn_to_payload,
 )
-from grimoire.scene.branches import followed, is_mine, tag_for
+from grimoire.scene.branches import is_mine, tag_for
 from grimoire.store import LibraryStore, ScopeRecord, StaleWrite, TakenIdsUnlisted
 from grimoire.store.layout import address_parts
 
@@ -58,6 +58,15 @@ class ChatTurns:
 
     def records(self) -> tuple[TurnRecord, ...]:
         return tuple(stored.record for stored in self.turns)
+
+    @property
+    def pauses(self) -> tuple[StoredTurn, ...]:
+        """Every turn that holds an open pause, on the line or set aside (016's pause is a safety tool: a turn a
+        fork choice set aside keeps its pause, so a merge never lifts one, 028). Play waits while any stands."""
+        return tuple(stored for stored in (*self.turns, *self.set_aside) if stored.record.paused)
+
+    def etags(self) -> dict[str, str]:
+        return {stored.record.turn_id: stored.etag for stored in (*self.turns, *self.set_aside)}
 
 
 def _chat_of(turn_id: str) -> str:
@@ -165,6 +174,8 @@ class SceneLibrary:
                 raise SceneRefused("turn_changed", "the chat's turns changed since they were read; read them again")
             if base is None:
                 assert view is not None
+                if view.pauses:  # a pause written meanwhile, on any turn (a peer's, set aside): never played over
+                    raise SceneRefused("turn_changed", "play was paused since the chat was read; read it again")
                 if any(stored.record.number == record.number for stored in line):
                     # this library already holds turn n under another device's tag (made before identify)
                     raise SceneRefused("turn_changed", "this turn was played since it was read; read it again")
@@ -197,8 +208,8 @@ class SceneLibrary:
         """028: at the chat's fork, as read in ``turns``, the branch headed by ``chosen`` goes on; the chat's turns
         afterwards. Every other branch head is marked ``set_aside`` (naming ``chosen``) and a mark on ``chosen``
         is cleared, in one commit, each file by compare-and-swap: two devices making the same choice write the
-        same bytes. Refused (nothing written): ``not_forked``, ``not_a_branch``, or ``turn_changed`` when the
-        fork or any of its heads changed since ``turns`` was read."""
+        same bytes. Refused (nothing written): ``not_forked``, ``not_a_branch``, or ``turn_changed`` when any
+        turn of the chat changed since ``turns`` was read."""
         fork = turns.fork
         if fork is None:
             raise SceneRefused("not_forked", "this chat is not forked")
@@ -206,24 +217,35 @@ class SceneLibrary:
         if chosen not in heads:
             raise SceneRefused("not_a_branch", "choose the first turn of one of the fork's branches")
         by_id = {stored.record.turn_id: stored for stored in (*turns.turns, *turns.set_aside)}
-        records = {turn: stored.record for turn, stored in by_id.items()}
+        changes = []
         for head in heads:
-            records[head] = replace(records[head], set_aside=None if head == chosen else SetAside(chosen, by))
-        after = arrange(records.values())
-        aside = {stored.record.turn_id for stored in turns.set_aside}
-        pauser = next((turn.paused_by for turn in after.set_aside if turn.paused and turn.turn_id not in aside), None)
-        if pauser is not None:
-            # a pause on a branch now set aside still holds: the chosen line stays paused, wherever it ends, until
-            # the player who paused it (or the owner) resumes (016's pause is a safety tool, never lifted by a merge)
-            inner = followed(after.line)
-            for turn in after.line:
-                if turn.number >= fork.number and turn.turn_id not in inner and not turn.paused:
-                    records[turn.turn_id] = replace(records[turn.turn_id], paused=True, paused_by=pauser)
-        changes = [(record, by_id[turn]) for turn, record in records.items() if record != by_id[turn].record]
+            record = replace(by_id[head].record, set_aside=None if head == chosen else SetAside(chosen, by))
+            if record != by_id[head].record:
+                changes.append((record, by_id[head]))
+        # only marks are written, never the chosen branch: a pause anywhere stays where it is (``pauses``)
+        return self._rewrite(turns, changes)
+
+    def resume(self, turns: ChatTurns, by: str, *, owner: bool) -> ChatTurns:
+        """016: lift the open pauses ``by`` may lift (its own; every one for the library's ``owner``), on whichever
+        turns hold them, line or set aside, in one commit; the chat's turns afterwards. Another player's pause
+        stays until they or the owner resume. Refused (nothing written): ``not_paused``, ``not_yours``, or
+        ``turn_changed`` when any turn of the chat changed since ``turns`` was read."""
+        if not turns.pauses:
+            raise SceneRefused("not_paused", "play is not paused")
+        lifted = [stored for stored in turns.pauses if owner or stored.record.paused_by == by]
+        if not lifted:
+            raise SceneRefused("not_yours", "only the player who paused, or the owner, may resume")
+        return self._rewrite(turns, [(replace(stored.record, paused=False, paused_by=None), stored)
+                                     for stored in lifted])
+
+    def _rewrite(self, turns: ChatTurns, changes: list[tuple[TurnRecord, StoredTurn]]) -> ChatTurns:
+        """Rewrite ``changes`` (each a record over the stored turn it replaces) in one commit, each by
+        compare-and-swap, only while every turn of the chat is as ``turns`` read it (a pause or a mark landing
+        meanwhile, anywhere in the chat, refuses it: ``turn_changed``)."""
         with self.store.lock:
             now = self.turns(turns.chat)
-            if now.fork != fork or now.problems != turns.problems:
-                raise SceneRefused("turn_changed", "the fork changed since it was read; read it again")
+            if now.etags() != turns.etags() or now.problems != turns.problems:
+                raise SceneRefused("turn_changed", "the chat's turns changed since they were read; read them again")
             if not changes:
                 return now
             txn = self.store.transaction()
@@ -233,7 +255,7 @@ class SceneLibrary:
             try:
                 txn.commit(self.handle)
             except StaleWrite:
-                raise SceneRefused("turn_changed", "a turn of the fork changed since it was read") from None
+                raise SceneRefused("turn_changed", "a turn of the chat changed since it was read") from None
             return self.turns(turns.chat)
 
 
