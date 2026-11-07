@@ -17,12 +17,14 @@ from pathlib import Path
 import pytest
 
 from grimoire.store import LibraryStore
-from grimoire.sync import resolve, resolve_ledger, sync, sync_until_quiet, ResolveRefused
+from grimoire.sync import ResolveRefused, apply_sync, plan_sync, resolve, resolve_ledger, sync, sync_until_quiet
+from grimoire.sync.ledger_resolve import plan_resolution
 
 from effects_fixtures import C, KEY2, give
-from ledger_fixtures import Device, build_base, read_ledger
+from ledger_fixtures import Device, build_base, pay, read_ledger
 from store_helpers import OWNER
 from sync_helpers import DESKTOP, PHONE, handles
+from test_sync_ledger import ledger_files
 
 
 @pytest.fixture
@@ -134,3 +136,88 @@ def test_a_record_a_holder_file_names_is_never_deleted_from_under_it(pair):
     assert {(conflict.path, conflict.code) for conflict in report.conflicts} >= {(path, "delete_dependency")}
     assert (phone.root / path).read_bytes() == original
     assert (phone.root / f"campaigns/{C}/holdings/character/tam.json").exists()
+
+
+class _PowerLoss(Exception):
+    pass
+
+
+def test_a_relation_deletion_stopped_before_its_archives_is_no_ledger_deletion_once_the_campaign_plays(pair):
+    desktop, phone = pair[DESKTOP].store, pair[PHONE].store
+    path = _relation_to(desktop, KEY2)  # no accepted event yet: an ordinary record, its deletion propagates
+    (desktop.root / path).unlink()
+
+    def stop(step):  # type: ignore[no-untyped-def]
+        if step.kind == "data":
+            raise _PowerLoss()
+    with pytest.raises(_PowerLoss):
+        apply_sync(plan_sync(desktop, phone, handles()), handles(), observer=stop)
+    assert not (phone.root / path).exists()  # the deletion landed on the phone; no archive records it yet
+    pair[PHONE].accept(give())  # the campaign's first event: its relations join the unit
+    report = sync(desktop, phone, handles())
+    assert report.conflicts == (), report.conflicts  # absent on both, its removal marker landed: deleted
+    for store, peer in ((desktop, PHONE), (phone, DESKTOP)):
+        assert "deleted" in _archive(store, peer)[path]
+    assert sync(desktop, phone, handles()).conflicts == ()
+
+
+# -- resolve_ledger writes only its campaign's ledger -------------------------------------------------
+
+def _review(pair) -> str:  # type: ignore[no-untyped-def]
+    pair[DESKTOP].accept(pay(sequence=8, attempt="pay-desk"))
+    pair[PHONE].accept(pay(sequence=9, attempt="pay-phone"))
+    report = sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    return {conflict.token for conflict in report.conflicts if conflict.code == "merge_review"}.pop()
+
+
+def test_resolve_ledger_never_carries_out_a_deletion_outside_its_unit(pair):
+    desktop, phone = pair[DESKTOP].store, pair[PHONE].store
+    token = _review(pair)
+    chat = f"campaigns/{C}/chats/t-3.json"
+    assert (phone.root / chat).exists()
+    (desktop.root / chat).unlink()  # after the review, the owner removes an unrelated chat on the desktop
+    steps: list[tuple[str, str, tuple[str, ...]]] = []
+    plan = plan_resolution(desktop, phone, C, "merge", token, handles())
+    apply_sync(plan, handles(), observer=lambda step: steps.append(
+        (step.kind, step.device, tuple(gone.path for gone in step.deletes))))
+    assert (phone.root / chat).exists()  # that deletion waits for the next sync
+    assert all(not gones for _, _, gones in steps) and "holds" not in {kind for kind, _, _ in steps}
+    assert ledger_files(desktop) == ledger_files(phone)
+    report = sync(desktop, phone, handles())  # the next sync carries the deletion as any sync does
+    assert (chat, PHONE) in report.deleted and report.conflicts == ()
+
+
+ZED = f"campaigns/{C}/instances/character/zed.json"
+CHAT3 = f"campaigns/{C}/chats/t-3.json"
+
+
+def _write(root: Path, path: str, value: dict) -> None:  # type: ignore[type-arg]
+    (root / path).parent.mkdir(parents=True, exist_ok=True)
+    (root / path).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def test_resolve_ledger_is_not_stopped_by_a_deletion_that_depends_on_a_copy_it_leaves_out(tmp_path):
+    base = build_base(tmp_path)
+    _write(base, ZED, {"address": f"campaign:{C}/character/zed", "format": "grimoire.record/1", "owner": OWNER,
+                       "payload": {"local_name": "Zed"}, "previous": None, "schema": "grimoire.entity/0"})
+    chat = json.loads((base / CHAT3).read_text())
+    chat["payload"]["launch"]["premise"] = f"campaign:{C}/character/zed"  # the chat names Zed
+    _write(base, CHAT3, chat)
+    made = {name: Device(base, tmp_path, name) for name in (DESKTOP, PHONE)}
+    desktop, phone = made[DESKTOP].store, made[PHONE].store
+    try:
+        assert sync(desktop, phone, handles()).conflicts == ()
+        token = _review(made)
+        edited = json.loads((desktop.root / CHAT3).read_text())  # the owner takes Zed out of the chat ...
+        edited["payload"]["launch"]["premise"] = "The lighthouse at dusk."
+        edited["previous"] = None
+        _write(desktop.root, CHAT3, edited)
+        (desktop.root / ZED).unlink()  # ... and deletes Zed: a sync takes both, since the edited chat lands too
+        resolve_ledger(desktop, phone, C, "merge", token, handles())
+        assert ledger_files(desktop) == ledger_files(phone)
+        assert (phone.root / ZED).exists() and (phone.root / CHAT3).read_bytes() != (desktop.root / CHAT3).read_bytes()
+        report = sync(desktop, phone, handles())
+        assert (ZED, PHONE) in report.deleted and report.conflicts == ()
+    finally:
+        for device in made.values():
+            device.close()

@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 
 from grimoire.core.identity import validate_segment
@@ -129,6 +129,18 @@ def confirmation(etags: dict[str, str | None]) -> str:
     return hashlib.sha256(json.dumps(etags, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def _base_paths(peer: str, archive) -> dict[str, list[tuple[str, str]]] | None:  # type: ignore[no-untyped-def]
+    """The ledger paths an archive a step writes agrees on, as ``(path, etag)`` by base cache entry name
+    (028), built once per step rather than once per entry; ``None`` when the step writes no archive."""
+    if archive is None:
+        return None
+    found: dict[str, list[tuple[str, str]]] = {}
+    for path, entry in sorted(archive.entries.items()):
+        if tuple(entry)[:1] == ("agreed",) and ledger_units.is_unit_path(path):
+            found.setdefault(ledger_units.base_name(peer, path), []).append((path, entry[1]))
+    return found
+
+
 class StepBuffer:
     """The serving side: collects one step's writes, then commits and verifies them together.
 
@@ -224,6 +236,7 @@ class StepBuffer:
                      root_name("archive", self.peer), root_name("pending", self.peer))}
         try:
             documents = self._check_documents(store, roots, ops)
+            base_paths = _base_paths(self.peer, documents.get("archive"))  # 028: once per step, by entry name
             # 028: the versions a resolve step holds here (this device's own, as ``check_step`` found),
             # which an earlier step's record must already hold (``_held_beforehand``), and the one
             # version a resolve's record step may add as held
@@ -283,7 +296,7 @@ class StepBuffer:
                 elif op == "state" and pair_state(header.get("name"), self.peer) and _etag_or_none(header.get("expected")):
                     name = header["name"]
                     expected = self._state_expected(store, name, body, header.get("expected"), roots, first,
-                                                    recordable, documents, holds_step)
+                                                    recordable, base_paths, holds_step)
                     txn.put_sync_state(name, body, expected)
                     targets.append((f".sync/{name}", name, lambda name=name: store.read_sync_state(name)))
                 else:  # only this pair's own .sync files, and records the peer's grants then decide
@@ -383,7 +396,7 @@ class StepBuffer:
 
     def _state_expected(self, store: LibraryStore, name: str, body: bytes, expected: str | None, roots: dict,  # type: ignore[type-arg]
                         first: set[tuple[str, str]], recordable: set[tuple[str, str]],
-                        documents: dict | None = None, holds_step: bool = False) -> str | None:  # type: ignore[type-arg]
+                        base_paths: Mapping[str, list[tuple[str, str]]] | None = None, holds_step: bool = False) -> str | None:
         """The etag a state write of the pair must replace, after checking the write is one a sync makes."""
         if name == keeps_name(self.peer) and len(body) > kept_record.RECORD_LIMIT:
             # this device writes no record past the cap (``keeps.fit`` leaves excess deliveries
@@ -400,7 +413,7 @@ class StepBuffer:
             raise PeerRefused("invalid", "a peer may not dismiss, add or drop a hold, or record a version it "
                                          "did not deliver")
         if name.startswith(f"peers/{self.peer}/bases/"):
-            return self._base_expected(store, name, body, (documents or {}).get("archive"))
+            return self._base_expected(store, name, body, base_paths)
         for kind in ("archive", "pending"):
             if not is_shard(name, kind, self.peer):
                 continue
@@ -414,17 +427,18 @@ class StepBuffer:
                 return None if current is None else etag(current)
         return expected
 
-    def _base_expected(self, store: LibraryStore, name: str, body: bytes, archive) -> str | None:  # type: ignore[no-untyped-def]
+    def _base_expected(self, store: LibraryStore, name: str, body: bytes,
+                       base_paths: Mapping[str, list[tuple[str, str]]] | None) -> str | None:
         """028: a base cache entry is written only with the archive that agrees on it, and holds this
         device's own copy of that file. Its name is a digest of the path, so the path is the one the
-        archive this step writes records as agreed at the body's etag; this device must hold those bytes
-        there now. A file changed here since the snapshot is a race, not a lie (``stale``): the client
-        plans again, and this step, archive included, never lands."""
-        if archive is None:
+        archive this step writes records as agreed at the body's etag (``base_paths``: that archive's
+        ledger paths by entry name, ``None`` when the step writes no archive); this device must hold those
+        bytes there now. A file changed here since the snapshot is a race, not a lie (``stale``): the
+        client plans again, and this step, archive included, never lands."""
+        if base_paths is None:
             raise PeerRefused("invalid", f"{name}: a base cache entry is written only with its pair's archive")
         tag = etag(body)
-        paths = [path for path, entry in sorted(archive.entries.items())
-                 if tuple(entry) == ("agreed", tag) and ledger_units.base_name(self.peer, path) == name]
+        paths = [path for path, agreed in base_paths.get(name, ()) if agreed == tag]
         if not paths:
             raise PeerRefused("invalid", f"{name} is no ledger file the archive this step writes agrees on")
         for path in paths:

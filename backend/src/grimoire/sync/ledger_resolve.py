@@ -70,6 +70,7 @@ def plan_resolution(left: LibraryStore, right: LibraryStore, campaign: str, keep
     for device in plan.devices:  # this campaign's ledger only: every other path waits for the next sync
         plan.copies[device] = [copy for copy in plan.copies[device] if copy.unit == campaign]
         plan.keeps[device] = []
+        plan.deletes[device] = []  # no propagated deletion either (and so no holds step): a ledger file has none
     return plan
 
 

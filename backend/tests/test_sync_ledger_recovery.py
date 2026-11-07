@@ -7,6 +7,7 @@ does; and one unreadable file must stop only what it belongs to.
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -15,10 +16,10 @@ import pytest
 from grimoire.holdings import Line, Operation
 from grimoire.store import LibraryStore
 from grimoire.store.guard import path_length
-from grimoire.sync import apply_sync, identify, plan_sync, sync, sync_until_quiet
+from grimoire.sync import apply_sync, identify, plan_sync, resolve_ledger, sync, sync_until_quiet
 from grimoire.sync.ledger_resolve import plan_resolution
 
-from effects_fixtures import C, CHAT, TAM, WREN
+from effects_fixtures import C, CHAT, TAM, WREN, give
 from ledger_fixtures import COIN, OTHER, Device, build_base, pay, read_ledger
 from sync_helpers import DESKTOP, PHONE, handles
 from test_sync_ledger import ledger_files
@@ -116,6 +117,59 @@ def test_a_merge_decision_stopped_after_any_commit_needs_no_second_decision(tmp_
         assert report.conflicts == (), (done, [(c.path, c.code) for c in report.conflicts])
         assert ledger_files(made[DESKTOP].store) == ledger_files(made[PHONE].store)
         assert len(read_ledger(made[DESKTOP].store).events) == 2
+    finally:
+        _close(made)
+
+
+def _reasons(report) -> list[str]:  # type: ignore[no-untyped-def]
+    return sorted({item.reason for conflict in report.conflicts for item in conflict.review})
+
+
+@pytest.mark.parametrize("stop", range(7))
+def test_a_review_after_a_stop_at_any_commit_offers_a_merge_the_owner_can_take(tmp_path, stop):
+    """Both devices play on in one chat after a merge stopped at any boundary: the review is a policy one
+    (``same_chat``), it stays that review at every later sync, and ``resolve_ledger`` takes its merge. A
+    file's own base may be uncertain there while its unit's is not; the bookkeeping must follow the unit."""
+    made = _devices(tmp_path / "x")
+    desktop, phone = made[DESKTOP].store, made[PHONE].store
+    try:
+        made[DESKTOP].accept(give())
+        made[PHONE].accept(pay(sequence=8, chat=OTHER, attempt="pay-phone-8"))  # a clean merge, copies both ways
+        observer, done = _stop_after(stop)
+        try:
+            apply_sync(plan_sync(desktop, phone, handles()), handles(), observer=observer)
+        except _PowerLoss:
+            pass
+        made[DESKTOP].accept(pay(sequence=9, chat=OTHER, attempt="pay-desk-9"))
+        made[PHONE].accept(pay(sequence=10, chat=OTHER, attempt="pay-phone-10"))
+        first = sync(desktop, phone, handles())
+        assert _reasons(first) == ["same_chat"], (done, first.conflicts)
+        again = sync(desktop, phone, handles())
+        assert _reasons(again) == ["same_chat"] and not again.wrote, done
+        token = {conflict.token for conflict in again.conflicts if conflict.code == "merge_review"}.pop()
+        resolve_ledger(desktop, phone, C, "merge", token, handles())
+        assert ledger_files(desktop) == ledger_files(phone)
+        assert sync(desktop, phone, handles()).conflicts == ()
+    finally:
+        _close(made)
+
+
+def test_a_review_sync_records_no_uncertainty_for_a_ledger_file_whose_unit_base_is_known(tmp_path):
+    made = _devices(tmp_path / "x")
+    desktop, phone = made[DESKTOP].store, made[PHONE].store
+    try:
+        made[PHONE].accept(pay(sequence=8, chat=OTHER, attempt="pay-phone-8"))  # only the phone plays
+        observer, done = _stop_after(0)
+        with pytest.raises(_PowerLoss):
+            apply_sync(plan_sync(desktop, phone, handles()), handles(), observer=observer)
+        assert done == [f"data:{DESKTOP}"]  # the desktop took the phone's ledger; nothing else landed
+        made[DESKTOP].accept(pay(sequence=9, chat=OTHER, attempt="pay-desk-9"))
+        made[PHONE].accept(pay(sequence=10, chat=OTHER, attempt="pay-phone-10"))
+        assert _reasons(sync(desktop, phone, handles())) == ["same_chat"]
+        for store, peer in ((desktop, PHONE), (phone, DESKTOP)):
+            raw = store.read_sync_state(f"peers/{peer}/pending.json")
+            entries = json.loads(raw)["entries"] if raw is not None else {}
+            assert not any(entry.get("uncertain") for path, entry in entries.items() if f"campaigns/{C}/" in path)
     finally:
         _close(made)
 

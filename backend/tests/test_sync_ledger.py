@@ -281,3 +281,19 @@ def test_a_ledger_review_and_a_keep_both_conflict_in_one_sync_end_each_on_its_ow
     resolve(pair[DESKTOP].store, pair[PHONE].store, path, etag(ours), {DESKTOP: etag(ours), PHONE: etag(theirs)},
             handles())
     assert sync_until_quiet(pair[DESKTOP].store, pair[PHONE].store, handles()).conflicts == ()
+
+
+def test_a_review_names_its_unit_once_however_many_of_its_files_differ(pair, monkeypatch):
+    from grimoire.sync import units
+    pair[DESKTOP].accept(pay(sequence=8, attempt="pay-desk"))
+    pair[PHONE].accept(pay(sequence=9, attempt="pay-phone"))
+    calls: list[str] = []
+    real = units.token
+
+    def counted(plan, campaign, *args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(campaign)
+        return real(plan, campaign, *args, **kwargs)
+    monkeypatch.setattr(units, "token", counted)
+    report = sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    assert len({conflict.path for conflict in report.conflicts if conflict.code == "merge_review"}) > 1
+    assert calls == [C]  # each token lists every file of the unit: once per unit, never once per file

@@ -44,7 +44,7 @@ from grimoire.store.envelope import parse_scope_record, scope_record_document
 from grimoire.store.jsonfmt import parse_strict, render
 from grimoire.store.layout import SYNC_BASES, SYNC_PEERS, address_parts, classify
 
-from .decide import archive_candidate
+from .decide import archive_candidate, derive_base
 from .documents import syncable
 from .model import FIRST, LEDGER_KINDS, UNCERTAIN, Base
 
@@ -117,17 +117,23 @@ def unit_bases(plan, paths: Iterable[str]) -> dict[str, Base]:  # type: ignore[n
     agreed in one holder file and new in another would read as half of one), and merging the device that
     took the merge with the one that did not gives the same files again (it is idempotent over the side
     that already took it). An unreadable or uncertain marker leaves that file's agreement unknown.
+
+    A removal's marker (``{"from": E, "to": null}``, a propagated deletion of a relation before its campaign
+    had a unit, 028) is no merged file: its base is what ``derive_base`` makes of it (``deleted E`` once the
+    deletion verifiably landed, else uncertain), and it never decides whether the unit's merge landed.
     """
     paths = tuple(paths)
     archived = {path: _archived(plan, path) for path in paths}
     unknown = {path for path in paths if any(
         plan.pendings[device].state == "ignored" or (plan.pendings[device].entries.get(path) or {}).get("uncertain")
         for device in plan.devices)}
+    removed = {path: _removal_base(plan, path) for path in paths
+               if path not in unknown and any(_is_removal(entry) for entry in _entries(plan, path).values())}
     fresh: dict[str, str | None] = {}
     landed = True
     for path in paths:
         entries = _entries(plan, path)
-        if path in unknown or not entries:
+        if path in unknown or path in removed or not entries:
             continue
         targets = {entry.get("to") for entry in entries.values()}
         to = next(iter(targets)) if len(targets) == 1 else None
@@ -141,6 +147,8 @@ def unit_bases(plan, paths: Iterable[str]) -> dict[str, Base]:  # type: ignore[n
     for path in paths:
         if path in unknown:
             bases[path] = UNCERTAIN
+        elif path in removed:
+            bases[path] = removed[path]
         elif landed and fresh.get(path) is not None:
             bases[path] = Base("agreed", fresh[path])  # type: ignore[arg-type]
         elif archived[path] is not None:
@@ -148,6 +156,19 @@ def unit_bases(plan, paths: Iterable[str]) -> dict[str, Base]:  # type: ignore[n
         else:
             bases[path] = _over(plan, path)
     return bases
+
+
+def _is_removal(entry: Mapping[str, object]) -> bool:
+    return "to" in entry and entry["to"] is None and entry.get("from") is not None
+
+
+def _removal_base(plan, path: str) -> Base:  # type: ignore[no-untyped-def]
+    """The base a removal's marker gives ``path``, exactly as a path outside a unit reads it."""
+    devices = plan.devices
+    return derive_base(path, tuple(plan.archives[device] for device in devices),  # type: ignore[arg-type]
+                       tuple(plan.pendings[device] for device in devices),  # type: ignore[arg-type]
+                       tuple(plan.sides[path][device].etag if plan.sides[path][device].state == "present" else None
+                             for device in devices))  # type: ignore[arg-type]
 
 
 def unit_base(plan, path: str) -> Base:  # type: ignore[no-untyped-def]
@@ -223,7 +244,8 @@ def base_bytes(plan, path: str, tag: str) -> bytes | None:  # type: ignore[no-un
     return None
 
 
-def plan_unit(plan, campaign: str, paths: Iterable[str], choice: str | None = None) -> UnitResult:  # type: ignore[no-untyped-def]
+def plan_unit(plan, campaign: str, paths: Iterable[str], choice: str | None = None,  # type: ignore[no-untyped-def]
+              bases: Mapping[str, Base] | None = None) -> UnitResult:
     """Merge one campaign's ledger unit as the plan's two devices hold it.
 
     ``choice`` is an owner's decision (``resolve_ledger``): ``"merge"`` takes the merge a policy-only
@@ -246,7 +268,7 @@ def plan_unit(plan, campaign: str, paths: Iterable[str], choice: str | None = No
     sides = {device: _ledger(campaign, {path: plan.scans[device].files.get(path) for path in paths}, items, device)
              for device in plan.devices}
     found: dict[str, bytes | None] = {}
-    bases = unit_bases(plan, paths)
+    bases = unit_bases(plan, paths) if bases is None else bases
     for path in paths:
         found[path] = _base_file(plan, path, bases[path], items)
     base = _ledger(campaign, found, items, "base")
@@ -282,10 +304,13 @@ def _taken(plan, campaign: str, paths: tuple[str, ...], differ: tuple[str, ...],
     return UnitResult(campaign, paths, differ, files=files)
 
 
-def token(plan, campaign: str) -> str:  # type: ignore[no-untyped-def]
-    """What a review was reported on: every file of the unit, by path and etag, on both devices."""
+def token(plan, campaign: str, paths: Iterable[str] | None = None) -> str:  # type: ignore[no-untyped-def]
+    """What a review was reported on: every file of the unit (``paths``, when the caller has them), by path
+    and etag, on both devices."""
+    if paths is None:
+        paths = [path for path, unit in plan.units.items() if unit == campaign]
     lines = [f"{device} {path} {plan.sides[path][device].etag or plan.sides[path][device].state}"
-             for path, unit in sorted(plan.units.items()) if unit == campaign for device in plan.devices]
+             for path in sorted(paths) for device in plan.devices]
     return etag("\n".join(lines).encode("utf-8"))
 
 
@@ -298,16 +323,21 @@ def plan_units(plan) -> None:  # type: ignore[no-untyped-def]
     for device in plan.devices:
         plan.unit_copies.setdefault(device, {})
     for campaign in sorted(groups):
-        result = plan_unit(plan, campaign, groups[campaign], plan.choices.get(campaign))
+        # the unit's base is every file's base, for the bookkeeping too: a file's own ``derive_base`` may
+        # be uncertain where the unit's is definite (a stop between the data commits), and a pending marker
+        # recording that uncertainty would leave the unit with no base at the next sync
+        bases = unit_bases(plan, groups[campaign])
+        plan.bases.update(bases)
+        result = plan_unit(plan, campaign, groups[campaign], plan.choices.get(campaign), bases)
         for path in result.paths:
             if path not in result.differ and plan.sides[path][plan.devices[0]].state != "blocked":
                 plan.agreed.add(path)  # as ``decide`` agrees a path both devices hold identically
         if result.review is not None:
             reasons = ", ".join(sorted(result.review.reasons))
+            named = token(plan, campaign, groups[campaign])  # once per unit: it lists every file of the unit
             for path in result.differ or result.paths[:1]:
                 plan.conflicts[path] = Conflict(path, "merge_review", f"campaign {campaign}'s ledger merge needs "
-                                                f"review: {reasons}", review=result.review.items,
-                                                token=token(plan, campaign))
+                                                f"review: {reasons}", review=result.review.items, token=named)
             continue
         if result.files is None:
             continue

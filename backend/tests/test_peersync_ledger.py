@@ -201,3 +201,71 @@ def test_a_ledger_file_the_serving_device_changes_before_its_archive_lands_is_me
         assert ledger_files(desktop.store) == ledger_files(phone.store)
         assert len(read_ledger(phone.store).events) == 3
         assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+
+
+def test_resolve_ledger_over_the_connection_never_deletes_on_the_serving_device(pair):
+    from grimoire.peersync import resolve_ledger_with
+    desktop, phone = pair[DESKTOP], pair[PHONE]
+    chat = f"campaigns/{C}/chats/t-3.json"
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+        _accept(desktop, pay(sequence=8, attempt="pay-desk"))
+        _accept(phone, pay(sequence=9, attempt="pay-phone"))
+        report = transfer(desktop.store, desktop.authority, PHONE, server.address)
+        token = {conflict.token for conflict in report.conflicts}.pop()
+        (desktop.store.root / chat).unlink()  # an unrelated chat removed on the desktop after the review
+        resolve_ledger_with(desktop.store, desktop.authority, PHONE, server.address, C, "merge", token,
+                            decided_by=OWNER)
+        assert (phone.store.root / chat).exists()  # only campaign c's ledger was written
+        assert ledger_files(desktop.store) == ledger_files(phone.store)
+        after = transfer(desktop.store, desktop.authority, PHONE, server.address)  # the next sync deletes it
+        assert after.status == "synced", (after.status, after.reason)
+    assert not (phone.store.root / chat).exists()
+
+
+class _CountedEntries(dict):  # type: ignore[type-arg]
+    reads = 0
+
+    def items(self):  # type: ignore[no-untyped-def]
+        _CountedEntries.reads += 1
+        return super().items()
+
+
+class _Archive:
+    def __init__(self, view) -> None:  # type: ignore[no-untyped-def]
+        self._view, self.entries = view, _CountedEntries(view.entries)
+
+    def __getattr__(self, name):  # type: ignore[no-untyped-def]
+        return getattr(self._view, name)
+
+
+def test_the_serving_device_reads_a_steps_archive_once_however_many_base_entries_it_writes(pair, monkeypatch):
+    from grimoire.peersync import replay
+    desktop, phone = pair[DESKTOP], pair[PHONE]
+    real_documents, real_commit = replay.StepBuffer._check_documents, replay.StepBuffer._commit
+    per_step: list[tuple[int, int]] = []  # (archive reads, base entries written), per step with an archive
+
+    def documents(self, store, roots, ops):  # type: ignore[no-untyped-def]
+        found = real_documents(self, store, roots, ops)
+        if found.get("archive") is not None:
+            found["archive"] = _Archive(found["archive"])
+        return found
+
+    def commit(self, store, handle, may_hold, holds_named=False):  # type: ignore[no-untyped-def]
+        before = _CountedEntries.reads
+        bases = sum(1 for header, _ in self.ops if header.get("op") == "state"
+                    and "/bases/" in str(header.get("name")))
+        try:
+            return real_commit(self, store, handle, may_hold, holds_named)
+        finally:
+            if bases:
+                per_step.append((_CountedEntries.reads - before, bases))
+    monkeypatch.setattr(replay.StepBuffer, "_check_documents", documents)
+    monkeypatch.setattr(replay.StepBuffer, "_commit", commit)
+    with serving(phone) as server:
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+        _accept(desktop, pay(sequence=8, chat=CHAT, attempt="pay-desk-8"))
+        _accept(phone, pay())
+        assert transfer(desktop.store, desktop.authority, PHONE, server.address).status == "synced"
+    assert any(bases > 1 for _, bases in per_step), per_step
+    assert all(reads <= 1 for reads, _ in per_step), per_step  # indexed once per step, not once per entry
