@@ -37,7 +37,7 @@ This sprint moves from Wave 7 to **Wave 6**. A user should not need to locate a 
 ## Inherited from Wave 5
 
 The [Wave 5 audit](../README.md#wave-5-status) found what one-click start needs from Wave 5 first slices:
-- **035 ([SCENES](../../SCENES.md)).** `begin` proposes only a card's first greeting, so choosing among greetings is 035's to add; a scope with a session zero refuses generation until 016's codec exists, so a quick start must work with none.
+- **035 ([SCENES](../../SCENES.md)).** `begin` proposes only a card's first greeting, so choosing among greetings is 035's to add (**done**: `begin` takes an opening id, [QUICKSTART](../../QUICKSTART.md#choosing-the-opening-035)); a scope with a session zero refuses generation until 016's codec exists, so a quick start must work with none (it does: Start Chat offers no boundaries).
 - **042 ([REBASE](../../REBASE.md)).** "A world created later from reviewed selected facts" is 042's `CanonProposer` plus 107's `attach_world`, which promote picked characters only; promoting lore, places, organisations and relations is later 042 work.
 
 ## Open questions
