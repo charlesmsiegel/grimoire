@@ -5,5 +5,7 @@ Joins the native store's envelopes (010), entity meaning (009) and world-optiona
 """
 
 from .library import ChatSnapshot, chat_selection, chat_snapshot, entity_decoder, explainer, selection_snapshot
+from .inspect import compose_in, inspect_definition, view_reader
 
-__all__ = ["ChatSnapshot", "chat_selection", "chat_snapshot", "entity_decoder", "explainer", "selection_snapshot"]
+__all__ = ["ChatSnapshot", "chat_selection", "chat_snapshot", "compose_in", "entity_decoder", "explainer",
+           "inspect_definition", "selection_snapshot", "view_reader"]

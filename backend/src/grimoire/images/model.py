@@ -21,9 +21,15 @@ PLACEMENT_SCHEMA = "grimoire.placement/0"
 MEDIA_TYPES = {"png": "image/png", "jpg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}
 #: ``unresolved`` (Sprint 038) is the explicit placement of art that belongs in a slot but whose picture
 #: is not here (a remote or embedded asset never fetched, say): it shows nothing and never falls back.
-MODES = ("set", "adjust", "hide", "unresolved")
-#: the modes a source placement may use: a source shows its own picture, or says one is missing
+#: ``inherit`` (Sprint 046) is the explicit reset of a slot to what the subject inherits: it reads
+#: exactly as no placement at all. The store never deletes a placement (sync never propagates a
+#: deletion either), so taking an override back is a compare-and-swap rewrite to ``inherit``.
+MODES = ("set", "adjust", "hide", "unresolved", "inherit")
+#: the modes a standalone source placement may use: it shows its own picture, or says one is missing
 SOURCE_MODES = ("set", "unresolved")
+#: the modes a derived portrayal's placement may use (046): it inherits its base's art slot by slot,
+#: so it may also clear (``hide``), re-crop (``adjust``) or reset (``inherit``) an inherited slot
+DERIVED_MODES = ("set", "adjust", "hide", "unresolved", "inherit")
 ROLES = ("avatar", "portrait", "gallery", "expression")
 #: Crop and focus are integer basis points of the whole image: 0..10000, never floats.
 BP = 10000
@@ -156,7 +162,8 @@ class ImageObject:
 class Placement:
     """One use of a picture in one slot. ``set`` shows ``image``; ``adjust`` re-crops the inherited
     picture (and names it); ``hide`` shows nothing and never falls back; ``unresolved`` (038) says a
-    picture belongs here but is missing, shows nothing, and never falls back either."""
+    picture belongs here but is missing, shows nothing, and never falls back either; ``inherit`` (046)
+    resets the slot to whatever is inherited, exactly as if there were no placement."""
 
     mode: str
     role: str | None = None
@@ -182,9 +189,11 @@ class Placement:
             raise ImageModelError("a set placement needs a role and an image")
         if self.mode == "adjust" and self.image is None:
             raise ImageModelError("an adjust placement names the inherited image it adjusts")
-        if self.mode == "hide" and any(getattr(self, label) is not None for label in
-                                       ("image", "crop", "focus", "expression")):
-            raise ImageModelError("a hide placement carries no image, crop, focus or expression")
+        if self.mode in ("hide", "inherit") and any(getattr(self, label) is not None for label in
+                                                    ("image", "crop", "focus", "expression")):
+            raise ImageModelError(f"a {self.mode} placement carries no image, crop, focus or expression")
+        if self.mode == "inherit" and self.role is not None:
+            raise ImageModelError("an inherit placement takes the inherited role; it names none")
         if self.mode == "unresolved":
             # the missing picture's role (and, for a sprite, its outfit and name) is what is preserved;
             # there is no picture to name, crop or focus
@@ -232,8 +241,14 @@ def slot_expression(slot: str) -> Expression | None:
     return Expression(*slot.split(".")[1:]) if slot_role(slot) == "expression" else None
 
 
-def validate_placement(subject: SourceRef | InstanceRef, slot: str, placement: Placement) -> tuple[str, str] | None:
-    """``(reason, detail)`` if ``placement`` may not sit in ``slot`` of ``subject``, else ``None``."""
+def validate_placement(subject: SourceRef | InstanceRef, slot: str, placement: Placement, *,
+                       derived: bool = False) -> tuple[str, str] | None:
+    """``(reason, detail)`` if ``placement`` may not sit in ``slot`` of ``subject``, else ``None``.
+
+    ``derived`` (046) says a definition subject's head is a 022 derived portrayal, which inherits its
+    base's art: it may then also ``hide``, ``adjust`` or ``inherit`` (``DERIVED_MODES``). A standalone
+    definition has nothing to inherit, so it may only ``set`` or mark a picture ``unresolved``.
+    """
     try:
         validate_segment(slot, "slot")
     except ValueError as error:
@@ -243,9 +258,9 @@ def validate_placement(subject: SourceRef | InstanceRef, slot: str, placement: P
     role = slot_role(slot)
     if role is None:
         return "role_slot_mismatch", f"{slot!r} is not expr.<outfit>.<name>"
-    if isinstance(subject, SourceRef) and placement.mode not in SOURCE_MODES:
-        return "mode_not_allowed", f"a source placement may only set a picture or mark one unresolved, " \
-                                   f"not {placement.mode}"
+    if isinstance(subject, SourceRef) and placement.mode not in (DERIVED_MODES if derived else SOURCE_MODES):
+        return "mode_not_allowed", f"a standalone source placement may only set a picture or mark one " \
+                                   f"unresolved, not {placement.mode}"
     if placement.role is not None and placement.role != role:
         return "role_slot_mismatch", f"slot {slot!r} holds a {role}, not a {placement.role}"
     if placement.expression is not None and placement.expression != slot_expression(slot):
