@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+import enum
 from dataclasses import dataclass
 from typing import Literal
 
 from grimoire.store.journal import DELETABLE_KINDS
 
 SideState = Literal["absent", "present", "blocked"]
+
+
+class LedgerMerge(enum.Enum):
+    """``resolve_ledger``'s ``keep`` that takes the review's merge (028). A device id is always a ``str``, and
+    no ``str`` equals this, so a request to merge can never select a device (one may be named ``merge``)."""
+
+    MERGE = "merge"
+
+    def __repr__(self) -> str:
+        return "MERGE"
+
+
+#: ``keep=MERGE``: the merge a policy-only ledger review would make; nothing is discarded.
+MERGE = LedgerMerge.MERGE
 BaseKind = Literal["first", "none", "uncertain", "agreed", "deleted"]
 Action = Literal["agreed", "copy", "conflict", "delete"]
 
@@ -17,20 +32,24 @@ Action = Literal["agreed", "copy", "conflict", "delete"]
 #: ``blob``, ``image`` and ``placement`` are 018's art; ``transcript`` is 036's chat transcript pages; ``turn`` is
 #: 035's played chat turns (028's turn merge: mutable, so ordinary rows; ``sync.turns`` names what one needs).
 SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge",
-                          "blob", "image", "placement", "transcript", "turn"})
+                          "blob", "image", "placement", "transcript", "turn", "accepted", "wrapup", "holdings"})
 #: 018's art: own units, never source-coarse, never grouped with a definition. A blob is binary and
 #: content-addressed (listed by name and size, hashed only when copied or first seen).
 ASSET_KINDS = frozenset({"blob", "image", "placement"})
 #: Campaign-local kinds: independent of sources and of each other at commit time.
 CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge", "transcript", "turn"})
-#: Families whose own stores commit several files as one unit and whose cross-device merge rule is
-#: a later milestone (docs/EFFECTS.md, docs/HOLDINGS.md): never copied file by file, always reported
-#: as skipped. 021's accepted events and wrap-ups and 023's holdings. 035's played turns left this set with
-#: 028's turn merge: two devices' turn n are two files, and a forked chat waits for its owner's choice.
-HELD_BACK_KINDS = frozenset({"accepted", "wrapup", "holdings"})
-#: A campaign holding any record of this kind on either device has its 017 relations held back too,
-#: because 021 changes relations in the same commit as an event: a relation must never arrive
-#: without the event that changed it.
+#: 028's ledger: 021's accepted events and wrap-ups and 023's holder files, which their own stores commit
+#: several at a time. They are never decided file by file: a campaign's ledger files (with its 017
+#: relations, see ``HOLDS_RELATIONS``) are one unit that ``grimoire.ledgermerge`` merges (``units``).
+LEDGER_KINDS = frozenset({"accepted", "wrapup", "holdings"})
+#: Families whose own stores commit several files as one unit and whose cross-device merge rule is a later
+#: milestone: never copied file by file, always reported as skipped. None is left: 021's and 023's ledger
+#: merges as units (``LEDGER_KINDS``), and 035's played turns left with 028's turn merge (two devices' turn
+#: n are two files, and a forked chat waits for its owner's choice). Kept for a family that comes later.
+HELD_BACK_KINDS: frozenset[str] = frozenset()
+#: A campaign holding any record of this kind on either device has its 017 relations in its ledger
+#: unit too, because 021 changes relations in the same commit as an event: a relation must never
+#: arrive without the event that changed it, so they are merged together.
 HOLDS_RELATIONS = "accepted"
 #: Create-only kinds: copied only onto an absent file, and a changed one is a conflict, never a copy.
 #: ``knowledge`` is 020's events, evidence and knowledge-log batches; ``image`` and ``blob`` are 018's;
@@ -45,9 +64,11 @@ PROPAGATED_DELETIONS = DELETABLE_KINDS
 
 #: Conflict codes, each named in docs/SYNC.md. ``held``: a held-back path whose two devices hold
 #: different bytes (nothing is copied or kept for it; it ends only when both hold identical bytes).
+#: ``merge_review``: a ledger file whose campaign's merge stopped (``Conflict.review`` names why); nothing
+#: of that campaign's ledger is copied or kept until ``resolve_ledger`` or a later sync settles it.
 CONFLICT_CODES = frozenset({
     "blocked", "missing_ancestor", "deleted", "edit_delete", "concurrent", "resurrected",
-    "revision_modified", "head_dependency", "name_collision", "unapplicable", "denied", "held",
+    "revision_modified", "head_dependency", "name_collision", "unapplicable", "denied", "held", "merge_review",
     "delete_dependency",
 })
 

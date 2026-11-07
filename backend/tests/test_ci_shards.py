@@ -29,8 +29,10 @@ def test_the_shards_partition_every_test_file():
     assert all(parts.values()) and set().union(*parts.values()) == files
     assert sum(len(part) for part in parts.values()) == len(files)
     assert {"test_sync_faults.py", "test_import_v1_recovery.py"} <= parts["explorations"]
-    assert {"test_store_recovery.py", "test_rebasestore_recovery.py", "test_store_deletion_recovery.py"} <= parts["store-explorations"]
-    assert {"test_sync_shards.py", "test_peersync.py"} <= parts["sync"]
+    assert {"test_store_recovery.py", "test_rebasestore_recovery.py"} <= parts["store-explorations"]
+    assert parts["deletion-explorations"] == {"test_store_deletion_recovery.py"}
+    assert {"test_sync_shards.py", "test_sync_ledger.py"} <= parts["sync"]
+    assert {"test_peersync.py", "test_peersync_resolve.py", "test_peersync_ledger.py"} <= parts["peersync"]
     assert {"test_store_replica.py", "test_imagestore_scenarios.py", "test_store_delete.py"} <= parts["stores"]
     assert "test_ci_shards.py" in parts["rest"]
 

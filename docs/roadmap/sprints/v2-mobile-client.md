@@ -23,7 +23,7 @@ Persist and sync the lightweight scope, source associations, actor IDs, transcri
 ## Inherited from Wave 5
 
 The [Wave 5 audit](../README.md#wave-5-status) records what the phone client depends on:
-- **Turns are held from sync** until 028's merge milestone, recorded in [DEVICE_SYNC](../../DEVICE_SYNC.md) as due before this sprint. Turn ids are device-qualified on an identified library, so two devices playing one chat offline make two distinct turn files for the merge to present.
+- **Turns sync** since 028's turn merge ([SYNC](../../SYNC.md#played-turns-035-028s-turn-merge)). Turn ids are device-qualified on an identified library, so two devices playing one chat offline make two distinct turn files, and the chat forks on both until its owner chooses which branch goes on. A UI for that choice is 065's.
 - **Kept turns are transcript, not 021-accepted effects** until 035 milestone 2. "Sync an accepted turn" means a kept turn until then.
 - **No text API.** 035's runner is in-process Python; the interface the phone calls is this sprint's to define.
 - **Imported history is not heard** until 035 milestone 2's first item, which is due before this sprint.

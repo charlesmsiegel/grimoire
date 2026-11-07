@@ -1,6 +1,6 @@
 # Ledger merge (028, before 044)
 
-`grimoire.ledgermerge` computes the merge of one campaign's **ledger** from two devices that each played offline: its 021 accepted events and wrap-ups ([EFFECTS](EFFECTS.md)), the 017 relations they change ([GRAPH](GRAPH.md)) and its 023 holder files ([HOLDINGS](HOLDINGS.md)). 019 holds these families back (`held`, [SYNC](SYNC.md)), since a file-by-file copy could deliver half an operation or give two events one ordinal. This package is the merge itself. Wiring it into sync, and the owner's review of what it cannot settle, come later ([DEVICE_SYNC](DEVICE_SYNC.md)).
+`grimoire.ledgermerge` computes the merge of one campaign's **ledger** from two devices that each played offline: its 021 accepted events and wrap-ups ([EFFECTS](EFFECTS.md)), the 017 relations they change ([GRAPH](GRAPH.md)) and its 023 holder files ([HOLDINGS](HOLDINGS.md)). A file-by-file copy could deliver half an operation or give two events one ordinal, so 019 never decides these files one by one. This package is the merge itself. Sync runs it for each campaign whose ledger the two devices hold differently, with that campaign's ledger as one unit ([SYNC](SYNC.md#ledgers-028), `grimoire.sync.units`). There it reads the base from the pair's archives and base cache, writes a clean merge as copies, and turns a review into a `merge_review` conflict, which the owner ends with `resolve_ledger`, locally or over the transport ([DEVICE_SYNC](DEVICE_SYNC.md)). Scene wrap-ups are merged with the rest: none is held.
 
 It is pure: it uses no store, clock, randomness or JSON. The caller reads each library into a `Ledger`: every file as a `Version`, which holds the decoded value, its etag, and the envelope's owner and unknown fields. The caller then calls `merge_ledger(base, sides, instances=..., sizer=...)`, where:
 
@@ -83,13 +83,13 @@ After all of that, the merged ledger is checked with 021's ledger checks: the pr
 
 ## Not settled here
 
-These are decisions for the owner's review: which reviews may merge automatically, what a review offers, and whether a hand edit or an operation wins an overlap.
+The owner's review (`resolve_ledger`) offers two decisions: the merge a policy-only review would make, or one device's ledger as it stands, which only an owner may take since it discards the other's changes. Still open: which reviews may merge without asking, and whether a hand edit or an operation wins an overlap (both are reviews today).
 
 Known limits:
 
 - A hand edit that a later operation on the same device depended on (an edit that made a removal possible) refuses on replay, because the edit is applied after the replay.
 - Domain conflicts beyond 017's preconditions are not detected, for example two devices each moving a scene on.
-- An undecodable file is the caller's to report before the merge.
+- An undecodable file is the caller's to report before the merge. Sync reports it as `unreadable` in the review.
 - Events without `after` form one line by the ordinals of the versions kept. Two unidentified libraries that each accepted events offline (which also collide on ids) would interleave by ordinal, not by what each accepted after.
 - Two devices that each revoked one new event stop as `both_changed`. Picking one revocation would also mean picking its relation and holder changes, which the merge does not do alone.
 - Holder logs are still numbered per pair. With three or more devices that all change one holder, one pair's merge can put an entry between two that another pair agreed, and that pair's next merge is then `log_diverged`. That is a review, never a reordered log, but such devices do not converge on their own. How three devices share a holder is open.
