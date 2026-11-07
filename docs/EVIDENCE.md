@@ -36,7 +36,8 @@ Behaviour:
 ```text
 campaigns/<campaign>/events/<event_id>.json                 # family event
 campaigns/<campaign>/evidence/<family>/<id>.json            # proposition | ruling | evidence | belief | disclosure
-campaigns/<campaign>/evidence/batch/<seq:010d>.json         # the knowledge log
+campaigns/<campaign>/evidence/batch/<seq:010d>.json         # the knowledge log (a library never identified)
+campaigns/<campaign>/evidence/batch/<seq:010d>-<tag>.json   # the knowledge log (028: an identified library)
 ```
 
 - Each record has a `KnowledgeRef` address: `campaign:<campaign>#<family>/<id>`. See [IDENTITY](IDENTITY.md#reference-families).
@@ -56,7 +57,8 @@ The envelope is `grimoire.knowledge-record/1` ([STORAGE](STORAGE.md#events-and-e
 | `grimoire.perception/1`, `grimoire.report/1` | `Perception`, `Report` (family `evidence`) |
 | `grimoire.belief/1` | `Belief` |
 | `grimoire.disclosure/1` | `Disclosure` |
-| `grimoire.knowledge-batch/1` | a log batch |
+| `grimoire.knowledge-batch/1` | a log batch with one parent, or none |
+| `grimoire.knowledge-batch/2` | a log batch that joins two or more heads (028, see [the knowledge log](#the-knowledge-log)) |
 
 **What the payload holds:**
 - Each 012 field, except `campaign_id` and the record's own ID; the address owns those.
@@ -108,18 +110,24 @@ Every append writes its records and exactly **one batch**, in one store transact
 - Each entry carries the etag of its file's exact bytes.
 - Rulings and beliefs also carry their **chain key** in the entry, and so do disclosures (as `event`). A damaged file's chain is therefore known without reading the file.
 
+**Two devices' appends (028).** The log is a DAG of create-only batches, so two devices that appended to one campaign offline can be merged by copying files, with nothing rewritten ([SYNC](SYNC.md#knowledge-logs-028)):
+- **Batch names.** On a library with a device identity, a batch is `batch/<seq:010d>-<tag>.json`, where the tag is the device's (`chatstore.device_tag`: the first eight hex digits of the SHA-256 of the device ID). Two devices that append batch *k* offline therefore write two files. A library that was never identified has never synced: it writes `batch/<seq:010d>.json` exactly as before. Batches written before `identify` keep their names.
+- **Heads.** A head is a batch no other batch names. An append extends **every** head: its `seq` is one more than the highest head's, and `previous` names them all. One head gives the `/1` form above, byte for byte. Two or more give a **join**, `grimoire.knowledge-batch/2`, whose `previous` is the list of their etags, sorted and distinct: `{"seq": 7, "previous": ["sha256:…", "sha256:…"], "records": {…}}`. So after a sync merged two devices' appends, the next append on either device joins them, and that device's log is linear again.
+- **Roots.** Several batches may be seq 1 (each device's first append to a campaign it holds without a log). Each has no `previous`.
+- **Merged chronology.** The merged ledger is the union of both devices' records. `moment.sequence` is the campaign clock each device advanced on its own while offline, so records with equal or interleaved sequences from two devices are concurrent: the merge does not claim either came first, and projections at any `as_of` hold every record of either device at or before it. A device's projections at an `as_of` below its own high-water mark can therefore gain the other device's records, as they would gain a delayed letter. No record is removed, but what a projection derives from the records can change: a ruling or disclosure the other device made offline at an earlier sequence changes standing and the table's view from that sequence on (a proposition that read `unasserted` at an earlier `as_of` can read `refuted` after the merge). Two devices ruling on one proposition offline are held, not merged ([SYNC](SYNC.md#knowledge-logs-028)); disclosures from both devices both stand. The no-backdating rule then applies to the merged high-water mark, the higher of the two (see `append`, step 6).
+
 ## Reading: assembly and quarantine
 
 `grimoire.evidence.assemble` turns what a scan found into a valid `Knowledge` and names everything it left out. It is pure and deterministic. The steps run in order:
 
 1. **Verify the log.**
-   - Batches run gap-free from 1.
-   - Each `previous` is the etag of the batch before it.
-   - Each batch decodes, and no record is listed twice.
-   - At the first failure, at batch `k`, the problem `log_broken` is reported, and:
-     - only batches `< k−1` are trusted, because a `previous` mismatch cannot tell which side was altered;
+   - Each batch decodes.
+   - Each parent etag in its `previous` is the etag of exactly one present batch, and its `seq` is one more than its highest parent's (a root is seq 1). In a linear log that is: gap-free from 1, each `previous` the batch before it.
+   - No record is listed twice (the later listing, by `seq` and then name, is the failure).
+   - If a batch fails, at lowest `seq` `k`, the problem `log_broken` is reported, and:
+     - only batches `< k−1` that a passing batch below `k` names are trusted, with everything they extend, because a `previous` mismatch cannot tell which side was altered. In a linear log that is exactly the batches `< k−1`. A head is named by no batch, so a broken log trusts no head;
      - all rulings, beliefs and disclosures are quarantined (`*_family_damaged`);
-     - batches from `k−1` on are untrusted hints. Every record they list is quarantined, as `log_broken`, or as `missing` if absent.
+     - every other batch is an untrusted hint. Every record it lists is quarantined, as `log_broken`, or as `missing` if absent.
 2. **Account for every file**, checking each record a trusted batch lists in this order:
    - absent → `missing`;
    - a damaged scan → its code (`malformed`, `unsupported_format`, `address_mismatch`, `link`);
@@ -141,7 +149,7 @@ A record's reason is the first one assigned.
 
 ### Guarantees
 
-These are tested against the undamaged ledger U, for every actor, the player and every `as_of`. They are tested on a 300-seed in-memory property test and a 40-seed on-disk one, under any visible damage: a deleted, edited, added, truncated, linked, newer-schema or look-alike-renamed record, and an edited or deleted middle batch.
+These are tested against the undamaged ledger U, for every actor, the player and every `as_of`. They are tested on a 300-seed in-memory property test, a 150-seed one over U stored as two devices' offline appends and a join (028), and a 40-seed on-disk one, under any visible damage: a deleted, edited, added, truncated, linked, newer-schema or look-alike-renamed record, and an edited or deleted middle batch.
 
 - **Monotone fail-closed.** Every bucket of every actor and player projection is a subset of U's, `inherited` included, and so are `table_events`.
 - **Never promotes.** A standing is U's, or `reported`/`unasserted`. An older ruling never resurfaces. A proposition that is itself quarantined has no standing: `standing` raises 012's `unknown_proposition`, exactly as for an id the ledger never held.
@@ -153,7 +161,7 @@ These are tested against the undamaged ledger U, for every actor, the player and
   - With a broken log, the break itself is reported. Any deleted record that only the altered or deleted batch listed may then go unreported individually. Its loss only removes knowledge, and rulings, beliefs and disclosures are quarantined wholesale anyway.
 
 **Limits.** As for [010b ledgers](STORAGE.md#reading), the log is an integrity check, not authentication. It cannot detect:
-- truncating, or consistently editing, the **tail**: removing the newest record together with its entry in the newest batch (a test pins this);
+- truncating, or consistently editing, the **tail**: removing the newest record together with its entry in the newest batch (a test pins this). With several heads (028), each head is a tail: removing one device's unjoined append whole is undetectable too;
 - a correctly chained forged batch;
 - restoring an older copy of the whole campaign;
 - altering two or more consecutive batches consistently. A broken `previous` at batch `k` is blamed on `k` or `k−1`, so the guarantees assume the visible damage altered **one** batch. Whoever re-chains two batches can as easily re-chain to the tail, which is undetectable anyway; the log protects against accidental damage, not a determined editor.
@@ -194,6 +202,7 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
    - **Accepted (021) ids.** An event id that is an accepted event's id in this campaign is reserved for that event's bridge, `as_knowledge_event(accepted)` ([EFFECTS](EFFECTS.md#continuity-the-next-response)): any other event there → `accepted_id`; the bridge of a revoked event → `revoked` (an undone turn is never stored as objective fact). Fail closed: while any accepted-event file, link or folder of the campaign cannot be read, or the one under a new event's id cannot be decoded, an append holding an event → `accepted_unreadable`. Appends without events are unaffected. The accepted files are read through the store and decoded with 021's pure codec.
 6. **No backdating.**
    - Every new `moment.sequence` must be at least the ledger's high-water mark H (`backdated`), and at most H + 1 000 000 (`sequence_jump`).
+   - After a sync merged two devices' appends (028), H is the higher of the two devices' marks: an append on the device that was behind is `backdated` until its sequence reaches the other's. That is the rule, not a refusal of the merge: 021/035, which allocate sequences, must allocate from the merged ledger.
    - **Single exception:** a delayed letter. An addressed report's `sent_at` may be earlier than H; its proposition must already be stored, otherwise `before_proposition`. Only that exception changes projections at `as_of < H`: the sender's `sent` bucket and the director view.
    - Campaign-wide sequence allocation belongs to 021/035.
 7. **012's ledger rules.** `KnowledgeError` propagates unchanged.
@@ -205,12 +214,12 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
      Each endpoint is an instance subject of the proposition, so step 3 has already checked that it exists, and the commit re-checks it.
 8. **Sovereignty.** Each new belief goes through `admit_belief`; `BeliefAuthorityError` propagates.
 9. **Symmetry.** Each record must read back exactly, at an address every platform can hold (`too_long`, `invalid_field` for text UTF-8 cannot hold, `unstorable_id`), in a file the store accepts (`too_large`: over 8 MiB rendered).
-10. **The write.** The records and their batch are staged. The assembled post-state must quarantine nothing.
+10. **The write.** The records and their batch are staged, the batch named for this device and extending every head (028). A device identity that cannot be read (damaged, a link or a folder) → `device_identity`, never an untagged batch two devices could both write. The assembled post-state must quarantine nothing.
 
 `KnowledgeChange.preview()` gives the exact bytes per logical path. **Previews are director-facing:** they hold raw records. Do not show a player a batch that holds director-only records; batch a player-approved belief alone.
 
 `commit(approvals=None)` runs under the store lock:
-- It re-checks the campaign, the chat, the actors (each still present and still not one of an [instance-id pair](STORAGE.md#instance-ids-are-never-reused), else `instance_id_conflict`) and the full snapshot of both knowledge trees (every file and link, and every problem; OS noise and empty folders are not state). Any difference → `StaleWrite`.
+- It re-checks the campaign, the chat, the actors (each still present and still not one of an [instance-id pair](STORAGE.md#instance-ids-are-never-reused), else `instance_id_conflict`), the device tag the batch is named with (an `identify` since the append → `StaleWrite`, 028) and the full snapshot of both knowledge trees (every file and link, and every problem; OS noise and empty folders are not state). Any difference → `StaleWrite`.
 - For an append holding events, it also re-checks the accepted-id rule, so an acceptance that took one of its ids after the preview → `StaleWrite` (a fresh `append` then names the reason). 021's commit makes the mirror check (no 020 event under its new id), and 021's `continuity` reports what sync or a hand edit can still deliver (`bridge_mismatch`, `revoked_but_bridged`).
 - It then commits one transaction. The batch's create-only CAS also stops a concurrent append.
 - A refusal before the commit point (`StaleWrite`, `WriteDenied`, `UnstorableIdentifier` — a Windows `MAX_PATH` overflow is only caught here — `NameCollision`, or an `OSError` while staging, which may leave empty folders that are not state) writes nothing. After `WriteDenied`, register fresh approvals for any it consumed and commit again. After `StaleWrite`, build a fresh `append`: the change's snapshot no longer matches. A change commits at most once.
@@ -239,7 +248,8 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
   - roll the log back: remove the newest batches and exactly the records they list. That is a consistent earlier state, and it deliberately brings back earlier stances and rulings.
 - If a middle batch cannot be decoded, only restoring its bytes works.
 - Remove an `unlisted` file by hand.
-- To an older build, a newer `knowledge-batch/2` looks like a broken log. It quarantines all rulings, beliefs and disclosures and refuses appends.
+- To a build from before 028, a join (`knowledge-batch/2`) looks like a broken log: it quarantines all rulings, beliefs and disclosures and refuses appends. A tagged batch name is not canonical to it: it reports the file as a problem, quarantines the records only that batch lists (`unlisted`) and refuses appends, and its sync neither sends nor receives the batch (so it receives those records without their batch, with the same result). Fail closed; upgrade every paired device.
+- A merge's records cannot be taken out of it: a device's offline append is undone, if the merged log must lose it, only by rolling that device's log back (above) on **both** devices before they sync again.
 - To a build from before claim shapes, a `grimoire.proposition/2` file is `unsupported_schema`. It quarantines that proposition and what cites it, not the whole log, and that build refuses appends (`ledger_damaged`). Sync (019) moves knowledge files without decoding them, so once one device writes a shaped proposition, every older device refuses appends to that campaign until it is upgraded.
 - A claim's predicate is read against this build's 017 `PREDICATES`. A build that does not know a predicate quarantines that proposition (`unknown_predicate`) and its dependents, and refuses appends, exactly as above. So adding a predicate to `PREDICATES` must also bump the shaped schema to `grimoire.proposition/3`, so that older builds report `unsupported_schema` rather than what reads as damage.
 
@@ -253,7 +263,8 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 | Which narration becomes an accepted event | 021 ([EFFECTS](EFFECTS.md); its `as_knowledge_event` bridge yields the 012 `Event` to store here) |
 | Transmission semantics | 032 |
 | Prompts from actor projections | 027 |
-| Cross-device merge of logs | [028](roadmap/sprints/app-managed-device-sync.md) |
+| Cross-device merge of logs: done by copying ([028](roadmap/sprints/app-managed-device-sync.md), [SYNC](SYNC.md#knowledge-logs-028)); a merge that would need a choice (two devices ruling on one proposition, a forked belief chain) stays a conflict | 028 (done); semantic resolution: Wave 7 |
+| Allocating record ids and sequences: 020 takes both from its caller. Two devices using one id for different bytes is a conflict, never a merge, so allocators must device-tag new ids (`chatstore.device_tag`) and allocate sequences from the merged high-water mark | 021, 029, 032, 035 |
 | Export redaction | the export owner |
 | Graph traversal | 017 |
 | Persisted control assignments | 009/035 |

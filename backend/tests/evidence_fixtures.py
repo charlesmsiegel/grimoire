@@ -151,3 +151,39 @@ def in_memory_files(record_batches=None) -> dict:
         previous = fake_etag(ref, schema, payload)
         files[ref] = ScannedFile(previous, schema, payload)
     return files
+
+
+#: two device tags (028) for a log both devices appended to offline
+TAG_A, TAG_B = "aaaaaaa1", "bbbbbbb2"
+
+
+def forked_files() -> dict:
+    """U as a log two devices extended offline and a third append then joined (028), with stand-in etags.
+
+    Batches 1-3 are shared. Device A appended U's batches 4 and 5 (``-aaaaaaa1``); device B appended Sam's
+    PC-era belief alone (``0000000004-bbbbbbb2``); the join (``0000000006-aaaaaaa1``) names both heads and
+    holds Ines's doubtful belief, which supersedes A's ``b-ines-1``. The union is exactly U.
+    """
+    six = batches()[5]
+    plan = [  # (records, seq, tag, parent keys)
+        (batches()[0], 1, "", ()), (batches()[1], 2, "", ("1",)), (batches()[2], 3, "", ("2",)),
+        (batches()[3], 4, TAG_A, ("3",)), (batches()[4], 5, TAG_A, ("4a",)),
+        ([r for r in six if r.belief_id == "b-sam-2"], 4, TAG_B, ("3",)),
+        ([r for r in six if r.belief_id == "b-ines-2"], 6, TAG_A, ("5a", "4b")),
+    ]
+    files: dict = {}
+    etags: dict = {}
+    for records, seq, tag, parents in plan:
+        entries = {}
+        for record in records:
+            ref, schema, payload = encode(record, None, CLAIMS.get(getattr(record, "proposition_id", None))
+                                          if isinstance(record, Proposition) else None)
+            stand_in = fake_etag(ref, schema, payload)
+            files[ref] = ScannedFile(stand_in, schema, payload)
+            entries[ref.name] = batch_entry(record, stand_in)
+        previous = tuple(etags[key] for key in parents) or None
+        ref, schema, payload = encode_batch(C, seq, previous, entries, tag)
+        key = f"{seq}{'ab'[tag == TAG_B] if tag else ''}"
+        etags[key] = fake_etag(ref, schema, payload)
+        files[ref] = ScannedFile(etags[key], schema, payload)
+    return files

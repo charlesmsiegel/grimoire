@@ -17,7 +17,7 @@ from grimoire.store import LibraryStore, NameCollision, StaleWrite, StoreError, 
 from grimoire.store.layout import definition_parts, manifest_parts
 from grimoire.store.replica import CanonicalScan, pinned_by
 
-from . import bookkeeping, keeps as kept_record, session
+from . import bookkeeping, keeps as kept_record, knowledge as merge, session
 from .art import art_needs, art_unmet
 from .decide import archive_candidate
 from .documents import ArchiveView, PendingView, syncable
@@ -305,7 +305,8 @@ def _resolve_art(stores: Mapping[str, LibraryStore], scans: Mapping[str, Canonic
 def _knowledge_log_copies(scans: Mapping[str, CanonicalScan], winner: str, receiver: str, path: str) -> list[str]:
     """What resolving one knowledge path delivers: every knowledge record of its campaign that the
     winner holds and the receiver lacks (020 writes records and their batch as one unit), never a
-    replacement. Two logs that diverged (a path both hold with different bytes) cannot be merged yet."""
+    replacement. Two logs that diverged (a path both hold with different bytes) cannot be merged, and
+    neither can two whose union would not read whole (028's merge check, as a sync makes it)."""
     if scans[receiver].files.get(path) is not None:
         raise ResolveRefused(f"{path} is a create-only knowledge record both devices hold differently: two "
                              "devices' knowledge logs cannot be merged yet. If one copy was edited by hand, "
@@ -327,6 +328,11 @@ def _knowledge_log_copies(scans: Mapping[str, CanonicalScan], winner: str, recei
                                  "cannot be merged yet")
         if theirs is not None and ours is None:
             copies.append(candidate)
+    if copies and any(scans[winner].files.get(candidate) is None and scans[receiver].files.get(candidate) is not None
+                      for candidate in log):  # the receiver ends with both devices' appends: a merge (028)
+        why = merge.merge_refusal(campaign, (scans[winner], scans[receiver]))  # type: ignore[arg-type]
+        if why is not None:
+            raise ResolveRefused(f"the two devices' knowledge logs of campaign {campaign} cannot be merged: {why}")
     return copies
 
 

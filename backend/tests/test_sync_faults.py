@@ -671,3 +671,66 @@ def test_c2_a_crash_or_error_at_any_commit_boundary_of_an_art_copy_converges(tmp
                              select=_select(points, {"before", "after", "fail"}))
     report.assert_ok()
     assert report.points_explored >= 9
+
+
+# -- 028: a sync merging two devices' offline knowledge-log appends, under the harness ------------------
+
+@functools.cache
+def _knowledge_fixture() -> tuple[tuple[str, bytes | None], ...]:
+    """Both devices appended to one campaign's knowledge log offline (test_sync_knowledge's fixture)."""
+    from test_sync_knowledge import offline_appends, pair_with_log
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        desktop, phone = pair_with_log(root)
+        offline_appends(desktop, phone)
+        desktop.close(), phone.close()
+        return tuple(snapshot(root).items())
+
+
+def _knowledge_setup(ops, root):
+    for key, data in _knowledge_fixture():
+        if data is None:
+            ops.make_dirs(root / key)
+        else:
+            ops.write_bytes(root / key, data)
+
+
+def _logs_whole(outcome):
+    """Each device's knowledge log reads whole at every recovered point: never half of the other's append."""
+    from grimoire.evidence import ScannedFile, assemble
+    from grimoire.store.replica import parse_exact
+    from grimoire.sync.knowledge import knowledge_ref
+    from evidence_fixtures import C as LOG
+    for device in DEVICES:
+        files = {}
+        for key, value in outcome.recovered.items():
+            path = key[len(device) + 1:]
+            if value is None or not key.startswith(f"{device}/campaigns/") or knowledge_ref(path) is None:
+                continue
+            record = parse_exact(tuple(path.split("/")), value)
+            files[knowledge_ref(path)] = ScannedFile(etag(value), record.schema, record.payload)
+        assembly = assemble(LOG, files)
+        if not assembly.clean:
+            return f"{device}'s knowledge log does not read whole: {assembly.quarantined[:2]} {assembly.problems}"
+    return None
+
+
+def _knowledge_scenario():
+    locker = ProcessLocker()
+    return CrashScenario("sync-knowledge", _knowledge_setup, lambda ops, root: _once(ops, root, locker),
+                         lambda ops, root: _once(ops, root, locker),
+                         (CONVERGES, Invariant("logs_whole", _logs_whole), idempotent_recovery(), RESIDUE),
+                         normalize=drop_empty_dirs)
+
+
+def test_a_crash_or_error_at_any_commit_boundary_of_a_knowledge_merge_converges(tmp_path):
+    with tempfile.TemporaryDirectory() as folder:
+        baseline = run_plans(_knowledge_scenario(), [], Path(folder))
+        baseline.assert_ok()
+        trace = baseline.runs[0].action_trace
+    points = commit_boundaries(trace)
+    assert len([op for op in trace if _is_journal_replace(op)]) >= 4  # data(desktop), data(phone), archives, markers
+    report = explore_crashes(_knowledge_scenario(), tmp_path, errors=True, torn=False,
+                             select=_select(points, {"before", "after", "fail"}))
+    report.assert_ok()
+    assert report.points_explored >= 12

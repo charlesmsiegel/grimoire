@@ -51,9 +51,12 @@ class Assembly:
     problems: tuple[str, ...]
     origins: Mapping[str, ChatRef]
     high_water: int
-    #: the newest batch's (seq, etag) when the log is intact, else None
+    #: the newest head's (seq, etag) when the log is intact, else None
     head: tuple[int, str] | None
     log_intact: bool = True
+    #: every head (a batch no batch extends) as (seq, etag), sorted, when the log is intact (028: two
+    #: devices' offline appends leave two until the next append joins them); else empty
+    heads: tuple[tuple[int, str], ...] = ()
     #: the kept records by name, for a writer that extends the ledger
     records: Mapping[str, Record] = field(default_factory=lambda: MappingProxyType({}), repr=False)
     #: each kept proposition's 017 claim shape, by proposition id; a quarantined one has none
@@ -75,44 +78,78 @@ def _decoded(ref: KnowledgeRef, scanned: ScannedFile
     return None, reason
 
 
-def _verify_log(files: Mapping[KnowledgeRef, ScannedFile]) -> tuple[list[Batch], list[Batch], bool, tuple[int, str] | None]:
-    """Verified batches, hint batches, whether the log broke, and the head when intact.
+def _verify_log(files: Mapping[KnowledgeRef, ScannedFile]
+                ) -> tuple[list[Batch], list[Batch], bool, tuple[tuple[int, str], ...]]:
+    """Verified batches, hint batches, whether the log broke, and its heads when intact.
+
+    028: the log is a DAG of create-only batches. Two devices that appended offline each wrote their
+    own batch (a tagged name, so neither overwrote the other), and the next append names every head
+    it extends. Each batch must decode, each parent etag must be exactly one present batch's, its
+    ``seq`` must be one more than its highest parent's (a root is seq 1, and has none), and no record
+    may be listed twice. A linear log is the special case with one parent each, verified as before.
 
     Walks only the batch files present, so a stray huge sequence number costs one file, never a
     loop over the numbers below it.
     """
-    present = {ref.seq: (ref, scanned) for ref, scanned in files.items() if ref.family == "batch"}
+    present = {ref: scanned for ref, scanned in files.items() if ref.family == "batch"}
     if not present:
-        return [], [], False, None
-    decoded: dict[int, Batch | None] = {}
-    for seq, (ref, scanned) in present.items():
+        return [], [], False, ()
+    etags = {ref: scanned.etag for ref, scanned in present.items() if isinstance(scanned.etag, str)}
+    decoded: dict[KnowledgeRef, Batch | None] = {}
+    for ref, scanned in present.items():
         batch: Batch | None = None
         if scanned.damage is None and isinstance(scanned.etag, str):  # no byte hash: it cannot chain
             try:
                 batch = decode_batch(ref, scanned.schema, scanned.payload)
             except EvidenceCodecError:
                 batch = None
-        decoded[seq] = batch
-    order = sorted(present)
-    broken_at: int | None = None
-    seen: set[str] = set()
-    previous_etag: str | None = None
-    for expected, seq in enumerate(order, start=1):
-        if seq != expected:  # a gap: batch `expected` is missing
-            broken_at = expected
-            break
-        batch = decoded[seq]
-        if batch is None or batch.previous != previous_etag or seen & set(batch.entries):
-            broken_at = seq
-            break
-        seen |= set(batch.entries)
-        previous_etag = present[seq][1].etag
-    if broken_at is None:
-        return [decoded[seq] for seq in order], [], False, (order[-1], present[order[-1]][1].etag)  # type: ignore[misc]
-    # A previous-mismatch at k cannot tell whether k or k-1 was altered: trust only < k-1.
-    verified = [decoded[seq] for seq in order if seq < broken_at - 1]
-    hints = [decoded[seq] for seq in order if seq >= broken_at - 1 and decoded[seq] is not None]
-    return verified, hints, True, None  # type: ignore[return-value]
+        decoded[ref] = batch
+    by_etag: dict[str, list[KnowledgeRef]] = {}
+    for ref, batch in decoded.items():
+        if batch is not None:
+            by_etag.setdefault(etags[ref], []).append(ref)
+    bad: set[KnowledgeRef] = set()
+    parents: dict[KnowledgeRef, tuple[KnowledgeRef, ...]] = {}
+    for ref, batch in decoded.items():
+        if batch is None:
+            bad.add(ref)
+            continue
+        found = [by_etag.get(parent, []) for parent in batch.parents]
+        if any(len(match) != 1 for match in found):  # a parent that is gone, edited or ambiguous
+            bad.add(ref)
+            continue
+        parents[ref] = tuple(match[0] for match in found)
+        if batch.parents and max(parent.seq for parent in parents[ref]) != ref.seq - 1:
+            bad.add(ref)  # a gap below it, or a parent that is not its predecessor
+    listers: dict[str, list[KnowledgeRef]] = {}
+    for ref in sorted(decoded, key=lambda ref: (ref.seq, ref.record_id)):
+        batch = decoded[ref]
+        for name in batch.entries if batch is not None else ():
+            listers.setdefault(name, []).append(ref)
+    for refs in listers.values():
+        bad.update(refs[1:])  # listed again: the later listing is the break, as in a linear walk
+    if not bad:
+        named = {parent for found in parents.values() for parent in found}
+        heads = tuple(sorted((ref.seq, etags[ref]) for ref in decoded if ref not in named))
+        order = sorted(decoded, key=lambda ref: (ref.seq, ref.record_id))
+        return [decoded[ref] for ref in order], [], False, heads  # type: ignore[misc]
+    # A parent mismatch at k cannot tell whether k or the batch it should name was altered, so trust
+    # only batches below k-1 that a good batch below k still names (in a linear log: exactly < k-1),
+    # closed under parents. A head is named by none, so a broken log trusts no head.
+    k = min(ref.seq for ref in bad)
+    vouched = {parent for ref, found in parents.items() if ref not in bad and ref.seq < k for parent in found}
+    trusted = {ref for ref in vouched if ref not in bad and ref.seq < k - 1}
+    changed = True
+    while changed:
+        changed = False
+        for ref in sorted(trusted, key=lambda ref: (ref.seq, ref.record_id)):
+            if any(parent not in trusted for parent in parents.get(ref, ())):
+                trusted.discard(ref)
+                changed = True
+    order = sorted(decoded, key=lambda ref: (ref.seq, ref.record_id))
+    verified = [decoded[ref] for ref in order if ref in trusted]
+    hints = [decoded[ref] for ref in order if ref not in trusted and decoded[ref] is not None]
+    return verified, hints, True, ()  # type: ignore[return-value]
 
 
 def assemble(campaign_id: str, files: Mapping[KnowledgeRef, ScannedFile]) -> Assembly:
@@ -140,7 +177,7 @@ def assemble(campaign_id: str, files: Mapping[KnowledgeRef, ScannedFile]) -> Ass
     def own_key(name: str) -> ChainKey | None:
         return chain_key(decoded[name][0]) if name in decoded else None
 
-    verified, hints, broken, head = _verify_log(
+    verified, hints, broken, heads = _verify_log(
         {ref: scanned for ref, scanned in files.items() if ref.family == "batch" and ref.campaign_id == campaign_id})
     if broken:
         problems.append("log_broken")
@@ -241,8 +278,8 @@ def assemble(campaign_id: str, files: Mapping[KnowledgeRef, ScannedFile]) -> Ass
     claims = {shape.proposition_id: shape for name in kept if (shape := decoded[name][2]) is not None}
     high_water = max((record.moment.sequence for record in kept.values()), default=0)
     return Assembly(knowledge, tuple(sorted(Quarantine(name, reason) for name, reason in quarantined.items())),
-                    tuple(sorted(set(problems))), MappingProxyType(origins), high_water, head,
-                    log_intact=not broken, records=MappingProxyType(kept), claims=MappingProxyType(claims))
+                    tuple(sorted(set(problems))), MappingProxyType(origins), high_water,
+                    heads[-1] if heads else None, log_intact=not broken, heads=heads, records=MappingProxyType(kept), claims=MappingProxyType(claims))
 
 
 def _dangling(candidates: Mapping[str, Record]) -> dict[str, str]:
