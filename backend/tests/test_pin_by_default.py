@@ -591,3 +591,43 @@ def test_detach_and_attach_of_the_same_actor_repairs_a_pinned_revision_that_no_l
         _chat_path(first.chat)]
     chats.attach_source(first.chat, MARA, "character", expected=etag, actor=actor).commit()
     assert [b.ref for b in chats.read_chat(first.chat)[0].active_bindings("character")] == [MARA.at("r2")]
+
+
+def test_a_rebind_elsewhere_between_plan_and_commit_makes_a_reuse_stale(store):
+    from grimoire.store import StaleWrite
+
+    chats = chat_library(store, owner_handle())
+    first = chats.start_chat(Launch("character", MARA)).commit()  # r1
+    [actor] = first.actors
+    land(store, encode(UPDATED), target=MARA.source)  # r2
+    key = ("character", MARA.entity_key)
+    pending = chats.start_chat(Launch("character", MARA), scope=first.scope, reuse_actors={key: actor})  # plans r1
+    rebind(chats, first.chat, MARA.at("r2"), "character", actor)  # the player's explicit rebind, meanwhile
+    with pytest.raises(StaleWrite):
+        pending.commit()  # it would pin r1 beside r2: binding_disagrees for every later review
+    again = chats.start_chat(Launch("character", MARA), scope=first.scope, reuse_actors={key: actor}).commit()
+    assert chats.read_chat(again.chat)[0].launch.ref == MARA.at("r2")
+    with pytest.raises(RebaseError) as caught:  # one revision across the campaign: r2, the head
+        rebase(store).review(actor)
+    assert caught.value.reason == "up_to_date"
+
+
+def test_a_rebind_in_a_v2_chat_between_a_rerun_plan_and_its_apply_makes_it_stale(tmp_path):
+    from grimoire.store import StaleWrite
+
+    env = Env(tmp_path)
+    env.plan().apply()
+    store = env.store
+    imported = SourceRef.parse(store.read(MARA_V1).envelope.payload["source"])
+    r2 = revise_mara(store, "A harbor clerk who keeps two ledgers.")
+    chats = chat_library(store, owner_handle())
+    key = ("character", imported.entity_key)
+    v2 = chats.start_chat(Launch("character", imported.unpinned()), scope=V1_CHAT.scope,
+                          reuse_actors={key: MARA_V1}).commit()
+    assert chats.read_chat(v2.chat)[0].launch.ref == imported  # a V2 chat of the campaign, not an import target
+
+    add_v1_scene(env)
+    plan = env.plan()  # plans the new scene at the imported revision, as both chats agree
+    rebind(chats, v2.chat, r2, "character", MARA_V1)  # meanwhile, an explicit rebind in the V2 chat
+    with pytest.raises(StaleWrite):
+        plan.apply()  # it would pin the new scene beside r2: binding_disagrees for every later review

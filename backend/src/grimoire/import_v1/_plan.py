@@ -190,6 +190,8 @@ class ImportPlan:
     transcripts: dict[object, int] = field(default_factory=dict)  # chat -> pages this run plans for it (036)
     _paired: dict[str, frozenset[InstanceRef]] = field(default_factory=dict)
     _played: dict[InstanceRef, SourceRef] = field(default_factory=dict)  # actor -> revision ``_plays`` found
+    #: campaign -> its chats at the etags read when a played revision was taken from them; re-checked at apply
+    played_from: dict[str, dict[ChatRef, str]] = field(default_factory=dict)
     _probe: object = None
     _review: dict = field(default_factory=dict)
     _preview: dict = field(default_factory=dict)
@@ -491,7 +493,12 @@ class ImportPlan:
         return self._played[actor.ref]
 
     def _played_now(self, actor) -> SourceRef:  # type: ignore[no-untyped-def]
-        bound = campaign_plays(self.store, actor.ref, actor.definition)
+        reads: list[dict[ChatRef, str]] = []
+        bound = campaign_plays(self.store, actor.ref, actor.definition, reads)
+        for read in reads:  # a rebind in one of them before apply would pin this scene beside it
+            chats = self.played_from.setdefault(actor.ref.campaign_id, {})
+            for chat, chat_etag in read.items():
+                chats.setdefault(chat, chat_etag)
         plays: SourceRef | None = None
         if bound is not None and len(bound) == 1:
             plays = next(iter(bound))
@@ -896,6 +903,14 @@ class ImportPlan:
                 clash = sorted(str(ref) for ref in actors & paired_instances(store.campaign_instances(cid)))
                 if clash:
                     raise StaleWrite([(ref, "id also used by another kind") for ref in clash])
+            for cid, chats in sorted(self.played_from.items()):  # what an existing actor's played revision rests on
+                found = store.campaign_chats(cid)
+                moved = [problem.path for problem in found.problems]
+                current = {ref: stored.etag for ref, stored in found.records.items()}
+                moved += ["/".join(address_parts(ref)) for ref in sorted(set(chats) | set(current), key=str)
+                          if chats.get(ref) != current.get(ref)]
+                if moved:
+                    raise StaleWrite([(path, "chat changed since the plan") for path in moved])
             for chat, count in sorted(self.transcripts.items(), key=lambda item: str(item[0])):
                 found = store.chat_transcript(chat)  # a page added since the plan would join this history
                 beyond = [problem.path for problem in found.problems]
