@@ -289,7 +289,9 @@ def _forge(table, kind: str, value: dict) -> None:
     ("obstacle", None, "railroaded"),
     ("attempt", {"obstacle_id": "archive", "attempt_id": "c10", "approach_id": "bribe", "novel": None,
                  "supersedes": "c9"}, "supersedes_mismatch"),
-], ids=["approach", "obstacle", "railroad", "supersedes"])
+    ("withdrawal", {"obstacle_id": "archive", "attempt_id": "c10"}, "not_linked"),
+    ("withdrawal", {"obstacle_id": "vault", "attempt_id": "c10"}, "unknown_obstacle"),
+], ids=["approach", "obstacle", "railroad", "supersedes", "withdraw-unlinked", "withdraw-unknown"])
 def test_a_forged_entry_makes_the_ledger_unreadable(table, kind, value, match):
     table.obstacles().record(archive())
     if value is None:
@@ -455,3 +457,59 @@ def test_text_the_store_cannot_hold_is_refused_before_the_link(table):
                    author=table.player()) == "invalid_field"
     _nothing_written(table, library)
     assert library.record(archive(goal="Reach the sealed ledger before dawn.")).revision == 2
+
+
+def test_check_refuses_as_frame_would_and_writes_nothing(table):
+    library = table.obstacles()
+    library.record(archive())
+    frame = attempt(library.required(Q, "archive", "bribe", 10) + (SILVER,), stakes_of(BRIBE))
+    assert library.check("archive", frame, approach="bribe", contribution=offer(), author=table.player()) is None
+    _nothing_written(table, library)  # a first attempt: nothing linked, nothing framed
+    short = attempt((GREEDY.factor("favours"),), stakes_of(BRIBE))
+    assert _reason(library.check, "archive", short, approach="bribe", contribution=offer(),
+                   author=table.player()) == "missing_fact"
+    assert _reason(library.check, "archive", frame, approach="bribe", contribution=offer(),
+                   author=table.owner) == "not_controller"  # 029's own refusal, unwritten
+    _nothing_written(table, library)
+    library.frame("archive", frame, approach="bribe", contribution=offer(), author=table.player())
+    # the pending attempt's revision is checked too, and writes nothing either
+    assert library.check("archive", frame, approach="bribe", contribution=offer(), author=table.player()) is None
+    assert _reason(library.check, "archive", frame, approach="sneak", contribution=offer(),
+                   author=table.player()) == "approach_changed"
+    assert len(library.adjudication.state(Q).frames["c10"]) == 1
+
+
+# -- withdrawals (035's pass of an attempt 029 cannot decide) ---------------------------------------------
+
+def _withdrawn_unframed(table, monkeypatch) -> ObstacleLibrary:
+    library = table.obstacles()
+    library.record(archive())
+    with monkeypatch.context() as patch:
+        patch.setattr(library.adjudication, "frame", _crash)
+        with pytest.raises(OSError):
+            _bribe(table, library)
+    library.withdraw(Q, "archive", "c10")
+    return library
+
+
+def test_a_replayed_withdrawal_is_ledger_damage(table, monkeypatch):
+    _withdrawn_unframed(table, monkeypatch)
+    _forge(table, "withdrawal", {"obstacle_id": "archive", "attempt_id": "c10"})
+    with pytest.raises(LedgerInvalid, match="already_withdrawn"):
+        _reopen(table).obstacles().state(Q, "archive")
+
+
+def test_withdrawing_an_earlier_attempt_is_ledger_damage(table, monkeypatch):
+    library = _withdrawn_unframed(table, monkeypatch)
+    _bribe(table, library, cid="c11", at=moment(11, "t11"))
+    _forge(table, "withdrawal", {"obstacle_id": "archive", "attempt_id": "c10"})
+    with pytest.raises(LedgerInvalid, match="already_withdrawn|withdrawal_mismatch"):
+        _reopen(table).obstacles().state(Q, "archive")
+
+
+def test_a_withdrawn_attempt_stays_void_across_a_restart_and_a_retried_frame(table, monkeypatch):
+    _withdrawn_unframed(table, monkeypatch)
+    library = _reopen(table).obstacles()
+    assert [a.status for a in library.state(Q, "archive").attempts] == ["void"]
+    assert _reason(_bribe, table, library) == "attempt_withdrawn"
+    assert _reason(library.withdraw, Q, "archive", "c10") == "already_withdrawn"

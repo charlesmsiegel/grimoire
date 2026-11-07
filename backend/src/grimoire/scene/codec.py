@@ -15,8 +15,8 @@ from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TurnRef
 from grimoire.core.inference import TOKEN_FIELDS, CallAttempt, CallId, InferenceStage, TokenUsage
 from grimoire.effects import EffectCodecError, EndorsementRecord, proposal_from_payload, proposal_to_payload
 
-from .model import (_DEVICE, CallRecord, Intention, IntentionOption, Label, Post, SceneLine, SceneRefused, SetAside,
-                    Take, TurnEffect, TurnRecord, turn_id)
+from .model import (_DEVICE, Against, CallRecord, Intention, IntentionOption, Label, Post, SceneLine, SceneRefused,
+                    SetAside, Take, TurnEffect, TurnRecord, Waiver, turn_id)
 
 TURN_SCHEMA = "grimoire.scene-turn/1"
 _TURN_KEYS = frozenset({"chat", "number", "origin", "post", "takes", "paused", "paused_by", "passed_by"})
@@ -40,13 +40,18 @@ _LINE_KEYS = frozenset({"line", "actor", "speaker", "text", "audience", "state",
 _CALL_KEYS = frozenset({"phase", "stage", "actor_id", "ordinal", "status", "reason", "attempts"})
 _ATTEMPT_KEYS = frozenset({"attempt", "outcome", "measurement", "route", "usage"})
 _LABEL_KEYS = frozenset({"label", "state", "sequence", "factors", "stakes", "calls", "reason", "by"})
+#: written only on a labelling against a 040 obstacle; a labelling without it frames against none
+_OPTIONAL_LABEL_KEYS = frozenset({"against"})
+_AGAINST_KEYS = frozenset({"obstacle", "approach", "novel"})
 _FACTOR_KEYS = frozenset({"factor", "bearing", "text", "established", "source"})
 _STAKE_KEYS = frozenset({"stake", "text"})
 _EFFECT_KEYS = frozenset({"effect", "state", "proposal", "endorsers", "approved_by", "endorsements", "event_id",
                           "reason"})
 #: written only on an effect whose acceptance recorded the control it was authorized under; an effect written
 #: before it existed has none and still reads
-_OPTIONAL_EFFECT_KEYS = frozenset({"controls_at", "accepted_on"})
+_OPTIONAL_EFFECT_KEYS = frozenset({"controls_at", "accepted_on", "waivers"})
+#: a waiver of a due change of a 040 obstacle attempt, written only on a director's proposal that has one
+_WAIVER_KEYS = frozenset({"change", "reason"})
 _INTENTION_KEYS = frozenset({"take", "actor", "as_of", "present", "unrecognised", "goal", "approach", "refusals",
                              "considered", "explanation", "omitted"})
 #: written only on an intention chosen on a 041 stage (whom the NPC perceived); one without it read as no stage
@@ -111,15 +116,22 @@ def _effect(effect: TurnEffect) -> dict[str, object]:
         payload["controls_at"] = effect.controls_at
     if effect.accepted_on is not None:
         payload["accepted_on"] = effect.accepted_on
+    if effect.waivers:
+        payload["waivers"] = [{"change": item.change, "reason": item.reason} for item in effect.waivers]
     return payload
 
 
 def _label(label: Label) -> dict[str, object]:
-    return {"label": label.label, "state": label.state, "sequence": label.sequence,
-            "factors": [{"factor": f.factor_id, "bearing": f.bearing, "text": f.text, "established": f.established,
-                         "source": f.source} for f in label.factors],
-            "stakes": [{"stake": s.stake_id, "text": s.text} for s in label.stakes],
-            "calls": [_call(call) for call in label.calls], "reason": label.reason, "by": label.by}
+    payload: dict[str, object] = {
+        "label": label.label, "state": label.state, "sequence": label.sequence,
+        "factors": [{"factor": f.factor_id, "bearing": f.bearing, "text": f.text, "established": f.established,
+                     "source": f.source} for f in label.factors],
+        "stakes": [{"stake": s.stake_id, "text": s.text} for s in label.stakes],
+        "calls": [_call(call) for call in label.calls], "reason": label.reason, "by": label.by}
+    if label.against is not None:
+        against = label.against
+        payload["against"] = {"obstacle": against.obstacle_id, "approach": against.approach_id, "novel": against.novel}
+    return payload
 
 
 def _post(post: Post) -> dict[str, object]:
@@ -270,7 +282,14 @@ def _decode_take(value: object, address: TurnRef) -> Take:
 
 
 def _decode_label(value: object, address: TurnRef) -> Label:
-    data = _mapping(value, "label", _LABEL_KEYS)
+    data = _mapping(value, "label", _LABEL_KEYS, open_keys=True)
+    unknown = set(data) - _LABEL_KEYS - _OPTIONAL_LABEL_KEYS
+    if unknown:
+        raise _invalid(f"label has unknown fields {sorted(unknown)}")
+    against = None
+    if "against" in data:
+        found = _mapping(data["against"], "label.against", _AGAINST_KEYS)
+        against = Against(found["obstacle"], found["approach"], found["novel"])  # type: ignore[arg-type]
     number = _int(data["label"], "label")
     plan_turn = f"{address.turn_id}.l{number}"
     factors = []
@@ -282,7 +301,7 @@ def _decode_label(value: object, address: TurnRef) -> Label:
               for found in (_mapping(item, "stake", _STAKE_KEYS) for item in _list(data["stakes"], "label.stakes"))]
     calls = tuple(_decode_call(item, address.campaign_id, plan_turn) for item in _list(data["calls"], "label.calls"))
     return Label(number, data["state"], data["sequence"], tuple(factors), tuple(stakes),  # type: ignore[arg-type]
-                 calls, data["reason"], data["by"])  # type: ignore[arg-type]
+                 calls, data["reason"], data["by"], against)  # type: ignore[arg-type]
 
 
 def _decode_intention(value: object) -> Intention:
@@ -337,10 +356,17 @@ def _decode_effect(value: object, address: TurnRef) -> TurnEffect:
                 found["contribution_id"], found["principal"], found["fingerprint"]))  # type: ignore[arg-type]
         except ValueError:
             raise _invalid("effect.endorsements holds an invalid endorsement") from None
+    waivers = ()
+    if "waivers" in data:  # never written empty
+        waivers = tuple(Waiver(found["change"], found["reason"])  # type: ignore[arg-type]
+                        for found in (_mapping(item, "waiver", _WAIVER_KEYS)
+                                      for item in _list(data["waivers"], "effect.waivers")))
+        if not waivers:
+            raise _invalid("effect.waivers is written only when it names a waiver")
     number = _int(data["effect"], "effect")
     return TurnEffect(number, data["state"], proposal, endorsers, data["approved_by"],  # type: ignore[arg-type]
                       tuple(endorsements), data["event_id"], data["reason"], controls_at,  # type: ignore[arg-type]
-                      accepted_on)
+                      accepted_on, waivers)
 
 
 def _decode_line(value: object) -> SceneLine:

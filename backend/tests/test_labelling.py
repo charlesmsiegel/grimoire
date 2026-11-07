@@ -13,7 +13,9 @@ from grimoire.adjudication import MAX_FACTORS, MAX_STAKES, Factor, Stake
 from grimoire.context.model import Origin, PackedItem
 from grimoire.core.identity import SourceRef
 from grimoire.core.inference import InferenceStage
-from grimoire.labelling import MAX_FACTS, MAX_STAKE_CHARS, Fact, LabelRefused, facts, label_messages, parse_labels
+from grimoire.labelling import (
+    MAX_FACTS, MAX_STAKE_CHARS, NOVEL, Fact, LabelRefused, Obstacle, facts, label_messages, parse_attempt, parse_labels,
+)
 from grimoire.providers import RouteChoice
 from grimoire.runtime import LabelRuntime
 from grimoire.runtime.label import MAX_REPLY_CHARS, decode_reply
@@ -94,6 +96,31 @@ def test_anything_else_in_a_reply_is_refused_whole(decoded, reason):
     with pytest.raises(LabelRefused) as error:
         parse_labels(decoded, OFFERED)
     assert error.value.reason == reason
+
+
+def test_against_an_obstacle_the_reply_chooses_an_approach_and_a_suggestion_lists_no_stakes():
+    hold = Obstacle("Get into the hold.", (("bribe", "Pay the keeper."), ("sneak", "Slip past.")))
+    system, user = label_messages("Anya Rook", "I pay her", OFFERED, obstacle=hold)
+    assert '"novel"' in system[1] and "never refuse an approach for being unlisted" in system[1]
+    assert "Obstacle: Get into the hold.\nSuggested approaches:\nbribe: Pay the keeper.\nsneak: Slip past." in user[1]
+    assert "Obstacle:" not in label_messages("Anya Rook", "I pay her", OFFERED)[1][1]
+    cited = {"fact": "f2", "bearing": "favours"}
+    assert parse_attempt({"approach": "bribe", "factors": [cited]}, OFFERED, ("bribe", "sneak"))[:2] == (
+        "bribe", (Factor("f2", "favours", OFFERED[1].text, 0, OFFERED[1].source),))
+    assert parse_attempt({"approach": NOVEL, "stakes": ["She is seen"]}, OFFERED, ("bribe",)) == (
+        NOVEL, (), (Stake("s1", "She is seen"),))
+    for decoded, reason in (({"approach": "bribe", "stakes": ["x"]}, "suggested_stakes"),
+                            ({"approach": "climb"}, "unknown_approach"), ({"factors": []}, "unknown_approach"),
+                            ({"approach": ["bribe"]}, "unknown_approach"),
+                            ({"approach": "bribe", "result": "success"}, "unparseable"),
+                            ({"approach": "bribe", "factors": [{"fact": "f9", "bearing": "favours"}]},
+                             "unknown_fact")):
+        with pytest.raises(LabelRefused) as error:
+            parse_attempt(decoded, OFFERED, ("bribe", "sneak"))
+        assert error.value.reason == reason, decoded
+    with pytest.raises(LabelRefused) as error:  # with no obstacle, an approach is a field no reply may carry
+        parse_labels({"approach": "bribe"}, OFFERED)
+    assert error.value.reason == "unparseable"
 
 
 @pytest.mark.parametrize(("text", "value"), [

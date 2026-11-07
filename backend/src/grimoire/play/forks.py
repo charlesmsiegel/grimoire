@@ -34,8 +34,17 @@ def choose_branch(runner, chat: ChatRef, by, turn: str):  # type: ignore[no-unty
     if other:
         raise SceneRefused("turns_unreadable", f"this chat's turns are incomplete "
                                                f"({', '.join(sorted(set(other)))}); nothing is written")
-    with span("write.turn"):
-        runner.scenes.choose(turns, turn, principal)
+    # 040: an undecided obstacle attempt on a branch set aside is withdrawn first, or it would hold its obstacle.
+    # Both under the store lock, as one step: confirm links and frames an attempt, and decide decides one, under
+    # it only while their turn is the line's open one, so no set-aside turn takes a live attempt after the choice
+    from grimoire.play.obstacles import retire_set_aside  # it imports the runner's modules
+    with runner.store.lock:
+        now = runner.scenes.turns(chat)
+        if now.etags() != turns.etags() or now.problems != turns.problems:  # nothing withdrawn for a stale choice
+            raise SceneRefused("turn_changed", "the chat's turns changed since they were read; read them again")
+        retire_set_aside(runner, turns, turn)
+        with span("write.turn"):
+            runner.scenes.choose(turns, turn, principal)
     return runner.open(chat)
 
 

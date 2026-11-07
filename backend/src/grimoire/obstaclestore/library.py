@@ -3,9 +3,10 @@
 ``ObstacleLibrary`` records into one authority ledger per campaign, ``obstacles/<campaign_id>``, through
 the library's ``DurableAuthority``: append-only, hash-chained, written only by the authority's
 capability, and replayed and re-checked on load (anything inconsistent is ``LedgerInvalid``). Its handle
-is the same **adjudication key** as 029's: the director's labelling channel. It holds two kinds of entry:
-``obstacle`` (an authored obstacle, or a revision of one no attempt has engaged yet) and ``attempt``
-(an attempt's link to an obstacle and the approach it takes).
+is the same **adjudication key** as 029's: the director's labelling channel. It holds three kinds of entry:
+``obstacle`` (an authored obstacle, or a revision of one no attempt has engaged yet), ``attempt``
+(an attempt's link to an obstacle and the approach it takes) and ``withdrawal`` (a pending attempt that
+029 cannot decide now, withdrawn for good: ``withdraw``).
 
 Attempts are 029 action frames. ``frame`` checks a frame against the obstacle as it stands (its facts
 and the escalations of earlier failures) and against 029's own rules (who may act and speak) without
@@ -29,13 +30,14 @@ from grimoire.ledgers.codec import envelope, exact
 from grimoire.obstacles import (
     Approach, Attempt, Obstacle, ObstacleError, ObstacleState, attempt_from_payload, attempt_to_payload,
     check_attempt, derive, obstacle_from_payload, obstacle_to_payload, required_factors, resolve_approach,
+    withdrawal_from_payload, withdrawal_to_payload,
 )
 from grimoire.security import is_valid_principal
 from grimoire.store import LibraryStore
 from grimoire.store.errors import InvalidEnvelope, LedgerInvalid, TakenIdsUnlisted
-from grimoire.store.ledger import Head
+from grimoire.store.ledger import Head, entry_cost
 
-_KINDS = frozenset({"obstacle", "attempt"})
+_KINDS = frozenset({"obstacle", "attempt", "withdrawal"})
 
 
 def ledger_for(campaign_id: str) -> str:
@@ -70,6 +72,7 @@ class _Builder:
     obstacles: dict[str, list[ObstacleEntry]] = field(default_factory=dict)
     attempts: dict[str, list[Attempt]] = field(default_factory=dict)
     linked: dict[str, str] = field(default_factory=dict)  # attempt id -> obstacle id
+    withdrawn: set[str] = field(default_factory=set)  # attempt ids
     head: Head | None = None
 
     def check_obstacle(self, obstacle: Obstacle) -> int:
@@ -103,12 +106,26 @@ class _Builder:
         approach, listed = resolve_approach(obstacle, approach_id if novel is None else novel)
         return Attempt(attempt_id, approach, listed, supersedes)
 
+    def check_withdrawal(self, obstacle_id: str, attempt_id: str) -> None:
+        """Refuse a withdrawal this ledger alone shows is wrong: only the obstacle's latest attempt, once."""
+        if not self.obstacles.get(obstacle_id):
+            raise _refused(f"no obstacle {obstacle_id!r}", "unknown_obstacle")
+        if self.linked.get(attempt_id) != obstacle_id:
+            raise _refused(f"attempt {attempt_id!r} is not linked to {obstacle_id!r}", "not_linked")
+        if self.attempts[obstacle_id][-1].attempt_id != attempt_id:
+            raise _refused(f"attempt {attempt_id!r} is not the latest against {obstacle_id!r}", "withdrawal_mismatch")
+        if attempt_id in self.withdrawn:
+            raise _refused(f"attempt {attempt_id!r} is already withdrawn", "already_withdrawn")
+
     def add_obstacle(self, entry: ObstacleEntry) -> None:
         self.obstacles.setdefault(entry.obstacle.obstacle_id, []).append(entry)
 
     def add_attempt(self, obstacle_id: str, attempt: Attempt) -> None:
         self.attempts.setdefault(obstacle_id, []).append(attempt)
         self.linked[attempt.attempt_id] = obstacle_id
+
+    def add_withdrawal(self, attempt_id: str) -> None:
+        self.withdrawn.add(attempt_id)
 
 
 def obstacle_actor_ids(store: LibraryStore, campaign_id: str) -> frozenset[str]:
@@ -178,6 +195,12 @@ class ObstacleLibrary:
             builder = self._builder(campaign_id)
             return tuple(self._derive(builder, obstacle_id) for obstacle_id in sorted(builder.obstacles))
 
+    def linked(self, campaign_id: str) -> dict[str, str]:
+        """Every attempt this ledger links, and the obstacle it is against: ``{attempt id: obstacle id}`` (a copy).
+        A caller that holds its own record of an attempt's obstacle checks it against this, the ledger's own."""
+        with self._authority.lock:
+            return dict(self._builder(campaign_id).linked)
+
     def entries(self, campaign_id: str, obstacle_id: str) -> tuple[ObstacleEntry, ...]:
         with self._authority.lock:
             return tuple(self._builder(campaign_id).obstacles.get(obstacle_id, ()))
@@ -240,61 +263,117 @@ class ObstacleLibrary:
         ``unknown_obstacle``, ``obstacle_diverged``, ``already_overcome``, ``attempt_linked`` (another
         obstacle's attempt) and ``already_decided`` (an attempt decided, or decided before it was linked).
         """
+        with self._authority.lock:  # the obstacle is read, the link appended and the frame recorded as one step
+            builder, link = self._admit(obstacle_id, frame, approach, contribution, author)
+            if link is not None:
+                obstacle, attempt, payload = link
+                self._append(builder, "attempt", payload)
+                builder.add_attempt(obstacle, attempt)
+            return self._adjudication.frame(frame, contribution=contribution, author=author)
+
+    def check(self, obstacle_id: str, frame: ActionFrame, *, approach: str | Approach,
+              contribution: PlayerContribution | None = None, author: object = None) -> None:
+        """Raise the refusal ``frame`` would raise now; return ``None`` when it would be recorded. Writes nothing.
+
+        Every check ``frame`` makes, the obstacle's and 029's (``AdjudicationLibrary.check``), for a caller that
+        must write its own record first and then the frame (035 marks a turn framed before it frames)."""
+        with self._authority.lock:
+            self._admit(obstacle_id, frame, approach, contribution, author)
+
+    def withdraw(self, campaign_id: str, obstacle_id: str, attempt_id: str, *, set_aside: bool = False) -> None:
+        """Withdraw the obstacle's undecided attempt ``attempt_id`` for good: it is ``void`` from now on.
+
+        For an attempt whose turn passes while 029 cannot decide it (its actor changed hands, or its frame
+        was never written): without this, control coming back would make it decidable and pending again,
+        and nothing could be attempted against the obstacle until it was decided. Only the obstacle's
+        latest attempt (``not_linked``, ``withdrawal_mismatch``), only while it is pending, or diverged by its
+        own frame (no revision of it can come once its turn has passed), and undecided (``not_pending``;
+        ``already_withdrawn``), and only while 029 cannot decide it (``attempt_decidable``). 035 decides an attempt
+        at an obstacle only under the same lock, after reading that it is not void (``refuse_void_attempt``).
+
+        ``set_aside``: the caller vouches that the attempt's turn is on a branch a fork choice sets aside (028), where
+        nothing in play can decide it however 029 stands, so 029's ``undecidable`` is not asked; one 029 decided
+        already is still ``attempt_decidable``.
+        """
+        with self._authority.lock:
+            builder = self._builder(campaign_id)
+            builder.check_withdrawal(obstacle_id, attempt_id)
+            last = self._derive(builder, obstacle_id).attempts[-1]
+            if last.attempt.attempt_id != attempt_id or not (
+                    last.status == "pending" or (last.status == "diverged" and last.problem != "attempt_out_of_turn")):
+                raise _refused(f"attempt {attempt_id!r} is not pending ({last.status})", "not_pending")
+            if (self._adjudication.outcome(campaign_id, attempt_id) is not None
+                    or (not set_aside and last.frame is not None
+                        and self._adjudication.undecidable(campaign_id, attempt_id) is None)):
+                raise _refused(f"attempt {attempt_id!r} can be decided now", "attempt_decidable")
+            self._append(builder, "withdrawal", withdrawal_to_payload(obstacle_id, attempt_id))
+            builder.add_withdrawal(attempt_id)
+
+    def _admit(self, obstacle_id: str, frame: ActionFrame, approach: str | Approach,
+               contribution: PlayerContribution | None, author: object):
+        """Every check ``frame`` makes before it writes: the builder, and the link to append (``None`` for a
+        revision of the pending attempt): ``(obstacle id, attempt, payload)``."""
         if type(frame) is not ActionFrame:
             raise TypeError("expected an ActionFrame")
         campaign_id = frame.campaign_id
-        with self._authority.lock:  # the obstacle is read, the link appended and the frame recorded as one step
-            builder = self._builder(campaign_id)
-            if obstacle_id not in builder.obstacles:
-                raise _refused(f"no obstacle {obstacle_id!r}", "unknown_obstacle")
-            state = self._derive(builder, obstacle_id)
-            given, listed = resolve_approach(state.obstacle, approach)
-            attempt = Attempt(frame.attempt_id, given, listed)
-            linked = builder.linked.get(frame.attempt_id)
-            if linked is not None and linked != obstacle_id:
-                raise _refused(f"attempt {frame.attempt_id!r} is against obstacle {linked!r}", "attempt_linked")
-            last = state.attempts[-1] if state.attempts else None
-            if linked is not None:
-                revisable = (last is not None and last.attempt.attempt_id == frame.attempt_id
-                             and (last.status == "pending" or (last.status == "diverged"
-                                                               and last.problem != "attempt_out_of_turn"))
-                             and self._adjudication.outcome(campaign_id, frame.attempt_id) is None)
-                if not revisable:
-                    if state.status == "diverged":
-                        raise _refused(f"obstacle {obstacle_id!r} no longer agrees with its attempts "
-                                       f"({state.problem})", "obstacle_diverged")
-                    raise _refused(f"attempt {frame.attempt_id!r} is already decided", "already_decided")
-                assert last is not None
-                if (last.attempt.approach, last.attempt.listed) != (given, listed):
-                    raise _refused("a revision keeps the attempt's approach", "approach_changed")
-                earlier = [a.frame.moment.sequence for a in state.attempts[:-1] if a.frame is not None]
-                self._check(state, attempt, frame, max(earlier) if earlier else None)
-                return self._adjudication.frame(frame, contribution=contribution, author=author)
-            if state.status == "diverged":
-                raise _refused(f"obstacle {obstacle_id!r} no longer agrees with its attempts ({state.problem})",
-                               "obstacle_diverged")
-            if state.status == "overcome":
-                raise _refused(f"obstacle {obstacle_id!r} is already overcome", "already_overcome")
-            pending = state.pending
-            if (pending is not None and pending.frame is not None
-                    and self._adjudication.undecidable(campaign_id, pending.attempt.attempt_id) is None):
-                raise _refused(f"attempt {pending.attempt.attempt_id!r} against {obstacle_id!r} is undecided",
-                               "attempt_pending")
-            # This one supersedes a pending attempt that cannot be decided now: a link whose frame was never
-            # written, or a frame whose actor changed hands (029 makes the new controller's action a new one).
-            # The link names it, so it stays void even if control comes back and 029 decides it after all.
-            superseded = None if pending is None else pending.attempt.attempt_id
-            if self._adjudication.outcome(campaign_id, frame.attempt_id) is not None:
-                # Linking a known result would let a success be pinned to an obstacle after the fact.
+        builder = self._builder(campaign_id)
+        if obstacle_id not in builder.obstacles:
+            raise _refused(f"no obstacle {obstacle_id!r}", "unknown_obstacle")
+        state = self._derive(builder, obstacle_id)
+        given, listed = resolve_approach(state.obstacle, approach)
+        attempt = Attempt(frame.attempt_id, given, listed)
+        linked = builder.linked.get(frame.attempt_id)
+        if linked is not None and linked != obstacle_id:
+            raise _refused(f"attempt {frame.attempt_id!r} is against obstacle {linked!r}", "attempt_linked")
+        last = state.attempts[-1] if state.attempts else None
+        if frame.attempt_id in builder.withdrawn:
+            raise _refused(f"attempt {frame.attempt_id!r} was withdrawn", "attempt_withdrawn")
+        if linked is not None:
+            revisable = (last is not None and last.attempt.attempt_id == frame.attempt_id
+                         and (last.status == "pending" or (last.status == "diverged"
+                                                           and last.problem != "attempt_out_of_turn"))
+                         and self._adjudication.outcome(campaign_id, frame.attempt_id) is None)
+            if not revisable:
+                if state.status == "diverged":
+                    raise _refused(f"obstacle {obstacle_id!r} no longer agrees with its attempts "
+                                   f"({state.problem})", "obstacle_diverged")
                 raise _refused(f"attempt {frame.attempt_id!r} is already decided", "already_decided")
-            attempt = builder.check_attempt(obstacle_id, attempt.attempt_id, given.approach_id,
-                                            None if listed else given, superseded)
-            self._check(state, attempt, frame, state.after)
+            assert last is not None
+            if (last.attempt.approach, last.attempt.listed) != (given, listed):
+                raise _refused("a revision keeps the attempt's approach", "approach_changed")
+            earlier = [a.frame.moment.sequence for a in state.attempts[:-1] if a.frame is not None]
+            self._check(state, attempt, frame, max(earlier) if earlier else None)
             self._adjudication.check(frame, contribution=contribution, author=author)  # 029's refusals, unwritten
-            payload = attempt_to_payload(obstacle_id, attempt.attempt_id, given, listed, superseded)
-            self._append(builder, "attempt", payload)
-            builder.add_attempt(obstacle_id, attempt)
-            return self._adjudication.frame(frame, contribution=contribution, author=author)
+            return builder, None
+        if state.status == "diverged":
+            raise _refused(f"obstacle {obstacle_id!r} no longer agrees with its attempts ({state.problem})",
+                           "obstacle_diverged")
+        if state.status == "overcome":
+            raise _refused(f"obstacle {obstacle_id!r} is already overcome", "already_overcome")
+        pending = state.pending
+        if (pending is not None and pending.frame is not None
+                and self._adjudication.undecidable(campaign_id, pending.attempt.attempt_id) is None):
+            raise _refused(f"attempt {pending.attempt.attempt_id!r} against {obstacle_id!r} is undecided",
+                           "attempt_pending")
+        # This one supersedes a pending attempt that cannot be decided now: a link whose frame was never
+        # written, or a frame whose actor changed hands (029 makes the new controller's action a new one).
+        # The link names it, so it stays void even if control comes back and 029 decides it after all.
+        superseded = None if pending is None else pending.attempt.attempt_id
+        if self._adjudication.outcome(campaign_id, frame.attempt_id) is not None:
+            # Linking a known result would let a success be pinned to an obstacle after the fact.
+            raise _refused(f"attempt {frame.attempt_id!r} is already decided", "already_decided")
+        attempt = builder.check_attempt(obstacle_id, attempt.attempt_id, given.approach_id,
+                                        None if listed else given, superseded)
+        self._check(state, attempt, frame, state.after)
+        self._adjudication.check(frame, contribution=contribution, author=author)  # 029's refusals, unwritten
+        payload = attempt_to_payload(obstacle_id, attempt.attempt_id, given, listed, superseded)
+        try:  # what _append would refuse, refused before anything is written
+            entry_cost(envelope("attempt", self._authority.now(), recorded_by=self._principal, value=payload))
+        except InvalidEnvelope as error:
+            raise _refused(str(error), "invalid_field") from None
+        except ValueError as error:
+            raise _refused(str(error), "too_large") from None
+        return builder, (obstacle_id, attempt, payload)
 
     # -- internals ----------------------------------------------------------------------------
 
@@ -313,7 +392,8 @@ class ObstacleLibrary:
                   if (entry := adjudication.frame(a.attempt_id)) is not None}
         outcomes = {a.attempt_id: adjudication.decisions[a.attempt_id].outcome for a in attempts
                     if a.attempt_id in adjudication.decisions}
-        return derive(entries[-1].obstacle, entries[-1].revision, attempts, frames, outcomes)
+        return derive(entries[-1].obstacle, entries[-1].revision, attempts, frames, outcomes,
+                      builder.withdrawn)
 
     def _append(self, builder: _Builder, kind: str, payload: dict[str, object]) -> None:
         name = ledger_for(builder.campaign_id)
@@ -354,6 +434,10 @@ def _replay(campaign_id: str, name: str, entries: Iterable[object], head: Head |
                 obstacle = obstacle_from_payload(campaign_id, data["value"])
                 builder.add_obstacle(ObstacleEntry(obstacle, builder.check_obstacle(obstacle),
                                                    recorded_by))  # type: ignore[arg-type]
+            elif kind == "withdrawal":
+                obstacle_id, attempt_id = withdrawal_from_payload(data["value"])
+                builder.check_withdrawal(obstacle_id, attempt_id)
+                builder.add_withdrawal(attempt_id)
             else:
                 obstacle_id, attempt_id, approach_id, novel, supersedes = attempt_from_payload(data["value"])
                 builder.add_attempt(obstacle_id, builder.check_attempt(obstacle_id, attempt_id, approach_id, novel,

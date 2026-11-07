@@ -22,9 +22,11 @@ Can create playable situations using freeform narration and current state; quest
 
 Milestones 1 and 2 are built as a first slice ([OBSTACLES](../../OBSTACLES.md)): `grimoire.obstacles` and `grimoire.obstaclestore`, with attempts framed and decided through [029](../../ADJUDICATION.md). The proving scenario runs headless: the bribe succeeds, the archive is overcome, and the purse and the guard's expected cut come due. An attempt superseded because it could not be decided (its actor changed hands) is named by the link that superseded it and stays void even if control returns and 029 decides it; framing is crash-explored under the fault harness.
 
+With 035 milestone 2 (Wave 6), 035's runner plays obstacles ([SCENES](../../SCENES.md#attempting-an-obstacle-040)): the labeller picks a suggested or novel approach and frames it through 029, and an attempt's due costs and stakes are applied as 021 accepted effects through their authored [structured changes](../../OBSTACLES.md#structured-changes) (holdings for coin, relations for reputation).
+
 ## Planned later work
 
-- Apply an attempt's due costs and stakes as 021 accepted effects (holdings for coin, relations for reputation), through 035's runner.
+- ~~Apply an attempt's due costs and stakes as 021 accepted effects (holdings for coin, relations for reputation), through 035's runner.~~ **done** (above); secret obstacle facts and escalation from a novel approach remain.
 - Group attempts (several characters at one obstacle) and contests between actors, with 029 milestone 3.
 - Graded escalation and clocks; retiring an obstacle the story has moved past.
 - Milestone 3: optional procedural encounter design grounded in actor motives and the setting.

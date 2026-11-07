@@ -42,6 +42,7 @@ No prices ship (013). Without a table every cost is `unpriced`.
 | `brief.npc` / `pack` | one speaker's brief and its packed context (with an agenda, 039's check, choice and the brief rebuilt with it) | `heard`; `items`, `omitted` |
 | `brief.director` | the director's brief | |
 | `plan`, `provider`, `review` | planning the turn's calls, running them, reviewing the takes | `calls` |
+| `write.obstacle` | `pass_turn`'s withdrawal of an obstacle attempt 029 cannot decide (040), before the turn write | |
 | `write.turn` | each turn write (a file, or 028's choice or 016's resume rewriting several in one commit), its checks under the lock included | |
 
 `generate` and `label` (035 M2's labelling call) add one call sample per booked attempt from their meter. Without a tracer every span is a no-op and nothing is timed.
