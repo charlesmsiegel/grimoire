@@ -16,12 +16,12 @@ jobs:
     name: domain contracts (Python 3.11, ${{ matrix.shard }})
     runs-on: ubuntu-24.04
     # The whole suite took 24 minutes here on a busy night (#647's first run, against about 12 on
-    # an idle runner), so the domain job runs in the compat cells' five shards (docs/TESTING.md#ci-gate).
+    # an idle runner), so the domain job runs in the compat cells' seven shards (docs/TESTING.md#ci-gate).
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [store-explorations, explorations, sync, stores, rest]
+        shard: [store-explorations, deletion-explorations, explorations, sync, peersync, stores, rest]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
@@ -39,9 +39,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     # The suite no longer fits one 30-minute job: the whole of it took 25-30 minutes on the Ubuntu
     # cells (Python 3.12 and 3.13) and Windows file I/O makes the crash explorations several times
-    # slower still. So Ubuntu and Windows run in five shards that together cover every test file: the
-    # store-backed crash explorations, the other crash and fault explorations, the replica-sync files,
-    # the other store files, and the rest (tests/conftest.py; docs/TESTING.md#ci-gate). The Ubuntu
+    # slower still. So Ubuntu and Windows run in seven shards that together cover every test file: the
+    # store-backed crash explorations, the store's deletion explorations, the other crash and fault
+    # explorations, the replica-sync files, the two-device transfer files, the other store files, and
+    # the rest (tests/conftest.py; docs/TESTING.md#ci-gate). The Ubuntu
     # cells are the os x python x shard product; each include entry names another OS, so it adds a
     # cell of its own (macOS unsharded, Windows one per shard).
     timeout-minutes: 30
@@ -50,7 +51,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04]
         python: ["3.12", "3.13"]  # 3.11 on Ubuntu is the domain job
-        shard: [store-explorations, explorations, sync, stores, rest]
+        shard: [store-explorations, deletion-explorations, explorations, sync, peersync, stores, rest]
         include:
           - os: macos-latest
             python: "3.11"
@@ -59,10 +60,16 @@ jobs:
             shard: store-explorations
           - os: windows-latest
             python: "3.11"
+            shard: deletion-explorations
+          - os: windows-latest
+            python: "3.11"
             shard: explorations
           - os: windows-latest
             python: "3.11"
             shard: sync
+          - os: windows-latest
+            python: "3.11"
+            shard: peersync
           - os: windows-latest
             python: "3.11"
             shard: stores
