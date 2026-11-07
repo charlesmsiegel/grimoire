@@ -48,9 +48,10 @@ There is **no UI, no importer and no image generation**. Nothing is fetched from
   - `set`: show `image`;
   - `adjust`: keep the inherited picture and override `crop` and/or `focus`. `image` must name that inherited picture;
   - `hide`: show nothing in this slot;
+  - `inherit` ([046](INHERITANCE.md)): show whatever the base chain shows, as if this subject had never placed the slot. It names no `role`, `image`, `crop`, `focus` or `expression`. The store has no deletes, so this is how a derived portrayal, or an instance, resets an override;
   - `unresolved` ([038](roadmap/sprints/expression-and-art-lineage.md)): a picture belongs in this slot but its bytes are not here, such as a card's remote or packaged picture. It names the slot's `role` (and, for a sprite, its `expression`) and no `image`, `crop` or `focus`. `provenance.note` says why, in the importer's words.
 
-  A source placement may only `set` or mark a picture `unresolved`, never `adjust` or `hide`. A build older than 038 reads an `unresolved` placement as `invalid_placement`, so it shows nothing there either.
+  A standalone source placement may only `set` or mark a picture `unresolved`, never `adjust`, `hide` or `inherit`. A placement on a [046](INHERITANCE.md#art-down-a-base-chain) derived portrayal (an entity whose head revision has a `derivation`) may use every mode, and its `set` may only name its own source's images. A build older than 046 reads a portrayal's `hide`, `adjust` or `inherit`, and any `inherit`, as `invalid_placement`. A build older than 038 reads an `unresolved` placement as `invalid_placement`, so it shows nothing there either.
 - **The slot decides the role:**
 
   | role | slot |
@@ -124,7 +125,7 @@ A refused rule writes nothing. Reasons are machine-readable: `InvalidImage.reaso
 
 The result is a `Resolution`. Each slot is exactly one of:
 
-- **`Shown(slot, role, image, blob, crop, focus, layer, provenance)`**, where `layer` is `source`, `campaign` or `campaign_adjusted`.
+- **`Shown(slot, role, image, blob, crop, focus, layer, provenance)`**, where `layer` is `source`, `source_adjusted` (a portrayal re-crops its base's picture), `campaign` or `campaign_adjusted`.
 - **`Hidden(slot)`.** A campaign `hide` never falls back to the source's picture, or to any picture with the same name.
 - **`Unavailable(slot, "unresolved", note)`** for an `unresolved` placement, with its `provenance.note` (empty when it has none). A campaign's `unresolved` never falls back to the source's picture, and an instance inherits its source's `unresolved` slot as unresolved: another picture of the subject never stands in. An `adjust` over it is refused `nothing_to_adjust`. [Sync](SYNC.md#art) copies it like any placement; it needs no blob.
 - **`Unavailable(slot, reason, text)`.** The reasons are:
@@ -147,7 +148,7 @@ The result is a `Resolution`. Each slot is exactly one of:
 - An instance inherits from its derivation entity: `derived_from` if present, else `base`, taken unpinned.
   - If both are present and name different entities, or a value cannot be parsed, nothing is inherited. Only campaign images are then in scope.
   - An unreadable or newer-format instance is handled the same way.
-- A derived variant or alternate portrayal in another source does **not** inherit art in this slice. That policy belongs to [038](roadmap/sprints/expression-and-art-lineage.md), over 022's derivation links.
+- A 022 derived portrayal inherits its base chain's art **live**, slot by slot, and an instance inherits through its entity's whole chain ([INHERITANCE](INHERITANCE.md#art-down-a-base-chain)). `Resolution.lineage` lists the entities layered, root first, and `Resolution.origin(slot)` says whether the subject's own placement or which ancestor's decides each slot. A broken chain inherits nothing, never a namesake's picture, and a damaged portrayal layer shows `Unavailable(invalid_placement, "portrayal layer damaged")` for every slot it would inherit.
 - **A damaged campaign layer never reveals the source picture.**
   - A campaign placement file that is a link or a directory gives its slot `Unavailable(invalid_placement)`.
   - If the instance's placement folder is a link, is unreadable, exists only under a look-alike spelling, holds any non-canonically named `.json` file (it could be a placement: `Avatar.json`, `avatar copy.json`, a sync tool's `Avatar.sync-conflict-….json`), or has a differently spelled sibling folder at any level below `placements/` (`Wren-b` beside `wren-b`), every inherited slot, and any `adjust` of one, is `Unavailable(invalid_placement, "campaign layer damaged")` instead of `Shown`, because the layer might be hiding something.
@@ -204,8 +205,8 @@ The [inventory](MIGRATION_INVENTORY.md) rows map as follows. `grimoire.import_v1
 - **Limits:**
   - Gating uses `check_source`/`check_definition`, which consult the store's shared, cached [`excluded_sources`](STORAGE.md#read-only-helpers-107). A source excluded **only** by a cross-source `identity_conflict` therefore shows no art, exactly as `load()` would exclude it. [Device sync](SYNC.md#art) reads the same verdict on both devices: art of a source either one excludes is never copied, so a device never shows a picture the other excludes, until the source is repaired. Writing art never invalidates that cache; a batch verifies it once until a commit, and each preview, commit or resolution once ([STORAGE](STORAGE.md#read-only-helpers-107) has the costs and the one staleness limit). Reading many images one by one should be wrapped in one `store.read_pass()`.
   - A damaged campaign layer (a linked, unreadable or look-alike folder or file) shows no source picture at all: every inherited slot, and any `adjust` of one, is `Unavailable(invalid_placement)`.
-  - Art follows the entity, not an instance's pinned `base` revision. Pinning placements to a revision or release belongs to 042/056.
-  - There is no unplace or delete, because the store has no deletes. A source avatar can be removed only by hand.
+  - Art follows the entity, not an instance's or a portrayal's pinned `base` revision, so a pinned chat sees new base art at once. Pinning placements to a revision or release is not built ([INHERITANCE](INHERITANCE.md#limits)).
+  - There is no unplace or delete, because the store has no deletes. A derived portrayal or an instance resets a slot with `inherit`; a standalone source avatar can be removed only by hand.
   - Direct store use (not the service) of a blob create or repair over a hand-placed file larger than 32 MiB reads that file whole during the commit.
   - **Placement subject ids stay taken.** `placement_subject_ids(store, campaign_id)` returns every id with a campaign placement folder (`placements/<kind>/<id>/`) from listings only, and a look-alike folder keeps the id it folds to. It is part of the one reservation set, [`campaign_taken_ids`](CHATS.md#taken-instance-ids), so a hand-deleted actor's id never goes to a new individual who would show the old one's `hide` or `set` art. A folder that could hold a subject but is a link or cannot be listed raises `TakenIdsUnlisted`.
-- **Later milestones:** gallery ordering and collections; expression manifests and outfit sets; captions and subjects; scene art; legacy loose images; cross-source portrayal inheritance ([038](roadmap/sprints/expression-and-art-lineage.md)); blob garbage collection; dimension probing; and image generation. Image objects, placements and blobs are synced between devices ([SYNC](SYNC.md#art)).
+- **Later milestones:** gallery ordering and collections; expression manifests and outfit sets; captions and subjects; scene art; legacy loose images; blob garbage collection; dimension probing; and image generation. Image objects, placements and blobs are synced between devices ([SYNC](SYNC.md#art)).

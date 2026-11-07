@@ -52,7 +52,7 @@ The recorded `base_etag` must still match the ancestor's bytes. If it doesn't, t
 - **`keep`** keeps the campaign's value as an instance override: the ancestor value on an `upstream` row, the override on a `conflict` row.
   - A name goes to `local_name`.
   - A facet goes to `replaced` if upstream has that trait, otherwise to `added`. A converged or kept `added` facet that upstream now has moves to `replaced`, because 009 refuses an `added` facet that shadows a trait.
-  - Description, sections and payload extras have no instance-level override in this slice. An instance also cannot suppress a trait upstream adds. `keep` on those is `not_overridable`: take the change, or stay pinned. A campaign keeping its own voice or greeting is 046's design.
+  - Description, sections and payload extras have no instance-level override in this slice. An instance also cannot suppress a trait upstream adds. `keep` on those is `not_overridable`: take the change, or stay pinned. A campaign keeping its own voice or greeting is not built yet ([INHERITANCE](INHERITANCE.md#limits)); a world portrayal can already override, clear or reset one field at a time.
 
 **Uncomposed payload keys** get an `extra:<key>` row too. 022 does not compose them (`EffectiveDefinition.uncomposed`), but other sprints read them. The main one is 037's `card`, which holds a card's example dialogue, greetings and system prompt; 035 reads it for the actor's voice and its opening line.
 - The row compares the key's value in every layer of the chain, leaf first, because 035's voice reads a base's card too. `ancestor` and `upstream` hold those values (`None` where a layer lacks the key).
@@ -152,7 +152,7 @@ What the chat's snapshot refuses for an actor (missing, undecodable, broken bind
 |---|---|
 | Rebasing a derived portrayal onto its base's new revision (source-level rebase) | 042 later |
 | Campaign-local overrides of description and sections, so one of two changed sections can be kept | 042 later (a 009 payload change) |
-| Keeping a campaign's own voice, greeting or system prompt when a card changes (`keep` on an `extra:` row) | 046 |
+| Keeping a campaign's own voice, greeting or system prompt when a card changes (`keep` on an `extra:` row) | 046 later |
 | Adopting a *different* entity for an existing actor (a world portrayal of its card), which needs a 107 roster change | 042 later |
 | A reviewed way to drop lived state when upstream removes the facet it needs | 042 later |
 | Checking at review that every layer of a derived ancestor is still what was adopted (`base_etag` covers the leaf; commit re-checks every layer against the review) | 042 later |
