@@ -31,6 +31,7 @@ Extend field provenance to voice anchors (027 owns speaking prompts), scoped art
 
 The [Wave 5 audit](../README.md#wave-5-status) records what this sprint inherits from 038 and 042's first slices:
 - **Art (038, [IMAGES](../../IMAGES.md)).** Derived-portrayal art inheritance and revision-pinned card art are 038's later milestone 2, which no wave schedules; this sprint delivers them with field inheritance. Today card art follows the entity, not a pinned revision, so a card update changes the art of a chat pinned to an older revision.
+- **Chats pin by default ([REBASE](../../REBASE.md#pin-by-default)).** Since the Wave 5 audit (#627) every product path pins a chat's sources at the revision it binds, so a source update reaches a chat only through a reviewed rebase. Live inheritance must keep that: a field that inherits live changes a pinned chat only through a review, never silently.
 - **Rebase (042, [REBASE](../../REBASE.md)).** Instance-level text overrides (keeping one of two changed sections), source-level rebase of a derived portrayal onto its base's new revision (Mara's Regency and Modern portrayals over one concept), and whether a campaign may keep its own voice or greeting when the card's changes (042's review shows them as take-only rows today).
 
 ## Open questions
