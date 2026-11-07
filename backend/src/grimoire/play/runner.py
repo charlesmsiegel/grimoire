@@ -38,7 +38,7 @@ from grimoire.intent import RoutingContext, Utterance, route
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import ControlChange
 from grimoire.partystore import PartyLibrary
-from grimoire.play.adjudicate import check_decided, confirm_action, decide_action, outcome_of, with_outcome
+from grimoire.play.adjudicate import check_decided, confirm_action, decide_action, outcome_lines, outcome_of
 from grimoire.play.history import chat_history
 from grimoire.play.labels import label_action
 from grimoire.play.scene import (
@@ -91,8 +91,12 @@ class SceneRunner:
                                              and getattr(label_handle, "trusted", None) is False):
             raise _refuse("bad_handle", "the label handle is an untrusted handle this library's authority issued")
         if adjudication is not None and not (isinstance(adjudication, AdjudicationLibrary)
-                                             and adjudication.store is store):
+                                             and adjudication.store is store and adjudication.authority is authority):
             raise _refuse("bad_adjudication", "adjudication must be this library's AdjudicationLibrary")
+        if adjudication is not None and (not adjudication.principal.startswith("app:") or adjudication.principal in {
+                getattr(label_handle, "principal", None), getattr(getattr(labeller, "_handle", None), "principal", None)}):
+            # the requester's call: the key is the app's own, never a player's, the owner's or the labeller's
+            raise _refuse("bad_adjudication", "the adjudication key is the app's own, apart from the labeller's")
         self.store = store
         self.authority = authority
         self.handle = handle
@@ -358,7 +362,7 @@ class SceneRunner:
         if not chosen and not director:
             raise _refuse("nothing_to_generate", "no NPC here can speak; ask for a director reply")
         pending = scene.pending
-        outcome = check_decided(self, pending)
+        check_decided(self, pending)
         stored = scene.turns.last if pending is not None else None
         record = pending if pending is not None else TurnRecord(
             chat, 1 if scene.last is None else scene.last.number + 1, "prompt", device=self.scenes.device())
@@ -377,8 +381,8 @@ class SceneRunner:
         if director and not any(call.stage is InferenceStage.DIRECTOR_GENERATION for call in plan.calls):
             raise _refuse("director_declined", "the inference policy allows no director reply")
         try:
-            briefs = self._briefs(context, chosen, heard_turns, outcome)
-            director_view = self._director(context, heard_turns, outcome) if director else None
+            briefs = self._briefs(context, chosen, heard_turns)
+            director_view = self._director(context, heard_turns) if director else None
         except GenerationError as error:
             raise _refuse(error.reason, "a brief cannot be built") from None
         planned = tuple(CallRecord(call.call_id.phase, call.stage, call.call_id.actor_id, call.call_id.ordinal,
@@ -441,16 +445,15 @@ class SceneRunner:
         ledger = EvidenceLibrary(self.store, self.handle, owner=self.owner).read(chat.campaign_id, requested_by=DIRECTOR)
         return ledger, _latest(ledger.knowledge)
 
-    def _briefs(self, context: _Context, chosen, turns: Sequence[TurnRecord], outcome=None) -> list:
+    def _briefs(self, context: _Context, chosen, turns: Sequence[TurnRecord]) -> list:
         if not chosen:
             return []
         scene, snap, chat = context.scene, context.captured.snapshot, context.scene.chat
         ledger, as_of = self._knowledge(chat)
+        _, bare = outcome_lines(self, turns, scene.names)  # an NPC hears a result where it saw the action
         briefs = []
         for actor, voice in chosen:
-            heard = heard_for(turns, actor, scene.names, before=scene.imported)
-            if turns and turns[-1].post is not None and actor in turns[-1].post.audience:  # it saw the action
-                heard = with_outcome(heard, outcome, scene.names, table=False)
+            heard = heard_for(turns, actor, scene.names, before=scene.imported, outcomes=bare)
             built = actor_context(context.view, chat, ledger, actor, as_of=as_of, budget=self.budget,
                                   present=scene.cast, scene_text=render(heard))
             knowledge = actor_knowledge(ledger.knowledge, actor, as_of=as_of)
@@ -459,13 +462,13 @@ class SceneRunner:
                                     context=built.pack, snapshot=snap))
         return briefs
 
-    def _director(self, context: _Context, turns: Sequence[TurnRecord], outcome=None):
+    def _director(self, context: _Context, turns: Sequence[TurnRecord]):
         scene, chat = context.scene, context.scene.chat
         scenario = _scenario_text(context)
         if not scenario:
             raise _refuse("no_scenario", "a director reply needs a bound scenario or a premise")
-        table = with_outcome(table_lines(turns, scene.names, before=scene.imported), outcome, scene.names,
-                             table=True)
+        table = table_lines(turns, scene.names, before=scene.imported,
+                            outcomes=outcome_lines(self, turns, scene.names)[0])
         lore = chat_lore(context.view, chat, table_text=render(table), budget=self.budget).lore
         names = {actor.instance_id: name for actor, name in scene.names.items()}
         brief = director_brief(scenario, campaign_id=chat.campaign_id, present=[a.instance_id for a in scene.cast],

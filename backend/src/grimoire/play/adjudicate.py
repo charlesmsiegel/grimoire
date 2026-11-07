@@ -18,7 +18,7 @@ from grimoire.adjudication import PROSE_MAX, ActionFrame, AdjudicationError, Dec
 from grimoire.core.authority import PlayerContribution
 from grimoire.core.identity import ChatRef
 from grimoire.core.knowledge import Moment
-from grimoire.generation import MAX_HEARD, MAX_LINE_CHARS, HeardLine
+from grimoire.generation import MAX_LINE_CHARS, HeardLine
 from grimoire.play.scene import WRITE_RETRIES, _refuse
 from grimoire.scene import SceneRefused, TurnRecord
 from grimoire.store.errors import LedgerInvalid, StoreError
@@ -149,19 +149,29 @@ _UNAVAILABLE = frozenset({"adjudication_unreadable", "adjudication_unavailable"}
 
 def _unframe(runner, chat: ChatRef, record: TurnRecord, number: int, reason: str) -> None:
     """Write labelling ``number`` ``refused`` with ``reason`` if it is the turn's framed one and 029 never
-    recorded it, so the action goes back to unframed play; best effort (the refusal is raised either way)."""
+    recorded it, so the action goes back to unframed play; best effort (the refusal is raised either way).
+
+    029 is read again, and the turn written, under the store lock 029 records a frame under: a concurrent
+    confirm that recorded the frame meanwhile keeps its turn marker."""
+    library = _library(runner)
     for _ in range(WRITE_RETRIES):
-        stored = next((s for s in runner.scenes.turns(chat).turns if s.record.ref == record.ref), None)
-        label = stored.record.framed if stored is not None else None
-        if label is None or label.label != number:
-            return
-        try:
-            runner.scenes.write(stored.record.with_label(
-                replace(label, state="refused", factors=(), stakes=(), reason=reason[:200])), stored)
-            return
-        except SceneRefused as error:
-            if error.reason != "turn_changed":
+        with runner.store.lock:
+            try:
+                if library.state(chat.campaign_id).frame(record.turn_id) is not None:
+                    return  # recorded after all: the turn stays framed
+            except (AdjudicationError, StoreError):
+                return  # 029 cannot be read: leave the mark, the next confirm settles it
+            stored = next((s for s in runner.scenes.turns(chat).turns if s.record.ref == record.ref), None)
+            label = stored.record.framed if stored is not None else None
+            if label is None or label.label != number:
                 return
+            try:
+                runner.scenes.write(stored.record.with_label(
+                    replace(label, state="refused", factors=(), stakes=(), reason=reason[:200])), stored)
+                return
+            except SceneRefused as error:
+                if error.reason != "turn_changed":
+                    return
 
 
 def _mark_framed(runner, chat: ChatRef, record: TurnRecord, number: int) -> TurnRecord:
@@ -240,13 +250,22 @@ def check_decided(runner, record: TurnRecord | None) -> Outcome | None:
     return outcome
 
 
-def with_outcome(heard, outcome: Outcome | None, names, *, table: bool) -> tuple[HeardLine, ...]:
-    """``heard`` with the outcome after it, still within ``MAX_HEARD`` lines: the table's full line for the
-    director (``table``), the bare result for an NPC."""
-    if outcome is None:
-        return tuple(heard)
-    line = outcome_line(outcome, names) if table else heard_outcome(outcome)
-    return (*heard, line)[-MAX_HEARD:]
+def outcome_lines(runner, turns, names) -> tuple[dict[str, HeardLine], dict[str, HeardLine]]:
+    """Every decided action's outcome among ``turns``, by turn id: the table's full line (for the director)
+    and the bare result (for an NPC or the acting character), heard where the action was. A framed turn is
+    read only with the key it was framed under (``no_adjudication`` without one)."""
+    framed = [record for record in turns if record.framed is not None]
+    if not framed:
+        return {}, {}
+    state = _029(_library(runner).state, framed[0].chat.campaign_id)
+    table: dict[str, HeardLine] = {}
+    bare: dict[str, HeardLine] = {}
+    for record in framed:
+        entry = state.decisions.get(record.turn_id)
+        if entry is not None:
+            table[record.turn_id] = outcome_line(entry.outcome, names)
+            bare[record.turn_id] = heard_outcome(entry.outcome)
+    return table, bare
 
 
 def heard_outcome(outcome: Outcome) -> HeardLine:
@@ -276,4 +295,4 @@ def outcome_line(outcome: Outcome, names) -> HeardLine:
 
 
 __all__ = ["OUTCOME_SPEAKER", "PROVENANCE", "check_decided", "confirm_action", "decide_action", "frame_of",
-           "heard_outcome", "outcome_line", "outcome_of", "with_outcome"]
+           "heard_outcome", "outcome_line", "outcome_lines", "outcome_of"]

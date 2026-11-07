@@ -21,6 +21,7 @@ from types import SimpleNamespace
 
 from grimoire.adjudication import AdjudicationError
 from grimoire.core.identity import InstanceRef
+from grimoire.adjudicationstore import AdjudicationLibrary
 from grimoire.core.inference import InferenceStage
 from grimoire.generation import MAX_LINE_CHARS
 from grimoire.play.adjudicate import outcome_line
@@ -345,6 +346,21 @@ def test_an_uncertain_action_waits_and_no_narration_is_written_or_kept_until_it_
         table.runner.keep(chat, table.player(), take.take)
 
 
+def test_a_decided_outcome_stays_where_it_was_heard_in_later_turns(cards):
+    folder, chat = cards
+    steps = [say("Mara nods."), say("Mara answers."), say("The storm builds.")]
+    with judged(folder, UNOPPOSED, steps=steps) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        table.runner.confirm(chat, table.player())
+        table.runner.keep(chat, table.player(), table.runner.generate(chat, table.player()).take)
+        table.runner.post(chat, table.player(), '"Did you see that?"')
+        table.runner.generate(chat, table.player())
+        npc = table.harness.prompts()[-1]
+        assert "Anya Rook: *I climb the rigging*\nOutcome: The action succeeds.\nMara Vell: Mara nods." in npc
+        assert "A harbor pilot" not in npc.split("Outcome:", 1)[1].split("\n", 1)[0]  # still the bare result
+
+
 def test_the_player_may_consent_to_a_setback_for_their_own_action(cards):
     folder, chat = cards
     with judged(folder, HINDERED) as table:
@@ -369,6 +385,15 @@ def test_the_adjudication_key_must_be_this_librarys(cards, tmp_path):
     with judged(folder) as table:
         refused("bad_adjudication", SceneRunner, table.store, table.authority, table.owner, owner=OWNER,
                 adjudication=object())
+
+
+def test_the_adjudication_key_is_the_apps_own_never_a_players_or_the_labellers(cards):
+    folder, _ = cards
+    with judged(folder) as table:
+        for principal in (ANA, OWNER, LABELLER):  # the acting player, the owner, the labeller's principal
+            key = AdjudicationLibrary(table.store, table.authority, table.authority.handle_for(principal, trusted=True))
+            refused("bad_adjudication", SceneRunner, table.store, table.authority, table.owner, owner=OWNER,
+                    label_handle=table.authority.handle_for(LABELLER, trusted=False), adjudication=key)
 
 
 def failing_once(owner, name: str, error: Exception) -> None:
@@ -464,6 +489,19 @@ def test_a_frame_029_refuses_for_good_sends_the_action_back_to_unframed_play(car
         table.runner.generate(chat, table.player())  # never framed: play goes on
         table.runner.label(chat, table.player())
         assert table.runner.confirm(chat, table.player()).decision.result == "success"
+
+
+def test_a_rollback_never_unframes_a_frame_029_recorded_meanwhile(cards):
+    from grimoire.play.adjudicate import _unframe
+    folder, chat = cards
+    with judged(folder, HINDERED) as table:
+        acting(table, chat)
+        table.runner.label(chat, table.player())
+        assert table.runner.confirm(chat, table.player()) is None  # framed in 029, waiting on a decision
+        record = table.runner.open(chat).pending
+        _unframe(table.runner, chat, record, record.framed.label, "card_missing")  # a losing confirm's rollback
+        assert table.runner.open(chat).pending.framed is not None  # the recorded frame keeps its turn marker
+        assert table.runner.decide(chat, table.owner, "partial", cites=("f1", "f2"), consequences=("s1",))
 
 
 def test_ids_given_as_a_generator_are_all_kept(cards):

@@ -313,6 +313,16 @@ class AdjudicationLibrary:
         self._authority = authority
         self._principal: str = handle.principal  # type: ignore[attr-defined]
 
+    @property
+    def authority(self) -> DurableAuthority:
+        """The authority that issued the adjudication key."""
+        return self._authority
+
+    @property
+    def principal(self) -> str:
+        """Who the adjudication key records entries as."""
+        return self._principal
+
     # -- reading ------------------------------------------------------------------------------
 
     def state(self, campaign_id: str) -> AdjudicationState:
