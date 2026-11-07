@@ -10,17 +10,20 @@ library; every model call is a scripted fake.
 
 from __future__ import annotations
 
+import json
 import shutil
 from hashlib import sha256
 
 import pytest
 
-from scene_fixtures import ANA, Table, card_library, say
+from scene_fixtures import ANA, ANYA, MARA_VELL, Table, card_library, say
 from store_helpers import OWNER
 
+from chat_fixtures import Clock
+from grimoire.archaeologystore import StImporter
+from grimoire.core.identity import TurnRef
 from grimoire.scene import TURN_SCHEMA, SceneRefused, turn_id, turn_to_payload
 from grimoire.scene.branches import replay_tag
-from grimoire.core.identity import TurnRef
 from grimoire.store import ScopeRecord, etag
 from grimoire.store.envelope import scope_record_document
 from grimoire.store.jsonfmt import render
@@ -335,3 +338,39 @@ def test_a_turn_written_before_follows_needs_what_its_origin_places_it_after(ori
     assert turn_named(path, data, scan) == [f"{folder}/{name}.json" for name in needed]
     with_follows = ScopeRecord(ref, TURN_SCHEMA, {"chat": "c", "number": 3, "follows": "c.000002"}, owner=OWNER)
     assert turn_named(path, render(scope_record_document(with_follows, None)), scan) == []
+
+
+def test_a_forked_imported_chat_hears_its_history_then_the_chosen_branch_only(built, tmp_path):
+    """035 M2's imported history comes before turn 1 on every branch; a choice sets aside only played turns."""
+    folder, _ = built
+    shutil.copytree(folder, tmp_path / "base")
+    rows = [{"user_name": "Anya Rook", "character_name": "Mara Vell", "create_date": "2026-01-02@10h00m00s"},
+            {"name": "Mara Vell", "is_user": False, "mes": "The lamps are out tonight.", "original_avatar": "m.png"},
+            {"name": "Anya Rook", "is_user": True, "mes": "Then we wait for the tide.",
+             "force_avatar": "User Avatars/a.png"}]
+    data = ("\n".join(json.dumps(row) for row in rows) + "\n").encode("utf-8")
+    with Table(tmp_path / "base") as base:
+        importer = StImporter(base.store, base.owner, clock=Clock(), owner=OWNER)
+        avatars = {speaker.avatar: speaker.id for speaker in importer.scan(data).speakers}
+        plan = importer.plan(data, speakers={avatars["m.png"]: MARA_VELL, avatars["User Avatars/a.png"]: ANYA},
+                             name="harbor.jsonl")
+        plan.commit()
+        chat = plan.chat
+        base.runner.seat(chat, ANA)
+    for name in (DESKTOP, PHONE):
+        shutil.copytree(tmp_path / "base", tmp_path / name)
+        with Table(tmp_path / name) as table:
+            identify(table.store, name)
+    with Table(tmp_path / DESKTOP, [say("Desk reply.")]) as desk, \
+            Table(tmp_path / PHONE, [say("Phone reply."), say("Phone goes on.")]) as phone:
+        play(desk, chat, "Asked on the desktop.")
+        play(phone, chat, "Asked on the phone.")
+        assert synced(desk, phone).conflicts == ()
+        fork = phone.runner.open(chat).turns.fork
+        assert fork.number == 1 and fork.after is None
+        phone.runner.choose(chat, phone.owner, turn_id(chat, 1, tag(DESKTOP)))
+        play(phone, chat, "And now?")
+        prompt = phone.harness.prompts()[-1]
+        assert prompt.index("The lamps are out tonight.") < prompt.index("Asked on the desktop.")
+        assert "Then we wait for the tide." in prompt and "Asked on the phone." not in prompt
+        assert phone.runner.open(chat).imported is not None
