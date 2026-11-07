@@ -148,6 +148,8 @@ Knowledge records are immutable like definition revisions: a new one is copied c
 
 A refused merge holds the log as one unit, as diverged logs always were: each batch that would have crossed is an **`unapplicable`** conflict whose detail names the records (never their text), each device keeps the other's batches under `.conflicts`, the rest of the campaign's knowledge copies are skipped, and each device keeps a healthy log of its own appends. `resolve` refuses it too (it would deliver the union). It ends when one device's offline appends are rolled back as 020 documents (remove its newest batches and exactly the records they list): the other's then sync over whole. A one-way copy (one log already holds all of the other) is never checked, as before.
 
+**Deletions never touch a log.** Knowledge records and batches are create-only, so sync never deletes one (a merged batch or record missing on one device is a conflict, never a propagated deletion, and the other device's log still reads whole), and a deletion of anything a log's records name, or of a campaign's last scope or instance while its log is left, is held back (`delete_dependency`, "Propagated deletions"). 035's turns are held and never decided, so they never take part either (`test_sync_deletion.py`).
+
 **Record ids.** 020 takes record ids from its callers. Two devices that used one id for different bytes made a path conflict (above), never a merge; allocators must device-tag new ids ([EVIDENCE](EVIDENCE.md#deferrals)). Logs that forked under the untagged names (identified libraries that appended before this build) still collide on `batch/<seq>.json`: a keep-both `missing_ancestor` conflict with the log held, as before.
 
 ## Art

@@ -14,23 +14,26 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.core.identity import InstanceRef, SourceRef
+from grimoire.core.identity import ChatRef, InstanceRef, SourceRef
 from grimoire.store import InvalidEnvelope, LibraryStore, ProcessLocker, RecordEnvelope, SourceManifest, etag
-from grimoire.store.layout import conflict_parts
+from grimoire.store.layout import address_parts, conflict_parts, turn_parts
 from grimoire.sync import ResolveRefused, SyncInterrupted, resolve, sync, sync_until_quiet
 from grimoire.sync import deletion, keeps as kept_record, resolution, session as sync_session
 from grimoire.sync.documents import keeps_name, parse_keeps, render_keeps
 from grimoire.testing import CrashScenario, Invariant, explore_crashes, idempotent_recovery, no_residue, run_plans
 from grimoire.testing.fileops import snapshot
 
+from evidence_fixtures import MARA
 from store_helpers import HARBOR, WREN_R2, drop_empty_dirs, harbor_manifest, instance, owner_handle
 from sync_helpers import (
     DESKTOP, PATHS, PHONE, WREN_A, WREN_B, canonical, chat_record, converged, edit_instance, handle, handles, kept,
-    make_pair,
-    new_revision, put,
+    make_pair, new_revision, put,
 )
+from test_store_turns import post_turn, scenes, tag
+from test_sync_knowledge import batch_paths, offline_appends, pair_with_log, read
 
 PAIR = (DESKTOP, PHONE)
+TURN_CHAT = ChatRef("c1", "talk")
 
 
 @pytest.fixture
@@ -566,3 +569,42 @@ def test_resolving_toward_the_deletion_survives_a_crash_or_error_at_every_commit
                              select=lambda op: points.get(op.index, frozenset()))
     report.assert_ok()
     assert len(points) >= 5  # holds, data, archives, pending
+
+
+# -- knowledge logs and turns never take part (020 create-only, 035 held) ----------------------
+
+def test_a_merged_knowledge_log_keeps_what_it_names_and_never_loses_a_batch(tmp_path):
+    """After two offline appends merged, one device deletes an actor the log names and one of the
+    merged batches: the actor's deletion is held back (the log still names it), the batch is
+    create-only so its absence is a conflict, never a deletion, and both devices still read the
+    whole merged log."""
+    desktop, phone = pair_with_log(tmp_path)
+    try:
+        offline_appends(desktop, phone)
+        assert sync(desktop, phone, handles()).conflicts == ()
+        actor = "/".join(address_parts(MARA))
+        batch = next(path for path in batch_paths(phone) if path.endswith(f"-{tag(PHONE)}.json"))
+        for path in (actor, batch):
+            (desktop.root / path).unlink()
+        report = sync(desktop, phone, handles())
+        assert report.deleted == () and report.conflict(actor).code == "delete_dependency"
+        assert report.conflict(batch) is not None and (phone.root / batch).exists() and (phone.root / actor).exists()
+        log = read(phone)
+        assert log.quarantined == () and log.problems == ()
+        assert {e.event_id for e in log.knowledge.events} == {"e1", "e-desk", "e-phone"}
+    finally:
+        desktop.close()
+        phone.close()
+
+
+def test_a_turn_deleted_on_one_device_is_never_deleted_on_the_other(pair):
+    """035's played turns are held: never copied, decided or deleted by sync, whichever device lacks one."""
+    desktop, phone = pair
+    written = scenes(desktop).write(post_turn(TURN_CHAT, 1, device=tag(DESKTOP)), None)
+    path = "/".join(turn_parts(written.record.ref))
+    (phone.root / path).parent.mkdir(parents=True, exist_ok=True)
+    (phone.root / path).write_bytes((desktop.root / path).read_bytes())
+    (desktop.root / path).unlink()
+    report = sync(desktop, phone, handles())
+    assert report.deleted == () and (phone.root / path).exists()
+    assert all(conflict.code == "held" for conflict in report.conflicts if conflict.path == path)
