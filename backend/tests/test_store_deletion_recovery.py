@@ -1,6 +1,6 @@
 """Crash, torn-write, error and race explorations of the store's deletion (028), apart from its unit
-tests (``test_store_delete.py``) so that they run in an explorations CI shard. Named without
-``store``, they run in ``explorations`` rather than ``store-explorations``, which balances the two
+tests (``test_store_delete.py``) so that they run in an explorations CI shard: named for the store
+and for deletion, they run in ``deletion-explorations``, apart from the other store explorations
 (docs/TESTING.md#ci-gate).
 
 The explorations that crash the recovery after every crash of the action are split by where the

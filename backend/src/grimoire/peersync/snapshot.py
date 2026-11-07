@@ -30,6 +30,7 @@ from grimoire.store.layout import name_key
 from grimoire.store.media import MAX_BLOB_BYTES
 from grimoire.store.replica import CanonicalScan
 from grimoire.sync.bookkeeping import pair_files, read_document
+from grimoire.sync import units as ledger_units
 from grimoire.sync.documents import DEVICE_FILE, keeps_name, pair_state, parse_device
 
 from .errors import MirrorMismatch, TransportError
@@ -250,6 +251,38 @@ def _walk(root: Path, parts: tuple[str, ...], depth: int,
         yield from _walk(root, (*parts, name), depth + 1, blocked)
 
 
+def base_files(store: LibraryStore, peer: str, device: str | None) -> tuple[dict[str, bytes], list[str]]:
+    """028: the pair's base cache entries a merge may need from this device: each ledger file its archive
+    records as agreed that it no longer holds as agreed (an unchanged one is its own base, sent as itself).
+
+    Also the names of those entries that cannot be read here (a folder where the file should be, say): an
+    entry is an optional copy, so it is left out, never a failed snapshot, and the client's mirror then
+    plans no write over it (``MirrorStore.read_sync_state``), which this device would refuse."""
+    if device is None:
+        return {}, []
+    view = read_document(store, "archive", peer, tuple(sorted((device, peer))))  # type: ignore[arg-type]
+    found: dict[str, bytes] = {}
+    unreadable: list[str] = []
+    for path, (kind, tag) in sorted(getattr(view, "entries", {}).items()):
+        if kind != "agreed" or not ledger_units.is_unit_path(path):
+            continue
+        try:
+            current = store.read_exact(path)
+        except (StoreError, OSError):
+            current = None  # unreadable here: the client's plan sees it blocked and stops that merge anyway
+        if current is not None and etag(current) == tag:
+            continue
+        name = ledger_units.base_name(peer, path)
+        try:
+            data = store.read_sync_state(name)
+        except (StoreError, OSError, ValueError):
+            unreadable.append(name)  # no base for that merge, which then stops for review
+            continue
+        if data is not None and etag(data) == tag:
+            found[name] = data
+    return found, unreadable
+
+
 def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -> None:  # type: ignore[no-untyped-def]
     """Stream this library's snapshot for the pair (this device, ``peer``) to the authenticated peer."""
     principal = peer_principal(peer)
@@ -271,6 +304,8 @@ def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -
         # sent as they stand, so the mirror's document is ignored with the same paths uncertain
         states.update(pair_files(store, kind, peer) if device is None  # the mirror refuses it anyway
                       else read_document(store, kind, peer, tuple(sorted((device, peer)))).files)  # type: ignore[arg-type]
+    bases, unreadable = base_files(store, peer, device)
+    states.update(bases)
     for name, data in states.items():
         channel.send({"t": "state", "name": name}, data)
     summary = scan_summary(store)  # before the walk: a file changed after it fails the client's check
@@ -281,7 +316,11 @@ def send_snapshot(channel: Channel, store: LibraryStore, authority, peer: str) -
     encoded = json.dumps(summary, sort_keys=True).encode()  # a large library's runs past one frame
     for start in range(0, len(encoded), _SUMMARY_CHUNK):
         channel.send({"t": "scan"}, encoded[start:start + _SUMMARY_CHUNK])
-    channel.send({"t": "end", "entries": count})
+    # 028: whether this device can store its base cache entries (one name length for all, so one answer):
+    # the client's mirror then plans none this device would refuse, which would stop every transfer
+    # and which of the entries it looked for it cannot read, so that the mirror plans no write over one
+    channel.send({"t": "end", "entries": count, "bases": store.sync_state_fits(ledger_units.base_name(peer, "")),
+                  "unreadable_bases": unreadable})
 
 
 # -- client side ------------------------------------------------------------------------------
@@ -297,8 +336,19 @@ class MirrorStore(LibraryStore):
     """
 
     peer_reasons: Mapping[str, str] = {}
+    peer_bases = True  # 028: whether the serving device can store its base cache entries (``sync_state_fits``)
+    #: 028: the base cache entries the serving device found but could not read (``base_files``)
+    peer_unreadable: frozenset[str] = frozenset()
     #: asks the serving device itself (``replay.ask_absent``), set once the session can
     peer_check: Callable[[list[str]], None] | None = None
+
+    def sync_state_fits(self, name: str) -> bool:
+        return self.peer_bases and super().sync_state_fits(name)
+
+    def read_sync_state(self, name: str) -> bytes | None:
+        if name in self.peer_unreadable:  # unreadable there: never absent, so no plan writes over it
+            raise StoreError(f".sync/{name} cannot be read on the serving device")
+        return super().read_sync_state(name)
 
     def confirm_absent(self, paths: list[str]) -> None:
         """019 checks, under both libraries' locks, that the device a deletion came from still lacks
@@ -424,6 +474,11 @@ def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Li
         if entries > limits.entries or total > limits.total_bytes:
             raise TransportError("the peer's snapshot is larger than this device accepts")
         if kind == "end":
+            bases = header.get("bases") is True
+            unreadable = header.get("unreadable_bases", [])
+            if not isinstance(unreadable, list) or len(unreadable) > limits.entries or not all(
+                    pair_state(name, local) and name.startswith(f"peers/{local}/bases/") for name in unreadable):
+                raise TransportError("the snapshot names unexpected unreadable sync files")
             break
         if kind == "scan":
             summary_bytes += len(body)
@@ -471,6 +526,8 @@ def receive_mirror(channel: Channel, root: Path, local: str, limits: Limits = Li
         if not isinstance(reasons, Mapping) or not all(type(reason) is str for reason in reasons.values()):
             raise MirrorMismatch("the peer's scan gives no reason for a blocked entry")
         store.peer_reasons = dict(reasons)
+        store.peer_bases = bases
+        store.peer_unreadable = frozenset(unreadable)
         handle = _grant_handle(grants, peer_principal(local))
     except BaseException:
         store.close()

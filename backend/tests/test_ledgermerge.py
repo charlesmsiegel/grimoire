@@ -456,14 +456,24 @@ def test_a_scene_wrapped_up_on_one_device_merges_with_the_others_play(base, devi
 
 # -- the merge's own arguments ---------------------------------------------------------------------
 
+def test_a_device_called_base_merges_like_any_other(base, devices):
+    # "base" is a valid device id; the merge's word for the agreed state must never collide with it
+    devices["desktop"].accept(give())
+    devices["phone"].accept(pay())
+    named = stores(devices)
+    renamed = {"base": named["desktop"], "phone": named["phone"]}  # "base" ranks before "phone", as "desktop" does
+    expected, result = merge(base, named), merge(base, renamed)
+    assert isinstance(result, Merged), result
+    assert result.order == expected.order
+    assert file_bytes(result, base, renamed) == file_bytes(expected, base, named)
+
+
 def test_a_merge_takes_exactly_two_devices_of_the_bases_campaign(base, devices):
     ledgers = {name: read_ledger(store) for name, store in stores(devices).items()}
     agreed = read_ledger(base)
     kwargs = {"instances": set(base.campaign_instances(C)), "sizer": StoreSizer()}
     with pytest.raises(ValueError, match="exactly two"):
         merge_ledger(agreed, {"desktop": ledgers["desktop"]}, **kwargs)
-    with pytest.raises(ValueError, match="agreed state"):
-        merge_ledger(agreed, {"base": ledgers["desktop"], "phone": ledgers["phone"]}, **kwargs)
     with pytest.raises(ValueError, match="campaign"):
         merge_ledger(agreed, {"desktop": replace(ledgers["desktop"], campaign_id="d"), "phone": ledgers["phone"]},
                      **kwargs)

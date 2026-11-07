@@ -153,7 +153,7 @@ An accepted turn effect may carry one holdings operation ([EFFECTS](EFFECTS.md#h
 | Including holdings in prompts | 031 (`context_lines` is the input). Holdings are not part of 022's `ChatSnapshot` (`load()` never reads them), so 031 must read them once per turn and pin each `HoldingsView.etag` to keep a turn consistent |
 | The UI editor and the tracking toggle | UI sprints (`adjust` is the headless editor) |
 | Item display labels, item definitions, unique objects | 034 |
-| Cross-device merge of counts (sync reports a divergence as a `held` conflict until then) | [028](roadmap/sprints/app-managed-device-sync.md) |
+| Cross-device merge of counts: done, by replay in the ledger merge ([LEDGER_MERGE](LEDGER_MERGE.md)); what it cannot replay is a `merge_review` ([SYNC](SYNC.md#ledgers-028)) | [028](roadmap/sprints/app-managed-device-sync.md) |
 | Exactly-once beyond the bounded log | 030 |
 | Completing a partly published operation at known seqs: `complete` ([RECOVERY](RECOVERY.md#023-complete)) | 030 (delivered) |
 | Who may mutate whose holdings beyond the store's per-path `APPLY` | 003/104 |

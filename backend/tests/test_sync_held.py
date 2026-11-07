@@ -1,8 +1,10 @@
-"""C1: a held-back path whose two devices differ is a named ``held`` conflict, never silent.
+"""028: a campaign's ledger is merged as one unit, and a divergence it cannot merge is never silent.
 
 021's accepted events and wrap-ups, 023's holdings, and the 017 relations of a campaign with an
-accepted event are held back until 028's merge rules exist. Nothing is copied, archived or kept for
-them, but a divergence is reported (docs/SYNC.md, conflict code ``held``) and ``resolve`` refuses it.
+accepted event were held back until 028's merge rules existed (C1). They are now one ledger unit per
+campaign: merged, or a ``merge_review`` conflict (docs/SYNC.md) on every file the devices hold
+differently, with nothing of that ledger copied or kept. ``resolve`` refuses a ledger file and points to
+``resolve_ledger``. (035's chat turns are still held: see ``test_store_turns``.)
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from grimoire.graphstore import RelationLibrary
 from grimoire.store import LibraryStore, ScopeRecord, engine, etag
 from grimoire.sync import ResolveRefused, identify, resolve, sync, sync_until_quiet
 from grimoire.sync.documents import parse_archive
+from grimoire.sync.units import base_name
 
 from chat_fixtures import Clock
 from effects_fixtures import C, INES, TAM, Handles
@@ -54,23 +57,21 @@ def _bytes(store, path):
     return target.read_bytes() if target.exists() else None
 
 
-def test_held_relation_edits_are_held_conflicts_not_silence(tmp_path):
-    """held2 inverted: with an accepted event, both relation edits are reported, on every sync."""
+def test_relation_edits_in_a_ledger_campaign_are_a_merge_review_never_copied_alone(tmp_path):
+    """held2 inverted, as before: with an accepted event, relation edits go with the ledger, on every sync."""
     desktop, phone, keys, _ = _effects_pair(tmp_path)
     try:
         _accept(desktop, keys)
         seed_2, added = _edit_both_and_add(desktop, phone)
         before = {path: (_bytes(desktop, path), _bytes(phone, path)) for path in (seed_2, added)}
-        report = sync_until_quiet(desktop, phone, handles())  # returns normally: held never raises
-        assert report.conflicts != ()
+        report = sync(desktop, phone, handles())  # returns normally: a review never raises
+        assert report.conflict(seed_2).code == "merge_review" and report.conflict(seed_2).review
         for path in (seed_2, added):
-            assert report.conflict(path).code == "held"
-            assert path in report.skipped[DESKTOP] or path in report.skipped[PHONE]
             assert (_bytes(desktop, path), _bytes(phone, path)) == before[path]  # nothing copied
         assert not [path for path, _ in report.copied if "/relations/" in path or "/accepted/" in path]
-        assert desktop.conflicts() == () and phone.conflicts() == ()  # nothing kept for a held path
-        again = sync(desktop, phone, handles())  # still reported: not converged until identical
-        assert {again.conflict(path).code for path in (seed_2, added)} == {"held"}
+        assert desktop.conflicts() == () and phone.conflicts() == ()  # nothing kept for a ledger file
+        again = sync(desktop, phone, handles())  # still reported: the ledger is merged again each time
+        assert again.conflict(seed_2).code == "merge_review"
         assert not again.wrote
     finally:
         desktop.close()
@@ -89,18 +90,19 @@ def test_without_an_accepted_event_the_same_edits_are_an_ordinary_conflict(tmp_p
         phone.close()
 
 
-def test_a_holdings_divergence_is_held_and_resolve_refuses_it(tmp_path):
+def test_an_unreadable_holder_file_is_a_merge_review_and_resolve_refuses_it(tmp_path):
     desktop, phone = make_pair(tmp_path)
     try:
         put(desktop, ScopeRecord(HoldingsRef("c1", "character", "wren-a"), "grimoire.holdings/1", {"coins": 3}), None)
         report = sync(desktop, phone, handles())
-        assert report.conflict(HOLDINGS).code == "held" and HOLDINGS in report.skipped[DESKTOP]
+        found = report.conflict(HOLDINGS)
+        assert found.code == "merge_review" and "unreadable" in {item.reason for item in found.review}
         assert not (phone.root / HOLDINGS).exists() and phone.conflicts() == ()
         data = (desktop.root / HOLDINGS).read_bytes()
-        with pytest.raises(ResolveRefused, match="held back until 028"):
+        with pytest.raises(ResolveRefused, match="resolve_ledger"):
             resolve(desktop, phone, HOLDINGS, etag(data), {DESKTOP: etag(data), PHONE: None}, handles())
         assert not (phone.root / HOLDINGS).exists()
-        # its only exit: both devices hold identical bytes (here, by hand)
+        # both devices holding identical bytes ends it too (here, by hand)
         (phone.root / HOLDINGS).parent.mkdir(parents=True)
         (phone.root / HOLDINGS).write_bytes(data)
         assert sync(desktop, phone, handles()).conflict(HOLDINGS) is None
@@ -109,7 +111,7 @@ def test_a_holdings_divergence_is_held_and_resolve_refuses_it(tmp_path):
         phone.close()
 
 
-def test_a_blocked_side_of_a_held_path_counts_as_differing(tmp_path):
+def test_a_blocked_side_of_a_ledger_file_is_a_merge_review(tmp_path):
     desktop, phone = make_pair(tmp_path)
     try:
         for store in (desktop, phone):
@@ -117,14 +119,14 @@ def test_a_blocked_side_of_a_held_path_counts_as_differing(tmp_path):
         assert sync(desktop, phone, handles()).conflict(HOLDINGS) is None  # identical: agreed, no conflict
         (phone.root / HOLDINGS).write_bytes(b"{not json")
         report = sync(desktop, phone, handles())
-        assert report.conflict(HOLDINGS).code == "held"
+        assert report.conflict(HOLDINGS).code == "merge_review"
         assert (phone.root / HOLDINGS).read_bytes() == b"{not json" and phone.conflicts() == ()
     finally:
         desktop.close()
         phone.close()
 
 
-def test_identical_held_bytes_are_no_conflict_and_stay_recorded_as_agreed(tmp_path):
+def test_identical_ledger_bytes_are_no_conflict_and_are_recorded_as_agreed(tmp_path):
     keys = Handles()
     desktop = LibraryStore.create(tmp_path / DESKTOP)
     seed_effects(desktop, keys)
@@ -136,39 +138,44 @@ def test_identical_held_bytes_are_no_conflict_and_stay_recorded_as_agreed(tmp_pa
         identify(desktop, DESKTOP)
         identify(phone, PHONE)
         report = sync(desktop, phone, handles())
-        assert report.conflicts == ()
-        relations = [path for path in desktop.scan().files if "/relations/" in path]
-        assert relations and set(relations) <= set(report.skipped[DESKTOP])
+        assert report.conflicts == () and not report.copied
+        ledger = [path for path in desktop.scan().files if "/relations/" in path or "/accepted/" in path]
+        assert ledger and not set(ledger) & set(report.skipped[DESKTOP])
         archive = parse_archive(desktop.read_sync_state(f"peers/{PHONE}/archive.json"), (DESKTOP, PHONE))
-        assert all(archive.entries[path][0] == "agreed" for path in relations)
+        assert all(archive.entries[path][0] == "agreed" for path in ledger)
+        # and each agreement's bytes are cached for the pair, for a later merge of both devices' changes
+        assert all(desktop.read_sync_state(base_name(PHONE, path)) == _bytes(desktop, path) for path in ledger)
     finally:
         desktop.close()
         phone.close()
 
 
-def test_resolve_refuses_a_held_relation_and_an_accepted_event(tmp_path):
+def test_resolve_refuses_a_ledger_relation_and_an_accepted_event(tmp_path):
     desktop, phone, keys, _ = _effects_pair(tmp_path)
     try:
         _accept(desktop, keys)
+        _edit_both_and_add(desktop, phone)
         report = sync(desktop, phone, handles())
-        held = [conflict.path for conflict in report.conflicts if conflict.code == "held"]
-        assert any("/accepted/" in path for path in held) and any("/relations/" in path for path in held)
-        for path in held:
+        reviewed = [conflict.path for conflict in report.conflicts if conflict.code == "merge_review"]
+        assert any("/accepted/" in path for path in reviewed) and any("/relations/" in path for path in reviewed)
+        for path in reviewed:
             mine, theirs = _bytes(desktop, path), _bytes(phone, path)
-            with pytest.raises(ResolveRefused, match="held back until 028"):
-                resolve(desktop, phone, path, etag(mine), {DESKTOP: etag(mine),
-                                                           PHONE: None if theirs is None else etag(theirs)}, handles())
+            with pytest.raises(ResolveRefused, match="resolve_ledger"):
+                resolve(desktop, phone, path, etag(mine) if mine else etag(theirs),
+                        {DESKTOP: None if mine is None else etag(mine),
+                         PHONE: None if theirs is None else etag(theirs)}, handles())
             assert _bytes(phone, path) == theirs
     finally:
         desktop.close()
         phone.close()
 
 
-def test_an_unlistable_accepted_folder_is_a_held_conflict(tmp_path, monkeypatch):
+def test_an_unlistable_accepted_folder_stops_its_campaigns_merge(tmp_path, monkeypatch):
     desktop, phone, keys, _ = _effects_pair(tmp_path)
     try:
         _accept(desktop, keys)
         sync(desktop, phone, handles())
+        _relations(phone, "phone").add(C, "knows", TAM, INES, since=Moment(2), provenance="director").commit()
         real = engine.Access.list_dir
         folder = ("campaigns", C, "accepted")
 
@@ -179,8 +186,9 @@ def test_an_unlistable_accepted_folder_is_a_held_conflict(tmp_path, monkeypatch)
         monkeypatch.setattr(engine.Access, "list_dir", busy)
         report = sync(desktop, phone, handles())
         monkeypatch.undo()
-        assert report.conflict("/".join(folder)).code == "held"
-        assert "cannot be listed" in report.conflict("/".join(folder)).detail
+        reasons = {item.reason for conflict in report.conflicts for item in conflict.review}
+        assert "unlistable" in reasons and {conflict.code for conflict in report.conflicts} == {"merge_review"}
+        assert not [path for path, _ in report.copied if "/relations/" in path]  # fails closed
     finally:
         desktop.close()
         phone.close()
