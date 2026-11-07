@@ -35,7 +35,8 @@ from grimoire.core.inference import InferencePolicy, InferenceStage, TurnUsageLe
 from grimoire.core.perspective import actor_knowledge
 from grimoire.effective import chat_snapshot
 from grimoire.evidencestore import EvidenceLibrary
-from grimoire.generation import GenerationError, director_brief, npc_brief, plan_generation_turn
+from grimoire.generation import GenerationError, director_brief, npc_brief, plan_generation_turn, unrecognised
+from grimoire.goals import Agenda, Choice, GoalError, check_agenda, choose, explain
 from grimoire.import_v1 import imported_voices
 from grimoire.intent import RoutingContext, Utterance, route
 from grimoire.ledgers import SovereigntyLedger
@@ -56,16 +57,24 @@ from grimoire.play.scene import (
 from grimoire.providers.meter import TurnMeter
 from grimoire.runtime import GenerationRuntime, LabelRuntime, RunFence
 from grimoire.scene import (
-    MAX_TAKES, NARRATOR, CallRecord, Label, Post, SceneLine, SceneRefused, Take, TurnRecord, audible, heard_for, render,
-    segments, table_lines, turn_id,
+    MAX_TAKES, NARRATOR, CallRecord, Intention, IntentionOption, Label, Post, SceneLine, SceneRefused, Take, TurnRecord,
+    audible, heard_for, render, segments, table_lines, turn_id,
 )
-from grimoire.scenestore import SceneLibrary, StoredTurn
+from grimoire.scenestore import MAX_TURN_BYTES, SceneLibrary, StoredTurn
 from grimoire.security import is_human
 from grimoire.store import LibraryStore, RecordNotFound
 from grimoire.tracing import Trace
 from grimoire.voice import ResolvedVoice, VoiceCatalog
 
 from .tracing import record_calls, span, traced
+
+#: Room a finished take needs in its turn file beyond its running take: each planned call's line (a screened line is
+#: at most ``MAX_LINE_CHARS`` characters, with its speaker, ids and audience, escaped), each attempt's usage, and the
+#: take's own fields. ``generate`` refuses ``turn_too_large`` before any call when the running turn leaves less.
+LINE_BYTES = 32 * 1024
+ATTEMPT_BYTES = 2 * 1024
+TAKE_BYTES = 64 * 1024
+
 
 class SceneRunner:
     """Plays chats of one open library through 027's runtime; every write is one turn file.
@@ -82,7 +91,10 @@ class SceneRunner:
     library's 029 ``AdjudicationLibrary`` over the app's own adjudication key: it frames a confirmed labelling
     (``confirm``) and records its decision (``decide``); without it nothing is framed. ``effects`` is the
     library's 021 ``TurnEffectsLibrary`` on the same store and this runner's own (owner's) handle: it accepts
-    a turn's effect once it holds every key (``propose_effect``); without it no effect is proposed.
+    a turn's effect once it holds every key (``propose_effect``); without it no effect is proposed. ``agendas``
+    are 039's director-authored ``Agenda`` values, at most one per NPC: each take chooses afresh what a speaking
+    director NPC with one pursues, from the knowledge its brief is built from, and records the choice on the
+    turn. They are the app's configuration, never read from a turn, a post or a reply.
     ``tracer`` receives one ``Trace`` per public call, timed with ``clock`` (048, docs/PERFORMANCE.md);
     without one nothing is timed.
     """
@@ -93,7 +105,7 @@ class SceneRunner:
                  fence: RunFence | None = None, budget: Budget = DEFAULT_BUDGET,
                  labeller: LabelRuntime | None = None, label_handle=None,
                  adjudication: AdjudicationLibrary | None = None,
-                 effects: TurnEffectsLibrary | None = None,
+                 effects: TurnEffectsLibrary | None = None, agendas: Iterable[Agenda] = (),
                  tracer: Callable[[Trace], None] | None = None,
                  clock: Callable[[], float] = time.perf_counter) -> None:
         if not (authority.issued(handle) and getattr(handle, "trusted", False) is True
@@ -116,6 +128,7 @@ class SceneRunner:
         if effects is not None and not (isinstance(effects, TurnEffectsLibrary) and effects.store is store
                                         and effects.handle is handle):
             raise _refuse("bad_effects", "effects must be this library's TurnEffectsLibrary on the runner's handle")
+        by_actor = _agendas(agendas)
         self.store = store
         self.authority = authority
         self.handle = handle
@@ -131,6 +144,7 @@ class SceneRunner:
         self.adjudication = adjudication
         self.effects = effects
         self.recovery = None if effects is None else EffectRecovery(effects)
+        self._agendas = by_actor  # director-authored input, fixed here: nothing played can author or change one
         self.tracer = tracer
         self.clock = clock
         self.scenes = SceneLibrary(store, handle, owner=owner)
@@ -436,7 +450,7 @@ class SceneRunner:
         if director and not any(call.stage is InferenceStage.DIRECTOR_GENERATION for call in plan.calls):
             raise _refuse("director_declined", "the inference policy allows no director reply")
         try:
-            briefs = self._briefs(context, chosen, heard_turns)
+            briefs, intentions = self._briefs(context, chosen, heard_turns, number)
             director_view = self._director(context, heard_turns) if director else None
         except GenerationError as error:
             raise _refuse(error.reason, "a brief cannot be built") from None
@@ -446,7 +460,10 @@ class SceneRunner:
         superseded = record.running
         if superseded is not None:
             record = record.with_take(replace(superseded, state="superseded"))
-        record = record.with_take(running)
+        record = record.with_take(running).with_intentions(number, intentions)
+        room = len(planned) * (LINE_BYTES + plan.policy.max_attempts_per_call * ATTEMPT_BYTES) + TAKE_BYTES
+        if self.scenes.size(record, stored) + room > MAX_TURN_BYTES:  # before any call: nothing is billed
+            raise _refuse("turn_too_large", "this turn's file has no room for another take; keep a take or pass")
         claimed = []  # the fence is claimed as the running take is published, never after: an older run
         # resuming between the two would otherwise cancel the reroll that superseded it
         stored = self._write(record, stored, after=scene.turns.last if stored is None else None, unpaused=True,
@@ -470,7 +487,7 @@ class SceneRunner:
         with span("review"):
             take = self._finished(record, running, plan, meter, outcome, failure, scene,
                                   director_view[1] if director_view else ())
-        return self._land(chat, stored, take, token)
+        return self._land(chat, stored, take, token, intentions)
 
     # -- generation helpers -----------------------------------------------------------------------
 
@@ -507,13 +524,15 @@ class SceneRunner:
                                                                                      requested_by=DIRECTOR)
             return ledger, _latest(ledger.knowledge)
 
-    def _briefs(self, context: _Context, chosen, turns: Sequence[TurnRecord]) -> list:
+    def _briefs(self, context: _Context, chosen, turns: Sequence[TurnRecord],
+                take: int) -> tuple[list, tuple[Intention, ...]]:
+        """Each speaker's brief, and the 039 intention of each speaker with an agenda, chosen afresh for ``take``."""
         if not chosen:
-            return []
+            return [], ()
         scene, snap, chat = context.scene, context.captured.snapshot, context.scene.chat
         ledger, as_of = self._knowledge(chat)
         _, bare = outcome_lines(self, turns, scene.names)  # an NPC hears a result where it saw the action
-        briefs = []
+        briefs, intentions = [], []
         for actor, voice in chosen:
             with span("brief.npc") as timed:
                 heard = heard_for(turns, actor, scene.names, before=scene.imported, outcomes=bare)
@@ -523,10 +542,38 @@ class SceneRunner:
                     packed.count(items=len(built.pack.items), omitted=len(built.pack.omitted))
                 knowledge = actor_knowledge(ledger.knowledge, actor, as_of=as_of)
                 view = snapshot_actor_view(snap.instance(actor), snap, knowledge)
-                briefs.append(npc_brief(view, voice, heard=heard, secrets=self.secrets, names=scene.names,
-                                        context=built.pack, snapshot=snap))
+                brief = npc_brief(view, voice, heard=heard, secrets=self.secrets, names=scene.names,
+                                  context=built.pack, snapshot=snap)
+                agenda = self._agendas.get(actor)
+                if agenda is not None:
+                    # 039: from the very projection the brief is built from, the cast split by whom it recognises
+                    choice = self._choose(context, ledger, agenda, knowledge, brief)
+                    brief = npc_brief(view, voice, heard=heard, secrets=self.secrets, names=scene.names,
+                                      context=built.pack, snapshot=snap, intention=choice)
+                    intentions.append(_intention(take, choice))
+                briefs.append(brief)
                 timed.count(heard=len(heard))
-        return briefs
+        return briefs, tuple(intentions)
+
+    def _choose(self, context: _Context, ledger, agenda: Agenda, knowledge, brief) -> Choice:
+        """039's choice for ``agenda``'s NPC, once its agenda checks against this campaign's ledger and actors.
+
+        Fail closed: a ledger with a quarantined record or a problem may hide the very belief a limit watches
+        for, and an agenda naming what the campaign lacks would let a limit lapse silently, so neither is used
+        (refused ``ledger_damaged``, or by 039's own reason, such as ``unknown_proposition``).
+        """
+        scene = context.scene
+        if ledger.quarantined or ledger.problems:
+            raise _refuse("ledger_damaged", f"the knowledge ledger cannot be read in full, so the agenda of "
+                          f"{agenda.actor} is not used")
+        try:
+            check_agenda(agenda, propositions=[p.proposition_id for p in ledger.knowledge.propositions],
+                         actors=[ref for ref in context.view.instances if ref.campaign_id == scene.chat.campaign_id])
+            unseen = unrecognised(brief, scene.cast)
+            return choose(agenda, knowledge, present=[actor for actor in scene.cast if actor not in unseen],
+                          unrecognised=unseen, controls=scene.controls)
+        except GoalError as error:
+            raise _refuse(error.reason, f"the agenda of {agenda.actor} cannot be used") from None
 
     def _director(self, context: _Context, turns: Sequence[TurnRecord]):
         with span("brief.director"):
@@ -589,17 +636,39 @@ class SceneRunner:
         return replace(running, state=state, lines=tuple(lines) if state == "proposed" else (), calls=tuple(calls),
                        outcome=status, unscreened=unscreened)
 
-    def _land(self, chat: ChatRef, stored: StoredTurn, take: Take, token) -> Take:
-        """Write the finished take over its running one; a run gone stale keeps its usage and no lines."""
+    def _land(self, chat: ChatRef, stored: StoredTurn, take: Take, token,
+              intentions: tuple[Intention, ...] = ()) -> Take:
+        """Write the finished take over its running one; a run gone stale keeps its usage and no lines. The run's
+        intentions go with it, onto another version of its turn too (a sync conflict resolved meanwhile).
+
+        A take that would make its turn file too large (``turn_too_large``) still lands its usage: first without
+        its lines (``_unlined``), then without this take's intentions as well; only a turn too large even for
+        that is refused, as the store refuses it. Shrinking spends none of the re-reads a changed turn gets.
+        """
         def fence() -> None:
             if take.state != "stale" and token.stale:
                 raise _Stale
 
         published = next(t for t in stored.record.takes if t.take == take.take)  # the running take, as written
+        bare = False  # this take's intentions are left out: with them its turn file would be too large
         for _ in range(WRITE_RETRIES):
             try:
-                self._write(stored.record.with_take(take), stored, landing=True, before_commit=fence)
-                return take
+                while True:
+                    landed = stored.record.with_take(take)
+                    if bare:
+                        landed = landed.with_intentions(take.take, ())
+                    elif intentions and not landed.intentions_of(take.take):
+                        landed = landed.with_intentions(take.take, intentions)
+                    try:
+                        self._write(landed, stored, landing=True, before_commit=fence)
+                        return take
+                    except SceneRefused as error:
+                        if error.reason != "turn_too_large" or bare:
+                            raise
+                    if take.lines:
+                        take = _unlined(take)
+                    else:
+                        bare = True
             except _Stale:  # a newer run of this chat started: keep the usage, drop the lines
                 take = replace(take, state="stale", lines=(), outcome="stale")
             except SceneRefused as error:
@@ -843,3 +912,46 @@ class SceneRunner:
 
 
 __all__ = ["DEFAULT_BUDGET", "Scene", "SceneRunner"]
+
+
+def _agendas(agendas: object) -> dict[InstanceRef, Agenda]:
+    """039's agendas by actor: exact ``Agenda`` values, one per actor (``bad_agenda`` otherwise)."""
+    if isinstance(agendas, (str, bytes, Mapping)):
+        raise _refuse("bad_agenda", "agendas must be a collection of Agenda values")
+    try:
+        found = tuple(agendas)  # type: ignore[arg-type]
+    except TypeError:
+        raise _refuse("bad_agenda", "agendas must be a collection of Agenda values") from None
+    by_actor: dict[InstanceRef, Agenda] = {}
+    for agenda in found:
+        if type(agenda) is not Agenda:
+            raise _refuse("bad_agenda", "agendas must be Agenda values")
+        if agenda.actor in by_actor:
+            raise _refuse("bad_agenda", f"{agenda.actor} has more than one agenda")
+        by_actor[agenda.actor] = agenda
+    return by_actor
+
+
+def _intention(take: int, choice: Choice) -> Intention:
+    """The turn record's account of ``choice``: what was pursued and refused, the approaches weighed up to the
+    chosen one and those after it a limit forbids, and why. The rest after the choice (outranked, or unmet)
+    are only counted, so an agenda's size never multiplies into every take's turn file."""
+    goal, approach = choice.goal, choice.approach
+    entries = choice.considered
+    cut = next((index for index, entry in enumerate(entries) if entry.outcome == "chosen"), len(entries))
+    kept = (*entries[:cut + 1], *(entry for entry in entries[cut + 1:] if entry.outcome == "forbidden"))
+    considered = tuple(IntentionOption(entry.goal_id, entry.approach_id, entry.outcome,
+                                       tuple(condition.describe() for condition in entry.unmet), entry.forbidden_by)
+                       for entry in kept)
+    return Intention(take, choice.actor, choice.as_of, tuple(choice.present), tuple(choice.unrecognised),
+                     goal.goal_id if goal is not None else None, approach.approach_id if approach is not None else None,
+                     tuple(limit.limit_id for limit in choice.refusals), considered, explain(choice),
+                     len(entries) - len(kept))
+
+
+def _unlined(take: Take) -> Take:
+    """``take`` without the lines its turn file has no room for: its calls keep their attempts and usage, and
+    each call that gave a line is ``rejected`` (``turn_too_large``), so the table sees why and generates again."""
+    calls = tuple(replace(call, status="rejected", reason="turn_too_large") if call.status == "accepted" else call
+                  for call in take.calls)
+    return replace(take, lines=(), calls=calls, outcome="halted" if take.state == "proposed" else take.outcome)

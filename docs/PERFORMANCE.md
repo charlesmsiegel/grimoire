@@ -38,7 +38,7 @@ No prices ship (013). Without a table every cost is `unpriced`.
 | `read.control`, `read.party` | 010b's control, 033's party | |
 | `stage.cast`, `voices` | staging and voice resolution | |
 | `read.knowledge` | what each speaker knows | |
-| `brief.npc` / `pack` | one speaker's brief and its packed context | `heard`; `items`, `omitted` |
+| `brief.npc` / `pack` | one speaker's brief and its packed context (with an agenda, 039's check, choice and the brief rebuilt with it) | `heard`; `items`, `omitted` |
 | `brief.director` | the director's brief | |
 | `plan`, `provider`, `review` | planning the turn's calls, running them, reviewing the takes | `calls` |
 | `write.turn` | each turn write (a file, or 028's choice or 016's resume rewriting several in one commit), its checks under the lock included | |

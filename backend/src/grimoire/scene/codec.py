@@ -15,8 +15,8 @@ from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TurnRef
 from grimoire.core.inference import TOKEN_FIELDS, CallAttempt, CallId, InferenceStage, TokenUsage
 from grimoire.effects import EffectCodecError, EndorsementRecord, proposal_from_payload, proposal_to_payload
 
-from .model import (_DEVICE, CallRecord, Label, Post, SceneLine, SceneRefused, SetAside, Take, TurnEffect, TurnRecord,
-                    turn_id)
+from .model import (_DEVICE, CallRecord, Intention, IntentionOption, Label, Post, SceneLine, SceneRefused, SetAside,
+                    Take, TurnEffect, TurnRecord, turn_id)
 
 TURN_SCHEMA = "grimoire.scene-turn/1"
 _TURN_KEYS = frozenset({"chat", "number", "origin", "post", "takes", "paused", "paused_by", "passed_by"})
@@ -24,7 +24,9 @@ _TURN_KEYS = frozenset({"chat", "number", "origin", "post", "takes", "paused", "
 #: untagged); one written before 028's turn merge has no ``follows`` (its place is inferred) or ``set_aside``.
 #: ``labels`` is written only on a turn whose action was labelled, and ``effects`` only on a turn an effect was
 #: proposed for (035 milestone 2); an older build keeps either as an unknown field when it rewrites the turn.
-_OPTIONAL_TURN_KEYS = frozenset({"device", "follows", "set_aside", "labels", "effects"})
+#: ``intentions`` (039's choices, 035 milestone 2) is written only on a turn a director NPC with an agenda was
+#: briefed in; a turn without it read as none.
+_OPTIONAL_TURN_KEYS = frozenset({"device", "follows", "set_aside", "labels", "effects", "intentions"})
 _SET_ASIDE_KEYS = frozenset({"chosen", "by"})
 _IDENTITY_KEYS = frozenset({"schema", "address", "campaign_id", "ref"})
 _POST_KEYS = frozenset({"submitted_by", "actor", "kind", "text", "audience", "channel", "addressees", "withheld"})
@@ -42,6 +44,9 @@ _EFFECT_KEYS = frozenset({"effect", "state", "proposal", "endorsers", "approved_
 #: written only on an effect whose acceptance recorded the control it was authorized under; an effect written
 #: before it existed has none and still reads
 _OPTIONAL_EFFECT_KEYS = frozenset({"controls_at", "accepted_on"})
+_INTENTION_KEYS = frozenset({"take", "actor", "as_of", "present", "unrecognised", "goal", "approach", "refusals",
+                             "considered", "explanation", "omitted"})
+_OPTION_KEYS = frozenset({"goal", "approach", "outcome", "unmet", "forbidden_by"})
 _ENDORSER_KEYS = frozenset({"contribution_id", "principal"})
 _ENDORSEMENT_KEYS = _ENDORSER_KEYS | {"fingerprint"}
 
@@ -69,7 +74,19 @@ def turn_to_payload(record: TurnRecord) -> dict[str, object]:
         payload["labels"] = [_label(label) for label in record.labels]
     if record.effects:
         payload["effects"] = [_effect(effect) for effect in record.effects]
+    if record.intentions:
+        payload["intentions"] = [_intention(intention) for intention in record.intentions]
     return payload
+
+
+def _intention(intention: Intention) -> dict[str, object]:
+    return {"take": intention.take, "actor": str(intention.actor), "as_of": intention.as_of,
+            "present": [str(a) for a in intention.present], "unrecognised": [str(a) for a in intention.unrecognised],
+            "goal": intention.goal_id, "approach": intention.approach_id, "refusals": list(intention.refusals),
+            "considered": [{"goal": o.goal_id, "approach": o.approach_id, "outcome": o.outcome,
+                            "unmet": list(o.unmet), "forbidden_by": list(o.forbidden_by)}
+                           for o in intention.considered],
+            "explanation": list(intention.explanation), "omitted": intention.omitted}
 
 
 def _effect(effect: TurnEffect) -> dict[str, object]:
@@ -199,6 +216,7 @@ def turn_from_payload(address: TurnRef, schema: str, payload: object) -> TurnRec
                           device, follows, set_aside,  # type: ignore[arg-type]
                           tuple(_decode_label(item, address) for item in _list(data.get("labels", []), "labels")),
                           tuple(_decode_effect(item, address) for item in _list(data.get("effects", []), "effects")),
+                          tuple(_decode_intention(item) for item in _list(data.get("intentions", []), "intentions")),
                           extras=extras)
     except SceneRefused:
         raise
@@ -244,6 +262,26 @@ def _decode_label(value: object, address: TurnRef) -> Label:
     calls = tuple(_decode_call(item, address.campaign_id, plan_turn) for item in _list(data["calls"], "label.calls"))
     return Label(number, data["state"], data["sequence"], tuple(factors), tuple(stakes),  # type: ignore[arg-type]
                  calls, data["reason"], data["by"])  # type: ignore[arg-type]
+
+
+def _decode_intention(value: object) -> Intention:
+    data = _mapping(value, "intention", _INTENTION_KEYS)
+    options = []
+    for item in _list(data["considered"], "intention.considered"):
+        found = _mapping(item, "intention option", _OPTION_KEYS)
+        unmet = tuple(_list(found["unmet"], "option.unmet"))
+        forbidden = tuple(_list(found["forbidden_by"], "option.forbidden_by"))
+        options.append(IntentionOption(found["goal"], found["approach"], found["outcome"],  # type: ignore[arg-type]
+                                       unmet, forbidden))  # type: ignore[arg-type]
+    return Intention(_int(data["take"], "intention.take"), _actor(data["actor"], "intention.actor"),
+                     _int(data["as_of"], "intention.as_of"),
+                     tuple(_actor(a, "intention.present") for a in _list(data["present"], "intention.present")),
+                     tuple(_actor(a, "intention.unrecognised")
+                           for a in _list(data["unrecognised"], "intention.unrecognised")),
+                     data["goal"], data["approach"],  # type: ignore[arg-type]
+                     tuple(_list(data["refusals"], "intention.refusals")), tuple(options),  # type: ignore[arg-type]
+                     tuple(_list(data["explanation"], "intention.explanation")),  # type: ignore[arg-type]
+                     data["omitted"])  # type: ignore[arg-type]
 
 
 def _decode_effect(value: object, address: TurnRef) -> TurnEffect:

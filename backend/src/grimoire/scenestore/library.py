@@ -16,6 +16,7 @@ hand copy is seen at once; what is reused is a function of the path and the byte
 from __future__ import annotations
 
 import copy
+import json
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -28,12 +29,19 @@ from grimoire.scene import (
 )
 from grimoire.scene.branches import is_mine, tag_for
 from grimoire.store import (
-    CampaignRecords, LibraryStore, ScopeRecord, StaleWrite, StoredScopeRecord, StoreError, TakenIdsUnlisted,
+    CampaignRecords, InvalidEnvelope, LibraryStore, ScopeRecord, StaleWrite, StoredScopeRecord, StoreError,
+    TakenIdsUnlisted,
 )
+from grimoire.store.envelope import scope_record_document
+from grimoire.store.jsonfmt import MAX_FILE_BYTES, render, thaw
 from grimoire.store.layout import CAMPAIGNS, TURNS, address_parts
 from grimoire.store.replica import parse_exact
 from grimoire.peersync.pairing import pairing_ended
 from grimoire.sync.turns import open_conflicts
+
+#: The most bytes a turn file may take: the store's cap on any file it reads back. ``write`` refuses a turn past it
+#: ``turn_too_large`` before anything is written; ``size`` measures a turn against it.
+MAX_TURN_BYTES = MAX_FILE_BYTES
 
 
 @dataclass(frozen=True)
@@ -294,12 +302,12 @@ class SceneLibrary:
         since it was read is never played on (028). ``landing`` (the runner's finished take, written over its own
         running take) checks nothing of the chat: a run already in flight always lands, wherever a fork, a choice,
         a conflict or a pause put its turn since, so its calls' usage is never lost; only ``base`` must hold.
+        A turn whose file would be over ``MAX_TURN_BYTES`` is refused ``turn_too_large`` before any check or hook
+        runs, landing or not: the store would write no file a reader refuses.
         """
-        payload = turn_to_payload(record)
-        if base is None:
-            envelope = ScopeRecord(record.ref, TURN_SCHEMA, payload, owner=self.owner)
-        else:
-            envelope = ScopeRecord(record.ref, TURN_SCHEMA, payload, owner=base.owner, extra=base.extra)
+        envelope = self._envelope(record, base)
+        if self._bytes(envelope, base) > MAX_TURN_BYTES:  # a file no reader accepts: refused before anything
+            raise SceneRefused("turn_too_large", f"turn {record.turn_id} would be larger than a turn file may be")
         with self.store.lock:
             if not landing:
                 self._admits(record, base, after=after, last=last, unpaused=unpaused)
@@ -315,6 +323,32 @@ class SceneLibrary:
                 on_commit()
         etag = result.etags["/".join(address_parts(record.ref))]
         return StoredTurn(record, etag, envelope.owner, envelope.extra)
+
+    def size(self, record: TurnRecord, base: StoredTurn | None = None) -> int:
+        """The bytes ``record``'s turn file would take if written over ``base``, as the store renders it, even past
+        what a reader accepts (``MAX_TURN_BYTES``); ``write`` refuses such a turn ``turn_too_large``. 0 for a turn the
+        store cannot render at all for another reason: its write then fails as the store says."""
+        return self._bytes(self._envelope(record, base), base)
+
+    def _envelope(self, record: TurnRecord, base: StoredTurn | None) -> ScopeRecord:
+        payload = turn_to_payload(record)
+        if base is None:
+            return ScopeRecord(record.ref, TURN_SCHEMA, payload, owner=self.owner)
+        return ScopeRecord(record.ref, TURN_SCHEMA, payload, owner=base.owner, extra=base.extra)
+
+    @staticmethod
+    def _bytes(envelope: ScopeRecord, base: StoredTurn | None) -> int:
+        document = scope_record_document(envelope, None if base is None else base.etag)
+        try:
+            return len(render(document))
+        except InvalidEnvelope:
+            # over the cap, or not writable at all: measure it the way ``render`` does, else let the write say why
+            try:
+                text = json.dumps(thaw(document), sort_keys=True, indent=2, ensure_ascii=False, allow_nan=False)
+                size = len((text + "\n").encode("utf-8"))
+            except (ValueError, TypeError, RecursionError, UnicodeEncodeError):
+                return 0
+            return size if size > MAX_TURN_BYTES else 0
 
     def _admits(self, record: TurnRecord, base: StoredTurn | None, *, after: StoredTurn | None, last: bool,
                 unpaused: bool) -> None:

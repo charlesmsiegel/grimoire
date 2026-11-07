@@ -8,9 +8,9 @@ load on first use. A turn's proposed effects are 021's pure values (``grimoire.e
 from .branches import Branch, Fork, Lineage, arrange
 from .codec import TURN_SCHEMA, turn_from_payload, turn_to_payload
 from .model import (
-    CALL_STATES, EFFECT_STATES, LABEL_STATES, LINE_STATES, MAX_CHAT_ID, MAX_EFFECTS, MAX_LABELS, MAX_TAGGED_CHAT_ID,
-    MAX_TAKES, ORIGINS, POST_KINDS, TAKE_STATES, TURN_OUTCOMES, CallRecord, Label, Post, SceneLine, SceneRefused,
-    SetAside, Take, TurnEffect, TurnRecord, parse_turn_id, turn_id, usage_totals,
+    CALL_STATES, EFFECT_STATES, INTENTION_OUTCOMES, LABEL_STATES, LINE_STATES, MAX_CHAT_ID, MAX_EFFECTS, MAX_LABELS,
+    MAX_TAGGED_CHAT_ID, MAX_TAKES, ORIGINS, POST_KINDS, TAKE_STATES, TURN_OUTCOMES, CallRecord, Intention,
+    IntentionOption, Label, Post, SceneLine, SceneRefused, SetAside, Take, TurnEffect, TurnRecord, parse_turn_id, turn_id, usage_totals,
 )
 
 _TRANSCRIPT = frozenset({"NARRATOR", "ImportedHistory", "audible", "heard_for", "imported_history", "render",
@@ -25,7 +25,8 @@ def __getattr__(name: str):
 
 
 __all__ = [
-    "Branch", "CALL_STATES", "CallRecord", "EFFECT_STATES", "Fork", "ImportedHistory", "LABEL_STATES", "LINE_STATES",
+    "Branch", "CALL_STATES", "CallRecord", "EFFECT_STATES", "Fork", "INTENTION_OUTCOMES", "ImportedHistory", "Intention",
+    "IntentionOption", "LABEL_STATES", "LINE_STATES",
     "Label", "Lineage", "MAX_CHAT_ID", "MAX_EFFECTS", "MAX_LABELS", "MAX_TAGGED_CHAT_ID", "MAX_TAKES", "NARRATOR",
     "ORIGINS", "POST_KINDS", "Post", "SceneLine", "SceneRefused", "SetAside", "TAKE_STATES", "TURN_OUTCOMES",
     "TURN_SCHEMA", "Take", "TurnEffect", "TurnRecord", "arrange", "audible", "heard_for", "imported_history",

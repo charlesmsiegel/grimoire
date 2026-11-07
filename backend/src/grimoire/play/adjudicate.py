@@ -166,7 +166,7 @@ def _unframe(runner, chat: ChatRef, record: TurnRecord, number: int, reason: str
             if label is None or label.label != number:
                 return
             try:
-                runner.scenes.write(stored.record.with_label(
+                runner._write(stored.record.with_label(
                     replace(label, state="refused", factors=(), stakes=(), reason=reason[:200])), stored)
                 return
             except SceneRefused as error:
@@ -202,7 +202,7 @@ def _mark_framed(runner, chat: ChatRef, record: TurnRecord, number: int, princip
                 elif take.state == "proposed":
                     framed = framed.with_take(_mark(take, {line.line_id for line in take.lines}, "withdrawn",
                                                     principal))
-            runner.scenes.write(framed, stored, unpaused=True)  # a pause written meanwhile refuses it
+            runner._write(framed, stored, unpaused=True)  # a pause written meanwhile refuses it
             return framed
         except SceneRefused as error:
             if error.reason != "turn_changed":
