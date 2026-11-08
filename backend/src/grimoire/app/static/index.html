@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Grimoire</title>
+<style>
+:root { color-scheme: light dark; --fg: #1d1b18; --bg: #faf8f4; --muted: #6b655c; --line: #ddd6ca; --accent: #6a3fb5; --bad: #a3271f; }
+@media (prefers-color-scheme: dark) { :root { --fg: #ece7de; --bg: #18161a; --muted: #a39b8f; --line: #3a3540; --accent: #b79cf0; --bad: #f08a80; } }
+* { box-sizing: border-box; }
+body { margin: 0; font: 16px/1.45 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+header { position: sticky; top: 0; display: flex; gap: 8px; align-items: center; padding: 10px 16px; background: var(--bg); border-bottom: 1px solid var(--line); }
+header h1 { flex: 1; margin: 0; font-size: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+main { padding: 12px 16px 120px; max-width: 760px; margin: 0 auto; }
+button, select, textarea, input { font: inherit; color: inherit; }
+button { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; }
+button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+button:disabled { opacity: .5; }
+.tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.tabs button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.item { display: block; width: 100%; text-align: left; margin: 6px 0; padding: 10px 12px; }
+.muted { color: var(--muted); font-size: 14px; }
+.bad { color: var(--bad); }
+.cast { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 10px; }
+.member { text-align: center; min-width: 72px; font-size: 13px; }
+.member img, .member .none { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 1px solid var(--line); display: block; margin: 0 auto 4px; }
+.member .none { display: grid; place-items: center; color: var(--muted); }
+.line { margin: 8px 0; }
+.speaker { font-weight: 600; }
+.post { margin: 14px 0 6px; padding-left: 10px; border-left: 3px solid var(--accent); }
+.take { border: 1px dashed var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+.bar { position: fixed; bottom: 0; left: 0; right: 0; padding: 10px 16px; background: var(--bg); border-top: 1px solid var(--line); }
+.bar .row { display: flex; gap: 6px; max-width: 760px; margin: 0 auto; }
+.bar textarea { flex: 1; min-height: 44px; max-height: 30vh; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: transparent; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.notice { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; }
+</style>
+</head>
+<body>
+<header><button id="back" hidden>Back</button><h1 id="title">Grimoire</h1><button id="sync">Sync</button></header>
+<main id="main"></main>
+<div class="bar" id="bar" hidden><div class="row"><textarea id="text" placeholder="Say or do something"></textarea><button class="primary" id="send">Post</button></div></div>
+<script>
+"use strict";
+// Everything shown comes from the library (card text, model output): it is only ever set as textContent.
+const TOKEN_KEY = "grimoire-token";
+(function takeToken() {
+  const match = /(?:^#|&)token=([^&]+)/.exec(location.hash);
+  if (match) {
+    try { sessionStorage.setItem(TOKEN_KEY, decodeURIComponent(match[1])); } catch (e) { window.__token = decodeURIComponent(match[1]); }
+    history.replaceState(null, "", location.pathname);
+  }
+})();
+function token() { try { return sessionStorage.getItem(TOKEN_KEY) || window.__token || ""; } catch (e) { return window.__token || ""; } }
+
+const PAGE = 50, MAX_LIST = 1000;  // chats shown at first, and the most one list request returns
+const state = { library: null, view: "recent", source: null, limit: PAGE, chat: null, scene: null, pictures: new Map(), busy: false };
+const $ = (id) => document.getElementById(id);
+
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (key === "onclick") node.addEventListener("click", value);
+    else if (key === "class") node.className = value;
+    else node.setAttribute(key, value);
+  }
+  for (const child of children) {
+    if (child === null || child === undefined || child === false) continue;
+    node.append(typeof child === "string" ? document.createTextNode(child) : child);
+  }
+  return node;
+}
+
+// A scene with no NPC who can speak is answered by the director: generate is refused nothing_to_generate
+// before anything is written, so the director reply is asked only then.
+async function answer() {
+  try { return await api("generate", { chat: state.chat }); }
+  catch (error) { if (error.reason !== "nothing_to_generate") throw error; }
+  return api("generate", { chat: state.chat, director: true });
+}
+
+async function api(op, args) {
+  const response = await fetch("/api/" + encodeURIComponent(op), {
+    method: "POST", headers: { "Content-Type": "application/json", "X-Grimoire-Token": token() },
+    body: JSON.stringify(args || {}), cache: "no-store", credentials: "omit",
+  });
+  const body = await response.json().catch(() => ({ error: "bad_response", message: "the app sent no answer" }));
+  if (!response.ok) { const error = new Error(body.message || body.error); error.reason = body.error; throw error; }
+  return body;
+}
+
+async function picture(ref) {
+  if (state.pictures.has(ref)) return state.pictures.get(ref);
+  const response = await fetch("/api/image?ref=" + encodeURIComponent(ref), { headers: { "X-Grimoire-Token": token() }, cache: "no-store", credentials: "omit" });
+  if (!response.ok) return null;
+  const url = URL.createObjectURL(await response.blob());
+  state.pictures.set(ref, url);
+  return url;
+}
+
+function notice(text, bad) { const box = el("div", { class: "notice" + (bad ? " bad" : "") }, text); $("main").prepend(box); setTimeout(() => box.remove(), 8000); }
+
+async function act(work) {
+  if (state.busy) return;
+  state.busy = true;
+  for (const button of document.querySelectorAll("button")) button.disabled = true;
+  try { await work(); } catch (error) { notice((error.reason ? error.reason + ": " : "") + error.message, true); }
+  finally { state.busy = false; for (const button of document.querySelectorAll("button")) button.disabled = false; }
+}
+
+// -- lists --------------------------------------------------------------------------------------------
+async function showList() {
+  state.chat = null; state.scene = null;
+  $("back").hidden = true; $("bar").hidden = true; $("title").textContent = "Chats";
+  const main = $("main"); main.replaceChildren();
+  const tabs = el("div", { class: "tabs" });
+  for (const [view, label] of [["recent", "Recent"], ["character", "By character"], ["scenario", "By scenario"]]) {
+    tabs.append(el("button", { "aria-pressed": String(state.view === view), onclick: () => act(async () => { state.view = view; state.source = null; state.limit = PAGE; await showList(); }) }, label));
+  }
+  main.append(tabs);
+  const recent = await api("chats", { filter: "recent", limit: state.view === "recent" ? state.limit : PAGE });
+  let chats = recent.chats;
+  if (state.view !== "recent") {
+    const picker = el("select", {});
+    picker.append(el("option", { value: "" }, "Choose a " + state.view));
+    for (const source of recent.sources.filter((item) => item.role === state.view)) {
+      const option = el("option", { value: source.ref }, source.name || source.ref);
+      if (source.ref === state.source) option.setAttribute("selected", "");
+      picker.append(option);
+    }
+    picker.addEventListener("change", () => act(async () => { state.source = picker.value || null; state.limit = PAGE; await showList(); }));
+    main.append(picker);
+    chats = state.source ? (await api("chats", { filter: state.view, source: state.source, limit: state.limit })).chats : [];
+  }
+  if (!chats.length) main.append(el("p", { class: "muted" }, state.view === "recent" ? "No chats yet. Sync with your other device." : "No chats here."));
+  for (const chat of chats) {
+    const where = chat.scope && chat.scope.world ? chat.scope.title || chat.scope.world : "No world";
+    main.append(el("button", { class: "item", onclick: () => act(() => openChat(chat.chat)) },
+      el("div", {}, chat.label || (chat.launch && chat.launch.name) || chat.chat),
+      el("div", { class: "muted" }, where + (chat.problem ? " · " + chat.problem : ""))));
+  }
+  // a full page may have more behind it: ask for a longer list, up to the API's largest
+  if (chats.length >= state.limit && state.limit < MAX_LIST) {
+    main.append(el("button", { onclick: () => act(async () => { state.limit = Math.min(state.limit * 4, MAX_LIST); await showList(); }) }, "Show more"));
+  }
+}
+
+// -- one chat -----------------------------------------------------------------------------------------
+async function openChat(chat) { state.chat = chat; render(await api("open", { chat })); }
+
+function speakerOf(line) { return line.speaker || "Narrator"; }
+
+function render(scene) {
+  state.scene = scene;
+  $("back").hidden = false; $("bar").hidden = false;
+  $("title").textContent = scene.label || (scene.launch && scene.launch.ref) || scene.chat;
+  const main = $("main"); main.replaceChildren();
+  const cast = el("div", { class: "cast" });
+  for (const member of scene.cast) {
+    const avatar = member.art.slots.find((slot) => slot.slot === "avatar");
+    const face = el("div", { class: "none" }, avatar && avatar.state === "unavailable" ? "?" : "·");
+    if (avatar && avatar.state === "shown") picture(avatar.image).then((url) => { if (url) face.replaceWith(el("img", { src: url, alt: member.name })); });
+    cast.append(el("div", { class: "member" }, face, member.name, member.persona ? el("div", { class: "muted" }, "you") : null));
+  }
+  main.append(cast);
+  for (const problem of scene.problems) main.append(el("div", { class: "notice muted" }, problem.code + (problem.detail ? ": " + problem.detail : "")));
+  if (scene.history) {
+    main.append(el("p", { class: "muted" }, "Imported history"));
+    for (const line of scene.history) main.append(el("div", { class: "line" }, el("span", { class: "speaker" }, speakerOf(line) + ": "), line.text));
+  }
+  for (const turn of scene.turns) {
+    if (turn.post) main.append(el("div", { class: "post" }, el("span", { class: "speaker" }, turn.post.speaker + ": "), turn.post.text));
+    if (turn.kept) for (const line of turn.kept.lines) main.append(el("div", { class: "line" }, el("span", { class: "speaker" }, speakerOf(line) + ": "), line.text));
+    for (const take of turn.offered) {
+      const box = el("div", { class: "take" }, el("div", { class: "muted" }, "Take " + take.take + " (" + take.state + ")"));
+      for (const line of take.lines) box.append(el("div", { class: "line" }, el("span", { class: "speaker" }, speakerOf(line) + ": "), line.text));
+      for (const call of take.calls) box.append(el("div", { class: "muted" }, call.actor + ": " + call.status + (call.reason ? " (" + call.reason + ")" : "")));
+      if (scene.state.keepable.includes(take.take)) {
+        const unscreened = scene.state.unscreened.includes(take.take);
+        box.append(el("button", { class: "primary", onclick: () => act(async () => render(await api("keep", { chat: state.chat, turn: turn.turn, take: take.take, acknowledge_unscreened: unscreened }))) }, unscreened ? "Keep (uses unscreened lore)" : "Keep"));
+      }
+      main.append(box);
+    }
+  }
+  const waiting = scene.state.waiting;
+  if (scene.fork) {
+    const box = el("div", { class: "notice" }, "This chat forked: both devices played on. Choose the branch that goes on.");
+    for (const branch of scene.fork.branches.filter((item) => !item.set_aside)) {
+      box.append(el("button", { onclick: () => act(async () => render(await api("choose", { chat: state.chat, turn: branch.head }))) }, "Keep the branch from " + (branch.device || "this device")));
+    }
+    main.append(box);
+  }
+  for (const conflict of scene.state.conflicts) {
+    const peer = state.library && state.library.peers[0] ? state.library.peers[0].peer : null;
+    const box = el("div", { class: "notice" }, "In conflict after sync: " + conflict.path);
+    if (peer) for (const keep of ["mine", "theirs"]) box.append(el("button", { onclick: () => act(async () => { const report = await api("resolve", { peer, path: conflict.path, mine: conflict.mine, theirs: conflict.theirs, keep }); notice("Resolve: " + report.status + (report.reason ? " (" + report.reason + ")" : "")); await openChat(state.chat); }) }, keep === "mine" ? "Keep this device's" : "Keep " + peer + "'s"));
+    main.append(box);
+  }
+  const actions = el("div", { class: "actions" });
+  if (!scene.state.seated) actions.append(el("button", { class: "primary", onclick: () => act(async () => render(await api("continue", { chat: state.chat }))) }, "Take your seat"));
+  if (state.library && state.library.generation) actions.append(el("button", { onclick: () => act(async () => render(await answer())) }, "Answer"));
+  const open = scene.state.open_turn;  // Pass names the turn on screen, so a late tap never closes a newer one
+  if (open) actions.append(el("button", { onclick: () => act(async () => render(await api("pass", { chat: state.chat, turn: open }))) }, "Pass"));
+  if (waiting.includes("paused")) actions.append(el("button", { onclick: () => act(async () => render(await api("resume", { chat: state.chat }))) }, "Resume"));
+  else actions.append(el("button", { onclick: () => act(async () => render(await api("pause", { chat: state.chat }))) }, "Pause"));
+  actions.append(addPicture(scene));
+  main.append(actions);
+  if (waiting.length) main.append(el("p", { class: "muted" }, "Waiting: " + waiting.join(", ")));
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+function addPicture(scene) {
+  const wrap = el("span", {});
+  const who = el("select", {});
+  for (const member of scene.cast) who.append(el("option", { value: member.actor }, member.name));
+  const file = el("input", { type: "file", accept: "image/*", hidden: "" });
+  file.addEventListener("change", () => act(async () => {
+    const chosen = file.files[0]; file.value = "";
+    if (!chosen) return;
+    const data = new Uint8Array(await chosen.arrayBuffer());
+    let binary = "";
+    for (let i = 0; i < data.length; i += 0x8000) binary += String.fromCharCode.apply(null, data.subarray(i, i + 0x8000));
+    const member = scene.cast.find((item) => item.actor === who.value);
+    const slot = member && member.art.slots.find((item) => item.slot === "avatar");
+    const args = { chat: state.chat, actor: who.value, slot: "avatar", media: btoa(binary) };
+    if (slot && slot.etag) args.expected = slot.etag;
+    render(await api("add_art", args));
+  }));
+  wrap.append(who, el("button", { onclick: () => file.click() }, "Add picture"), file);
+  return wrap;
+}
+
+$("send").addEventListener("click", () => act(async () => {
+  const text = $("text").value.trim();
+  if (!text || !state.chat) return;
+  const scene = await api("post", { chat: state.chat, text });
+  $("text").value = "";
+  render(scene);  // the post is shown even if the answer then fails, so it is never sent twice
+  if (state.library && state.library.generation) render(await answer());
+}));
+$("back").addEventListener("click", () => act(showList));
+$("sync").addEventListener("click", () => act(async () => {
+  const peers = (state.library && state.library.peers) || [];
+  if (!peers.length) { notice("No paired device is configured for this app.", true); return; }
+  for (const peer of peers) {
+    const report = await api("sync", { peer: peer.peer });
+    notice(peer.peer + ": " + report.status + (report.reason ? " (" + report.reason + ")" : "") + (report.conflicts.length ? ", " + report.conflicts.length + " in conflict" : ""), report.status !== "synced");
+  }
+  state.library = await api("library", {});
+  if (state.chat) await openChat(state.chat); else await showList();
+}));
+
+act(async () => {
+  if (!token()) { $("main").replaceChildren(el("p", {}, "Open the address the app printed when it started: it carries this session's key.")); return; }
+  state.library = await api("library", {});
+  await showList();
+});
+</script>
+</body>
+</html>
