@@ -138,6 +138,21 @@ def imported_history(pages: Iterable[TranscriptPage], listeners: Iterable[Instan
     return ImportedHistory(frozenset(listeners), tuple(reversed(heard)), tuple(reversed(table)), count)
 
 
+def imported_table(pages: Iterable[TranscriptPage], names: Mapping[InstanceRef, str], *,
+                   player: str | None = None) -> tuple[tuple[str, str], ...]:
+    """Every post of ``pages`` the table saw, oldest first, as ``(speaker, text)`` with nothing clipped: the
+    posts ``imported_history``'s ``table`` holds, with no window, for a reader that shows the whole imported
+    chat (044). Which posts and which speaker are ``imported_history``'s rule; only the text is the post's whole
+    chosen text rather than a heard line's 2,000 characters."""
+    found = []
+    for page in sorted(pages, key=lambda each: each.ref.seq):
+        for post in page.posts:
+            line = _imported_line(post, names, player)
+            if line is not None:
+                found.append((line[0].speaker, post.variants[post.active].text))
+    return tuple(found)
+
+
 def heard_for(turns: Iterable[TurnRecord], actor: InstanceRef, names: Mapping[InstanceRef, str], *,
               limit: int = MAX_HEARD, before: ImportedHistory | None = None,
               narration: bool = True, outcomes: Mapping[str, HeardLine] | None = None) -> tuple[HeardLine, ...]:
@@ -211,5 +226,5 @@ def segments(turn: TurnRecord) -> tuple[NarrationSegment, ...]:
     return tuple(found)
 
 
-__all__ = ["NARRATOR", "ImportedHistory", "audible", "heard_for", "imported_history", "render", "segments",
-           "table_lines"]
+__all__ = ["NARRATOR", "ImportedHistory", "audible", "heard_for", "imported_history", "imported_table", "render",
+           "segments", "table_lines"]

@@ -12,10 +12,12 @@ pytest_plugins = ["pytester"]
 #: deletion explorations (also named ``*store*`` and ``*deletion*``), ``store-explorations`` for the
 #: other store-backed ones (named ``*store*``) and ``explorations`` for the rest. ``peersync`` runs the
 #: two-device transfer files (named ``*peersync*``), ``sync`` the other replica-sync files (named
-#: ``*sync*``), ``stores`` the other store files (named ``*store*``), and ``rest`` every other file.
+#: ``*sync*``), ``stores`` the other store files (named ``*store*``), ``scenes`` the other scene files
+#: (named ``*scene*``), and ``rest`` every other file.
 #: Each file belongs to exactly one shard by its name, so together they always run the whole suite;
 #: unset runs everything.
-SHARDS = ("store-explorations", "deletion-explorations", "explorations", "sync", "peersync", "stores", "rest")
+SHARDS = ("store-explorations", "deletion-explorations", "explorations", "sync", "peersync", "stores", "scenes",
+          "rest")
 
 
 def is_exploration(name: str) -> bool:
@@ -26,14 +28,17 @@ def shard_of(name: str) -> str:
     """The one shard a test file runs in; explorations win, so ``test_sync_faults.py`` is one, and a
     store-backed exploration such as ``test_store_recovery.py`` runs in ``store-explorations`` (or
     ``deletion-explorations`` when it is also named for deletion). Sync wins over store, so a file
-    named for both stays with the replica-sync files, and ``peersync`` is the sync files' own split."""
+    named for both stays with the replica-sync files, and ``peersync`` is the sync files' own split. Store
+    wins over scene, so ``test_scenestore.py`` would stay with the store files."""
     if is_exploration(name):
         if "store" in name:
             return "deletion-explorations" if "deletion" in name else "store-explorations"
         return "explorations"
     if "sync" in name:
         return "peersync" if "peersync" in name else "sync"
-    return "stores" if "store" in name else "rest"
+    if "store" in name:
+        return "stores"
+    return "scenes" if "scene" in name else "rest"
 
 
 def pytest_configure(config):

@@ -25,6 +25,7 @@ from grimoire.archaeologystore import StImporter
 from grimoire.chatstore import ChatLibrary
 from grimoire.core.identity import InstanceRef, TranscriptRef
 from grimoire.scene import NARRATOR, SceneRefused, heard_for, imported_history, table_lines
+from grimoire.scene.transcript import imported_table
 from grimoire.transcripts import Post, Speaker, TranscriptPage, Variant
 
 V1_IMPORTED = ("I knock on the door.", "The door opens.", "Someone waits inside.")
@@ -294,3 +295,15 @@ def test_unnamed_and_unlabelled_imported_speakers():
                                                                       ("Character", "Who?"), ("Character", "Me.")]
     assert [(line.speaker, line.text) for line in history.table][1] == (NARRATOR, "The door opens.")
     assert imported_history(pages, (MARA,), {}).heard[0].speaker == "Player"
+
+
+def test_the_whole_imported_table_view_has_no_window_and_no_clip():
+    long = "word " * 1000  # 5,000 characters, past a heard line's 2,000
+    posts = [post(n, "character", f"Line {n}.", actor=MARA) for n in range(1, 46)]
+    pages = [page(*posts[:30]), page(*posts[30:], post(46, "narrator", long), post(47, "system", "Rolled a 6."),
+                                     post(48, "character", "Hidden.", actor=MARA, hidden=True), seq=2)]
+    whole = imported_table(reversed(pages), {MARA: "Mara Vell"})
+    assert [text for _speaker, text in whole] == [f"Line {n}." for n in range(1, 46)] + [long]
+    assert whole[0][0] == "Mara Vell" and whole[-1][0] == NARRATOR
+    window = imported_history(pages, (MARA,), {MARA: "Mara Vell"})
+    assert len(window.table) == 40 and len(window.table[-1].text) < len(long)  # the prompt's view is windowed
