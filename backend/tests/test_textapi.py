@@ -108,6 +108,8 @@ def test_malformed_requests_are_refused_with_their_status_and_write_nothing(sync
         assert _refused(mobile, "add_art", chat=chat, actor=mara, media=_media(PNG), expected="garbage").status == 400
         assert _refused(mobile, "add_art", chat=chat, actor=_mara(mobile("open", chat=chat)), slot="expr.default.smile",
                         media=_media(PNG)).reason == "invalid_field"
+        for slot in ("", "a/b", "x" * 300):  # a slot PlacementRef refuses is a field error, not a failure
+            assert _refused(mobile, "add_art", chat=chat, actor=mara, slot=slot, media=_media(PNG)).status == 400
         assert json.dumps(mobile("open", chat=chat), sort_keys=True) == before
 
 
@@ -307,3 +309,29 @@ def test_a_take_with_no_line_shown_is_not_offered_to_keep(synced):
         (take,) = scene["turns"][-1]["offered"]
         assert take["lines"] == [] and take["calls"]
         assert scene["state"]["keepable"] == []
+
+
+def test_a_character_filter_reads_every_chat_however_many_the_library_holds(synced, monkeypatch):
+    import grimoire.chats.navigation as navigation
+
+    _desk, phone, chat = synced
+    with Device(phone) as mobile:
+        monkeypatch.setattr(navigation, "MAX_RECENT", 1)  # fewer than the library's chats: recent() would refuse
+        listed = mobile("chats", filter="character", source="card:mara-vell/character/mara-vell")["chats"]
+        assert chat in [entry["chat"] for entry in listed]
+
+
+def test_a_staged_take_shows_only_the_lines_a_player_character_heard():
+    from grimoire.core.identity import InstanceRef
+    from grimoire.scene.model import SceneLine, Take
+    from grimoire.textapi.views import heard
+
+    anya, mara, tamsin = (InstanceRef("w", "character", name) for name in ("anya", "mara", "tamsin"))
+    lines = (SceneLine("l1", mara, "Mara", "Psst, the vault code.", (tamsin,)),
+             SceneLine("l2", mara, "Mara", "Good evening.", (anya, tamsin)))
+    staged = Take(1, "kept", "generated", (anya, mara, tamsin), lines, on_stage=(anya, mara, tamsin), players=(anya,))
+    assert [line.line_id for line in heard(staged)] == ["l2"]  # Tamsin is no player: the table never heard l1
+    unknown = Take(1, "kept", "generated", (anya, mara, tamsin), lines, on_stage=(anya, mara, tamsin))
+    assert heard(unknown) == ()  # a staged take that recorded no players: fail closed
+    unstaged = Take(1, "kept", "generated", (anya, mara, tamsin), lines)
+    assert len(heard(unstaged)) == 2

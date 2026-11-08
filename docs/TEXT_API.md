@@ -85,7 +85,9 @@ client hands it back unchanged.
   and `conflicts_unknown` when this device's sync records cannot be read.
 
 The scene shows only what the table's player may read. It never shows intentions, briefs, unscreened lore, lines
-that are not shown, or set-aside lines.
+that are not shown, or set-aside lines. On a 041 stage a take's line is shown only when a player character of
+that take (its recorded `players`) was in the line's audience, as 035's table view reads it; a staged take that
+recorded no players shows none.
 
 ## Refusals
 

@@ -221,7 +221,7 @@ class TextApi:
             if source.pinned:  # a pinned ref would find only the chats bound to that one revision
                 source = source.unpinned()
             matched = {ref for role in FILTER_ROLES[which] for ref in index.by_source(source, role=role)}
-            found = tuple(ref for ref in index.recent(len(index.all_chats()) or 1) if ref in matched)[:limit]
+            found = tuple(ref for ref in index.all_chats() if ref in matched)[:limit]  # newest first, uncapped
         else:
             raise ApiRefused("invalid_field", "filter must be recent, character or scenario")
         entries: list[NavEntry] = [index.entry(ref) for ref in index.all_chats()]
@@ -425,11 +425,15 @@ class TextApi:
         role = "avatar" if slot == "avatar" else "portrait" if slot == "portrait" else "gallery"
         if slot.startswith("expr."):
             raise ApiRefused("invalid_field", "an expression slot needs its outfit and name: not in this slice")
+        try:
+            target = PlacementRef(actor, slot)
+        except ValueError as error:
+            raise ApiRefused("invalid_field", f"slot: {error}") from None
         expected = _field(args, "expected", str, required=False)
         if expected is not None and not is_etag(expected):
             raise ApiRefused("invalid_field", "expected must be the slot's etag as open gave it")
         conflicts, complete = self._conflicts(chat.campaign_id)
-        if not complete or "/".join(placement_parts(PlacementRef(actor, slot))) in {c["path"] for c in conflicts}:
+        if not complete or "/".join(placement_parts(target)) in {c["path"] for c in conflicts}:
             # a third version of a slot in conflict would leave nothing either device could resolve
             raise ApiRefused("art_conflict", f"{actor}'s {slot} is in conflict after a sync: resolve it first")
         batch = self.images.change()

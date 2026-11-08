@@ -98,9 +98,19 @@ def _speaker(actor: InstanceRef | None, names: Mapping[InstanceRef, str], fallba
     return names.get(actor, actor.instance_id)
 
 
+def heard(take: Take) -> tuple:
+    """The lines of ``take`` the table's player heard: every shown line, except on a 041 stage, where a line
+    counts only when a player character as of the take (``Take.players``, never control now) is in its
+    audience, as 035's ``table_lines(as_heard=True)`` reads it. A staged take with no players gives none."""
+    if take.on_stage is None:
+        return take.shown()
+    table = frozenset(take.players or ())
+    return tuple(line for line in take.shown() if table.intersection(line.audience))
+
+
 def _lines(take: Take) -> list[dict]:
     return [{"line": line.line_id, "speaker": line.speaker, "actor": _ref(line.actor), "text": line.text}
-            for line in take.lines if line.shown]
+            for line in heard(take)]
 
 
 def _take(take: Take) -> dict:
