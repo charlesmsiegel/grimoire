@@ -365,8 +365,18 @@ def test_a_request_trickled_a_byte_at_a_time_is_dropped_at_its_deadline(running,
         time.sleep(1.5)
         for connection in slow:  # the server dropped every one at its deadline
             assert connection.recv(1) == b""
-        response, _ = server.request("GET", "/", token=None)
-        assert response.status == 200  # and serves the page again
+        # and serves the page again once their handlers have returned their slots: a slot is released when
+        # the handler thread ends, a moment after the client sees the connection close (slower on Windows)
+        give_up = time.monotonic() + 10
+        while True:
+            try:
+                response, _ = server.request("GET", "/", token=None)
+                break
+            except (http.client.RemoteDisconnected, ConnectionError):
+                if time.monotonic() > give_up:
+                    raise
+                time.sleep(0.05)
+        assert response.status == 200
     finally:
         for connection in slow:
             connection.close()
