@@ -34,6 +34,7 @@ def test_the_shards_partition_every_test_file():
     assert {"test_sync_shards.py", "test_sync_ledger.py"} <= parts["sync"]
     assert {"test_peersync.py", "test_peersync_resolve.py", "test_peersync_ledger.py"} <= parts["peersync"]
     assert {"test_store_replica.py", "test_imagestore_scenarios.py", "test_store_delete.py"} <= parts["stores"]
+    assert {"test_scene_runner.py", "test_scene_staging.py", "test_scene_turn_merge.py"} <= parts["scenes"]
     assert "test_ci_shards.py" in parts["rest"]
 
 
