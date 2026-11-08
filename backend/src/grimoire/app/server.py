@@ -13,11 +13,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import io
 import json
 import secrets
 import socket
 import sys
 import threading
+import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -91,6 +93,31 @@ class _Server(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+class _DeadlineReader(io.RawIOBase):
+    """The socket as a raw file whose every read waits no longer than the request's deadline.
+
+    The deadline is kept by the reading thread itself. A timer that shuts the socket down from another thread
+    frees the client, but on Windows it leaves the blocked read, and so the connection's slot, held until the
+    socket's own timeout."""
+
+    def __init__(self, connection: socket.socket) -> None:
+        super().__init__()
+        self._connection = connection
+        self.until: float | None = None
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:  # type: ignore[no-untyped-def,override]
+        wait = SOCKET_TIMEOUT
+        if self.until is not None:
+            wait = min(wait, self.until - time.monotonic())
+            if wait <= 0:
+                raise TimeoutError("the request's deadline passed")
+        self._connection.settimeout(wait)
+        return self._connection.recv_into(buffer)
+
+
 class _V6Server(_Server):
     address_family = socket.AF_INET6
 
@@ -105,29 +132,17 @@ class _Handler(BaseHTTPRequestHandler):
     # -- deadlines -----------------------------------------------------------------------------------------
     def setup(self) -> None:
         super().setup()
-        self._timer: threading.Timer | None = None
+        self.rfile.close()  # read through the deadline instead of the plain socket file
+        self._reader = _DeadlineReader(self.connection)
+        self.rfile = io.BufferedReader(self._reader)
         self._deadline(HEADER_DEADLINE)
 
     def _deadline(self, seconds: float | None) -> None:
         """Drop the connection unless what it is sending arrives within ``seconds`` (``None``: stop the clock).
         A per-recv timeout alone lets a client hold a slot forever by trickling a byte at a time."""
-        if self._timer is not None:
-            self._timer.cancel()
-            self._timer = None
-        if seconds is not None:
-            self._timer = threading.Timer(seconds, self._expire)
-            self._timer.daemon = True
-            self._timer.start()
-
-    def _expire(self) -> None:
-        try:
-            self.connection.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-
-    def finish(self) -> None:
-        self._deadline(None)
-        super().finish()
+        self._reader.until = None if seconds is None else time.monotonic() + seconds
+        if seconds is None:
+            self.connection.settimeout(SOCKET_TIMEOUT)
 
     # -- responses ---------------------------------------------------------------------------------------
     def _send(self, status: int, body: bytes, content_type: str, extra: tuple[tuple[str, str], ...] = ()) -> None:
@@ -227,7 +242,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._error(415, "unsupported_media", "the body must be application/json")
             return
         self._deadline(BODY_DEADLINE + int(length) / BODY_RATE)
-        body = self.rfile.read(int(length))
+        try:
+            body = self.rfile.read(int(length))
+        except TimeoutError:  # the deadline passed: drop the connection, as for headers
+            self.close_connection = True
+            return
         self._deadline(None)  # read: an op may take as long as it takes (a model's answer)
         if len(body) != int(length):
             self._error(400, "invalid_field", "the body ended early")

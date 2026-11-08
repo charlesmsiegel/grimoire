@@ -350,24 +350,22 @@ def test_a_length_that_is_not_ascii_digits_and_a_deeply_nested_body_are_answered
     assert status == 400 and json.loads(data)["error"] == "invalid_field"
 
 
-def test_a_request_trickled_a_byte_at_a_time_is_dropped_at_its_deadline(running, monkeypatch):
+def _hold_every_slot_until_the_deadline(server, server_module, opening: bytes) -> None:
+    """Fill every slot with a connection that sends ``opening`` and then stalls; each must be dropped at its
+    deadline, and its slot freed well before the socket's own timeout (on Windows a read blocked in another
+    thread outlives a shutdown, so the deadline must be kept by the reading thread)."""
     import time
 
-    import grimoire.app.server as server_module
-
-    monkeypatch.setattr(server_module, "HEADER_DEADLINE", 0.5)
-    server, _device, _chat = running
     slow = [socket.create_connection((server.host, server.port), timeout=10)
             for _ in range(server_module.MAX_CONNECTIONS)]
     try:
         for connection in slow:
-            connection.sendall(b"G")  # each holds a slot, never finishing its request line
+            connection.sendall(opening)
         time.sleep(1.5)
         for connection in slow:  # the server dropped every one at its deadline
             assert connection.recv(1) == b""
-        # and serves the page again once their handlers have returned their slots: a slot is released when
-        # the handler thread ends, a moment after the client sees the connection close (slower on Windows)
-        give_up = time.monotonic() + 10
+        # a slot is released when the handler thread ends, a moment after the client sees the close
+        give_up = time.monotonic() + 5  # far short of SOCKET_TIMEOUT
         while True:
             try:
                 response, _ = server.request("GET", "/", token=None)
@@ -380,6 +378,24 @@ def test_a_request_trickled_a_byte_at_a_time_is_dropped_at_its_deadline(running,
     finally:
         for connection in slow:
             connection.close()
+
+
+def test_a_request_trickled_a_byte_at_a_time_is_dropped_at_its_deadline(running, monkeypatch):
+    import grimoire.app.server as server_module
+
+    monkeypatch.setattr(server_module, "HEADER_DEADLINE", 0.5)
+    server, _device, _chat = running
+    _hold_every_slot_until_the_deadline(server, server_module, b"G")  # never finishes its request line
+
+
+def test_a_body_that_never_arrives_is_dropped_at_its_deadline(running, monkeypatch):
+    import grimoire.app.server as server_module
+
+    monkeypatch.setattr(server_module, "BODY_DEADLINE", 0.5)
+    server, _device, _chat = running
+    head = (f"POST /api/library HTTP/1.0\r\nHost: 127.0.0.1:{server.port}\r\n{TOKEN_HEADER}: {server.app.token}\r\n"
+            "Content-Type: application/json\r\nContent-Length: 100\r\n\r\n{")
+    _hold_every_slot_until_the_deadline(server, server_module, head.encode())
 
 
 def test_init_refuses_a_bad_owner_or_device_before_writing_anything(tmp_path, capsys):
