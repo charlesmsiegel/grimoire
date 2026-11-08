@@ -29,7 +29,9 @@ The first slice's text API is built ([TEXT_API](../../TEXT_API.md)): `grimoire.t
 
 The failure flows are covered too: an unreachable desktop, a missing pairing, a fork from offline play on both devices, a turn kept differently on each (resolved), and a picture placed in one slot on both (resolved).
 
-Who controls each actor is per device (003's ledger does not sync), so a chat from another device is seated by `continue` before it is played there. The runnable app and the phone page are the slice's second PR.
+Who controls each actor is per device (003's ledger does not sync), so a chat from another device is seated by `continue` before it is played there.
+
+The runnable app is built too ([MOBILE](../../MOBILE.md)): `python -m grimoire.app` sets a library up, pairs it with another device and serves the text API with a phone-sized page on loopback. The phone reaches the desktop through `adb reverse` or an SSH tunnel until 028 has an encrypted transport. Sync runs when the page's **Sync** is pressed.
 
 ## Inherited from Wave 5
 
