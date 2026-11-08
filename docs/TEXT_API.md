@@ -1,0 +1,122 @@
+# Text API (044)
+
+`grimoire.textapi.TextApi` is what a client (the phone page first) calls to play a V2 library. It has JSON ops
+over one open library: a JSON object goes in and a JSON object comes out. It is trusted application code acting
+for the library's **owner**. It writes only through the services that own each record:
+
+- 107's `ChatLibrary` (chats and navigation)
+- 035's `SceneRunner` (turns)
+- 052's `QuickStart` (seating and openings)
+- 038's `ImageLibrary` (pictures)
+- 028's `transfer` and `resolve_conflict` (sync)
+
+It keeps no record of its own. The HTTP app that serves it on loopback is 044's second slice.
+
+```python
+api = TextApi(store, authority, owner="human:owner", runtime=runtime, policy=policy, voices=voices,
+              peers={"desktop": ("127.0.0.1", 8765)})
+scene = api.call("continue", {"chat": "campaign:q-c-1#chat/t-c-2"})
+media_type, data = api.image(scene["cast"][0]["art"]["slots"][0]["image"])
+```
+
+## Who plays
+
+This slice is for one person and one library: the owner plays at the table. `player` other than the owner is
+refused (`ValueError`), because a different player would read the table unfiltered and could choose forks. Their
+own view comes with 053 and 102. Every handle is issued by the library's durable authority, trusted.
+
+**Control is per device.** Who controls each actor is 003's sovereignty ledger. It lives under `authority/`, which
+does not sync ([SYNC](SYNC.md)). A chat that arrived from another device shows `state.seated: false` until
+`continue` seats this device's player as the persona and gives every actor nobody controls here its controller (052). Post and play refuse
+`not_your_character` until then. Both devices must use the **same owner principal**. The app's `init` will use one
+default for this: a different owner would be a different table player on each device.
+
+## Ops
+
+Every ref is passed and returned in its own string form (`ChatRef`, `InstanceRef`, `SourceRef`, `ImageRef`), so a
+client hands it back unchanged.
+
+| Op | Arguments | Result |
+|---|---|---|
+| `library` | none | `device`, `owner`, `player`, `peers` (each `peer`, `address`, `paired`, `last` sync report), `generation` (a model is configured), `ops` |
+| `chats` | `filter` `recent` (default), `character` or `scenario`; `source` (a source ref, required with a filter; a pinned ref is unpinned); `limit` 1 to 1000 (default 50) | `chats`, newest activity first, each `chat`, `label`, `last_activity`, `scope` (`campaign`, `title`, `world`: `null` for a world-less chat), `launch`, `sources` (active bindings: `role`, unpinned `ref`, `name`), `problem`; and `sources`, every character and scenario some chat binds, for the filter picker |
+| `open` | `chat` | the **scene** (below) |
+| `continue` | `chat`, `opening` (optional greeting id) | 052's `continue_chat`: seats this device's player and opens a chat with no turn yet. The scene, plus `unfinished` |
+| `post` | `chat`, `text` (at most 20,000 characters) | the scene |
+| `generate` | `chat`, `speakers` (optional actor refs), `director` (bool) | the scene, with the new take proposed |
+| `keep` | `chat`, `take`, `acknowledge_unscreened` (bool) | the scene |
+| `pass` | `chat` | the scene |
+| `pause`, `resume` | `chat` | the scene |
+| `choose` | `chat`, `turn` (a fork branch's first turn) | the scene: the owner's fork choice (028) |
+| `add_art` | `chat`, `actor` (one of the cast), `slot` (default `avatar`; `portrait` or a gallery slot; expression slots are not in this slice), `media` (base64, at most 32 MiB decoded), `expected` (the slot's `etag` as `open` gave it, to replace a picture the campaign already placed) | the scene |
+| `sync` | `peer` (a configured peer) | 028's transfer report: `peer`, `status` (`synced`, `incomplete`, `refused`), `reason`, `code` (the reason's first word, such as `unreachable`), `passes`, `conflicts` (`path`, `code`), `copied`, `deleted` |
+| `resolve` | `peer`, `path` (a conflict `open` reported), `keep` `mine` or `theirs` | 028's resolve report: `peer`, `path`, `status` (`resolved`, `refused`, `incomplete`), `reason`, `code`, `receiver` |
+
+`TextApi.image(ref)` returns a picture's media type and exact bytes. 038 checks them against the blob's name.
+
+### The scene
+
+`open` and every play op return the same object:
+
+- `chat`, `label`, `scope`, `launch` (`kind`, `ref`, `premise`)
+- `persona`: `actor`, `name`
+- `cast`: each `actor`, `name`, `role` (`player`, `npc` or `unseated`), `persona`, and `art`. `art` holds `slots`,
+  each with `state`:
+  - `shown`: with `image`, `media_type`, `size`, `layer`, `crop` and `focus`
+  - `hidden`
+  - `unavailable`: with `reason` and `note`, such as a card picture not given with the card. It is never
+    substituted.
+
+  Every slot carries its campaign-layer placement `etag` (`null`: none yet). `art` also carries `problems`.
+- `history`: an imported V1 scene's posts as the table heard them, or `null`
+- `turns`: each `turn`, `number`, `origin`, `device`, `post`, `kept` (the kept take's shown lines), `offered` (the
+  takes still on offer while the turn is open), `open`, `passed`, `paused`, `set_aside`
+- `set_aside`: turns a fork choice set aside, by `turn`, `number` and `device` only. Nobody heard them (035).
+- `fork`: the open fork, by `number`, `after`, `state` and `branches`, or `null`
+- `state`:
+  - `waiting`: why play waits now, any of `paused`, `forked`, `conflicted`, `turns_unreadable`, `interrupted`
+  - `seated`
+  - `open_turn`
+  - `keepable`: the open turn's proposed takes that can be kept
+  - `unscreened`: those that need `acknowledge_unscreened`
+  - `conflicted_turns`
+  - `conflicts`: each `path`, `mine` and `theirs` (etags; `null` for a deletion), and `versions`
+- `problems`: each `code` and `detail`. These are 035's scene problems, broken bindings, the chat's own problems,
+  and `conflicts_unknown` when this device's sync records cannot be read.
+
+The scene shows only what the table's player may read. It never shows intentions, briefs, unscreened lore, lines
+that are not shown, or set-aside lines.
+
+## Refusals
+
+A refusal raises `ApiRefused`. It carries `reason`, a message and `status`, and `to_json()` gives
+`{"error", "message"}`. A refusal of 035, 052, 038, 107 or 028 keeps that service's own reason. Nothing is written,
+except what the reason's own service documents: a `generate` refused after its running take was written
+(SCENES, "Refusals"), for instance.
+
+| Status | Reasons |
+|---|---|
+| 404 | `no_chat`, `unknown_op`, `missing_image`, `missing_blob`, `no_actor`, `unknown_peer` |
+| 400 | `invalid_field`, `invalid_selection`, `too_large`, `unsupported_media`, `empty` |
+| 409 | every refusal of state, such as `not_your_character`, `turn_fork`, `turn_conflict`, `paused`, `no_runtime`, `changed` (a compare-and-swap lost, so nothing was written), `not_paired`, `no_conflict`, `several_versions`, `blob_corrupt`, `device_identity` |
+
+## Sync, forks and conflicts
+
+`sync` runs one 028 transfer with a configured peer at its loopback address. A peer that cannot be reached
+returns `incomplete` with code `unreachable`, and the phone plays on offline.
+
+- **Forks.** When both devices played one chat offline, the chat forks on both (`waiting: forked`). Play is
+  refused `turn_fork` until the owner `choose`s a branch on either device. The next sync carries the choice.
+- **Conflicts.** A turn both devices kept or passed differently, or a picture both devices placed in one slot,
+  is a keep-both conflict. It blocks play in that chat (`turn_conflict`), and every sync reports it until
+  `resolve` keeps one version. Both devices must be reachable for `resolve`.
+
+## Limits of this slice
+
+- **Single user.** Owner only. Seating is per device (above).
+- **Pictures.** Pictures are added as campaign placements on the chat's own actors, never on a source.
+  Expression slots, crops and focus are not set here.
+- **Loopback only.** 028's transport is loopback and unencrypted. The phone reaches the desktop through a
+  forwarded port.
+- **Generation needs a model.** Without one configured, `generate` is refused `no_runtime`. Everything else
+  works offline.

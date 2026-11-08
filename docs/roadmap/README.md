@@ -214,6 +214,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 
 #### Wave 6 status
 
+- **044 first slice (text API):** JSON ops over one open library let a client find a world-less card chat or an imported V1 chat, play it, add a picture and sync with a paired device over 028's loopback transport. A phone's turn and picture resume on the desktop once, and offline play on both forks or conflicts until the owner chooses or resolves ([TEXT_API](../TEXT_API.md)). The runnable phone app is its next PR.
 - **045 first slice:** one NPC's tactics decision is recorded per scene turn with its evidence and replayed, never re-decided, when narration is retried; an optional, capped `decision` call may pick only among the approaches 039's policy allows, and only when the mode enables it ([DECISIONS](../DECISIONS.md)).
 
 <a id="wave-7"></a>
