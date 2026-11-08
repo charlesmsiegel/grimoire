@@ -54,7 +54,8 @@ const TOKEN_KEY = "grimoire-token";
 })();
 function token() { try { return sessionStorage.getItem(TOKEN_KEY) || window.__token || ""; } catch (e) { return window.__token || ""; } }
 
-const state = { library: null, view: "recent", source: null, chat: null, scene: null, pictures: new Map(), busy: false };
+const PAGE = 50, MAX_LIST = 1000;  // chats shown at first, and the most one list request returns
+const state = { library: null, view: "recent", source: null, limit: PAGE, chat: null, scene: null, pictures: new Map(), busy: false };
 const $ = (id) => document.getElementById(id);
 
 function el(tag, attrs, ...children) {
@@ -69,6 +70,14 @@ function el(tag, attrs, ...children) {
     node.append(typeof child === "string" ? document.createTextNode(child) : child);
   }
   return node;
+}
+
+// A scene with no NPC who can speak is answered by the director: generate is refused nothing_to_generate
+// before anything is written, so the director reply is asked only then.
+async function answer() {
+  try { return await api("generate", { chat: state.chat }); }
+  catch (error) { if (error.reason !== "nothing_to_generate") throw error; }
+  return api("generate", { chat: state.chat, director: true });
 }
 
 async function api(op, args) {
@@ -107,10 +116,10 @@ async function showList() {
   const main = $("main"); main.replaceChildren();
   const tabs = el("div", { class: "tabs" });
   for (const [view, label] of [["recent", "Recent"], ["character", "By character"], ["scenario", "By scenario"]]) {
-    tabs.append(el("button", { "aria-pressed": String(state.view === view), onclick: () => act(async () => { state.view = view; state.source = null; await showList(); }) }, label));
+    tabs.append(el("button", { "aria-pressed": String(state.view === view), onclick: () => act(async () => { state.view = view; state.source = null; state.limit = PAGE; await showList(); }) }, label));
   }
   main.append(tabs);
-  const recent = await api("chats", { filter: "recent" });
+  const recent = await api("chats", { filter: "recent", limit: state.view === "recent" ? state.limit : PAGE });
   let chats = recent.chats;
   if (state.view !== "recent") {
     const picker = el("select", {});
@@ -120,9 +129,9 @@ async function showList() {
       if (source.ref === state.source) option.setAttribute("selected", "");
       picker.append(option);
     }
-    picker.addEventListener("change", () => act(async () => { state.source = picker.value || null; await showList(); }));
+    picker.addEventListener("change", () => act(async () => { state.source = picker.value || null; state.limit = PAGE; await showList(); }));
     main.append(picker);
-    chats = state.source ? (await api("chats", { filter: state.view, source: state.source })).chats : [];
+    chats = state.source ? (await api("chats", { filter: state.view, source: state.source, limit: state.limit })).chats : [];
   }
   if (!chats.length) main.append(el("p", { class: "muted" }, state.view === "recent" ? "No chats yet. Sync with your other device." : "No chats here."));
   for (const chat of chats) {
@@ -130,6 +139,10 @@ async function showList() {
     main.append(el("button", { class: "item", onclick: () => act(() => openChat(chat.chat)) },
       el("div", {}, chat.label || (chat.launch && chat.launch.name) || chat.chat),
       el("div", { class: "muted" }, where + (chat.problem ? " · " + chat.problem : ""))));
+  }
+  // a full page may have more behind it: ask for a longer list, up to the API's largest
+  if (chats.length >= state.limit && state.limit < MAX_LIST) {
+    main.append(el("button", { onclick: () => act(async () => { state.limit = Math.min(state.limit * 4, MAX_LIST); await showList(); }) }, "Show more"));
   }
 }
 
@@ -186,7 +199,7 @@ function render(scene) {
   }
   const actions = el("div", { class: "actions" });
   if (!scene.state.seated) actions.append(el("button", { class: "primary", onclick: () => act(async () => render(await api("continue", { chat: state.chat }))) }, "Take your seat"));
-  if (state.library && state.library.generation) actions.append(el("button", { onclick: () => act(async () => render(await api("generate", { chat: state.chat }))) }, "Answer"));
+  if (state.library && state.library.generation) actions.append(el("button", { onclick: () => act(async () => render(await answer())) }, "Answer"));
   const open = scene.state.open_turn;  // Pass names the turn on screen, so a late tap never closes a newer one
   if (open) actions.append(el("button", { onclick: () => act(async () => render(await api("pass", { chat: state.chat, turn: open }))) }, "Pass"));
   if (waiting.includes("paused")) actions.append(el("button", { onclick: () => act(async () => render(await api("resume", { chat: state.chat }))) }, "Resume"));
@@ -224,7 +237,7 @@ $("send").addEventListener("click", () => act(async () => {
   const scene = await api("post", { chat: state.chat, text });
   $("text").value = "";
   render(scene);  // the post is shown even if the answer then fails, so it is never sent twice
-  if (state.library && state.library.generation) render(await api("generate", { chat: state.chat }));
+  if (state.library && state.library.generation) render(await answer());
 }));
 $("back").addEventListener("click", () => act(showList));
 $("sync").addEventListener("click", () => act(async () => {
