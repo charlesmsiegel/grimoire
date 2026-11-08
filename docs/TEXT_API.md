@@ -50,7 +50,7 @@ client hands it back unchanged.
 | `choose` | `chat`, `turn` (a fork branch's first turn) | the scene: the owner's fork choice (028) |
 | `add_art` | `chat`, `actor` (one of the cast), `slot` (default `avatar`; `portrait` or a gallery slot; expression slots are not in this slice), `media` (base64, at most 32 MiB decoded), `expected` (the slot's `etag` as `open` gave it, to replace a picture the campaign already placed) | the scene |
 | `sync` | `peer` (a configured peer) | 028's transfer report: `peer`, `status` (`synced`, `incomplete`, `refused`), `reason`, `code` (the reason's first word, such as `unreachable`), `passes`, `conflicts` (`path`, `code`), `copied`, `deleted` |
-| `resolve` | `peer`, `path` (a campaign file `open` reports in conflict), `keep`: `mine`, `theirs` (the one other version kept here, or the peer's deletion), or one of `theirs` by etag | 028's resolve report: `peer`, `path`, `status` (`resolved`, `refused`, `incomplete`), `reason`, `code`, `receiver` |
+| `resolve` | `peer`, `path` (a campaign file `open` reports in conflict), `mine` and `theirs` (the conflict's etags exactly as `open` gave them: a version changed since is refused `changed`), `keep`: `mine`, `theirs` (the one other version kept here, or the peer's deletion), or one of `theirs` by etag | 028's resolve report: `peer`, `path`, `status` (`resolved`, `refused`, `incomplete`), `reason`, `code`, `receiver` |
 
 `TextApi.image(ref)` returns a picture's media type and exact bytes. 038 checks them against the blob's name.
 

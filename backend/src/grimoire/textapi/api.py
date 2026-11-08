@@ -479,7 +479,8 @@ class TextApi:
     def _resolve(self, args: Mapping[str, object]) -> dict:
         """End one keep-both conflict with ``peer`` (019 over 028's transport): ``keep`` is ``mine`` (this
         device's version) or ``theirs`` (the peer's version this device holds). Both devices must be
-        reachable; the etags come from this device's records, as ``open`` reports them."""
+        reachable. ``mine`` and ``theirs`` name the versions the client read, as ``open`` reported them:
+        anything since is refused ``changed``."""
         peer = _field(args, "peer", str)
         address = self.peers.get(peer)
         if address is None:
@@ -493,6 +494,17 @@ class TextApi:
         found = next((item for item in conflicts if item["path"] == path), None)
         if found is None:
             raise ApiRefused("no_conflict", f"{path} is not in conflict here")
+        # the versions the client read, as open gave them: a version that changed since is never resolved
+        # unseen, so they are checked here and its ``mine`` is what the resolver expects on this device
+        if "mine" not in args or "theirs" not in args:
+            raise ApiRefused("invalid_field", "name the versions you read: mine and theirs as open gave them")
+        seen_mine, seen_theirs = args["mine"], args["theirs"]
+        if seen_mine is not None and not (isinstance(seen_mine, str) and is_etag(seen_mine)):
+            raise ApiRefused("invalid_field", "mine must be an etag as open gave it, or null")
+        if not isinstance(seen_theirs, list) or not all(isinstance(item, str) and is_etag(item) for item in seen_theirs):
+            raise ApiRefused("invalid_field", "theirs must be the list of etags open gave")
+        if seen_mine != found["mine"] or sorted(seen_theirs) != found["theirs"]:
+            raise ApiRefused("changed", f"{path} changed since it was read: open the chat again")
         theirs = found["theirs"]
         if keep == "mine":
             chosen = found["mine"]
@@ -512,7 +524,7 @@ class TextApi:
             local = device_of(self.store)
         except (SyncError, StoreError, OSError, ValueError) as error:
             raise ApiRefused("device_identity", str(error)) from None
-        expected = {local: found["mine"], peer: peer_version}
+        expected = {local: seen_mine, peer: peer_version}
         try:
             report = resolve_conflict(self.store, self.authority, peer, address, path, chosen, expected,
                                       timeout=self.transfer_timeout)

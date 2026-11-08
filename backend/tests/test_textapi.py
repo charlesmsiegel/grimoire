@@ -97,7 +97,7 @@ def test_malformed_requests_are_refused_with_their_status_and_write_nothing(sync
             ("add_art", {"chat": chat, "actor": "campaign:x/character/y", "media": ""}, "empty", 400),
             ("add_art", {"chat": chat, "actor": "campaign:x/character/y", "media": _media(PNG)}, "no_actor", 404),
             ("sync", {"peer": "laptop"}, "unknown_peer", 404),
-            ("resolve", {"peer": "laptop", "path": "x", "keep": "mine"}, "unknown_peer", 404),
+            ("resolve", {"peer": "laptop", "path": "x", "keep": "mine", "mine": None, "theirs": []}, "unknown_peer", 404),
             ("post", {"chat": chat, "text": ""}, "no_content", 400),
         ]
         for op, args, reason, status in cases:
@@ -227,7 +227,8 @@ def test_two_devices_keeping_one_turn_differently_conflict_until_one_is_resolved
             assert "conflicted" in scene["state"]["waiting"]
             (conflict,) = [item for item in scene["state"]["conflicts"] if "/turns/" in item["path"]]
             assert _refused(mobile, "post", chat=chat, text="Hm.").reason == "turn_conflict"
-            result = mobile("resolve", peer=DESKTOP, path=conflict["path"], keep="theirs")
+            result = mobile("resolve", peer=DESKTOP, path=conflict["path"], keep="theirs", mine=conflict["mine"],
+                            theirs=conflict["theirs"])
             assert result["status"] == "resolved", result
             scene = mobile("open", chat=chat)
             assert "conflicted" not in scene["state"]["waiting"]
@@ -257,9 +258,17 @@ def test_a_picture_added_to_one_slot_on_both_devices_conflicts_and_both_pictures
             # a third version would leave the conflict with nothing to resolve: the slot waits for resolve
             error = _refused(mobile, "add_art", chat=chat, actor=mara, media=_media(PNG + b"3"))
             assert (error.reason, error.status) == ("art_conflict", 409)
-            assert _refused(mobile, "resolve", peer=DESKTOP, path="nowhere", keep="mine").status == 400
-            assert _refused(mobile, "resolve", peer=DESKTOP, path=conflict["path"], keep="neither").status == 400
-            assert mobile("resolve", peer=DESKTOP, path=conflict["path"], keep="mine")["status"] == "resolved"
+            read = {"mine": conflict["mine"], "theirs": conflict["theirs"]}
+            assert _refused(mobile, "resolve", peer=DESKTOP, path="nowhere", keep="mine", **read).status == 400
+            assert _refused(mobile, "resolve", peer=DESKTOP, path=conflict["path"], keep="neither", **read).status == 400
+            assert _refused(mobile, "resolve", peer=DESKTOP, path=conflict["path"], keep="mine").status == 400
+            assert _refused(mobile, "resolve", peer=DESKTOP, path=conflict["path"], keep="mine", mine="garbage",
+                            theirs=conflict["theirs"]).status == 400
+            # a version other than the one read (here: the other device's, as if this one had changed since)
+            stale = _refused(mobile, "resolve", peer=DESKTOP, path=conflict["path"], keep="theirs",
+                             mine=conflict["theirs"][0], theirs=conflict["theirs"])
+            assert (stale.reason, stale.status) == ("changed", 409)
+            assert mobile("resolve", peer=DESKTOP, path=conflict["path"], keep="mine", **read)["status"] == "resolved"
             assert mobile("sync", peer=DESKTOP)["conflicts"] == []
         scene = desktop("open", chat=chat)
         (avatar,) = [slot for member in scene["cast"] if member["actor"] == mara
