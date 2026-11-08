@@ -989,14 +989,17 @@ class SceneRunner:
         return record
 
     @traced("pass_turn")
-    def pass_turn(self, chat: ChatRef, by) -> TurnRecord:
-        """Close the open turn with nothing kept, so play can go on."""
+    def pass_turn(self, chat: ChatRef, by, *, turn: str | None = None) -> TurnRecord:
+        """Close the open turn with nothing kept, so play can go on. ``turn``, as for ``keep``, names the turn
+        meant (044): a late or repeated pass is refused ``turn_changed`` once another turn is open."""
         scene = self._context(chat).scene
         principal = self._principal(scene, by)
         stored = self._open(scene)
         if scene.paused:
             raise _refuse("paused", "play is paused")
         record = stored.record
+        if turn is not None and record.turn_id != turn:
+            raise _refuse("turn_changed", "that was another turn; read the chat again")
         framed = record.framed
         # 029's lock: a decision of this turn's action (``decide``, or ``confirm``'s by rule) re-reads the turn under
         # it, so a pass and a decision are ordered: one decided before the pass stands, and one after is refused

@@ -91,6 +91,7 @@ def test_malformed_requests_are_refused_with_their_status_and_write_nothing(sync
             ("keep", {"chat": chat, "take": 0}, "invalid_field", 400),
             ("keep", {"chat": chat, "take": True}, "invalid_field", 400),
             ("keep", {"chat": chat, "take": 1}, "invalid_field", 400),  # no turn named
+            ("pass", {"chat": chat}, "invalid_field", 400),  # no turn named
             ("generate", {"chat": chat, "speakers": "mara"}, "invalid_field", 400),
             ("add_art", {"chat": chat, "actor": "campaign:x/character/y", "media": "!!"}, "invalid_field", 400),
             ("add_art", {"chat": chat, "actor": "campaign:x/character/y", "media": ""}, "empty", 400),
@@ -219,7 +220,7 @@ def test_two_devices_keeping_one_turn_differently_conflict_until_one_is_resolved
         keep(desktop, chat)
         with serving(desktop) as server, Device(phone, peers={DESKTOP: server.address}) as mobile:
             mobile("continue", chat=chat)
-            mobile("pass", chat=chat)
+            mobile("pass", chat=chat, turn=mobile("open", chat=chat)["state"]["open_turn"])
             report = mobile("sync", peer=DESKTOP)
             assert report["conflicts"], report
             scene = mobile("open", chat=chat)
@@ -354,3 +355,17 @@ def test_a_late_keep_never_keeps_another_turns_take(synced):
         assert (error.reason, error.status) == ("turn_changed", 409)
         scene = mobile("open", chat=chat)
         assert scene["state"]["open_turn"] is not None and scene["state"]["keepable"] == [1]
+
+
+def test_a_late_pass_never_closes_a_newer_turn(synced):
+    _desk, phone, chat = synced
+    with Device(phone, [say("Turn three, unread.")]) as mobile:
+        mobile("continue", chat=chat)
+        mobile("post", chat=chat, text="Two.")
+        read = mobile("open", chat=chat)["state"]["open_turn"]
+        mobile("pass", chat=chat, turn=read)
+        mobile("post", chat=chat, text="Three.")
+        mobile("generate", chat=chat)
+        error = _refused(mobile, "pass", chat=chat, turn=read)  # the first pass, sent again
+        assert (error.reason, error.status) == ("turn_changed", 409)
+        assert mobile("open", chat=chat)["state"]["keepable"] == [1]

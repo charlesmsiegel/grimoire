@@ -45,7 +45,7 @@ client hands it back unchanged.
 | `post` | `chat`, `text` (at most 20,000 characters) | the scene |
 | `generate` | `chat`, `speakers` (optional actor refs), `director` (bool) | the scene, with the new take proposed |
 | `keep` | `chat`, `turn` (the open turn the take was read on), `take`, `acknowledge_unscreened` (bool) | the scene; another turn is refused `turn_changed` |
-| `pass` | `chat` | the scene |
+| `pass` | `chat`, `turn` (the open turn meant) | the scene; another turn is refused `turn_changed` |
 | `pause`, `resume` | `chat` | the scene |
 | `choose` | `chat`, `turn` (a fork branch's first turn) | the scene: the owner's fork choice (028) |
 | `add_art` | `chat`, `actor` (one of the cast), `slot` (default `avatar`; `portrait` or a gallery slot; expression slots are not in this slice), `media` (base64, at most 32 MiB decoded), `expected` (the slot's `etag` as `open` gave it, to replace a picture the campaign already placed) | the scene |

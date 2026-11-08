@@ -383,7 +383,8 @@ class TextApi:
 
     def _pass(self, args: Mapping[str, object]) -> dict:
         chat = self._chat(args)
-        self.runner.pass_turn(chat, self.player_handle)
+        turn = _field(args, "turn", str)  # the turn meant: a late pass never closes a newer one
+        self.runner.pass_turn(chat, self.player_handle, turn=turn)
         return self._scene(chat)
 
     def _pause(self, args: Mapping[str, object]) -> dict:
