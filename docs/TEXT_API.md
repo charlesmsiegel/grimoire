@@ -44,7 +44,7 @@ client hands it back unchanged.
 | `continue` | `chat`, `opening` (optional greeting id) | 052's `continue_chat`: seats this device's player and opens a chat with no turn yet. The scene, plus `unfinished` |
 | `post` | `chat`, `text` (at most 20,000 characters) | the scene |
 | `generate` | `chat`, `speakers` (optional actor refs), `director` (bool) | the scene, with the new take proposed |
-| `keep` | `chat`, `take`, `acknowledge_unscreened` (bool) | the scene |
+| `keep` | `chat`, `turn` (the open turn the take was read on), `take`, `acknowledge_unscreened` (bool) | the scene; another turn is refused `turn_changed` |
 | `pass` | `chat` | the scene |
 | `pause`, `resume` | `chat` | the scene |
 | `choose` | `chat`, `turn` (a fork branch's first turn) | the scene: the owner's fork choice (028) |

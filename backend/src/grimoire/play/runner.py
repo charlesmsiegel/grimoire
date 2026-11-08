@@ -929,14 +929,20 @@ class SceneRunner:
     # -- the table's choices ------------------------------------------------------------------------
 
     @traced("keep")
-    def keep(self, chat: ChatRef, by, take: int, *, acknowledge_unscreened: bool = False) -> TurnRecord:
-        """Keep one proposed take: its shown lines become the transcript, and the turn closes."""
+    def keep(self, chat: ChatRef, by, take: int, *, acknowledge_unscreened: bool = False,
+             turn: str | None = None) -> TurnRecord:
+        """Keep one proposed take: its shown lines become the transcript, and the turn closes.
+
+        ``turn`` is the turn the table read the take on (044): take numbers start again on every turn, so a
+        late or repeated keep names its turn and is refused (``turn_changed``) once another turn is open."""
         scene = self._context(chat).scene
         principal = self._principal(scene, by)
         stored = self._open(scene)
         if scene.paused:
             raise _refuse("paused", "play is paused")
         record = stored.record
+        if turn is not None and record.turn_id != turn:
+            raise _refuse("turn_changed", "that take was on another turn; read the chat again")
         found = next((t for t in record.takes if t.take == take), None)
         if found is None or found.state != "proposed":
             raise _refuse("not_proposed", "only a proposed take can be kept")

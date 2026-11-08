@@ -13,6 +13,7 @@ import socket
 import pytest
 from scene_fixtures import Table
 from textapi_fixtures import (
+    keep,
     DESKTOP,
     PHONE,
     V1_CHAT,
@@ -58,7 +59,7 @@ def _play(device: Device, chat: str, text: str) -> dict:
     device("continue", chat=chat)
     device("post", chat=chat, text=text)
     device("generate", chat=chat)
-    return device("keep", chat=chat, take=1)
+    return keep(device, chat)
 
 
 def _mara(scene: dict) -> str:
@@ -89,6 +90,7 @@ def test_malformed_requests_are_refused_with_their_status_and_write_nothing(sync
             ("post", {"chat": chat, "text": "x" * 20001}, "invalid_field", 400),
             ("keep", {"chat": chat, "take": 0}, "invalid_field", 400),
             ("keep", {"chat": chat, "take": True}, "invalid_field", 400),
+            ("keep", {"chat": chat, "take": 1}, "invalid_field", 400),  # no turn named
             ("generate", {"chat": chat, "speakers": "mara"}, "invalid_field", 400),
             ("add_art", {"chat": chat, "actor": "campaign:x/character/y", "media": "!!"}, "invalid_field", 400),
             ("add_art", {"chat": chat, "actor": "campaign:x/character/y", "media": ""}, "empty", 400),
@@ -164,7 +166,7 @@ def test_a_take_proposed_on_the_phone_is_kept_on_the_desktop(synced):
         desktop("continue", chat=chat)
         scene = desktop("open", chat=chat)
         assert scene["state"]["keepable"] == [1]
-        scene = desktop("keep", chat=chat, take=1)
+        scene = keep(desktop, chat)
         assert scene["turns"][-1]["kept"]["lines"][0]["text"] == "Proposed on the phone."
         assert scene["state"]["open_turn"] is None
 
@@ -214,7 +216,7 @@ def test_two_devices_keeping_one_turn_differently_conflict_until_one_is_resolved
             assert mobile("sync", peer=DESKTOP)["status"] == "synced"
     # offline, each device passes or keeps the same open turn its own way
     with Device(desk) as desktop:
-        desktop("keep", chat=chat, take=1)
+        keep(desktop, chat)
         with serving(desktop) as server, Device(phone, peers={DESKTOP: server.address}) as mobile:
             mobile("continue", chat=chat)
             mobile("pass", chat=chat)
@@ -335,3 +337,20 @@ def test_a_staged_take_shows_only_the_lines_a_player_character_heard():
     assert heard(unknown) == ()  # a staged take that recorded no players: fail closed
     unstaged = Take(1, "kept", "generated", (anya, mara, tamsin), lines)
     assert len(heard(unstaged)) == 2
+
+
+def test_a_late_keep_never_keeps_another_turns_take(synced):
+    _desk, phone, chat = synced
+    with Device(phone, [say("Turn two."), say("Turn three, unread.")]) as mobile:
+        mobile("continue", chat=chat)
+        mobile("post", chat=chat, text="Two.")
+        mobile("generate", chat=chat)
+        read = mobile("open", chat=chat)["state"]["open_turn"]
+        mobile("keep", chat=chat, take=1, turn=read)
+        mobile("post", chat=chat, text="Three.")
+        scene = mobile("generate", chat=chat)
+        assert scene["state"]["keepable"] == [1]
+        error = _refused(mobile, "keep", chat=chat, take=1, turn=read)  # the first keep, sent again
+        assert (error.reason, error.status) == ("turn_changed", 409)
+        scene = mobile("open", chat=chat)
+        assert scene["state"]["open_turn"] is not None and scene["state"]["keepable"] == [1]

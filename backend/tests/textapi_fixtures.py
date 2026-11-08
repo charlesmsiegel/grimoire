@@ -44,8 +44,14 @@ from grimoire.sync import identify
 from grimoire.textapi import TextApi
 
 DESKTOP, PHONE = "desktop", "phone"
-__all__ = ["DESKTOP", "PHONE", "V1_CHAT", "Device", "copy_library", "desktop_library", "pair_devices",
+__all__ = ["DESKTOP", "PHONE", "V1_CHAT", "Device", "copy_library", "desktop_library", "keep", "pair_devices",
            "phone_library", "say", "serving"]
+
+
+def keep(device, chat: str, take: int = 1, **args) -> dict:
+    """Keep ``take`` of the open turn, naming that turn as a client that read it does."""
+    turn = device("open", chat=chat)["state"]["open_turn"]
+    return device("keep", chat=chat, take=take, turn=turn, **args)
 
 
 def desktop_library(root: Path):

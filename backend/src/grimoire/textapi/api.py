@@ -37,10 +37,12 @@ from grimoire.peersync import (
     transfer,
 )
 from grimoire.peersync.pairing import pairing_ended
+from grimoire.effective import chat_snapshot
 from grimoire.play import SceneRunner
+from grimoire.play.history import chat_transcript
 from grimoire.quickstart import QuickStart, QuickStartRefused
 from grimoire.scene import SceneRefused
-from grimoire.store import BlobCorrupt, LibraryStore, StaleWrite, StoreError, etag
+from grimoire.store import BlobCorrupt, LibraryStore, RecordNotFound, StaleWrite, StoreError, etag
 from grimoire.store.jsonfmt import is_etag
 from grimoire.store.layout import placement_parts
 from grimoire.sync import NoDeviceIdentity, SyncError, SyncInterrupted, device_of
@@ -207,6 +209,14 @@ class TextApi:
         except Exception:  # noqa: BLE001 -- a name is presentation only; a missing source shows its ref
             return None
 
+    def _imported(self, chat: ChatRef) -> tuple[tuple[str, str], ...]:
+        try:
+            captured = chat_snapshot(self.store.load(), chat)
+        except (RecordNotFound, ChatCodecError):
+            return ()
+        lines, _problems = chat_transcript(self.store, chat, captured.chat, captured.snapshot)
+        return lines or ()
+
     def _chats(self, args: Mapping[str, object]) -> dict:
         which = _field(args, "filter", str, required=False, default="recent")
         limit = _field(args, "limit", int, required=False, default=50)
@@ -307,8 +317,8 @@ class TextApi:
         seated = (scene.persona is None or scene.controller(scene.persona) == self.player) and all(
             scene.controller(actor) is not None for actor in scene.cast)
         history = None
-        if scene.imported is not None:
-            history = [{"speaker": line.speaker, "text": line.text} for line in scene.imported.table]
+        if scene.imported is not None:  # the whole imported chat, not the runner's 40-line prompt window
+            history = [{"speaker": speaker, "text": text} for speaker, text in self._imported(chat)]
         return {
             "chat": str(chat), "label": label, "scope": scope, "launch": launch,
             "persona": None if scene.persona is None else {"actor": str(scene.persona),
@@ -362,10 +372,13 @@ class TextApi:
         take = _field(args, "take", int)
         if isinstance(take, bool) or take < 1:
             raise ApiRefused("invalid_field", "take must be a take number")
+        # take numbers restart on every turn: the turn the take was read on, so a late keep never keeps
+        # another turn's take nobody read
+        turn = _field(args, "turn", str)
         # a director take that used lore no reply screen covered is kept only once the owner, who directs,
         # says so (035: ``unscreened_lore`` otherwise)
         acknowledge = _field(args, "acknowledge_unscreened", bool, required=False, default=False)
-        self.runner.keep(chat, self.player_handle, take, acknowledge_unscreened=acknowledge)
+        self.runner.keep(chat, self.player_handle, take, acknowledge_unscreened=acknowledge, turn=turn)
         return self._scene(chat)
 
     def _pass(self, args: Mapping[str, object]) -> dict:

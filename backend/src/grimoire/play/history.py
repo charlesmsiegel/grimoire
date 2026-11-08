@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from grimoire.archaeologystore import read_transcript
 from grimoire.core.identity import ChatRef, InstanceRef
 from grimoire.scene import ImportedHistory, imported_history
+from grimoire.scene.transcript import imported_table
 from grimoire.store import LibraryStore
 
 
@@ -25,6 +26,26 @@ def chat_history(store: LibraryStore, chat: ChatRef, record, snapshot
     pages (a link, a look-alike folder) makes this chat's own pages unreadable too, but a chat with no pages
     is only told about it (``transcripts``): it has no history to lose.
     """
+    pages, problems = _pages(store, chat)
+    if not pages:
+        return None, problems
+    names = _imported_names(snapshot, record)
+    return imported_history(pages, imported_cast(record), names, player=_imported_player(record, names)), problems
+
+
+def chat_transcript(store: LibraryStore, chat: ChatRef, record, snapshot
+                    ) -> tuple[tuple[tuple[str, str], ...] | None, list[tuple[str, str]]]:
+    """The whole imported history as the table saw it (``imported_table``), unwindowed and unclipped, for a
+    reader that shows it (044); ``None`` exactly when ``chat_history`` gives none, with the same problems."""
+    pages, problems = _pages(store, chat)
+    if not pages:
+        return None, problems
+    names = _imported_names(snapshot, record)
+    return imported_table(pages, names, player=_imported_player(record, names)), problems
+
+
+def _pages(store: LibraryStore, chat: ChatRef) -> tuple[list, list[tuple[str, str]]]:
+    """The chat's pages, or none when any of them cannot be read (with why), and the other problems."""
     pages, found = read_transcript(store, chat)
     own = [problem for problem in found if _about_chat(problem, chat)]
     others = [problem for problem in found if not _about_chat(problem, chat)]
@@ -32,12 +53,8 @@ def chat_history(store: LibraryStore, chat: ChatRef, record, snapshot
         own.append(f"{pages[0].ref}:missing_pages")
     unreadable = own + (others if pages else [])
     if unreadable:
-        return None, [("imported_history_unreadable", _problem_text(problem)) for problem in unreadable]
-    problems = [("transcripts", _problem_text(problem)) for problem in others]
-    if not pages:
-        return None, problems
-    names = _imported_names(snapshot, record)
-    return imported_history(pages, imported_cast(record), names, player=_imported_player(record, names)), problems
+        return [], [("imported_history_unreadable", _problem_text(problem)) for problem in unreadable]
+    return list(pages), [("transcripts", _problem_text(problem)) for problem in others]
 
 
 def imported_cast(record) -> tuple[InstanceRef, ...]:

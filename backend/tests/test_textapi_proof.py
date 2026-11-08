@@ -14,6 +14,7 @@ import hashlib
 import pytest
 from scene_fixtures import MARA, SERAPHINE
 from textapi_fixtures import (
+    keep,
     DESKTOP,
     PHONE,
     V1_CHAT,
@@ -78,7 +79,7 @@ def test_a_post_and_a_picture_from_the_phone_resume_on_the_desktop(libraries):
             scene = mobile("post", chat=chat, text='Is the lighthouse lit?')
             scene = mobile("generate", chat=chat)
             assert scene["state"]["keepable"] == [1]
-            scene = mobile("keep", chat=chat, take=1)
+            scene = keep(mobile, chat)
             phone_turns = [turn["turn"] for turn in scene["turns"]]
             assert _texts(scene) == opening + ['Is the lighthouse lit?', "Dark, and the harbor pays for it."]
             mara = _actor(scene, "Mara Vell")
@@ -112,7 +113,7 @@ def test_a_post_and_a_picture_from_the_phone_resume_on_the_desktop(libraries):
         assert [turn["turn"] for turn in scene["turns"]] == phone_turns
         scene = desktop("post", chat=chat, text='Then we sail tonight.')
         scene = desktop("generate", chat=chat)
-        scene = desktop("keep", chat=chat, take=1)
+        scene = keep(desktop, chat)
         assert _texts(scene)[-2:] == ['Then we sail tonight.', "Lamps out at midnight, as promised."]
         (prompt,) = desktop.prompts()
         assert prompt.count("Dark, and the harbor pays for it.") == 1
@@ -151,7 +152,7 @@ def test_the_imported_v1_chat_is_found_by_its_world_character_and_played_on_the_
             assert scene["state"]["seated"] is True and scene["persona"]["name"] == "Winifred"
             mobile("post", chat=chat, text='What does the ledger say?')
             scene = mobile("generate", chat=chat, speakers=[str(MARA), str(SERAPHINE)])
-            scene = mobile("keep", chat=chat, take=1)
+            scene = keep(mobile, chat)
             assert _texts(scene)[-3:] == ['What does the ledger say?', "The ledger is wet, but legible.",
                                           "Then read it aloud."]
             turns = [turn["turn"] for turn in scene["turns"]]
