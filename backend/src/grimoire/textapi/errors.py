@@ -5,7 +5,8 @@ from __future__ import annotations
 #: Reasons that mean "the thing asked for is not here" rather than "the request is malformed" or "not now".
 NOT_FOUND = frozenset({"no_chat", "unknown_op", "missing_image", "missing_blob", "no_actor", "unknown_peer"})
 #: Reasons that mean the request itself is wrong: the client should not repeat it as it is.
-BAD_REQUEST = frozenset({"invalid_field", "invalid_selection", "too_large", "unsupported_media", "empty"})
+BAD_REQUEST = frozenset({"invalid_field", "invalid_selection", "too_large", "unsupported_media", "empty",
+                         "no_content", "unknown_opening"})
 
 
 class ApiRefused(ValueError):

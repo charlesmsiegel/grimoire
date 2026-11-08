@@ -95,6 +95,7 @@ def test_malformed_requests_are_refused_with_their_status_and_write_nothing(sync
             ("add_art", {"chat": chat, "actor": "campaign:x/character/y", "media": _media(PNG)}, "no_actor", 404),
             ("sync", {"peer": "laptop"}, "unknown_peer", 404),
             ("resolve", {"peer": "laptop", "path": "x", "keep": "mine"}, "unknown_peer", 404),
+            ("post", {"chat": chat, "text": ""}, "no_content", 400),
         ]
         for op, args, reason, status in cases:
             error = _refused(mobile, op, **args)
@@ -103,6 +104,8 @@ def test_malformed_requests_are_refused_with_their_status_and_write_nothing(sync
         with pytest.raises(ApiRefused) as caught:
             mobile.api.call("open", ["not", "an", "object"])  # type: ignore[arg-type]
         assert caught.value.reason == "invalid_field"
+        mara = _mara(mobile("open", chat=chat))
+        assert _refused(mobile, "add_art", chat=chat, actor=mara, media=_media(PNG), expected="garbage").status == 400
         assert _refused(mobile, "add_art", chat=chat, actor=_mara(mobile("open", chat=chat)), slot="expr.default.smile",
                         media=_media(PNG)).reason == "invalid_field"
         assert json.dumps(mobile("open", chat=chat), sort_keys=True) == before
@@ -244,6 +247,13 @@ def test_a_picture_added_to_one_slot_on_both_devices_conflicts_and_both_pictures
                 assert mobile.api.image(avatar["image"]) == ("image/png", data)
             scene = mobile("open", chat=chat)
             (conflict,) = scene["state"]["conflicts"]
+            assert len(conflict["theirs"]) == 1 and conflict["mine"] not in conflict["theirs"]
+            assert scene["state"]["waiting"] == []  # a picture in conflict holds the slot, not play
+            # a third version would leave the conflict with nothing to resolve: the slot waits for resolve
+            error = _refused(mobile, "add_art", chat=chat, actor=mara, media=_media(PNG + b"3"))
+            assert (error.reason, error.status) == ("art_conflict", 409)
+            assert _refused(mobile, "resolve", peer=DESKTOP, path="nowhere", keep="mine").status == 400
+            assert _refused(mobile, "resolve", peer=DESKTOP, path=conflict["path"], keep="neither").status == 400
             assert mobile("resolve", peer=DESKTOP, path=conflict["path"], keep="mine")["status"] == "resolved"
             assert mobile("sync", peer=DESKTOP)["conflicts"] == []
         scene = desktop("open", chat=chat)
@@ -283,3 +293,17 @@ def test_the_v1_chat_reads_on_the_phone_with_its_imported_history(synced):
         scene = mobile("open", chat=str(V1_CHAT))
         assert scene["scope"]["world"] is not None
         assert len(scene["history"]) == 3
+
+
+def test_a_take_with_no_line_shown_is_not_offered_to_keep(synced):
+    _desk, phone, chat = synced
+    with Device(phone, []) as mobile:  # the scripted model has no reply: the call fails and the take halts
+        mobile("continue", chat=chat)
+        mobile("post", chat=chat, text="Anyone?")
+        try:
+            scene = mobile("generate", chat=chat)
+        except ApiRefused:
+            scene = mobile("open", chat=chat)
+        (take,) = scene["turns"][-1]["offered"]
+        assert take["lines"] == [] and take["calls"]
+        assert scene["state"]["keepable"] == []

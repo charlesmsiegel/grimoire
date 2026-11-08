@@ -50,7 +50,7 @@ client hands it back unchanged.
 | `choose` | `chat`, `turn` (a fork branch's first turn) | the scene: the owner's fork choice (028) |
 | `add_art` | `chat`, `actor` (one of the cast), `slot` (default `avatar`; `portrait` or a gallery slot; expression slots are not in this slice), `media` (base64, at most 32 MiB decoded), `expected` (the slot's `etag` as `open` gave it, to replace a picture the campaign already placed) | the scene |
 | `sync` | `peer` (a configured peer) | 028's transfer report: `peer`, `status` (`synced`, `incomplete`, `refused`), `reason`, `code` (the reason's first word, such as `unreachable`), `passes`, `conflicts` (`path`, `code`), `copied`, `deleted` |
-| `resolve` | `peer`, `path` (a conflict `open` reported), `keep` `mine` or `theirs` | 028's resolve report: `peer`, `path`, `status` (`resolved`, `refused`, `incomplete`), `reason`, `code`, `receiver` |
+| `resolve` | `peer`, `path` (a campaign file `open` reports in conflict), `keep`: `mine`, `theirs` (the one other version kept here, or the peer's deletion), or one of `theirs` by etag | 028's resolve report: `peer`, `path`, `status` (`resolved`, `refused`, `incomplete`), `reason`, `code`, `receiver` |
 
 `TextApi.image(ref)` returns a picture's media type and exact bytes. 038 checks them against the blob's name.
 
@@ -80,7 +80,7 @@ client hands it back unchanged.
   - `keepable`: the open turn's proposed takes that can be kept
   - `unscreened`: those that need `acknowledge_unscreened`
   - `conflicted_turns`
-  - `conflicts`: each `path`, `mine` and `theirs` (etags; `null` for a deletion), and `versions`
+  - `conflicts`: each `path`, `mine` (this device's version's etag; `null`: deleted here) and `theirs` (the etags of the other versions kept here; empty for the peer's deletion, or when no kept version can be read)
 - `problems`: each `code` and `detail`. These are 035's scene problems, broken bindings, the chat's own problems,
   and `conflicts_unknown` when this device's sync records cannot be read.
 
@@ -97,8 +97,8 @@ except what the reason's own service documents: a `generate` refused after its r
 | Status | Reasons |
 |---|---|
 | 404 | `no_chat`, `unknown_op`, `missing_image`, `missing_blob`, `no_actor`, `unknown_peer` |
-| 400 | `invalid_field`, `invalid_selection`, `too_large`, `unsupported_media`, `empty` |
-| 409 | every refusal of state, such as `not_your_character`, `turn_fork`, `turn_conflict`, `paused`, `no_runtime`, `changed` (a compare-and-swap lost, so nothing was written), `not_paired`, `no_conflict`, `several_versions`, `blob_corrupt`, `device_identity` |
+| 400 | `invalid_field`, `invalid_selection`, `too_large`, `unsupported_media`, `empty`, `no_content`, `unknown_opening` |
+| 409 | every refusal of state, such as `not_your_character`, `turn_fork`, `turn_conflict`, `paused`, `no_runtime`, `changed` (a compare-and-swap lost, so nothing was written), `not_paired`, `no_conflict`, `art_conflict` (the slot is in conflict: `resolve` first), `blob_corrupt`, `device_identity`, and any other refusal of the store by its class name |
 
 ## Sync, forks and conflicts
 
@@ -108,8 +108,15 @@ returns `incomplete` with code `unreachable`, and the phone plays on offline.
 - **Forks.** When both devices played one chat offline, the chat forks on both (`waiting: forked`). Play is
   refused `turn_fork` until the owner `choose`s a branch on either device. The next sync carries the choice.
 - **Conflicts.** A turn both devices kept or passed differently, or a picture both devices placed in one slot,
-  is a keep-both conflict. It blocks play in that chat (`turn_conflict`), and every sync reports it until
-  `resolve` keeps one version. Both devices must be reachable for `resolve`.
+  is a keep-both conflict. Every sync reports it until `resolve` keeps one version, and both devices must be
+  reachable for `resolve`.
+  - A turn in conflict blocks play in that chat (`turn_conflict`).
+  - A picture in conflict blocks only its slot: `add_art` there is refused `art_conflict`, because a third
+    version would leave neither device a version to resolve against. Each device shows its own picture.
+- **Only campaign files.** `resolve` takes the conflicts `open` reports, which are the chat campaign's files.
+  A conflict that `sync` reports elsewhere, such as a source's definition revision, is not resolved here.
+- **One peer at a time.** With more than one paired device, `theirs` lists every version kept here. Name the
+  one to keep by etag.
 
 ## Limits of this slice
 

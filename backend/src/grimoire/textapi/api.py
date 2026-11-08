@@ -41,7 +41,9 @@ from grimoire.play import SceneRunner
 from grimoire.quickstart import QuickStart, QuickStartRefused
 from grimoire.scene import SceneRefused
 from grimoire.store import BlobCorrupt, LibraryStore, StaleWrite, StoreError, etag
-from grimoire.sync import NoDeviceIdentity, SyncInterrupted, device_of
+from grimoire.store.jsonfmt import is_etag
+from grimoire.store.layout import placement_parts
+from grimoire.sync import NoDeviceIdentity, SyncError, SyncInterrupted, device_of
 from grimoire.sync.turns import open_conflicts
 
 from .errors import ApiRefused
@@ -158,8 +160,10 @@ class TextApi:
                 raise ApiRefused("changed", f"the library changed meanwhile; nothing was written ({error})") from None
             except BlobCorrupt as error:
                 raise ApiRefused("blob_corrupt", str(error)) from None
-            except DeviceIdentityUnusable as error:
+            except (DeviceIdentityUnusable, SyncError) as error:
                 raise ApiRefused("device_identity", str(error)) from None
+            except StoreError as error:  # any other refusal of the store: nothing was written
+                raise ApiRefused(type(error).__name__, str(error)) from None
 
     def image(self, ref: str) -> tuple[str, bytes]:
         """A picture's media type and exact bytes (038 checks them against the blob's name)."""
@@ -216,9 +220,8 @@ class TextApi:
             source = _parse(SourceRef.parse, args, "source")
             if source.pinned:  # a pinned ref would find only the chats bound to that one revision
                 source = source.unpinned()
-            found = tuple(dict.fromkeys(ref for role in FILTER_ROLES[which]
-                                        for ref in index.by_source(source, role=role)))
-            found = tuple(ref for ref in index.recent(MAX_LIMIT) if ref in set(found))[:limit]
+            matched = {ref for role in FILTER_ROLES[which] for ref in index.by_source(source, role=role)}
+            found = tuple(ref for ref in index.recent(len(index.all_chats()) or 1) if ref in matched)[:limit]
         else:
             raise ApiRefused("invalid_field", "filter must be recent, character or scenario")
         entries: list[NavEntry] = [index.entry(ref) for ref in index.all_chats()]
@@ -241,8 +244,8 @@ class TextApi:
 
     def _conflicts(self, campaign: str) -> tuple[list[dict], bool]:
         """The campaign's files that a sync left in a keep-both conflict on this device, each with the etag of
-        this device's version (``mine``; ``None``: deleted here) and of the peer's version kept here
-        (``theirs``; ``None``: the peer's deletion, or no readable kept version), as ``resolve`` takes them."""
+        this device's version (``mine``; ``None``: deleted here) and the etags of every other version kept here
+        (``theirs``: empty for a peer's deletion, or when no kept version can be read), as ``resolve`` takes them."""
         try:
             found, complete = open_conflicts(self.store, f"campaigns/{campaign}",
                                              ended=lambda peer: pairing_ended(self.store, peer))
@@ -256,9 +259,7 @@ class TextApi:
                 mine = None
             except OSError:
                 complete, mine = False, None
-            kept = found[path]
-            conflicts.append({"path": path, "mine": mine,
-                              "theirs": etag(kept[0]) if len(kept) == 1 else None, "versions": len(kept)})
+            conflicts.append({"path": path, "mine": mine, "theirs": sorted({etag(data) for data in found[path]})})
         return conflicts, complete
 
     def _open(self, args: Mapping[str, object]) -> dict:
@@ -303,7 +304,7 @@ class TextApi:
             ("interrupted", scene.interrupted)) if holds]
         # Who controls each actor is this device's own record (003's ledger does not sync): a chat that came
         # from another device is played here only once ``continue`` seats this device's player.
-        seated = scene.persona is not None and scene.controller(scene.persona) == self.player and all(
+        seated = (scene.persona is None or scene.controller(scene.persona) == self.player) and all(
             scene.controller(actor) is not None for actor in scene.cast)
         history = None
         if scene.imported is not None:
@@ -318,7 +319,7 @@ class TextApi:
             "fork": fork_view(scene.turns.fork),
             "state": {"waiting": waiting, "seated": seated, "open_turn": None if pending is None else pending.turn_id,
                       "keepable": [] if pending is None else
-                      [take.take for take in pending.takes if take.state == "proposed" and take.shown],
+                      [take.take for take in pending.takes if take.state == "proposed" and take.shown()],
                       "unscreened": [] if pending is None else
                       [take.take for take in pending.takes if take.state == "proposed" and take.unscreened],
                       "conflicted_turns": list(scene.turns.conflicted), "conflicts": conflicts},
@@ -425,6 +426,12 @@ class TextApi:
         if slot.startswith("expr."):
             raise ApiRefused("invalid_field", "an expression slot needs its outfit and name: not in this slice")
         expected = _field(args, "expected", str, required=False)
+        if expected is not None and not is_etag(expected):
+            raise ApiRefused("invalid_field", "expected must be the slot's etag as open gave it")
+        conflicts, complete = self._conflicts(chat.campaign_id)
+        if not complete or "/".join(placement_parts(PlacementRef(actor, slot))) in {c["path"] for c in conflicts}:
+            # a third version of a slot in conflict would leave nothing either device could resolve
+            raise ApiRefused("art_conflict", f"{actor}'s {slot} is in conflict after a sync: resolve it first")
         batch = self.images.change()
         # a fresh id qualified by this device's tag (028), so two devices never write one image id
         image = batch.add_image(str(ScopeRef(chat.campaign_id)), self._new_image(f"art{device_tag(self.store)}"), data,
@@ -461,24 +468,35 @@ class TextApi:
             raise ApiRefused("unknown_peer", f"no address is configured for {peer!r}")
         path = _field(args, "path", str)
         keep = _field(args, "keep", str)
-        if keep not in ("mine", "theirs"):
-            raise ApiRefused("invalid_field", "keep must be mine or theirs")
         parts = path.split("/")
         if len(parts) < 3 or parts[0] != "campaigns":
-            raise ApiRefused("no_conflict", f"{path} is not in conflict here")
+            raise ApiRefused("invalid_field", "path must be a campaign file that open reports in conflict")
         conflicts, _complete = self._conflicts(parts[1])
         found = next((item for item in conflicts if item["path"] == path), None)
         if found is None:
             raise ApiRefused("no_conflict", f"{path} is not in conflict here")
-        if found["versions"] > 1:
-            raise ApiRefused("several_versions", f"{path} holds more than one of the peer's versions")
+        theirs = found["theirs"]
+        if keep == "mine":
+            chosen = found["mine"]
+        elif keep == "theirs":
+            if len(theirs) > 1:
+                raise ApiRefused("invalid_selection", "several versions are kept here: name the one to keep by etag")
+            chosen = theirs[0] if theirs else None
+        elif keep in theirs:
+            chosen = keep
+        else:
+            raise ApiRefused("invalid_field", "keep must be mine, theirs, or one of theirs by etag")
+        # the peer's version as this device holds it: the chosen one, or the only one, or its deletion
+        peer_version = chosen if keep != "mine" else (theirs[0] if len(theirs) == 1 else None)
+        if keep == "mine" and len(theirs) > 1:
+            raise ApiRefused("invalid_selection", "several versions are kept here: resolve on the other device")
         try:
             local = device_of(self.store)
-        except (NoDeviceIdentity, SyncInterrupted, StoreError, OSError, ValueError) as error:
+        except (SyncError, StoreError, OSError, ValueError) as error:
             raise ApiRefused("device_identity", str(error)) from None
-        expected = {local: found["mine"], peer: found["theirs"]}
+        expected = {local: found["mine"], peer: peer_version}
         try:
-            report = resolve_conflict(self.store, self.authority, peer, address, path, found[keep], expected,
+            report = resolve_conflict(self.store, self.authority, peer, address, path, chosen, expected,
                                       timeout=self.transfer_timeout)
         except NotPaired as error:
             raise ApiRefused("not_paired", str(error)) from None
