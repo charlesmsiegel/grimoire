@@ -45,8 +45,15 @@ that entry's settings, extensions and extras. The **raw editor** (`sources.save_
 given, in the record's own schema. An entity payload must still decode (009), and a scenario's lorebook must still
 be a pinned lorebook ref.
 
-A blank description or an empty section in the structured editor is left out of the payload. On a portrayal that
-means "inherit"; a clear is always the typed `clear_*` edit, never a blank field.
+A blank description or an empty section in the structured editor is left out of the payload. On a **portrayal**
+the structured editor goes through 046's helpers: a description or section it is given is an override (which also
+lifts a clear of it), and a blank one, or a local section left out, inherits again. A clear is always the typed
+`clear_*` edit, never a blank field.
+
+**Every entity revision must compose.** Before anything is written, the new revision is composed (022) over the
+library as it would be. A head that could not be played is refused with 022's reason: a derivation base that does
+not exist or is not written yet (`missing_base`), a field both cleared and set (`clear_and_set`), another nature
+than the base's (`nature_mismatch`), a chain that is too deep, a malformed derivation.
 
 ## Ops
 
@@ -93,6 +100,8 @@ Every refusal is 044's `ApiRefused`, and nothing was written.
 | `no_structured_editor` | The record's family has no structured editor; use the raw editor. |
 | `not_attachable`, `no_chat` | The kind cannot be attached to a chat, or the chat does not exist. |
 | `invalid_field`, `invalid_sections`, `invalid_derivation`, `invalid_payload` and 009's codec reasons | A malformed argument or payload. |
+| `missing_base`, `clear_and_set`, `nature_mismatch`, `chain_too_deep` and 022's other reasons | The new revision would not compose. |
+| `invalid_envelope`, `invalid_source_state` and the store's other refusals | The store refused the transaction (a derivation cycle, a payload nested too deep...): the error's class name in snake case. |
 | `excluded_source`, `entity_dropped`, `missing_entity`... | The ref does not resolve, with the store's reason. |
 
 ## What is not offered

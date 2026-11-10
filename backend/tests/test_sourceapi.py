@@ -186,6 +186,8 @@ def test_a_clear_of_something_not_inherited_is_refused_up_front(api):
     assert refused(api, "sources.portrayal", **_head(api, derived["ref"]), edit="clear_section",
                    name="history").reason == "stale_clear"
     edit(api, derived["ref"], "sources.portrayal", edit="override_description", text="Pale.")
+    cleared = edit(api, derived["ref"], "sources.portrayal", edit="clear_description")  # an override clears too
+    assert states(api.call("sources.read", {"ref": cleared["ref"]}))["description"] == "cleared"
     assert refused(api, "sources.portrayal", **_head(api, derived["ref"]), edit="clear_description").reason \
         == "stale_clear"
     # only a portrayal takes portrayal edits
@@ -295,3 +297,61 @@ def test_new_scenarios_and_lorebooks_are_written_in_their_own_schemas(api):
         {"lorebook", "scenario", "location"}
     assert refused(api, "sources.create", source="world:harbor", kind="scenario",
                    expected=location["manifest_etag"], fields={"title": "Empty"}).reason == "invalid_field"
+
+
+# -- an editor never writes a head that cannot be played ------------------------------------------------
+
+def portrayal_of(api):
+    gothic, modern = two_maras(api)
+    derived = api.call("sources.derive", {"base": gothic["ref"], "source": MODERN, "expected": modern["manifest_etag"]})
+    return gothic, derived["ref"]
+
+
+def test_the_structured_editor_overrides_a_portrayals_cleared_fields_instead_of_breaking_it(api):
+    _gothic, portrayal = portrayal_of(api)
+    edit(api, portrayal, "sources.portrayal", edit="clear_description")
+    edit(api, portrayal, "sources.portrayal", edit="clear_section", name="personality")
+    saved = edit(api, portrayal, "sources.save", fields={"description": "New.", "sections": {"personality": "Kind."}})
+    read = api.call("sources.read", {"ref": saved["ref"]})
+    assert read["composition_error"] is None
+    assert states(read) == {"name": "restated", "description": "overridden", "section:personality": "overridden"}
+    assert "clear_description" not in read["payload"]["derivation"]
+    reset = edit(api, portrayal, "sources.save", fields={"description": "", "sections": {}})
+    assert states(api.call("sources.read", {"ref": reset["ref"]})) == \
+        {"name": "restated", "description": "inherited", "section:personality": "inherited"}
+
+
+def test_a_head_that_would_not_compose_is_refused_and_nothing_is_written(api, store):
+    _gothic, portrayal = portrayal_of(api)
+    head = _head(api, portrayal)
+    payload = api.call("sources.read", {"ref": portrayal})["payload"]
+    before = files_of(store.root)
+    assert refused(api, "sources.save", **head, fields={"nature": "template"}).reason == "nature_mismatch"
+    future = {**payload, "derivation": {"base": "catalog:gothic/character/mara@r2"}}  # not written yet
+    assert refused(api, "sources.save_raw", **head, payload=future).reason == "missing_base"
+    both = {**payload, "description": "Set.", "derivation": {**payload["derivation"], "clear_description": True}}
+    assert refused(api, "sources.save_raw", **head, payload=both).reason == "clear_and_set"
+    for junk in (5, None, True, ["Bad Name"]):
+        malformed = {**payload, "derivation": {**payload["derivation"], "clear_sections": junk}}
+        assert refused(api, "sources.save_raw", **head, payload=malformed).reason != "changed"
+    assert files_of(store.root) == before
+
+
+def test_a_scenario_with_odd_raw_keys_is_edited_without_a_crash_or_a_lost_key(api, store):
+    land(store, encode(SCENARIO))
+    read = api.call("sources.read", {"ref": str(STORM)})
+    odd = {**read["payload"], "openings": [{"id": ["x"], "text": "a"}], "roles": ["custom"]}
+    raw = api.call("sources.save_raw", {"ref": read["entity"], "expected": read["manifest_etag"],
+                                        "head": read["head"], "payload": odd})
+    titled = edit(api, raw["ref"], "sources.save", fields={"title": "Storm, again"})
+    assert api.call("sources.read", {"ref": titled["ref"]})["payload"]["roles"] == ["custom"]
+    assert refused(api, "sources.save", **_head(api, str(STORM)),
+                   fields={"openings": [{"text": "b"}]}).reason == "invalid_payload"
+
+
+def test_each_write_returns_the_etag_of_exactly_what_it_wrote(api, store):
+    etag = source(api, GOTHIC, "Gothic")
+    assert etag == store.read_source(GOTHIC).etag
+    renamed = api.call("sources.rename_source", {"source": GOTHIC, "title": "Gothic tales", "expected": etag})
+    assert renamed["manifest_etag"] == store.read_source(GOTHIC).etag != etag
+    assert refused(api, "sources.rename_source", source=GOTHIC, title="Late", expected=etag).reason == "changed"

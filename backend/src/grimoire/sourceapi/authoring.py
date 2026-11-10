@@ -29,7 +29,7 @@ from grimoire.cards import IMPORT_KIND, LOREBOOK_SCHEMA, SCENARIO_SCHEMA, scenar
 from grimoire.cards.records import section_ok, slugify
 from grimoire.core.entity_codec import ENTITY_SCHEMA, CodecError, _facet_payload, definition_from_payload
 from grimoire.core.identity import SEGMENT_MAX, SourceRef, validate_segment, validate_source_id
-from grimoire.core.index import MissingDefinition
+from grimoire.core.index import DefinitionLink, MissingDefinition
 from grimoire.core.inheritance import (
     OverrideError,
     clear_description,
@@ -41,8 +41,9 @@ from grimoire.core.inheritance import (
     reset_facet,
     reset_section,
 )
-from grimoire.core.portrayal import MAX_CHAIN, PortrayalError
-from grimoire.effective.inspect import compose_in, inspect_definition
+from grimoire.core.portrayal import MAX_CHAIN, PortrayalError, compose
+from grimoire.effective.inspect import compose_in, inspect_definition, view_reader
+from grimoire.effective.library import explainer
 from grimoire.store import (
     CommitResult,
     LibraryStore,
@@ -196,8 +197,9 @@ class SourceAuthoring:
         manifest = SourceManifest(source_id, self.owner, title or None, {}, ())
         transaction = self.store.transaction()
         transaction.put(manifest, None)
+        key = transaction.staged()[-1]
         result = transaction.commit(self.handle)
-        return Written(None, source_id, self._manifest_etag(source_id), result)
+        return Written(None, source_id, result.etags[key], result)
 
     def rename_source(self, source_id: str, title: str | None, *, expected: str) -> Written:
         """Change a source's title, nothing else (its heads, links and unknown keys are kept)."""
@@ -207,8 +209,9 @@ class SourceAuthoring:
                                   stored.manifest.links, stored.manifest.extra)
         transaction = self.store.transaction()
         transaction.put(manifest, expected)
+        key = transaction.staged()[-1]
         result = transaction.commit(self.handle)
-        return Written(None, source_id, self._manifest_etag(source_id), result)
+        return Written(None, source_id, result.etags[key], result)
 
     # -- writing: definitions -------------------------------------------------------------------------------
     def create(self, source_id: str, kind: str, fields: Mapping[str, object], *, expected: str,
@@ -301,14 +304,14 @@ class SourceAuthoring:
             edited = PORTRAYAL_EDITS[edit](*args)
         except OverrideError as error:
             raise AuthoringRefused(error.reason, str(error)) from None
+        except (TypeError, ValueError, AttributeError) as error:  # a raw edit left a malformed derivation
+            raise AuthoringRefused("invalid_payload", f"{current.ref}'s derivation is malformed; use the raw "
+                                                      f"editor ({error})") from None
         if edit == "override_section" and not section_ok(args[1], args[2]):  # type: ignore[arg-type]
             raise AuthoringRefused("invalid_sections", "that section text is not one 022 composes")
         return self._write(stored, self._next(current.ref), ENTITY, edited)
 
     # -- internals -------------------------------------------------------------------------------------------
-    def _manifest_etag(self, source_id: str) -> str:
-        return self.store.read_source(source_id).etag
-
     def _source(self, source_id: str):  # type: ignore[no-untyped-def]
         try:
             validate_source_id(source_id)
@@ -358,7 +361,7 @@ class SourceAuthoring:
             raise AuthoringRefused(getattr(error, "reason", "missing_base"),
                                    f"{ref} does not compose, so nothing can be cleared ({error})") from None
         found = inspection.field(field_name)
-        if found is None or found.state not in ("inherited", "pinned"):
+        if found is None or found.state not in ("inherited", "pinned", "overridden", "restated"):
             raise AuthoringRefused("stale_clear", f"{field_name} is not inherited by {ref}, so there is nothing "
                                                   "to clear")
 
@@ -391,13 +394,54 @@ class SourceAuthoring:
             if not any((existing.subject, existing.relation, existing.object) ==
                        (link.subject, link.relation, link.object) for existing in links):
                 links.append(link)
+        if family == ENTITY:
+            self._require_composes(ref, payload, link if isinstance(derivation, Mapping) else None)
         envelope = RecordEnvelope(ref, payload, name=name, owner=self.owner, extra={"schema": schema})
         transaction = self.store.transaction()
         transaction.put(envelope, None)
         transaction.put(SourceManifest(manifest.source, manifest.owner, manifest.title, heads, tuple(links),
                                        manifest.extra), stored.etag)
+        key = transaction.staged()[-1]
         result = transaction.commit(self.handle)
-        return Written(ref, ref.source, self._manifest_etag(ref.source), result)
+        return Written(ref, ref.source, result.etags[key], result)
+
+    def _require_composes(self, ref: SourceRef, payload: dict, link: LinkSpec | None) -> None:
+        """Refuse an entity revision that would not compose (022): a derivation whose base does not exist or
+        is not yet written, a clear of something it also sets, another nature than its base's... It is
+        composed over the current library as if it were written, so a head that cannot be played is never
+        written by an editor."""
+        view = self.load()
+        definition = definition_from_payload(ref, ENTITY_SCHEMA, payload)
+        extra = (DefinitionLink(SourceRef.parse(link.subject), link.relation, SourceRef.parse(link.object),
+                                ref.source),) if link is not None else ()
+        reader = view_reader(view)
+
+        def read(current: SourceRef):  # type: ignore[no-untyped-def]
+            return (definition, None) if current == ref else reader(current)
+
+        try:
+            compose(ref, _Candidate(view.index, ref, definition, extra), read, explainer(view))
+        except (PortrayalError, MissingDefinition) as error:
+            reason = getattr(error, "reason", "missing_base")
+            raise AuthoringRefused(reason, f"{ref} would not compose ({reason}): {error}") from None
+
+
+class _Candidate:
+    """The library's index as it would be with one more entity revision (and its own derivation link)."""
+
+    def __init__(self, index, ref: SourceRef, definition: object, links: tuple) -> None:  # type: ignore[no-untyped-def]
+        self.index, self.ref, self.definition, self.extra = index, ref, definition, links
+
+    def resolve(self, ref: SourceRef):  # type: ignore[no-untyped-def]
+        return self.definition if ref == self.ref else self.index.resolve(ref)
+
+    def check(self, ref: SourceRef):  # type: ignore[no-untyped-def]
+        return None if ref == self.ref else self.index.check(ref)
+
+    def links_for(self, ref: SourceRef) -> tuple:  # type: ignore[type-arg]
+        key = ref.entity_key
+        own = tuple(link for link in self.extra if key in (link.subject.entity_key, link.object.entity_key))
+        return self.index.links_for(ref) + own
 
 
 # -- payload validation -----------------------------------------------------------------------------------
@@ -438,6 +482,7 @@ def _entity_fields(payload: dict, fields: Mapping[str, object], derived: bool) -
     unknown = set(fields) - allowed
     if unknown:
         raise AuthoringRefused("invalid_field", f"unknown fields: {', '.join(sorted(unknown))}")
+    new = not payload
     edited = dict(payload)
     if "name" in fields or "name" not in edited:
         edited["name"] = _text(fields.get("name"), "name", required=True, limit=MAX_TITLE)
@@ -448,9 +493,12 @@ def _entity_fields(payload: dict, fields: Mapping[str, object], derived: bool) -
         edited["nature"] = nature
     if "description" in fields:
         description = _text(fields["description"], "description")
-        if description:
+        if derived:  # an override, or blank to inherit again (a clear is always the typed edit)
+            edited = _helper(override_description, edited, description) if description and description.strip() \
+                else _helper(reset_description, edited)
+        elif description:
             edited["description"] = description
-        else:  # blank: on a portrayal this inherits again (never an implicit clear)
+        else:
             edited.pop("description", None)
     if "sections" in fields:
         sections = fields["sections"]
@@ -464,7 +512,13 @@ def _entity_fields(payload: dict, fields: Mapping[str, object], derived: bool) -
             if not section_ok(name, text):
                 raise AuthoringRefused("invalid_sections", f"section {name!r} is not one 022 composes")
             kept[name] = text
-        if kept:
+        if derived:  # each given section overrides; a local section left out inherits again
+            before = edited.get("sections") if isinstance(edited.get("sections"), Mapping) else {}
+            for name in sorted(set(before) - set(kept)):
+                edited = _helper(reset_section, edited, name)
+            for name, text in kept.items():
+                edited = _helper(override_section, edited, name, text)
+        elif kept:
             edited["sections"] = kept
         else:
             edited.pop("sections", None)
@@ -473,14 +527,26 @@ def _entity_fields(payload: dict, fields: Mapping[str, object], derived: bool) -
         if not isinstance(traits, list) or not all(isinstance(item, Mapping) for item in traits):
             raise AuthoringRefused("invalid_field", "traits must be a list of facet objects")
         edited["traits"] = [dict(item) for item in traits]
-    edited.setdefault("traits", [])
+    if new:
+        edited.setdefault("traits", [])
     return edited
+
+
+def _helper(edit: Callable[..., dict], payload: dict, *args: object) -> dict:
+    try:
+        return edit(payload, *args)
+    except OverrideError as error:
+        raise AuthoringRefused(error.reason, str(error)) from None
+    except (TypeError, ValueError, AttributeError) as error:
+        raise AuthoringRefused("invalid_payload", f"the derivation is malformed; use the raw editor ({error})") \
+            from None
 
 
 def _openings(value: object, before: object) -> list[dict]:
     if not isinstance(value, list) or len(value) > MAX_OPENINGS:
         raise AuthoringRefused("invalid_field", f"openings must be a list of at most {MAX_OPENINGS}")
-    old = {item.get("id"): item for item in before if isinstance(item, Mapping)} if isinstance(before, list) else {}
+    old = {item["id"]: item for item in before if isinstance(item, Mapping) and type(item.get("id")) is str} \
+        if isinstance(before, list) else {}
     found: list[dict] = []
     used: set[str] = set()
     for number, item in enumerate(value, start=1):
@@ -508,7 +574,14 @@ def _scenario_fields(payload: dict, fields: Mapping[str, object], _derived: bool
     if unknown:
         raise AuthoringRefused("invalid_field", f"unknown fields: {', '.join(sorted(unknown))}")
     edited = dict(payload)
-    roles = dict(edited.get("roles") or {}) if isinstance(edited.get("roles", {}), Mapping) else {}
+    had_roles = "roles" in edited
+    if had_roles and not isinstance(edited["roles"], Mapping):
+        if set(fields) & {"premise", "instructions", "openings"}:
+            raise AuthoringRefused("invalid_payload", "this scenario's roles are not an object; use the raw editor")
+        roles: dict = {}
+    else:
+        roles = dict(edited.get("roles") or {})
+    before_roles = dict(roles)
     if "title" in fields or "title" not in edited:
         edited["title"] = _text(fields.get("title"), "title", required=True, limit=MAX_TITLE)
     for key, role in (("premise", "scenario_premise"), ("instructions", "private_instruction")):
@@ -530,7 +603,8 @@ def _scenario_fields(payload: dict, fields: Mapping[str, object], _derived: bool
             roles.pop("openings", None)
     if not (isinstance(edited.get("premise"), str) or edited.get("openings")):
         raise AuthoringRefused("invalid_field", "a scenario needs a premise or an opening")
-    edited["roles"] = roles
+    if roles != before_roles or (not had_roles and roles):
+        edited["roles"] = roles
     return edited
 
 
@@ -578,13 +652,14 @@ def _lorebook_fields(payload: dict, fields: Mapping[str, object], _derived: bool
             if "enabled" in item:
                 if type(item["enabled"]) is not bool:
                     raise AuthoringRefused("invalid_field", f"entry {number} enabled must be true or false")
-                if item["enabled"]:
-                    entry.pop("enabled", None)
+                if item["enabled"] and "enabled" not in entry:
+                    pass  # absent means enabled; nothing to write
                 else:
-                    entry["enabled"] = False
+                    entry["enabled"] = item["enabled"]
             found.append(entry)
         edited["entries"] = found
-    edited.setdefault("entries", [])
+    if not payload:
+        edited.setdefault("entries", [])
     return edited
 
 

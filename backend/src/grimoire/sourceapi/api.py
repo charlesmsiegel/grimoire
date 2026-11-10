@@ -9,7 +9,10 @@ Every ref is written in its own string form, so a client hands it back unchanged
 
 from __future__ import annotations
 
+import re
 import threading
+import uuid
+from datetime import datetime, timezone
 from collections.abc import Callable, Mapping
 
 from grimoire.cards import IMPORT_KIND
@@ -52,6 +55,19 @@ UNAVAILABLE = {
 }
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+
+
+def _reason_of(error: Exception) -> str:
+    """A store refusal's class name as a snake_case reason (``InvalidEnvelope`` -> ``invalid_envelope``)."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", type(error).__name__).lower()
+
+
 def _str(value: object) -> str | None:
     return None if value is None else str(value)
 
@@ -88,13 +104,12 @@ class SourceApi:
     """The Library pages' ops over one open library, for its owner. Calls are serialized."""
 
     def __init__(self, store: LibraryStore, authority, *, owner: str,  # type: ignore[no-untyped-def]
-                 clock: Callable[[], str] | None = None, new_id: Callable[[str], str] | None = None) -> None:
+                 clock: Callable[[], str] = _utc_now, new_id: Callable[[str], str] = _new_id) -> None:
         self.store = store
         self.owner = owner
         self.handle = authority.handle_for(owner, trusted=True)
         self.authoring = SourceAuthoring(store, self.handle, owner=owner)
-        extra = {key: value for key, value in (("clock", clock), ("new_id", new_id)) if value is not None}
-        self.chats = ChatLibrary(store, self.handle, owner=owner, **extra)
+        self.chats = ChatLibrary(store, self.handle, clock=clock, new_id=new_id, owner=owner)
         self._lock = threading.RLock()
         self._ops: dict[str, Callable[[Mapping[str, object]], dict]] = {
             "sources.catalog": self._catalog, "sources.read": self._read, "sources.create_source": self._create_source,
@@ -129,7 +144,7 @@ class SourceApi:
             except RecordNotFound as error:
                 raise ApiRefused("missing", str(error), 404) from None
             except StoreError as error:  # any other refusal of the store: nothing was written
-                raise ApiRefused(type(error).__name__, str(error)) from None
+                raise ApiRefused(_reason_of(error), str(error)) from None
 
     # -- reading -----------------------------------------------------------------------------------------
     def _catalog(self, args: Mapping[str, object]) -> dict:
