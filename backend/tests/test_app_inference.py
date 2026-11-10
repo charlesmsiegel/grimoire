@@ -163,6 +163,22 @@ def test_counts_a_provider_does_not_report_are_unreported_never_zero(desk, tmp_p
         assert usage["total"]["lower_bound"]["input_tokens"] is True
 
 
+def test_a_call_with_no_attempt_booked_is_counted_unmetered_in_its_stage_too(desk, tmp_path):
+    with sse_server(lambda handler: handler.respond(400, b"{}")) as server, Device(desk, runtime=False) as device:
+        inference = _table(device, tmp_path / "model.json")
+        inference.call("save_models", {"settings": _settings(server), "expected": None})
+        device("continue", chat=CHAT)
+        device("post", chat=CHAT, text="Who answers?")
+        device("generate", chat=CHAT, speakers=[str(MARA), str(SERAPHINE)])  # halted: the first call failed
+        usage = inference.call("usage", {"chat": CHAT})
+        calls = _calls(usage, stage="npc_generation")
+        missing = sum(1 for call in calls if not call["attempts"])
+        assert missing >= 1
+        (stage,) = [entry for entry in usage["by_stage"] if entry["stage"] == "npc_generation"]
+        assert stage["unmetered_calls"] == missing == usage["total"]["unmetered_calls"]
+        assert stage["not_issued_calls"] == sum(1 for call in calls if call["status"] == "not_issued") >= 1
+
+
 # -- privacy -----------------------------------------------------------------------------------------------
 
 def test_usage_and_diagnostics_hold_no_text_a_call_sent_or_received(desk, model, tmp_path):
@@ -221,6 +237,11 @@ def test_the_app_names_only_a_provider_key_variable_unless_the_file_already_name
         saved = inference.call("save_models", {"settings": {**current["settings"], "max_output_tokens": 300},
                                                "expected": current["etag"]})
         assert saved["settings"]["key_env"] == "MY_LOCAL_TOKEN" and saved["generation"]["available"] is True
+        # ...for the endpoint it was written for only: never sent anywhere the owner did not name by hand
+        moved = {**saved["settings"], "base_url": "https://elsewhere.example/v1"}
+        with pytest.raises(ApiRefused) as refused:
+            inference.call("save_models", {"settings": moved, "expected": saved["etag"]})
+        assert refused.value.reason == "invalid_settings" and "MY_LOCAL_TOKEN" not in str(refused.value)
 
 
 # -- refusals ------------------------------------------------------------------------------------------------
@@ -237,6 +258,14 @@ def test_a_save_at_a_revision_that_moved_on_writes_nothing(desk, model, tmp_path
         with pytest.raises(ApiRefused) as refused:
             inference.call("save_models", {"settings": _settings(model, director=0), "expected": first["etag"]})
         assert refused.value.reason == "changed" and json.loads(path.read_text())["model"] == "model-z"
+        # the page reads the file as it now is, and plays by it: a save from that read keeps the hand edit's revision
+        current = inference.call("models")
+        assert current["settings"]["model"] == "model-z" and current["generation"]["routes"][0].endswith("/model-z")
+        assert device.api.runner.runtime is not None
+        path.unlink()  # removed by hand: no model, and a save must create the file again
+        gone = inference.call("models")
+        assert gone["settings"] is None and gone["etag"] is None and gone["generation"]["problem"]["code"] == "not_configured"
+        assert device.api.runner.runtime is None
         for expected in ("not-an-etag", 3):
             with pytest.raises(ApiRefused) as refused:
                 inference.call("save_models", {"settings": _settings(model), "expected": expected})

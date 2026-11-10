@@ -32,7 +32,9 @@ The file is 044's model configuration ([MOBILE](MOBILE.md#answers-from-a-model))
 `director_generation` stage. `max_output_tokens` is 1 to 32,768.
 
 **Saving** writes the whole file atomically, only if it is still at `expected`: a file changed since it was read
-(by another tab or by hand) is refused `changed`, and nothing is written. The runner then plays its **next** call
+(by another tab or by hand) is refused `changed`, and nothing is written. A file edited or removed by hand while
+the app runs is read again the next time `models` is asked, and played by from then on, so the page always shows
+the file as it is. The runner then plays its **next** call
 by the new runtime and policy; a call already running finishes as it began. A configuration whose key variable is
 not set is saved, and generation stays off with `problem.code: key_missing`: the app reads its environment at
 start, so set the variable and restart it.
@@ -41,8 +43,9 @@ start, so set the variable and restart it.
 key: capitals, digits and `_`, ending `_API_KEY` (`OPENROUTER_API_KEY`). Otherwise whoever holds the serve's
 token could have the app send any of its environment, a cloud credential say, to an endpoint of their choice. A
 file the owner wrote by hand keeps whatever name it gives, and saving it again from the app with that name is
-allowed. A refused name is never echoed back, in case it was a key pasted by mistake. The token holder can still
-point the configured key at another https endpoint: the token is the owner's, as for every other op.
+allowed for the endpoint it was written for, never with another `base_url`. A refused name is never echoed back,
+in case it was a key pasted by mistake. The token holder can still point a provider key variable at another https
+endpoint: the token is the owner's, as for every other op.
 
 **Starting.** `serve --model FILE` reads FILE if it exists. A file that does not exist yet, or cannot be used,
 starts the app without a model: generation is refused `no_runtime`, everything else works, and `models` says why
@@ -70,7 +73,9 @@ labelling of its turns, the turns a fork choice set aside included (they were bi
 
 `total` and each of `by_stage` are 004's sums: `sums`, `unreported` (attempts that left each count unreported) and
 `lower_bound` (a sum is a lower bound while any of its counts is unreported: a screen never shows it bare),
-`measurements`, and `unmetered_calls` (calls with no attempt booked: missing data, never free).
+`measurements`, `unmetered_calls` (planned calls with no attempt booked, as 004 counts them) and `not_issued_calls`
+(those of them never sent, so they used nothing; what the rest used is unknown, never free). `listed` and `of` say
+how many turns are listed, of how many.
 
 **No prices ship (013)**, so every `cost` is `null` with `cost_state: "unpriced"`: unknown, never zero.
 

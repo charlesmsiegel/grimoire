@@ -180,6 +180,7 @@ class InferenceApi:
             runner.tracer = self.traces.record
         self.config: ModelConfig | None = None
         self.problem: dict | None = None
+        self._loaded: str | None = None  # the etag of the file the configuration was read from
         self._ops: dict[str, Callable[[Mapping[str, object]], dict]] = {
             "models": self._models, "check_models": self._check, "save_models": self._save,
             "usage": self._usage, "diagnostics": self._diagnostics,
@@ -217,8 +218,9 @@ class InferenceApi:
         if self.settings.path is None:
             self._apply(None, _problem("not_configured", "no settings file: generation is off, everything else works"))
             return
+        self._loaded = None
         try:
-            data, _found = self.settings.read()
+            data, self._loaded = self.settings.read()
         except OSError as error:
             self._apply(None, _problem("settings_unreadable", f"the settings file cannot be read ({error.strerror})"))
             return
@@ -280,6 +282,9 @@ class InferenceApi:
             _data, found = self.settings.read()
         except OSError:
             found = None
+        if found != self._loaded:  # edited (or removed) by hand since it was read: the file is what holds
+            self._load()
+            found = self._loaded
         config = self.config
         routes = [] if config is None else [route_label(config.endpoint, model) for model in config.models]
         return {
@@ -307,7 +312,10 @@ class InferenceApi:
         if unknown:
             return None, [{"field": "settings", "message": "the settings have fields this app does not know"}]
         key_env = raw.get("key_env")
-        kept = self.config is not None and key_env == self.config.key_env
+        # a hand-written name that does not look like a provider key is kept only for the endpoint it was
+        # written for: the app never sends it anywhere the owner did not name by hand
+        kept = (self.config is not None and key_env == self.config.key_env
+                and raw.get("base_url") == self.config.endpoint.base_url)
         if isinstance(key_env, str) and not kept and not APP_KEY_ENV.fullmatch(key_env):
             # never echoed: a key pasted here by mistake must not come back to the screen
             return None, [{"field": "key_env", "message": "name the key's environment variable, in capitals, "
@@ -344,7 +352,7 @@ class InferenceApi:
         config, problems = self._draft(args)
         if config is None:
             raise ApiRefused("invalid_settings", problems[0]["message"])
-        self.settings.write(config, expected)
+        self._loaded = self.settings.write(config, expected)
         self._build(config)
         return self._models({})
 
@@ -369,7 +377,7 @@ class InferenceApi:
         names = {actor.instance_id: name for actor, name in scene.names.items()}
         stored = [(item, False) for item in scene.turns.turns] + [(item, True) for item in scene.turns.set_aside]
         stored.sort(key=lambda pair: (pair[0].record.number, pair[1]))
-        turns, everything, by_stage, unmetered = [], [], {}, 0
+        turns, everything, by_stage, unmetered, unsent = [], [], {}, {}, {}
         for item, set_aside in stored:
             record = item.record
             entries = []
@@ -386,16 +394,18 @@ class InferenceApi:
                 if "stage" in entry:
                     everything.extend(attempts)
                     by_stage.setdefault(entry["stage"], []).extend(attempts)
-                    if not attempts:
-                        unmetered += 1
+                    unmetered[entry["stage"]] = unmetered.get(entry["stage"], 0) + (not attempts)
+                    unsent[entry["stage"]] = unsent.get(entry["stage"], 0) + (
+                        not attempts and entry["status"] == "not_issued")
             turns.append({"turn": record.turn_id, "number": record.number, "set_aside": set_aside,
                           "calls": [{key: value for key, value in entry.items() if key != "_attempts"}
                                     for entry in entries]})
         problems = [{"code": code, "detail": detail} for code, detail in scene.problems]
         return {
             "chat": str(chat), "turns": turns[-limit:], "listed": min(len(turns), limit), "of": len(turns),
-            "total": _totals(everything, unmetered),
-            "by_stage": [{"stage": stage, **_totals(attempts, 0)} for stage, attempts in sorted(by_stage.items())],
+            "total": _totals(everything, sum(unmetered.values()), sum(unsent.values())),
+            "by_stage": [{"stage": stage, **_totals(attempts, unmetered[stage], unsent[stage])}
+                         for stage, attempts in sorted(by_stage.items())],
             "complete": scene.turns.complete, "problems": problems,
         }
 
@@ -444,11 +454,13 @@ def _usage_totals(totals: UsageTotals) -> dict:
             "measurements": sorted(m.value for m in totals.measurements)}
 
 
-def _totals(attempts, unmetered: int) -> dict:  # type: ignore[no-untyped-def]
-    """Every attempt summed as 004 sums them: an unreported count is counted, never taken as zero, and a call
-    with no attempt booked is missing data, not a free call. No prices: the cost is unknown."""
+def _totals(attempts, unmetered: int, unsent: int) -> dict:  # type: ignore[no-untyped-def]
+    """Every attempt summed as 004 sums them: an unreported count is counted, never taken as zero. A planned
+    call with no attempt booked is unmetered (004); ``not_issued`` of them were never sent, and what the rest used
+    is unknown, not free. No prices: the cost is unknown."""
     view = _usage_totals(UsageTotals.of(attempts))
     view["unmetered_calls"] = unmetered
+    view["not_issued_calls"] = unsent
     view["cost"] = None
     view["cost_state"] = "unpriced"
     return view

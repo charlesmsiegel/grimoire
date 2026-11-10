@@ -41,6 +41,15 @@ function count(totals, name) {
   return `at least ${sum} (${missing} unreported)`;
 }
 
+function unmetered(totals) {
+  // 004 counts every planned call with no attempt booked; the ones never issued used nothing
+  const unsent = totals.not_issued_calls, rest = totals.unmetered_calls - unsent;
+  const parts = [];
+  if (unsent) parts.push(`${unsent} never sent`);
+  if (rest) parts.push(`${rest} with what they used unknown`);
+  return `${totals.unmetered_calls}: ${parts.join(", ")}`;
+}
+
 function cost(item) {
   return item.cost_state === "unpriced" ? "unknown: no prices are set" : String(item.cost);
 }
@@ -167,7 +176,7 @@ export async function render(root, ctx) {
       TOKEN_NAMES.map(([name, label]) => [el("dt", {}, label + " tokens"), el("dd", {}, count(total, name))]),
       el("dt", {}, "Attempts"), el("dd", {}, String(total.attempts)),
       el("dt", {}, "Cost"), el("dd", {}, cost(total)),
-      total.unmetered_calls ? [el("dt", {}, "Calls with no record"), el("dd", { class: "g-bad" }, `${total.unmetered_calls}: what they used is unknown`)] : null);
+      total.unmetered_calls ? [el("dt", {}, "Calls with no usage booked"), el("dd", { class: "g-bad" }, unmetered(total))] : null);
     const turns = result.turns.filter((turn) => turn.calls.length).reverse().map((turn) => el("details", {},
       el("summary", {}, `Turn ${turn.number}` + (turn.set_aside ? " (set aside at a fork)" : "") + `: ${turn.calls.filter((c) => c.stage).length} call(s)`),
       el("ul", {}, turn.calls.map(callView))));
