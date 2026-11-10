@@ -26,7 +26,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from grimoire.cards import IMPORT_KIND, LOREBOOK_SCHEMA, SCENARIO_SCHEMA, scenario_lorebook
+from grimoire.cards.lore import read_lorebook
 from grimoire.cards.records import section_ok, slugify
+from grimoire.context import MAX_KEYS, SkippedEntry, valid_key
 from grimoire.core.entity_codec import ENTITY_SCHEMA, CodecError, _facet_payload, definition_from_payload
 from grimoire.core.identity import SEGMENT_MAX, SourceRef, validate_segment, validate_source_id
 from grimoire.core.index import DefinitionLink, MissingDefinition
@@ -623,10 +625,34 @@ def _scenario_fields(payload: dict, fields: Mapping[str, object], _derived: bool
     return edited
 
 
-def _keys(value: object, label: str) -> list[str]:
+def _keys(value: object, label: str, kept: object = ()) -> list[str]:
+    """Nonblank keys, each one the lore reader can match (``valid_key``), at most ``MAX_KEYS``; a key the
+    head's entry already had is kept as it is, so an imported entry stays editable."""
     if not isinstance(value, list) or not all(type(key) is str for key in value):
         raise AuthoringRefused("invalid_field", f"{label} must be a list of text")
-    return [key for key in value if key.strip()]
+    kept = kept if isinstance(kept, (list, tuple)) else ()
+    keys = [key for key in value if key.strip()]
+    for key in keys:
+        if key not in kept and not valid_key(key.strip()):
+            raise AuthoringRefused("invalid_field", f"{label}: {key[:40]!r} is not a key lore can match (one line "
+                                                    "of at most 100 characters with a word)")
+    if len(keys) > max(MAX_KEYS, len(kept)):
+        raise AuthoringRefused("invalid_field", f"{label}: at most {MAX_KEYS} keys")
+    return keys
+
+
+def _lore_skip(entry: object) -> str | None:
+    """Why the lore reader (037) would skip ``entry`` and never put it in context, or ``None``."""
+    found = read_lorebook({"entries": [entry]})
+    return found[0].reason if found and isinstance(found[0], SkippedEntry) else None
+
+
+_LORE_SKIPS = {
+    "content": "its content must be at most 8000 characters of plain text",
+    "keys": "it needs a key, or to be constant",
+    "use_regex": "regex keys are not matched; edit it in the raw editor",
+    "secondary_keys": "a secondary key cannot be used",
+}
 
 
 def _lorebook_fields(payload: dict, fields: Mapping[str, object], _derived: bool) -> dict:
@@ -658,7 +684,7 @@ def _lorebook_fields(payload: dict, fields: Mapping[str, object], _derived: bool
                 entry = dict(before[origin])  # its settings, extensions and extras stay as they were
             else:
                 entry = {}
-            entry["keys"] = _keys(item.get("keys", entry.get("keys", [])), f"entry {number} keys")
+            entry["keys"] = _keys(item.get("keys", entry.get("keys", [])), f"entry {number} keys", entry.get("keys"))
             entry["content"] = _text(item.get("content"), f"entry {number} content", required=True)
             if "constant" in item:  # 037's lore reader reads ``settings.constant``; its other settings stay
                 if type(item["constant"]) is not bool:
@@ -679,6 +705,10 @@ def _lorebook_fields(payload: dict, fields: Mapping[str, object], _derived: bool
                     pass  # absent means enabled; nothing to write
                 else:
                     entry["enabled"] = item["enabled"]
+            skipped = _lore_skip(entry)
+            if skipped is not None and (origin is None or _lore_skip(before[origin]) != skipped):
+                raise AuthoringRefused("unusable_lore", f"entry {number} would never reach play ({skipped}): "
+                                                        + _LORE_SKIPS.get(skipped, "the lore reader skips it"))
             found.append(entry)
         edited["entries"] = found
     if not payload:

@@ -103,6 +103,7 @@ Every refusal is 044's `ApiRefused`, and nothing was written.
 | `source_exists`, `entity_exists` | A new source or id that is already used. |
 | `import_record_read_only` | The `card-import` record is written only by its importer. |
 | `no_structured_editor` | The record's family has no structured editor; use the raw editor. |
+| `unusable_lore` | A lorebook entry the lore reader (037) would skip, so it would never reach play: content over 8000 characters or not plain text, or no key and not constant. An entry the head already holds that the reader skips for the same reason (an imported regex entry...) stays editable. A key the reader cannot match, or more than 64 keys, is `invalid_field`. |
 | `not_attachable`, `no_chat` | The kind cannot be attached to a chat, or the chat does not exist. |
 | `duplicate_binding`, `binding_limit` and the chat model's other reasons | The chat refuses the binding (107): that revision is already bound, or the chat is full. |
 | `invalid_field`, `invalid_sections`, `invalid_derivation`, `invalid_payload` and 009's codec reasons | A malformed argument or payload. |

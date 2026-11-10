@@ -475,3 +475,24 @@ def test_an_attach_the_chat_refuses_is_a_refusal_with_its_reason(api):
 def test_a_character_made_here_is_said_to_need_a_voice_profile(api):
     gothic, _modern = two_maras(api)
     assert "voice" in api.call("sources.read", {"ref": gothic["ref"]})["unavailable"]
+
+
+def test_lore_the_reader_would_skip_is_refused_but_an_imported_quirk_stays_editable(api):
+    etag = source(api, "world:harbor", "Harbor")
+    for entry, reason in (({"keys": ["bell"], "content": "x" * 8001}, "unusable_lore"),
+                          ({"keys": [], "content": "Keyed by nothing."}, "unusable_lore"),
+                          ({"keys": ["k" * 101], "content": "A key too long to match."}, "invalid_field"),
+                          ({"keys": ["one\ntwo"], "content": "A key of two lines."}, "invalid_field"),
+                          ({"keys": [f"key {n}" for n in range(65)], "content": "Too many keys."}, "invalid_field")):
+        assert refused(api, "sources.create", source="world:harbor", kind="lorebook", expected=etag,
+                       fields={"entries": [entry]}).reason == reason
+    lore = api.call("sources.create", {"source": "world:harbor", "kind": "lorebook", "expected": etag, "fields": {
+        "entries": [{"keys": ["bell"], "content": "x" * 8000}]}})
+    # an entry the head already holds, which the reader skips (a regex key), keeps being editable as it is
+    read = api.call("sources.read", {"ref": lore["ref"]})
+    quirk = {"keys": ["/b.ll/"], "content": "Regex lore.", "settings": {"use_regex": True}}
+    raw = edit(api, lore["ref"], "sources.save_raw", payload={**read["payload"], "entries": [quirk]})
+    saved = edit(api, raw["ref"], "sources.save", fields={"name": "Harbor lore", "entries": [
+        {"index": 0, "keys": ["/b.ll/"], "content": "Regex lore, retold."}]})
+    entry = api.call("sources.read", {"ref": saved["ref"]})["payload"]["entries"][0]
+    assert entry["settings"] == {"use_regex": True} and entry["content"] == "Regex lore, retold."
