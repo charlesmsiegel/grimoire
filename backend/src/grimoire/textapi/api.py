@@ -48,6 +48,7 @@ from grimoire.store.layout import placement_parts
 from grimoire.sync import NoDeviceIdentity, SyncError, SyncInterrupted, device_of
 from grimoire.sync.turns import open_conflicts
 
+from .chatplay import POST_MODES, ChatPlayOps
 from .errors import ApiRefused
 from .views import (
     FILTER_ROLES,
@@ -136,6 +137,7 @@ class TextApi:
             "pause": self._pause, "resume": self._resume, "choose": self._choose, "add_art": self._add_art,
             "sync": self._sync, "resolve": self._resolve,
         }
+        self._ops.update(ChatPlayOps(self).handlers())  # 111: Start Chat, add card, line requests, repairs
 
     @property
     def ops(self) -> tuple[str, ...]:
@@ -201,7 +203,7 @@ class TextApi:
             peers.append({"peer": peer, "address": f"{host}:{port}", "paired": paired,
                           "last": self.reports.get(peer)})
         return {"device": self._device(), "owner": self.owner, "player": self.player, "peers": peers,
-                "generation": self.runtime is not None, "ops": list(self.ops)}
+                "generation": self.runtime is not None, "ops": list(self.ops), "post_modes": list(POST_MODES)}
 
     def _source_name(self, view, ref: SourceRef) -> str | None:  # type: ignore[no-untyped-def]
         try:
@@ -235,8 +237,15 @@ class TextApi:
         else:
             raise ApiRefused("invalid_field", "filter must be recent, character or scenario")
         entries: list[NavEntry] = [index.entry(ref) for ref in index.all_chats()]
+        names = self._mention_names(view, entries)
+        return {"filter": which, "chats": self._entries(view, index, found, names),
+                "sources": filter_sources(entries, names)}
+
+    def _mention_names(self, view, entries) -> dict[str, str | None]:  # type: ignore[no-untyped-def]
         refs = {source_key(key) for entry in entries for _role, key, _rev, _active in entry.mentions}
-        names = {ref: self._source_name(view, SourceRef.parse(ref)) for ref in refs}
+        return {ref: self._source_name(view, SourceRef.parse(ref)) for ref in refs}
+
+    def _entries(self, view, index, found, names) -> list[dict]:  # type: ignore[no-untyped-def]
         chats = []
         for ref in found:
             stored = view.chats.get(ref)
@@ -247,10 +256,24 @@ class TextApi:
                 except ChatCodecError:
                     record = None
             chats.append(chat_entry(index.entry(ref), index.scope(ref.campaign_id), record, names))
-        return {"filter": which, "chats": chats, "sources": filter_sources(entries, names)}
+        return chats
+
+    def chat_entries(self, refs) -> list[dict]:  # type: ignore[no-untyped-def]
+        """``refs`` as the ``chats`` op lists them, in the order given (111's Continue list)."""
+        view = self.store.load()
+        index = self.chats.navigation()
+        known = set(index.all_chats())
+        found = [ref for ref in refs if ref in known]
+        return self._entries(view, index, found, self._mention_names(view, [index.entry(ref) for ref in found]))
 
     def _chat(self, args: Mapping[str, object]) -> ChatRef:
         return _parse(ChatRef.parse, args, "chat")
+
+    #: for 111's ops (``chatplay``): the same argument check and scene view the 044 ops use
+    chat_arg = _chat
+
+    def scene_view(self, chat: ChatRef) -> dict:
+        return self._scene(chat)
 
     def _conflicts(self, campaign: str) -> tuple[list[dict], bool]:
         """The campaign's files that a sync left in a keep-both conflict on this device, each with the etag of
@@ -350,7 +373,10 @@ class TextApi:
         text = _field(args, "text", str)
         if len(text) > MAX_POST_CHARS:
             raise ApiRefused("invalid_field", f"a post is at most {MAX_POST_CHARS} characters")
-        self.runner.post(chat, self.player_handle, text)
+        mode = _field(args, "mode", str, required=False, default="auto")  # 008's typed intent (111)
+        if mode not in POST_MODES:
+            raise ApiRefused("invalid_field", f"mode must be one of {', '.join(POST_MODES)}")
+        self.runner.post(chat, self.player_handle, text, mode=mode)
         return self._scene(chat)
 
     def _generate(self, args: Mapping[str, object]) -> dict:
