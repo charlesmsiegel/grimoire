@@ -131,6 +131,8 @@ export function openPalette({ items, more, label = "Search pages, chats and comm
 
   input.addEventListener("input", search);
   dialog.addEventListener("keydown", (event) => {
+    // While an input method composes (Japanese, Chinese...), Enter and the arrows pick its candidates, not ours.
+    if (event.isComposing || event.keyCode === 229) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       if (shown.length) active = (active + (event.key === "ArrowDown" ? 1 : shown.length - 1)) % shown.length;

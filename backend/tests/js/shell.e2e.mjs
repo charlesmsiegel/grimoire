@@ -59,6 +59,9 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   let kept = false;  // Ctrl+K again stays the app's: the browser's own would take focus out of the dialog
   for (const listener of document.listeners.get("keydown")) listener({ key: "k", ctrlKey: true, preventDefault() { kept = true; } });
   assert.ok(kept && body.querySelectorAll("dialog").length === 1, "a second Ctrl+K opens nothing and is kept");
+  const composing = { key: "Enter", isComposing: true, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  body.querySelector("dialog").dispatchEvent(composing);  // Enter that confirms an input method's text
+  assert.ok(!composing.defaultPrevented && body.querySelector("dialog"), "composing text chooses nothing");
   type(box, "zzzz");
   await until(() => byText(body.querySelector("dialog"), "div", "Nothing matches.").length, 15000, "no results");
   assert.equal(box.getAttribute("aria-activedescendant"), null, "nothing is active with no results");
