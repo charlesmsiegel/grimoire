@@ -150,9 +150,13 @@ on, under the text API's writer lock, as the owner's trusted handle, with the re
   and reads the head again. A draft whose head has moved on says what changed since and what the draft changes.
   Kept, only the draft's own changes are laid over the new head (`static/pages/source/drafts.js`): sections are
   matched by name, openings by id and lorebook entries by exact content. A part changed differently on both sides
-  is a conflict: the draft is shown to copy and can only be discarded. A draft the head already holds (saved, then
-  the page left) is dropped. The editors wait until the draft is kept or discarded.
-- The raw editor is unavailable for a payload holding a whole number beyond 2^53, which the browser would round.
+  is a conflict: the draft's own text for it is shown to copy and the draft can only be discarded. A change the head
+  already holds (saved, then the page left) is recognized, additions and lore entries included, and a draft with
+  nothing else is dropped. A head changed in place (same revision, new etag) counts as moved on. What is typed
+  while a save is on its way is kept as a draft. The editors wait until the draft is kept or discarded.
+- An older revision with no field list (a scenario, a lorebook, a world...) shows what it holds, read-only.
+- The raw editor is unavailable for a payload holding a whole number beyond 2^53, which the browser would round, and
+  refuses to save one, or a number beyond its range.
   Nothing is offered to derive from a revision that does not compose.
 - What the ops do not offer is shown as such, with the reason `sources.read` gives (above).
 

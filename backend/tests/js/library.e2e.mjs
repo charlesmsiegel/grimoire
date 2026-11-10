@@ -199,4 +199,14 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   assert.ok(!section(page, "Edit this portrayal"), "an older revision has no editor");
   assert.ok(byText(page, "div", "shown exactly as it was written").length);
   assert.equal(fieldRow(page, "Description").querySelector("span").textContent, "inherited");
+
+  // an older lorebook revision, which has no field list, is shown read-only as it was written
+  const LORE = "card:mara-vell/lorebook/mara-vell-lore";
+  const lore = await call("sources.read", { ref: LORE });
+  await call("sources.save", { ref: LORE, head: lore.head, etag: lore.etag, expected: lore.manifest_etag, fields: { name: "Mara's lore, renamed" } });
+  page = await go(at(LORE + "@" + lore.head), entry, "the older lorebook revision");
+  const held = section(page, "What " + lore.head + " holds");
+  assert.ok(held, "an older lorebook revision shows what it holds");
+  assert.ok(held.textContent.includes("Entry 1") && held.textContent.includes(lore.payload.name));
+  assert.ok(!section(page, "Edit"), "an older revision has no editor");
 });

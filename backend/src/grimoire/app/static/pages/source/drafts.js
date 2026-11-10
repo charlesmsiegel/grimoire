@@ -84,37 +84,82 @@ export function changedParts(family, before, after) {
     : !same(before[key], after[key]));
 }
 
-// A draft's changes laid over `read`, the head now: { model, conflicts, mine, changed }. `conflicts` names each
-// part the draft changed that also changed under it, differently; the model then holds the head's value there.
+// An item as the person sees it, for a copy of a conflict: no slot, no original.
+function shown(item) {
+  const { slot: _slot, original: _original, ...rest } = item;
+  return rest;
+}
+
+// What of an item counts when two writers may have made the same change (an entry's keys as they would be saved).
+function saved(family, item) {
+  return family === "lorebook" ? [splitKeys(item.keys).join("\n"), item.content, item.constant, item.enabled] : props(family, item);
+}
+
+// A draft's changes laid over `read`, the head now: { model, conflicts, copies, mine, changed }. `conflicts` names
+// each part the draft changed that also changed under it, differently; the model then holds the head's value
+// there, and `copies` holds the draft's own value for each, to copy (null for a part the draft removes). A change
+// the head already has (the draft was saved, then the page left before the answer) is neither laid again nor a
+// conflict.
 export function rebase(read, draft) {
   const family = read.family;
   const head = modelOf(read);
   const { start, model: mine } = draft;
-  const out = { ...head, [LIST[family]]: head[LIST[family]].map((item) => ({ ...item })) };
+  const list = LIST[family];
+  const out = { ...head, [list]: head[list].map((item) => ({ ...item })) };
   const conflicts = [];
+  const copies = {};
+  const conflict = (label, value) => { conflicts.push(label); copies[label] = value; };
   for (const key of SIMPLE[family]) {
     if (same(mine[key], start[key])) continue;
-    if (!same(head[key], start[key]) && !same(head[key], mine[key])) conflicts.push(key);
+    if (!same(head[key], start[key]) && !same(head[key], mine[key])) conflict(key, mine[key]);
     else out[key] = mine[key];
   }
-  const list = LIST[family];
   const mineChanges = changesOf(family, start, mine);
+  const mineBy = new Map(mine[list].filter((item) => item.slot !== null).map((item) => [item.slot, item]));
   if (head.locked) {
     // The head's list is no longer all text (the raw editor wrote it), so a structured save cannot send it: every
     // change the draft made to the list is a conflict, kept to copy, never laid over the head or dropped.
-    conflicts.push(...mineChanges.filter((part) => !SIMPLE[family].includes(part)));
-    return { model: out, conflicts, mine: mineChanges, changed: changedParts(family, start, head) };
+    const startBy = new Map(start[list].filter((item) => item.slot !== null).map((item) => [item.slot, item]));
+    mine[list].forEach((item, index) => {
+      if (item.slot === null) conflict(itemLabel(family, item, index + 1) + " (new)", shown(item));
+      else if (!startBy.has(item.slot) || !same(props(family, startBy.get(item.slot)), props(family, item))) conflict(itemLabel(family, item, index + 1), shown(item));
+    });
+    start[list].forEach((item, index) => {
+      if (item.slot !== null && !mineBy.has(item.slot)) conflict(itemLabel(family, item, index + 1) + " (removed)", null);
+    });
+    return { model: out, conflicts, copies, mine: mineChanges, changed: changedParts(family, start, head) };
   }
   const items = out[list];
+  // The head's items that are not the draft's start items: added (or, an entry, changed) under the draft.
+  const startSlots = new Set(start[list].map((item) => item.slot));
+  const startOriginals = start[list].map((item) => item.original);
+  const fresh = new Set();
+  if (family === "lorebook") {
+    const left = [...startOriginals];
+    head[list].forEach((item, where) => {
+      const at = left.indexOf(item.original);
+      if (at >= 0) left.splice(at, 1); else fresh.add(where);
+    });
+  } else {
+    head[list].forEach((item, where) => { if (!startSlots.has(item.slot)) fresh.add(where); });
+  }
+  // A fresh head item the same as `item` would be saved: the draft's change is already there.
+  const already = (item) => {
+    const where = [...fresh].find((at) => same(saved(family, head[list][at]), saved(family, item)));
+    if (where === undefined) return false;
+    fresh.delete(where);
+    return true;
+  };
   // Each item the draft started from that it edits or removes is found in the head now: a section by its name and
   // an opening by its id; an entry, which has no id and whose index moves, by its exact content. Where the head
   // changed that item too (or it is gone), the draft's change is a conflict, unless both made the same change.
-  const mineBy = new Map(mine[list].filter((item) => item.slot !== null).map((item) => [item.slot, item]));
   const used = new Set();
   const removals = [];
+  const freshAtStart = fresh.size;
   start[list].forEach((item, index) => {
     const edited = mineBy.get(item.slot);
     if (edited && same(props(family, edited), props(family, item))) return;  // left alone: the head's stands
+    const label = itemLabel(family, item, index + 1);
     let at;
     if (family === "lorebook") {
       at = head[list].findIndex((other, where) => other.original === item.original && !used.has(where));
@@ -122,12 +167,15 @@ export function rebase(read, draft) {
     } else {
       at = items.findIndex((other) => other.slot === item.slot);
       if (at >= 0 && !same(props(family, items[at]), props(family, item))) {  // changed in the head as well
-        if (!(edited && same(props(family, items[at]), props(family, edited)))) conflicts.push(itemLabel(family, item, index + 1));
+        if (!(edited && same(props(family, items[at]), props(family, edited)))) conflict(label, shown(edited || item));
         return;
       }
     }
     if (at < 0) {  // gone from the head, or (an entry) changed there
-      if (edited || family === "lorebook") conflicts.push(itemLabel(family, item, index + 1));
+      if (family === "lorebook" && edited) { if (!already(edited)) conflict(label, shown(edited)); return; }
+      // an entry the draft removes that is gone, with nothing changed in its place: removed on both sides
+      if (family === "lorebook" && freshAtStart) conflict(label + " (removed)", null);
+      else if (edited) conflict(label, shown(edited));
       return;
     }
     if (edited) items[at] = { ...edited, slot: items[at].slot, original: items[at].original };
@@ -136,14 +184,16 @@ export function rebase(read, draft) {
   for (const at of removals.sort((x, y) => y - x)) items.splice(at, 1);
   mine[list].forEach((item, index) => {
     if (item.slot !== null) return;
+    const label = itemLabel(family, item, index + 1) + " (new)";
     if (family === "entity" && items.some((other) => other.name === item.name)) {
       const other = items.find((candidate) => candidate.name === item.name);
-      if (!same(other.text, item.text)) conflicts.push(itemLabel(family, item, index + 1));
+      if (!same(other.text, item.text)) conflict(label, shown(item));
       return;
     }
+    if (family !== "entity" && already(item)) return;
     items.push({ ...item });
   });
-  return { model: out, conflicts, mine: mineChanges, changed: changedParts(family, start, head) };
+  return { model: out, conflicts, copies, mine: mineChanges, changed: changedParts(family, start, head) };
 }
 
 // The `fields` a structured save sends for `model` over `read`, the head the model is of: only the parts that
@@ -156,14 +206,14 @@ export function fieldsOf(read, model) {
   const list = LIST[family];
   if (head.locked || !changedParts(family, head, model).includes(list)) return fields;
   if (family === "entity") {
-    fields.sections = {};
+    fields.sections = Object.create(null);  // no inherited names: a section may be called "constructor" or "__proto__"
     for (const item of model.sections) {
       const name = item.name.trim();
       if (!name) {
         if (item.text.trim()) throw new Error("A new section needs a name.");
         continue;
       }
-      if (name in fields.sections) throw new Error("Two sections are named " + JSON.stringify(name) + ".");
+      if (Object.hasOwn(fields.sections, name)) throw new Error("Two sections are named " + JSON.stringify(name) + ".");
       fields.sections[name] = item.text;
     }
   } else if (family === "scenario") {
@@ -224,10 +274,11 @@ export function rebaseRaw(read, draft) {
   return { text: JSON.stringify(out, null, 2), payload: out, conflicts, mine: minePart, changed };
 }
 
-// Whether a payload holds a whole number the browser cannot keep exactly (beyond 2^53): read into JavaScript, it
-// is already rounded, so the raw editor would save a different number than the one stored.
+// Whether a payload holds a number the browser cannot keep exactly: a whole number beyond 2^53, already rounded
+// once read into JavaScript, or one beyond its range (1e400 reads as Infinity, and is sent as null). Either way the
+// raw editor would save a different number than the one written.
 export function unsafeNumbers(value) {
-  if (typeof value === "number") return Number.isInteger(value) && !Number.isSafeInteger(value);
+  if (typeof value === "number") return !Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value));
   if (Array.isArray(value)) return value.some(unsafeNumbers);
   if (value && typeof value === "object") return Object.values(value).some(unsafeNumbers);
   return false;

@@ -45,6 +45,7 @@ export async function mount(root, ctx) {
     root.append(ui.notice("This revision does not compose, so it cannot be played: " + describe(read.composition_error), { kind: "bad" }));
   }
   if (read.effective) root.append(effective(ctx, read));
+  else if (!read.is_head) root.append(revisionView(ctx, read));
 
   const drafts = draftsOf(ctx, read.entity);
   if (read.is_head) {
@@ -183,6 +184,38 @@ function notOffered(ctx, read) {
   return ui.section("Not offered here", ...items);
 }
 
+// An older revision with no field list (scenarios, lorebooks, worlds...): what it holds, read-only, so the exact
+// revision can be read before it is attached or derived from.
+const LABELS = { name: "Name", nature: "Nature", description: "Description", title: "Title", premise: "Premise",
+  instructions: "Instructions" };
+
+function revisionView(ctx, read) {
+  const { ui } = ctx;
+  const { el } = ui;
+  const box = ui.section("What " + read.revision + " holds");
+  const model = FAMILIES.includes(read.family) ? modelOf(read) : null;
+  if (model) {
+    const facts = el("dl", { class: "source-facts" });
+    for (const [key, label] of Object.entries(LABELS)) {
+      if (typeof model[key] === "string" && model[key]) facts.append(el("dt", {}, label), el("dd", { class: "source-value" }, model[key]));
+    }
+    box.append(facts);
+    const items = read.family === "entity" ? model.sections.map((item) => ["Section " + item.name, item.text])
+      : read.family === "scenario" ? model.openings.map((item, index) => ["Opening " + (item.slot || index + 1), item.text])
+        : model.entries.map((item, index) => ["Entry " + (index + 1) + (item.keys ? " (" + item.keys.split("\n").join(", ") + ")" : "")
+          + (item.enabled ? "" : ", off") + (item.constant ? ", always on" : ""), item.content]);
+    if (items.length) {
+      box.append(el("div", {}, ...items.map(([label, text]) => el("div", { class: "source-field" },
+        el("strong", {}, label), el("div", { class: "source-value" }, text || "(empty)")))));
+    }
+  }
+  const payload = el("textarea", { class: "g-input source-raw", readonly: true, "aria-label": "The payload of " + read.revision });
+  payload.value = JSON.stringify(read.payload, null, 2);
+  box.append(el("details", {}, el("summary", {}, "The payload as written"), payload));
+  if (unsafeNumbers(read.payload)) box.append(el("p", { class: "g-muted" }, "A number in it is too large for the browser to show exactly."));
+  return box;
+}
+
 // -- drafts ---------------------------------------------------------------------------------------------
 
 // One draft per entity and editor, kept per tab until it is saved or discarded (see ./drafts.js for its shape).
@@ -197,6 +230,10 @@ function draftsOf(ctx, entity) {
       },
       set(value) { store.set(JSON.stringify(value)); },
       clear() { store.clear(); },
+      // The draft as stored now, and a clear that happens only if it is still that: what is typed while a save is
+      // on its way is kept, and is held against the new head like any other draft.
+      snapshot() { return store.get(); },
+      clearIf(snapshot) { if (store.get() === snapshot) store.clear(); },
     };
   };
   return {
@@ -224,7 +261,7 @@ function staleDrafts(ctx, read, drafts) {
     else {
       shown = true;
       box.append(...staleParts(ctx, read, "edit", form, merged && merged.changed, merged ? merged.mine : null,
-        merged ? merged.conflicts : null, merged ? conflictText(read, form.model, merged.conflicts) : JSON.stringify(form.model, null, 2),
+        merged ? merged.conflicts : null, merged ? JSON.stringify(merged.copies, null, 2) : JSON.stringify(form.model, null, 2),
         merged && !merged.conflicts.length
           ? () => drafts.form.set({ base: read.head, etag: read.etag, start: modelOf(read), model: merged.model }) : null,
         () => drafts.form.clear()));
@@ -280,29 +317,12 @@ function staleParts(ctx, read, what, draft, changed, mine, conflicts, kept, onKe
   return parts;
 }
 
-// The draft's own text for the parts in conflict, for the person to copy.
-function conflictText(read, model, conflicts) {
-  return JSON.stringify(Object.fromEntries(conflicts.map((part) => [part, partOf(read.family, model, part)])), null, 2);
-}
-
-function partOf(family, model, part) {
-  if (part in model && typeof model[part] !== "object") return model[part];
-  const list = family === "entity" ? model.sections : family === "scenario" ? model.openings : model.entries;
-  const match = /^(section|opening|entry) (.+)$/.exec(part);
-  if (!match) return null;
-  const found = family === "entity" ? list.find((item) => item.name === match[2] || item.slot === match[2])
-    : family === "scenario" ? list.find((item) => item.slot === match[2]) || list[Number(match[2]) - 1]
-      : list[Number(match[2]) - 1];
-  if (!found) return null;
-  const { slot: _slot, original: _original, ...shown } = found;
-  return shown;
-}
-
 // What a save sends, against the head this page read: a refusal "changed" keeps the draft and reads the head again.
 async function save(ctx, read, op, args, draft) {
   try {
+    const sent = draft.snapshot ? draft.snapshot() : null;
     const answer = await ctx.api(op, { ref: read.entity, head: read.head, etag: read.etag, expected: read.manifest_etag, ...args });
-    draft.clear();
+    if (draft.clearIf) draft.clearIf(sent); else draft.clear();
     ctx.notify("Saved as " + answer.ref.split("@").pop() + ".");
     ctx.navigate(ctx.href("source", [read.entity]));
   } catch (error) {
@@ -435,7 +455,7 @@ function rawEditor(ctx, read, drafts) {
   if (!ctx.has("sources.save_raw")) return ui.section("Raw payload", ui.unavailable("The raw editor", "This app does not serve sources.save_raw."));
   if (unsafeNumbers(read.payload)) {
     return ui.section("Raw payload", ui.unavailable("The raw editor for this record",
-      "It holds a whole number too large for the browser to keep exactly, so saving it here would change that number."));
+      "It holds a number too large for the browser to keep exactly, so saving it here would change that number."));
   }
   const draft = drafts.raw.get();
   if (draft && stale(draft, read)) return ui.section("Raw payload", el("p", { class: "g-muted" }, "Keep or discard your draft above first."));
@@ -454,7 +474,7 @@ function rawEditor(ctx, read, drafts) {
       return;
     }
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) { field.setError("The payload must be a JSON object."); return; }
-    if (unsafeNumbers(payload)) { field.setError("A whole number here is too large to be kept exactly."); return; }
+    if (unsafeNumbers(payload)) { field.setError("A number here is too large to be kept exactly; write it as text, or leave it as it was."); return; }
     field.setError("");
     await save(ctx, read, "sources.save_raw", { payload }, drafts.raw);
   }));

@@ -95,7 +95,37 @@ test("a list the head no longer lets the structured editor send is a conflict, n
   const merged = rebase(r2, draft);
   assert.equal(modelOf(r2).locked, true);
   assert.deepEqual(merged.conflicts, ["opening first"]);
+  assert.deepEqual(merged.copies, { "opening first": { text: "Rain, sideways." } });
   assert.equal(merged.model.title, "Squall");
+  // an opening the draft adds is kept to copy too, by its own text
+  const added = rebase(r2, drafted(r1, (model) => { model.openings.push({ slot: null, text: "Thunder." }); }));
+  assert.deepEqual(added.copies, { "opening 2 (new)": { text: "Thunder." } });
+});
+
+test("a save that landed before the page heard back is recognized, additions and lore edits included", () => {
+  const r1s = scenario("r1", { title: "Storm", openings: [{ id: "first", text: "Rain." }] });
+  const opening = drafted(r1s, (model) => { model.openings.push({ slot: null, text: "Thunder." }); });
+  const r2s = scenario("r2", { title: "Storm", openings: [{ id: "first", text: "Rain." }, { id: "opening-2", text: "Thunder." }] });
+  const sOut = rebase(r2s, opening);
+  assert.deepEqual([sOut.conflicts, fieldsOf(r2s, sOut.model)], [[], {}]);
+
+  const bell = { keys: ["bell"], content: "The bell." };
+  const tide = { keys: ["tide"], content: "The tide." };
+  const r1 = lorebook("r1", [bell, tide]);
+  const draft = drafted(r1, (model) => {
+    model.entries[1].content = "The tide, retold.";
+    model.entries.push({ slot: null, original: null, keys: "gull\n", content: "Gulls.", constant: false, enabled: true });
+  });
+  const r2 = lorebook("r2", [bell, { ...tide, content: "The tide, retold." }, { keys: ["gull"], content: "Gulls." }]);
+  const out = rebase(r2, draft);
+  assert.deepEqual([out.conflicts, fieldsOf(r2, out.model)], [[], {}]);
+  // an entry removed by the draft and already gone, with nothing changed in its place
+  const removed = drafted(r1, (model) => { model.entries.splice(0, 1); });
+  const gone = rebase(lorebook("r2", [tide]), removed);
+  assert.deepEqual([gone.conflicts, fieldsOf(lorebook("r2", [tide]), gone.model)], [[], {}]);
+  // but gone while another entry changed: it may have been changed, not removed, so it is a conflict
+  const unsure = rebase(lorebook("r2", [{ ...tide, content: "Theirs." }]), removed);
+  assert.deepEqual(unsure.conflicts, ["entry 1 (removed)"]);
 });
 
 test("a draft is stale when its revision moved on, or when that revision was changed in place", () => {
@@ -125,7 +155,15 @@ test("a raw draft lays its own keys over a newer head", () => {
   assert.ok(rebaseRaw(r2, { ...draft, text: "{" }).error);
 });
 
-test("a whole number the browser cannot keep exactly is noticed", () => {
+test("a section may be called by a name an object inherits", () => {
+  const read = entity("r1", { name: "Mara", sections: { constructor: "Built.", toString: "Said." } });
+  const edited = drafted(read, (model) => { model.sections[0].text = "Rebuilt."; });
+  assert.deepEqual({ ...fieldsOf(read, edited.model).sections }, { constructor: "Rebuilt.", toString: "Said." });
+});
+
+test("a number the browser cannot keep exactly is noticed", () => {
+  assert.equal(unsafeNumbers({ n: JSON.parse("1e400") }), true);
+  assert.equal(unsafeNumbers([JSON.parse("-1e400")]), true);
   assert.equal(unsafeNumbers({ extensions: { uid: JSON.parse("9007199254740993") } }), true);
   assert.equal(unsafeNumbers({ uid: 9007199254740991, n: 1.5, list: [1, "2"] }), false);
 });
