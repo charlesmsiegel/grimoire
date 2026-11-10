@@ -17,9 +17,9 @@ const CHAT = "campaign:c1#chat/t1";
 const ANYA = "campaign:c1/character/anya", MARA = "campaign:c1/character/mara";
 const FRAMED = {
   attempt: "t1.000001", actor: { ref: ANYA, name: "Anya" }, intent: "slip past the lantern", moment: { sequence: 1 },
-  factors: [{ id: "lantern", bearing: "against", text: "The lantern is lit." }],
+  factors: [{ id: "lantern", bearing: "hinders", text: "The lantern is lit." }],
   stakes: [{ id: "seen", text: "Anya is seen at the hatch." }],
-  classification: "uncertain", allowed: ["success", "partial", "failure"], fingerprint: "f".repeat(64),
+  classification: "uncertain", allowed: ["failure", "partial", "success"], fingerprint: "f".repeat(64),
 };
 
 function hub(audience, overrides = {}) {
@@ -42,23 +42,28 @@ function hub(audience, overrides = {}) {
   };
 }
 
-async function mounted(audience, shown) {
+async function mounted(audience, shown, scene = null) {
   const calls = [];
+  const drafts = new Map();  // the shell keeps a draft across re-renders and navigation
   const root = ui.el("div", {});
   const ctx = {
     ui, path: ["c1"], query: new URLSearchParams({ chat: CHAT, ...(audience === "director" ? { audience } : {}) }),
     href: (route, segments = [], query = {}) => "#/" + [route, ...segments.map(encodeURIComponent)].join("/")
       + "?" + new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined)).toString(),
-    has: () => false, registered: (route) => route === "chat", setTitle() {}, setActions() {}, styles() {}, notify() {},
-    draft: () => ({ get: () => "", set() {}, clear() {} }),
+    has: (op) => op === "open" && scene !== null, registered: (route) => route === "chat", setTitle() {}, setActions() {}, styles() {}, notify() {},
+    draft: (key) => ({ get: () => drafts.get(key), set: (text) => drafts.set(key, text), clear: () => drafts.delete(key) }),
     act: async (work) => { try { return await work(); } catch { return undefined; } },
     api: async (op, args) => {
       calls.push([op, args]);
-      return op === "campaign.hub" ? shown : { done: {}, hub: shown };
+      if (op === "open") return scene;
+      const now = typeof shown === "function" ? shown() : shown;
+      return op === "campaign.hub" ? now : { done: op === "campaign.recover_effects" ? { settled: [] } : {}, hub: now };
     },
   };
+  const notices = [];
+  ctx.notify = (text) => notices.push(text);
   await page.mount(root, ctx);
-  return { root, calls };
+  return { root, calls, notices };
 }
 
 const writes = (calls) => calls.filter(([op]) => op !== "campaign.hub");
@@ -69,7 +74,7 @@ test("the director decides among every result the frame allows, citing what was 
   const action = section(root, "Open action");
   assert.ok(byText(action, "strong", "Labelling this action is not available yet").length, "named, never a button");
   const result = action.querySelector("select");
-  assert.deepEqual(result.querySelectorAll("option").map((node) => node.getAttribute("value")), ["success", "partial", "failure"]);
+  assert.deepEqual(result.querySelectorAll("option").map((node) => node.getAttribute("value")), ["failure", "partial", "success"]);
   result.value = "partial";
   action.querySelectorAll("input").find((node) => node.getAttribute("value") === "lantern").checked = true;
   byText(action, "button", "Decide")[0].click();
@@ -83,7 +88,7 @@ test("the acting player consents only to a setback, naming the frame's fingerpri
   const { root, calls } = await mounted("table", hub("table"));
   const action = section(root, "Open action");
   const options = action.querySelector("select").querySelectorAll("option").map((node) => node.getAttribute("value"));
-  assert.deepEqual(options, ["partial", "failure"]);
+  assert.deepEqual(options, ["failure", "partial"]);
   action.querySelector("select").value = "failure";
   byText(action, "button", "Consent")[0].click();
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -126,4 +131,59 @@ test("the endorsement names the effect's own fingerprint, and the table is never
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(writes(calls), [["campaign.endorse_effect", { chat: CHAT, audience: "table", turn: "t1.000001", number: 1,
     fingerprint: effect.fingerprint }]]);
+});
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+const scene = { turns: [{ turn: "t1.000001", number: 1, kept: { lines: [] }, post: { text: "I press a coin into Mara's hand" } },
+  { turn: "t1.000002", number: 2, kept: null, post: { text: "I slip past the lantern" } }] };
+
+test("an effect is proposed for a kept turn by default, never for an action still undecided", async () => {
+  const open = { ...hub("director").open_action, turn: "t1.000002" };
+  const { root } = await mounted("director", hub("director", { open_action: open }), scene);
+  const choice = section(root, "Propose an effect").querySelector("select");
+  assert.deepEqual(choice.querySelectorAll("option").map((node) => node.getAttribute("value")), ["t1.000001"]);
+  assert.equal(choice.value, "t1.000001");
+});
+
+test("a proposal being built survives another write, and the one made is cleared", async () => {
+  const { root, calls } = await mounted("director", hub("director"), scene);
+  const propose = () => section(root, "Propose an effect");
+  byText(propose(), "button", "Add an operation")[0].click();
+  const summary = propose().querySelector("textarea");
+  summary.value = "Anya pays Mara a coin.";
+  summary.dispatchEvent({ type: "input" });  // typed: the draft holds it
+  byText(section(root, "Open action"), "button", "Decide")[0].click();  // another write: the hub is drawn again
+  await tick();
+  assert.equal(propose().querySelectorAll("div").filter((node) => node.className === "campaign-row").length, 1);
+  assert.equal(propose().querySelector("textarea").value, "Anya pays Mara a coin.");
+  byText(propose(), "button", "Propose").at(-1).click();
+  await tick();
+  const [op, args] = writes(calls).at(-1);
+  assert.equal(op, "campaign.propose_effect");
+  assert.equal(args.turn, "t1.000001");
+  assert.equal(args.operations.length, 1);
+  assert.equal(propose().querySelector("textarea").value, "", "the proposal made is not left to be sent twice");
+  assert.equal(propose().querySelectorAll("div").filter((node) => node.className === "campaign-row").length, 0);
+});
+
+test("a cut-short acceptance is the director's to settle, and the page says what was settled", async () => {
+  const problems = [{ code: "effect_unsettled", detail: "t1.000001:e-1:unpublished" }, { code: "effect_untagged", detail: "t1.000001:e-2" }];
+  const table = await mounted("table", hub("table", { problems }));
+  const shown = section(table.root, "Acceptance cut short");
+  assert.ok(shown && !byText(shown, "button", "Settle").length, "the table is told, and offered nothing");
+  const { root, calls, notices } = await mounted("director", hub("director", { problems }));
+  const recover = section(root, "Acceptance cut short");
+  const boxes = recover.querySelectorAll("input");
+  assert.equal(boxes.length, 2, "the player's key and the owner's word on the untagged one, each asked apart");
+  boxes[1].checked = true;
+  byText(recover, "button", "Settle by what landed")[0].click();
+  await tick();
+  assert.deepEqual(writes(calls), [["campaign.recover_effects", { chat: CHAT, audience: "director", abort: false, player_key: false, own: true }]]);
+  assert.deepEqual(notices, ["Nothing was settled."]);
+});
+
+test("a problem elsewhere in the campaign's continuity offers no recovery", async () => {
+  const { root } = await mounted("director", hub("director", { problems: [{ code: "effects", detail: "receipt_mismatch:e-9" },
+    { code: "effects_unreadable", detail: "x" }] }));
+  assert.equal(section(root, "Acceptance cut short"), undefined);
 });

@@ -126,11 +126,29 @@ def test_the_app_names_what_it_cannot_do_and_a_refusal_writes_nothing(desk):
         (label,) = [item for item in hub["actions"] if item["op"] == "label"]
         assert label["available"] is False  # the app passes the hub no labelling model
         assert refused(app, "campaign.label", chat=str(chat)).reason == "no_labeller"
-        assert app.call("campaign.hub", {"chat": str(chat)})["turns"] == hub["turns"]
         assert refused(app, "campaign.hub", chat=str(chat), audience="everyone").reason == "invalid_field"
-        assert refused(app, "campaign.decide", chat=str(chat), result="success").reason
+        assert refused(app, "campaign.decide", chat=str(chat), result="success").reason == "not_an_action"
         features = {item["feature"] for item in hub["unavailable"]}
         assert {"revoke_effect", "ability_use", "proposed_by_narration"} <= features
+
+
+def test_a_refused_proposal_writes_nothing(desk):
+    folder, chat = desk
+    with Device(folder, [say("Mara pockets it.")]) as device:
+        app = AppApi(device.api)
+        turn = kept_turn(device, chat)
+        names = cast_of(app.call("campaign.hub", {"chat": str(chat)}))
+        before = app.call("campaign.hub", {"chat": str(chat), "audience": "director"})
+        # a player character's act with no backing post: only the player authors their character's act (021)
+        unbacked = {"kind": "begin", "predicate": "knows", "subject": names["Mara Vell"], "object": names["Anya Rook"],
+                    "agent": names["Anya Rook"]}
+        assert refused(app, "campaign.propose_effect", chat=str(chat), turn=turn, summary="Anya pays Mara a coin.",
+                       operations=[unbacked]).reason == "pc_authorship"
+        assert refused(app, "campaign.propose_effect", chat=str(chat), turn=turn, summary="  ",
+                       operations=[unbacked]).reason == "invalid_field"
+        after = app.call("campaign.hub", {"chat": str(chat), "audience": "director"})
+        assert after["turns"] == before["turns"] and after["truth"] == before["truth"]
+        assert not [effect for record in after["turns"] for effect in record["effects"]]
 
 
 def test_the_hub_acts_only_with_the_owners_own_trusted_handle(desk):

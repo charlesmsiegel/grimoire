@@ -49,7 +49,8 @@ async function showCampaign(root, ctx, campaign) {
   const found = answer.campaigns.find((item) => item.campaign === campaign);
   const rows = (found ? found.chats : []).map((item) => el("a", { href: ctx.href("campaign", [campaign], { chat: item.chat }) },
     ui.rowText(item.label || item.name || item.chat, item.problem ? item.chat + " · " + item.problem : item.chat)));
-  root.append(ui.list(rows, { empty: "This campaign has no chats in this library." }));
+  root.append(ui.list(rows, { empty: answer.complete ? "This campaign has no chats in this library."
+    : "None of this campaign's chats is among the most recent ones listed." }));
   if (!answer.complete) root.append(ui.notice("Only the most recent chats are listed."));
 }
 
@@ -74,9 +75,13 @@ async function showHub(root, ctx, campaign, chat, audience) {
 
   const call = (op, args) => ctx.api("campaign." + op, { chat, audience, ...args });
   // Every write answers the hub as it now stands: show that, never the one from before the write.
-  const write = (op, args, said) => ctx.act(async () => {
+  // `said` is a notice, or a function of what the write did; `succeeded` runs once it is done, before the hub is
+  // drawn again (so a field it clears is drawn empty).
+  const write = (op, args, said, succeeded) => ctx.act(async () => {
     const answer = await call(op, args);
-    if (said) ctx.notify(said);
+    if (succeeded) succeeded(answer.done);
+    const notice = typeof said === "function" ? said(answer.done) : said;
+    if (notice) ctx.notify(notice);
     if (answer.hub) render(answer.hub);
     else {
       ctx.notify("Done, but the campaign could not be read again: " + problemsText(answer.problems), { bad: true });
@@ -92,6 +97,17 @@ async function showHub(root, ctx, campaign, chat, audience) {
     if (scene) turns = scene.turns.filter((turn) => turn.kept).map((turn) => ({ turn: turn.turn,
       label: "Turn " + turn.number + (turn.post ? ": " + clip(turn.post.text) : "") }));
     render(hub);
+  };
+
+  // The proposal being built is kept across re-renders (another write, a refusal) while what it was built from
+  // (the cast, the turns it may name, whether proposing is available) is unchanged; a proposal made clears it.
+  let built = null;
+  const proposal = (hub) => {
+    const can = hub.actions.find((item) => item.op === "propose_effect");
+    const key = JSON.stringify([hub.cast.map((member) => [member.actor, member.role]), turns, hub.open_action && hub.open_action.outcome
+      ? hub.open_action.turn : null, can && can.available]);
+    if (!built || built.key !== key) built = { key, node: proposeSection(ctx, hub, chat, turns, write, () => { built = null; }) };
+    return built.node;
   };
 
   function render(hub) {
@@ -110,8 +126,8 @@ async function showHub(root, ctx, campaign, chat, audience) {
     parts.push(obstaclesSection(ctx, hub, nameOf));
     parts.push(actionSection(ctx, hub, nameOf, write, director));
     parts.push(turnsSection(ctx, hub, nameOf, write, director));
-    if (director) parts.push(proposeSection(ctx, hub, chat, turns, write));
-    parts.push(recoverSection(ctx, hub, write));
+    if (director) parts.push(proposal(hub));
+    parts.push(recoverSection(ctx, hub, write, director));
     if (director) parts.push(truthSection(ctx, hub, nameOf), goalsSection(ctx, hub, nameOf));
     parts.push(knowledgeSection(ctx, hub, call, knowledge, director));
     parts.push(unavailableSection(ctx, hub));
@@ -221,7 +237,7 @@ function actionSection(ctx, hub, nameOf, write, director) {
   if (action.label) {
     const label = action.label;
     parts.push(el("p", {}, "Labelled " + label.label + " (" + label.state + ")" + (label.reason ? ": " + label.reason : "")
-      + (label.against ? ", against " + label.against.obstacle + " by " + label.against.approach + (label.against.novel ? " (a new approach)" : "") : "")));
+      + (label.against ? ", against " + label.against.obstacle + (label.against.approach ? " by " + label.against.approach : "") + (label.against.novel ? " (a new approach)" : "") : "")));
   }
   const framed = action.framed;
   if (framed) {
@@ -326,17 +342,20 @@ function effectBlock(ctx, turn, effect, hub, nameOf, write, can, director) {
 
 // The director proposes a turn's effect whole, in structured form: what an obstacle attempt made due comes
 // first, by itself; operations and holdings lines are added here. Nothing is proposed from narration.
-function proposeSection(ctx, hub, chat, kept, write) {
+function proposeSection(ctx, hub, chat, kept, write, made) {
   const { ui } = ctx;
   const { el } = ui;
   const can = hub.actions.find((item) => item.op === "propose_effect");
   if (!can || !can.available) return ui.section("Propose an effect", ui.unavailable("Proposing an effect", can && can.reason));
+  // An effect is proposed for a kept turn or a decided action (035): the open turn is offered only once its
+  // action is decided, and the newest kept turn is the default.
   const options = kept.map((item) => ({ value: item.turn, label: item.label }));
-  if (hub.open_action && !options.some((item) => item.value === hub.open_action.turn)) {
-    options.push({ value: hub.open_action.turn, label: "The open action's turn" });
+  const action = hub.open_action;
+  if (action && action.outcome && !options.some((item) => item.value === action.turn)) {
+    options.push({ value: action.turn, label: "The open action's turn (decided)" });
   }
   if (!options.length) return ui.section("Propose an effect", ui.empty("No turn is kept yet: an effect is proposed for a kept turn or a decided action."));
-  const turnChoice = ui.choice("For turn", options, { value: options[options.length - 1].value });
+  const turnChoice = ui.choice("For turn", options, { value: (kept.length ? kept[kept.length - 1].turn : options[0].value) });
   const summary = ui.field("What happens", { draft: ctx.draft("summary:" + chat), multiline: true });
   const cast = hub.cast.map((member) => ({ value: member.actor, label: member.name }));
   const operations = [];
@@ -391,7 +410,7 @@ function proposeSection(ctx, hub, chat, kept, write) {
       args.holdings = { lines: lines.map((entry) => acted(entry, turn, { kind: entry.kind.value, holder: entry.holder.value,
         item: entry.item.value.trim(), amount: Number(entry.amount.value) })) };
     }
-    return write("propose_effect", args, "Effect proposed.").then((done) => { if (done) summary.clear(); });
+    return write("propose_effect", args, "Effect proposed.", () => { summary.clear(); made(); });
   }, { kind: "primary" });
   return ui.section("Propose an effect", turnChoice.node, summary.node, el("h3", {}, "Operations"), opsBox, ui.actions(addOp),
     el("h3", {}, "Holdings"), linesBox, ui.actions(addLine),
@@ -399,25 +418,40 @@ function proposeSection(ctx, hub, chat, kept, write) {
     ui.actions(go));
 }
 
-function recoverSection(ctx, hub, write) {
+// What 035 reports for this chat's cut-short acceptances: unsettled ones this library settles, untagged ones only
+// on the owner's word that this library accepted them, and ones another device accepted, which that device settles.
+function recoverSection(ctx, hub, write, director) {
   const { ui } = ctx;
   const { el } = ui;
-  const cut = hub.turns.some((turn) => turn.effects.some((effect) => effect.state === "accepting"))
-    || hub.problems.some((problem) => problem.code.startsWith("effect"));
-  if (!cut) return null;
+  const codes = new Set(hub.problems.map((problem) => problem.code));
+  const here = codes.has("effect_unsettled"), untagged = codes.has("effect_untagged"), elsewhere = codes.has("effect_elsewhere");
+  if (!here && !untagged && !elsewhere) return null;
+  const parts = [ui.notice("An effect's acceptance was cut short.")];
+  if (elsewhere) parts.push(ui.notice("One was accepted on another device: settle it there."));
+  if (!director) {
+    if (here || untagged) parts.push(el("p", { class: "g-muted" }, "The director settles it, in the director's view."));
+    return ui.section("Acceptance cut short", ...parts);
+  }
+  if (!here && !untagged) return ui.section("Acceptance cut short", ...parts);
   const can = hub.actions.find((item) => item.op === "recover_effects");
-  const keyId = ui.id("campaign-key");
-  const key = el("input", { type: "checkbox", id: keyId });
-  const keyRow = el("div", { class: "g-field" }, key, el("label", { for: keyId },
-    " I am the player who endorsed it, and I give my own key for this settlement"));
-  const settle = (abort) => write("recover_effects", { abort, player_key: Boolean(key.checked) }, abort ? "Acceptance undone." : "Acceptance settled.");
-  return ui.section("Acceptance cut short",
-    ui.notice("An effect's acceptance was cut short. Settle it by what landed, or undo it."),
-    available(ctx, can, "Settling it", () => el("div", {}, keyRow, ui.actions(
-      ui.button("Settle", () => settle(false), { kind: "primary" }),
-      ui.button("Undo it", async () => {
-        if (await ui.confirm("Undo the acceptance that was cut short? What landed is taken back.", { confirmLabel: "Undo", danger: true })) settle(true);
-      }, { kind: "danger" })))));
+  const tick = (text) => {
+    const id = ui.id("campaign-tick");
+    const input = el("input", { type: "checkbox", id });
+    return { input, node: el("div", { class: "g-field" }, input, el("label", { for: id }, " " + text)) };
+  };
+  const key = tick("I am the player who endorsed it, and I give my own key for this settlement");
+  const own = untagged ? tick("No device is named for one of them: it was accepted in this library") : null;
+  const said = (abort) => (done) => done.settled.length
+    ? (abort ? "Undone: " : "Settled: ") + plural(done.settled.length, "effect") + "."
+    : "Nothing was settled.";
+  const settle = (abort) => write("recover_effects", { abort, player_key: Boolean(key.input.checked),
+    own: Boolean(own && own.input.checked) }, said(abort));
+  parts.push(available(ctx, can, "Settling it", () => el("div", {}, key.node, own ? own.node : null, ui.actions(
+    ui.button("Settle by what landed", () => settle(false), { kind: "primary" }),
+    ui.button("Undo it", async () => {
+      if (await ui.confirm("Undo the acceptance that was cut short? What landed is taken back.", { confirmLabel: "Undo", danger: true })) settle(true);
+    }, { kind: "danger" })))));
+  return ui.section("Acceptance cut short", ...parts);
 }
 
 function truthSection(ctx, hub, nameOf) {

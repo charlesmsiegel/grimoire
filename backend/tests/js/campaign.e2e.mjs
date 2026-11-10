@@ -72,6 +72,7 @@ test("a campaign's chat, its two views and an effect accepted with two keys", { 
   };
   const actor = (name) => pick("Subject").querySelectorAll("option").find((node) => node.textContent === name).getAttribute("value");
   pick("What happens").value = "Anya pays Mara a coin.";
+  pick("What happens").dispatchEvent({ type: "input" });
   pick("Relation").value = "knows";
   pick("Subject").value = actor("Mara Vell");
   pick("Object").value = actor("Anya Rook");

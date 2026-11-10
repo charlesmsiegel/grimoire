@@ -31,8 +31,9 @@ Who acts:
 
 - **The table** confirms a labelling and consents to a setback, naming the frame's fingerprint, after a confirmation that says what it decides. It also endorses an effect exactly as shown.
 - **Either view** asks for a labelling where the app has a labeller. The app passes the hub none yet, so labelling there is named as unavailable.
-- **The director** decides, and proposes an effect. A proposal names a kept turn (read from the core `open` op) and is written in structured form: 021 operations, plus 023 `add` and `consume` lines. The director then approves it. When the director's key is the last one, the confirmation says the effect becomes world truth.
-- Settling or undoing a cut-short acceptance appears only when one exists. The player's own key for it is a separate box they tick.
+- **The director** decides, and proposes an effect. A proposal names a kept turn (read from the core `open` op) or the open action's turn once it is decided and is written in structured form: 021 operations, plus 023 `add` and `consume` lines. The director then approves it. When the director's key is the last one, the confirmation says the effect becomes world truth.
+- A cut-short acceptance of this chat (035's `effect_unsettled`, `effect_untagged` or `effect_elsewhere`) is shown to both views. Only the director's view settles or undoes it. The player's own key is a separate box they tick, and so is the owner's word that an untagged one was accepted in this library (`own`). One that another device accepted is left to that device. The page then says how many effects were settled.
+- A proposal being built survives other writes, and is cleared once it is made.
 - A character pinned behind its source links to the review screen (110) when that page is in the app, and is otherwise named as unavailable.
 - A perspective is opened per actor and labelled as theirs.
 
