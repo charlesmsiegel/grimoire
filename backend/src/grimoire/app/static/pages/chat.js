@@ -62,17 +62,19 @@ function runner(ctx) {
 // -- Chats: Recent, by character, by scenario ---------------------------------------------------------------
 export async function chatsPage(root, ctx, params) {
   const busy = runner(ctx);
-  const view = ["recent", "character", "scenario"].includes(params.view) ? params.view : "recent";
-  const limit = Math.min(Math.max(Number(params.limit) || PAGE_SIZE, 1), MAX_LIST);
+  const view = ["recent", "all", "character", "scenario"].includes(params.view) ? params.view : "recent";
+  // All is every chat, newest activity first, as far as one list request goes
+  const limit = view === "all" ? MAX_LIST : Math.min(Math.max(Number(params.limit) || PAGE_SIZE, 1), MAX_LIST);
   ctx.title("Chats");
-  const recent = await ctx.api("chats", { filter: "recent", limit: view === "recent" ? limit : PAGE_SIZE });
+  const listed = view === "recent" || view === "all";
+  const recent = await ctx.api("chats", { filter: "recent", limit: listed ? limit : PAGE_SIZE });
   let chats = recent.chats;
   const tabs = el("div", { class: "tabs", role: "tablist", "aria-label": "Which chats" });
-  for (const [key, label] of [["recent", "Recent"], ["character", "By character"], ["scenario", "By scenario"]]) {
+  for (const [key, label] of [["recent", "Recent"], ["all", "All"], ["character", "By character"], ["scenario", "By scenario"]]) {
     tabs.append(el("button", { role: "tab", "aria-selected": String(view === key), onclick: () => ctx.go("chats", { view: key }) }, label));
   }
   const body = [el("div", { class: "row" }, el("button", { class: "primary", onclick: () => ctx.go("start", {}) }, "Start Chat")), tabs];
-  if (view !== "recent") {
+  if (!listed) {
     const picker = el("select", { "aria-label": "Choose a " + view, onchange: () => ctx.go("chats", { view, source: picker.value || undefined }) },
       el("option", { value: "" }, "Choose a " + view));
     for (const source of recent.sources.filter((item) => item.role === view)) {
@@ -81,7 +83,7 @@ export async function chatsPage(root, ctx, params) {
     body.push(picker);
     chats = params.source ? (await ctx.api("chats", { filter: view, source: params.source, limit })).chats : [];
   }
-  if (!chats.length) body.push(el("p", { class: "muted" }, view === "recent" ? "No chats yet. Start one, or sync with your other device." : params.source ? "No chats here." : ""));
+  if (!chats.length) body.push(el("p", { class: "muted" }, listed ? "No chats yet. Start one, or sync with your other device." : params.source ? "No chats here." : ""));
   const list = el("ul", { class: "list" });
   for (const chat of chats) list.append(el("li", {}, chatButton(ctx, chat)));
   body.push(list);
