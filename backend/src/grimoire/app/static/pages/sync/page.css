@@ -1,0 +1,9 @@
+.sync-versions { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); margin: 8px 0; }
+.sync-version { border: 1px solid var(--g-line); border-radius: var(--g-radius); padding: 8px; background: var(--g-raised); }
+.sync-holder { font-weight: 600; }
+.sync-thumb { display: block; max-width: 100%; max-height: 160px; object-fit: contain; border-radius: var(--g-radius); margin-top: 4px; }
+.sync-line { margin: 4px 0; }
+.sync-speaker { font-weight: 600; }
+.sync-path { font-size: 13px; overflow-wrap: anywhere; }
+.sync-bad { color: var(--g-bad); }
+.sync-key { font-family: ui-monospace, monospace; overflow-wrap: anywhere; user-select: all; }

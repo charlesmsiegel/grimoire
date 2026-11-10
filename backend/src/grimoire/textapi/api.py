@@ -1,7 +1,8 @@
 """The text API (044): what the phone (or any client) calls to play a V2 library, as JSON ops.
 
 ``TextApi`` is trusted application code over one open library, acting for its owner: it writes only
-through 107's ``ChatLibrary``, 035's ``SceneRunner``, 052's ``QuickStart``, 038's ``ImageLibrary`` and
+through 107's ``ChatLibrary``, 035's ``SceneRunner`` (with 029's ``AdjudicationLibrary`` on the app's own
+adjudication key, so a turn framed and decided at the campaign hub (113) is read when it is narrated), 052's ``QuickStart``, 038's ``ImageLibrary`` and
 028's ``transfer``, and keeps no record of its own. Every op takes a JSON object and returns one; a
 refusal is ``ApiRefused`` with the service's own reason. See docs/TEXT_API.md.
 """
@@ -15,6 +16,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 
+from grimoire.adjudicationstore import AdjudicationLibrary
 from grimoire.chats import NavEntry
 from grimoire.chats.codec import ChatCodecError, chat_from_payload
 from grimoire.chatstore import ChatLibrary, InvalidBinding
@@ -62,6 +64,9 @@ from .views import (
     turn_view,
 )
 
+#: The app's own adjudication key (029): never a player's, never the owner's, never a labeller's. The text API
+#: only reads with it (a framed turn's outcome, before narration); the campaign hub (113) frames and decides.
+ADJUDICATOR = "app:adjudicator"
 #: 038's own cap on one picture's bytes (W1-W2); the decoded upload may be no larger.
 MAX_ART_BYTES = 32 * 1024 * 1024
 MAX_POST_CHARS = 20_000
@@ -140,8 +145,10 @@ class TextApi:
             raise ValueError("this slice plays as the library owner only")
         self.owner = self.player = owner
         self.owner_handle = self.player_handle = authority.handle_for(owner, trusted=True)
+        # one adjudication key for the app: a turn framed at the hub is read here with the key it was framed under
+        self.adjudication = AdjudicationLibrary(store, authority, authority.handle_for(ADJUDICATOR, trusted=True))
         self.runner = SceneRunner(store, authority, self.owner_handle, owner=owner, runtime=runtime, policy=policy,
-                                  voices=voices)
+                                  voices=voices, adjudication=self.adjudication)
         self.chats = ChatLibrary(store, self.owner_handle, clock=clock, new_id=new_id, owner=owner)
         self.quick = QuickStart(self.chats, self.runner)
         self.images = ImageLibrary(store, self.owner_handle, owner=owner)
@@ -257,8 +264,15 @@ class TextApi:
         else:
             raise ApiRefused("invalid_field", "filter must be recent, character or scenario")
         entries: list[NavEntry] = [index.entry(ref) for ref in index.all_chats()]
+        names = self._mention_names(view, entries)
+        return {"filter": which, "chats": self._entries(view, index, found, names),
+                "sources": filter_sources(entries, names)}
+
+    def _mention_names(self, view, entries) -> dict[str, str | None]:  # type: ignore[no-untyped-def]
         refs = {source_key(key) for entry in entries for _role, key, _rev, _active in entry.mentions}
-        names = {ref: self._source_name(view, SourceRef.parse(ref)) for ref in refs}
+        return {ref: self._source_name(view, SourceRef.parse(ref)) for ref in refs}
+
+    def _entries(self, view, index, found, names) -> list[dict]:  # type: ignore[no-untyped-def]
         chats = []
         for ref in found:
             stored = view.chats.get(ref)
@@ -269,7 +283,16 @@ class TextApi:
                 except ChatCodecError:
                     record = None
             chats.append(chat_entry(index.entry(ref), index.scope(ref.campaign_id), record, names))
-        return {"filter": which, "chats": chats, "sources": filter_sources(entries, names)}
+        return chats
+
+    def chat_entries(self, refs) -> list[dict]:  # type: ignore[no-untyped-def]
+        """``refs`` as the ``chats`` op lists them, in the order given; a ref the library does not know is left out.
+        For the app's ``play.options`` (111), whose Continue list shows the chats 052 says a selection started."""
+        view = self.store.load()
+        index = self.chats.navigation()
+        known = set(index.all_chats())
+        found = [ref for ref in refs if ref in known]
+        return self._entries(view, index, found, self._mention_names(view, [index.entry(ref) for ref in found]))
 
     def _chat(self, args: Mapping[str, object]) -> ChatRef:
         return parse_ref(ChatRef.parse, args, "chat")
@@ -561,4 +584,4 @@ class TextApi:
                 "receiver": report.receiver}
 
 
-__all__ = ["DEFAULT_SLOT", "MAX_ART_BYTES", "MAX_POST_CHARS", "TextApi", "field", "parse_ref", "refusal"]
+__all__ = ["ADJUDICATOR", "DEFAULT_SLOT", "MAX_ART_BYTES", "MAX_POST_CHARS", "TextApi", "field", "parse_ref", "refusal"]

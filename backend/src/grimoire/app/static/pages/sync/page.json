@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "id": "sync",
+  "route": "sync",
+  "title": "Sync",
+  "slot": "media",
+  "order": 20,
+  "owner": "114",
+  "entry": "page.js",
+  "requires": ["media.devices", "media.conflicts", "media.forks"],
+  "unavailable": null
+}
