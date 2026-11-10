@@ -52,8 +52,13 @@ key: capitals, digits and `_`, ending `_API_KEY` (`OPENROUTER_API_KEY`). Otherwi
 token could have the app send any of its environment, a cloud credential say, to an endpoint of their choice. A
 file the owner wrote by hand keeps whatever name it gives, and saving it again from the app with that name is
 allowed for the endpoint it was written for, never with another `base_url`. A refused name is never echoed back,
-in case it was a key pasted by mistake. The token holder can still point a provider key variable at another https
-endpoint: the token is the owner's, as for every other op.
+in case it was a key pasted by mistake. A name that says whose key it is (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`OPENROUTER_API_KEY` and the others in `OWNED_KEYS`) is sent from the app only to that provider's own hosts, a
+subdomain of one, or an endpoint on this machine (a local proxy), so the token cannot point a well-known key at a
+server of the holder's choosing; a hand-written file keeps such a name for the endpoint it names, as above. Any
+other `_API_KEY` name can still be pointed at another https endpoint by whoever holds the token, and `check_models`
+says whether such a variable is set: the token is the owner's, as for every other op, so name a key variable the
+table owns when the token may be shared.
 
 **Starting.** `serve --model FILE` reads FILE if it exists. A file that does not exist yet, or cannot be used,
 starts the app without a model: generation is refused `no_runtime`, everything else works, and `models` says why

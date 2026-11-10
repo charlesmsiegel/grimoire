@@ -29,7 +29,7 @@ from pathlib import Path
 from grimoire.core.identity import ChatRef
 from grimoire.core.inference import InferencePolicy, InferenceStage, UsageTotals
 from grimoire.core.inference.usage import TOKEN_FIELDS
-from grimoire.providers.config import route_label
+from grimoire.providers.config import ProviderEndpoint, route_label
 from grimoire.scene import SceneRefused
 from grimoire.store import LibraryLocked, LockUnavailable, OsLocker, StoreError
 from grimoire.store.jsonfmt import etag, is_etag
@@ -53,6 +53,26 @@ from .config import (
 #: app's environment (a cloud credential, say) to an endpoint of their choosing. A file the owner wrote by hand
 #: keeps whatever name it gives: saving it again unchanged is allowed.
 APP_KEY_ENV = re.compile(r"[A-Z][A-Z0-9_]{0,119}_API_KEY")
+#: Key variables whose names say whose key they hold. From the app, each is sent only to that provider's own
+#: hosts (or a subdomain of one) or to an endpoint on this machine (a local proxy, say), so the token cannot be
+#: used to point a well-known key at a server of the holder's choosing. A file the owner wrote by hand is kept,
+#: as for any other name, for the endpoint it was written for.
+OWNED_KEYS: dict[str, tuple[str, ...]] = {
+    "ANTHROPIC_API_KEY": ("api.anthropic.com",),
+    "CEREBRAS_API_KEY": ("api.cerebras.ai",),
+    "COHERE_API_KEY": ("api.cohere.com", "api.cohere.ai"),
+    "DEEPSEEK_API_KEY": ("api.deepseek.com",),
+    "FIREWORKS_API_KEY": ("api.fireworks.ai",),
+    "GEMINI_API_KEY": ("generativelanguage.googleapis.com",),
+    "GOOGLE_API_KEY": ("generativelanguage.googleapis.com",),
+    "GROQ_API_KEY": ("api.groq.com",),
+    "MISTRAL_API_KEY": ("api.mistral.ai",),
+    "OPENAI_API_KEY": ("api.openai.com",),
+    "OPENROUTER_API_KEY": ("openrouter.ai",),
+    "PERPLEXITY_API_KEY": ("api.perplexity.ai",),
+    "TOGETHER_API_KEY": ("api.together.xyz", "api.together.ai"),
+    "XAI_API_KEY": ("api.x.ai",),
+}
 #: The most bytes of configuration read: a real one is a few hundred.
 MAX_CONFIG_BYTES = 64 * 1024
 #: Turns a usage answer lists at most; its totals still cover every turn.
@@ -377,11 +397,17 @@ class InferenceApi:
             return None, [{"field": "key_env", "message": "name the key's environment variable, in capitals, "
                                                           "ending _API_KEY (such as OPENROUTER_API_KEY)"}]
         try:
-            return parse_model_config(raw), []
+            config = parse_model_config(raw)
         except ConfigError as error:
             message = _config_message(error)
             field = next((key for key in sorted(KEYS) if message.startswith(key)), "settings")
             return None, [{"field": field, "message": message}]
+        if not kept and config.key_env in OWNED_KEYS and not _owned_by(config.endpoint, OWNED_KEYS[config.key_env]):
+            # the name is one of the table's own, never something pasted, so it may be shown
+            hosts = " or ".join(OWNED_KEYS[config.key_env])
+            return None, [{"field": "key_env", "message": f"{config.key_env} is sent only to {hosts} or to this "
+                                                          "machine: name another variable for this endpoint"}]
+        return config, []
 
     def _check(self, args: Mapping[str, object]) -> dict:
         """Check a draft without saving it or sending anything: what a save would make of it."""
@@ -529,4 +555,13 @@ def _totals(attempts, unmetered: int, unsent: int) -> dict:  # type: ignore[no-u
     return view
 
 
-__all__ = ["APP_KEY_ENV", "UNAVAILABLE", "InferenceApi", "SettingsFile", "parse_settings", "settings_usable"]
+def _owned_by(endpoint: ProviderEndpoint, hosts: tuple[str, ...]) -> bool:
+    """Whether ``endpoint`` is one of ``hosts`` (or a subdomain of one), or on this machine."""
+    if endpoint.loopback_literal:
+        return True
+    host = endpoint.host.lower().rstrip(".")
+    return any(host == owned or host.endswith("." + owned) for owned in hosts)
+
+
+__all__ = ["APP_KEY_ENV", "OWNED_KEYS", "UNAVAILABLE", "InferenceApi", "SettingsFile", "parse_settings",
+           "settings_usable"]
