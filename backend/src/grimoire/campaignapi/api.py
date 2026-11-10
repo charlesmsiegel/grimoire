@@ -7,7 +7,8 @@ own and writes only through the services that own each record:
 - 035's ``SceneRunner``, configured with 029's ``AdjudicationLibrary`` and 040's ``ObstacleLibrary`` on the
   app's own adjudication key, and 021's ``TurnEffectsLibrary`` on the owner's handle: labelling, confirming and
   deciding an action, proposing an effect, each key on it, and recovering an acceptance cut short;
-- nothing else: holdings, items, party, stage, knowledge, relations and accepted events are only read.
+- nothing else: holdings, items, party, stage, knowledge, relations, accepted events, powers, bindings and
+  agendas are only read.
 
 **Two keys, two calls.** A player's own key on an effect (``endorse_effect``) and the director's
 (``approve_effect``) are separate ops the person makes separately, even when one person holds both (021's
@@ -15,11 +16,14 @@ own and writes only through the services that own each record:
 ``decide`` with ``basis: consent`` naming the frame's fingerprint, as 035 requires.
 
 **Who sees what.** ``audience`` is ``table`` (default) or ``director``. The table sees the cast, control, the
-stage, its own characters' party standing, holdings, items and knowledge, the obstacles (040 has no hidden
-facts), every turn's adjudication and the effects it holds a key on. The director also sees world truth (021's
-accepted events and 017's relations), every effect, membership, holding and item, 021's problems, and any one
-actor's perspective by asking for it. An actor's perspective is that actor's observations and beliefs, never
-world truth, and is never folded into the table's. See docs/CAMPAIGN_HUB.md.
+stage, its own characters' party standing, holdings, items, powers, source pins and knowledge, the obstacles
+(040 has no hidden facts), every turn's adjudication and the effects it holds a key on. The director also sees
+world truth (021's accepted events, 017's relations and 012's standing of every proposition beside what the
+cast believes of it), every effect, membership, holding, item, power and binding, 021's problems, the app's
+039 agendas and each turn's recorded intentions, and any one actor's perspective by asking for it. An actor's
+perspective is that actor's observations and beliefs, never world truth, and is never folded into the table's.
+A character pinned behind its source's head is handed to the review screen's rebase review (110, over 042):
+the hub names the op and rebases nothing. See docs/CAMPAIGN_HUB.md.
 """
 
 from __future__ import annotations
@@ -31,11 +35,16 @@ from datetime import datetime, timezone
 
 from grimoire.adjudicationstore import AdjudicationLibrary
 from grimoire.core import DIRECTOR
+from grimoire.core.abilities import Abilities
 from grimoire.core.authority import AuthorityError
+from grimoire.core.index import MissingDefinition
 from grimoire.core.inference import InferencePolicy
 from grimoire.core.identity import ChatRef
+from grimoire.core.perspective import actor_knowledge, director_knowledge
+from grimoire.effective import chat_snapshot
 from grimoire.effectstore import TurnEffectsLibrary
 from grimoire.evidencestore import EvidenceLibrary
+from grimoire.goals import GoalError, check_agenda
 from grimoire.holdingstore import HoldingsLibrary
 from grimoire.obstaclestore import ObstacleLibrary
 from grimoire.partystore import PartyLibrary
@@ -49,8 +58,9 @@ from grimoire.textapi import ApiRefused
 from . import parse
 from .views import (
     Names,
-    actor_ref, effect_view, event_view, framed_view, holdings_view, items_view, knowledge_view, label_view,
-    obstacle_view, outcome_view, relation_view, stage_view, turn_view,
+    abilities_view, actor_ref, agenda_view, claim_view, effect_view, event_view, framed_view, holdings_view,
+    items_view, knowledge_view, label_view, obstacle_view, outcome_view, relation_view, source_view, stage_view,
+    turn_view,
 )
 
 #: The app's own adjudication key (029/040): never a player's, never the owner's, never the labeller's.
@@ -72,6 +82,15 @@ UNAVAILABLE = (
     {"feature": "clocks", "blocker": "055", "reason": "calendar and clocks are Wave 8"},
     {"feature": "npc_autonomy", "blocker": "039",
      "reason": "NPC agendas are the app's configuration; no screen edits them in this slice"},
+    {"feature": "goal_progress", "blocker": "039",
+     "reason": "stored agendas, goal progress and completion are 039's next slice; the hub shows the configured "
+               "agendas and each turn's recorded intentions"},
+    {"feature": "rebase_scenario", "blocker": "042",
+     "reason": "rebasing a pinned scenario or lorebook is a later 042 milestone; a character behind its source's "
+               "head is handed to the review screen's rebase review"},
+    {"feature": "stored_change_sets", "blocker": "043",
+     "reason": "stored change-set proposals are 043 milestone 3; a change set is reviewed from its document in "
+               "the review screen"},
 )
 
 
@@ -98,8 +117,8 @@ class CampaignApi:
     own locks and every service's etags still refuse a stale write). The library owner alone may construct it."""
 
     def __init__(self, store: LibraryStore, authority, *, owner: str, labeller=None, label_handle=None,  # type: ignore[no-untyped-def]
-                 policy: InferencePolicy | None = None, stages=None, lock: threading.RLock | None = None,
-                 adjudicator: str = ADJUDICATOR,
+                 policy: InferencePolicy | None = None, stages=None, agendas=(),
+                 lock: threading.RLock | None = None, adjudicator: str = ADJUDICATOR,
                  clock: Callable[[], str] = _utc_now, new_id: Callable[[str], str] = _new_id) -> None:
         if owner not in authority.owners:  # the director view and every write are the library owner's
             raise ValueError("the campaign hub acts for this library's owner")
@@ -112,9 +131,12 @@ class CampaignApi:
         self.obstacles = ObstacleLibrary(store, authority, key)
         self.effects = TurnEffectsLibrary(store, self.handle, issued=authority.issued, clock=clock, new_id=new_id,
                                           owner=owner)
+        agendas = tuple(agendas) if not isinstance(agendas, (str, bytes, Mapping)) else agendas
+        # the runner checks the agendas (039's exact values, one per NPC); the hub only shows them to the director
         self.runner = SceneRunner(store, authority, self.handle, owner=owner, labeller=labeller,
                                   label_handle=label_handle, policy=policy, adjudication=self.adjudication,
-                                  effects=self.effects, obstacles=self.obstacles, stages=stages)
+                                  effects=self.effects, obstacles=self.obstacles, stages=stages, agendas=agendas)
+        self.agendas = {agenda.actor: agenda for agenda in agendas}
         self.labelling = labeller is not None and label_handle is not None and policy is not None
         self.evidence = EvidenceLibrary(store, self.handle, owner=owner)
         self.holdings = HoldingsLibrary(store, self.handle, clock=clock, owner=owner)
@@ -193,16 +215,142 @@ class CampaignApi:
         holdings, items = self._holdings(shown, problems), self._items(campaign, shown, problems)
         obstacles = self._obstacles(campaign, names, problems)
         turns = [turn_view(record, names, None if director else self.owner) for record in scene.records
-                 if record.labels or record.effects or (record.open and record.post is not None)]
+                 if record.labels or record.effects or (record.open and record.post is not None)
+                 or (director and record.intentions)]
+        view, captured = self._captured(chat, problems)
+        abilities = self._abilities(captured, shown, problems)
+        sources = self._sources(captured, names, None if director else mine, problems)
         hub = {"chat": str(chat), "audience": audience, "director": self.owner, "player": self.owner,
                "cast": cast, "persona": None if scene.persona is None else str(scene.persona),
                "paused": scene.paused, "stage": stage_view(stage, names), "party": party,
-               "holdings": holdings, "items": items, "obstacles": obstacles, "turns": turns,
+               "holdings": holdings, "items": items, "abilities": abilities, "sources": sources,
+               "obstacles": obstacles, "turns": turns,
                "open_action": self._open_action(chat, scene, names, problems), "problems": problems,
                "actions": self._actions(scene.paused), "unavailable": self._unavailable(stage)}
         if director:
-            hub["truth"] = self._truth(campaign, scene, names, problems)
+            ledger = self._ledger(campaign, problems)
+            hub["truth"] = self._truth(campaign, scene, names, problems, ledger)
+            hub["goals"] = self._goals(campaign, scene, view, names, ledger)
         return hub
+
+    def _captured(self, chat: ChatRef, problems: list):  # type: ignore[no-untyped-def]
+        """The library as loaded now and 022's snapshot of the chat over it, or ``(None, None)`` with a problem."""
+        try:
+            view = self.store.load()
+            return view, chat_snapshot(view, chat)
+        except (ValueError, LookupError, StoreError) as error:
+            problems.append({"code": "snapshot_unreadable", "detail": type(error).__name__})
+            return None, None
+
+    def _abilities(self, captured, actors, problems: list) -> dict:  # type: ignore[no-untyped-def]
+        """Each shown actor's effective powers (025), from the chat's snapshot, a character in reserve included:
+        an NPC's are the director's alone."""
+        if captured is None:
+            return {}
+        found = {}
+        for actor in actors:
+            try:
+                entity = captured.snapshot.entity(actor)
+            except (ValueError, MissingDefinition) as error:  # an actor whose definition cannot be composed now
+                if getattr(error, "reason", None) == "unknown_instance":
+                    continue  # a party member this chat never bound: its powers are another chat's to show
+                problems.append({"code": "abilities_unreadable",
+                                 "detail": f"{actor}: {getattr(error, 'reason', type(error).__name__)}"})
+                continue
+            found[str(actor)] = abilities_view(entity.facets.get(Abilities))
+        return found
+
+    def _sources(self, captured, names, own, problems: list) -> list[dict]:  # type: ignore[no-untyped-def]
+        """The chat's active bindings, their pinned revisions and their sources' heads; for the table only its
+        own characters' (``own``), for the director every binding. A character behind its source's head is
+        handed to the review screen's rebase review (110); nothing here rebases."""
+        if captured is None:
+            return []
+        snapshot = captured.snapshot
+        resolutions = {(item.source.role, item.source.ref.entity_key): item for item in snapshot.sources()}
+        found = []
+        for binding in captured.chat.active_bindings():
+            actor = binding.actor
+            if own is not None and (actor is None or actor.instance_id not in own):
+                continue
+            try:
+                checked = self.store.check_definition(binding.ref.unpinned())
+            except (ValueError, StoreError) as error:
+                checked = type(error).__name__
+            head = None if isinstance(checked, str) else str(checked.ref)
+            try:
+                notices = () if actor is None else snapshot.instance_notices(actor)
+            except ValueError as error:
+                notices = ()
+                problems.append({"code": "source_unreadable",
+                                 "detail": f"{actor}: {getattr(error, 'reason', type(error).__name__)}"})
+            found.append(source_view(binding, resolutions.get((binding.role, binding.ref.entity_key)), head,
+                                     checked if isinstance(checked, str) else None, notices, names))
+        return found
+
+    def _ledger(self, campaign: str, problems: list):  # type: ignore[no-untyped-def]
+        """020's stored ledger, the director's, or ``None`` with a problem. Damage is said, never hidden."""
+        try:
+            stored = self.evidence.read(campaign, requested_by=DIRECTOR)
+        except (ValueError, StoreError) as error:
+            problems.append({"code": "knowledge_unreadable", "detail": getattr(error, "reason", type(error).__name__)})
+            return None
+        if stored.quarantined or stored.problems:
+            problems.append({"code": "knowledge_damaged",
+                             "detail": f"{len(stored.quarantined)} quarantined, {len(stored.problems)} problems"})
+        return stored
+
+    def _claims(self, scene, names, ledger) -> list[dict]:  # type: ignore[no-untyped-def]
+        """Every proposition with canon's standing and what each cast actor believes of it now (director only)."""
+        if ledger is None:
+            return []
+        knowledge = ledger.knowledge
+        truth = director_knowledge(knowledge, as_of=NOW, requested_by=DIRECTOR)
+        held: dict[str, list] = {}
+        for actor in scene.cast:
+            try:
+                known = actor_knowledge(knowledge, actor, as_of=NOW)
+            except ValueError:  # an actor the ledger cannot project holds nothing here
+                continue
+            for belief in known.current:
+                held.setdefault(belief.proposition_id, []).append((actor, belief.stance))
+        shapes = ledger.claims.shapes
+        return [claim_view(item, shapes.get(item.proposition.proposition_id),
+                           held.get(item.proposition.proposition_id, ()), names) for item in truth.propositions]
+
+    @staticmethod
+    def _complete(ledger) -> bool:  # type: ignore[no-untyped-def]
+        """Whether every record of the ledger was read: a lost ruling would show a claim as merely reported."""
+        return ledger is not None and not ledger.quarantined and not ledger.problems
+
+    def _goals(self, campaign: str, scene, view, names, ledger) -> list[dict]:  # type: ignore[no-untyped-def]
+        """The app's 039 agendas for this chat's cast, each checked as play would use it now (director only):
+        only a voiced director NPC on stage speaks, and its agenda must check against the whole ledger."""
+        actors = None if view is None else [ref for ref in view.instances if ref.campaign_id == campaign]
+        voiceless = {detail.rsplit(":", 1)[0] for code, detail in scene.problems if code == "no_voice"}
+        on_stage = set(scene.on_stage)
+        found = []
+        for actor in scene.cast:
+            agenda = self.agendas.get(actor)
+            if agenda is None:
+                continue
+            problem = None
+            if scene.controller(actor) != DIRECTOR:
+                problem = "not_an_npc"  # a player character's intentions are its player's
+            elif actor not in on_stage:
+                problem = "not_on_stage"
+            elif str(actor) in voiceless:
+                problem = "no_voice"
+            elif not self._complete(ledger) or actors is None:
+                problem = "ledger_damaged"
+            else:
+                try:
+                    check_agenda(agenda, propositions=[p.proposition_id for p in ledger.knowledge.propositions],
+                                 actors=actors)
+                except GoalError as error:
+                    problem = error.reason
+            found.append(agenda_view(agenda, names, problem))
+        return found
 
     def _party(self, campaign: str, scene, names, problems: list, own):  # type: ignore[no-untyped-def]
         """Who is present, and 033's memberships: for the table only its own characters' (``own``: the actor ids
@@ -274,13 +422,16 @@ class CampaignApi:
                 "label": None if latest is None else label_view(latest),
                 "framed": framed_view(framed, names), "outcome": outcome_view(outcome, names)}
 
-    def _truth(self, campaign: str, scene, names, problems: list) -> dict:  # type: ignore[no-untyped-def]
-        """World truth, for the director: 021's accepted events and the cast's 017 relations."""
+    def _truth(self, campaign: str, scene, names, problems: list, ledger) -> dict:  # type: ignore[no-untyped-def]
+        """World truth, for the director: 021's accepted events, the cast's 017 relations and 012's standing of
+        every proposition beside what the cast believes of it."""
+        claims = self._claims(scene, names, ledger)
         try:
             continuity = self.effects.continuity(campaign, as_of=NOW, requested_by=DIRECTOR)
         except (ValueError, StoreError) as error:
             problems.append({"code": "effects_unreadable", "detail": getattr(error, "reason", type(error).__name__)})
-            return {"events": [], "revoked": [], "relations": []}
+            return {"events": [], "revoked": [], "relations": [], "claims": claims,
+                    "claims_complete": self._complete(ledger)}
         for problem in continuity.problems:
             problems.append({"code": "effects", "detail": f"{problem.code}:{problem.event_id or ''}"})
         relations, seen = [], set()
@@ -297,7 +448,8 @@ class CampaignApi:
                     relations.append(relation_view(relation, names))
         return {"events": [event_view(event, names) for event in continuity.events],
                 "revoked": [event_view(event, names) for event in continuity.revoked],
-                "relations": sorted(relations, key=lambda item: (item["since"], item["relation"]))}
+                "relations": sorted(relations, key=lambda item: (item["since"], item["relation"])),
+                "claims": claims, "claims_complete": self._complete(ledger)}
 
     def _actions(self, paused: bool) -> list[dict]:
         """What can be done from the hub now, each implemented; a disabled one says why. A pause holds every
