@@ -228,6 +228,12 @@ function obstaclesSection(ctx, hub, nameOf) {
   return ui.section("Obstacles", blocks);
 }
 
+// A labelling's or a frame's factors (each with how it bears) and its stakes, each said in full.
+function weighed(ui, factors, stakes) {
+  return [factors.length ? ui.list(factors.map((factor) => ui.rowText(factor.text, factor.bearing))) : null,
+    stakes.length ? ui.list(stakes.map((stake) => ui.rowText(stake.text, "at stake"))) : null].filter(Boolean);
+}
+
 function actionSection(ctx, hub, nameOf, write, director) {
   const { ui } = ctx;
   const { el } = ui;
@@ -238,12 +244,13 @@ function actionSection(ctx, hub, nameOf, write, director) {
   if (action.label) {
     const label = action.label;
     parts.push(el("p", {}, "Labelled " + label.label + " (" + label.state + ")" + (label.reason ? ": " + label.reason : "")
-      + (label.against ? ", against " + label.against.obstacle + (label.against.approach ? " by " + label.against.approach : "") + (label.against.novel ? " (a new approach)" : "") : "")));
+      + (label.against ? ", against " + label.against.obstacle + (label.against.approach ? " by " + label.against.approach : "") + (label.against.novel ? " (a new approach)" : "") : "")),
+      ...weighed(ui, label.factors, label.stakes));  // what confirming frames, read before it is locked in
   }
   const framed = action.framed;
   if (framed) {
     parts.push(el("p", {}, "Framed: " + framed.intent + " · " + framed.classification + " · allows " + framed.allowed.join(", ")),
-      framed.factors.length ? ui.list(framed.factors.map((factor) => ui.rowText(factor.text, factor.bearing))) : null);
+      ...weighed(ui, framed.factors, framed.stakes));
   }
   const outcome = action.outcome;
   if (outcome) {

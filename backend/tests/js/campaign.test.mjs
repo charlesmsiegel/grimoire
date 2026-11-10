@@ -209,3 +209,15 @@ test("a holdings change is shown in full beside the endorsement: who gives, who 
   assert.ok(shown.includes("adjust Mara's chit from 2 to 0"), shown);
   assert.ok(shown.includes("Holdings note: the harbour fee"), shown);
 });
+
+test("a proposed labelling shows its factors and stakes beside the button that confirms it", async () => {
+  const label = { label: "sneak", state: "proposed", reason: null, against: null,
+    factors: [{ id: "lantern", bearing: "hinders", text: "The lantern is lit." }],
+    stakes: [{ id: "seen", text: "Anya is seen at the hatch." }] };
+  const open = { ...hub("table").open_action, label, framed: null };
+  const { root } = await mounted("table", hub("table", { open_action: open }));
+  const action = section(root, "Open action");
+  assert.ok(byText(action, "button", "Confirm this labelling").length);
+  assert.ok(action.textContent.includes("The lantern is lit.") && action.textContent.includes("hinders"), action.textContent);
+  assert.ok(action.textContent.includes("Anya is seen at the hatch."), action.textContent);
+});
