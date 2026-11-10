@@ -160,11 +160,23 @@ async function subjectView(root, ctx, scope, subject) {
   };
 
   const editor = (slot, mine) => {
-    const modes = art.modes.map((mode) => ({ value: mode, label: MODES[mode] || mode }));
+    // the picture this slot inherits, where the art says which: shown as inherited, or named by its own re-crop.
+    // A re-crop names exactly that picture (038), so it is offered only when it is known.
+    const inherited = slot.state === "shown" && slot.origin === "inherited" ? slot.image
+      : mine && mine.mode === "adjust" ? mine.image : null;
+    const modes = art.modes.filter((mode) => mode !== "adjust" || inherited)
+      .map((mode) => ({ value: mode, label: MODES[mode] || mode }));
     const options = Object.entries(reusable).flatMap(([from, images]) => images.map((image) =>
       ({ value: image.image, label: describe(image.provenance) + " · " + from })));
+    // the picture shown now stays chosen even when it is not among the listed ones, so saving a crop alone never
+    // swaps it for another; with none shown, a picture must be picked
+    const current = slot.state === "shown" ? slot.image : null;
+    if (current && !options.some((option) => option.value === current)) {
+      options.unshift({ value: current, label: (named(current) || "The picture shown now") + " · shown now" });
+    }
+    if (!current && options.length) options.unshift({ value: "", label: "Choose a picture" });
     const mode = ui.choice("Change " + slot.slot, modes, { value: modes.length ? modes[0].value : "" });
-    const image = options.length ? ui.choice("Picture", options, { value: slot.image || options[0].value }) : null;
+    const image = options.length ? ui.choice("Picture", options, { value: current || "" }) : null;
     const box = ["x", "y", "w", "h"].map((key) => number(ui, "Crop " + key + " %", (slot.crop || {})[key]));
     const point = ["x", "y"].map((key) => number(ui, "Focus " + key + " %", (slot.focus || {})[key]));
     const save = async () => {
@@ -172,7 +184,10 @@ async function subjectView(root, ctx, scope, subject) {
       if (mode.value === "set" || mode.value === "adjust") {
         if (mode.value === "set") {
           if (!image) throw refusal("A picture is needed: add one first.");
+          if (!image.value) throw refusal("Choose the picture to use first.");
           args.image = image.value;
+        } else {
+          args.image = inherited;
         }
         const crop = box.map(read), focus = point.map(read);
         if (crop.some((value) => value !== null)) {

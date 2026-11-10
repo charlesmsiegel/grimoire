@@ -1,7 +1,8 @@
 // 114's Sync page over a keep-both conflict with three other devices, in fakedom with the page's ops answered
 // here: every version is shown, keeping this device's is not offered while several others stand (the text API
 // refuses it), a deletion waits behind the others' versions, and after keeping one the report lists this
-// device's version as not kept and what the other devices still hold. Run by test_media_pages.py.
+// device's version as not kept and what the other devices still hold, even when refreshing the page fails right
+// after. Run by test_media_pages.py.
 import assert from "node:assert/strict";
 import { register } from "node:module";
 import { test } from "node:test";
@@ -32,20 +33,25 @@ const CONFLICT = {
 const LEFT = { ...CONFLICT, mine: placement(PHONE), theirs: [{ ...placement(TABLET), peers: ["tablet"] }],
   peers: [CONFLICT.peers[1], CONFLICT.peers[2]] };
 
-test("a conflict with three devices: every version shown, nothing lost after keeping one", async () => {
+test("a conflict with three devices: every version shown, nothing lost after keeping one, even if a refresh fails", async () => {
   install("http://127.0.0.1:9");
   const ui = await import("/static/shell/ui.js");
   const { mount } = await import("/static/pages/sync/page.js");
   const asked = [];
   let open = [CONFLICT];
+  let failNext = false;  // the first refresh after the resolve fails
   const answers = {
     "media.devices": () => ({ device: "desk", device_problem: null, transport: { note: "Loopback only, not encrypted." },
       peers: ["phone", "tablet", "watch"].map((peer) => ({ peer, address: "127.0.0.1:1", paired: true, last: null })),
       unavailable: [] }),
     "media.conflicts": () => ({ conflicts: open, unknown: [] }),
-    "media.forks": () => ({ forks: [], more: false, problems: [] }),
+    "media.forks": () => {
+      if (failNext) { failNext = false; throw Object.assign(new Error("unreachable"), { reason: "unavailable" }); }
+      return { forks: [], more: false, problems: [] };
+    },
     "media.resolve": (args) => {
       open = [LEFT];
+      failNext = true;
       return { peer: args.peer, path: args.path, status: "resolved", reason: null, code: null,
         not_kept: [{ ...placement(MINE), holder: "this device" }],
         still_open: { theirs: LEFT.theirs, peers: LEFT.peers } };
@@ -54,7 +60,7 @@ test("a conflict with three devices: every version shown, nothing lost after kee
   const ctx = {
     ui, query: new URLSearchParams(), signal: new AbortController().signal,
     api: async (op, args) => { asked.push([op, args]); return answers[op](args); },
-    act: async (work) => work(), has: (op) => op in answers, registered: () => false,
+    act: async (work) => { try { await work(); } catch (error) { ctx.failed = error; } }, has: (op) => op in answers, registered: () => false,
     picture: async () => null, styles() {}, setTitle() {}, setActions() {}, notify() {},
     refreshLibrary: async () => null,
   };
@@ -80,8 +86,17 @@ test("a conflict with three devices: every version shown, nothing lost after kee
   assert.ok(report.textContent.includes("Not kept:") && byText(report, "div", "This device").length);
   assert.ok(report.textContent.includes("Still in conflict with other devices:"));
   assert.ok(byText(report, "div", "tablet").length && byText(report, "div", "watch").length);
-  // with one other version left, the deletion still waits and this device's can be kept again
+  assert.equal(ctx.failed.reason, "unavailable", "the refresh failed, and the report is shown all the same");
+
+  // once the page loads again: with one other version left, this device's can be kept again, and the deleting
+  // device's side still offers nothing (the text API refuses it as stale until the edit is resolved)
+  await mount(root, ctx);
   const still = byText(root, "section", PATH).filter((node) => !node.textContent.startsWith("Resolved")).pop();
-  const now = still.querySelectorAll("button").map((node) => node.textContent);
-  assert.ok(now.includes("Keep this device's") && now.includes("Keep tablet's"));
+  const rows = still.querySelectorAll("div").filter((node) => node.querySelector("strong")
+    && node.querySelector("strong").textContent.startsWith("With "));
+  const labels = (peer) => rows.find((node) => node.querySelector("strong").textContent === "With " + peer)
+    .querySelectorAll("button").map((node) => node.textContent);
+  assert.deepEqual(labels("tablet"), ["Keep this device's", "Keep tablet's"]);
+  assert.deepEqual(labels("watch"), []);
+  assert.ok(still.textContent.includes("Resolve the other devices' versions first"));
 });

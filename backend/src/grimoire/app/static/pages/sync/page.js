@@ -19,11 +19,17 @@ export async function mount(root, ctx) {
   let report = null;  // what the last action did, shown above everything until the next one
   let shownKey = null;  // a key just drawn for a pairing: shown once, to type on the other device
 
+  // what the last action did lives in its own box, drawn the moment the action answers: a refresh that fails
+  // after a resolve still leaves every version it set aside listed
+  const reportBox = el("div", {});
+  const showReport = () => reportBox.replaceChildren(...[reportView()].filter(Boolean));
+
   const load = async () => {
     const [devices, conflicts, forks] = await Promise.all([
       ctx.api("media.devices", {}), ctx.api("media.conflicts", {}), ctx.api("media.forks", {})]);
+    showReport();
     root.replaceChildren(...[
-      reportView(),
+      reportBox,
       deviceSection(devices),
       peersSection(devices),
       conflictsSection(devices, conflicts),
@@ -34,6 +40,8 @@ export async function mount(root, ctx) {
 
   const after = async (next) => {
     report = next;
+    showReport();
+    if (!reportBox.parentNode) root.prepend(reportBox);
     await load();
   };
 
@@ -134,8 +142,10 @@ export async function mount(root, ctx) {
       if (!dialed.has(side.peer)) {
         row.append(el("p", { class: "g-muted" }, "Both devices must be reachable: give " + side.peer + "'s address under Pair a device to resolve it here."));
       } else {
-        // with several other versions standing, the text API keeps this device's only on the other device
-        const buttons = item.theirs.length > 1 ? [] : [ui.button(item.mine.deleted ? "Keep this device's deletion" : "Keep this device's", () =>
+        // with several other versions standing, the text API keeps this device's only on the other device; and a
+        // deleting device's side waits until the others' versions are resolved (it is refused as stale till then)
+        const waits = side.deleted && item.theirs.length > 0;
+        const buttons = item.theirs.length > 1 || waits ? [] : [ui.button(item.mine.deleted ? "Keep this device's deletion" : "Keep this device's", () =>
           resolve(item, side, "mine", "this device's " + (item.mine.deleted ? "deletion" : "version")))];
         for (const tag of side.versions) {
           buttons.push(ui.button("Keep " + side.peer + "'s", () => resolve(item, side, tag, side.peer + "'s version")));
@@ -144,7 +154,7 @@ export async function mount(root, ctx) {
           buttons.push(ui.button("Accept " + side.peer + "'s deletion", () => resolve(item, side, "theirs", side.peer + "'s deletion"), { kind: "danger" }));
         }
         if (buttons.length) row.append(ui.actions(...buttons));
-        if (item.theirs.length > 1) {
+        if (item.theirs.length > 1 && !waits) {
           row.append(el("p", { class: "g-muted" }, "Several other versions stand, so this device's can be kept only on "
             + side.peer + ". Keeping one of theirs here lists this device's after, with the rest."));
         }

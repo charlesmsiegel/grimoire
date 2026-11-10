@@ -64,6 +64,23 @@ test("a picture added to a portrait, then this device named and paired", { skip:
   assert.ok(shown.getAttribute("src").startsWith("blob:"));
   assert.ok(section(main, "portrait").textContent.includes("Mara at the harbor"));
 
+  // the slot's picture choice holds the picture shown, so saving a focus alone keeps it; a standalone card's
+  // slot offers no re-crop of an inherited picture, since it inherits none
+  const choose = section(main, "portrait").querySelectorAll("select");
+  const modes = choose[0].querySelectorAll("option").map((node) => node.getAttribute("value"));
+  assert.ok(!modes.includes("adjust"), "no re-crop without an inherited picture");
+  const placed = choose[1].value;
+  assert.ok(placed && choose[1].querySelectorAll("option").find((node) => node.selected).textContent.includes("Mara at the harbor"));
+  const focus = section(main, "portrait").querySelectorAll("input").filter((node) => node.getAttribute("type") === "number").slice(4);
+  type(focus[0], "25");
+  type(focus[1], "40");
+  byText(section(main, "portrait"), "button", "Save")[0].click();
+  await until(() => {
+    const now = section(main, "portrait");
+    return now && now.querySelectorAll("input").filter((node) => node.getAttribute("type") === "number")[4].value === "25";
+  }, 15000, "the saved focus");
+  assert.equal(section(main, "portrait").querySelectorAll("select")[1].value, placed, "the same picture after saving");
+
   // the scope's gallery lists it with where it is used
   window.location.hash = "#/art?scope=" + encodeURIComponent(scope);
   const pictures = await until(() => {
@@ -93,6 +110,9 @@ test("a picture added to a portrait, then this device named and paired", { skip:
   byText(pairing, "button", "Pair")[0].click();
   const key = await until(() => section(main, "Type this key on phone"), 15000, "the new key");
   assert.match(key.textContent, /[0-9a-f]{64}/);
-  const peers = section(main, "Devices");
-  assert.ok(peers.textContent.includes("phone") && peers.textContent.includes("It dials this device."));
+  // the key is shown as soon as the pairing answers; the list of devices follows when the page reloads
+  await until(() => {
+    const peers = section(main, "Devices");
+    return peers && peers.textContent.includes("phone") && peers.textContent.includes("It dials this device.");
+  }, 15000, "the paired device listed");
 });
