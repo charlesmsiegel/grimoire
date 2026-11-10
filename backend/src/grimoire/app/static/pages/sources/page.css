@@ -1,0 +1,3 @@
+.sources-search { display: flex; gap: 6px; align-items: end; flex-wrap: wrap; }
+.sources-search .g-field { flex: 1; min-width: 12em; margin: 0; }
+.sources-problem .g-row-title { color: var(--g-bad); }

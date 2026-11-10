@@ -35,7 +35,7 @@ A record's family comes from its schema:
 |---|---|---|---|
 | entity | `grimoire.entity/0` | `character`, `location`, `item`... any kind but the two below | `name`, `nature` (`individual` or `template`), `description`, `sections` (name → text), `traits` (a list of facet objects) |
 | scenario | `grimoire.scenario/1` | `scenario` | `title`, `premise`, `openings` (a list of `{id?, text}`), `instructions` |
-| lorebook | `grimoire.lorebook/1` | `lorebook` | `name`, `description`, `entries` (a list of `{index?, keys, content, constant?, enabled?}`; `constant` is written to the entry's `settings`, where 037 reads it) |
+| lorebook | `grimoire.lorebook/1` | `lorebook` | `name`, `description`, `entries` (a list of `{index?, keys, content, constant?, enabled?}`, where an entry with `index` may leave out its keys and content to keep the head's; `constant` is written to the entry's `settings`, where 037 reads it) |
 | other | anything else | | raw editor only |
 
 A world is a source (`world:...`), not a record. Its locations, items and characters are entities in it.
@@ -77,7 +77,7 @@ the revision they replace, and `etag`, that head record's own etag from `sources
 | `sources.save_raw` | `ref`, `payload`, `head`, `etag`, `expected` | the new revision's `ref`, `manifest_etag` |
 | `sources.derive` | `base` (unpinned is pinned to its head now), `source`, `id?`, `name?`, `expected` (of `source`) | the portrayal's `ref` (`r1`), `manifest_etag` |
 | `sources.portrayal` | `ref`, `edit`, `name?` (a section or facet), `text?` (an override), `head`, `etag`, `expected` | the new revision's `ref`, `manifest_etag` |
-| `sources.chats` | `limit?` | recent `chats`, each with the `etag` an attach must name |
+| `sources.chats` | `query?` (in a chat's label or ref, any case), `limit?` (1 to 1000, default 50) | `chats`, newest activity first, each with the `etag` an attach must name; `truncated` when more match |
 | `sources.attach` | `ref` (pinned), `chat`, `expected` (the chat's etag) | `chat`, `ref`, `role`, the chat's new `etag`, the new `actors` |
 
 `edit` is one of `override_section`, `clear_section`, `reset_section`, `override_description`,
@@ -129,7 +129,36 @@ them:
 
 Only the head revision is edited. An older revision is read exactly and can still be attached.
 
-## Not yet in the app
+## In the app
 
-The Library page that calls these ops plugs into the app shell through 108's route and page contract, which
-lands separately. Until then the ops are reachable from Python only.
+The Library is two pages of the [app shell](APP_SHELL.md), reached from the Library menu and Home. They call these
+ops as the app's `sources` adapter (`backend/src/grimoire/app/adapters/sources.py`): `POST /api/sources.read` and so
+on, under the text API's writer lock, as the owner's trusted handle, with the refusals above.
+
+- **`#/sources`** (`?role=character|persona|scenario|lore|world`, `q=` a search, `source=` one source) lists every
+  entry by its exact ref. Same-named entries are separate rows, each naming the others. It creates and renames
+  sources and creates entries in the source shown.
+- **`#/source/<SourceRef>`** shows one revision exactly: its ref, source and revisions, each field's state, value and
+  source (046), and where it is used (chats and the revisions they bind, portrayals, namesakes, links). On the head
+  it has the structured editor for its family and the raw editor. A portrayal overrides, clears (after a
+  confirmation) and resets inherited fields in the field list. Any entity can be derived from the revision shown,
+  and any revision can be attached to a chat exactly as shown, after a confirmation that names it.
+- **Drafts and stale writes.** What is typed is kept per tab, with the head it started from and the editor's model
+  of that head, until it is saved or discarded. A structured save sends only the fields that differ from the head;
+  a lorebook entry the edit leaves alone is sent as `{"index": n}` alone, and an indexed entry keeps whatever keys,
+  content and settings the edit leaves out, so the head keeps it exactly. A save refused `changed` keeps the draft
+  and reads the head again. A draft whose head has moved on says what changed since and what the draft changes.
+  Kept, only the draft's own changes are laid over the new head (`static/pages/source/drafts.js`): sections are
+  matched by name, openings by id and lorebook entries by exact content. A part changed differently on both sides
+  is a conflict: the draft's own text for it is shown to copy and the draft can only be discarded. A change the head
+  already holds (saved, then the page left) is recognized, additions and lore entries included, and a draft with
+  nothing else is dropped. A head changed in place (same revision, new etag) counts as moved on. What is typed
+  while a save is on its way is kept as a draft. The editors wait until the draft is kept or discarded.
+- An older revision with no field list (a scenario, a lorebook, a world...) shows what it holds, read-only.
+- The raw editor is unavailable for a payload holding a whole number beyond 2^53, which the browser would round, and
+  refuses to save one, or a number beyond its range.
+  Nothing is offered to derive from a revision that does not compose.
+- What the ops do not offer is shown as such, with the reason `sources.read` gives (above).
+
+Tested through the adapter in `backend/tests/test_library_pages.py`, and end to end in Node's stand-in DOM by
+`backend/tests/js/library.e2e.mjs`; the drafts on their own by `backend/tests/js/library.unit.mjs`.
