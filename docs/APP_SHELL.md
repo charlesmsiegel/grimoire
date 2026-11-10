@@ -184,7 +184,8 @@ until its sprint adds it. `GET /shell/pages` lists the ops the app serves now (`
 not before the library op exists; the core `library` op answers only once a library is open.
 
 The header's **Search** button, or Ctrl+K, Cmd+K or `/` outside a text box, opens the **command palette**: every
-page that can open, every chat by its name (from the `chats` op), the themes and the shortcuts. `?` lists the
+page that can open, every chat by its name (from the `chats` op), the themes and the shortcuts. Before anything is
+typed it lists every page and command; a typed search shows the best 12 matches. `?` lists the
 shortcuts. The theme (system, light or dark) is kept per browser and switches the `--g-` tokens.
 
 ## Tests
