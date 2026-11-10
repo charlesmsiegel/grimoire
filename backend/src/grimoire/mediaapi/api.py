@@ -48,8 +48,8 @@ from grimoire.store.jsonfmt import is_etag
 from grimoire.store.layout import classify, placement_parts
 from grimoire.store.replica import parse_exact
 from grimoire.sync import NoDeviceIdentity, SyncError, SyncInterrupted, device_of, identify
-from grimoire.sync.documents import check_device_id
-from grimoire.sync.keeps import other_peers
+from grimoire.sync.documents import NO_VERSION, check_device_id
+from grimoire.sync.keeps import other_peers, read_keeps
 from grimoire.sync.turns import open_conflicts
 from grimoire.textapi import ApiRefused, TextApi
 from grimoire.textapi.views import fork_view, set_aside_view, turn_view
@@ -641,34 +641,68 @@ class MediaSyncApi:
             preview["unreadable"] = type(error).__name__
         return {"etag": etag(data), "deleted": False, "size": len(data), "preview": preview}
 
+    def _standing(self, campaign: str) -> dict[str, dict[str, tuple[frozenset[str], bool]]]:
+        """Per path of the campaign, per peer, the versions of that pair's conflict that stand here (the etags
+        of ``open_conflicts``' rule) and whether the peer's version is its deletion. ``open_conflicts`` merges
+        every peer's kept bytes into one list and has no bytes for a deletion, so a deletion beside another
+        peer's edit would read as no deletion at all; this keeps each peer's side. A record that cannot be read
+        adds nothing here: ``open_conflicts`` already marks the campaign incomplete for it."""
+        folder = f"campaigns/{campaign}"
+        standing: dict[str, dict[str, tuple[frozenset[str], bool]]] = {}
+        try:
+            device = device_of(self.store)
+            peers = other_peers(self.store, device)
+        except (NoDeviceIdentity, StoreError, OSError, SyncInterrupted):
+            return standing
+        for peer in peers:
+            try:
+                if pairing_ended(self.store, peer):
+                    continue
+                view = read_keeps(self.store, peer, tuple(sorted((device, peer))))  # type: ignore[arg-type]
+            except (StoreError, OSError, ValueError, SyncInterrupted):
+                continue
+            for path, entry in (view.entries.items() if view.state == "valid" else ()):
+                tags = (({entry.open} - {None}) | entry.delivered) - entry.dismissed
+                if tags and path.startswith(folder + "/"):
+                    standing.setdefault(path, {})[peer] = (frozenset(tags - {NO_VERSION}), NO_VERSION in tags)
+        return standing
+
     def _campaign_conflicts(self, campaign: str) -> tuple[list[dict], bool]:
         """The campaign's open conflicts, each with every kept version, and whether that is the whole of it.
-        A kept version whose bytes are lost or damaged here makes it incomplete (``require_kept``), so an empty
-        ``theirs`` in a complete answer is the other device's deletion (``their_deletion``), never a version
-        that went missing unseen."""
+        A kept version whose bytes are lost or damaged here makes it incomplete (``require_kept``). ``peers``
+        says, per peer, which versions of that pair's conflict stand here and whether its version is a deletion,
+        so a peer's deletion shows beside another peer's edit (``their_deletion``), and an empty ``theirs`` in a
+        complete answer is a deletion too, never a version that went missing unseen."""
         try:
             found, complete = open_conflicts(self.store, f"campaigns/{campaign}",
                                              ended=lambda peer: pairing_ended(self.store, peer), require_kept=True)
         except (StoreError, OSError, ValueError, SyncInterrupted):
             return [], False
+        standing = self._standing(campaign)
         conflicts = []
-        for path in sorted(found):
+        for path in sorted(set(found) | set(standing)):
             try:
                 mine = (self.store.root / path).read_bytes()
             except FileNotFoundError:
                 mine = None
             except OSError:
                 complete, mine = False, None
-            theirs = {etag(data): data for data in found[path]}
+            theirs = {etag(data): data for data in found.get(path, ())}
+            sides = standing.get(path, {})
             parsed = classify(tuple(path.split("/")))
             entry = {"path": path, "campaign": campaign, "kind": "other" if parsed is None else parsed[0],
                      "mine": self._candidate(path, mine),
-                     "theirs": [self._candidate(path, theirs[tag]) for tag in sorted(theirs)]}
+                     "theirs": [{**self._candidate(path, theirs[tag]),
+                                 "peers": sorted(peer for peer, (tags, _gone) in sides.items() if tag in tags)}
+                                for tag in sorted(theirs)],
+                     "peers": [{"peer": peer, "versions": sorted(tags), "deleted": gone}
+                               for peer, (tags, gone) in sorted(sides.items())]}
             if parsed is not None and parsed[0] == "placement":
                 entry["subject"], entry["slot"] = str(parsed[1].subject), parsed[1].slot
             conflicts.append(entry)
         for entry in conflicts:
-            entry["their_deletion"] = complete and not entry["theirs"]
+            entry["their_deletion"] = any(side["deleted"] for side in entry["peers"]) or \
+                (complete and not entry["theirs"])
         return conflicts, complete
 
     def _conflict_list(self, args: Mapping[str, object]) -> dict:
@@ -699,23 +733,37 @@ class MediaSyncApi:
                                             if key in args})
         if found is None or report["status"] != "resolved":
             return {**report, "kept": None, "not_kept": []}
+        peer = args.get("peer")
         keep = args.get("keep")
-        candidates = [{**found["mine"], "holder": "this device"}] + \
-            [{**item, "holder": "another device"} for item in found["theirs"]]
         if keep == "mine":
             kept = found["mine"]["etag"]
         elif keep == "theirs":
             kept = found["theirs"][0]["etag"] if found["theirs"] else None
         else:
             kept = keep
-        not_kept = [item for item in candidates if item["etag"] != kept]
-        if keep == "mine" and not found["theirs"]:
-            # the other version is the peer's deletion, or one whose bytes are not readable here: either way a
-            # version not kept
-            deleted = found["their_deletion"]
+        # only the conflict with ``peer`` ended: what still stands with any peer afterwards was not set aside
+        after, after_complete = self._campaign_conflicts(parts[1])
+        remaining = next((item for item in after if item["path"] == path), None)
+        still = set() if remaining is None or not after_complete else \
+            {tag for side in remaining["peers"] for tag in side["versions"]}
+        not_kept = [] if found["mine"]["etag"] == kept else [{**found["mine"], "holder": "this device"}]
+        side = next((item for item in found["peers"] if item["peer"] == peer), None)
+        readable = {item["etag"]: item for item in found["theirs"]}
+        tags = side["versions"] if side is not None else sorted(readable)
+        for tag in tags:
+            if tag != kept and tag not in still:
+                not_kept.append({**readable.get(tag, {"etag": tag, "deleted": False, "unreadable": True,
+                                                      "preview": None}), "holder": peer})
+        if kept is not None and (side["deleted"] if side is not None else
+                                 (keep == "mine" and not found["theirs"])):
+            # the peer's version was its deletion, or (with no record of its side) one not readable here: either
+            # way a version not kept
+            deleted = side is not None or found["their_deletion"]
             not_kept.append({"etag": None, "deleted": deleted, "unreadable": not deleted, "preview": None,
-                             "holder": "another device"})
-        return {**report, "kept": kept, "not_kept": not_kept}
+                             "holder": peer})
+        return {**report, "kept": kept, "not_kept": not_kept,
+                "still_open": None if remaining is None else {"theirs": remaining["theirs"],
+                                                              "peers": remaining["peers"]}}
 
     def _forks(self, args: Mapping[str, object]) -> dict:
         """The recent chats that forked (both devices played on offline) and wait for the owner's choice, each

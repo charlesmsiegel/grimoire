@@ -103,10 +103,15 @@ the app's `--peer` keeps it across restarts.
 briefs and unshown lines are never shown; a placement shows its mode and picture; any other record shows its kind.
 A turn a fork choice set aside was heard by no one, so it shows its id, number and device only
 (`set_aside`), and so does any turn whose chat cannot be opened to tell. A version this build cannot parse is still
-listed (`unreadable`). A kept version whose bytes are lost or damaged here puts its campaign under `unknown`, so
-an empty `theirs` in a campaign that is not unknown is the other device's deletion (`their_deletion`). `sync.resolve` takes the etags as read, and its
-`not_kept` lists every version that was not kept, with which device held it. Keeping this device's version over
-the other device's deletion reports that deletion as not kept.
+listed (`unreadable`). `peers` gives each paired device's side of the conflict: the versions of it that stand here
+and whether that device's version is its deletion, and each of `theirs` names the devices that hold it. So one
+device's deletion shows beside another device's edit (`their_deletion`). A kept version whose bytes are lost or
+damaged here puts its campaign under `unknown`, so an empty `theirs` in a campaign that is not unknown is a deletion
+too. `sync.resolve` ends the conflict with one device and takes the etags as read. Its `not_kept` lists every
+version that conflict set aside, with the device that held it (`holder`), and `still_open` is what other devices
+still hold in conflict on that file, or `null`. Keeping this device's version over that device's deletion reports
+the deletion as not kept. A device's deletion is resolved after every other device's version: before that, the text
+API refuses it (`stale`) and nothing changes.
 
 **Unavailable here.** `sync.devices` lists, with reasons, what the app does not offer yet: unpairing (ending a
 pairing drops the conflicts kept with that device), background sync (waits on an encrypted transport), and

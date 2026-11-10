@@ -10,12 +10,13 @@ import base64
 import socket
 
 import pytest
+from store_helpers import OWNER
 from textapi_fixtures import DESKTOP, PHONE, Device, desktop_library, keep, pair_devices, phone_library, say, serving
 
 from grimoire.core.identity import ImageRef, SourceRef, TurnRef
 from grimoire.images import Placement
 from grimoire.mediaapi import MediaSyncApi
-from grimoire.peersync import read_pairing
+from grimoire.peersync import new_pairing_key, pair, read_pairing
 from grimoire.store.layout import turn_parts
 from grimoire.sync.keeps import kept_slots
 from grimoire.textapi import ApiRefused
@@ -148,6 +149,7 @@ def test_art_on_a_character_and_its_chat_syncs_and_a_conflict_reports_the_versio
             assert result["kept"] == theirs["etag"]
             (lost,) = result["not_kept"]
             assert (lost["etag"], lost["holder"]) == (conflict["mine"]["etag"], "this device")
+            assert result["still_open"] is None
             assert mobile_device.api.image(lost["preview"]["placement"]["image"])[1] == THIRD_PNG
             assert mobile("sync.conflicts")["conflicts"] == []
             assert mobile("sync.run", peer=DESKTOP)["conflicts"] == []
@@ -410,13 +412,80 @@ def test_keeping_mine_over_a_peers_deletion_reports_the_deletion_not_kept(synced
         mine = {"etag": "sha256:" + "1" * 64, "deleted": False, "size": 3, "preview": None}
         monkeypatch.setattr(media, "_campaign_conflicts",
                             lambda campaign: ([{"path": path, "campaign": campaign, "kind": "placement",
-                                                "mine": mine, "theirs": [], "their_deletion": True}], True))
+                                                "mine": mine, "theirs": [], "their_deletion": True,
+                                                "peers": [{"peer": DESKTOP, "versions": [], "deleted": True}]}],
+                                              True))
         monkeypatch.setattr(device.api, "call", lambda op, args: {"status": "resolved", "path": path})
         result = media.call("sync.resolve", {"peer": DESKTOP, "path": path, "keep": "mine", "mine": mine["etag"],
                                              "theirs": []})
         assert result["kept"] == mine["etag"]
         assert result["not_kept"] == [{"etag": None, "deleted": True, "unreadable": False, "preview": None,
-                                       "holder": "another device"}]
+                                       "holder": DESKTOP}]
+
+
+def test_one_peers_deletion_shows_beside_another_peers_edit_and_outlives_resolving_the_edit(synced, tmp_path):
+    """Three devices on one baseline: the desktop and the phone each place their own picture, the laptop deletes
+    the placement. The phone holds both conflicts; the laptop's deletion is listed, not hidden behind the
+    desktop's readable version, and resolving with the desktop leaves it standing."""
+    desk, phone, chat = synced
+    laptop = phone_library(tmp_path / "laptop")
+    key = new_pairing_key()
+    with Device(laptop) as laptop_device:
+        Both(laptop_device)("sync.identify", device="laptop")
+        pair(laptop_device.table.store, laptop_device.table.authority, PHONE, key, granted_by=OWNER)
+    with Device(phone) as phone_device:
+        pair(phone_device.table.store, phone_device.table.authority, "laptop", key, granted_by=OWNER)
+    with Device(desk) as desktop_device:
+        desktop = Both(desktop_device)
+        mara = _mara(desktop, chat)
+        desktop("media.upload", scope="campaign:q-c-1", media=_media(PNG), subject=mara, slot="avatar", expected=None)
+        with serving(desktop_device) as server, Device(phone, peers={DESKTOP: server.address}) as mobile_device:
+            assert Both(mobile_device)("sync.run", peer=DESKTOP)["status"] == "synced"
+    with Device(phone) as mobile_device, serving(mobile_device) as server:
+        with Device(laptop, peers={PHONE: server.address}) as laptop_device:
+            assert Both(laptop_device)("sync.run", peer=PHONE)["status"] == "synced"
+    # offline: the desktop and the phone each place another picture; the laptop deletes the placement
+    with Device(desk) as desktop_device:
+        desktop = Both(desktop_device)
+        desktop("media.upload", scope="campaign:q-c-1", media=_media(OTHER_PNG), subject=mara, slot="avatar",
+                expected=_own(desktop("media.art", subject=mara), "avatar")["etag"])
+    with Device(phone) as mobile_device:
+        mobile = Both(mobile_device)
+        mobile("media.upload", scope="campaign:q-c-1", media=_media(THIRD_PNG), subject=mara, slot="avatar",
+               expected=_own(mobile("media.art", subject=mara), "avatar")["etag"])
+    with Device(laptop) as laptop_device:
+        placements = [item for item in laptop_device.api.store.root.joinpath("campaigns", "q-c-1").rglob("*.json")
+                      if "placements" in item.parts]
+        (placement,) = placements
+        placement.unlink()
+    with Device(desk) as desktop_device, serving(desktop_device) as desk_server, \
+            Device(laptop) as laptop_device, serving(laptop_device) as laptop_server, \
+            Device(phone, peers={DESKTOP: desk_server.address, "laptop": laptop_server.address}) as mobile_device:
+        mobile = Both(mobile_device)
+        assert mobile("sync.run", peer=DESKTOP)["conflicts"]
+        assert mobile("sync.run", peer="laptop")["conflicts"]
+        listed = mobile("sync.conflicts")
+        assert listed["unknown"] == []
+        (conflict,) = listed["conflicts"]
+        (theirs,) = conflict["theirs"]
+        assert mobile_device.api.image(theirs["preview"]["placement"]["image"])[1] == OTHER_PNG
+        assert theirs["peers"] == [DESKTOP]
+        assert conflict["peers"] == [{"peer": DESKTOP, "versions": [theirs["etag"]], "deleted": False},
+                                     {"peer": "laptop", "versions": [], "deleted": True}]
+        assert conflict["their_deletion"] is True
+        # resolving with the laptop first is refused while the desktop's version stands, and changes nothing
+        early = mobile("sync.resolve", peer="laptop", path=conflict["path"], keep="mine",
+                       mine=conflict["mine"]["etag"], theirs=[theirs["etag"]])
+        assert (early["status"], early["not_kept"]) == ("refused", [])
+        assert mobile("sync.conflicts") == listed
+        # resolving with the desktop sets its version aside and leaves the laptop's deletion standing
+        result = mobile("sync.resolve", peer=DESKTOP, path=conflict["path"], keep="mine",
+                        mine=conflict["mine"]["etag"], theirs=[theirs["etag"]])
+        assert result["status"] == "resolved", result
+        assert [(item["etag"], item["holder"]) for item in result["not_kept"]] == [(theirs["etag"], DESKTOP)]
+        assert result["still_open"]["peers"] == [{"peer": "laptop", "versions": [], "deleted": True}]
+        (left,) = mobile("sync.conflicts")["conflicts"]
+        assert (left["theirs"], left["their_deletion"]) == ([], True)
 
 
 def test_placing_another_picture_over_an_imported_one_says_it_was_placed_here(synced):
