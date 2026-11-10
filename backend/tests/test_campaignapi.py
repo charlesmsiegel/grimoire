@@ -22,7 +22,7 @@ from store_helpers import OWNER
 
 from grimoire.campaignapi import CampaignApi
 from grimoire.core import DIRECTOR, Belief, Event, Moment, Perception, Proposition, Report, Ruling, Subject
-from grimoire.core.abilities import Abilities, Ability, Cost as PowerCost, Effect, Limit as PowerLimit
+from grimoire.core.abilities import Abilities, Ability, Cost as PowerCost, Effect, Limit as PowerLimit, Prerequisite
 from grimoire.core.entity_codec import instance_from_payload, instance_to_payload
 from grimoire.core.facets import FacetBundle
 from grimoire.core.identity import SourceRef
@@ -389,7 +389,8 @@ def empower(hub: Hub, actor, ability: Ability) -> None:
 
 VEIL = Ability("veil", "Veil", (Effect("hide", "Bends light around her.", frozenset({"light", "concealment"})),),
                limits=(PowerLimit("no_force", "Light carries no push.", frozenset({"force"})),),
-               costs=(PowerCost("strain", "Her eyes ache after.", frozenset()),))
+               costs=(PowerCost("strain", "Her eyes ache after.", frozenset()),),
+               prerequisites=(Prerequisite("lit", "Some light to bend.", frozenset({"hide"})),))
 TIDE = Ability("tide", "Tide sense", (Effect("read", "Knows when the tide turns.", frozenset({"tide"}),
                                              certainty="uncertain"),))
 
@@ -408,6 +409,7 @@ def test_powers_are_the_players_own_and_an_npcs_the_directors(cards):
         assert veil["ability"] == "veil" and veil["effects"][0]["tags"] == ["concealment", "light"]
         assert veil["limits"] == [{"id": "no_force", "text": "Light carries no push.", "excludes": ["force"]}]
         assert veil["costs"] == [{"id": "strain", "text": "Her eyes ache after.", "applies_to": []}]
+        assert veil["prerequisites"] == [{"id": "lit", "text": "Some light to bend.", "applies_to": ["hide"]}]
         assert "Tide sense" not in repr(table)  # an NPC's powers are never the table's
         director = hub.call("hub", chat=str(chat), audience="director")
         assert set(director["abilities"]) == {str(anya), str(mara)}
@@ -539,3 +541,55 @@ def test_a_claim_is_contested_only_when_beliefs_disagree_with_each_other_or_cano
     held = [(InstanceRef("c1", "character", f"a{n}"), stance) for n, stance in enumerate(stances)]
     view = claim_view(PropositionStanding(proposition, standing, None), None, held, lambda actor: None)
     assert view["contested"] is contested and [item["stance"] for item in view["held"]] == list(stances)
+
+
+def test_a_character_in_reserve_keeps_its_powers_on_the_table(cards):
+    folder, chat = cards
+    with Hub(folder, labelling=False) as hub:
+        hub.api.runner.seat(chat, OWNER)
+        scene = hub.api.runner.open(chat)
+        anya, (mara,) = scene.persona, [a for a in scene.cast if a != scene.persona]
+        empower(hub, anya, VEIL)
+        hub.api.party.join(mara, anya, at=Moment(2), provenance="director").commit()
+        hub.api.party.store_in_reserve(anya, at=Moment(3), provenance="director").commit()
+        table = hub.call("hub", chat=str(chat))
+        assert [power["ability"] for power in table["abilities"][str(anya)]] == ["veil"]
+        assert not [p for p in table["problems"] if p["code"] == "abilities_unreadable"]
+
+
+def test_an_agenda_play_would_not_use_says_why(cards):
+    folder, chat = cards
+    with Hub(folder, labelling=False) as hub:
+        hub.api.runner.seat(chat, OWNER)
+        scene = hub.api.runner.open(chat)
+        anya = scene.persona
+    persona = Agenda(chat.campaign_id, anya, goals=(Goal("g", AIM, 10, (GoalApproach("a", "Wait"),)),))
+    with Hub(folder, labelling=False, agendas=[persona]) as hub:
+        (goals,) = hub.call("hub", chat=str(chat), audience="director")["goals"]
+        assert (goals["usable"], goals["problem"]) == (False, "not_an_npc")  # a player's intentions are the player's
+
+
+def test_a_damaged_ledger_marks_claims_incomplete_and_agendas_unusable(cards):
+    folder, chat = cards
+    with Hub(folder, labelling=False) as hub:
+        hub.api.runner.seat(chat, OWNER)
+        scene = hub.api.runner.open(chat)
+        (mara,) = [a for a in scene.cast if a != scene.persona]
+        hub.api.evidence.append(chat.campaign_id, [
+            Proposition(chat.campaign_id, WATCH, "The quay is watched", Moment(1), "director"),
+            Ruling(chat.campaign_id, "r-watch", WATCH, "established", Moment(2), "director",
+                   grounds=(Subject("instance", str(mara)),))]).commit()
+    with Hub(folder, labelling=False, agendas=[mara_agenda(mara)]) as hub:
+        director = hub.call("hub", chat=str(chat), audience="director")
+        assert director["truth"]["claims_complete"] is True and director["goals"][0]["usable"] is True
+    rulings = [path for path in folder.rglob("*.json") if "r-watch" in path.name]
+    assert rulings
+    for path in rulings:
+        path.write_text("{garbage", encoding="utf-8")
+    with Hub(folder, labelling=False, agendas=[mara_agenda(mara)]) as hub:
+        director = hub.call("hub", chat=str(chat), audience="director")
+        assert director["truth"]["claims_complete"] is False
+        assert (director["goals"][0]["usable"], director["goals"][0]["problem"]) == (False, "ledger_damaged")
+        assert any(p["code"] == "knowledge_damaged" for p in director["problems"])
+        table = hub.call("hub", chat=str(chat))
+        assert not any(p["code"].startswith("knowledge") for p in table["problems"])  # the ledger is the director's

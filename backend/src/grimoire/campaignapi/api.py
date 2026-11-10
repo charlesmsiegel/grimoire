@@ -218,8 +218,7 @@ class CampaignApi:
                  if record.labels or record.effects or (record.open and record.post is not None)
                  or (director and record.intentions)]
         view, captured = self._captured(chat, problems)
-        abilities = self._abilities(captured, [actor for actor in scene.cast if director or actor.instance_id in mine],
-                                    problems)
+        abilities = self._abilities(captured, shown, problems)
         sources = self._sources(captured, names, None if director else mine, problems)
         hub = {"chat": str(chat), "audience": audience, "director": self.owner, "player": self.owner,
                "cast": cast, "persona": None if scene.persona is None else str(scene.persona),
@@ -244,7 +243,8 @@ class CampaignApi:
             return None, None
 
     def _abilities(self, captured, actors, problems: list) -> dict:  # type: ignore[no-untyped-def]
-        """Each actor's effective powers (025), from the chat's snapshot: an NPC's are the director's alone."""
+        """Each shown actor's effective powers (025), from the chat's snapshot, a character in reserve included:
+        an NPC's are the director's alone."""
         if captured is None:
             return {}
         found = {}
@@ -252,6 +252,8 @@ class CampaignApi:
             try:
                 entity = captured.snapshot.entity(actor)
             except (ValueError, MissingDefinition) as error:  # an actor whose definition cannot be composed now
+                if getattr(error, "reason", None) == "unknown_instance":
+                    continue  # a party member this chat never bound: its powers are another chat's to show
                 problems.append({"code": "abilities_unreadable",
                                  "detail": f"{actor}: {getattr(error, 'reason', type(error).__name__)}"})
                 continue
@@ -316,16 +318,30 @@ class CampaignApi:
         return [claim_view(item, shapes.get(item.proposition.proposition_id),
                            held.get(item.proposition.proposition_id, ()), names) for item in truth.propositions]
 
+    @staticmethod
+    def _complete(ledger) -> bool:  # type: ignore[no-untyped-def]
+        """Whether every record of the ledger was read: a lost ruling would show a claim as merely reported."""
+        return ledger is not None and not ledger.quarantined and not ledger.problems
+
     def _goals(self, campaign: str, scene, view, names, ledger) -> list[dict]:  # type: ignore[no-untyped-def]
-        """The app's 039 agendas for this chat's NPCs, each checked as play would check it (director only)."""
+        """The app's 039 agendas for this chat's cast, each checked as play would use it now (director only):
+        only a voiced director NPC on stage speaks, and its agenda must check against the whole ledger."""
         actors = None if view is None else [ref for ref in view.instances if ref.campaign_id == campaign]
+        voiceless = {detail.rsplit(":", 1)[0] for code, detail in scene.problems if code == "no_voice"}
+        on_stage = set(scene.on_stage)
         found = []
         for actor in scene.cast:
             agenda = self.agendas.get(actor)
             if agenda is None:
                 continue
             problem = None
-            if ledger is None or ledger.quarantined or ledger.problems or actors is None:
+            if scene.controller(actor) != DIRECTOR:
+                problem = "not_an_npc"  # a player character's intentions are its player's
+            elif actor not in on_stage:
+                problem = "not_on_stage"
+            elif str(actor) in voiceless:
+                problem = "no_voice"
+            elif not self._complete(ledger) or actors is None:
                 problem = "ledger_damaged"
             else:
                 try:
@@ -414,7 +430,8 @@ class CampaignApi:
             continuity = self.effects.continuity(campaign, as_of=NOW, requested_by=DIRECTOR)
         except (ValueError, StoreError) as error:
             problems.append({"code": "effects_unreadable", "detail": getattr(error, "reason", type(error).__name__)})
-            return {"events": [], "revoked": [], "relations": [], "claims": claims}
+            return {"events": [], "revoked": [], "relations": [], "claims": claims,
+                    "claims_complete": self._complete(ledger)}
         for problem in continuity.problems:
             problems.append({"code": "effects", "detail": f"{problem.code}:{problem.event_id or ''}"})
         relations, seen = [], set()
@@ -432,7 +449,7 @@ class CampaignApi:
         return {"events": [event_view(event, names) for event in continuity.events],
                 "revoked": [event_view(event, names) for event in continuity.revoked],
                 "relations": sorted(relations, key=lambda item: (item["since"], item["relation"])),
-                "claims": claims}
+                "claims": claims, "claims_complete": self._complete(ledger)}
 
     def _actions(self, paused: bool) -> list[dict]:
         """What can be done from the hub now, each implemented; a disabled one says why. A pause holds every
