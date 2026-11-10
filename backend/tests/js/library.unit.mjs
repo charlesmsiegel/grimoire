@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { changesOf, fieldsOf, modelOf, rebase, rebaseRaw, stale, unsafeNumbers } from
+import { changesOf, draftParts, fieldsOf, modelOf, rebase, rebaseRaw, stale, unsafeNumbers } from
   "../../src/grimoire/app/static/pages/source/drafts.js";
 
 const entity = (head, payload) => ({ family: "entity", head, payload });
@@ -126,6 +126,38 @@ test("a save that landed before the page heard back is recognized, additions and
   // but gone while another entry changed: it may have been changed, not removed, so it is a conflict
   const unsure = rebase(lorebook("r2", [{ ...tide, content: "Theirs." }]), removed);
   assert.deepEqual(unsure.conflicts, ["entry 1 (removed)"]);
+});
+
+test("an addition saved and edited again before the answer is updated in place, never added twice", () => {
+  const r1 = scenario("r1", { title: "Storm", openings: [{ id: "first", text: "Rain." }] });
+  const start = modelOf(r1);
+  const sentItem = { slot: null, added: "a1", text: "Thunder." };
+  const draft = { base: "r1", start, model: { ...structuredClone(start), openings: [...structuredClone(start.openings), { ...sentItem, text: "Thunder, closer." }] },
+    sent: { a1: sentItem } };
+  const r2 = scenario("r2", { title: "Storm", openings: [{ id: "first", text: "Rain." }, { id: "opening-2", text: "Thunder." }] });
+  const merged = rebase(r2, draft);
+  assert.deepEqual(merged.conflicts, []);
+  assert.deepEqual(fieldsOf(r2, merged.model).openings, [{ id: "first", text: "Rain." }, { id: "opening-2", text: "Thunder, closer." }]);
+  // the same for a lorebook entry
+  const l1 = lorebook("l1", [{ keys: ["bell"], content: "The bell." }]);
+  const ls = modelOf(l1);
+  const entrySent = { slot: null, added: "b1", original: null, keys: "gull", content: "Gulls.", constant: false, enabled: true };
+  const ldraft = { base: "l1", start: ls, model: { ...structuredClone(ls), entries: [...structuredClone(ls.entries), { ...entrySent, content: "Gulls, many." }] },
+    sent: { b1: entrySent } };
+  const l2 = lorebook("l2", [{ keys: ["bell"], content: "The bell." }, { keys: ["gull"], content: "Gulls." }]);
+  const lmerged = rebase(l2, ldraft);
+  assert.deepEqual([lmerged.conflicts, fieldsOf(l2, lmerged.model).entries], [[], [{ index: 0 }, { index: 1, content: "Gulls, many." }]]);
+  // not found as it was sent (someone changed it since): a conflict, not a second copy
+  const l3 = lorebook("l3", [{ keys: ["bell"], content: "The bell." }, { keys: ["gull"], content: "Gulls, theirs." }]);
+  assert.deepEqual(rebase(l3, ldraft).conflicts, ["entry 2 (new)"]);
+});
+
+test("a draft that cannot be kept is given to copy whole, not only its conflicts", () => {
+  const r1 = entity("r1", { name: "Mara", description: "A" });
+  const draft = drafted(r1, (model) => { model.name = "Mara Vell"; model.description = "Mine."; });
+  const merged = rebase(entity("r2", { name: "Mara", description: "Theirs." }), draft);
+  assert.deepEqual(merged.conflicts, ["description"]);
+  assert.deepEqual(draftParts("entity", draft.start, draft.model), { name: "Mara Vell", description: "Mine." });
 });
 
 test("a draft is stale when its revision moved on, or when that revision was changed in place", () => {

@@ -46,6 +46,12 @@ export function modelOf(read) {
   return null;
 }
 
+// A draft's own id for an item it adds, so a save that lands while the draft is edited again can be told apart
+// from an addition still to make.
+export function addedId() {
+  return "added-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+}
+
 // What of a list item the person edits (not its slot or the head's original).
 function props(family, item) {
   if (family === "entity") return [item.name, item.text];
@@ -84,9 +90,29 @@ export function changedParts(family, before, after) {
     : !same(before[key], after[key]));
 }
 
+// Everything a draft changes, by part, with the draft's own value (null for a part it removes): the copy a person
+// is given of a draft that cannot be kept.
+export function draftParts(family, start, model) {
+  const parts = {};
+  for (const key of SIMPLE[family]) if (!same(start[key], model[key])) parts[key] = model[key];
+  const list = LIST[family];
+  const startBy = new Map(start[list].filter((item) => item.slot !== null).map((item) => [item.slot, item]));
+  const kept = new Set();
+  model[list].forEach((item, index) => {
+    if (item.slot === null) { parts[itemLabel(family, item, index + 1) + " (new)"] = shown(item); return; }
+    kept.add(item.slot);
+    const before = startBy.get(item.slot);
+    if (!before || !same(props(family, before), props(family, item))) parts[itemLabel(family, item, index + 1)] = shown(item);
+  });
+  start[list].forEach((item, index) => {
+    if (item.slot !== null && !kept.has(item.slot)) parts[itemLabel(family, item, index + 1) + " (removed)"] = null;
+  });
+  return parts;
+}
+
 // An item as the person sees it, for a copy of a conflict: no slot, no original.
 function shown(item) {
-  const { slot: _slot, original: _original, ...rest } = item;
+  const { slot: _slot, original: _original, added: _added, ...rest } = item;
   return rest;
 }
 
@@ -119,14 +145,9 @@ export function rebase(read, draft) {
   if (head.locked) {
     // The head's list is no longer all text (the raw editor wrote it), so a structured save cannot send it: every
     // change the draft made to the list is a conflict, kept to copy, never laid over the head or dropped.
-    const startBy = new Map(start[list].filter((item) => item.slot !== null).map((item) => [item.slot, item]));
-    mine[list].forEach((item, index) => {
-      if (item.slot === null) conflict(itemLabel(family, item, index + 1) + " (new)", shown(item));
-      else if (!startBy.has(item.slot) || !same(props(family, startBy.get(item.slot)), props(family, item))) conflict(itemLabel(family, item, index + 1), shown(item));
-    });
-    start[list].forEach((item, index) => {
-      if (item.slot !== null && !mineBy.has(item.slot)) conflict(itemLabel(family, item, index + 1) + " (removed)", null);
-    });
+    for (const [part, value] of Object.entries(draftParts(family, start, mine))) {
+      if (!SIMPLE[family].includes(part)) conflict(part, value);
+    }
     return { model: out, conflicts, copies, mine: mineChanges, changed: changedParts(family, start, head) };
   }
   const items = out[list];
@@ -182,9 +203,27 @@ export function rebase(read, draft) {
     else removals.push(at);
   });
   for (const at of removals.sort((x, y) => y - x)) items.splice(at, 1);
+  const sent = (draft.sent && typeof draft.sent === "object") ? draft.sent : {};
   mine[list].forEach((item, index) => {
     if (item.slot !== null) return;
     const label = itemLabel(family, item, index + 1) + " (new)";
+    const landed = item.added && sent[item.added];
+    if (landed) {
+      // This addition was saved, and edited again before the answer came: it is the head's item now, found as
+      // it was sent, and the later edit is laid over it as an edit. Not found as sent, it is a conflict: never a
+      // second copy.
+      const at = family === "entity"
+        ? items.findIndex((other) => other.name === landed.name && same(other.text, landed.text))
+        : (() => {
+          const where = [...fresh].find((candidate) => same(saved(family, head[list][candidate]), saved(family, landed)));
+          if (where === undefined) return -1;
+          fresh.delete(where);
+          return items.findIndex((other) => other.slot === head[list][where].slot && other.original === head[list][where].original);
+        })();
+      if (at < 0) conflict(label, shown(item));
+      else if (!same(saved(family, items[at]), saved(family, item))) items[at] = { ...item, slot: items[at].slot, original: items[at].original };
+      return;
+    }
     if (family === "entity" && items.some((other) => other.name === item.name)) {
       const other = items.find((candidate) => candidate.name === item.name);
       if (!same(other.text, item.text)) conflict(label, shown(item));

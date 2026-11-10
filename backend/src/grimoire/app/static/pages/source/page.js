@@ -4,7 +4,7 @@
 // their fields, and attaches the exact revision shown to a chat. Every edit writes a new revision: nothing here
 // changes or deletes an old one. What a draft changes, and how it is held over a newer head, is ./drafts.js.
 
-import { FAMILIES, changesOf, fieldsOf, modelOf, rebase, rebaseRaw, stale, unsafeNumbers } from "./drafts.js";
+import { FAMILIES, addedId, changesOf, draftParts, fieldsOf, modelOf, rebase, rebaseRaw, stale, unsafeNumbers } from "./drafts.js";
 
 const STATES = {
   inherited: "inherited from the base",
@@ -233,7 +233,7 @@ function draftsOf(ctx, entity) {
       // The draft as stored now, and a clear that happens only if it is still that: what is typed while a save is
       // on its way is kept, and is held against the new head like any other draft.
       snapshot() { return store.get(); },
-      clearIf(snapshot) { if (store.get() === snapshot) store.clear(); },
+      clearIf(snapshot) { if (store.get() !== snapshot) return false; store.clear(); return true; },
     };
   };
   return {
@@ -261,7 +261,7 @@ function staleDrafts(ctx, read, drafts) {
     else {
       shown = true;
       box.append(...staleParts(ctx, read, "edit", form, merged && merged.changed, merged ? merged.mine : null,
-        merged ? merged.conflicts : null, merged ? JSON.stringify(merged.copies, null, 2) : JSON.stringify(form.model, null, 2),
+        merged ? merged.conflicts : null, JSON.stringify(draftParts(read.family, form.start, form.model), null, 2),
         merged && !merged.conflicts.length
           ? () => drafts.form.set({ base: read.head, etag: read.etag, start: modelOf(read), model: merged.model }) : null,
         () => drafts.form.clear()));
@@ -295,8 +295,7 @@ function staleParts(ctx, read, what, draft, changed, mine, conflicts, kept, onKe
     el("p", {}, "Changed since: " + (changed ? list(changed) : "not known") + "."),
     el("p", { class: "g-muted" }, "Your draft changes: " + (mine ? list(mine) : "not known") + ".")];
   if (conflicts && conflicts.length) {
-    parts.push(ui.notice("Changed under your draft as well: " + conflicts.join(", ") + ". Your text for "
-      + (conflicts.length === 1 ? "it" : "them") + " is below to copy; then discard the draft and edit the head.", { kind: "bad" }));
+    parts.push(ui.notice("Changed under your draft as well: " + conflicts.join(", ") + ". Everything your draft changes is below to copy; then discard the draft and edit the head.", { kind: "bad" }));
   }
   if (!onKeep) {
     const copy = el("textarea", { class: "g-input source-raw", readonly: true, "aria-label": "Your draft" });
@@ -318,11 +317,12 @@ function staleParts(ctx, read, what, draft, changed, mine, conflicts, kept, onKe
 }
 
 // What a save sends, against the head this page read: a refusal "changed" keeps the draft and reads the head again.
-async function save(ctx, read, op, args, draft) {
+async function save(ctx, read, op, args, draft, onKept = () => {}) {
   try {
     const sent = draft.snapshot ? draft.snapshot() : null;
     const answer = await ctx.api(op, { ref: read.entity, head: read.head, etag: read.etag, expected: read.manifest_etag, ...args });
-    if (draft.clearIf) draft.clearIf(sent); else draft.clear();
+    if (!draft.clearIf) draft.clear();
+    else if (!draft.clearIf(sent)) onKept();
     ctx.notify("Saved as " + answer.ref.split("@").pop() + ".");
     ctx.navigate(ctx.href("source", [read.entity]));
   } catch (error) {
@@ -358,7 +358,14 @@ function structuredEditor(ctx, read, drafts) {
   const saveButton = ui.button("Save as a new revision", () => ctx.act(async () => {
     const fields = fieldsOf(read, model);
     if (!Object.keys(fields).length) { ctx.notify("Nothing changed."); return; }
-    await save(ctx, read, "sources.save", { fields }, drafts.form);
+    // the items this save adds, by the draft's own id for each: if the draft is edited again before the answer, it
+    // is kept, and these tell its next rebase that they landed (see ./drafts.js)
+    const list = model.sections || model.openings || model.entries;
+    const adding = Object.fromEntries(list.filter((item) => item.slot === null && item.added).map((item) => [item.added, { ...item }]));
+    await save(ctx, read, "sources.save", { fields }, drafts.form, () => {
+      const kept = drafts.form.get();
+      if (kept && Object.keys(adding).length) drafts.form.set({ ...kept, sent: { ...(kept.sent || {}), ...adding } });
+    });
   }), { kind: "primary" });
   const discard = ui.button("Discard my changes", () => { drafts.form.clear(); model = modelOf(read); render(); });
   box.append(ui.actions(saveButton, discard));
@@ -403,7 +410,7 @@ function formFor(ctx, read, model, keep, render) {
         ui.actions(ui.button("Remove this section", () => { model.sections.splice(index, 1); keep(); render(); })));
       nodes.push(group);
     });
-    nodes.push(ui.actions(ui.button("Add a section", () => { model.sections.push({ slot: null, name: "", text: "" }); keep(); render(); })));
+    nodes.push(ui.actions(ui.button("Add a section", () => { model.sections.push({ slot: null, added: addedId(), name: "", text: "" }); keep(); render(); })));
   } else if (read.family === "scenario") {
     nodes.push(bound(ctx, "Title", model.title, set(model, "title")),
       bound(ctx, "Premise", model.premise, set(model, "premise"), { multiline: true }),
@@ -415,7 +422,7 @@ function formFor(ctx, read, model, keep, render) {
         bound(ctx, "Text", item.text, set(item, "text"), { multiline: true }),
         ui.actions(ui.button("Remove this opening", () => { model.openings.splice(index, 1); keep(); render(); }))));
     });
-    nodes.push(ui.actions(ui.button("Add an opening", () => { model.openings.push({ slot: null, text: "" }); keep(); render(); })));
+    nodes.push(ui.actions(ui.button("Add an opening", () => { model.openings.push({ slot: null, added: addedId(), text: "" }); keep(); render(); })));
   } else if (read.family === "lorebook") {
     nodes.push(bound(ctx, "Name", model.name, set(model, "name")),
       bound(ctx, "Description", model.description, set(model, "description"), { multiline: true }));
@@ -430,7 +437,7 @@ function formFor(ctx, read, model, keep, render) {
         ui.actions(ui.button("Remove this entry", () => { model.entries.splice(index, 1); keep(); render(); }))));
     });
     nodes.push(ui.actions(ui.button("Add an entry", () => {
-      model.entries.push({ slot: null, original: null, keys: "", content: "", constant: false, enabled: true }); keep(); render();
+      model.entries.push({ slot: null, added: addedId(), original: null, keys: "", content: "", constant: false, enabled: true }); keep(); render();
     })));
   }
   return nodes;
