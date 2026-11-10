@@ -89,6 +89,10 @@ file or the library. `max_output_tokens` (default 1024) caps each reply. `direct
 director replies a turn may make, for a scene with no character who can answer. `max_tokens_field` is
 `max_tokens` or `max_completion_tokens`.
 
+The app's **Models and costs** page (`#/providers`, [INFERENCE_UI](INFERENCE_UI.md)) writes this file too: a
+`--model` file that does not exist yet, or cannot be used, starts the app without a model, and the page says why
+and can set one up.
+
 ## Limits of this slice
 
 - **Loopback and a tunnel.** The phone reaches the desktop through `adb reverse` or SSH until 028 has an

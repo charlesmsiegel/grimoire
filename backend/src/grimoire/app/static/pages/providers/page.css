@@ -1,0 +1,8 @@
+/* Sprint 112's Models and costs page: only providers- classes (docs/APP_SHELL.md). */
+.providers-live { min-height: 1.4em; margin: 8px 0; }
+.providers-scroll { overflow-x: auto; }
+.providers-scroll table { border-collapse: collapse; width: 100%; }
+.providers-scroll th, .providers-scroll td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--g-line); vertical-align: top; }
+.providers-totals { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; }
+.providers-totals dt { font-weight: 600; }
+.providers-totals dd { margin: 0; }

@@ -2,14 +2,19 @@
 
 First slice of [UI Inference, Prompts and Costs](roadmap/sprints/ui-inference-prompts-costs.md). The app's
 **Models and costs** page sets up the model the table plays with, says which model calls a turn may make, and
-shows what each chat's calls used. Its ops are `grimoire.app.inference.InferenceApi`, served beside 044's
-[text API](TEXT_API.md) on the same loopback address and token ([MOBILE](MOBILE.md)).
+shows what each chat's calls used. It is the `providers` page of 108's [app shell](APP_SHELL.md) (`#/providers`,
+in the settings slot), and its ops are the shell's `providers` adapter (`providers.models`...), served beside 044's
+[text API](TEXT_API.md) on the same loopback address and token ([MOBILE](MOBILE.md)). They are
+`grimoire.app.inference.InferenceApi`'s, one per open library: `serve` gives it the settings file
+(`grimoire.app.adapters.providers.configure`) before it listens, and runs it under the text API's lock.
 
 `InferenceApi` writes one thing: the app's model configuration file. It lives outside the library, because it is
 per device and names where the provider's key is read from, never the key. Everything else is read from records
 other services own. Nothing in the library is written, and nothing is sent to a provider by these ops.
 
 ## Ops
+
+Each is called as `providers.<op>`.
 
 | Op | Arguments | Result |
 |---|---|---|
@@ -54,7 +59,7 @@ endpoint: the token is the owner's, as for every other op.
 starts the app without a model: generation is refused `no_runtime`, everything else works, and `models` says why
 (`not_configured`, `settings_unreadable`, `settings_invalid`, `key_missing`). A file whose content cannot be used
 is never echoed. Without `--model` the settings are read-only (`file.configured: false`, `save_models` refused
-`read_only`).
+`read_only`), and a runtime the text API was built with (a test's, say) is left as it is.
 
 ### Stages
 
@@ -97,11 +102,13 @@ real provider on the real clock; `synthetic`, `partial` or `unreported` otherwis
 
 ## The page
 
-`grimoire/app/static/pages/inference.js` exports `render(root, ctx)`, where `ctx.api(op, args)` posts one op. It
+`grimoire/app/static/pages/providers/` is the page: `page.json` and `page.js`, which exports the shell's
+`mount(root, ctx)` and calls `providers.<op>` and the text API's `chats` through `ctx.api`. It
 has five sections: **Model** (the settings form, **Check** and **Save**), **Model calls a turn may make**,
 **Usage by chat**, **Recent calls on this device** and **Not available yet**. Every library and provider text is
 set as text, never markup. `backend/tests/test_app_inference_page.py` runs the page in Node over a fake DOM and
-fake ops (skipped where Node is not installed).
+fake ops (skipped where Node is not installed); `backend/tests/test_app_inference_shell.py` serves it through
+the shell, from `serve --model FILE` as a process too.
 
 ## Not available yet
 

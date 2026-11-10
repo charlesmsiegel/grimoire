@@ -35,7 +35,14 @@ const api = async (op, args) => { calls.push([op, args]);
   if (op === "diagnostics") return { available: true, kept: 64, traces: [{ operation: "runner.generate", status: "ok", seconds: 0.5, spans: [], calls: [{ stage: "npc_generation", actor: "npc-1", attempts: 1, provider_seconds: null, latency: "synthetic" }] }] };
   throw new Error(op); };
 const root = new Node_("main");
-await page.render(root, { api });
+const seen = { title: null, styles: [], refreshed: 0, sent: [] };
+// the shell's ctx: the page calls its own ops as providers.<op> and the text API's chats as is
+const ctx = { api: (op, args) => { seen.sent.push(op);
+  if (op !== "chats" && !op.startsWith("providers.")) throw new Error("unprefixed " + op);
+  return api(op.replace(/^providers\./, ""), args); },
+  setTitle: (text) => { seen.title = text; }, styles: (file) => { seen.styles.push(file); },
+  refreshLibrary: async () => { seen.refreshed += 1; } };
+await page.mount(root, ctx);
 const form = root.querySelector("#inf-provider");
 const find = (n, tag) => n.tag === tag ? n : (n.children || []).map((c) => c.tag ? find(c, tag) : null).find(Boolean);
 await new Promise((r) => setTimeout(r, 10));
@@ -62,4 +69,8 @@ assert.ok(!shown.includes("SLOW") && shown.includes("Mara"), "a stale chat's ans
 for (const text of ["at least 10 (1 unreported, 1 call(s) unrecorded)", "at least 3 (1 call(s) unrecorded)", "unknown: no prices are set", "1 never sent, 1 with what they used unknown",
   "Never sent, so it used nothing.", "prompt unreported"]) assert.ok(shown.includes(text), text);
 assert.ok(!shown.includes("[object") && !/\bcost 0\b/.test(shown));
+assert.equal(seen.title, "Models and costs");
+assert.deepEqual(seen.styles, ["page.css"]);
+assert.equal(seen.refreshed, 1, "the shell's library facts are refreshed after a save");
+assert.ok(seen.sent.includes("providers.save_models") && seen.sent.includes("chats"));
 console.log("ok");

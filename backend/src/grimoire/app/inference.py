@@ -249,8 +249,10 @@ class InferenceApi:
 
     def _load(self) -> None:
         """Read the file and give the runner what it configures; a file that cannot be used leaves no model."""
-        if self.settings.path is None:
-            self._apply(None, _problem("not_configured", "no settings file: generation is off, everything else works"))
+        if self.settings.path is None:  # read-only: whatever runtime the text API was built with stays
+            self.config = None
+            self.problem = None if self.text_api.runtime is not None else _problem(
+                "not_configured", "no settings file: generation is off, everything else works")
             return
         self._loaded = None
         try:

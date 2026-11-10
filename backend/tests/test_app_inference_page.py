@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 HERE = Path(__file__).parent
-PAGE = HERE.parent / "src" / "grimoire" / "app" / "static" / "pages" / "inference.js"
+PAGE = HERE.parent / "src" / "grimoire" / "app" / "static" / "pages" / "providers" / "page.js"
 NODE = shutil.which("node")
 
 

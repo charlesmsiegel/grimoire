@@ -27,7 +27,7 @@ from grimoire.sync import NoDeviceIdentity, SyncError, device_of, identify
 from grimoire.sync.documents import check_device_id
 from grimoire.textapi import TextApi
 
-from .config import ConfigError, build_runtime, load_model_config
+from .adapters import providers
 from .server import AppServer
 
 #: The one owner principal the app uses unless told otherwise. Both paired devices must use the same one:
@@ -164,12 +164,6 @@ def _peer(value: str) -> tuple[str, tuple[str, int]]:
 
 def serve(args: argparse.Namespace) -> None:
     path = _library(args.library)
-    runtime = policy = None
-    if args.model is not None:
-        try:
-            runtime, policy = build_runtime(load_model_config(args.model), args.owner)
-        except ConfigError as error:
-            raise CliError(f"--model: {error}") from None
     store = _open(path)
     try:
         authority = _authority(store, args.owner)
@@ -179,7 +173,12 @@ def serve(args: argparse.Namespace) -> None:
                     device = device_of(store)
                 except NoDeviceIdentity:
                     raise CliError("this library has no device name: run `init` (or 019's identify) first") from None
-            api = TextApi(store, authority, owner=args.owner, runtime=runtime, policy=policy, peers=dict(args.peer))
+            api = TextApi(store, authority, owner=args.owner, peers=dict(args.peer))
+            # 112: the model is the settings file's; one that is missing or unusable starts the app without a
+            # model, and its Models and costs page says why and can set one up
+            settings = providers.configure(api, args.model)
+            if settings.problem is not None and args.model is not None:
+                print(f"no model: {settings.problem['message']}", file=sys.stderr)
             try:
                 app = AppServer(api, host=args.host, port=args.port)
             except OSError as error:
@@ -235,7 +234,7 @@ def parser() -> argparse.ArgumentParser:
     three.add_argument("--port", type=_port, default=8080)
     three.add_argument("--peer", type=_peer, action="append", default=[], help="NAME=HOST:PORT of a paired device")
     three.add_argument("--sync-port", type=_port, help="also serve this library to paired devices on this port")
-    three.add_argument("--model", type=Path, help="the model configuration (JSON)")
+    three.add_argument("--model", type=Path, help="the model settings file (JSON): created by the app when missing")
     three.set_defaults(run=serve)
     return top
 

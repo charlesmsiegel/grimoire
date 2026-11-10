@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "id": "providers",
+  "route": "providers",
+  "title": "Models and costs",
+  "slot": "settings",
+  "order": 10,
+  "owner": "112",
+  "entry": "page.js",
+  "requires": ["chats", "providers.models", "providers.check_models", "providers.save_models", "providers.usage",
+               "providers.diagnostics"]
+}
