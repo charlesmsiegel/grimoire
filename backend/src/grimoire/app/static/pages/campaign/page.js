@@ -122,7 +122,7 @@ async function showHub(root, ctx, campaign, chat, audience) {
     parts.push(castSection(ctx, hub, nameOf));
     parts.push(stageSection(ctx, hub, nameOf));
     parts.push(charactersSection(ctx, hub, nameOf));
-    parts.push(sourcesSection(ctx, hub, nameOf));
+    parts.push(sourcesSection(ctx, hub, nameOf, chat));
     parts.push(obstaclesSection(ctx, hub, nameOf));
     parts.push(actionSection(ctx, hub, nameOf, write, director));
     parts.push(turnsSection(ctx, hub, nameOf, write, director));
@@ -190,7 +190,7 @@ function abilityText(ability) {
     listed("costs", ability.costs), listed("needs", ability.prerequisites)].filter(Boolean).join(" · ") || "no effects listed";
 }
 
-function sourcesSection(ctx, hub, nameOf) {
+function sourcesSection(ctx, hub, nameOf, chat) {
   const { ui } = ctx;
   const { el } = ui;
   const rows = hub.sources.map((source) => {
@@ -201,8 +201,9 @@ function sourcesSection(ctx, hub, nameOf) {
     const row = el("div", {}, ...ui.rowText((source.actor ? nameOf(source.actor) + ": " : "") + source.role,
       source.binding + " · " + state + (source.problem ? " · " + source.problem : "") + notices));
     if (source.handoff) {
-      // 042's rebase review is the review screen's (110): link to it only where that page is in the app.
-      row.append(ctx.registered("import") ? ui.link("Review the rebase", "import")
+      // 042's rebase review is the import and review screen's (110), on its source-update tab for this chat:
+      // link to it only where that page is in the app. The hub rebases nothing.
+      row.append(ctx.registered("import") ? ui.link("Review the update", "import", [], { tab: "rebase", chat })
         : ui.unavailable("Reviewing this rebase", "the review screen is Sprint 110's"));
     }
     return row;

@@ -42,7 +42,7 @@ function hub(audience, overrides = {}) {
   };
 }
 
-async function mounted(audience, shown, scene = null) {
+async function mounted(audience, shown, scene = null, routes = ["chat"]) {
   const calls = [];
   const drafts = new Map();  // the shell keeps a draft across re-renders and navigation
   const root = ui.el("div", {});
@@ -50,7 +50,7 @@ async function mounted(audience, shown, scene = null) {
     ui, path: ["c1"], query: new URLSearchParams({ chat: CHAT, ...(audience === "director" ? { audience } : {}) }),
     href: (route, segments = [], query = {}) => "#/" + [route, ...segments.map(encodeURIComponent)].join("/")
       + "?" + new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined)).toString(),
-    has: (op) => op === "open" && scene !== null, registered: (route) => route === "chat", setTitle() {}, setActions() {}, styles() {}, notify() {},
+    has: (op) => op === "open" && scene !== null, registered: (route) => routes.includes(route), setTitle() {}, setActions() {}, styles() {}, notify() {},
     draft: (key) => ({ get: () => drafts.get(key), set: (text) => drafts.set(key, text), clear: () => drafts.delete(key) }),
     act: async (work) => { try { return await work(); } catch { return undefined; } },
     api: async (op, args) => {
@@ -186,4 +186,10 @@ test("a problem elsewhere in the campaign's continuity offers no recovery", asyn
   const { root } = await mounted("director", hub("director", { problems: [{ code: "effects", detail: "receipt_mismatch:e-9" },
     { code: "effects_unreadable", detail: "x" }] }));
   assert.equal(section(root, "Acceptance cut short"), undefined);
+});
+
+test("with the review screen in the app, a character behind its source links to its source-update tab for this chat", async () => {
+  const { root } = await mounted("table", hub("table"), null, ["chat", "import"]);
+  const link = byText(section(root, "Sources"), "a", "Review the update")[0];
+  assert.equal(link.getAttribute("href"), "#/import?" + new URLSearchParams({ tab: "rebase", chat: CHAT }).toString());
 });
