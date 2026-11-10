@@ -54,6 +54,7 @@ from grimoire.possessionstore import PossessionLibrary
 from grimoire.scene import SceneRefused
 from grimoire.store import LibraryStore, StaleWrite, StoreError
 from grimoire.textapi import ApiRefused
+from grimoire.textapi.api import ADJUDICATOR  # the app's own adjudication key (029/040), shared with the chat
 
 from . import parse
 from .views import (
@@ -63,8 +64,6 @@ from .views import (
     turn_view,
 )
 
-#: The app's own adjudication key (029/040): never a player's, never the owner's, never the labeller's.
-ADJUDICATOR = "app:adjudicator"
 AUDIENCES = ("table", "director")
 MAX_SUMMARY = 4000
 
@@ -114,18 +113,22 @@ class CampaignApi:
     allows its ``labelling`` call (without all three, ``label`` is unavailable).
     ``stages`` is the app's 041 stage source. ``lock`` is the lock the app's other APIs over the same library
     hold, so that one library has one writer at a time; without it this API has a lock of its own (the store's
-    own locks and every service's etags still refuse a stale write). The library owner alone may construct it."""
+    own locks and every service's etags still refuse a stale write). ``handle`` is the owner's trusted handle the
+    app already holds (asked of ``authority`` when not given). The library owner alone may construct it."""
 
     def __init__(self, store: LibraryStore, authority, *, owner: str, labeller=None, label_handle=None,  # type: ignore[no-untyped-def]
                  policy: InferencePolicy | None = None, stages=None, agendas=(),
-                 lock: threading.RLock | None = None, adjudicator: str = ADJUDICATOR,
+                 lock: threading.RLock | None = None, adjudicator: str = ADJUDICATOR, handle=None,
                  clock: Callable[[], str] = _utc_now, new_id: Callable[[str], str] = _new_id) -> None:
         if owner not in authority.owners:  # the director view and every write are the library owner's
             raise ValueError("the campaign hub acts for this library's owner")
         self.store = store
         self.authority = authority
         self.owner = owner
-        self.handle = authority.handle_for(owner, trusted=True)
+        # the owner's trusted handle: the app's own (108's ``AdapterContext.handle``) when it passes one
+        self.handle = authority.handle_for(owner, trusted=True) if handle is None else handle
+        if getattr(self.handle, "principal", None) != owner or getattr(self.handle, "trusted", False) is not True:
+            raise ValueError("the campaign hub writes with its owner's own trusted handle")
         key = authority.handle_for(adjudicator, trusted=True)
         self.adjudication = AdjudicationLibrary(store, authority, key)
         self.obstacles = ObstacleLibrary(store, authority, key)
