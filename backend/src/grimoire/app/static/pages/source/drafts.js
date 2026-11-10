@@ -183,7 +183,16 @@ export function rebase(read, draft) {
     const label = itemLabel(family, item, index + 1);
     let at;
     if (family === "lorebook") {
-      at = head[list].findIndex((other, where) => other.original === item.original && !used.has(where));
+      // Identical entries cannot be told apart by content: the k-th copy in the draft's start is the k-th in the
+      // head only while both hold the same number of copies. Otherwise which one the draft meant is not known.
+      const copies = (entries) => entries.flatMap((other, where) => (other.original === item.original ? [where] : []));
+      const inStart = copies(start[list]);
+      const inHead = copies(head[list]);
+      if (inStart.length !== inHead.length && (inStart.length > 1 || inHead.length > 1)) {
+        if (!(edited && already(edited))) conflict(edited ? label : label + " (removed)", edited ? shown(edited) : null);
+        return;
+      }
+      at = inHead.length ? inHead[inStart.indexOf(index)] : -1;
       if (at >= 0) used.add(at);
     } else {
       at = items.findIndex((other) => other.slot === item.slot);
@@ -301,15 +310,19 @@ export function rebaseRaw(read, draft) {
   if (!mine || typeof mine !== "object" || Array.isArray(mine)) return { error: "Your draft is not a JSON object." };
   const start = JSON.parse(draft.start);
   const head = read.payload || {};
-  const out = { ...head };
+  // Keys are read and written as own properties only, so any JSON key ("__proto__", "constructor") is kept as one.
+  const own = (object, key) => (Object.hasOwn(object, key) ? object[key] : undefined);
+  const out = {};
+  const put = (key, value) => Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
+  for (const key of Object.keys(head)) put(key, head[key]);
   const conflicts = [];
   const keys = [...new Set([...Object.keys(start), ...Object.keys(mine)])].sort();
-  const minePart = keys.filter((key) => !same(mine[key], start[key]));
+  const minePart = keys.filter((key) => !same(own(mine, key), own(start, key)));
   for (const key of minePart) {
-    if (!same(head[key], start[key]) && !same(head[key], mine[key])) { conflicts.push(key); continue; }
-    if (key in mine) out[key] = mine[key]; else delete out[key];
+    if (!same(own(head, key), own(start, key)) && !same(own(head, key), own(mine, key))) { conflicts.push(key); continue; }
+    if (Object.hasOwn(mine, key)) put(key, mine[key]); else delete out[key];
   }
-  const changed = [...new Set([...Object.keys(start), ...Object.keys(head)])].filter((key) => !same(start[key], head[key])).sort();
+  const changed = [...new Set([...Object.keys(start), ...Object.keys(head)])].filter((key) => !same(own(start, key), own(head, key))).sort();
   return { text: JSON.stringify(out, null, 2), payload: out, conflicts, mine: minePart, changed };
 }
 

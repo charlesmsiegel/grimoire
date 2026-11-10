@@ -160,6 +160,21 @@ test("a draft that cannot be kept is given to copy whole, not only its conflicts
   assert.deepEqual(draftParts("entity", draft.start, draft.model), { name: "Mara Vell", description: "Mine." });
 });
 
+test("identical entries are matched copy for copy, and a match that cannot be told is a conflict", () => {
+  const same = { keys: ["a"], content: "A." };
+  const r1 = lorebook("r1", [same, same]);
+  const draft = drafted(r1, (model) => { model.entries[1].content = "Mine."; });
+  // the other writer changed the second copy: which copy is left is not known, so nothing is guessed
+  assert.deepEqual(rebase(lorebook("r2", [same, { ...same, content: "Theirs." }]), draft).conflicts, ["entry 2"]);
+  // both copies still there (another entry added): the second copy is the second copy
+  const r2 = lorebook("r2", [same, same, { keys: ["b"], content: "B." }]);
+  const merged = rebase(r2, draft);
+  assert.deepEqual([merged.conflicts, fieldsOf(r2, merged.model).entries], [[], [{ index: 0 }, { index: 1, content: "Mine." }, { index: 2 }]]);
+  // the draft's own edit, already saved
+  const saved = lorebook("r2", [same, { ...same, content: "Mine." }]);
+  assert.deepEqual(rebase(saved, draft).conflicts, []);
+});
+
 test("a draft is stale when its revision moved on, or when that revision was changed in place", () => {
   const head = { head: "r3", etag: "e2" };
   assert.equal(stale({ base: "r3", etag: "e2" }, head), false);
@@ -185,6 +200,11 @@ test("a raw draft lays its own keys over a newer head", () => {
   assert.deepEqual([merged.mine, merged.changed, merged.conflicts], [["a"], ["c"], []]);
   assert.deepEqual(rebaseRaw({ ...r2, payload: { a: 3, b: { x: 1 } } }, draft).conflicts, ["a"]);
   assert.ok(rebaseRaw(r2, { ...draft, text: "{" }).error);
+  // any JSON key is a key, "__proto__" included
+  const odd = { base: "r1", start: JSON.stringify({ name: "A" }), text: '{"name":"A","__proto__":{"extension":true}}' };
+  const kept = rebaseRaw({ family: "other", head: "r2", payload: { name: "A", description: "B" } }, odd);
+  assert.deepEqual([kept.conflicts, kept.mine], [[], ["__proto__"]]);
+  assert.equal(kept.text, JSON.stringify(JSON.parse('{"name":"A","description":"B","__proto__":{"extension":true}}'), null, 2));
 });
 
 test("a section may be called by a name an object inherits", () => {
