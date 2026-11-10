@@ -13,6 +13,7 @@ import base64
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 
 STAMP = "'2026-01-01T00:00:00Z'"
@@ -158,7 +159,14 @@ def build_library(root: Path) -> Path:
 
 
 def tree_digest(root: Path) -> dict[str, tuple]:
-    """Every entry below `root`: type, bytes digest, mode and mtime (links not followed)."""
+    """Every entry below `root`: type, bytes digest, mode and mtime (links not followed).
+
+    On Windows a directory's mtime is left out: Windows CI reported changed times for V1 directories that were
+    only read (every file in them identical), so the directory time is not a reliable "written" signal there.
+    Every file keeps its mode, size, mtime and bytes there too, and the set of entries is compared everywhere,
+    so a file added, removed or changed in a directory is still caught; POSIX runs also keep directory mtimes,
+    which catch a file created and removed again.
+    """
     seen = {}
     for directory, dirs, files in os.walk(root, followlinks=False):
         for name in (*dirs, *files):
@@ -168,5 +176,6 @@ def tree_digest(root: Path) -> dict[str, tuple]:
             if os.path.isfile(path) and not os.path.islink(path):
                 with open(path, "rb") as handle:
                     content = sha(handle.read())
-            seen[os.path.relpath(path, root)] = (info.st_mode, info.st_size, info.st_mtime_ns, content)
+            mtime = None if os.name == "nt" and stat.S_ISDIR(info.st_mode) else info.st_mtime_ns
+            seen[os.path.relpath(path, root)] = (info.st_mode, info.st_size, mtime, content)
     return seen
