@@ -2,7 +2,7 @@
 
 **Target branch:** `v2`. This is an implementation-priority plan for the new *headless* V2 core, not the older V1 `roadmapping` notebook. Every implementation PR branches from `v2`, targets **base `v2`** and follows [AGENTS.md](../../AGENTS.md). The V2 branch is not merged into V1 `main`.
 
-**There are 107 active proposals: 90 retained from the earlier catalog, 16 original V2 foundation proposals and new Sprint 107 for world-optional chat scopes.** This table schedules only each proposal's *first useful slice*. The copied older proposals remain useful as ambition catalogs, but any claim that a V1 runtime/editor API is already available must be re-specified for V2 before implementation. See [Thematic catalog](CATALOG.md) and [V2 architecture](../ARCHITECTURE.md).
+**There are 119 active proposals: 90 retained from the earlier catalog, 17 V2 foundations/play proposals through Sprint 107, and 12 new UI proposals (108–119).** This table schedules only each proposal's *first useful slice*. The copied older proposals remain useful as ambition catalogs, but any claim that a V1 runtime/editor API is already available must be re-specified for V2 before implementation. See [Thematic catalog](CATALOG.md) and [V2 architecture](../ARCHITECTURE.md).
 
 ## Primary objective: migrate and play soon
 
@@ -12,16 +12,19 @@
 4. **Preserve separately generated NPC voices:** default V2 calls an RP model **once for each speaking NPC contribution**, just as V0.2.1 does. Graph traversal and known/perceived/related evidence selection are deterministic and do not require an extra LLM call. Further planning, perception inference, character theory-of-mind, critique, image generation and autonomy jobs are **feature-flagged, metered, and optional**.
 5. **Make play possible before large moonshots:** the [first text runner](sprints/minimal-text-scene-runner.md) must support **both** an imported V1 world scene and a new **world-less card/scenario chat**, with actor-specific generation or an explicitly metered director stage for a no-NPC scenario, save/reload and optional lorebooks. The [mobile client](sprints/v2-mobile-client.md) must support phone play and **actual desktop/phone sync**, not a placeholder concept.
 6. **Synchronization is a product capability, not a vendor dependency:** [device revisions/conflicts](sprints/sync-revisions-and-conflict-core.md) are designed alongside native storage. [App-managed transfer](sprints/app-managed-device-sync.md) provides authenticated reachable-peer transport early. A local app **can** sync directly when peers can reach each other; when devices are not connected, off-LAN sync requires a user-provided reachable endpoint, relay or optional service. It does **not** require Syncthing. Conflicting offline writes remain preserved and reviewable.
+7. **A usable UI is now a release gate, not a polish phase:** the new [Wave 7 UI convergence gate](UI_COVERAGE.md) must make all user-relevant capabilities delivered through Wave 6 usable from desktop/web/phone, including authoring, launch, play, model setup, review, art and sync. Every later wave has a sequential UI exit slice that follows its domain first slices; headless green tests alone do not close a product wave.
 
 ## World-less chat and reusable-character path
 
 **A world is optional, not a prerequisite for roleplay.** Sprint **107** adds a minimal persistent chat/play scope and source-qualified associations as a **post-010 Wave 3** change, without reopening completed storage work. A lightweight chat still has an internal campaign namespace for independent actor/history IDs, but does not require a **user-visible campaign setup**, world, mechanics or map. Chats can be found via Characters, Scenarios, Campaigns, Worlds or Recent Chats using rebuildable indexes over **one canonical chat record**.
 
-Sprint **022** must resolve a reusable base character into explicitly derived period/modern/spacefaring/supernatural portrayals with documented inherit/replace/**clear** semantics, before first playable prompts rely on them. Sprint **037** is **moved from Wave 5 into Wave 4**, independently importing standalone character/scenario/lorebook cards without requiring 026's world importer; **035** requires both launch paths and retains Wave 5's first-playable milestone. Sprint **036** owns loss-aware SillyTavern chat-history/swipe import; **052** moves to Wave 6 for one-click onboarding, and **065** later delivers the richer unified chat library/navigation workspace. View the [**chat architecture and navigation contract**](CHAT_MODEL.md) and [Sprint 107](sprints/world-optional-chat-scopes.md). Sprint 107's **headless first slice is implemented**: durable world-less scopes and chats, source bindings, and a rebuildable navigation index. It is documented in [CHATS](../CHATS.md). Sprint 017's **headless first slice is implemented** too: persisted typed relations, a director-only bounded traversal and per-node actor claims ([GRAPH](../GRAPH.md)). Sprint 020's **headless first slice is also implemented**: durable events and evidence with read-time quarantine, documented in [EVIDENCE](../EVIDENCE.md). Sprint 018's **headless first slice is implemented** as well: shared image blobs with per-entity and per-campaign placements, documented in [IMAGES](../IMAGES.md). Sprint 022's **headless first slice is implemented**: pinned derived-portrayal composition with inherit/replace/clear provenance, and frozen world-optional chat/selection snapshots, documented in [EFFECTIVE_VIEWS](../EFFECTIVE_VIEWS.md). So is Sprint 021's: two-key acceptance of turn effects committed once with their relation changes, latest-first revocation and scene wrap-ups ([EFFECTS](../EFFECTS.md)); its next slice lets an accepted effect also change counted holdings and charge ability costs, each attempt exactly once. Sprint 025's headless first slice (fictional abilities: authored limits/costs and a deterministic attempt assessment) is documented in [ABILITIES](../ABILITIES.md). Sprint 023's headless first slice persists counted holdings with idempotent operation ids ([HOLDINGS](../HOLDINGS.md)), Sprint 024's promotes one generic creature instance in place to a named individual ([ENTITIES](../ENTITIES.md#individualizing-a-template-instance)), and Sprint 019's is a transport-free sync revision and conflict core ([SYNC](../SYNC.md)). In Wave 4, Sprint 032's headless first slice delivers an in-scene whisper, telepathic or spoken message only to its valid recipients as stored evidence ([COMMUNICATION](../COMMUNICATION.md)). The other items are **planned**, not already shipped.
+Sprint **022** must resolve a reusable base character into explicitly derived period/modern/spacefaring/supernatural portrayals with documented inherit/replace/**clear** semantics, before first playable prompts rely on them. Sprint **037** is **moved from Wave 5 into Wave 4**, independently importing standalone character/scenario/lorebook cards without requiring 026's world importer; **035** requires both launch paths and retains Wave 5's first-playable milestone. Sprint **036** owns loss-aware SillyTavern chat-history/swipe import; **052** moves to Wave 6 for one-click onboarding, the **new Wave 7 (108–114)** makes the existing headless capabilities available through the application, and **065** (now Wave 8) extends that workspace with richer long-term navigation and customization. View the [**chat architecture and navigation contract**](CHAT_MODEL.md) and [Sprint 107](sprints/world-optional-chat-scopes.md). Sprint 107's **headless first slice is implemented**: durable world-less scopes and chats, source bindings, and a rebuildable navigation index. It is documented in [CHATS](../CHATS.md). Sprint 017's **headless first slice is implemented** too: persisted typed relations, a director-only bounded traversal and per-node actor claims ([GRAPH](../GRAPH.md)). Sprint 020's **headless first slice is also implemented**: durable events and evidence with read-time quarantine, documented in [EVIDENCE](../EVIDENCE.md). Sprint 018's **headless first slice is implemented** as well: shared image blobs with per-entity and per-campaign placements, documented in [IMAGES](../IMAGES.md). Sprint 022's **headless first slice is implemented**: pinned derived-portrayal composition with inherit/replace/clear provenance, and frozen world-optional chat/selection snapshots, documented in [EFFECTIVE_VIEWS](../EFFECTIVE_VIEWS.md). So is Sprint 021's: two-key acceptance of turn effects committed once with their relation changes, latest-first revocation and scene wrap-ups ([EFFECTS](../EFFECTS.md)); its next slice lets an accepted effect also change counted holdings and charge ability costs, each attempt exactly once. Sprint 025's headless first slice (fictional abilities: authored limits/costs and a deterministic attempt assessment) is documented in [ABILITIES](../ABILITIES.md). Sprint 023's headless first slice persists counted holdings with idempotent operation ids ([HOLDINGS](../HOLDINGS.md)), Sprint 024's promotes one generic creature instance in place to a named individual ([ENTITIES](../ENTITIES.md#individualizing-a-template-instance)), and Sprint 019's is a transport-free sync revision and conflict core ([SYNC](../SYNC.md)). In Wave 4, Sprint 032's headless first slice delivers an in-scene whisper, telepathic or spoken message only to its valid recipients as stored evidence ([COMMUNICATION](../COMMUNICATION.md)). The other items are **planned**, not already shipped.
 
 ## How order and parallelism work
 
-**The table's wave and row order is the recommended pickup sequence; sprint IDs are stable identifiers and are not renumbered when new work is inserted.** Every sprint in a wave has **no hard prerequisite in its own wave**; each owns a separate primary package/API surface. Implementers may develop same-wave work concurrently against earlier frozen interfaces, but if shared mutations or API changes emerge, land the common contract first or move a sprint. The graph and relation schemas are central shared contracts, so migration, model runtime and sync should consume rather than redefine them. An earlier wave's unrelated unfinished sprint never blocks a later sprint whose *listed hard prerequisites* are already merged and verified.
+**The table's wave and row order is the recommended pickup sequence; sprint IDs are stable identifiers and are not renumbered when new work is inserted.** The ordinary **parallel domain/feature sprints** in a wave have **no hard prerequisite in their own wave**; each owns a separate primary package/API surface. Implementers may develop same-wave work concurrently against earlier frozen interfaces, but if shared mutations or API changes emerge, land the common contract first or move a sprint. The graph and relation schemas are central shared contracts, so migration, model runtime and sync should consume rather than redefine them. An earlier wave's unrelated unfinished sprint never blocks a later sprint whose *listed hard prerequisites* are already merged and verified.
+
+**UI planning exception (explicitly sequential):** Wave 7 is a dedicated UI convergence wave whose seven separate first slices integrate against the stable interfaces from Waves 1–6. Each of Waves 8–12 has **one UI exit slice** (115–119) scheduled *after* that wave's relevant domain features land. Those tail slices are **not** parallel peers: they may require same-wave domain milestones, and are counted separately in the wave table. This preserves the dependency-safe parallel groups without shipping headless-only wave exits. A UI slice exposes only implemented, supported actions; blocked or future features are labelled, never faked. [UI coverage and exit criteria](UI_COVERAGE.md).
 
 Priorities: **P0** essential for migration/play/safety or known RP quality; **P1** major user value; **P2** optional growth; **P3** frontier research. The order does not constrain engineering ambition. **Cost is different:** expensive model calls during play are opt-in and bounded. Each first slice needs a proving scenario, an owner and tested failure behavior before integration.
 
@@ -34,12 +37,14 @@ Priorities: **P0** essential for migration/play/safety or known RP quality; **P1
 | Migration and model | Reviewed V0.2.1 import **plus direct standalone character/scenario/lore card import**, per-NPC generation and peer transport | End of Wave 4 |
 | Desktop play | Both a world-based migrated scene and a **new world-less character/scenario chat** can be saved/reloaded | End of Wave 5 |
 | Phone play | One-click card/scenario chats on phone, with desktop exchange of accepted turns **and pictures** and explicit sync status | End of Wave 6 |
+| **Usable product UI** | Fresh-install desktop/web/phone journey: configure, import/create, start, play, review, save, resume and sync with no CLI or manual file editing | **End of new Wave 7** |
+| Continued UI parity | Every new user-facing capability from a later wave is reachable, reviewable and testable in the shared UI; unimplemented backend features are not advertised | **At each Wave 8–12 UI exit slice** |
 
 These are **functional gates**, not dates. Import and phone play cannot be described as supported merely because the corresponding docs exist.
 
 ## Waves at a glance
 
-| Wave | Parallel sprints | Main outcome |
+| Wave | Parallel sprints (+ sequential UI exit) | Main outcome |
 |---|---:|---|
 | [1](#wave-1) | 8 | Foundational contracts, isolation and cost baselines |
 | [2](#wave-2) | 8 | Native entities/files, provider/voice contracts and a runnable V1 inventory |
@@ -47,15 +52,16 @@ These are **functional gates**, not dates. Import and phone play cannot be descr
 | [4](#wave-4) | 10 | Standalone cards, scenarios, V1 import, NPC generation and peer transfer |
 | [5](#wave-5) | 8 | First playable world-less chat and imported-world campaign |
 | [6](#wave-6) | 6 | Quick-start onboarding, phone play, sync and early UX |
-| [7](#wave-7) | 23 | Reliable long-term use and independent enhancements |
-| [8](#wave-8) | 15 | Advanced mechanics, authoring and audio foundations |
-| [9](#wave-9) | 12 | Richer interaction, simulation and presentation |
-| [10](#wave-10) | 5 | Complex content, governance and publishing |
-| [11](#wave-11) | 2 | Voice-native and long-horizon research |
+| [7](#wave-7) | **7** | **P0 UI convergence: everything usable through Wave 6** |
+| [8](#wave-8) | 23 + **1 UI exit** | Reliable long-term use and independent enhancements |
+| [9](#wave-9) | 15 + **1 UI exit** | Advanced mechanics, authoring and audio foundations |
+| [10](#wave-10) | 12 + **1 UI exit** | Richer interaction, simulation and presentation |
+| [11](#wave-11) | 5 + **1 UI exit** | Complex content, governance and publishing |
+| [12](#wave-12) | 2 + **1 UI exit** | Voice-native and long-horizon research |
 
 ## Full ordered backlog
 
-The **wave and order of rows** determine pickup priority; the # column is a stable sprint ID. New Sprint 107 is placed first in Wave 3 rather than renumbering the other 106 identifiers and breaking existing documentation links. A same-wave group is deliberately parallel: **prerequisites** refer only to first-slice contracts in earlier waves.
+The **wave and order of rows** determine pickup priority; the # column is a stable sprint ID. New Sprint 107 remains first in Wave 3; UI sprints 108–114 form the new Wave 7 and 115–119 close Waves 8–12 without renumbering older sprint IDs. Domain rows are parallel with earlier-wave dependencies; the separately marked **UI exit slices** are sequential tail work that consumes the same wave's landed user-visible features. UI sprints 108–114 work in disjoint surfaces under the frozen [UI integration contract](UI_COVERAGE.md#implementation-ownership-and-parallel-handoffs).
 
 <a id="wave-1"></a>
 
@@ -219,7 +225,25 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 
 <a id="wave-7"></a>
 
-### Wave 7 — Reliable long-term use and independent enhancements
+### Wave 7 — **P0 usable UI through Wave 6**
+
+**UI convergence gate, not a second headless backend roadmap.** Build one responsive desktop/web/phone product around the shipped Waves 1–6 domain contracts. The seven independent slices below own separate frontend/API adapters; do not copy the V1 ontology, duplicate chat histories or silently create new canonical stores. Their integration and complete acceptance test are in [UI coverage](UI_COVERAGE.md). A backend first slice marked implemented in a spec is not proof its UI is done. Unsupported second milestones show honest unavailable/repair states.
+
+| # | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
+|---:|---|---|---|---|---|
+| 108 | [UI Shell, Onboarding and Navigation](sprints/ui-shell-onboarding-navigation.md) | **P0** | 001, 010, 044, 052, 107 | frontend / shell, routing, first-run and shared design system | A fresh library opens in a responsive app; configure a provider and reach Start Chat or import without a world |
+| 109 | [UI Library, Facets and Portrayals](sprints/ui-library-facets-portrayals.md) | **P0** | 002, 009, 010, 017, 022, 037, 042, 046 (where delivered) | frontend / source and facet editors | Create and edit a character, scenario, lorebook and world; inspect pinned derived-portrayal fields without changing instance history |
+| 110 | [UI Import, Migration and Change Review](sprints/ui-import-migration-review.md) | **P0** | 007, 011, 026, 036, 037, 042, 043 | frontend / imports, diffs and approval | Preview a real 0.2.1 inventory or standalone card, approve exact changes and retain a loss/identity report |
+| 111 | [UI Chat Launch and Scene Play](sprints/ui-chat-launch-play.md) | **P0** | 003, 016, 027, 031, 035, 044, 052, 107 | frontend / chat and scene interaction | Start world-less and migrated-world scenes, post, generate per speaker, keep or pass, save, reopen, and recover an interrupted interaction |
+| 112 | [UI Inference, Prompts and Costs](sprints/ui-inference-prompts-costs.md) | **P0** | 004, 013, 014, 015, 027, 031, 044, 045, 048 (where delivered) | frontend / providers, model policy and read-only diagnostics | Configure and test an endpoint, see the effective model and per-NPC/optional-call cost, inspect permitted context without leaking private evidence |
+| 113 | [UI Campaign State and Canon Review](sprints/ui-campaign-state-canon.md) | **P0** | 012, 017, 020, 021, 023, 024, 025, 029, 030, 032, 033, 034, 035, 040, 041, 042, 043, 047 (where delivered) | frontend / campaign dashboard, state and review | Inspect cast, stage, evidence and effects; accept or refuse state changes under the correct authority, without turning NPC beliefs into world truth |
+| 114 | [UI Media, Sync and Resilience](sprints/ui-media-sync-resilience.md) | **P0** | 006, 018, 019, 028, 038, 044, 046 (where delivered) | frontend / media, sync and recovery UX | Place an image, sync chat and picture to a phone, review a conflict or fork, and resume with accessible keyboard/touch controls |
+
+**End-of-wave acceptance:** A user on a fresh V2 library can choose storage, configure a model, create or import authored content, start a world-less chat, play two independently voiced NPC turns, review and keep a take, close/reopen, then sync that chat and its image to another device. A reviewed 0.2.1 import can start and resume an existing world scene. All applicable authoring, revision, source, event, media, cost and conflict actions delivered through Wave 6 have an interface or an explicit unavailable explanation. No command-line or hand-edited JSON is required for the core journey. Run automated UI/API tests and a keyboard-only desktop/mobile acceptance pass. [Detailed matrix](UI_COVERAGE.md).
+
+<a id="wave-8"></a>
+
+### Wave 8 — Reliable long-term use and independent enhancements
 
 | # | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|---|---|---|---|---|
@@ -247,9 +271,18 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 | 071 | [Theory Driven Simplification](sprints/theory-driven-simplification.md) | **P2** | V2 baseline only | engineering / isolated modules | Simplify one bounded V2 module without altering shared contracts |
 | 072 | [VN Staging And Cues](sprints/vn-staging-and-cues.md) | **P2** | [Expression And Art Lineage](sprints/expression-and-art-lineage.md) | frontend / VN stage | Render authored stage cues without changing transcript |
 
-<a id="wave-8"></a>
 
-### Wave 8 — Advanced mechanics, authoring and audio foundations
+#### Wave 8 — sequential UI exit slice (not parallel)
+
+| # | UI exit sprint | Priority | Delivery order | Primary owner | First useful proof |
+|---:|---|---|---|---|---|
+| 115 | [Wave 8 UI Exit: Reliable Campaign Play](sprints/wave-8-ui-exit.md) | **P0 (wave gate)** | After 108–114 and this wave's relevant domain first slices; integrate only merged features | frontend / campaign reliability and advanced navigation | Resolve an offline fork, review a retcon, view clock/party/story state and resume the same chat; add controls for every Wave 8 user-facing first slice |
+
+The wave is not **user-visible complete** until its implemented user-facing domain first slices pass the UI acceptance in [UI coverage](UI_COVERAGE.md#later-wave-ui-exit-matrix); do not block domain merges or show unavailable capabilities as working.
+
+<a id="wave-9"></a>
+
+### Wave 9 — Advanced mechanics, authoring and audio foundations
 
 | # | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|---|---|---|---|---|
@@ -269,9 +302,18 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 | 086 | [Mechanics Module Authoring](sprints/mechanics-module-authoring.md) | **P2** | [Ruleset Action Contracts](sprints/ruleset-action-contracts.md) | mechanics / module editor | Author an isolated validated mechanics sheet |
 | 087 | [World Authoring Assistant](sprints/world-authoring-assistant.md) | **P2** | [World Change Sets](sprints/world-change-sets.md), [Catalog Composition](sprints/catalog-composition.md) | authoring / world proposals | Review three linked towns and accept two |
 
-<a id="wave-9"></a>
 
-### Wave 9 — Richer interaction, simulation and presentation
+#### Wave 9 — sequential UI exit slice (not parallel)
+
+| # | UI exit sprint | Priority | Delivery order | Primary owner | First useful proof |
+|---:|---|---|---|---|---|
+| 116 | [Wave 9 UI Exit: Mechanics, Authoring and Audio](sprints/wave-9-ui-exit.md) | **P0 (wave gate)** | After 108–114 and this wave's relevant domain first slices; integrate only merged features | frontend / tools, writing and voice panels | Resolve a recorded roll and edit a validated sheet, inspect a story/history link and review a world suggestion; expose remaining Wave 9 user-facing slices |
+
+The wave is not **user-visible complete** until its implemented user-facing domain first slices pass the UI acceptance in [UI coverage](UI_COVERAGE.md#later-wave-ui-exit-matrix); do not block domain merges or show unavailable capabilities as working.
+
+<a id="wave-10"></a>
+
+### Wave 10 — Richer interaction, simulation and presentation
 
 | # | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|---|---|---|---|---|
@@ -288,9 +330,18 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 | 098 | [Publishing And Anonymization](sprints/publishing-and-anonymization.md) | **P2** | [Scenes Forks And Retcons](sprints/scenes-forks-and-retcons.md), [Memory Consolidation](sprints/memory-consolidation.md) | export / story publication | Produce a non-mutating anonymized EPUB |
 | 099 | [Soundscapes And Audio Cues](sprints/soundscapes-and-audio-cues.md) | **P2** | [V2 Mobile Client](sprints/v2-mobile-client.md) | audio / ambience | Optional non-authoritative ambient audio in phone client |
 
-<a id="wave-10"></a>
 
-### Wave 10 — Complex content, governance and publishing
+#### Wave 10 — sequential UI exit slice (not parallel)
+
+| # | UI exit sprint | Priority | Delivery order | Primary owner | First useful proof |
+|---:|---|---|---|---|---|
+| 117 | [Wave 10 UI Exit: Rich Interaction and Presentation](sprints/wave-10-ui-exit.md) | **P0 (wave gate)** | After 108–114 and this wave's relevant domain first slices; integrate only merged features | frontend / encounter, mapping and visual presentation | Play a controlled encounter and edit a location map, with user-facing pacing, growth, graphics and publication flows as their domain slices land |
+
+The wave is not **user-visible complete** until its implemented user-facing domain first slices pass the UI acceptance in [UI coverage](UI_COVERAGE.md#later-wave-ui-exit-matrix); do not block domain merges or show unavailable capabilities as working.
+
+<a id="wave-11"></a>
+
+### Wave 11 — Complex content, governance and publishing
 
 | # | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|---|---|---|---|---|
@@ -300,9 +351,18 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 | 103 | [Content Publication](sprints/content-publication.md) | **P2** | [Catalog Composition](sprints/catalog-composition.md), [Source Upgrades And Dependencies](sprints/source-upgrades-and-dependencies.md), [Character Card Ingestion](sprints/character-card-ingestion.md) | sharing / content manifests | Round-trip one versioned world/catalog package |
 | 104 | [Multi Speaker Table Audio](sprints/multi-speaker-table-audio.md) | **P2** | [Local Multi PC](sprints/local-multi-pc.md), [Conversation Turn Taking](sprints/conversation-turn-taking.md) | voice / multiuser capture | Attribute two known audio channels to separate PCs |
 
-<a id="wave-11"></a>
 
-### Wave 11 — Voice-native and long-horizon research
+#### Wave 11 — sequential UI exit slice (not parallel)
+
+| # | UI exit sprint | Priority | Delivery order | Primary owner | First useful proof |
+|---:|---|---|---|---|---|
+| 118 | [Wave 11 UI Exit: Collaboration and Publication](sprints/wave-11-ui-exit.md) | **P0 (wave gate)** | After 108–114 and this wave's relevant domain first slices; integrate only merged features | frontend / multiplayer, arcs and publishing | Review an evolving arc, publish a validated content package and perform a two-controller action with explicit authority |
+
+The wave is not **user-visible complete** until its implemented user-facing domain first slices pass the UI acceptance in [UI coverage](UI_COVERAGE.md#later-wave-ui-exit-matrix); do not block domain merges or show unavailable capabilities as working.
+
+<a id="wave-12"></a>
+
+### Wave 12 — Voice-native and long-horizon research
 
 | # | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|---|---|---|---|---|
@@ -328,3 +388,12 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 ## Scope and review
 
 All changes are proposals on an isolated feature branch and must pass the V2 independent review gates before merging. V2 remains headless until the corresponding implementation work lands. The 90 inherited ideas are retained to avoid lost moonshots, but their V1-specific implementation references are design history rather than ready-to-run V2 instructions.
+
+#### Wave 12 — sequential UI exit slice (not parallel)
+
+| # | UI exit sprint | Priority | Delivery order | Primary owner | First useful proof |
+|---:|---|---|---|---|---|
+| 119 | [Wave 12 UI Exit: Voice and Immersion](sprints/wave-12-ui-exit.md) | **P0 (wave gate)** | After 108–114 and this wave's relevant domain first slices; integrate only merged features | frontend / voice and immersive modes | Run one spoken NPC exchange with synchronized accepted text; optional spatial view falls back to text without losing state |
+
+The wave is not **user-visible complete** until its implemented user-facing domain first slices pass the UI acceptance in [UI coverage](UI_COVERAGE.md#later-wave-ui-exit-matrix); do not block domain merges or show unavailable capabilities as working.
+
