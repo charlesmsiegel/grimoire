@@ -1,20 +1,22 @@
-"""The app's loopback HTTP server (044): the text API as ``POST /api/<op>``, pictures as ``GET /api/image``,
-and the phone page as ``GET /``.
+"""The app's loopback HTTP server (044, 108): the text API and the adapters' ops as ``POST /api/<op>``, pictures
+as ``GET /api/image``, the shell's page as ``GET /``, its modules and styles as ``GET /static/...`` and the page
+registry as ``GET /shell/pages``.
 
 It listens on a loopback address only. Every request must name that address in its ``Host`` header, which
 stops a web page from reaching it by DNS rebinding. Every ``/api`` request must carry the serve's random token
 in ``X-Grimoire-Token``. A custom header forces a CORS preflight, which is never answered, so no other origin's
-page can drive the library. The page is served with a content security policy that allows only its own script
-and style, the page's own address for requests, and ``blob:`` pictures.
+page can drive the library. The page is served with a content security policy that allows only this server's own
+scripts and styles (no inline code), the page's own address for requests, and ``blob:`` pictures. ``/static``
+and ``/shell/pages`` are code and its manifest, not library data, so they need no token: a module cannot be
+imported with a custom header.
 """
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import hmac
 import io
 import json
+import re
 import secrets
 import socket
 import sys
@@ -23,11 +25,15 @@ import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from grimoire.ledgers import AuthorityUnavailable
 from grimoire.peersync.wire import is_loopback
 from grimoire.textapi import ApiRefused, TextApi
+
+from .adapter import Adapter
+from .appapi import AppApi
+from .pages import CONTRACT, SLOTS, load_pages
 
 #: The largest request body read: a 32 MiB picture is about 43 MiB as base64, plus its JSON.
 MAX_BODY = 48 * 1024 * 1024
@@ -41,24 +47,53 @@ HEADER_DEADLINE = 10.0
 BODY_DEADLINE = 10.0
 BODY_RATE = 1024 * 1024
 TOKEN_HEADER = "X-Grimoire-Token"
-PAGE = Path(__file__).with_name("static") / "index.html"
+STATIC = Path(__file__).with_name("static")
+PAGE = STATIC / "index.html"
+#: What ``/static`` serves, by extension: modules, style sheets and a page's own icons and fonts. Anything else
+#: there (a page's ``page.json``) is not served. A page needing another kind of file adds it here.
+STATIC_TYPES = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+                ".svg": "image/svg+xml", ".png": "image/png", ".webp": "image/webp", ".woff2": "font/woff2"}
+#: One segment of a ``/static`` path: no dot files, no ``..``, nothing a file system could read two ways.
+_SEGMENT = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}")
 COMMON_HEADERS = (("Cache-Control", "no-store"), ("X-Content-Type-Options", "nosniff"),
                   ("Referrer-Policy", "no-referrer"), ("X-Frame-Options", "DENY"),
                   ("Cross-Origin-Resource-Policy", "same-origin"))
 
 
-def _inline_hash(page: str, tag: str) -> str:
-    """The CSP source for the page's one inline ``<script>`` or ``<style>`` block."""
-    start = page.index(f"<{tag}>") + len(tag) + 2
-    end = page.index(f"</{tag}>", start)
-    digest = hashlib.sha256(page[start:end].encode("utf-8")).digest()
-    return f"'sha256-{base64.b64encode(digest).decode('ascii')}'"
+#: The shell page's policy: only this server's own modules, style sheets, icons and fonts, no inline code (108).
+#: Library pictures arrive as ``blob:`` URLs (``ctx.picture``), never by address.
+PAGE_POLICY = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; font-src 'self'; "
+               "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+#: A module's or style sheet's own policy, should it ever be opened as a document.
+STATIC_POLICY = "default-src 'none'; sandbox"
 
 
-def page_policy(page: str) -> str:
-    return ("default-src 'none'; "
-            f"script-src {_inline_hash(page, 'script')}; style-src {_inline_hash(page, 'style')}; "
-            "img-src blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+def static_file(static: Path, path: str) -> tuple[Path, str] | None:
+    """The file ``/static/<path>`` names, and its type, or ``None``. Every segment must be a plain name, the
+    extension one ``STATIC_TYPES`` serves, and the file a regular file inside ``static`` once links are resolved;
+    the file a link resolves to must pass the same checks, so an ``alias.js`` naming a manifest or a dot file
+    serves nothing."""
+    if _servable(path.split("/")) is None:
+        return None
+    root = static.resolve()
+    try:
+        resolved = root.joinpath(*path.split("/")).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if not resolved.is_relative_to(root) or not resolved.is_file():
+        return None
+    kind = _servable(list(resolved.relative_to(root).parts))
+    if kind is None:
+        return None
+    return resolved, kind
+
+
+def _servable(segments: list[str]) -> str | None:
+    """The type of the file these path segments name, or ``None`` when some segment is not a plain name or the
+    extension is not one ``STATIC_TYPES`` serves."""
+    if not segments or not all(_SEGMENT.fullmatch(part) and ".." not in part for part in segments):
+        return None
+    return STATIC_TYPES.get(Path(segments[-1]).suffix)
 
 
 class _Server(ThreadingHTTPServer):
@@ -194,9 +229,22 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._guard():
             return
         parts = urlsplit(self.path)
+        app = self.server.app
         if parts.path == "/":
-            app = self.server.app
-            self._send(200, app.page, "text/html; charset=utf-8", (("Content-Security-Policy", app.policy),))
+            self._send(200, app.page, "text/html; charset=utf-8", (("Content-Security-Policy", PAGE_POLICY),))
+        elif parts.path.startswith("/static/"):
+            found = static_file(app.static, unquote(parts.path[len("/static/"):]))
+            if found is None or parts.query:
+                self._error(404, "not_found", "no such file")
+                return
+            try:
+                data = found[0].read_bytes()
+            except OSError:
+                self._error(404, "not_found", "no such file")
+                return
+            self._send(200, data, found[1], (("Content-Security-Policy", STATIC_POLICY),))
+        elif parts.path == "/shell/pages":
+            self._json(200, app.registry)
         elif parts.path == "/api/image":
             refs = parse_qs(parts.query).get("ref", [])
             if len(refs) != 1:
@@ -268,7 +316,13 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:  # noqa: BLE001 -- a bug: logged here, never shown to the client
             self._failure()
         else:
-            self._json(200, result)
+            try:
+                encoded = json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8")
+            except (TypeError, ValueError):  # a bug: an answer that is not JSON is never half sent
+                self._failure()
+                return
+            self._send(200, encoded, "application/json; charset=utf-8",
+                       (("Content-Security-Policy", "default-src 'none'; sandbox"),))
 
     def _failure(self) -> None:
         print("grimoire app: an op failed:", file=sys.stderr)
@@ -278,16 +332,24 @@ class _Handler(BaseHTTPRequestHandler):
 
 class AppServer:
     """Serve ``api`` on a loopback ``host``. ``token`` (default: 32 random bytes, drawn per serve) is what
-    every ``/api`` request must carry. Calls reach ``api`` one at a time (``TextApi`` serializes them)."""
+    every ``/api`` request must carry. Calls reach ``api`` one at a time (``TextApi`` serializes them, adapter
+    ops included). ``adapters`` (default: the app's own, ``grimoire.app.adapters``) and ``static`` (default: the
+    packaged shell and pages) are what tests replace. A bad page manifest stops the server before it listens
+    (``PageManifestError``)."""
 
-    def __init__(self, api: TextApi, *, host: str = "127.0.0.1", port: int = 0, token: str | None = None) -> None:
+    def __init__(self, api: TextApi, *, host: str = "127.0.0.1", port: int = 0, token: str | None = None,
+                 adapters: tuple[Adapter, ...] | None = None, static: Path = STATIC) -> None:
         if not is_loopback(host):
             raise ValueError("the app serves loopback addresses only")
         self.api = api
+        self.app_api = AppApi(api, adapters)
+        self.static = static
+        self.pages = load_pages(static)
+        self.registry = {"contract": CONTRACT, "slots": list(SLOTS),
+                         "pages": [page.to_json(self.app_api.ops) for page in self.pages]}
         self.token = token if token is not None else secrets.token_urlsafe(32)
-        page = PAGE.read_text(encoding="utf-8")
-        self.page = page.encode("utf-8")
-        self.policy = page_policy(page)
+        self.page = (static / "index.html").read_bytes()
+        self.policy = PAGE_POLICY
         server_class = _V6Server if ":" in host else _Server
         self._server = server_class((host, port), _Handler, self)
         bound_host, bound_port = self._server.server_address[:2]
@@ -310,10 +372,10 @@ class AppServer:
         return f"http://{shown}:{port}/#token={self.token}"
 
     def call(self, op: str, args: dict) -> dict:
-        return self.api.call(op, args)
+        return self.app_api.call(op, args)
 
     def image(self, ref: str) -> tuple[str, bytes]:
-        return self.api.image(ref)
+        return self.app_api.image(ref)
 
     def serve_forever(self) -> None:
         with self._state:
@@ -336,4 +398,5 @@ class AppServer:
         self._server.server_close()
 
 
-__all__ = ["BODY_DEADLINE", "HEADER_DEADLINE", "MAX_BODY", "MAX_CONNECTIONS", "TOKEN_HEADER", "AppServer", "page_policy"]
+__all__ = ["BODY_DEADLINE", "HEADER_DEADLINE", "MAX_BODY", "MAX_CONNECTIONS", "PAGE_POLICY", "STATIC", "TOKEN_HEADER",
+           "AppServer", "static_file"]
