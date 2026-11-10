@@ -139,9 +139,9 @@ export async function mount(root, ctx) {
     const scene = await ctx.api("play.start", args);
     // only a premise that was sent is done; text typed into it while the start ran stays a draft
     if (chosen.kind === "premise" && premise.value === chosen.premise) premise.clear();
-    // 052 wrote the chat but stopped before it finished; the chat says how (take your seat) once it opens
-    if (scene.unfinished) ctx.notify("The chat was started, but starting stopped before it finished (" + scene.unfinished + ").", { bad: true });
-    ctx.navigate(ctx.href("chat", [scene.chat]));
+    // 052 wrote the chat but stopped before it finished: the chat page says so and offers Finish starting, as
+    // opening the chat does not say it
+    ctx.navigate(ctx.href("chat", [scene.chat], scene.unfinished ? { unfinished: scene.unfinished } : undefined));
   }), { kind: "primary" });
 
   root.append(el("p", { class: "g-muted" }, "No world is needed. Every source is bound at the revision it has now."),

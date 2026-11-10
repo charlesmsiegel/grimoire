@@ -192,6 +192,18 @@ def test_a_typed_skip_in_the_composer_is_the_same_request(folder):
         assert scene["state"]["keepable"] == []
 
 
+
+def test_asking_the_director_with_no_speakers_asks_no_npc(folder):
+    # what the chat page's "Ask the director" sends: with speakers omitted, 035 asks every NPC on stage too
+    with Device(folder, [say("Thunder rolls over the harbour.")]) as device:
+        chat = device("play.start", kind="character", ref=str(MARA_VELL), persona=str(ANYA))["chat"]
+        device("play.add_card", chat=chat, ref=str(STORM), role="scenario")
+        device("post", chat=chat, text='"Listen."')
+        scene = device("generate", chat=chat, director=True, speakers=[])
+        (take,) = scene["turns"][-1]["offered"]
+        assert [line["text"] for line in take["lines"]] == ["Thunder rolls over the harbour."]
+        assert [line["speaker"] for line in take["lines"]] == ["Narrator"]
+
 # -- a source gone --------------------------------------------------------------------------------------------
 
 def test_a_missing_card_is_reported_and_detached_and_the_chat_plays_on(folder):

@@ -3,7 +3,8 @@
 // find the chat under All and under Continue on Start Chat. A second test mends a chat whose added card is gone.
 // Run by test_app_play_js.py, which serves a synthetic card library with a scripted model and passes
 // GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_CHARACTER (Mara), GRIMOIRE_PERSONA (Anya) and GRIMOIRE_NEWCOMER (Tamsin),
-// or, for the second test, GRIMOIRE_BROKEN: a chat whose newcomer's card was removed.
+// or, for the second test, GRIMOIRE_BROKEN: a chat whose newcomer's card was removed, or, for the third,
+// GRIMOIRE_UNFINISHED: the server's first opening is cut off, so Start Chat's start stops before it finishes.
 import assert from "node:assert/strict";
 import { register } from "node:module";
 import { test } from "node:test";
@@ -54,7 +55,7 @@ async function boot() {
   return { window, body, main };
 }
 
-test("Start Chat, play a turn, correct it and find the chat again", { skip: !env.GRIMOIRE_APP || Boolean(env.GRIMOIRE_BROKEN) }, async () => {
+test("Start Chat, play a turn, correct it and find the chat again", { skip: !env.GRIMOIRE_APP || Boolean(env.GRIMOIRE_BROKEN || env.GRIMOIRE_UNFINISHED) }, async () => {
   const { window, body, main } = await boot();
   const nav = await until(() => byText(body.querySelector("nav"), "a", "Start Chat").length && body.querySelector("nav"), 15000, "the menu");
 
@@ -160,4 +161,19 @@ test("a chat whose added card is gone shows what is missing and detaches it", { 
   await until(() => !byText(main, "button", "See what is missing").length && !byText(main, "button", "Detach").length && idle(body), 15000, "the detached card");
   assert.ok(!main.querySelectorAll("div.g-notice").some((node) => node.textContent.includes("A source this chat binds is gone.")));
   assert.deepEqual(body.querySelectorAll("div.g-bad").map((node) => node.textContent), [], "the detach shows no error");
+});
+
+test("a start that stops before it finishes is finished from the chat", { skip: !env.GRIMOIRE_UNFINISHED }, async () => {
+  const { window, body, main } = await boot();
+  await until(() => body.querySelector("nav"), 15000, "the menu");
+  window.location.hash = "#/start?source=" + encodeURIComponent(env.GRIMOIRE_CHARACTER);
+  await until(() => byText(main, "legend", "Opening").length, 15000, "the openings");
+  pick(choice(main, "You play"), env.GRIMOIRE_PERSONA);
+  byText(main, "button", "Start Chat").at(-1).click();
+  await until(() => window.location.hash.startsWith("#/chat/"), 15000, "the new chat");
+  const finish = await until(() => byText(main, "button", "Finish starting")[0], 15000, "Finish starting");
+  assert.ok(!main.querySelectorAll("div.chat-line").length, "nothing opened the chat yet");
+  finish.click();
+  await until(() => main.querySelectorAll("div.chat-line").some((node) => node.textContent.includes("You came back. I didn't think you would."))
+    && !byText(main, "button", "Finish starting").length && idle(body), 15000, "the opening, finished");
 });

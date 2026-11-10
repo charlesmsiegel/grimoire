@@ -19,6 +19,7 @@ from textapi_fixtures import Device
 
 from grimoire.app import AppServer
 from grimoire.app.appapi import AppApi
+from grimoire.scene import SceneRefused
 from grimoire.store import LibraryStore
 
 TESTS = Path(__file__).with_name("js")
@@ -70,3 +71,22 @@ def test_a_gone_card_is_detached_in_the_chat_page(tmp_path):
     with Device(folder) as device:
         _run(device, GRIMOIRE_BROKEN=chat)
         assert AppApi(device.api).call("play.repairs", {"chat": chat})["repairs"] == []
+
+
+@pytest.mark.skipif(NODE is None, reason="Node is not installed")
+def test_a_start_cut_off_is_finished_in_the_chat_page(tmp_path):
+    folder = _library(tmp_path)
+    with Device(folder) as device:
+        runner = device.api.runner
+        begin = runner.begin
+        cut = []
+
+        def once(*args, **kwargs):  # the first opening is lost to a race; continue's goes through
+            if not cut:
+                cut.append(True)
+                raise SceneRefused("turn_changed", "a turn was opened meanwhile")
+            return begin(*args, **kwargs)
+
+        runner.begin = once
+        _run(device, GRIMOIRE_UNFINISHED="1", GRIMOIRE_CHARACTER=str(MARA_VELL), GRIMOIRE_PERSONA=str(ANYA))
+        assert cut == [True]

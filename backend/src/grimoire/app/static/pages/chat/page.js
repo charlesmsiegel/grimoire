@@ -24,7 +24,9 @@ export async function mount(root, ctx) {
     page.busy = true;
     return ctx.act(work).finally(() => { page.busy = false; if (page.scene && !ctx.signal.aborted) render(page.scene); });
   };
-  const page = { busy: false, scene: null, mode: "auto", redirecting: null, striking: null, pickable: null, modes: null, repairs: null };
+  const page = { busy: false, scene: null, mode: "auto", redirecting: null, striking: null, pickable: null, modes: null, repairs: null,
+    // a start that stopped before it finished, as Start Chat was told (?unfinished=), until continue answers
+    unfinished: ctx.query.get("unfinished") };
   const view = el("div", {});
   const composer = ui.field("Your turn", { draft: ctx.draft("composer:" + chat), multiline: true });
   composer.input.setAttribute("maxlength", "20000");
@@ -46,13 +48,15 @@ export async function mount(root, ctx) {
   async function call(op, args) { return ctx.api(op, { chat, ...args }); }
   async function act(op, args) { render(await call(op, args)); }
   async function open() { render(await call("open", {})); }
+  // 052's continue finishes a start that stopped and seats this device; its answer says whether it finished
+  async function finish() { const scene = await call("continue", {}); page.unfinished = scene.unfinished || null; render(scene); }
 
   // A scene with no NPC who can speak is answered by the director: generate is refused nothing_to_generate
   // before anything is written, so the director reply is asked only then.
   async function answer() {
     try { return render(await call("generate", {})); }
     catch (error) { if (error.reason !== "nothing_to_generate") throw error; }
-    render(await call("generate", { director: true }));
+    render(await call("generate", { director: true, speakers: [] }));
   }
 
   async function post() {
@@ -78,6 +82,7 @@ export async function mount(root, ctx) {
 
   function render(scene, { bottom = false } = {}) {
     page.scene = scene;
+    if (scene.turns.some((turn) => turn.post)) page.unfinished = null;  // a stale address: play has begun
     // while play is held up (no seat, a pause, a fork, a conflict, unreadable turns) nothing new is taken
     page.stopped = !scene.state.seated || scene.state.waiting.some((item) => STOPS.includes(item));
     // a pause holds new play, not corrections: 035 takes a skip, a redirect or a strike while paused
@@ -147,6 +152,7 @@ export async function mount(root, ctx) {
         const space = pick.value.indexOf(" ");
         const scene = await call("play.add_card", { role: pick.value.slice(0, space), ref: pick.value.slice(space + 1) });
         page.adding = false;
+        page.unfinished = scene.unfinished || null;  // the newcomer bound but not seated: continue seats it
         render(scene);
       })));
   }
@@ -174,13 +180,13 @@ export async function mount(root, ctx) {
     const out = [];
     const waiting = scene.state.waiting;
     const box = (text, ...actions) => { const node = ui.notice(text); if (actions.length) node.append(ui.actions(...actions)); return node; };
-    if (scene.unfinished && ctx.has("continue")) {
-      out.push(box("Starting stopped before it finished (" + scene.unfinished + ").",
-        ui.button("Finish starting", () => run(() => act("continue", {})), { kind: "primary" })));
+    if (page.unfinished && ctx.has("continue")) {
+      out.push(box("Starting stopped before it finished (" + page.unfinished + ").",
+        ui.button("Finish starting", () => run(finish), { kind: "primary" })));
     }
     if (!scene.state.seated && ctx.has("continue")) {
       out.push(box("This device has not taken its seat at this chat yet.",
-        ui.button("Take your seat", () => run(() => act("continue", {})), { kind: "primary" })));
+        ui.button("Take your seat", () => run(finish), { kind: "primary" })));
     }
     if (waiting.includes("paused")) out.push(box("Play is paused.", ui.button("Resume", () => run(() => act("resume", {})))));
     if (waiting.includes("interrupted")) {
@@ -333,7 +339,8 @@ export async function mount(root, ctx) {
       first.disabled = stopped;
       bar.append(first);
       if (npcs.length > 1) for (const npc of npcs) bar.append(ask("Ask " + npc.name, { speakers: [npc.actor] }));
-      if (npcs.length) bar.append(ask("Ask the director", { director: true }));
+      // the director alone: with no speakers named, 035 would ask every NPC on stage too
+      if (npcs.length) bar.append(ask("Ask the director", { director: true, speakers: [] }));
     } else if (ctx.has("generate")) {
       bar.append(el("span", { class: "g-muted" }, "No model is set up, so nobody can answer yet. Posts, keeps and passes still work."));
     }
