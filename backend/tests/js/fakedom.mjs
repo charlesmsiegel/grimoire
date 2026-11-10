@@ -9,9 +9,11 @@ class Node {
   constructor(document) { this.ownerDocument = document; this.parentNode = null; this.childNodes = []; }
   get textContent() { return this.childNodes.map((child) => child.textContent).join(""); }
   set textContent(text) { this.replaceChildren(text === "" ? [] : new Text(this.ownerDocument, String(text))); }
+  // as a browser's append(): a node is adopted and anything else becomes text (an array is not flattened, it
+  // is stringified, so a page that nests arrays shows "[object HTMLElement]" here as it would in a browser)
   _adopt(nodes) {
-    return nodes.flat().map((node) => {
-      const child = typeof node === "string" ? new Text(this.ownerDocument, node) : node;
+    return nodes.map((node) => {
+      const child = node !== null && typeof node === "object" && "childNodes" in node ? node : new Text(this.ownerDocument, String(node));
       if (child.parentNode) child.remove();
       child.parentNode = this;
       return child;
