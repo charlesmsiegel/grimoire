@@ -32,6 +32,7 @@ from grimoire.chatstore import ChatLibrary
 from grimoire.core.identity import SourceRef
 from grimoire.ledgers import DurableAuthority
 from grimoire.reviewapi import ReviewRefused, preview_digest
+from grimoire.security import Grant, Permission, ResourcePath
 from grimoire.store import LibraryStore, SourceManifest
 from grimoire.testing.fileops import snapshot
 
@@ -42,6 +43,16 @@ def files_of(folder) -> dict:
     """The library's canonical files (the authority's own ledgers aside)."""
     return {path: data for path, data in snapshot(folder).items()
             if not path.startswith((".", "authority/"))}
+
+
+def apply_checked(desk, proposal) -> dict:
+    """Apply as shown, and check that every file now holds exactly the bytes the proposal showed."""
+    shown = desk.api.proposals.get(proposal["proposal"]).preview()
+    applied = desk("proposal.apply", proposal=proposal["proposal"], digest=proposal["digest"])
+    now = snapshot(desk.folder)
+    for path, data in shown.items():
+        assert now.get(path) == data, path
+    return applied
 
 
 def refused(call) -> ReviewRefused:
@@ -77,7 +88,7 @@ def test_proving_scenario_a_v1_library_and_a_separate_card_are_previewed_approve
         before = files_of(desk.folder)
         assert not any(path.startswith("sources/world/") for path in before)  # a preview writes nothing
 
-        applied = desk("proposal.apply", proposal=proposal["proposal"], digest=proposal["digest"])
+        applied = apply_checked(desk, proposal)
         assert applied["state"] == "applied" and applied["result"]["receipt"].startswith("import:")
         after = files_of(desk.folder)
         assert {row["path"] for row in proposal["files"]} <= set(after)
@@ -85,20 +96,20 @@ def test_proving_scenario_a_v1_library_and_a_separate_card_are_previewed_approve
 
         again = desk("v1.preview", scan=desk("v1.scan", source=str(v1), archive_id=ARCHIVE)["scan"])
         assert again["writes"] == 0 and again["files"] == []
-        desk("proposal.apply", proposal=again["proposal"], digest=again["digest"])
+        apply_checked(desk, again)
         assert files_of(desk.folder) == after  # the rerun duplicated nothing
 
         card_proposal = desk("card.preview", card=b64(CARD), origin="mara.json", portrait=b64(PORTRAIT))
         report = card_proposal["report"]
         assert report["status"] == "new" and report["accepted_events"] == []
         assert {piece["role"] for piece in report["pieces"]} >= {"authored_description", "opening_greeting"}
-        desk("proposal.apply", proposal=card_proposal["proposal"], digest=card_proposal["digest"])
+        apply_checked(desk, card_proposal)
         with_card = files_of(desk.folder)
         assert any(path.startswith("sources/card/mara-vell/") for path in with_card)
 
         rerun = desk("card.preview", card=b64(CARD), origin="mara.json", portrait=b64(PORTRAIT))
         assert rerun["report"]["status"] == "unchanged" and rerun["files"] == []
-        desk("proposal.apply", proposal=rerun["proposal"], digest=rerun["digest"])
+        apply_checked(desk, rerun)
         assert files_of(desk.folder) == with_card
         assert not any(path.startswith("sources/card/mara-vell-2") for path in with_card)
     assert tree_digest(v1) == v1_before  # the V1 source was only read
@@ -133,7 +144,7 @@ def test_the_digest_covers_every_file_and_its_bytes(desk):
 def test_a_library_that_moved_since_the_preview_refuses_the_apply_and_writes_nothing(desk):
     first = desk("card.preview", card=b64(CARD))
     second = desk("card.preview", card=b64(CARD))  # the same destination, planned before the first landed
-    desk("proposal.apply", proposal=first["proposal"], digest=first["digest"])
+    apply_checked(desk, first)
     landed = files_of(desk.folder)
     error = refused(lambda: desk("proposal.apply", proposal=second["proposal"], digest=second["digest"]))
     assert error.reason == "stale" and error.details
@@ -143,7 +154,7 @@ def test_a_library_that_moved_since_the_preview_refuses_the_apply_and_writes_not
 
 def test_a_proposal_is_applied_once(desk):
     proposal = desk("card.preview", card=b64(CARD))
-    desk("proposal.apply", proposal=proposal["proposal"], digest=proposal["digest"])
+    apply_checked(desk, proposal)
     error = refused(lambda: desk("proposal.apply", proposal=proposal["proposal"], digest=proposal["digest"]))
     assert error.reason == "no_proposal" and error.status == 404
 
@@ -190,10 +201,14 @@ def test_imported_history_is_previewed_and_creates_no_memory_or_event(tmp_path):
         speakers = {sid: str(ref) for sid, ref in mapping(scan_st_export(data)).items()}
         proposal = desk("history.preview", export=b64(data), speakers=speakers, name="tide.jsonl")
         assert proposal["report"]["status"] == "new" and proposal["report"]["provider_calls"] == 0
-        assert proposal["report"]["accepted_events"] == [] and proposal["report"]["memories"] == []
-        applied = desk("proposal.apply", proposal=proposal["proposal"], digest=proposal["digest"])
+        report = proposal["report"]
+        assert report["staged"].get("transcript") and report["staged"].get("chat") == 1
+        assert report["accepted_events"] == [] and report["memories"] == [] and report["turns"] == []
+        applied = apply_checked(desk, proposal)
         written = files_of(desk.folder)
-        assert not any("/events/" in path or "/evidence/" in path or "/knowledge/" in path for path in written)
+        made = [path for path in written if path.startswith("campaigns/")]
+        assert made and not any(f"/{folder}/" in path for path in made
+                                for folder in ("accepted", "wrapups", "turns", "knowledge", "evidence", "events"))
         again = desk("history.preview", export=b64(data), speakers=speakers, name="tide.jsonl")
         assert again["report"]["status"] == "already_imported" and again["files"] == []
         assert applied["result"]["chat"] == again["report"]["chat"]
@@ -258,7 +273,7 @@ def test_an_approved_change_set_writes_exactly_its_files(tmp_path):
     with Desk(secured(tmp_path / "lib", seed_world)) as desk:
         proposal = desk("changeset.review", changeset=_changeset(desk.store))
         shown = desk.api.proposals.get(proposal["proposal"]).preview()
-        applied = desk("proposal.apply", proposal=proposal["proposal"], digest=proposal["digest"])
+        applied = apply_checked(desk, proposal)
         assert applied["result"]["changeset"] == "cs-1"
         after = files_of(desk.folder)
         for path, data in shown.items():
@@ -313,7 +328,7 @@ def test_a_rebase_is_reviewed_decided_and_applied_as_one_proposal(tmp_path):
         assert undecided.reason == "undecided"
         proposal = desk("rebase.preview", review=review["review"],
                         decisions={name: "take" for name in review["decisions_needed"]})
-        applied = desk("proposal.apply", proposal=proposal["proposal"], digest=proposal["digest"])
+        applied = apply_checked(desk, proposal)
         assert applied["result"]["upstream"].endswith("@r2")
         assert not desk("rebase.candidates", chat=str(chat_ref))["actors"][0]["behind"]
 
@@ -333,7 +348,7 @@ def test_the_v1_library_is_never_written_even_when_the_import_is_applied_twice(t
     with Desk(secured(tmp_path / "lib"), home=home) as desk:
         for _ in range(2):
             proposal = desk("v1.preview", scan=desk("v1.scan", source=str(v1), archive_id=ARCHIVE)["scan"])
-            desk("proposal.apply", proposal=proposal["proposal"], digest=proposal["digest"])
+            apply_checked(desk, proposal)
     assert tree_digest(v1) == tree_digest(copy)
 
 
@@ -346,3 +361,49 @@ def test_an_owner_without_a_grant_for_the_destination_is_refused_and_nothing_is_
         denied = refused(lambda: desk("card.preview", card=b64(CARD), origin="mara.json"))
         assert denied.reason == "denied" and denied.details
         assert len(desk.api.proposals) == 0
+
+
+def test_a_portrait_that_is_no_picture_is_refused_by_name(desk):
+    error = refused(lambda: desk("card.preview", card=b64(CARD), portrait=b64(b"not a picture")))
+    assert error.reason == "invalid_portrait" and error.status == 400 and error.details == {"detail": "portrait"}
+
+
+def test_a_v1_folder_that_is_missing_or_gone_since_its_scan_is_refused(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    with Desk(secured(tmp_path / "lib"), home=home) as desk:
+        missing = refused(lambda: desk("v1.scan", source=str(tmp_path / "nowhere"), archive_id=ARCHIVE))
+        assert missing.reason == "no_source" and missing.status == 404
+        v1 = build_two_npc_library(tmp_path / "v1")
+        scanned = desk("v1.scan", source=str(v1), archive_id=ARCHIVE)
+        shutil.rmtree(v1)
+        gone = refused(lambda: desk("v1.preview", scan=scanned["scan"]))
+        assert gone.reason in ("no_source", "not_a_v1_library", "source_changed")
+        assert refused(lambda: desk("v1.receipts", archive_id="A/B")).reason == "invalid_field"
+
+
+def test_a_denied_apply_writes_nothing_and_stays_open_to_retry(desk):
+    proposal = desk("card.preview", card=b64(CARD))
+    before = files_of(desk.folder)
+    desk.authority.revoke_grant("owner-sources")
+    denied = refused(lambda: desk("proposal.apply", proposal=proposal["proposal"], digest=proposal["digest"]))
+    assert denied.reason == "denied" and files_of(desk.folder) == before
+    assert desk("proposal.get", proposal=proposal["proposal"])["state"] == "open"
+    desk.authority.add_grant(Grant("owner-sources-again", OWNER, frozenset({Permission.APPLY}),
+                                   ResourcePath.parse("sources"), OWNER))
+    assert apply_checked(desk, proposal)["state"] == "applied"
+
+
+def test_a_rejected_card_import_writes_nothing(desk):
+    before = files_of(desk.folder)
+    proposal = desk("card.preview", card=b64(CARD), portrait=b64(PORTRAIT))
+    assert desk("proposal.reject", proposal=proposal["proposal"])["state"] == "rejected"
+    assert files_of(desk.folder) == before
+    gone = refused(lambda: desk("proposal.apply", proposal=proposal["proposal"], digest=proposal["digest"]))
+    assert gone.reason == "no_proposal"
+
+
+def test_a_preview_records_one_authority_decision_per_staged_path(desk):
+    before = len(desk.authority.audit())
+    proposal = desk("card.preview", card=b64(CARD), portrait=b64(PORTRAIT))
+    assert len(desk.authority.audit()) - before == proposal["writes"]

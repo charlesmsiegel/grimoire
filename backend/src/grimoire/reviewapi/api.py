@@ -10,8 +10,9 @@ record of its own and writes only through the services that own each write:
 - 043's ``ChangeSetLibrary`` (a reviewed world change set)
 
 Every write is a two-step **proposal**: a ``*.preview`` op plans it and returns the exact bytes of every file
-and their digest; ``proposal.apply`` names the proposal and that digest. Nothing is written by a preview. See
-docs/REVIEW_UI.md.
+and their digest; ``proposal.apply`` names the proposal and that digest. A preview writes no library file;
+the authority records its decision on each staged path in the security audit, as every planner's ask
+does. See docs/REVIEW_UI.md.
 """
 
 from __future__ import annotations
@@ -43,7 +44,9 @@ from grimoire.migrate_v1._fs import SourceChanged, TooLarge
 from grimoire.rebase import RebaseError
 from grimoire.rebasestore import SourceRebase
 from grimoire.security import Permission
-from grimoire.store import LibraryStore, StaleWrite, StoreError
+from grimoire.imagestore.disk import InvalidImage
+from grimoire.store import LibraryStore, StaleWrite, StoreError, UnstorableIdentifier
+from grimoire.store.layout import classify
 from grimoire.store.errors import WriteDenied
 from grimoire.textapi import ApiRefused
 
@@ -58,11 +61,12 @@ MAX_HELD = 4
 MAX_ROWS = 500
 MAX_TEXT = 1000
 
-NOT_FOUND = frozenset({"unknown_op", "no_proposal", "no_scan", "no_review", "no_chat", "no_actor"})
+NOT_FOUND = frozenset({"unknown_op", "no_proposal", "no_scan", "no_review", "no_chat", "missing_actor",
+                       "no_source"})
 BAD_REQUEST = frozenset({
     "invalid_field", "too_large", "invalid_json", "invalid_card", "unsupported_format", "invalid_options",
     "invalid_target", "not_a_card_source", "not_a_v1_library", "unsafe_paths", "unknown_speaker", "role_kind",
-    "invalid_selection", "unstorable", "unstorable_id",
+    "invalid_selection", "unstorable", "unstorable_id", "invalid_portrait", "unsupported_schema", "invalid_message",
 })
 
 
@@ -133,9 +137,17 @@ def _bytes(args: Mapping[str, object], key: str, limit: int, *, required: bool =
 
 
 def _refused(error: Exception, details: object = None) -> ReviewRefused:
+    """The service's own reason code; an error that carries none is ``refused``, its kind in ``details``."""
     reason = getattr(error, "reason", None)
-    return ReviewRefused(reason if isinstance(reason, str) and reason else type(error).__name__, str(error),
-                         details=details)
+    if isinstance(reason, str) and reason:
+        return ReviewRefused(reason, str(error), details=details)
+    return ReviewRefused("refused", str(error), details={"error": type(error).__name__} if details is None else details)
+
+
+def _unreadable(error: OSError, what: str) -> ReviewRefused:
+    if isinstance(error, FileNotFoundError):
+        return ReviewRefused("no_source", f"{what} is not there")
+    return ReviewRefused("unreadable_source", f"{what} cannot be read ({type(error).__name__})")
 
 
 def _stale(error: StaleWrite) -> ReviewRefused:
@@ -168,18 +180,16 @@ class _OwnerProposes:
         self._handle = handle
 
     def authorize(self, permission, resource, payload=None, approval_id=None):  # type: ignore[no-untyped-def]
-        decision = self._handle.authorize(permission, resource, payload, approval_id)
-        if permission is Permission.PROPOSE and not decision.allowed:
+        if permission is Permission.PROPOSE:  # one recorded decision per path: the owner's apply, else propose
             applied = self._handle.authorize(Permission.APPLY, resource, payload, approval_id)
             if applied.allowed:
                 return applied
-        return decision
+        return self._handle.authorize(permission, resource, payload, approval_id)
 
 
 class ReviewApi:
     """The review ops on one open library, for its ``owner`` (a ``human:`` principal). ``authority`` is the
-    library's durable authority: its trusted owner handle is what every planner and service writes with, and
-    a change set that needs a per-file approval gets it registered there on the owner's own ``apply``. Calls
+    library's durable authority: its trusted owner handle is what every planner and service writes with. Calls
     are serialized: one library, one writer at a time. ``environ`` and ``home`` are what 011's path checks
     read to keep a V1 library and its scan apart from this one (default: this process's)."""
 
@@ -342,6 +352,9 @@ class ReviewApi:
                 from None
         except ImportDenied as error:
             raise ReviewRefused("denied", str(error), details=[list(item) for item in error.denied]) from None
+        except InvalidImage as error:
+            raise ReviewRefused("invalid_portrait", f"the portrait is not a supported picture ({error})",
+                                details={"detail": "portrait"}) from None
         except StaleWrite as error:
             raise _stale(error) from None
         except StoreError as error:
@@ -363,8 +376,7 @@ class ReviewApi:
         except StRefused as error:
             raise ReviewRefused(error.reason, str(error), details={"line": error.line}) from None
         return {"sha256": found.sha256, "bytes": found.byte_length, "counts": dict(found.counts),
-                "speakers": jsonable(found.speakers), "losses": jsonable(found.losses),
-                "campaign": found.campaign_id}
+                "speakers": jsonable(found.speakers), "losses": jsonable(found.losses)}
 
     def _history_preview(self, args: Mapping[str, object]) -> dict:
         data = _bytes(args, "export", MAX_EXPORT_BYTES)
@@ -395,12 +407,19 @@ class ReviewApi:
             raise ReviewRefused(error.reason, str(error), details={"line": error.line}) from None
         except StoreError as error:
             raise _refused(error) from None
+        kinds: dict[str, list[str]] = {}
+        for path in planned.preview():
+            found = classify(tuple(path.split("/")))
+            kinds.setdefault(found[0] if found is not None else "other", []).append(path)
         view = {"status": planned.status, "chat": str(planned.chat), "provider_calls": planned.provider_calls,
                 "speakers": {sid: str(ref) for sid, ref in planned.speakers.items()},
                 "actors": {sid: str(ref) for sid, ref in planned.actors.items()},
                 "counts": dict(planned.scan.counts), "pages": len(planned.pages),
                 "losses": jsonable(planned.losses), "following": [str(ref) for ref in planned.following],
-                "accepted_events": [], "memories": []}
+                "staged": {kind: len(paths) for kind, paths in sorted(kinds.items())},
+                # what an import must never stage: accepted events, wrap-ups, played turns, actor knowledge
+                "accepted_events": sorted(kinds.get("accepted", []) + kinds.get("wrapup", [])),
+                "turns": sorted(kinds.get("turn", [])), "memories": sorted(kinds.get("knowledge", []))}
 
         def commit() -> dict:
             result = planned.commit(None)
@@ -427,6 +446,8 @@ class ReviewApi:
             raise ReviewRefused("too_large", str(error)) from None
         except ValueError as error:  # an archive id that is no identity segment
             raise ReviewRefused("invalid_field", str(error)) from None
+        except OSError as error:
+            raise _unreadable(error, "the V1 library folder") from None
         manifest = json.loads(render_json(result.manifest))  # exactly what a reviewer saves and reloads
         scan_id = self._new_id("scan")
         self.scans.hold(scan_id, (source, manifest))
@@ -456,8 +477,14 @@ class ReviewApi:
             raise ReviewRefused("unsafe_paths", str(error)) from None
         except SourceChanged as error:
             raise ReviewRefused("source_changed", f"the V1 library changed while it was read ({error})") from None
+        except NotAV1Library as error:
+            raise ReviewRefused("not_a_v1_library", f"{error}; scan the V1 library again") from None
+        except TooLarge as error:
+            raise ReviewRefused("too_large", str(error)) from None
         except StoreError as error:
             raise _refused(error) from None
+        except OSError as error:
+            raise _unreadable(error, "the scanned V1 library folder") from None
         review = plan.review()
 
         def commit() -> dict:
@@ -473,7 +500,7 @@ class ReviewApi:
             receipts = read_receipts(self.store, archive_id)  # type: ignore[arg-type]
         except V1Refused as error:
             raise _refused(error) from None
-        except ValueError as error:
+        except (ValueError, UnstorableIdentifier) as error:
             raise ReviewRefused("invalid_field", str(error)) from None
         return {"archive_id": archive_id, "runs": receipts.run, "written": len(receipts.written),
                 "mapping": {key: len(rows) for key, rows in receipts.mapping.items()}}
@@ -555,15 +582,13 @@ class ReviewApi:
                 "conflicts": jsonable(review.conflicts), "permissions": jsonable(review.permissions),
                 "blocked": list(review.blocked), "applicable": review.applicable,
                 "needs_approval": list(review.needs_approval),
-                "approvals": review.describe_approvals(self.owner) if review.needs_approval else {}}
-        library, authority, owner = self.changesets, self.authority, self.owner
+}
+        library, authority = self.changesets, self.authority
 
         def commit() -> dict:
-            approvals = {}
-            if review.needs_approval:  # the owner's own apply is the human action 007's approval needs
-                approvals = library.approve(review, authority, approved_by=owner,
-                                            new_id=lambda: self._new_id("approval"))
-            result = library.apply(review, approvals)
+            # the owner's trusted handle writes with its grant: no per-file approval (``needs_approval`` is
+            # empty for it); an authority that refuses the write anyway is ``denied``, and nothing is written
+            result = library.apply(review, {})
             return {"changeset": result.changeset_id, "revisions": [str(ref) for ref in result.revisions],
                     "written": sorted(result.etags)}
 
