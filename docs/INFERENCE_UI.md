@@ -31,8 +31,10 @@ The file is 044's model configuration ([MOBILE](MOBILE.md#answers-from-a-model))
 `director` (0 or more; any count above 0 allows the one director reply a turn may make) is the optional
 `director_generation` stage. `max_output_tokens` is 1 to 32,768.
 
-**Saving** writes the whole file atomically, only if it is still at `expected`: a file changed since it was read
-(by another tab or by hand) is refused `changed`, and nothing is written. A file edited or removed by hand while
+**Saving** writes the whole file atomically, one writer at a time (an OS lock on `FILE.lock` beside it; a save that
+waits more than 2 s for another is refused `busy`), only if it is still at `expected`: a file changed since it was read
+(by another tab or by hand) is refused `changed`, and nothing is written. The revision is checked again just before the new file replaces the
+old, so a hand edit made while it was written is refused too, not overwritten. A file edited or removed by hand while
 the app runs is read again the next time `models` is asked, and played by from then on, so the page always shows
 the file as it is. The runner then plays its **next** call
 by the new runtime and policy; a call already running finishes as it began. A configuration whose key variable is
@@ -72,7 +74,8 @@ labelling of its turns, the turns a fork choice set aside included (they were bi
 - a take's `declined` optional requests, as 035 recorded them.
 
 `total` and each of `by_stage` are 004's sums: `sums`, `unreported` (attempts that left each count unreported) and
-`lower_bound` (a sum is a lower bound while any of its counts is unreported: a screen never shows it bare),
+`lower_bound` (a sum is a lower bound while any of its counts is unreported, or a call was issued with no attempt
+booked: a screen never shows it bare),
 `measurements`, `unmetered_calls` (planned calls with no attempt booked, as 004 counts them) and `not_issued_calls`
 (those of them never sent, so they used nothing; what the rest used is unknown, never free). `listed` and `of` say
 how many turns are listed, of how many.

@@ -21,10 +21,12 @@ const models = { settings: { provider_id: "local", base_url: "http://127.0.0.1:1
   stages: [{ stage: "npc_generation", kind: "baseline", enabled: true, cap: null, available: true, note: "n" }, { stage: "decision", kind: "optional", enabled: false, cap: null, available: false, note: "no" }],
   limits: { attempts_per_call: 2, max_output_tokens: 99, director_calls_per_turn: 1 }, unavailable: [{ feature: "prices", reason: "none" }], bounds: { fallbacks: 4, attempts: 3, max_output_tokens: 32768 } };
 const calls = [];
+let hold = null;
 const api = async (op, args) => { calls.push([op, args]);
+  if (op === "usage" && args.chat === "slow") return new Promise((resolve) => { hold = () => resolve({ turns: [], total: { ...totals, unmetered_calls: 0, not_issued_calls: 0 }, by_stage: [], complete: true, problems: [], marker: "SLOW" }); });
   if (op === "models" || op === "save_models") return models;
   if (op === "check_models") return { ok: true, problems: [], routes: ["a", "b"], local: true, key_set: null, sent: false };
-  if (op === "chats") return { chats: [{ chat: "c1", label: "Chat one" }] };
+  if (op === "chats") return { chats: [{ chat: "c1", label: "Chat one" }, { chat: "slow", label: "Slow" }] };
   if (op === "usage") return { turns: [{ turn: "t", number: 1, set_aside: false, calls: [
       { take: 1, label: null, state: "kept", phase: "main", stage: "npc_generation", kind: "baseline", actor: "a", name: "Mara", status: "accepted", reason: null,
         attempts: [{ attempt: 1, outcome: "completed", measurement: "provider_reported", route: "r", tokens: { input_tokens: null, output_tokens: 3, cache_read_tokens: null, reasoning_tokens: null, cache_write_tokens: null }, cost: null, cost_state: "unpriced" }] },
@@ -37,17 +39,27 @@ await page.render(root, { api });
 const form = root.querySelector("#inf-provider");
 const find = (n, tag) => n.tag === tag ? n : (n.children || []).map((c) => c.tag ? find(c, tag) : null).find(Boolean);
 await new Promise((r) => setTimeout(r, 10));
-root.querySelector("#inf-chat").listeners.change({ target: { value: "c1" } });
+const pick = (value) => root.querySelector("#inf-chat").listeners.change({ target: { value } });
+pick("slow"); await new Promise((r) => setTimeout(r, 10));
+pick("c1"); await new Promise((r) => setTimeout(r, 10));
+hold(); await new Promise((r) => setTimeout(r, 10));  // the first chat's answer comes last: it must not draw
+// an edit survives Check, and Save sends the edited draft
+root.querySelector("#inf-name").value = "edited-model";
+find(root, "form").children.find((c) => c.className === "g-actions").children[0].listeners.click();
 await new Promise((r) => setTimeout(r, 10));
+assert.equal(root.querySelector("#inf-name").value, "edited-model");
+assert.ok(root.querySelector("#inf-check").textContent.includes("Nothing was sent"));
 const formNode = find(root, "form");
 formNode.listeners.submit({ preventDefault() {} });
 await new Promise((r) => setTimeout(r, 10));
 const ops = calls.map((c) => c[0]);
 for (const op of ["models", "chats", "diagnostics", "usage", "save_models"]) assert.ok(ops.includes(op), op);
 assert.deepEqual(calls.find((c) => c[0] === "save_models")[1].expected, "sha256:x");
+assert.equal(calls.find((c) => c[0] === "save_models")[1].settings.model, "edited-model");
 assert.ok(!ops.some((op) => !["models", "chats", "diagnostics", "usage", "save_models", "check_models"].includes(op)));
 const shown = root.querySelector("#inf-usage-body").textContent;
-for (const text of ["at least 10 (1 unreported)", "unknown: no prices are set", "1 never sent, 1 with what they used unknown",
+assert.ok(!shown.includes("SLOW") && shown.includes("Mara"), "a stale chat's answer drew");
+for (const text of ["at least 10 (1 unreported, 1 call(s) unrecorded)", "at least 3 (1 call(s) unrecorded)", "unknown: no prices are set", "1 never sent, 1 with what they used unknown",
   "Never sent, so it used nothing.", "prompt unreported"]) assert.ok(shown.includes(text), text);
 assert.ok(!shown.includes("[object") && !/\bcost 0\b/.test(shown));
 console.log("ok");

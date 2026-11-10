@@ -7,6 +7,7 @@ billed, never a real provider), reached through 013's real ``HttpTransport``.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 from provider_servers import base_url, sse_lines, sse_server, stream
@@ -179,6 +180,15 @@ def test_a_call_with_no_attempt_booked_is_counted_unmetered_in_its_stage_too(des
         assert stage["not_issued_calls"] == sum(1 for call in calls if call["status"] == "not_issued") >= 1
 
 
+
+def test_a_call_issued_with_no_attempt_booked_makes_every_sum_a_lower_bound():
+    from grimoire.app.inference import _totals
+
+    never_sent = _totals([], unmetered=1, unsent=1)  # not_issued: it used nothing, so 0 is exact
+    assert never_sent["sums"]["input_tokens"] == 0 and not any(never_sent["lower_bound"].values())
+    lost = _totals([], unmetered=1, unsent=0)  # issued, and what it used was never booked
+    assert all(lost["lower_bound"].values()) and lost["cost_state"] == "unpriced"
+
 # -- privacy -----------------------------------------------------------------------------------------------
 
 def test_usage_and_diagnostics_hold_no_text_a_call_sent_or_received(desk, model, tmp_path):
@@ -272,6 +282,39 @@ def test_a_save_at_a_revision_that_moved_on_writes_nothing(desk, model, tmp_path
             assert refused.value.reason == "invalid_field"
         with pytest.raises(ApiRefused):
             inference.call("save_models", {"settings": _settings(model)})
+
+
+
+def test_two_writers_of_one_settings_file_never_both_win(model, tmp_path, monkeypatch):
+    from grimoire.app import inference as module
+    from grimoire.app.config import parse_model_config as parse
+    from grimoire.store import OsLocker
+
+    path = tmp_path / "model.json"
+    one, two = SettingsFile(path), SettingsFile(path)
+    config = parse(_settings(model))
+    first = one.write(config, None)
+    # another writer (another instance, another process) holds the file's lock: refused, nothing written
+    monkeypatch.setattr(module, "LOCK_WAIT", 0.1)
+    held = OsLocker().acquire(path.with_name(path.name + ".lock"))
+    try:
+        with pytest.raises(ApiRefused) as refused:
+            two.write(parse(_settings(model, director=0)), first)
+        assert refused.value.reason == "busy"
+    finally:
+        OsLocker().release(held)
+    # a hand edit landing while the new file is written is refused, not overwritten
+    real = os.fsync
+
+    def edit_meanwhile(descriptor):
+        real(descriptor)
+        path.write_text(json.dumps(_settings(model, model="by-hand")))
+
+    monkeypatch.setattr(module.os, "fsync", edit_meanwhile)
+    with pytest.raises(ApiRefused) as refused:
+        two.write(parse(_settings(model, director=0)), first)
+    assert refused.value.reason == "changed" and json.loads(path.read_text())["model"] == "by-hand"
+    assert not list(tmp_path.glob(".model-*"))  # the new file written meanwhile was removed
 
 
 def test_without_a_settings_file_settings_are_read_only_and_play_goes_on(desk, model):

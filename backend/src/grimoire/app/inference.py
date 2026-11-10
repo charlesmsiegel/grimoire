@@ -22,6 +22,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -30,7 +31,7 @@ from grimoire.core.inference import InferencePolicy, InferenceStage, UsageTotals
 from grimoire.core.inference.usage import TOKEN_FIELDS
 from grimoire.providers.config import route_label
 from grimoire.scene import SceneRefused
-from grimoire.store import StoreError
+from grimoire.store import LibraryLocked, LockUnavailable, OsLocker, StoreError
 from grimoire.store.jsonfmt import etag, is_etag
 from grimoire.textapi import ApiRefused
 from grimoire.tracing import TraceLog, call_costs
@@ -59,6 +60,9 @@ MAX_TURNS = 1000
 DEFAULT_TURNS = 200
 #: Traces of runner calls kept in memory for ``diagnostics``.
 KEEP_TRACES = 64
+#: Seconds a save waits for another writer of the same settings file before it is refused ``busy``.
+LOCK_WAIT = 2.0
+_LOCKER = OsLocker()
 
 #: The optional stages, and why the app plays none but the director's reply yet. A stage is shown as it is:
 #: the app never offers a switch that would change nothing.
@@ -117,30 +121,59 @@ class SettingsFile:
         data = (json.dumps(config_json(config), indent=2, sort_keys=True) + "\n").encode("utf-8")
         with self._lock:
             try:
-                _current, found = self.read()
-            except OSError as error:
-                raise ApiRefused("settings_unreadable", f"the settings file cannot be read ({error.strerror})") from None
-            if found != expected:
-                raise ApiRefused("changed", "the settings changed since they were read; nothing was written")
-            folder = self.path.parent
-            try:
-                folder.mkdir(parents=True, exist_ok=True)
-                handle, temporary = tempfile.mkstemp(prefix=".model-", suffix=".tmp", dir=folder)
-                try:
-                    with os.fdopen(handle, "wb") as out:
-                        out.write(data)
-                        out.flush()
-                        os.fsync(out.fileno())
-                    os.replace(temporary, self.path)
-                except BaseException:
-                    try:
-                        os.unlink(temporary)
-                    except OSError:
-                        pass
-                    raise
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                held = self._hold()
             except OSError as error:
                 raise ApiRefused("settings_unwritable", f"the settings file cannot be written ({error.strerror})") from None
+            try:
+                self._check(expected)
+                try:
+                    handle, temporary = tempfile.mkstemp(prefix=".model-", suffix=".tmp", dir=self.path.parent)
+                    try:
+                        with os.fdopen(handle, "wb") as out:
+                            out.write(data)
+                            out.flush()
+                            os.fsync(out.fileno())
+                        self._check(expected)  # a hand edit while the new file was written wins: refused, not lost
+                        os.replace(temporary, self.path)
+                    except BaseException:
+                        try:
+                            os.unlink(temporary)
+                        except OSError:
+                            pass
+                        raise
+                except OSError as error:
+                    raise ApiRefused("settings_unwritable",
+                                     f"the settings file cannot be written ({error.strerror})") from None
+            finally:
+                _LOCKER.release(held)
         return etag(data)
+
+    def _check(self, expected: str | None) -> None:
+        try:
+            _current, found = self.read()
+        except OSError as error:
+            raise ApiRefused("settings_unreadable", f"the settings file cannot be read ({error.strerror})") from None
+        if found != expected:
+            raise ApiRefused("changed", "the settings changed since they were read; nothing was written")
+
+    def _hold(self) -> object:
+        """The OS lock on the file's ``.lock`` beside it: one writer at a time, across processes and instances
+        (another serve, another tab's app, a test). Waits briefly, then refuses ``busy``: nothing is written."""
+        lock = self.path.with_name(self.path.name + ".lock")
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+        os.close(os.open(lock, flags, 0o600))
+        deadline = time.monotonic() + LOCK_WAIT
+        while True:
+            try:
+                return _LOCKER.acquire(lock)
+            except LockUnavailable as error:
+                raise ApiRefused("settings_unwritable", f"the settings file cannot be locked ({error})") from None
+            except LibraryLocked:
+                if time.monotonic() >= deadline:
+                    raise ApiRefused("busy", "another save of these settings is under way; nothing was written") \
+                        from None
+                time.sleep(0.05)
 
 
 def _problem(code: str, message: str) -> dict:
@@ -461,6 +494,8 @@ def _totals(attempts, unmetered: int, unsent: int) -> dict:  # type: ignore[no-u
     view = _usage_totals(UsageTotals.of(attempts))
     view["unmetered_calls"] = unmetered
     view["not_issued_calls"] = unsent
+    if unmetered > unsent:  # a call issued with no attempt booked used something unknown: every sum is a floor
+        view["lower_bound"] = {name: True for name in TOKEN_FIELDS}
     view["cost"] = None
     view["cost_state"] = "unpriced"
     return view

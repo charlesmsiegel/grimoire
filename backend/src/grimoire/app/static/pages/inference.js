@@ -34,11 +34,14 @@ function fill(node, ...children) {
 }
 
 function count(totals, name) {
-  // a sum is a lower bound while any of its counts went unreported: say so, never show a bare number
+  // a sum is a lower bound while any of its counts went unreported, or a call was issued with no attempt
+  // booked: say so, never show a bare number (not even 0)
   const sum = totals.sums[name], missing = totals.unreported[name];
-  if (missing === 0) return String(sum);
-  if (missing === totals.attempts) return "unreported";
-  return `at least ${sum} (${missing} unreported)`;
+  const unknown = (totals.unmetered_calls || 0) - (totals.not_issued_calls || 0);
+  if (missing === 0 && unknown <= 0) return String(sum);
+  if (totals.attempts === 0 || missing === totals.attempts) return "unknown";
+  const why = [missing ? `${missing} unreported` : null, unknown > 0 ? `${unknown} call(s) unrecorded` : null];
+  return `at least ${sum} (${why.filter(Boolean).join(", ")})`;
 }
 
 function unmetered(totals) {
@@ -62,7 +65,7 @@ function field(id, label, input, hint) {
 /** Render the page into ``root``. ``ctx.api(op, args)`` posts one op and rejects with ``error.reason``. */
 export async function render(root, ctx) {
   const api = ctx.api;
-  const state = { models: null, check: null, chat: null };
+  const state = { models: null, check: null, chat: null, asked: 0 };
   const live = el("div", { class: "g-live", role: "status", "aria-live": "polite" });
   const sections = {
     model: el("section", { "aria-labelledby": "inf-model" }),
@@ -121,7 +124,7 @@ export async function render(root, ctx) {
         el("button", { type: "button", onclick: check }, "Check"),
         el("button", { type: "submit", class: "g-primary", disabled: readOnly }, "Save")),
       readOnly ? el("p", { class: "g-hint" }, "Read only: the app was started without a settings file (serve --model FILE).") : null,
-      state.check ? checkView(state.check) : null);
+      el("div", { id: "inf-check", "aria-live": "polite" }));
     fill(sections.model, el("h2", { id: "inf-model" }, "Model"), status, form);
   }
 
@@ -165,12 +168,16 @@ export async function render(root, ctx) {
   }
 
   async function usage() {
-    const body = root.querySelector("#inf-usage-body");
-    if (!state.chat) { fill(body); return; }
+    // only the newest request draws: an answer for a chat no longer chosen is dropped
+    const body = root.querySelector("#inf-usage-body"), asked = ++state.asked, chat = state.chat;
+    if (!chat) { fill(body); return; }
+    fill(body, el("p", {}, "Reading this chat's usage…"));
     let result;
-    try { result = await api("usage", { chat: state.chat }); } catch (error) {
-      fill(body, el("p", { class: "g-bad" }, error.message)); return;
+    try { result = await api("usage", { chat }); } catch (error) {
+      if (asked === state.asked) fill(body, el("p", { class: "g-bad" }, error.message));
+      return;
     }
+    if (asked !== state.asked) return;
     const total = result.total;
     const summary = el("dl", { class: "g-totals" },
       TOKEN_NAMES.map(([name, label]) => [el("dt", {}, label + " tokens"), el("dd", {}, count(total, name))]),
@@ -219,7 +226,7 @@ export async function render(root, ctx) {
   }
 
   async function check() {
-    try { state.check = await api("check_models", { settings: draft() }); modelSection(); say(state.check.ok ? "Checked: nothing was sent." : "These settings cannot be used.", !state.check.ok); }
+    try { state.check = await api("check_models", { settings: draft() }); fill(root.querySelector("#inf-check"), checkView(state.check)); say(state.check.ok ? "Checked: nothing was sent." : "These settings cannot be used.", !state.check.ok); }
     catch (error) { say(error.message, true); }
   }
 
