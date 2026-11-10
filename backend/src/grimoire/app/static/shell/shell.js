@@ -292,7 +292,9 @@ async function route() {
     if (controller.signal.aborted) return;
     root.replaceChildren(ui.errorBox(error), ui.actions(ui.button("Try again", () => route())));
   }
-  if (!restoreFocus(key, root)) focusTitle();
+  // A person who already chose a control while the page mounted keeps it, caret and all: the place they left last
+  // time is only where to start when they have not started anywhere yet.
+  if (current.lastFocus || !restoreFocus(key, root)) focusTitle();
   if (state.scroll.has(key)) window.scrollTo(0, state.scroll.get(key));  // back where the person left it
   current.ready = true;
 }

@@ -86,7 +86,8 @@ sheet stays linked once loaded, so an unprefixed class would restyle other pages
 The shell moves focus to the page heading after each navigation and restores the scroll position when the person
 comes back to an address. Coming back also puts focus in the control they were last in on that page, with the
 caret where it was, when that control has a `data-focus-key`: every `field` with a draft has one, and a page may
-give one to any other control, as a key that stays the same from one mount to the next (ids do not).
+give one to any other control, as a key that stays the same from one mount to the next (ids do not). A control
+the person picks while the page is still loading keeps focus.
 
 ### Design primitives (`ctx.ui`, `static/shell/ui.js`)
 

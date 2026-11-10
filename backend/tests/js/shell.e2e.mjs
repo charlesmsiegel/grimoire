@@ -101,6 +101,25 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   assert.equal(again.value, "Hello over the shell.");
   await until(() => document.activeElement === again, 15000, "focus back in the composer");
 
+  // a person who picks a control while the page still loads keeps it: the remembered composer does not take over
+  window.location.hash = "#/home";
+  await until(() => byText(main, "h2", "What next").length, 15000, "Home once more");
+  const fetchNow = globalThis.fetch;
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  globalThis.fetch = async (url, options) => {  // hold the chat's answers back, as a slow device would
+    if (String(url).startsWith("/api/") && !String(url).startsWith("/api/library")) await held;
+    return fetchNow(url, options);
+  };
+  window.location.hash = chatHash;
+  const allChats = await until(() => byText(main, "a", "All chats").at(-1), 15000, "the chat, still loading");
+  allChats.focus();
+  release();
+  globalThis.fetch = fetchNow;
+  await until(() => byText(main, "button", "Pause").length, 15000, "the scene after a slow load");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(document.activeElement, allChats, "the control chosen during the load keeps focus");
+
   // post it: the post shows in the chat and the draft is cleared
   const before = main.querySelectorAll("div").filter((node) => node.className === "chat-post").length;
   await until(() => byText(main, "button", "Pause").length, 15000, "the scene");
