@@ -49,6 +49,9 @@ test("a pasted change set is reviewed, approved and written", { skip: !base }, a
   byText(main, "button", "Review change set")[0].click();
   await until(() => byText(main, "h2", "Review before anything is written").length, 30000, "the review");
   assert.ok(byText(main, "p", "Digest sha256:").length, "the digest is shown");
+  const applicable = main.querySelectorAll("dt").find((node) => node.textContent === "Can be applied");
+  assert.ok(applicable, "the report's facts are shown as labelled values");
+  assert.ok(!main.textContent.includes("[object"), "no value is shown as an object's name");
   const files = main.querySelectorAll("details").filter((node) => node.className.includes("import-file"));
   assert.ok(files.length > 0, "each file it would write is listed");
 

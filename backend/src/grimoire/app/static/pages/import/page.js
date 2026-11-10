@@ -55,7 +55,7 @@ export async function mount(root, ctx) {
 
   const facts = (pairs) => el("dl", { class: "import-facts" },
     pairs.filter(([, value]) => value !== undefined && value !== null && value !== "")
-      .map(([key, value]) => [el("dt", {}, key), el("dd", {}, shown(value))]));
+      .flatMap(([key, value]) => [el("dt", {}, key), el("dd", {}, shown(value))]));
   const rows = (title, found, describe = shown) => {
     if (!found) return null;
     const items = Array.isArray(found) ? found : found.rows || [];
@@ -87,7 +87,8 @@ export async function mount(root, ctx) {
     function render(state, result) {
       const open = state === "open";
       panel.replaceChildren(...[
-        el("h2", {}, open ? "Review before anything is written" : state === "applied" ? "Written" : "Not written"),
+        el("h2", {}, open ? "Review before anything is written" : state === "applied" ? "Written"
+          : state === "unknown" ? "Check whether this was written" : "Not written"),
         report,
         el("h3", {}, count),
         proposal.files.length ? proposal.files.map(fileRow)
@@ -102,20 +103,31 @@ export async function mount(root, ctx) {
     async function approve() {
       if (proposal.writes && !await ui.confirm("Write " + count + " into this library, exactly as shown?",
         { confirmLabel: "Write " + count })) return;
+      let done;
       try {
-        const done = await ctx.api("imports.proposal_apply", { proposal: proposal.proposal, digest: proposal.digest });
-        render("applied", done.result);
-        ctx.notify("Written.");
-        if (after) await after(done);
+        done = await ctx.api("imports.proposal_apply", { proposal: proposal.proposal, digest: proposal.digest });
       } catch (error) {
-        // a stale or conflicting write ended this proposal: preview again. A denied one stays open.
-        if (["stale", "stale_approval", "conflict", "no_proposal"].includes(error.reason)) {
+        // a stale or conflicting approval ended this proposal before anything was written: preview again
+        if (["stale", "stale_approval", "conflict"].includes(error.reason)) {
           render("ended");
           ctx.notify(ui.errorText(error) + " Nothing was written; preview it again.", { bad: true });
           return;
         }
+        // the server no longer holds this proposal: an approval whose answer was lost may have written it already
+        if (error.reason === "no_proposal") {
+          render("unknown");
+          ctx.notify("This proposal is no longer held here, so it may already have been written (or the app restarted). "
+            + "Check the library before you preview it again.", { bad: true });
+          return;
+        }
+        // any other refusal from the server also ends the proposal, without saying what reached the disk; a denied
+        // write, or a request that got no answer, leaves it open to try again
+        if (error.status && error.reason !== "denied") render("unknown");
         throw error;
       }
+      render("applied", done.result);
+      ctx.notify("Written.");
+      if (after) await after(done);
     }
     async function reject() {
       await ctx.api("imports.proposal_reject", { proposal: proposal.proposal });

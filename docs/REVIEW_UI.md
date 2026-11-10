@@ -89,7 +89,8 @@ Card, Chat history, V1 library, Change set and Source update (a chat's character
 of their source). A tab shows only when the app serves every op its form calls. Each tab previews; the shared proposal
 panel then lists every file with its action, size, sha256 and its text or diff, and the digest. Approve and
 write asks first, naming how many files, and sends the digest back; Reject discards the proposal. A stale or
-conflicting approval says to preview again. The "Not available yet" list comes from `imports.capabilities`.
+conflicting approval says nothing was written and to preview again; a proposal the server no longer holds (an
+approval whose answer was lost, or an app restart) says to check the library first, since it may have been written. The "Not available yet" list comes from `imports.capabilities`.
 Files are sent as base64 in one request, which the app server caps at 48 MiB, so one card or history file is
 limited to about 34 MiB.
 
