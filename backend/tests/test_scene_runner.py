@@ -6,6 +6,7 @@ persona, and the Storm over Port Vell scenario chat. Every model call is a scrip
 
 from __future__ import annotations
 
+import re
 import shutil
 import threading
 
@@ -25,7 +26,9 @@ from grimoire.core import DIRECTOR
 from grimoire.core.identity import InstanceRef, ScopeRef
 from grimoire.core.inference import InferencePolicy
 from grimoire.runtime import RunFence
+from grimoire.comms.reader import UNREAD_REASONS
 from grimoire.play import SceneRunner
+from grimoire.play.runner import UNREAD_HINTS
 from grimoire.ledgers.codec import ControlChange
 from grimoire.scene import SceneRefused, TurnRecord, Take, heard_for, table_lines
 from grimoire.testing.providers import Supersede
@@ -170,6 +173,41 @@ def test_a_post_that_cannot_be_played_writes_nothing(cards, text, mode, reason):
         seated(table, chat)
         refused(reason, table.runner.post, chat, table.player(), text, mode=mode)
         assert table.runner.open(chat).records == ()
+
+
+@pytest.mark.parametrize(("text", "reason", "fixed"), [
+    # spoken words with a privacy word in them: the refusal says to quote them, and quoted they are said aloud
+    ("The vault code is a secret", "unresolved_private", '"The vault code is a secret"'),
+    # a speech tag is narration: the refusal says to post the words alone
+    ("The tide is turning, I tell her", "mixed_narration", '"The tide is turning"'),
+])
+def test_a_line_that_cannot_be_read_says_how_to_post_it_so_it_reads(cards, text, reason, fixed):
+    folder, chat, _ = cards
+    with Table(folder) as table:
+        seated(table, chat)
+        error = refused(reason, table.runner.post, chat, table.player(), text, mode="speech")
+        assert str(error) == f"{reason}: {UNREAD_HINTS[reason]}" and "quotes" in str(error)
+        assert table.runner.open(chat).records == ()
+        assert table.runner.post(chat, table.player(), fixed, mode="speech").post.kind == "speech"
+
+
+@pytest.mark.parametrize("example", sorted({example for hint in UNREAD_HINTS.values()
+                                              for example in re.findall(r'I [a-z ()]+: "[.][.][.]"', hint)}))
+def test_each_example_a_hint_gives_is_read_as_a_private_message(cards, example):
+    folder, chat, _ = cards
+    with Table(folder) as table:
+        seated(table, chat)
+        line = example.replace("(name)", "Mara Vell").replace("...", "The lamp is out")
+        try:
+            turn = table.runner.post(chat, table.player(), line, mode="action")
+        except SceneRefused as error:  # read, then refused for what the sender can do (no telepathy here)
+            assert error.reason not in UNREAD_REASONS, error
+        else:
+            assert turn.post.channel in ("whisper", "telepathy") and turn.post.text == "The lamp is out"
+
+
+def test_every_unread_reason_a_post_can_be_refused_has_a_hint():
+    assert set(UNREAD_HINTS) == UNREAD_REASONS - {"not_dialogue", "wrong_speaker", "not_directed"}
 
 
 def test_a_chat_without_a_persona_has_no_one_to_post_for(cards):

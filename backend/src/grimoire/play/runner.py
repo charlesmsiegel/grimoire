@@ -39,6 +39,7 @@ from grimoire.generation import GenerationError, director_brief, npc_brief, plan
 from grimoire.goals import Agenda, Choice, GoalError, check_agenda, choose, explain
 from grimoire.import_v1 import imported_voices
 from grimoire.intent import Command, RoutingContext, Utterance, route
+from grimoire.intent.text import wrapped
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import ControlChange
 from grimoire.obstaclestore import ObstacleLibrary
@@ -76,6 +77,25 @@ from grimoire.tracing import Trace
 from grimoire.voice import ResolvedVoice, VoiceCatalog
 
 from .tracing import record_calls, span, traced
+
+#: What a player can do about a line 032 cannot read, by its reason: the refusal says how to post it so it reads.
+UNREAD_HINTS = {
+    "unresolved_private": "the line sounds meant for fewer ears than the room's: put the words in quotes to say "
+                          "them aloud, or post an action such as I whisper to (name): \"...\"",
+    "mixed_narration": "the line mixes the words said with narration: post the words alone, or in quotes, and the "
+                       "rest as an action",
+    "unknown_addressee": "use a name from the scene and set the words off after it, such as "
+                         "I whisper to (name): \"...\"",
+    "ambiguous_addressee": "more than one listener fits: name one, and put the words in quotes, such as "
+                           "I whisper to (name): \"...\"",
+    "conflicting_channel": "the line both whispers and speaks mind to mind: choose one, such as "
+                           "I tell (name) telepathically: \"...\"",
+    "indirect_speech": "say how it reaches them, such as I whisper to (name): \"...\" or "
+                       "I tell (name) telepathically: \"...\", or post the words as speech",
+    "unclear_content": "the words said are unclear: put the exact words in quotes after the name, such as "
+                       "I whisper to (name): \"...\"",
+    "no_content": "the line has no words for anyone to hear",
+}
 
 #: Room a finished take needs in its turn file beyond its running take: each planned call's line (a screened line is
 #: at most ``MAX_LINE_CHARS`` characters, with its speaker, ids and audience, escaped), each attempt's usage, and the
@@ -483,6 +503,10 @@ class SceneRunner:
             raise _refuse("uncertain", intent.feedback)
         if intent.kind not in ("pc_speech", "pc_action"):
             raise _refuse("not_in_this_slice", f"{intent.kind} is not played yet")
+        if intent.kind == "pc_speech" and intent.reason == "explicit_mode" and wrapped(text.strip(), '"', '"') is not None:
+            # 008 takes the quotes off a wholly quoted line in the speech lane as in auto; 032 still reads its words as
+            # quoted ones, said aloud privacy words and all, as it would had auto routed the same line
+            intent = replace(intent, reason="quoted")
         kind = "speech" if intent.kind == "pc_speech" else "action"
         try:
             submit_contribution(PlayerContribution(chat.campaign_id, tid, chat.chat_id, tid, persona.instance_id,
@@ -500,7 +524,8 @@ class SceneRunner:
             # one 032 cannot rule out as a private message (a note, an aside, a signal) is withheld: its sender
             # alone hears it. A message aimed at someone 032 cannot resolve is refused, never made public.
             if kind == "speech" or read.reason not in ("not_directed", "unresolved_private"):
-                raise _refuse(read.reason, "the line cannot be read as a message; say who it is for, and what")
+                hint = UNREAD_HINTS.get(read.reason, "the line cannot be read as a message; say who it is for, and what")
+                raise _refuse(read.reason, hint)
             withheld = read.reason == "unresolved_private"
             post = Post(principal, persona, "action", intent.text, (persona,) if withheld else _seen(scene, persona),
                         withheld=withheld)
