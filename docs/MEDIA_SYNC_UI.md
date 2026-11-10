@@ -121,6 +121,11 @@ conflict). A definition's placements are a source's files, so a definition slot 
 
 ## Limits of this slice
 
-- This slice is the adapter. Serving it over HTTP and the page that uses it register through 108's shell contract.
+- The app shell serves every op as `media.<op>` (`media.devices` for `sync.devices`, `media.sync` for `sync.run`,
+  and so on), through one `MediaSyncApi` per open library, so a pairing made on one request is listed on the next.
+  The Art page (`#/art`, a scope's gallery or one subject's slots) and the Sync page (`#/sync`, devices, conflicts
+  and forks) use only those ops, and hide an action whose op the app does not serve.
+- The Sync page keeps this device's version of a conflict only while one other version stands, as the text API
+  does; with several, it keeps one of theirs and lists this device's as not kept, or it is kept on the other device.
 - Expression slots (`expr.<outfit>.<name>`) are placed by name; there is no expression editor yet.
 - `media.gallery` lists at most 1000 pictures of one scope per call, from the start.

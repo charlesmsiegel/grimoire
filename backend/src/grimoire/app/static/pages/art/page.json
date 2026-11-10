@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "id": "art",
+  "route": "art",
+  "title": "Art",
+  "slot": "media",
+  "order": 10,
+  "owner": "114",
+  "entry": "page.js",
+  "requires": ["media.scopes", "media.gallery", "media.art"],
+  "unavailable": null
+}
