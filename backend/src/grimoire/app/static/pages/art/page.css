@@ -1,0 +1,11 @@
+.art-grid { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.art-card { border: 1px solid var(--g-line); border-radius: var(--g-radius); padding: 8px; background: var(--g-raised); }
+.art-thumb { display: block; width: 100%; max-height: 220px; object-fit: contain; border-radius: var(--g-radius); }
+.art-none { display: grid; place-items: center; min-height: 96px; border: 1px dashed var(--g-line);
+  border-radius: var(--g-radius); color: var(--g-muted); padding: 6px; text-align: center; }
+.art-bad { color: var(--g-bad); }
+.art-meta { font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
+.art-slots { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.art-numbers { display: flex; gap: 6px; flex-wrap: wrap; }
+.art-numbers .g-field { width: 6.5em; margin: 0; }
