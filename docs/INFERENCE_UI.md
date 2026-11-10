@@ -96,7 +96,8 @@ real provider on the real clock; `synthetic`, `partial` or `unreported` otherwis
 `grimoire/app/static/pages/inference.js` exports `render(root, ctx)`, where `ctx.api(op, args)` posts one op. It
 has five sections: **Model** (the settings form, **Check** and **Save**), **Model calls a turn may make**,
 **Usage by chat**, **Recent calls on this device** and **Not available yet**. Every library and provider text is
-set as text, never markup.
+set as text, never markup. `backend/tests/test_app_inference_page.py` runs the page in Node over a fake DOM and
+fake ops (skipped where Node is not installed).
 
 ## Not available yet
 
