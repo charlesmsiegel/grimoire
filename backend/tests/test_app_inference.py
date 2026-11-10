@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 
 import pytest
 from provider_servers import base_url, sse_lines, sse_server, stream
@@ -329,6 +330,24 @@ def test_without_a_settings_file_settings_are_read_only_and_play_goes_on(desk, m
         device("post", chat=CHAT, text="Still here.")
 
 
+def test_a_save_waits_for_a_text_api_op_so_it_never_lands_mid_turn(desk, model, tmp_path):
+    with Device(desk, runtime=False) as device:
+        inference = _table(device, tmp_path / "model.json")
+        done = threading.Event()
+
+        def save():
+            inference.call("save_models", {"settings": _settings(model), "expected": None})
+            done.set()
+
+        with device.api.lock:  # what every text API op, a turn included, runs under
+            writer = threading.Thread(target=save)
+            writer.start()
+            assert not done.wait(0.3)
+            assert inference.call("models")["etag"] is None  # the same thread may still read
+        writer.join(5)
+        assert done.is_set() and inference.call("models")["generation"]["available"]
+
+
 @pytest.mark.parametrize("content", [b"not json", b"[]", json.dumps({"sk-pasted-as-a-key": 1}).encode(),
                                      json.dumps({"provider_id": "p", "base_url": "http://x.example/v1",
                                                  "model": "m"}).encode()])
@@ -348,13 +367,16 @@ def test_a_settings_file_that_cannot_be_used_leaves_the_app_without_a_model_and_
 def test_checking_a_draft_sends_nothing_and_says_what_a_save_would_play_by(desk, model, tmp_path):
     with Device(desk, runtime=False) as device:
         inference = _table(device, tmp_path / "model.json")
-        checked = inference.call("check_models", {"settings": _settings(model, fallbacks=["model-b"])})
+        checked = inference.call("check_models", {"settings": _settings(model, fallbacks=["model-b"], attempts=2)})
         assert checked["ok"] is True and checked["local"] is True and len(checked["routes"]) == 2
         hosted = inference.call("check_models", {"settings": {"provider_id": "hosted", "base_url":
                                                               "https://models.example/v1", "model": "m"}})
         assert hosted["ok"] is True and hosted["local"] is False
         bad = inference.call("check_models", {"settings": _settings(model, attempts=9)})
         assert bad["ok"] is False and bad["problems"][0]["field"] == "attempts"
+        # a fallback no attempt reaches would halt every call before it is sent: refused, never saved
+        unreached = inference.call("check_models", {"settings": _settings(model, fallbacks=["model-b"])})
+        assert unreached["ok"] is False and unreached["problems"][0]["field"] == "fallbacks"
         assert inference.call("check_models", {"settings": "nope"})["ok"] is False
         assert model.requests == [] and not (tmp_path / "model.json").exists()
 
@@ -387,9 +409,11 @@ def test_stages_say_which_optional_calls_the_app_can_play_and_why_the_rest_are_u
 
 # -- the configuration -----------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("extra", [{"attempts": 0}, {"attempts": 4}, {"fallbacks": "model-b"},
-                                   {"fallbacks": ["m"]}, {"fallbacks": ["b", "b"]}, {"fallbacks": ["has space"]},
-                                   {"fallbacks": ["a", "b", "c", "d", "e"]}, {"max_output_tokens": 10**6}])
+@pytest.mark.parametrize("extra", [{"attempts": 0}, {"attempts": 4}, {"fallbacks": "model-b", "attempts": 3},
+                                   {"fallbacks": ["m"], "attempts": 3}, {"fallbacks": ["b", "b"], "attempts": 3},
+                                   {"fallbacks": ["has space"], "attempts": 3}, {"fallbacks": ["b"]},
+                                   {"fallbacks": ["b", "c"], "attempts": 2}, {"fallbacks": ["b", "c", "d"], "attempts": 3},
+                                   {"max_output_tokens": 10**6}])
 def test_fallbacks_and_attempts_are_bounded(extra):
     with pytest.raises(ConfigError):
         parse_model_config({"provider_id": "p", "base_url": "https://x.example/v1", "model": "m", **extra})

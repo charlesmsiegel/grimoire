@@ -28,10 +28,11 @@ KEYS = frozenset({"provider_id", "base_url", "model", "key_env", "max_tokens_fie
                   "director", "fallbacks", "attempts"})
 #: Calls a director reply (a scene with no NPC that can answer) may make per turn; 0 turns the stage off.
 DEFAULT_DIRECTOR_CALLS = 1
-#: Fallback models a configuration may name (112): each is tried only by a retry, so only with ``attempts`` > 1.
-MAX_FALLBACKS = 4
 #: Attempts per planned call (004's ``max_attempts_per_call``): every one may be billed, so it stays small.
 MAX_ATTEMPTS = 3
+#: Fallback models a configuration may name (112): attempt *i* uses the *i*-th model, and 013's meter refuses a
+#: call given more routes than attempts, so each fallback needs an attempt of its own.
+MAX_FALLBACKS = MAX_ATTEMPTS - 1
 MAX_OUTPUT_TOKENS = 32_768
 
 
@@ -96,6 +97,9 @@ def parse_model_config(raw: object) -> ModelConfig:
         raise ConfigError(str(error)) from None
     if len(set(fallbacks)) != len(fallbacks) or raw["model"] in fallbacks:
         raise ConfigError("fallbacks must be other models, each named once")
+    if len(fallbacks) >= attempts:  # attempt i uses model i: a model no attempt reaches would halt every call (013)
+        raise ConfigError(f"fallbacks are tried only by retries: with {attempts} attempt(s) per call, name at most "
+                          f"{attempts - 1} fallback model(s)")
     return ModelConfig(endpoint, raw["model"], key_env, tokens, director, tuple(fallbacks), attempts)
 
 

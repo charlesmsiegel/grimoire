@@ -138,6 +138,12 @@ class TextApi:
         }
 
     @property
+    def lock(self) -> threading.RLock:
+        """The lock every op runs under: an adapter beside this API (112's settings) takes it too, so nothing it
+        changes on the runner lands in the middle of a turn."""
+        return self._lock
+
+    @property
     def ops(self) -> tuple[str, ...]:
         return tuple(sorted(self._ops))
 

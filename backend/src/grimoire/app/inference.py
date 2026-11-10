@@ -192,7 +192,8 @@ class InferenceApi:
     """The settings, usage and diagnostics ops over one served ``TextApi``.
 
     ``settings`` is the app's ``SettingsFile``; ``owner`` the library owner the runtime's provider grant is
-    made by; ``lock`` serializes these ops with the text API's (one library, one writer at a time). A runtime
+    made by; ``lock`` (default: the text API's own) serializes these ops with the text API's, so a save never
+    swaps the runner's runtime in the middle of a turn. A runtime
     is built from the file at once (``environ`` and ``transport`` as 044's ``build_runtime`` takes them) and
     given to ``text_api``'s runner; a file that cannot be used leaves the app without a model, with the reason
     ``models`` shows. ``traces`` holds the runner's 048 traces when it has no tracer of its own."""
@@ -204,7 +205,7 @@ class InferenceApi:
         self.owner = owner
         self.environ = os.environ if environ is None else environ
         self.transport = transport
-        self._lock = lock if lock is not None else threading.RLock()
+        self._lock = lock if lock is not None else text_api.lock  # one lock with the text API's ops: never mid-turn
         self.traces: TraceLog | None = None
         self.keep = keep
         runner = text_api.runner

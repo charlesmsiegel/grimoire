@@ -23,8 +23,9 @@ other services own. Nothing in the library is written, and nothing is sent to a 
 
 The file is 044's model configuration ([MOBILE](MOBILE.md#answers-from-a-model)) with two more keys:
 
-- `fallbacks`: up to 4 other models **on the same endpoint**. 013's adapter gives attempt *i* of a call the
-  *i*-th route, so a fallback is tried only by a retry.
+- `fallbacks`: other models **on the same endpoint**, at most one fewer than `attempts` (so up to 2). 013's
+  adapter gives attempt *i* of a call the *i*-th route, so a fallback is tried only by a retry, and a model no
+  attempt could reach would stop every call before it is sent: such a file is refused.
 - `attempts`: attempts per planned call, 1 to 3 (004's `max_attempts_per_call`, default 1). Every attempt may
   be billed, and retries happen only before any text reached the table (013).
 
