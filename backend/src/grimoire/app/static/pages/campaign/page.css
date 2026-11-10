@@ -1,0 +1,8 @@
+.campaign-actor, .campaign-obstacle, .campaign-turn, .campaign-agenda { border-top: 1px solid var(--g-line); padding: 8px 0; }
+.campaign-effect, .campaign-form { border: 1px dashed var(--g-line); border-radius: var(--g-radius); padding: 8px 10px; margin: 8px 0; }
+.campaign-intention { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--g-muted); }
+.campaign-claim { margin: 8px 0; }
+.campaign-contested { padding-left: 10px; border-left: 3px solid var(--g-bad); }
+.campaign-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: end; margin: 6px 0; }
+.campaign-row .g-field { margin: 0; }
+.campaign-ticks { border: 1px solid var(--g-line); border-radius: var(--g-radius); margin: 8px 0; }
