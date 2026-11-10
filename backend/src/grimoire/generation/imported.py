@@ -168,7 +168,14 @@ def card_voice_texts(definition: EntityDefinition) -> VoiceTexts | None:
     personality = (text_of(_mapping(extras.get("sections")).get("personality"))
                    or text_of(_mapping(card.get("unsectioned")).get("personality")))
     imported, notes = imported_source(CARD_FORMAT, None, examples, card.get("extensions"))
-    return VoiceTexts(examples, personality, definition.description, imported, notes)
+    return VoiceTexts(examples, personality, definition.description, imported, notes, _speaker(card))
+
+
+def _speaker(card: Mapping) -> str | None:
+    """``example_speaker``: the name the examples label the character's turns with, kept by 109's editor
+    when it renames an imported character; ``None`` (the speaking name) otherwise."""
+    speaker = card.get("example_speaker")
+    return speaker if isinstance(speaker, str) and speaker.strip() else None
 
 
 def _clip(text: str, cap: int) -> str:
