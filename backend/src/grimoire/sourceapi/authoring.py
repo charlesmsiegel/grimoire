@@ -695,8 +695,11 @@ def _lorebook_fields(payload: dict, fields: Mapping[str, object], _derived: bool
                 entry = dict(before[origin])  # its settings, extensions and extras stay as they were
             else:
                 entry = {}
-            entry["keys"] = _keys(item.get("keys", entry.get("keys", [])), f"entry {number} keys", entry.get("keys"))
-            entry["content"] = _text(item.get("content"), f"entry {number} content", required=True)
+            # an entry of the head keeps the keys and content the edit leaves out, exactly as they are
+            if "keys" in item or origin is None:
+                entry["keys"] = _keys(item.get("keys", entry.get("keys", [])), f"entry {number} keys", entry.get("keys"))
+            if "content" in item or origin is None:
+                entry["content"] = _text(item.get("content"), f"entry {number} content", required=True)
             if "constant" in item:  # 037's lore reader reads ``settings.constant``; its other settings stay
                 if type(item["constant"]) is not bool:
                     raise AuthoringRefused("invalid_field", f"entry {number} constant must be true or false")
