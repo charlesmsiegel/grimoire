@@ -45,7 +45,8 @@ An opening keeps its other keys by `id`, and a lorebook entry that names the `in
 that entry's settings, extensions and extras. The **raw editor** (`sources.save_raw`) writes a payload exactly as
 given, in the record's own schema (a record that has none keeps having none). An entity payload must still decode
 (009), and a scenario's lorebook must still be a pinned lorebook ref. Every edit, structured, raw or portrayal, keeps
-the head's other envelope fields (STORAGE's preserved unknown keys) on the new revision.
+the head's other envelope fields (STORAGE's preserved unknown keys) on the new revision. An imported character (026, 037) keeps its verbatim card for provenance, and a `personality` section edited here is
+the personality it speaks from in play.
 
 A blank description or an empty section in the structured editor is left out of the payload. On a **portrayal**
 the structured editor goes through 046's helpers: a description or section it is given is an override (which also

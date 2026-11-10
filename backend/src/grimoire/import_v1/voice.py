@@ -26,7 +26,8 @@ def v1_voice_texts(definition: EntityDefinition) -> VoiceTexts | None:
 
     A persona (``persona_md``) has only its description, which 026 already took from its body. A card
     that does not parse as a JSON object speaks from its description alone, like a card with no
-    example messages; one nested too deep to parse does too, noted ``card_unreadable``.
+    example messages; one nested too deep to parse does too, noted ``card_unreadable``. A ``personality``
+    section authored on the revision (109's editor) is its personality instead of the card's.
     """
     v1 = definition.extras.get("v1")
     if not (isinstance(v1, Mapping) and isinstance(v1.get("legacy_id"), str) and isinstance(v1.get("text"), str)):
@@ -52,7 +53,16 @@ def v1_voice_texts(definition: EntityDefinition) -> VoiceTexts | None:
     except RecursionError:  # extensions that parsed but nest too deep to copy: the verbatim text keeps them
         imported, notes = imported_source(fmt, card_version, examples, {})
         notes = (*notes, VoiceNote("extensions", 0, "extensions_not_carried"))
-    return VoiceTexts(examples, text_of(data.get("personality")), definition.description, imported, notes)
+    return VoiceTexts(examples, _authored_personality(definition) or text_of(data.get("personality")),
+                      definition.description, imported, notes)
+
+
+def _authored_personality(definition: EntityDefinition) -> str:
+    """A ``personality`` section authored on the revision (109's editor), which wins over the verbatim card's,
+    as 037's card reader does; the verbatim text stays the import's provenance."""
+    sections = definition.extras.get("sections")
+    text = text_of(sections.get("personality")) if isinstance(sections, Mapping) else ""
+    return text if text.strip() else ""
 
 
 def imported_voices(snapshot: EffectiveSnapshot, authored: VoiceCatalog | None = None) -> SnapshotVoices:
