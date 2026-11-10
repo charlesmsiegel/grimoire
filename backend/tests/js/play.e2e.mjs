@@ -159,4 +159,5 @@ test("a chat whose added card is gone shows what is missing and detaches it", { 
   yes.click();
   await until(() => !byText(main, "button", "See what is missing").length && !byText(main, "button", "Detach").length && idle(body), 15000, "the detached card");
   assert.ok(!main.querySelectorAll("div.g-notice").some((node) => node.textContent.includes("A source this chat binds is gone.")));
+  assert.deepEqual(body.querySelectorAll("div.g-bad").map((node) => node.textContent), [], "the detach shows no error");
 });

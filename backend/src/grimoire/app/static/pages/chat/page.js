@@ -219,9 +219,10 @@ export async function mount(root, ctx) {
                 const sure = await ui.confirm("Detach " + repair.ref + " from this chat? It plays on without it, and this cannot be undone here.",
                   { confirmLabel: "Detach", danger: true });
                 if (!sure) return;
+                const rest = page.repairs.filter((item) => item.field !== repair.field || item.ref !== repair.ref);
                 await act("play.detach", { field: repair.field, ref: repair.ref });
-                // the redraw when this ends shows what is still missing (none at all clears it)
-                page.repairs = page.repairs.filter((item) => item.field !== repair.field || item.ref !== repair.ref);
+                // the redraw when this ends shows what is still missing; drawing a chat with none cleared it
+                if (page.repairs) page.repairs = rest;
               }))
               : el("span", { class: "g-muted" }, "Import the card again to bring it back.")))));
       } else if (ctx.has("play.repairs")) {
