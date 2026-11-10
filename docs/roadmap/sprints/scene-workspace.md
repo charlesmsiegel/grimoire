@@ -1,6 +1,6 @@
 # Scene Workspace and Accessible Controls
 
-> **V2 scope correction:** V2 initially has no frontend. The first scene workspace enhancement must build on the minimal V2 text runner/mobile client, not reintroduce V1 APIs. See the [V2 ordered roadmap](../README.md) for hard prerequisites and delivery wave; older references to existing V1 systems are porting targets, not the V2 starting baseline.
+> **V2 Wave 8 scope correction:** The new **Wave 7** sprints [108–114](../UI_COVERAGE.md) first deliver a fully usable shell, library, quick-start/play, reviews, media/sync and basic navigation. This sprint **extends** that shipped UI into a richer long-term workspace; it must not duplicate the new P0 foundation or reintroduce V1 APIs. See the [ordered roadmap](../README.md).
 
 
 **Outcome:** Make chats discoverable and resumable from **Chats, Characters, Scenarios, Campaigns and Worlds**, while keeping reading, writing, reviewing and steering scenes fluid on desktop and mobile.
@@ -11,7 +11,7 @@
 - Support keyboard, screen reader, contrast, focus, font scaling and reduced motion.
 
 ## Milestones
-1. Implement a navigable **unified chat library** (recent/all, by exact character portrayal, scenario, named campaign or attached world) over the same stable chat IDs, retaining drafts and scroll/focus when switching.
+1. Enhance the Wave 7 unified chat library with advanced saved filters, source/portrayal comparisons and efficient large-library browsing; preserve the stable chat IDs, drafts and scroll/focus already delivered by 108/109/111.
 2. Offer optional compact status panels and reliable keyboard/touch workflows.
 3. Add user-configurable layouts and workspaces with graceful defaults.
 
@@ -26,7 +26,7 @@ Can improve current screens incrementally; voice control is a parallel input mod
 
 ## Navigation invariants inherited from the quick-chat path
 
-107 owns stable world-less play scope/chat associations and a rebuildable reverse index. 035 provides the **minimal** chat list, and 052 the one-click start surface. This sprint (Wave 7) owns the **full browsing/workspace UX**, not a second data model:
+107 owns stable world-less play scope/chat associations and a rebuildable reverse index. 035 provides the **minimal** chat list, and 052 the one-click start surface. This sprint (Wave 8) owns the **mature browsing/workspace enhancements beyond Wave 7 parity**, not a second data model:
 
 - Recent / All Chats lists the canonical chat IDs, even if no world or named campaign exists.
 - Character and Scenario pages show linked chats by **exact pinned/qualified source reference**. Include a deliberate equivalent/derived-portrayal filter but never merge two same-named authors' records.
