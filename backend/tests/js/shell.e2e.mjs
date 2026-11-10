@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 import { byText, install, until } from "./fakedom.mjs";
+import { RESERVED } from "../../src/grimoire/app/static/shell/router.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const STATIC = pathToFileURL(path.join(here, "..", "..", "src", "grimoire", "app", "static") + path.sep).href;
@@ -26,7 +27,15 @@ function type(input, text) {
   input.dispatchEvent({ type: "input" });
 }
 
+// Home's starting points and the reserved routes they open (home/page.js); each later sprint registers one.
+const STARTS = { start: "Start a chat", chats: "Continue a chat", import: "Import", sources: "Your library", providers: "Set up a model" };
+
 test("from the printed address to a kept draft and a post", { skip: !base }, async () => {
+  // a reserved route no page in this app has registered yet (read from the live registry, as the shell does)
+  const registry = await (await fetch(base + "/shell/pages", { cache: "no-store" })).json();
+  const taken = new Set(registry.pages.map((page) => page.route));
+  const waiting = Object.keys(RESERVED).filter((route) => !taken.has(route));
+  const waitingStart = Object.keys(STARTS).find((route) => !taken.has(route));
   const window = install(base);
   window.location.hash = "#token=" + encodeURIComponent(token);
   await import("/static/shell/shell.js");
@@ -39,8 +48,12 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   const nav = body.querySelector("nav");
   const chatsItem = byText(nav, "a", "Chats")[0];
   assert.ok(chatsItem, "Chats is in the menu");
-  // a screen no sprint has added yet is said to be unavailable, not linked
-  assert.ok(byText(main, "div", "Import (not in this app yet)").length);
+  // a screen no sprint has added yet is said to be unavailable, not linked; a registered one is a link
+  for (const [route, title] of Object.entries(STARTS)) {
+    if (taken.has(route)) assert.ok(byText(main, "a", title).length, title + " is linked");
+    else assert.ok(byText(main, "div", title + " (not in this app yet)").length, title + " is unavailable");
+  }
+  assert.ok(waitingStart === undefined || !byText(main, "a", STARTS[waitingStart]).length);
 
   chatsItem.click();
   await until(() => byText(main, "a", "By character").length && main.querySelector("ul"), 15000, "the chat list");
@@ -76,9 +89,11 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   assert.equal(window.sessionStorage.getItem("grimoire-draft:chat:composer:" + decodeURIComponent(chatHash.split("/")[2])), null);
 
   // an address no page owns says so; a reserved one names its sprint
-  window.location.hash = "#/import";
-  await until(() => byText(main, "strong", "is not available yet").length, 15000, "an unregistered reserved route");
-  assert.ok(byText(main, "div", "Sprint 110").length);
+  if (waiting.length) {
+    window.location.hash = "#/" + waiting[0];
+    await until(() => byText(main, "strong", "is not available yet").length, 15000, "an unregistered reserved route");
+    assert.ok(byText(main, "div", "Sprint " + RESERVED[waiting[0]].owner).length);
+  }
   window.location.hash = "#/nowhere";
   await until(() => body.querySelector("h1").textContent === "Not found", 15000, "an unknown route");
 });

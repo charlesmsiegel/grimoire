@@ -1,0 +1,13 @@
+/* Sprint 110's import and review page: every class starts with "import-" (docs/APP_SHELL.md). */
+.import-pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow: auto; padding: 0.5rem;
+  border: 1px solid var(--g-line); border-radius: var(--g-radius); background: var(--g-raised); font-size: 0.85rem; }
+.import-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.import-file { border-top: 1px solid var(--g-line); padding: 0.5rem 0; }
+.import-file > summary { cursor: pointer; }
+.import-badge { display: inline-block; padding: 0 0.4rem; border: 1px solid var(--g-line); border-radius: var(--g-radius);
+  font-size: 0.8rem; }
+.import-facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 0.75rem; margin: 0.5rem 0; }
+.import-facts dt { color: var(--g-muted); }
+.import-facts dd { margin: 0; overflow-wrap: anywhere; }
+.import-check { display: flex; gap: 0.5rem; align-items: center; margin: 0.25rem 0; }
+.import-proposal { border: 1px solid var(--g-line); border-radius: var(--g-radius); padding: 0.75rem; margin-top: 1rem; }

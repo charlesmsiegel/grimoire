@@ -26,8 +26,8 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 
-from grimoire.archaeologystore import ImportRefused as StRefused
 from grimoire.archaeologystore import MAX_EXPORT_BYTES, StImporter, scan_st_export
+from grimoire.archaeologystore import ImportRefused as StRefused
 from grimoire.cards import CardError
 from grimoire.cardstore import MAX_CARD_BYTES, CardImporter, ImportDenied
 from grimoire.changesets import ChangeSetError
@@ -36,6 +36,7 @@ from grimoire.changesetstore import ChangeSetLibrary
 from grimoire.changesetstore.library import ChangeSetConflict
 from grimoire.chatstore import ChatLibrary
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef
+from grimoire.imagestore.disk import InvalidImage
 from grimoire.import_v1 import ImportRefused as V1Refused
 from grimoire.import_v1 import Selection, plan_import, read_receipts
 from grimoire.library import LibraryPathError
@@ -44,10 +45,9 @@ from grimoire.migrate_v1._fs import SourceChanged, TooLarge
 from grimoire.rebase import RebaseError
 from grimoire.rebasestore import SourceRebase
 from grimoire.security import Permission
-from grimoire.imagestore.disk import InvalidImage
 from grimoire.store import LibraryStore, StaleWrite, StoreError, UnstorableIdentifier
-from grimoire.store.layout import classify
 from grimoire.store.errors import WriteDenied
+from grimoire.store.layout import classify
 from grimoire.textapi import ApiRefused
 
 from .proposals import Proposals, preview_digest
@@ -195,11 +195,12 @@ class ReviewApi:
 
     def __init__(self, store: LibraryStore, authority, *, owner: str,  # type: ignore[no-untyped-def]
                  clock: Callable[[], str] = _utc_now, new_id: Callable[[str], str] | None = None,
-                 environ: Mapping[str, str] | None = None, home=None) -> None:
+                 environ: Mapping[str, str] | None = None, home=None, handle=None) -> None:
         self.store = store
         self.authority = authority
         self.owner = owner
-        self.handle = authority.handle_for(owner, trusted=True)
+        # the app passes its one trusted owner handle (108: an adapter asks for none of its own)
+        self.handle = handle if handle is not None else authority.handle_for(owner, trusted=True)
         self._clock = clock
         self._new_id = new_id or (lambda prefix: f"{prefix}-{uuid.uuid4().hex[:16]}")
         self._environ = environ
