@@ -83,3 +83,13 @@ textarea.g-input { min-height: 44px; max-height: 30vh; resize: vertical; }
 .g-empty { margin: 16px 0; }
 .g-dialog { border: 1px solid var(--g-line); border-radius: var(--g-radius); background: var(--g-bg); color: var(--g-fg); max-width: 420px; }
 .g-dialog::backdrop { background: rgb(0 0 0 / .4); }
+
+/* the command palette (palette.js) */
+.g-palette { width: min(92vw, 560px); max-width: none; padding: 12px; }
+.g-palette-input { width: 100%; }
+.g-palette-results { list-style: none; margin: 8px 0 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+.g-palette-option { padding: 8px 10px; border-radius: var(--g-radius); cursor: pointer; }
+.g-palette-option[aria-selected="true"], .g-palette-option:hover { background: var(--g-raised); }
+.g-shortcuts { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; }
+.g-shortcuts dd { margin: 0; }
+kbd { font: 13px ui-monospace, monospace; border: 1px solid var(--g-line); border-radius: 4px; padding: 1px 5px; }
