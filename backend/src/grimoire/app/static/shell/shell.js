@@ -155,6 +155,7 @@ async function leave() {
   if (!current) return;
   if (current.ready) state.scroll.set(current.key, window.scrollY);
   current.controller.abort();
+  ui.closeConfirmations();
   current.root.remove();  // detached: whatever the page still does lands nowhere
   state.current = null;
   if (typeof current.cleanup === "function") {

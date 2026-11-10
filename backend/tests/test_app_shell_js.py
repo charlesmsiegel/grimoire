@@ -23,7 +23,7 @@ needs_node = pytest.mark.skipif(NODE is None, reason="Node is not installed")
 
 
 def _node(script: Path, env: dict | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run([NODE, "--test", str(script)], capture_output=True, text=True, timeout=180, check=False,
+    return subprocess.run([NODE, "--test", "--test-reporter=tap", str(script)], capture_output=True, text=True, timeout=180, check=False,
                           env={**os.environ, **(env or {})})
 
 

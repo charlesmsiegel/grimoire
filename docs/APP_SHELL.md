@@ -93,7 +93,8 @@ replaced by another of the same name), `field(label, {draft, multiline, hint})` 
 to the input for screen readers), `choice(label, options, {value, onchange})`, `section(title, ...)`,
 `list(items, {empty})`, `rowText(title, detail)`, `notice(text, {kind})`, `errorBox(error)`, `errorText(error)`,
 `unavailable(what, blocker)`, `empty(text)`, `actions(...)` and `confirm(message, {confirmLabel, danger})`, which
-names exactly what is about to happen before anything that cannot be undone.
+names exactly what is about to happen before anything that cannot be undone (and answers no by itself if the
+person leaves the page while it is open).
 
 Style with the `g-` classes and the `--g-` tokens of `shell.css` (`--g-fg`, `--g-bg`, `--g-raised`, `--g-muted`,
 `--g-line`, `--g-accent`, `--g-bad`, `--g-good`, `--g-focus`, `--g-radius`); the shell switches them for dark mode.
@@ -144,6 +145,7 @@ ADAPTER = Adapter("sources", owner="109", ops={"show": _show}, refusals={CardErr
   as `ApiRefused` exactly as a core op's (`StaleWrite` is `changed`, 409). Raise `ApiRefused(reason, message)` for
   a refusal of the adapter's own. **`refusals`** maps another service's refusal class that the text API does not
   know (a card error, an import refusal, a provider's `CallRefused`) to its reason; a subclass matches its base.
+  The text API's own mapping comes first, so a `StaleWrite` is `changed` whatever an adapter declares.
   Any other exception is a bug: the server logs it and answers 500 `internal`.
 - An op answers one JSON object (no `NaN`, no Python objects); anything else is a bug, answered 500.
 - `ctx` holds the open library (`store`, `authority`), the owner and **`ctx.handle`, the owner's trusted handle**:

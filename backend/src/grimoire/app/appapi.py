@@ -10,7 +10,7 @@ import json
 from collections.abc import Mapping
 from types import MappingProxyType
 
-from grimoire.textapi import ApiRefused, TextApi
+from grimoire.textapi import ApiRefused, TextApi, refusal
 
 from .adapter import Adapter, AdapterContext, Handler
 from .adapters import ADAPTERS
@@ -62,7 +62,8 @@ class AppApi:
             except ApiRefused:
                 raise
             except Exception as error:
-                reason = adapter.refusal(error)
+                # The text API's own mapping comes first: an adapter can add reasons, never rename "changed".
+                reason = adapter.refusal(error) if refusal(error) is None else None
                 if reason is None:
                     raise
                 raise ApiRefused(reason, str(error)) from None
