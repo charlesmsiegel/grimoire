@@ -75,6 +75,7 @@ sheet stays linked once loaded, so an unprefixed class would restyle other pages
 | `ctx.registered(route)` | whether some page owns a route: link to another sprint's screen only when it does |
 | `ctx.href(route, segments, query)` | the address of a route; each segment is one exact string (a ref), URI-encoded |
 | `ctx.navigate(hash)` | go to an address |
+| `ctx.restart(hash)` | load the app again (its pages, ops and library) and open `hash`: after first run opens a library |
 | `ctx.draft(key)` | an unsent draft (`get`, `set`, `clear`), kept per tab until cleared, across navigation and reloads |
 | `ctx.setTitle(text)`, `ctx.setActions(...nodes)` | the header's title and its action buttons |
 | `ctx.notify(text, {bad})` | a notice above the page (`bad` stays until dismissed and is announced) |
@@ -160,6 +161,28 @@ ADAPTER = Adapter("sources", owner="109", ops={"show": _show}, refusals={CardErr
 - An adapter may grow into a package (`adapters/sources/`), keeping `ADAPTER` at its top.
 - An adapter imports `grimoire.app.adapter` and domain packages only, never `grimoire.app` itself, its server or
   `appapi`: the registry loads every adapter while `grimoire.app` is still loading, so that would close a cycle.
+
+## First run, search, shortcuts and themes
+
+`serve` with no LIBRARY, where the V2 library location has no library yet (a new folder, or an empty one), serves
+the app in **first-run** mode; so does `serve LIBRARY --setup`. A LIBRARY that is named but holds nothing is
+otherwise refused, since a mistyped path or an unmounted drive must not become a second library. In first-run
+mode only the `setup.*` ops (`status`, `check`, `create`, `open`) are served, and the shell opens on Library setup
+(`#/setup`), since every other page needs the library's ops. There the person checks a folder, names this device
+and makes a library, or opens one. A place inside, around or beside a V1 library, a relative path or an occupied
+folder is refused before anything is written; a folder left by a create that stopped early counts as empty, and
+the next create finishes it. One library per serve. A create that fails after the store exists answers
+`create_incomplete` (a library is there, without the owner's grants or device name: move it aside). `setup.open`
+names an unnamed library's device once and refuses a different name for a named one (`device_differs`). The setup
+ops are served alongside an open library too, so Library setup always shows which library is open and the
+`serve` command that opens it next time. Once one is open, every page that waited
+on it is usable, and setup lists where to go next (Start Chat, Import, a provider), each shown as not available
+until its sprint adds it. `GET /shell/pages` lists the ops the app serves now (`ops`), so a page is usable or
+not before the library op exists; the core `library` op answers only once a library is open.
+
+The header's **Search** button, or Ctrl+K, Cmd+K or `/` outside a text box, opens the **command palette**: every
+page that can open, every chat by its name (from the `chats` op), the themes and the shortcuts. `?` lists the
+shortcuts. The theme (system, light or dark) is kept per browser and switches the `--g-` tokens.
 
 ## Tests
 

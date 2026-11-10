@@ -61,7 +61,30 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   const chatHash = "#/chat/" + encodeURIComponent(process.env.GRIMOIRE_CHAT);
   const first = main.querySelector("ul").querySelectorAll("a").find((node) => node.getAttribute("href") === chatHash);
   assert.ok(first, "the card chat is listed, linked by its exact ref");
-  first.click();
+  // the palette finds the same chat by a word of its name, and Enter opens it
+  const name = first.querySelector("span").textContent;
+  window.location.hash = "#/home";
+  await until(() => byText(main, "h2", "What next").length, 15000, "Home before the palette");
+  for (const listener of document.listeners.get("keydown")) listener({ key: "k", ctrlKey: true, preventDefault() {} });
+  const box = await until(() => body.querySelector("dialog") && body.querySelector("dialog").querySelector("input"), 15000, "the palette");
+  assert.equal(document.activeElement, box);
+  assert.ok(byText(body.querySelector("dialog"), "li", "Theme: dark").length, "commands are listed before anything is typed");
+  let kept = false;  // Ctrl+K again stays the app's: the browser's own would take focus out of the dialog
+  for (const listener of document.listeners.get("keydown")) listener({ key: "k", ctrlKey: true, preventDefault() { kept = true; } });
+  assert.ok(kept && body.querySelectorAll("dialog").length === 1, "a second Ctrl+K opens nothing and is kept");
+  const composing = { key: "Enter", isComposing: true, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  body.querySelector("dialog").dispatchEvent(composing);  // Enter that confirms an input method's text
+  assert.ok(!composing.defaultPrevented && body.querySelector("dialog"), "composing text chooses nothing");
+  type(box, "zzzz");
+  await until(() => byText(body.querySelector("dialog"), "div", "Nothing matches.").length, 15000, "no results");
+  assert.equal(box.getAttribute("aria-activedescendant"), null, "nothing is active with no results");
+  assert.equal(box.getAttribute("aria-expanded"), "false");
+  type(box, name.split(/\s+/)[0]);
+  await until(() => byText(body.querySelector("dialog"), "li", "chat").length, 15000, "a chat in the results");
+  const option = byText(body.querySelector("dialog"), "li", name).at(-1);
+  assert.ok(option, "the chat is found by its name");
+  option.click();
+  await until(() => window.location.hash === chatHash && !body.querySelector("dialog"), 15000, "the chat from the palette");
   const composer = await until(() => main.querySelector("textarea"), 15000, "the chat");
   assert.equal(window.location.hash, chatHash);
   assert.equal(document.activeElement, body.querySelector("h1"), "focus moves to the new page's heading");

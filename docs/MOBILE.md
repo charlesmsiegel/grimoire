@@ -20,6 +20,9 @@ python -m grimoire.app init ~/grimoire-library --device phone
 
 Keep the library in Termux's home folder, not on shared storage (`/sdcard`): other apps can read shared storage.
 
+Or skip `init`: `serve --setup ~/grimoire-library`, on a folder with no library yet, opens the app's first-run
+page, which makes the library there (or opens another) in the browser. Start `serve` on that folder from then on.
+
 On the **desktop**, use your existing V2 library (or `init` a new one with `--device desktop`). An existing
 library that was never given a device name gets one, once: `python -m grimoire.app identify --device desktop`.
 

@@ -1,0 +1,11 @@
+{
+  "contract": 1,
+  "id": "setup",
+  "route": "setup",
+  "title": "Library setup",
+  "slot": "settings",
+  "order": 0,
+  "owner": "108",
+  "entry": "page.js",
+  "requires": ["setup.status", "setup.check"]
+}

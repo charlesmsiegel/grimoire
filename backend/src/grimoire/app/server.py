@@ -33,6 +33,7 @@ from grimoire.textapi import ApiRefused, TextApi
 
 from .adapter import Adapter
 from .appapi import AppApi
+from .launcher import Launcher
 from .pages import CONTRACT, SLOTS, load_pages
 
 #: The largest request body read: a 32 MiB picture is about 43 MiB as base64, plus its JSON.
@@ -330,23 +331,35 @@ class _Handler(BaseHTTPRequestHandler):
         self._error(500, "internal", "the app failed; see its console")
 
 
+def _unused_build(store, authority):  # type: ignore[no-untyped-def]
+    """A launcher over a library already open never builds another (``setup.create`` answers ``library_open``)."""
+    raise AssertionError("a launcher with a library open builds no other")
+
+
 class AppServer:
-    """Serve ``api`` on a loopback ``host``. ``token`` (default: 32 random bytes, drawn per serve) is what
+    """Serve ``api`` on a loopback ``host``: one open library's ``TextApi``, or a ``Launcher`` that serves
+    first-run setup and then the library it opens. ``token`` (default: 32 random bytes, drawn per serve) is what
     every ``/api`` request must carry. Calls reach ``api`` one at a time (``TextApi`` serializes them, adapter
     ops included). ``adapters`` (default: the app's own, ``grimoire.app.adapters``) and ``static`` (default: the
-    packaged shell and pages) are what tests replace. A bad page manifest stops the server before it listens
-    (``PageManifestError``)."""
+    packaged shell and pages) are what tests replace; a launcher brings its own adapters. A bad page manifest
+    stops the server before it listens (``PageManifestError``)."""
 
-    def __init__(self, api: TextApi, *, host: str = "127.0.0.1", port: int = 0, token: str | None = None,
+    def __init__(self, api: TextApi | Launcher, *, host: str = "127.0.0.1", port: int = 0, token: str | None = None,
                  adapters: tuple[Adapter, ...] | None = None, static: Path = STATIC) -> None:
         if not is_loopback(host):
             raise ValueError("the app serves loopback addresses only")
         self.api = api
-        self.app_api = AppApi(api, adapters)
+        self.app_api: Launcher
+        if isinstance(api, Launcher):
+            if adapters is not None:
+                raise ValueError("a launcher brings its own adapters: pass them to the Launcher")
+            self.app_api = api
+        else:
+            # One open library is served as a launcher that opened it already, so the setup ops (and the setup
+            # page that needs them) are there whichever way the serve started.
+            self.app_api = Launcher(owner=api.owner, build=_unused_build, opened=(None, AppApi(api, adapters)))
         self.static = static
         self.pages = load_pages(static)
-        self.registry = {"contract": CONTRACT, "slots": list(SLOTS),
-                         "pages": [page.to_json(self.app_api.ops) for page in self.pages]}
         self.token = token if token is not None else secrets.token_urlsafe(32)
         self.page = (static / "index.html").read_bytes()
         self.policy = PAGE_POLICY
@@ -359,6 +372,14 @@ class AppServer:
         self.hosts = frozenset(f"{name}:{bound_port}" for name in names)
         self._state = threading.Lock()
         self._serving = self._closed = False
+
+    @property
+    def registry(self) -> dict:
+        """What ``GET /shell/pages`` answers: every page, with the ops it lacks *now* (a launcher gains the
+        library's ops once one is open), and every op the app serves."""
+        ops = self.app_api.ops
+        return {"contract": CONTRACT, "slots": list(SLOTS), "ops": list(ops),
+                "pages": [page.to_json(ops) for page in self.pages]}
 
     @property
     def address(self) -> tuple[str, int]:
