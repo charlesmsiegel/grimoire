@@ -6,7 +6,7 @@ import path from "node:path";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const shell = path.join(here, "..", "..", "src", "grimoire", "app", "static", "shell");
-const { RESERVED, href, pageFor, parse, takeToken } = await import(path.join(shell, "router.js"));
+const { RESERVED, href, pageFor, parse, reserved, takeToken } = await import(path.join(shell, "router.js"));
 const { Drafts } = await import(path.join(shell, "drafts.js"));
 
 test("a reference survives a round trip through the address exactly", () => {
@@ -43,7 +43,9 @@ test("the token is taken from the address once and the rest is kept", () => {
   assert.deepEqual(takeToken("#token=a%2Bb"), { token: "a+b", hash: "" });
   assert.deepEqual(takeToken("#/chat/x?token=t1"), { token: "t1", hash: "#/chat/x" });
   assert.deepEqual(takeToken("#/chats?filter=character&token=t2"), { token: "t2", hash: "#/chats?filter=character" });
+  assert.deepEqual(takeToken("#/chats?token=t3&filter=scenario"), { token: "t3", hash: "#/chats?filter=scenario" });
   assert.equal(takeToken("#/chats"), null);
+  assert.equal(takeToken("#/chats?filter=character"), null);
 });
 
 test("every reserved route names its owning sprint", () => {
@@ -53,6 +55,8 @@ test("every reserved route names its owning sprint", () => {
   }
   assert.equal(pageFor([{ route: "chats", id: "chats" }], "chats").id, "chats");
   assert.equal(pageFor([], "chats"), null);
+  assert.equal(reserved("chat").owner, "111");
+  for (const name of ["constructor", "toString", "__proto__", "nowhere"]) assert.equal(reserved(name), null);
 });
 
 class Storage {
@@ -81,6 +85,14 @@ test("a draft survives a full or missing tab storage for the life of the page", 
   const drafts = new Drafts(storage);
   drafts.set("k", "kept in memory");
   assert.equal(drafts.get("k"), "kept in memory");
+  // a newer draft that could not be stored is not hidden by an older one the storage still holds
+  const stale = new Storage();
+  stale.items.set("grimoire-draft:k", "older");
+  stale.full = true;
+  const newer = new Drafts(stale);
+  newer.set("k", "newer");
+  assert.equal(newer.get("k"), "newer");
+  assert.equal(new Drafts(stale).get("k"), "", "the stale copy is dropped rather than brought back by a reload");
   const bare = new Drafts(null);
   bare.set("k", "v");
   assert.equal(bare.get("k"), "v");

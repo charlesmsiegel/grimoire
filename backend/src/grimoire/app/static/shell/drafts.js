@@ -10,20 +10,26 @@ export class Drafts {
     this.memory = new Map();  // when the tab's storage is unavailable or full
   }
 
+  // What this page typed last wins (memory), then what an earlier load of the tab kept (storage).
   get(key) {
     const name = PREFIX + key;
+    if (this.memory.has(name)) return this.memory.get(name);
     try {
       const value = this.storage ? this.storage.getItem(name) : null;
       if (value !== null && value !== undefined) return value;
-    } catch (error) { /* fall back to memory */ }
-    return this.memory.has(name) ? this.memory.get(name) : "";
+    } catch (error) { /* nothing kept */ }
+    return "";
   }
 
   set(key, value) {
     const name = PREFIX + key;
     if (!value) { this.clear(key); return; }
     this.memory.set(name, value);
-    try { if (this.storage) this.storage.setItem(name, value); } catch (error) { /* memory keeps it */ }
+    try { if (this.storage) this.storage.setItem(name, value); }
+    catch (error) {
+      // Storage is full: an older copy left there would come back after a reload in place of this one.
+      try { this.storage.removeItem(name); } catch (ignored) { /* nothing more to do */ }
+    }
   }
 
   clear(key) {

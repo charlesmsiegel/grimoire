@@ -5,7 +5,7 @@
 
 import * as api from "./api.js";
 import { Drafts } from "./drafts.js";
-import { RESERVED, href, pageFor, parse, takeToken } from "./router.js";
+import { href, pageFor, parse, reserved as reservedRoute, takeToken } from "./router.js";
 import * as ui from "./ui.js";
 
 const { el } = ui;
@@ -15,9 +15,8 @@ const NOTICE_MS = 8000;
 
 const state = {
   registry: { pages: [], slots: [] }, library: null, ops: new Set(), modules: new Map(),
-  current: null,  // { key, cleanup, controller }
+  current: null,  // { key, cleanup, controller, root }
   scroll: new Map(),  // location hash -> scrollY, restored on return
-  busy: false,
 };
 const drafts = new Drafts(safeSessionStorage());
 const frame = {};
@@ -97,19 +96,30 @@ function notify(text, { bad = false } = {}) {
 }
 
 // -- the context a page gets ------------------------------------------------------------------------------
-function context(location, page, controller) {
-  const root = frame.main;
+// Everything a page can reach outside its own root goes through here, and stops once the page is left: a request
+// that answers after the person has moved on rejects (reason "left") instead of writing into the next page.
+function context(location, page, controller, root) {
+  const { signal } = controller;
+  const live = () => !signal.aborted;
+  const settle = async (promise) => {
+    const value = await promise;
+    if (signal.aborted) throw new api.ApiError("left", "the page was left before the app answered", 0);
+    return value;
+  };
+  let busy = false;  // this page's own: a slow action on a page that was left never blocks the next one
   const ctx = {
-    route: location.route, path: location.path, query: location.query, page, signal: controller.signal,
-    ui, href, api: api.call, picture: api.picture, ApiError: api.ApiError,
+    route: location.route, path: location.path, query: location.query, page, signal,
+    ui, href, ApiError: api.ApiError,
+    api: (op, args) => settle(api.call(op, args, signal)),
+    picture: (ref) => settle(api.picture(ref)),
     get library() { return state.library; },
-    async refreshLibrary() { await loadLibrary(); return state.library; },
+    async refreshLibrary() { await settle(loadLibrary()); return state.library; },
     has: (op) => state.ops.has(op),
     registered: (route) => Boolean(pageFor(state.registry.pages, route)),
-    navigate(target) { if (window.location.hash === target) route(); else window.location.hash = target; },
-    setTitle(text) { frame.title.textContent = text || page.title; document.title = (text || page.title) + " · Grimoire"; },
-    setActions(...nodes) { frame.actions.replaceChildren(...nodes); },
-    notify,
+    navigate(target) { if (!live()) return; if (window.location.hash === target) route(); else window.location.hash = target; },
+    setTitle(text) { if (live()) setTitle(text || page.title); },
+    setActions(...nodes) { if (live()) frame.actions.replaceChildren(...nodes); },
+    notify(text, options) { return live() ? notify(text, options) : null; },
     // Link a style sheet from the page's own folder (the page's policy allows no inline styles), once.
     styles(file) {
       const url = "/static/pages/" + page.id + "/" + file;
@@ -121,13 +131,13 @@ function context(location, page, controller) {
     // Run one action: while it runs the page's buttons are disabled (a second tap is not a second post), and a
     // refusal is shown with the server's reason. Returns the work's result, or undefined when it failed.
     async act(work) {
-      if (state.busy || controller.signal.aborted) return undefined;
-      state.busy = true;
+      if (busy || !live()) return undefined;
+      busy = true;
       const buttons = [...root.querySelectorAll("button"), ...frame.actions.querySelectorAll("button")].filter((node) => !node.disabled);
       for (const node of buttons) node.disabled = true;
       try { return await work(); }
-      catch (error) { if (!controller.signal.aborted) notify(ui.errorText(error), { bad: true }); return undefined; }
-      finally { state.busy = false; for (const node of buttons) node.disabled = false; }
+      catch (error) { if (live()) notify(ui.errorText(error), { bad: true }); return undefined; }
+      finally { busy = false; for (const node of buttons) node.disabled = false; }
     },
   };
   return ctx;
@@ -143,17 +153,22 @@ function defaultRoute() {
 async function leave() {
   const current = state.current;
   if (!current) return;
-  state.scroll.set(current.key, window.scrollY);
+  if (current.ready) state.scroll.set(current.key, window.scrollY);
   current.controller.abort();
+  current.root.remove();  // detached: whatever the page still does lands nowhere
   state.current = null;
   if (typeof current.cleanup === "function") {
     try { current.cleanup(); } catch (error) { console.error("grimoire: a page's cleanup failed", error); }
   }
 }
 
-function show(title, ...children) {
+function setTitle(title) {
   frame.title.textContent = title;
   document.title = title + " · Grimoire";
+}
+
+function show(title, ...children) {
+  setTitle(title);
   frame.actions.replaceChildren();
   frame.main.replaceChildren(...children);
 }
@@ -172,7 +187,7 @@ async function route() {
   markNav(location.route);
   const page = pageFor(state.registry.pages, location.route);
   if (!page) {
-    const reserved = RESERVED[location.route];
+    const reserved = reservedRoute(location.route);
     if (reserved) show(reserved.what, ui.unavailable(reserved.what, "Sprint " + reserved.owner + " has not added this screen to the app yet."));
     else show("Not found", ui.notice("There is no page at " + key + "."), ui.actions(ui.link("Go home", defaultRoute() || "home")));
     focusTitle();
@@ -181,29 +196,38 @@ async function route() {
   const blocked = blocker(page);
   if (blocked) { show(page.title, ui.unavailable(page.title, blocked)); focusTitle(); return; }
   const controller = new AbortController();
-  state.current = { key, cleanup: null, controller };
+  const root = el("div", { class: "g-page", "data-page": page.id });
+  const current = { key, cleanup: null, controller, root };
+  state.current = current;
   show(page.title, el("p", { class: "g-muted" }, "Loading…"));
   let module;
   try {
     module = state.modules.get(page.module) || await import(page.module);
     state.modules.set(page.module, module);
   } catch (error) {
-    if (!controller.signal.aborted) { show(page.title, ui.errorBox(new Error("this page could not load: " + error.message))); focusTitle(); }
+    // A module that failed to import stays failed in this document (the browser caches the failure), so the
+    // way out is a reload, not "try again".
+    if (!controller.signal.aborted) {
+      show(page.title, ui.errorBox(new Error("this page could not load: " + error.message)),
+        ui.actions(ui.button("Reload the app", () => window.location.reload())));
+      focusTitle();
+    }
     return;
   }
   if (controller.signal.aborted) return;
-  frame.main.replaceChildren();
+  frame.main.replaceChildren(root);
   window.scrollTo(0, 0);  // a page may scroll itself while it mounts (a chat to its newest turn)
   try {
-    const cleanup = await module.mount(frame.main, context(location, page, controller));
+    const cleanup = await module.mount(root, context(location, page, controller, root));
     if (controller.signal.aborted) { if (typeof cleanup === "function") cleanup(); return; }
-    state.current.cleanup = cleanup;
+    current.cleanup = cleanup;
   } catch (error) {
     if (controller.signal.aborted) return;
-    frame.main.replaceChildren(ui.errorBox(error), ui.actions(ui.button("Try again", () => route())));
+    root.replaceChildren(ui.errorBox(error), ui.actions(ui.button("Try again", () => route())));
   }
   focusTitle();
   if (state.scroll.has(key)) window.scrollTo(0, state.scroll.get(key));  // back where the person left it
+  current.ready = true;
 }
 
 function focusTitle() {
@@ -213,33 +237,65 @@ function focusTitle() {
   frame.title.focus({ preventScroll: true });
 }
 
+// Remember where the person is on each address as they scroll, so Back and Forward return them there (the
+// browser's own restoration does not know a page re-renders after the hash changes).
+// Only once a page is mounted and back in place: the shell's own scroll to the top while a page loads is not the
+// person's.
+let scrollPending = false;
+function recordScroll() {
+  if (scrollPending) return;
+  scrollPending = true;
+  setTimeout(() => {
+    scrollPending = false;
+    const current = state.current;
+    if (current && current.ready) state.scroll.set(current.key, window.scrollY);
+  }, 100);
+}
+
 async function loadLibrary() {
   state.library = await api.call("library", {});
   state.ops = new Set(state.library.ops || []);
 }
 
 // -- start ----------------------------------------------------------------------------------------
-async function start() {
+// A "#token=..." in the address (the one the app printed, or a new one pasted into an open tab after a
+// restart) becomes this tab's key and leaves the address. Returns whether there was one.
+function adoptToken() {
   const taken = takeToken(window.location.hash);
-  if (taken) {
-    api.setToken(taken.token);
-    history.replaceState(null, "", window.location.pathname + (taken.hash || ""));
-  }
-  buildFrame();
+  if (!taken) return false;
+  api.setToken(taken.token);
+  history.replaceState(null, "", window.location.pathname + (taken.hash || ""));
+  return true;
+}
+
+// Load what the app serves (its pages and its library) and open the address. False when it could not.
+async function connect() {
   if (!api.token()) {
     show("Grimoire", el("p", {}, "Open the address the app printed when it started: it carries this session's key."));
-    return;
+    return false;
   }
   try {
     const [registry] = await Promise.all([api.registry(), loadLibrary()]);
     state.registry = registry;
   } catch (error) {
     show("Grimoire", ui.errorBox(error), ui.actions(ui.button("Try again", () => window.location.reload())));
-    return;
+    return false;
   }
   buildNav();
-  window.addEventListener("hashchange", () => { route(); });
   await route();
+  return true;
+}
+
+async function start() {
+  adoptToken();
+  buildFrame();
+  try { history.scrollRestoration = "manual"; } catch (error) { /* an older browser restores on its own */ }
+  window.addEventListener("scroll", recordScroll);
+  window.addEventListener("hashchange", async () => {
+    if (adoptToken()) { await leave(); await connect(); return; }  // a new serve: a new key and maybe new pages
+    route();
+  });
+  await connect();
 }
 
 start();

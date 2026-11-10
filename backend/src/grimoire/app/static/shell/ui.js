@@ -4,10 +4,12 @@
 
 import { href } from "./router.js";
 
-// el(tag, attrs, ...children): attrs are attributes, except `class`, `on<event>` (a listener) and `text`.
+// el(tag, attrs, ...children): attrs are attributes, except `class`, `on<event>` (a listener) and `text`. A
+// `style` attribute is refused: the page's policy drops inline styles, so it would only look like it worked.
 export function el(tag, attrs, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs || {})) {
+    if (key === "style") throw new TypeError("el: inline styles are refused by the page's policy; use a class");
     if (value === undefined || value === null || value === false) continue;
     if (key === "class") node.className = value;
     else if (key === "text") node.textContent = value;
@@ -145,6 +147,8 @@ export function confirm(message, { confirmLabel = "Confirm", danger = false } = 
     dialog.append(el("p", {}, message), actions(button("Cancel", () => done(false)),
       button(confirmLabel, () => done(true), { kind: danger ? "danger" : "primary" })));
     dialog.addEventListener("cancel", (event) => { event.preventDefault(); done(false); });
+    // A click on the dialog itself, not on its content, is a click on the backdrop around it.
+    dialog.addEventListener("click", (event) => { if (event.target === dialog) done(false); });
     document.body.append(dialog);
     dialog.showModal();
   });

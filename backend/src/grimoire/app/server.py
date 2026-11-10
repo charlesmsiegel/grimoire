@@ -49,8 +49,10 @@ BODY_RATE = 1024 * 1024
 TOKEN_HEADER = "X-Grimoire-Token"
 STATIC = Path(__file__).with_name("static")
 PAGE = STATIC / "index.html"
-#: What ``/static`` serves, by extension; anything else there (a page's ``page.json``) is not served.
-STATIC_TYPES = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
+#: What ``/static`` serves, by extension: modules, style sheets and a page's own icons and fonts. Anything else
+#: there (a page's ``page.json``) is not served. A page needing another kind of file adds it here.
+STATIC_TYPES = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+                ".svg": "image/svg+xml", ".png": "image/png", ".webp": "image/webp", ".woff2": "font/woff2"}
 #: One segment of a ``/static`` path: no dot files, no ``..``, nothing a file system could read two ways.
 _SEGMENT = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}")
 COMMON_HEADERS = (("Cache-Control", "no-store"), ("X-Content-Type-Options", "nosniff"),
@@ -58,9 +60,10 @@ COMMON_HEADERS = (("Cache-Control", "no-store"), ("X-Content-Type-Options", "nos
                   ("Cross-Origin-Resource-Policy", "same-origin"))
 
 
-#: The shell page's policy: only this server's own modules and style sheets, no inline code (108).
-PAGE_POLICY = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src blob:; connect-src 'self'; "
-               "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+#: The shell page's policy: only this server's own modules, style sheets, icons and fonts, no inline code (108).
+#: Library pictures arrive as ``blob:`` URLs (``ctx.picture``), never by address.
+PAGE_POLICY = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; font-src 'self'; "
+               "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 #: A module's or style sheet's own policy, should it ever be opened as a document.
 STATIC_POLICY = "default-src 'none'; sandbox"
 
@@ -305,7 +308,13 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:  # noqa: BLE001 -- a bug: logged here, never shown to the client
             self._failure()
         else:
-            self._json(200, result)
+            try:
+                encoded = json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8")
+            except (TypeError, ValueError):  # a bug: an answer that is not JSON is never half sent
+                self._failure()
+                return
+            self._send(200, encoded, "application/json; charset=utf-8",
+                       (("Content-Security-Policy", "default-src 'none'; sandbox"),))
 
     def _failure(self) -> None:
         print("grimoire app: an op failed:", file=sys.stderr)

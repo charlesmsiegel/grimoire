@@ -58,18 +58,27 @@ export function href(route, segments = [], query = undefined) {
   return tail ? text + "?" + tail : text;
 }
 
-// The serve's token arrives once, as "#token=..." (or "&token=..." after a route): returns the token and the
+// The serve's token arrives once, as "#token=..." (or as "token=..." in a route's query): returns the token and the
 // hash to show without it, or null when the hash carries none.
 export function takeToken(hash) {
   const text = typeof hash === "string" ? hash : "";
-  const match = /(?:^#|[&?])token=([^&]*)/.exec(text);
-  if (!match) return null;
-  let token;
-  try { token = decodeURIComponent(match[1]); } catch (error) { token = match[1]; }
-  let rest = text.slice(0, match.index) + text.slice(match.index + match[0].length);
-  rest = rest.replace(/[?&]$/, "").replace(/\?&/, "?");
-  if (rest === "#" || rest === "") rest = "";
-  return { token, hash: rest };
+  if (/^#token=/.test(text)) {
+    const params = new URLSearchParams(text.slice(1));
+    return { token: params.get("token") || "", hash: "" };
+  }
+  const mark = text.indexOf("?");
+  if (mark === -1) return null;
+  const params = new URLSearchParams(text.slice(mark + 1));
+  if (!params.has("token")) return null;
+  const token = params.get("token") || "";
+  params.delete("token");
+  const tail = params.toString();
+  return { token, hash: text.slice(0, mark) + (tail ? "?" + tail : "") };
+}
+
+// The reserved route of that name, or null (only the routes listed above: "constructor" is not one).
+export function reserved(route) {
+  return typeof route === "string" && Object.hasOwn(RESERVED, route) ? RESERVED[route] : null;
 }
 
 // The page that owns a route, among the registry's pages.

@@ -14,7 +14,8 @@ server.
 backend/src/grimoire/app/
   static/index.html            the shell's host page (108)
   static/shell/                the shell (108): shell.js, router.js, ui.js, api.js, drafts.js, shell.css
-  static/pages/<id>/           one page: page.json and its ES module (and, optionally, its own .css)
+  static/pages/<id>/           one page: page.json and its ES module (and, optionally, its own .css, .svg,
+                               .png, .webp or .woff2 files; nothing else under static/ is served)
   adapter.py                   the adapter contract: Adapter, AdapterContext
   adapters/<name>.py           one sprint's ops: sources 109, imports 110, play 111, providers 112,
                                campaign 113, media 114, shell 108
@@ -53,16 +54,21 @@ export async function mount(root, ctx) {
 }
 ```
 
-`root` is the page's own region; the shell empties it when the page is left. Build everything from text: never
-assign library text (card text, model output) to `innerHTML` or any other markup sink.
+`root` is the page's own region; the shell detaches it when the page is left, and from then on `ctx.api` and
+`ctx.picture` reject with reason `left` and `setTitle`, `setActions`, `notify` and `navigate` do nothing, so a
+late answer never writes into the next page. Build everything from text: never assign library text (card text,
+model output) to `innerHTML` or any other markup sink. `ui.el` refuses a `style` attribute.
+
+A page's own style sheet names only classes that start with its id (`chat-post` for the `chat` page): every
+sheet stays linked once loaded, so an unprefixed class would restyle other pages.
 
 ### What `ctx` gives a page
 
 | | |
 |---|---|
 | `ctx.route`, `ctx.path`, `ctx.query` | the address: `#/chat/<ref>` is route `chat`, path `[ref]`; `query` is a `URLSearchParams` |
-| `ctx.api(op, args)` | call an op; resolves to its JSON answer or rejects with `ctx.ApiError` (`reason`, `message`, `status`) |
-| `ctx.act(work)` | run one action: the page's buttons are disabled meanwhile and a refusal is shown with its reason |
+| `ctx.api(op, args)` | call an op; resolves to its JSON answer or rejects with `ctx.ApiError` (`reason`, `message`, `status`; `network`, `bad_response` and `left` are the shell's own reasons) |
+| `ctx.act(work)` | run one action: the page's buttons are disabled meanwhile, a second tap does nothing, and a refusal is shown with its reason |
 | `ctx.picture(ref)` | an `ImageRef`'s picture as a `blob:` URL (the only image source the page's policy allows) |
 | `ctx.library`, `ctx.refreshLibrary()` | the `library` op's answer (device, peers, whether a model is set up, `ops`) |
 | `ctx.has(op)` | whether the app serves an op: show an action only when it does |
@@ -129,21 +135,28 @@ def _show(ctx: AdapterContext, args) -> dict:
     return {"source": str(ref)}
 
 
-ADAPTER = Adapter("sources", owner="109", ops={"show": _show})
+ADAPTER = Adapter("sources", owner="109", ops={"show": _show}, refusals={CardError: "card_refused"})
 ```
 
 - The op is called as `sources.show`: `POST /api/sources.show` with the serve's token, like a core op, and `library`
   lists it in `ops`.
 - It runs through `TextApi.serialized`: under the library's one writer lock, with each service's refusal answered
   as `ApiRefused` exactly as a core op's (`StaleWrite` is `changed`, 409). Raise `ApiRefused(reason, message)` for
-  a refusal of the adapter's own.
+  a refusal of the adapter's own. **`refusals`** maps another service's refusal class that the text API does not
+  know (a card error, an import refusal, a provider's `CallRefused`) to its reason; a subclass matches its base.
+  Any other exception is a bug: the server logs it and answers 500 `internal`.
+- An op answers one JSON object (no `NaN`, no Python objects); anything else is a bug, answered 500.
 - `ctx` holds the open library (`store`, `authority`), the owner and **`ctx.handle`, the owner's trusted handle**:
   every write goes through a domain service with that handle. Its services are the text API's own (`chats`,
-  `runner`, `quick`, `images`, `runtime`); `ctx.core(op, args)` runs a core op in the same call.
+  `runner`, `quick`, `images`, `runtime`); `ctx.core(op, args)` runs a core op in the same call. `ctx.store` and
+  `ctx.authority` are there to build the owning domain service over the same open library; an adapter never asks
+  the authority for a handle of its own or writes the store directly.
 - References travel as their canonical strings and are parsed by their owning backend (`parse_ref(SourceRef.parse,
   ...)`), never looked up by name. A write that replaces a record takes the revision it was shown (an etag) and is
   refused `changed` if the record moved on.
 - An adapter may grow into a package (`adapters/sources/`), keeping `ADAPTER` at its top.
+- An adapter imports `grimoire.app.adapter` and domain packages only, never `grimoire.app` itself, its server or
+  `appapi`: the registry loads every adapter while `grimoire.app` is still loading, so that would close a cycle.
 
 ## Tests
 

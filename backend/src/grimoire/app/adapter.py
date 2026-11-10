@@ -10,6 +10,10 @@ one writer lock, with every service's refusal answered as ``ApiRefused`` exactly
 Each sprint owns one module of ``grimoire.app.adapters`` (``sources`` 109, ``imports`` 110, ``play`` 111,
 ``providers`` 112, ``campaign`` 113, ``media`` 114, ``shell`` 108). The registry imports all seven, so a sprint
 only ever edits its own module and nobody edits a shared list. See docs/APP_SHELL.md.
+
+An adapter module imports this module and domain packages only, never ``grimoire.app`` itself, its server or
+``appapi``: the registry imports every adapter while ``grimoire.app`` is still loading, so such an import would
+close a cycle.
 """
 
 from __future__ import annotations
@@ -29,7 +33,11 @@ NAME = re.compile(r"[a-z][a-z0-9_]{0,31}")
 class AdapterContext:
     """What an adapter op works with: the open library and the services the text API already holds, acting as
     the library owner through the app's one trusted handle (044). ``core(op, args)`` runs a core text API op
-    (``open``, to answer with the scene view, say) inside the same serialized call."""
+    (``open``, to answer with the scene view, say) inside the same serialized call.
+
+    ``store`` and ``authority`` are here so an adapter can build its owning domain service over the same open
+    library (a source service, an import planner). Every write goes through such a service with ``handle``: an
+    adapter never asks the authority for a handle of its own or writes the store directly."""
 
     api: TextApi
 
@@ -71,6 +79,7 @@ class AdapterContext:
         return self.api.runtime
 
     def core(self, op: str, args: Mapping[str, object] | None = None) -> dict:
+        # The lock is re-entrant, so the core op runs inside this op's serialized call, not after it.
         return self.api.call(op, dict(args or {}))
 
 
@@ -80,11 +89,17 @@ Handler = Callable[[AdapterContext, Mapping[str, object]], dict]
 
 @dataclass(frozen=True)
 class Adapter:
-    """One sprint's ops. ``owner`` names the sprint ("109"); ``ops`` maps each op's own name to its handler."""
+    """One sprint's ops. ``owner`` names the sprint ("109"); ``ops`` maps each op's own name to its handler.
+
+    ``refusals`` maps a refusal its services raise that the text API does not know (``CardError``,
+    ``ImportRefused``, a provider's ``CallRefused``) to the machine-readable reason the client is answered with,
+    as a 409 unless the reason is one of the text API's not-found or bad-request reasons. A subclass matches its
+    base. Any other exception is a bug: logged by the server and answered 500."""
 
     name: str
     owner: str
     ops: Mapping[str, Handler] = field(default_factory=dict)
+    refusals: Mapping[type[BaseException], str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not NAME.fullmatch(self.name):
@@ -96,7 +111,20 @@ class Adapter:
                 raise ValueError(f"op {op!r} of adapter {self.name!r} must match {NAME.pattern}")
             if not callable(handler):
                 raise ValueError(f"op {self.name}.{op} is not callable")
+        for kind, reason in self.refusals.items():
+            if not (isinstance(kind, type) and issubclass(kind, Exception)):
+                raise ValueError(f"adapter {self.name!r}: a refusal is an exception class, not {kind!r}")
+            if not isinstance(reason, str) or not NAME.fullmatch(reason):
+                raise ValueError(f"adapter {self.name!r}: refusal reason {reason!r} must match {NAME.pattern}")
         object.__setattr__(self, "ops", MappingProxyType(dict(self.ops)))
+        object.__setattr__(self, "refusals", MappingProxyType(dict(self.refusals)))
+
+    def refusal(self, error: BaseException) -> str | None:
+        """The reason ``error`` is answered with, or None when it is not one of this adapter's refusals."""
+        for kind in type(error).__mro__:
+            if kind in self.refusals:
+                return self.refusals[kind]
+        return None
 
 
 __all__ = ["NAME", "Adapter", "AdapterContext", "Handler"]

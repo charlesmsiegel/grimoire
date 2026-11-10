@@ -16,7 +16,7 @@ export function token() {
 
 export class ApiError extends Error {
   // reason: the server's machine-readable reason ("changed", "no_chat", "unknown_op"...), or "network" when the
-  // request never got an answer and "bad_response" when the answer was not JSON. status: the HTTP status (0: none).
+  // request never got an answer, "bad_response" when the answer was not JSON and "left" when the page was left. status: the HTTP status (0: none).
   constructor(reason, message, status) {
     super(message || reason);
     this.name = "ApiError";
@@ -25,14 +25,17 @@ export class ApiError extends Error {
   }
 }
 
-export async function call(op, args) {
+// `signal` (optional) abandons the request: it then rejects with reason "left". A write the server already
+// received still happens; only the answer is dropped.
+export async function call(op, args, signal = undefined) {
   let response;
   try {
     response = await fetch("/api/" + encodeURIComponent(op), {
       method: "POST", headers: { "Content-Type": "application/json", "X-Grimoire-Token": token() },
-      body: JSON.stringify(args || {}), cache: "no-store", credentials: "omit",
+      body: JSON.stringify(args || {}), cache: "no-store", credentials: "omit", signal,
     });
   } catch (error) {
+    if (signal && signal.aborted) throw new ApiError("left", "the page was left before the app answered", 0);
     throw new ApiError("network", "the app did not answer: is it still running?", 0);
   }
   const body = await response.json().catch(() => null);

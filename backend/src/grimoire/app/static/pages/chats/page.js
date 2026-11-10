@@ -19,7 +19,7 @@ export async function mount(root, ctx) {
   };
 
   ctx.setTitle("Chats");
-  ctx.setActions(syncButton(ctx));
+  if (ctx.has("sync")) ctx.setActions(syncButton(ctx));
   const tabs = el("div", { class: "g-actions", role: "group", "aria-label": "Which chats" });
   for (const [name, label] of VIEWS) {
     const link = el("a", { class: "g-button", href: address({ filter: name, source: undefined, limit: undefined }) }, label);
@@ -33,6 +33,9 @@ export async function mount(root, ctx) {
   if (view !== "recent") {
     const options = [{ value: "", label: "Choose a " + view }];
     for (const item of recent.sources.filter((entry) => entry.role === view)) options.push({ value: item.ref, label: item.name || item.ref });
+    // A linked source the recent list does not name (older, or not in this library) is still the one shown: the
+    // picker says its exact ref rather than silently showing another.
+    if (source && !options.some((option) => option.value === source)) options.push({ value: source, label: source });
     const picker = ui.choice(view === "character" ? "Character" : "Scenario", options, {
       value: source || "", onchange: (value) => ctx.navigate(address({ source: value || undefined, limit: undefined })),
     });

@@ -223,7 +223,30 @@ def _probe(seen: list):
     def refuse(ctx, args):
         raise ApiRefused("probe_refused", "the probe says no")
 
-    return Adapter("probe", owner="test", ops={"echo": echo, "stale": stale, "open": opened, "refuse": refuse})
+    def foreign(ctx, args):
+        raise _NarrowCardRefusal("the card has no name")
+
+    def broken(ctx, args):
+        raise _OtherServiceError("a bug, not a refusal")
+
+    def not_json(ctx, args):
+        return {"when": object()}
+
+    return Adapter("probe", owner="test", refusals={_CardRefusal: "card_refused"},
+                   ops={"echo": echo, "stale": stale, "open": opened, "refuse": refuse, "foreign": foreign,
+                        "broken": broken, "not_json": not_json})
+
+
+class _CardRefusal(Exception):
+    """Stands in for another service's refusal the text API does not know (109's card errors, say)."""
+
+
+class _NarrowCardRefusal(_CardRefusal):
+    pass
+
+
+class _OtherServiceError(Exception):
+    pass
 
 
 def test_an_adapter_op_runs_over_the_open_library_as_its_owner(device):
@@ -251,6 +274,36 @@ def test_an_adapter_refuses_as_a_core_op_would(device):
     with pytest.raises(ApiRefused) as refused:
         app.call("probe.echo", ["not", "an", "object"])  # type: ignore[arg-type]
     assert refused.value.reason == "invalid_field"
+
+
+def test_an_adapters_own_refusals_are_answered_with_its_reason_and_anything_else_is_a_bug(device):
+    opened, _chat = device
+    app = AppApi(opened.api, (_probe([]),))
+    with pytest.raises(ApiRefused) as refused:
+        app.call("probe.foreign", {})  # a subclass of a declared refusal matches it
+    assert (refused.value.reason, refused.value.status, str(refused.value)) == ("card_refused", 409, "the card has no name")
+    with pytest.raises(_OtherServiceError):
+        app.call("probe.broken", {})
+    with pytest.raises(TypeError, match="not JSON"):
+        app.call("probe.not_json", {})
+
+
+def test_a_bug_in_an_adapter_is_answered_500_over_http_and_the_app_goes_on(device):
+    opened, _chat = device
+    server = Served(opened.api, adapters=(_probe([]),))
+    try:
+        assert server.post("probe.not_json", {}) == (500, {"error": "internal", "message": "the app failed; see its console"})
+        assert server.post("probe.broken", {})[0] == 500
+        assert server.post("probe.foreign", {}) == (409, {"error": "card_refused", "message": "the card has no name"})
+        assert server.post("probe.echo", {"text": "still here"})[0] == 200
+    finally:
+        server.close()
+
+
+@pytest.mark.parametrize("refusals", [{ValueError: "Bad Reason"}, {"ValueError": "fine"}, {int: "fine"}])
+def test_an_adapters_refusals_are_exception_classes_with_reasons(refusals):
+    with pytest.raises(ValueError):
+        Adapter("ok", owner="test", refusals=refusals)
 
 
 def test_adapter_ops_need_the_token_over_http(device):

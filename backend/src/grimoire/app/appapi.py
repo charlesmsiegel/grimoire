@@ -6,6 +6,7 @@ text API itself. ``library`` lists every op, core and adapter, so a page can tel
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from types import MappingProxyType
 
@@ -24,14 +25,14 @@ class AppApi:
             adapters = ADAPTERS
         self.api = api
         self.context = AdapterContext(api)
-        handlers: dict[str, Handler] = {}
+        handlers: dict[str, tuple[Adapter, Handler]] = {}
         names: set[str] = set()
         for adapter in adapters:
             if adapter.name in names:
                 raise ValueError(f"two adapters are named {adapter.name!r}")
             names.add(adapter.name)
             for op, handler in adapter.ops.items():
-                handlers[f"{adapter.name}.{op}"] = handler
+                handlers[f"{adapter.name}.{op}"] = (adapter, handler)
         self._handlers = MappingProxyType(handlers)
 
     @property
@@ -45,18 +46,44 @@ class AppApi:
             if op == "library":  # the client learns adapter ops from the same answer as the core ones
                 result = {**result, "ops": list(self.ops)}
             return result
-        handler = self._handlers.get(op)
-        if handler is None:
+        entry = self._handlers.get(op)
+        if entry is None:
             raise ApiRefused("unknown_op", f"no op {op!r}")
+        adapter, handler = entry
         if args is None:
             args = {}
         if not isinstance(args, Mapping):
             raise ApiRefused("invalid_field", "the arguments must be a JSON object")
         context = self.context
-        return self.api.serialized(lambda given: handler(context, given), args)
+
+        def run(given: Mapping[str, object]) -> dict:
+            try:
+                return handler(context, given)
+            except ApiRefused:
+                raise
+            except Exception as error:
+                reason = adapter.refusal(error)
+                if reason is None:
+                    raise
+                raise ApiRefused(reason, str(error)) from None
+
+        result = self.api.serialized(run, args)
+        _check_answer(op, result)
+        return result
 
     def image(self, ref: str) -> tuple[str, bytes]:
         return self.api.image(ref)
+
+
+def _check_answer(op: str, result: object) -> None:
+    """An op answers one JSON object; anything else is the adapter's bug, raised here (the server logs it and
+    answers 500) rather than found while the answer is half written."""
+    if not isinstance(result, dict):
+        raise TypeError(f"op {op} answered {type(result).__name__}, not a JSON object")
+    try:
+        json.dumps(result, allow_nan=False)
+    except (TypeError, ValueError) as error:
+        raise TypeError(f"op {op} answered something that is not JSON ({error})") from None
 
 
 __all__ = ["AppApi"]

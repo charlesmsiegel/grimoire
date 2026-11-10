@@ -12,8 +12,9 @@ export async function mount(root, ctx) {
   const send = ui.button("Post", () => ctx.act(post), { kind: "primary" });
   const bar = el("div", { class: "chat-bar" }, el("div", { class: "chat-bar-row" }, composer.node, send));
   root.append(el("div", { class: "g-actions" }, ui.link("All chats", "chats")), view, bar);
-  ctx.setActions(syncButton(ctx, () => open()));
-  const generates = () => Boolean(ctx.library && ctx.library.generation);
+  if (ctx.has("sync")) ctx.setActions(syncButton(ctx, () => open()));
+  // Answer only where the app serves generate and a model is set up: no button pretends to work.
+  const generates = () => ctx.has("generate") && Boolean(ctx.library && ctx.library.generation);
 
   async function open() { render(await ctx.api("open", { chat })); }
 
