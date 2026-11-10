@@ -1,0 +1,11 @@
+{
+  "contract": 1,
+  "id": "campaign",
+  "route": "campaign",
+  "title": "Campaigns",
+  "slot": "campaign",
+  "order": 10,
+  "owner": "113",
+  "entry": "page.js",
+  "requires": ["campaign.chats", "campaign.hub"]
+}

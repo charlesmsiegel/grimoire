@@ -513,3 +513,33 @@ def test_renaming_an_imported_character_keeps_its_own_example_lines(api, store):
         saved = edit(api, str(MARA_VELL), "sources.save", fields={"name": name})
         assert _spoken(store, MARA_VELL) == (name, ["Mind the wick."])
     assert api.call("sources.read", {"ref": saved["ref"]})["payload"]["card"]["example_speaker"] == "Mara Vell"
+
+
+# -- page review: entries an edit leaves alone, derive from what cannot compose -----------------------------
+
+def test_an_entry_the_edit_leaves_alone_keeps_its_keys_and_content_exactly(api):
+    etag = source(api, "world:harbor", "Harbor")
+    lore = api.call("sources.create", {"source": "world:harbor", "kind": "lorebook", "expected": etag, "fields": {
+        "entries": [{"keys": ["bell"], "content": "The bell."}]}})
+    blank = {"keys": [], "content": "", "enabled": False, "extensions": {"uid": 7}}  # an imported empty entry
+    inert = {"keys": ["red\ndragon", " dragon "], "content": "Old dragon lore."}     # keys the reader cannot match
+    read = api.call("sources.read", {"ref": lore["ref"]})
+    raw = edit(api, lore["ref"], "sources.save_raw", payload={**read["payload"], "entries": [blank, inert]})
+    saved = edit(api, raw["ref"], "sources.save", fields={"entries": [{"index": 0}, {"index": 1, "content": "New lore."}]})
+    entries = api.call("sources.read", {"ref": saved["ref"]})["payload"]["entries"]
+    assert entries == [blank, {**inert, "content": "New lore."}]
+    # a new entry still needs its content and a key the reader can match
+    assert refused(api, "sources.save", **_head(api, saved["ref"]), fields={"entries": [{"keys": ["bell"]}]}).reason \
+        == "invalid_field"
+
+
+def test_nothing_is_offered_to_derive_from_a_revision_that_does_not_compose(api, store):
+    gothic, _modern = two_maras(api)
+    derived = api.call("sources.derive", {"base": gothic["ref"], "source": GOTHIC,
+                                          "expected": api.call("sources.read", {"ref": gothic["ref"]})["manifest_etag"]})
+    assert api.call("sources.read", {"ref": derived["ref"]})["actions"]["derive"] is None
+    _hand_edit(store, derived["ref"], lambda record: record["payload"]["derivation"].update(
+        {"base": "catalog:gothic/character/nobody@r1"}))
+    read = api.call("sources.read", {"ref": derived["ref"]})
+    assert read["composition_error"] is not None
+    assert "does not compose" in read["actions"]["derive"]

@@ -109,11 +109,23 @@ class SourceApi:
 
     def __init__(self, store: LibraryStore, authority, *, owner: str,  # type: ignore[no-untyped-def]
                  clock: Callable[[], str] = _utc_now, new_id: Callable[[str], str] = _new_id) -> None:
+        handle = authority.handle_for(owner, trusted=True)
+        self._setup(store, handle, ChatLibrary(store, handle, clock=clock, new_id=new_id, owner=owner), owner)
+
+    @classmethod
+    def over(cls, store: LibraryStore, handle, chats: ChatLibrary, *, owner: str) -> "SourceApi":  # type: ignore[no-untyped-def]
+        """The ops over a handle and chat library that already exist: the app's adapter (108) builds one per call
+        over the text API's own, so it never asks the authority for a handle of its own."""
+        api = cls.__new__(cls)
+        api._setup(store, handle, chats, owner)
+        return api
+
+    def _setup(self, store: LibraryStore, handle, chats: ChatLibrary, owner: str) -> None:  # type: ignore[no-untyped-def]
         self.store = store
         self.owner = owner
-        self.handle = authority.handle_for(owner, trusted=True)
-        self.authoring = SourceAuthoring(store, self.handle, owner=owner)
-        self.chats = ChatLibrary(store, self.handle, clock=clock, new_id=new_id, owner=owner)
+        self.handle = handle
+        self.authoring = SourceAuthoring(store, handle, owner=owner)
+        self.chats = chats
         self._lock = threading.RLock()
         self._ops: dict[str, Callable[[Mapping[str, object]], dict]] = {
             "sources.catalog": self._catalog, "sources.read": self._read, "sources.create_source": self._create_source,
@@ -254,7 +266,7 @@ class SourceApi:
         detail["namesakes"] = [str(other) for other in view.index.find_by_name(stored.name, ref.kind)
                                if other.entity_key != ref.entity_key] if stored.name else []
         detail["chats"] = self._linked_chats(ref)
-        detail["actions"] = _actions(ref, family, derived, stored.ref == head.ref)
+        detail["actions"] = _actions(ref, family, derived, stored.ref == head.ref, detail["composition_error"])
         detail["unavailable"] = UNAVAILABLE
         return detail
 
@@ -271,23 +283,31 @@ class SourceApi:
         return found
 
     def _attach_targets(self, args: Mapping[str, object]) -> dict:
-        """Recent chats with the etag an ``attach`` must name."""
+        """Chats, newest activity first, with the etag an ``attach`` must name: at most ``limit`` of them, and only
+        those whose label or ref holds ``query`` (any case) when one is given. ``truncated`` says more match."""
         limit = _field(args, "limit", int, required=False, default=50)
         if not 1 <= limit <= MAX_LIMIT:
             raise ApiRefused("invalid_field", f"limit must be 1 to {MAX_LIMIT}")
+        query = _field(args, "query", str, required=False, default="").strip().casefold()
         index = self.chats.navigation()
-        chats = []
-        for chat in index.recent(limit):
+        chats: list[dict] = []
+        truncated = False
+        for chat in index.all_chats():
             entry = index.entry(chat)
             if entry.problem is not None:
+                continue
+            if query and query not in (entry.label or "").casefold() and query not in str(chat).casefold():
                 continue
             try:
                 _record, etag = self.chats.read_chat(chat)
             except (RecordNotFound, StoreError, ValueError):
                 continue
+            if len(chats) == limit:
+                truncated = True
+                break
             chats.append({"chat": str(chat), "label": entry.label, "last_activity": entry.last_activity,
                           "etag": etag})
-        return {"chats": chats}
+        return {"chats": chats, "truncated": truncated}
 
     # -- writing -----------------------------------------------------------------------------------------
     def _create_source(self, args: Mapping[str, object]) -> dict:
@@ -367,14 +387,21 @@ def _effective(inspection, composed) -> dict:  # type: ignore[no-untyped-def]
     }
 
 
-def _actions(ref: SourceRef, family: str, derived: bool, is_head: bool) -> dict:
-    """What the record page offers: each action available, or the reason it is not."""
+def _actions(ref: SourceRef, family: str, derived: bool, is_head: bool, uncomposed: Mapping | None = None) -> dict:
+    """What the record page offers: each action available, or the reason it is not. A revision that does not
+    compose (``uncomposed``, its composition error) cannot be a portrayal's base: 022 refuses one derived from it."""
     actions: dict[str, str | None] = {}
     edit_reason = None if is_head else "Only the head revision is edited; open the head to change this entity."
     actions["save"] = edit_reason if family in (ENTITY, SCENARIO, LOREBOOK) else \
         "This record has no structured editor; use the raw editor."
     actions["save_raw"] = edit_reason
-    actions["derive"] = None if family == ENTITY else "Only entities have portrayals."
+    if family != ENTITY:
+        actions["derive"] = "Only entities have portrayals."
+    elif uncomposed is not None:
+        actions["derive"] = (f"This revision does not compose ({uncomposed.get('reason')}), so nothing can be "
+                             "derived from it.")
+    else:
+        actions["derive"] = None
     actions["portrayal"] = (edit_reason if derived else "Only a derived portrayal overrides or clears inherited "
                                                         "fields.")
     actions["attach"] = None if ref.kind in ATTACH_ROLE else f"A {ref.kind} cannot be attached to a chat."
