@@ -84,11 +84,16 @@ UNREAD_HINTS = {
                           "them aloud, or post an action such as I whisper to (name): \"...\"",
     "mixed_narration": "the line mixes the words said with narration: post the words alone, or in quotes, and the "
                        "rest as an action",
-    "unknown_addressee": "the line names no one in the scene by a name it knows: use a name from the scene",
-    "ambiguous_addressee": "more than one listener fits: name one, and put the words in quotes",
-    "conflicting_channel": "the line both whispers and speaks mind to mind: choose one",
-    "indirect_speech": "say how it reaches them (I whisper to (name), or mind to mind), or post the words as speech",
-    "unclear_content": "the words said are unclear: put the exact words in quotes after the name",
+    "unknown_addressee": "use a name from the scene and set the words off after it, such as "
+                         "I whisper to (name): \"...\"",
+    "ambiguous_addressee": "more than one listener fits: name one, and put the words in quotes, such as "
+                           "I whisper to (name): \"...\"",
+    "conflicting_channel": "the line both whispers and speaks mind to mind: choose one, such as "
+                           "I tell (name) telepathically: \"...\"",
+    "indirect_speech": "say how it reaches them, such as I whisper to (name): \"...\" or "
+                       "I tell (name) telepathically: \"...\", or post the words as speech",
+    "unclear_content": "the words said are unclear: put the exact words in quotes after the name, such as "
+                       "I whisper to (name): \"...\"",
     "no_content": "the line has no words for anyone to hear",
 }
 

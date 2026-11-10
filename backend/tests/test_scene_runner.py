@@ -6,6 +6,7 @@ persona, and the Storm over Port Vell scenario chat. Every model call is a scrip
 
 from __future__ import annotations
 
+import re
 import shutil
 import threading
 
@@ -188,6 +189,21 @@ def test_a_line_that_cannot_be_read_says_how_to_post_it_so_it_reads(cards, text,
         assert str(error) == f"{reason}: {UNREAD_HINTS[reason]}" and "quotes" in str(error)
         assert table.runner.open(chat).records == ()
         assert table.runner.post(chat, table.player(), fixed, mode="speech").post.kind == "speech"
+
+
+@pytest.mark.parametrize("example", sorted({example for hint in UNREAD_HINTS.values()
+                                              for example in re.findall(r'I [a-z ()]+: "[.][.][.]"', hint)}))
+def test_each_example_a_hint_gives_is_read_as_a_private_message(cards, example):
+    folder, chat, _ = cards
+    with Table(folder) as table:
+        seated(table, chat)
+        line = example.replace("(name)", "Mara Vell").replace("...", "The lamp is out")
+        try:
+            turn = table.runner.post(chat, table.player(), line, mode="action")
+        except SceneRefused as error:  # read, then refused for what the sender can do (no telepathy here)
+            assert error.reason not in UNREAD_REASONS, error
+        else:
+            assert turn.post.channel in ("whisper", "telepathy") and turn.post.text == "The lamp is out"
 
 
 def test_every_unread_reason_a_post_can_be_refused_has_a_hint():
