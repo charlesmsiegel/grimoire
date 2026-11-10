@@ -24,7 +24,7 @@ export async function mount(root, ctx) {
     page.busy = true;
     return ctx.act(work).finally(() => { page.busy = false; if (page.scene && !ctx.signal.aborted) render(page.scene); });
   };
-  const page = { busy: false, scene: null, mode: "auto", redirecting: null, striking: null, pickable: null, modes: null };
+  const page = { busy: false, scene: null, mode: "auto", redirecting: null, striking: null, pickable: null, modes: null, repairs: null };
   const view = el("div", {});
   const composer = ui.field("Your turn", { draft: ctx.draft("composer:" + chat), multiline: true });
   composer.input.setAttribute("maxlength", "20000");
@@ -80,13 +80,20 @@ export async function mount(root, ctx) {
     page.scene = scene;
     // while play is held up (no seat, a pause, a fork, a conflict, unreadable turns) nothing new is taken
     page.stopped = !scene.state.seated || scene.state.waiting.some((item) => STOPS.includes(item));
+    // a pause holds new play, not corrections: 035 takes a skip, a redirect or a strike while paused
+    const correctable = scene.state.seated && scene.state.waiting.every((item) => item === "paused" || !STOPS.includes(item));
+    if (!scene.problems.some((problem) => problem.code === "broken_binding")) page.repairs = null;
     const players = scene.cast.filter((member) => !member.persona).map((member) => member.name).join(", ");
     ctx.setTitle(scene.label || (scene.launch && scene.launch.kind === "premise" ? "Premise chat" : players)
       || (scene.launch && scene.launch.ref) || "Chat");
     view.replaceChildren(castStrip(scene), ...notices(scene), transcript(scene), controls(scene));
     drawComposer(scene);
     if (page.busy) for (const node of view.querySelectorAll("button")) node.disabled = true;
-    else if (page.stopped) for (const log of view.querySelectorAll("section.chat-log")) for (const node of log.querySelectorAll("button")) node.disabled = true;
+    else if (page.stopped) {
+      for (const log of view.querySelectorAll("section.chat-log")) {
+        for (const node of log.querySelectorAll("button")) if (!(correctable && node.hasAttribute("data-correction"))) node.disabled = true;
+      }
+    }
     if (bottom) scrollDown();
   }
 
@@ -202,19 +209,24 @@ export async function mount(root, ctx) {
     const other = scene.problems.filter((problem) => problem.code !== "broken_binding");
     if (broken.length) {
       const holder = box("A source this chat binds is gone. Its turns stay.");
-      if (ctx.has("play.repairs")) {
+      // what play.repairs found is kept on the page, so the redraw after the request draws it again
+      if (page.repairs) {
+        holder.append(ui.list(page.repairs.map((repair) =>
+          el("div", { class: "chat-repair" }, el("span", {}, repair.field + ": "), el("span", { class: "g-ref" }, repair.ref),
+            el("span", { class: "g-muted" }, " (" + repair.reason + ") "),
+            repair.choices.includes("detach") && ctx.has("play.detach")
+              ? ui.button("Detach", () => run(async () => {
+                const sure = await ui.confirm("Detach " + repair.ref + " from this chat? It plays on without it, and this cannot be undone here.",
+                  { confirmLabel: "Detach", danger: true });
+                if (!sure) return;
+                await act("play.detach", { field: repair.field, ref: repair.ref });
+                // the redraw when this ends shows what is still missing (none at all clears it)
+                page.repairs = page.repairs.filter((item) => item.field !== repair.field || item.ref !== repair.ref);
+              }))
+              : el("span", { class: "g-muted" }, "Import the card again to bring it back.")))));
+      } else if (ctx.has("play.repairs")) {
         holder.append(ui.actions(ui.button("See what is missing", () => run(async () => {
-          const found = await call("play.repairs", {});
-          holder.replaceChildren("A source this chat binds is gone. Its turns stay.", ui.list(found.repairs.map((repair) =>
-            el("div", { class: "chat-repair" }, el("span", {}, repair.field + ": "), el("span", { class: "g-ref" }, repair.ref),
-              el("span", { class: "g-muted" }, " (" + repair.reason + ") "),
-              repair.choices.includes("detach") && ctx.has("play.detach")
-                ? ui.button("Detach", () => run(async () => {
-                  const sure = await ui.confirm("Detach " + repair.ref + " from this chat? It plays on without it, and this cannot be undone here.",
-                    { confirmLabel: "Detach", danger: true });
-                  if (sure) await act("play.detach", { field: repair.field, ref: repair.ref });
-                }))
-                : el("span", { class: "g-muted" }, "Import the card again to bring it back.")))));
+          page.repairs = (await call("play.repairs", {})).repairs;
         }))));
       }
       out.push(holder);
@@ -256,13 +268,16 @@ export async function mount(root, ctx) {
     return log;
   }
 
+  // a skip, a redirect or a strike, which 035 takes while play is paused (a keep or a pass it does not)
+  function correction(node) { node.setAttribute("data-correction", ""); return node; }
+
   function strikeTools(item) {
     if (page.striking === item.line) {
       return el("span", { class: "chat-tools" },
-        ui.button("Strike it", () => run(async () => { page.striking = null; await act("play.strike", { line: item.line }); }), { kind: "danger" }),
-        ui.button("Cancel", () => { page.striking = null; render(page.scene); }));
+        correction(ui.button("Strike it", () => run(async () => { page.striking = null; await act("play.strike", { line: item.line }); }), { kind: "danger" })),
+        correction(ui.button("Cancel", () => { page.striking = null; render(page.scene); })));
     }
-    const strike = ui.button("Strike", () => { page.striking = item.line; render(page.scene); });
+    const strike = correction(ui.button("Strike", () => { page.striking = item.line; render(page.scene); }));
     strike.setAttribute("aria-label", "Strike this line: nobody hears it from now on");
     return el("span", { class: "chat-tools" }, strike);
   }
@@ -294,16 +309,16 @@ export async function mount(root, ctx) {
         placeholder: "How should it change?" });
       setTimeout(() => direction.focus());
       return el("span", { class: "chat-tools" }, direction,
-        ui.button("Redirect", () => run(async () => {
+        correction(ui.button("Redirect", () => run(async () => {
           const text = direction.value.trim();
           page.redirecting = null;
           await act("play.withdraw", { kind: "redirect", lines: [item.line], ...(text ? { direction: text } : {}) });
-        })),
-        ui.button("Cancel", () => { page.redirecting = null; render(page.scene); }));
+        }))),
+        correction(ui.button("Cancel", () => { page.redirecting = null; render(page.scene); })));
     }
     return el("span", { class: "chat-tools" },
-      ui.button("Skip", () => run(() => act("play.withdraw", { kind: "skip", lines: [item.line] }))),
-      ui.button("Redirect", () => { page.redirecting = item.line; render(page.scene); }));
+      correction(ui.button("Skip", () => run(() => act("play.withdraw", { kind: "skip", lines: [item.line] })))),
+      correction(ui.button("Redirect", () => { page.redirecting = item.line; render(page.scene); })));
   }
 
   // -- play ----------------------------------------------------------------------------------------------------

@@ -1,8 +1,9 @@
 // Sprint 111's pages end to end in the shell (108), against a real app server, in fakedom: Start Chat from a
 // character played as a persona, post with a typed mode, skip a line, ask again, keep, strike, add a card, then
-// find the chat under All and under Continue on Start Chat.
+// find the chat under All and under Continue on Start Chat. A second test mends a chat whose added card is gone.
 // Run by test_app_play_js.py, which serves a synthetic card library with a scripted model and passes
-// GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_CHARACTER (Mara), GRIMOIRE_PERSONA (Anya) and GRIMOIRE_NEWCOMER (Tamsin).
+// GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_CHARACTER (Mara), GRIMOIRE_PERSONA (Anya) and GRIMOIRE_NEWCOMER (Tamsin),
+// or, for the second test, GRIMOIRE_BROKEN: a chat whose newcomer's card was removed.
 import assert from "node:assert/strict";
 import { register } from "node:module";
 import { test } from "node:test";
@@ -44,12 +45,17 @@ const idle = (body) => !body.querySelectorAll("button").some((node) => node.disa
 const takes = (main) => main.querySelectorAll("article.chat-take");
 const kept = (main) => main.querySelectorAll("div.chat-line").filter((node) => !takes(main).some((take) => take.contains(node)));
 
-test("Start Chat, play a turn, correct it and find the chat again", { skip: !env.GRIMOIRE_APP }, async () => {
+async function boot() {
   const window = install(env.GRIMOIRE_APP);
   window.location.hash = "#token=" + encodeURIComponent(env.GRIMOIRE_TOKEN);
   await import("/static/shell/shell.js");
   const body = document.body;
   const main = await until(() => body.querySelector("main"), 15000, "the frame");
+  return { window, body, main };
+}
+
+test("Start Chat, play a turn, correct it and find the chat again", { skip: !env.GRIMOIRE_APP || Boolean(env.GRIMOIRE_BROKEN) }, async () => {
+  const { window, body, main } = await boot();
   const nav = await until(() => byText(body.querySelector("nav"), "a", "Start Chat").length && body.querySelector("nav"), 15000, "the menu");
 
   // Chats has the way to Start Chat, and an All tab beside Recent
@@ -61,7 +67,11 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   // pick Mara, played as Anya, with her default opening
   const character = await until(() => choice(main, "Character"), 15000, "the Start Chat form");
   assert.equal(window.location.hash, "#/start");
-  pick(character, env.GRIMOIRE_CHARACTER);
+  // a premise written and left unsent stays a draft when a character is started instead
+  pick(choice(main, "Start from"), "premise");
+  type(await until(() => main.querySelector("textarea"), 15000, "the premise field"), "A lighthouse keeper's last night.");
+  pick(choice(main, "Start from"), "character");
+  pick(await until(() => choice(main, "Character"), 15000, "the character picker"), env.GRIMOIRE_CHARACTER);
   await until(() => byText(main, "legend", "Opening").length, 15000, "the openings");
   assert.equal(main.querySelectorAll("input").filter((node) => node.type === "radio" && node.checked).length, 1);
   byText(main, "button", "Start Chat").at(-1).click();
@@ -86,11 +96,19 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   assert.equal(main.querySelector("textarea").value, "");
   assert.ok(byText(main, "div", "Keep a take or pass this turn before you post again.").length);
 
-  // skip its line: nobody hears it, and there is nothing to keep; then ask again and keep
-  byText(takes(main).at(-1), "button", "Skip")[0].click();
+  // pause: nothing new is played or kept, but its line can still be skipped, so nobody hears it
+  byText(main, "button", "Pause")[0].click();
+  await until(() => byText(main, "button", "Resume").length && !byText(main, "button", "Resume")[0].disabled, 15000, "the pause");
+  assert.ok(byText(takes(main).at(-1), "button", "Keep")[0].disabled, "nothing is kept while play is paused");
+  const skip = byText(takes(main).at(-1), "button", "Skip")[0];
+  assert.ok(!skip.disabled, "a line can be skipped while play is paused");
+  skip.click();
   await until(() => !takes(main).some((node) => node.textContent.includes("Safe as the tide.")), 15000, "the skipped line");
   assert.ok(!byText(main, "button", "Keep").length, "a take with its only line skipped has nothing to keep");
-  await until(() => idle(body), 15000, "the skip");
+  await until(() => !byText(main, "button", "Resume")[0].disabled, 15000, "the skip");
+  byText(main, "button", "Resume")[0].click();
+  await until(() => !byText(main, "button", "Resume").length && idle(body), 15000, "play resumed");
+  // then ask again and keep
   byText(main, "button", "Answer")[0].click();
   await until(() => takes(main).some((node) => node.textContent.includes("Gone with the tide.")), 30000, "the second take");
   await until(() => idle(body), 15000, "the second answer");
@@ -123,4 +141,22 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   window.location.hash = "#/start?source=" + encodeURIComponent(env.GRIMOIRE_CHARACTER);
   await until(() => byText(main, "h2", "Continue").length, 15000, "Continue on Start Chat");
   assert.ok(main.querySelectorAll("a").some((node) => node.getAttribute("href") === chatHash));
+  pick(choice(main, "Start from"), "premise");
+  const premise = await until(() => main.querySelector("textarea"), 15000, "the premise field again");
+  assert.equal(premise.value, "A lighthouse keeper's last night.", "the unsent premise is still a draft");
+});
+
+test("a chat whose added card is gone shows what is missing and detaches it", { skip: !env.GRIMOIRE_BROKEN }, async () => {
+  const { window, body, main } = await boot();
+  await until(() => body.querySelector("nav"), 15000, "the menu");
+  window.location.hash = "#/chat/" + encodeURIComponent(env.GRIMOIRE_BROKEN);
+  const see = await until(() => byText(main, "button", "See what is missing")[0], 15000, "the broken binding");
+  see.click();
+  // the list survives the redraw that follows the request
+  const detach = await until(() => byText(main, "button", "Detach").length === 1 && idle(body) && byText(main, "button", "Detach")[0], 15000, "the repairs");
+  detach.click();
+  const yes = await until(() => body.querySelector("dialog") && byText(body.querySelector("dialog"), "button", "Detach")[0], 15000, "the confirmation");
+  yes.click();
+  await until(() => !byText(main, "button", "See what is missing").length && !byText(main, "button", "Detach").length && idle(body), 15000, "the detached card");
+  assert.ok(!main.querySelectorAll("div.g-notice").some((node) => node.textContent.includes("A source this chat binds is gone.")));
 });

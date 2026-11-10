@@ -137,7 +137,8 @@ export async function mount(root, ctx) {
     if (form.opening) args.opening = form.opening;
     if (label.value.trim()) args.label = label.value.trim();
     const scene = await ctx.api("play.start", args);
-    premise.clear();
+    // only a premise that was sent is done; text typed into it while the start ran stays a draft
+    if (chosen.kind === "premise" && premise.value === chosen.premise) premise.clear();
     // 052 wrote the chat but stopped before it finished; the chat says how (take your seat) once it opens
     if (scene.unfinished) ctx.notify("The chat was started, but starting stopped before it finished (" + scene.unfinished + ").", { bad: true });
     ctx.navigate(ctx.href("chat", [scene.chat]));
