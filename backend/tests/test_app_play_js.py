@@ -1,0 +1,49 @@
+"""111's pages under Node: Start Chat, play, corrections and the chat lists in 108's shell, in a stand-in DOM
+(``js/fakedom.mjs``) against a real app server over a synthetic card library with a scripted model.
+
+Skipped where Node is not installed: the Python suite is the gate, and this is the pages' client side.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import threading
+from pathlib import Path
+
+import pytest
+from card_fixtures import SCENARIO, encode, land
+from scene_fixtures import ANYA, ANYA_CARD, MARA_VELL, TAMSIN, TAMSIN_CARD, VOICED, say, secure
+from textapi_fixtures import Device
+
+from grimoire.app import AppServer
+from grimoire.store import LibraryStore
+
+TESTS = Path(__file__).with_name("js")
+NODE = shutil.which("node")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node is not installed")
+def test_start_chat_and_play_end_to_end(tmp_path):
+    folder = tmp_path / "cards"
+    with LibraryStore.create(folder) as store:
+        for document in (VOICED, ANYA_CARD, TAMSIN_CARD, SCENARIO):
+            land(store, encode(document))
+    secure(folder)
+    with Device(folder, [say("Safe as the tide."), say("Gone with the tide.")]) as device:
+        app = AppServer(device.api)
+        thread = threading.Thread(target=app.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host, port = app.address
+            result = subprocess.run(
+                [NODE, "--test", str(TESTS / "play.e2e.mjs")], capture_output=True, text=True, timeout=240,
+                check=False, env={**os.environ, "GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": app.token,
+                                  "GRIMOIRE_CHARACTER": str(MARA_VELL), "GRIMOIRE_PERSONA": str(ANYA),
+                                  "GRIMOIRE_NEWCOMER": str(TAMSIN)})
+        finally:
+            app.close()
+            thread.join(10)
+    assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
+    assert "# pass 1" in result.stdout

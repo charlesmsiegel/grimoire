@@ -9,6 +9,21 @@ The ops write only through 052's `QuickStart` (which composes 107's `ChatLibrary
 changes a chat answers the **scene** exactly as the core `open` op does, plus `unfinished` (052's reason a launch
 or an added card's seat stopped after the chat was written; the core `continue` finishes it).
 
+## Pages
+
+| Page | Address | What it does |
+|---|---|---|
+| **Chats** (`chats`, Play) | `#/chats`, `?filter=all`, `?filter=character\|scenario&source=<SourceRef>` | Recent chats, every chat (as far as one list goes, 1,000), or one character's or scenario's chats, each linked by its exact ref; a Start Chat action in the header |
+| **Start Chat** (`start`, Play) | `#/start`, `?source=<SourceRef>` (a character or scenario to start from) | Pick a character, a character with a lorebook, a scenario or a premise; who you play (required); the opening (the default is chosen); an optional name. **Continue** lists the chats already started from the same pick. The persona and an unsent premise are drafts |
+| **Chat** (`chat`, hidden) | `#/chat/<ChatRef>` | The cast (with pictures), the transcript, each take with **Skip** and **Redirect** on its lines and **Keep**, **Strike** (asked twice) on a kept line, **Answer**, **Ask** one NPC, **Ask the director**, **Pass**, **Pause** and **Resume**; the composer with its mode and a kept draft; **Add a character or card**; and what holds play up: an unfinished start, no seat yet, a pause, a cut-off reply, a fork to choose, a sync conflict, a source that is gone (with **Detach**) |
+
+Every action is one op and every value from the library is set as text. An action shows only where the app serves
+its op (`ctx.has`): with no model set up the chat says nobody can answer yet, rather than offer an Answer that
+fails. A post is answered at once only when it made a new open turn; a typed table request is not answered.
+
+Not in this slice: a director instruction typed as a post (035 refuses it), conflict resolution beyond keeping one
+device's version (Sync, 114), costs (112), and campaigns with a world (113).
+
 ## Ops
 
 | Op | Arguments | Result |
