@@ -190,7 +190,9 @@ def serve(args: argparse.Namespace) -> None:
     if place.state == "library":
         _serve_library(args, place.path, build)
         return
-    if place.state == "occupied":
+    if place.state == "invalid":
+        raise CliError(f"{place.path} has a library marker this version cannot open (another version, or damaged)")
+    if place.state != "new" and place.state != "empty":
         raise CliError(f"{place.path} holds something other than a library: pick an empty or new folder")
     if args.library and not args.setup:
         raise CliError(f"{place.path} holds no library: check the path, run `init` there, or add --setup to make "

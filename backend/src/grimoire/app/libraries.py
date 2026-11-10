@@ -16,7 +16,7 @@ from pathlib import Path
 from grimoire.ledgers import DurableAuthority
 from grimoire.library import LibraryPathError, V1IsolationError, check_write_destination
 from grimoire.security import Grant, Permission, ResourcePath, is_human
-from grimoire.store import LibraryLocked, LibraryStore, StoreError
+from grimoire.store import LibraryLocked, LibraryStore, NotALibrary, StoreError
 from grimoire.store.layout import MARKER
 from grimoire.sync import SyncError, identify
 from grimoire.sync.documents import check_device_id
@@ -42,8 +42,8 @@ class SetupError(Exception):
 @dataclass(frozen=True)
 class Place:
     """What is at a path the person typed: ``new`` (nothing yet: a library can be made there), ``empty`` (an
-    empty folder: likewise), ``library`` (a V2 library: it can be opened) or ``occupied`` (a folder with other
-    things in it, or a file: neither)."""
+    empty folder: likewise), ``library`` (a V2 library: it can be opened), ``invalid`` (a library marker this
+    version cannot open: neither) or ``occupied`` (a folder with other things in it, or a file: neither)."""
 
     path: Path
     state: str
@@ -81,6 +81,14 @@ def inspect(path: str | os.PathLike[str]) -> Place:
     if not stat.S_ISDIR(info.st_mode):
         return Place(resolved, "occupied")
     if (resolved / MARKER).is_file():
+        # Read the marker as the store would (read-only: no lock, no recovery), so a folder is offered as a
+        # library only when opening it can succeed.
+        try:
+            LibraryStore.open(resolved, writable=False).close()
+        except NotALibrary:
+            return Place(resolved, "invalid")
+        except (StoreError, OSError, ValueError) as error:
+            raise SetupError("bad_path", f"{resolved}: cannot read it ({error})") from None
         return Place(resolved, "library")
     try:
         if not any(resolved.iterdir()) or LibraryStore.interrupted_create(resolved):

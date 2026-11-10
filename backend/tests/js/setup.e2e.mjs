@@ -43,6 +43,12 @@ test("from no library to an open one", { skip: !base }, async () => {
   type(folder, "relative/folder");
   byText(main, "button", "Check this folder").at(-1).click();
   await until(() => folder.getAttribute("aria-invalid") === "true", 15000, "the refusal");
+  // a check whose folder was edited while it was out is dropped: no action is offered for a folder not typed
+  type(folder, process.env.GRIMOIRE_PLACE);
+  byText(main, "button", "Check this folder").at(-1).click();
+  type(folder, process.env.GRIMOIRE_PLACE + "-other");
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  assert.equal(byText(main, "button", "Make the library here").length, 0, "the stale answer is dropped");
   type(folder, process.env.GRIMOIRE_PLACE);
   byText(main, "button", "Check this folder").at(-1).click();
   const make = await until(() => byText(main, "button", "Make the library here").at(-1), 15000, "the check");

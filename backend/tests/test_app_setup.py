@@ -21,7 +21,7 @@ from grimoire.app.libraries import DEFAULT_OWNER, SetupError, create_library, in
 from grimoire.app.server import TOKEN_HEADER
 from grimoire.ledgers import DurableAuthority
 from grimoire.store import LibraryStore
-from grimoire.sync import device_of
+from grimoire.sync import device_of, identify
 from grimoire.textapi import ApiRefused, TextApi
 
 
@@ -284,3 +284,27 @@ def test_serve_takes_a_library_path_relative_to_where_it_was_typed(tmp_path, mon
         taken.listen()
         assert main(["serve", "Seraphine", "--port", str(taken.getsockname()[1])]) == 2
         assert "cannot listen" in capsys.readouterr().err
+
+
+def test_a_marker_this_version_cannot_open_is_neither_opened_nor_made_over(launcher, tmp_path, capsys):
+    place = tmp_path / "odd"
+    place.mkdir()
+    (place / "grimoire-library.json").write_text('{"format": "not-a-v2-library"}')
+    before = _tree(tmp_path)
+    assert launcher.call("setup.check", {"path": str(place)})["state"] == "invalid"
+    assert _refused(launcher, "setup.create", {"path": str(place), "device": "desk"}).reason == "occupied"
+    assert _refused(launcher, "setup.open", {"path": str(place)}).reason == "not_a_library"
+    assert main(["serve", str(place), "--setup"]) == 2 and "cannot open" in capsys.readouterr().err
+    assert _tree(tmp_path) == before
+
+
+def test_a_refused_device_name_writes_nothing_to_the_library(launcher, tmp_path):
+    bare = LibraryStore.create(tmp_path / "library")
+    try:
+        identify(bare, "desk")  # named, but no authority yet: opening it would write the first ledger entry
+    finally:
+        bare.close()
+    before = _tree(tmp_path / "library")
+    assert _refused(launcher, "setup.open", {"path": str(tmp_path / "library"), "device": "phone"}).reason == \
+        "device_differs"
+    assert [name for name in _tree(tmp_path / "library") if name not in before and not name.startswith(".txn")] == []

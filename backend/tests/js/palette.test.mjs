@@ -21,8 +21,10 @@ test("every word must match; a word the name starts with ranks first; ties keep 
   assert.equal(rank("a", Array.from({ length: 40 }, (_, n) => item("a" + n))).length, 12);
 });
 
-test("Ctrl+K or Cmd+K opens the palette anywhere; slash only when not typing", () => {
-  assert.ok(opensPalette({ key: "k", ctrlKey: true }, true));
+test("Ctrl+K, Cmd+K or slash opens the palette, never while typing", () => {
+  assert.ok(opensPalette({ key: "k", ctrlKey: true }, false));
+  assert.ok(!opensPalette({ key: "k", ctrlKey: true }, true));  // a Mac text box deletes to the line's end
+  assert.ok(!opensPalette({ key: "k", metaKey: true }, true));
   assert.ok(opensPalette({ key: "K", metaKey: true }, false));
   assert.ok(!opensPalette({ key: "k", ctrlKey: true, altKey: true }, false));
   assert.ok(opensPalette({ key: "/" }, false));

@@ -5,7 +5,7 @@
 
 import * as api from "./api.js";
 import { Drafts } from "./drafts.js";
-import { THEMES, isTyping, openPalette, openShortcuts, opensPalette, rank, readTheme, setTheme } from "./palette.js";
+import { THEMES, isPaletteKey, isTyping, openPalette, openShortcuts, opensPalette, rank, readTheme, setTheme } from "./palette.js";
 import { href, pageFor, parse, reserved as reservedRoute, takeToken } from "./router.js";
 import * as ui from "./ui.js";
 
@@ -55,7 +55,7 @@ function buildFrame() {
     const opens = opensPalette(event, typing);
     if (document.body.querySelector("dialog.g-dialog")) {  // one dialog at a time
       // Ctrl+K is still the app's while one is open: the browser's own would take focus out of the dialog.
-      if (opens && event.key !== "/") event.preventDefault();
+      if (isPaletteKey(event)) event.preventDefault();
       return;
     }
     if (opens) { event.preventDefault(); palette(); }

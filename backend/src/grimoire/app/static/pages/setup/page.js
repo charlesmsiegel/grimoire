@@ -15,6 +15,8 @@ const PLACES = {
   new: ["A new library will be made in this folder.", "create"],
   empty: ["This folder is empty: a new library can be made in it.", "create"],
   library: ["A V2 library is already here: it can be opened.", "open"],
+  invalid: ["This folder has a library marker this app cannot open (another version, or damaged), so nothing is made "
+    + "or opened here. Pick another folder.", null],
   occupied: ["This folder already holds other things, so no library is made here. Pick a new or empty folder.", null],
 };
 
@@ -42,11 +44,21 @@ export async function mount(root, ctx) {
   const forget = () => { checked = null; found.replaceChildren(); path.setError(""); };
   path.input.addEventListener("input", forget);
 
+  // The box may change while a check is out: its answer then belongs to a folder no longer typed, and is dropped.
+  const stale = (typed) => path.value.trim() !== typed;
+
   async function check() {
     const typed = path.value.trim();
     if (!typed) { path.setError("Type the folder's full path."); return; }
-    try { checked = { typed, ...await ctx.api("setup.check", { path: typed }) }; }
-    catch (error) { if (error.reason === "left") throw error; checked = null; found.replaceChildren(); path.setError(ui.errorText(error)); return; }
+    let answer;
+    try { answer = await ctx.api("setup.check", { path: typed }); }
+    catch (error) {
+      if (error.reason === "left") throw error;
+      if (stale(typed)) return;
+      checked = null; found.replaceChildren(); path.setError(ui.errorText(error)); return;
+    }
+    if (stale(typed)) return;
+    checked = { typed, ...answer };
     path.setError("");
     const [says, action] = PLACES[checked.state] || ["This place cannot hold a library.", null];
     const buttons = [];
@@ -55,13 +67,23 @@ export async function mount(root, ctx) {
     found.replaceChildren(ui.notice(checked.path + ": " + says, { kind: action ? "" : "bad" }), ui.actions(...buttons));
   }
 
+  // An action acts on the folder checked, and only while that is still what the box says.
+  function still() {
+    if (checked && !stale(checked.typed)) return true;
+    forget();
+    path.setError("Check this folder again: it changed.");
+    return false;
+  }
+
   async function make() {
+    if (!still()) return;
     if (!device.value.trim()) { device.setError("Name this device first."); return; }
     device.setError("");
     await done(await ctx.api("setup.create", { path: checked.path, device: device.value.trim() }));
   }
 
   async function openIt() {
+    if (!still()) return;
     const name = device.value.trim();
     await done(await ctx.api("setup.open", name ? { path: checked.path, device: name } : { path: checked.path }));
   }

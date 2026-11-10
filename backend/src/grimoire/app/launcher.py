@@ -129,7 +129,7 @@ class Launcher:
         place = _inspect(field(args, "path", str))
         device = field(args, "device", str)
         if place.state not in ("new", "empty"):
-            raise ApiRefused("occupied" if place.state == "occupied" else "already_a_library",
+            raise ApiRefused("already_a_library" if place.state == "library" else "occupied",
                              f"{place.path} is not an empty place for a new library ({place.state})")
         try:
             create_library(place.path, device=device, owner=self.owner)
@@ -164,10 +164,12 @@ class Launcher:
         except SetupError as error:
             raise _refusal(error) from None
         try:
+            # Every refusal before the first write: opening the authority can publish its first ledger entry.
+            unnamed = device is not None and _needs_name(store, device)
             authority = open_authority(store, self.owner)
             try:
-                if device is not None:
-                    _name_once(store, device)
+                if unnamed:
+                    name_device(store, device)
             except BaseException:
                 authority.close()
                 raise
@@ -188,17 +190,18 @@ class Launcher:
         return self._status({})
 
 
-def _name_once(store: LibraryStore, device: str) -> None:
-    """Name an unnamed library, once, as ``identify`` would; a named one keeps its name, and a different name
-    typed for it is refused rather than dropped, so the person never believes the device was renamed."""
+def _needs_name(store: LibraryStore, device: str) -> bool:
+    """Whether an unnamed library is to be named ``device``, once, as ``identify`` would. A named one keeps its
+    name, and a different name typed for it is refused rather than dropped, so the person never believes the
+    device was renamed. Reads only."""
     try:
         named = device_of(store)
     except NoDeviceIdentity:
-        name_device(store, device)
-        return
+        return True
     if named != device:
         raise ApiRefused("device_differs", f"this library already calls this device {named!r}: leave the name "
                          f"empty, or type {named!r}")
+    return False
 
 
 def _inspect(path: str):  # type: ignore[no-untyped-def]

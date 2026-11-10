@@ -179,7 +179,7 @@ on it is usable, and setup lists where to go next (Start Chat, Import, a provide
 until its sprint adds it. `GET /shell/pages` lists the ops the app serves now (`ops`), so a page is usable or
 not before the library op exists; the core `library` op answers only once a library is open.
 
-The header's **Search** button, Ctrl+K or Cmd+K, or `/` outside a text box opens the **command palette**: every
+The header's **Search** button, or Ctrl+K, Cmd+K or `/` outside a text box, opens the **command palette**: every
 page that can open, every chat by its name (from the `chats` op), the themes and the shortcuts. `?` lists the
 shortcuts. The theme (system, light or dark) is kept per browser and switches the `--g-` tokens.
 

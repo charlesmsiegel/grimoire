@@ -57,10 +57,16 @@ export function setTheme(choice, root, storage) {
   return theme;
 }
 
-// Whether a key press opens the palette: Ctrl+K or Cmd+K anywhere; "/" when the person is not typing.
+// Whether a key is Ctrl+K or Cmd+K.
+export function isPaletteKey(event) {
+  return (event.ctrlKey || event.metaKey) && !event.altKey && String(event.key).toLowerCase() === "k";
+}
+
+// Whether a key press opens the palette: Ctrl+K, Cmd+K or "/", and only when the person is not typing. In a text
+// box each is the person's own key: "/" is text, and Ctrl+K deletes to the end of the line on a Mac.
 export function opensPalette(event, typing) {
-  if ((event.ctrlKey || event.metaKey) && !event.altKey && String(event.key).toLowerCase() === "k") return true;
-  return event.key === "/" && !typing && !event.ctrlKey && !event.metaKey && !event.altKey;
+  if (typing) return false;
+  return isPaletteKey(event) || (event.key === "/" && !event.ctrlKey && !event.metaKey && !event.altKey);
 }
 
 // Whether the focus is in something the person types into, where a bare key is text, not a shortcut.
@@ -145,8 +151,7 @@ export function openPalette({ items, more, label = "Search pages, chats and comm
 
 // The keyboard shortcuts, as the help dialog lists them.
 export const SHORTCUTS = Object.freeze([
-  ["Ctrl+K or Cmd+K", "Search pages, chats and commands"],
-  ["/", "The same, when you are not typing"],
+  ["Ctrl+K, Cmd+K or /", "Search pages, chats and commands, when you are not typing"],
   ["?", "These shortcuts"],
   ["Escape", "Close a dialog or the menu"],
 ]);
