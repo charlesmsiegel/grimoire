@@ -3,7 +3,8 @@
 An adapter over 107, 035, 052, 038 and 028, never a second store. See docs/TEXT_API.md.
 """
 
-from .api import DEFAULT_SLOT, MAX_ART_BYTES, MAX_POST_CHARS, TextApi
+from .api import DEFAULT_SLOT, MAX_ART_BYTES, MAX_POST_CHARS, TextApi, field, parse_ref, refusal
 from .errors import ApiRefused
 
-__all__ = ["ApiRefused", "DEFAULT_SLOT", "MAX_ART_BYTES", "MAX_POST_CHARS", "TextApi"]
+__all__ = ["ApiRefused", "DEFAULT_SLOT", "MAX_ART_BYTES", "MAX_POST_CHARS", "TextApi", "field", "parse_ref",
+           "refusal"]
