@@ -305,16 +305,29 @@ function turnsSection(ctx, hub, nameOf, write, director) {
   return ui.section("Turns and effects", blocks.length ? blocks : ui.empty("No turn has been labelled or given an effect yet."));
 }
 
+// One holdings line in full, as the key on it covers it: who gives, who gets, how many, and who acts. Every
+// field the line carries is said, so two different changes never read the same beside "Endorse as shown".
+function holdingLine(line, nameOf) {
+  const counted = (line.amount ?? "?") + " " + line.item;
+  const said = line.kind === "add" ? "add " + counted + " to " + nameOf(line.holder)
+    : line.kind === "consume" ? "consume " + counted + " from " + nameOf(line.holder)
+    : line.kind === "move" ? "move " + counted + " from " + nameOf(line.holder) + " to " + nameOf(line.target)
+    : line.kind === "adjust" ? "adjust " + nameOf(line.holder) + "'s " + line.item + " from " + line.seen + " to " + line.to
+    : line.kind + " " + counted + " (" + nameOf(line.holder) + ")";
+  return said + (line.agent ? " (by " + nameOf(line.agent) + ")" : "");
+}
+
 function effectBlock(ctx, turn, effect, hub, nameOf, write, can, director) {
   const { ui } = ctx;
   const { el } = ui;
   const ops = effect.operations.map((op) => op.kind + " " + op.predicate + ": " + nameOf(op.subject) + " → " + nameOf(op.object)
     + (op.agent ? " (by " + nameOf(op.agent) + ")" : ""));
-  const lines = effect.holdings ? effect.holdings.lines.map((line) => line.kind + " " + (line.amount ?? "") + " " + line.item + " for " + nameOf(line.holder)) : [];
+  const lines = effect.holdings ? effect.holdings.lines.map((line) => holdingLine(line, nameOf)) : [];
   const keys = effect.endorsers.map((key) => (key.principal === hub.player ? "your key" : key.principal) + (key.given ? " given" : " not given"));
   const box = el("div", { class: "campaign-effect" },
     el("p", {}, el("strong", {}, "Effect " + effect.number + " (" + effect.state + "): "), effect.summary),
     ops.length || lines.length ? ui.list([...ops, ...lines].map((text) => el("span", {}, text))) : null,
+    effect.holdings && effect.holdings.note ? el("p", { class: "g-muted" }, "Holdings note: " + effect.holdings.note) : null,
     effect.waivers.length ? el("p", { class: "g-muted" }, "Waived: " + effect.waivers.map((item) => item.change + " (" + item.reason + ")").join("; ")) : null,
     el("p", { class: "g-muted" }, [keys.length ? "Players: " + keys.join(", ") : "No player's key is needed",
       "director: " + (effect.approved_by ? "approved" : "not yet")].join(" · ")));

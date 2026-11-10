@@ -17,6 +17,7 @@ import threading
 from pathlib import Path
 
 import pytest
+from scene_fixtures import LABEL_POLICY, Table
 from store_helpers import OWNER
 from textapi_fixtures import Device, desktop_library, keep, say
 
@@ -24,6 +25,9 @@ from grimoire.app import AppServer
 from grimoire.app.appapi import AppApi
 from grimoire.app.pages import load_pages
 from grimoire.campaignapi import CampaignApi
+from grimoire.obstacles import Approach, Obstacle, ObstacleFact
+from grimoire.providers import RouteChoice
+from grimoire.runtime import LabelRuntime
 from grimoire.textapi import ApiRefused
 
 STATIC = Path(__file__).resolve().parents[1] / "src" / "grimoire" / "app" / "static"
@@ -149,6 +153,42 @@ def test_a_refused_proposal_writes_nothing(desk):
         after = app.call("campaign.hub", {"chat": str(chat), "audience": "director"})
         assert after["turns"] == before["turns"] and after["truth"] == before["truth"]
         assert not [effect for record in after["turns"] for effect in record["effects"]]
+
+
+def labelled_action(folder: Path, chat) -> None:
+    """Anya's bribe posted and labelled against Mara's hold, as an app with a labelling model would (this app
+    configures none), then closed: the library holds a proposed labelling for the hub to confirm."""
+    with Table(folder, policy=LABEL_POLICY, labels=[say('{"approach": "bribe", "factors": [], "stakes": []}')]) as at:
+        labels = at.labels
+        labeller = LabelRuntime(labels.adapter, (RouteChoice("primary", "model-a"),), labels.handle,
+                                approvals=labels.approvals)
+        hub = CampaignApi(at.store, at.authority, owner=OWNER, labeller=labeller, label_handle=at.label_handle,
+                          policy=LABEL_POLICY)
+        hub.runner.seat(chat, OWNER)
+        scene = hub.runner.open(chat)
+        (mara,) = [actor for actor in scene.cast if actor != scene.persona]
+        hub.obstacles.record(Obstacle(
+            obstacle_id="hold", campaign_id=mara.campaign_id, goal="Get into the cargo hold.", actors=frozenset({mara}),
+            facts=(ObstacleFact("debt", "motive", "Mara owes a favour.", 0, "author:test", {"bribe": "favours"}),),
+            stakes=(), approaches=(Approach("bribe", "Pay Mara to look away.", frozenset()),
+                        Approach("talk", "Talk Mara round.", frozenset())), provenance="author:test"))
+        hub.runner.post(chat, hub.handle, "*I press five coins into Mara's hand*")
+        assert hub.call("label", {"chat": str(chat), "obstacle": "hold"})["done"]["label"]["state"] == "proposed"
+
+
+def test_an_action_decided_at_the_hub_is_narrated_in_the_chat(desk):
+    folder, chat = desk
+    labelled_action(folder, chat)
+    with Device(folder, [say("Mara pockets the coins.")]) as device:
+        app = AppApi(device.api)
+        outcome = app.call("campaign.confirm", {"chat": str(chat)})["done"]["outcome"]
+        if outcome is None:  # the frame leaves it to the director
+            outcome = app.call("campaign.decide", {"chat": str(chat), "audience": "director", "result": "success"})[
+                "done"]["outcome"]
+        assert outcome["result"] == "success"
+        # the chat's own runner reads the frame with the app's adjudication key the hub framed it under
+        device("generate", chat=str(chat))
+        assert any("The action succeeds" in prompt for prompt in device.prompts()), device.prompts()[-1][-2000:]
 
 
 def test_the_hub_acts_only_with_the_owners_own_trusted_handle(desk):

@@ -54,6 +54,7 @@ from grimoire.possessionstore import PossessionLibrary
 from grimoire.scene import SceneRefused
 from grimoire.store import LibraryStore, StaleWrite, StoreError
 from grimoire.textapi import ApiRefused
+from grimoire.textapi.api import ADJUDICATOR  # the app's own adjudication key (029/040), shared with the chat
 
 from . import parse
 from .views import (
@@ -63,8 +64,6 @@ from .views import (
     turn_view,
 )
 
-#: The app's own adjudication key (029/040): never a player's, never the owner's, never the labeller's.
-ADJUDICATOR = "app:adjudicator"
 AUDIENCES = ("table", "director")
 MAX_SUMMARY = 4000
 

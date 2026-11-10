@@ -193,3 +193,19 @@ test("with the review screen in the app, a character behind its source links to 
   const link = byText(section(root, "Sources"), "a", "Review the update")[0];
   assert.equal(link.getAttribute("href"), "#/import?" + new URLSearchParams({ tab: "rebase", chat: CHAT }).toString());
 });
+
+test("a holdings change is shown in full beside the endorsement: who gives, who gets, the counts and who acts", async () => {
+  const anya = { ref: ANYA, name: "Anya" }, mara = { ref: MARA, name: "Mara" };
+  const effect = { number: 1, state: "proposed", reason: null, summary: "Anya settles up.", proposed_by: "director",
+    sequence: 1, operations: [], waivers: [], endorsers: [{ contribution: "t1.000001", principal: "human:owner", given: false }],
+    holdings: { note: "the harbour fee", lines: [
+      { kind: "move", holder: anya, item: "coin", amount: 3, seen: null, to: null, target: mara, agent: anya, backed_by: "t1.000001" },
+      { kind: "adjust", holder: mara, item: "chit", amount: null, seen: 2, to: 0, target: null, agent: null, backed_by: null }] },
+    approved_by: null, event: null, fingerprint: "e".repeat(64), accepted_on: null };
+  const turns = [{ turn: "t1.000001", number: 1, open: false, kept: true, passed: false, post: null, labels: [], effects: [effect] }];
+  const { root } = await mounted("table", hub("table", { turns, open_action: null }));
+  const shown = section(root, "Turns and effects").textContent;
+  assert.ok(shown.includes("move 3 coin from Anya to Mara (by Anya)"), shown);
+  assert.ok(shown.includes("adjust Mara's chit from 2 to 0"), shown);
+  assert.ok(shown.includes("Holdings note: the harbour fee"), shown);
+});
