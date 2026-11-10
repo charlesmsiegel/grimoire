@@ -174,7 +174,10 @@ class CampaignApi:
         # 021's problems name accepted events of the whole campaign: the director's, shown once, in ``truth``
         problems = [{"code": code, "detail": detail} for code, detail in scene.problems if code != "effects"]
         on_stage = set(scene.on_stage)
-        own = {actor for actor in scene.cast if scene.controller(actor) == self.owner}
+        # control is recorded, not read from the present cast: a character set in reserve leaves the cast (033)
+        # and stays its player's
+        mine = {item.actor_id for item in scene.controls
+                if item.campaign_id == campaign and item.controller_id == self.owner}
         stage = scene.stage
         cast = []
         for actor in scene.cast:
@@ -184,8 +187,9 @@ class CampaignApi:
                          "role": "unseated" if controller is None else "npc" if controller == DIRECTOR else "player",
                          "on_stage": actor in on_stage,
                          "absent": None if absence is None else {"via": absence.via, "basis": absence.basis}})
-        party = self._party(campaign, scene, names, problems, None if director else own)
-        shown = [a for a in scene.cast if director or a in own]
+        party, members = self._party(campaign, scene, names, problems, None if director else mine)
+        shown = [a for a in scene.cast if director or a.instance_id in mine]
+        shown += [a for a in members if a not in shown and (director or a.instance_id in mine)]
         holdings, items = self._holdings(shown, problems), self._items(campaign, shown, problems)
         obstacles = self._obstacles(campaign, names, problems)
         turns = [turn_view(record, names, None if director else self.owner) for record in scene.records
@@ -200,16 +204,21 @@ class CampaignApi:
             hub["truth"] = self._truth(campaign, scene, names, problems)
         return hub
 
-    def _party(self, campaign: str, scene, names, problems: list, own) -> dict:  # type: ignore[no-untyped-def]
-        """Who is present, and 033's memberships: for the table only its own characters', for the director all."""
+    def _party(self, campaign: str, scene, names, problems: list, own):  # type: ignore[no-untyped-def]
+        """Who is present, and 033's memberships: for the table only its own characters' (``own``: the actor ids
+        its player controls), for the director all. Also the members shown, in or out of the present cast."""
         staged = scene.staged
+        members: list = []
         try:
             view = self.party.view(campaign, as_of=NOW)
         except (ValueError, StoreError) as error:
             problems.append({"code": "party_unreadable", "detail": type(error).__name__})
             memberships = []
         else:
-            mine = (lambda actor: True) if own is None else (lambda actor: actor in own)
+            def mine(actor) -> bool:  # type: ignore[no-untyped-def]
+                return own is None or (actor.campaign_id == campaign and actor.instance_id in own)
+
+            members = sorted((member for member in view.state.memberships if mine(member)), key=str)
             memberships = [{"member": actor_ref(item.member, names), "party": actor_ref(item.party, names),
                             "status": item.status, "since": item.since.sequence}
                            for member, item in sorted(view.state.memberships.items(), key=lambda pair: str(pair[0]))
@@ -221,7 +230,7 @@ class CampaignApi:
             if own is None:
                 problems.extend({"code": f"party_{item.code}", "detail": item.path} for item in view.problems)
         return {"present": None if staged is None else [actor_ref(a, names) for a in staged.present],
-                "memberships": memberships}
+                "memberships": memberships}, members
 
     def _holdings(self, shown, problems: list) -> dict:  # type: ignore[no-untyped-def]
         found = {}
@@ -340,12 +349,12 @@ class CampaignApi:
                 "actors": [knowledge_view(known, names)], "table_events": []}
 
     # -- adjudication (029/040 through 035) ----------------------------------------------------------------
-    def _after(self, chat: ChatRef, args: Mapping[str, object], done: Callable[[Names], dict]) -> dict:
+    def _after(self, chat: ChatRef, audience: str, done: Callable[[Names], dict]) -> dict:
         """The write's result (``done``, given the chat's names) and the hub as it now stands. The write is
         already committed, so a chat that cannot be read again now is reported beside it (``hub: None``, and
         the result without names), never as a refusal of the write."""
         try:
-            hub = self.hub(chat, self._audience(args))
+            hub = self.hub(chat, audience)
         except (SceneRefused, StoreError, ValueError) as error:
             return {"done": done(lambda actor: None), "hub": None,
                     "problems": [{"code": getattr(error, "reason", type(error).__name__), "detail": str(error)}]}
@@ -354,28 +363,31 @@ class CampaignApi:
 
     def _label(self, args: Mapping[str, object]) -> dict:
         chat = parse.chat_of(args)
+        audience = self._audience(args)  # read before any write: a malformed request writes nothing
         if not self.labelling:
             raise ApiRefused("no_labeller", "no labelling model is configured for this app")
         obstacle = parse.field(args, "obstacle", str, required=False)
         label = self.runner.label(chat, self.handle, obstacle=obstacle)
-        return self._after(chat, args, lambda names: {"label": label_view(label)})
+        return self._after(chat, audience, lambda names: {"label": label_view(label)})
 
     def _confirm(self, args: Mapping[str, object]) -> dict:
         """The acting player confirms the open action's latest labelling, unedited (035)."""
         chat = parse.chat_of(args)
+        audience = self._audience(args)  # read before any write: a malformed request writes nothing
         outcome = self.runner.confirm(chat, self.handle)
-        return self._after(chat, args, lambda names: {"outcome": outcome_view(outcome, names)})
+        return self._after(chat, audience, lambda names: {"outcome": outcome_view(outcome, names)})
 
     def _decide(self, args: Mapping[str, object]) -> dict:
         """The director adjudicates (``basis: adjudicated``) or the acting player consents to a setback
         (``basis: consent``, naming the frame's ``fingerprint``)."""
         chat = parse.chat_of(args)
+        audience = self._audience(args)  # read before any write: a malformed request writes nothing
         result = parse.field(args, "result", str)
         basis = parse.field(args, "basis", str, required=False, default="adjudicated")
         fingerprint = parse.field(args, "fingerprint", str, required=False)
         outcome = self.runner.decide(chat, self.handle, result, basis=basis, cites=parse.names(args, "cites"),
                                      consequences=parse.names(args, "consequences"), fingerprint=fingerprint)
-        return self._after(chat, args, lambda names: {"outcome": outcome_view(outcome, names)})
+        return self._after(chat, audience, lambda names: {"outcome": outcome_view(outcome, names)})
 
     # -- effects (021 through 035) -------------------------------------------------------------------------
     def _turn_number(self, args: Mapping[str, object]) -> tuple[str, int]:
@@ -388,6 +400,7 @@ class CampaignApi:
     def _propose(self, args: Mapping[str, object]) -> dict:
         """The director proposes a turn's effect whole; what an obstacle attempt made due comes first (035)."""
         chat = parse.chat_of(args)
+        audience = self._audience(args)  # read before any write: a malformed request writes nothing
         turn = parse.field(args, "turn", str)
         summary = parse.field(args, "summary", str)
         if not summary.strip() or len(summary) > MAX_SUMMARY:
@@ -396,37 +409,40 @@ class CampaignApi:
         holdings = parse.holdings(args, chat.campaign_id)
         effect = self.runner.propose_effect(chat, self.handle, turn, summary, operations, holdings,
                                             waive=parse.waivers(args))
-        return self._after(chat, args, lambda names: {"effect": effect_view(effect, names)})
+        return self._after(chat, audience, lambda names: {"effect": effect_view(effect, names)})
 
     def _endorse(self, args: Mapping[str, object]) -> dict:
         """The player's own key on the exact effect shown: ``fingerprint`` as the hub showed it."""
         chat = parse.chat_of(args)
+        audience = self._audience(args)  # read before any write: a malformed request writes nothing
         turn, number = self._turn_number(args)
         fingerprint = parse.field(args, "fingerprint", str)
         effect = self.runner.endorse_effect(chat, self.handle, turn, number, fingerprint)
-        return self._after(chat, args, lambda names: {"effect": effect_view(effect, names)})
+        return self._after(chat, audience, lambda names: {"effect": effect_view(effect, names)})
 
     def _approve(self, args: Mapping[str, object]) -> dict:
         """The director's key; when it is the last one, the effect is accepted, once."""
         chat = parse.chat_of(args)
+        audience = self._audience(args)  # read before any write: a malformed request writes nothing
         turn, number = self._turn_number(args)
         effect = self.runner.approve_effect(chat, self.handle, turn, number)
-        return self._after(chat, args, lambda names: {"effect": effect_view(effect, names)})
+        return self._after(chat, audience, lambda names: {"effect": effect_view(effect, names)})
 
     def _recover(self, args: Mapping[str, object]) -> dict:
-        """Settle this chat's acceptances cut short, by what landed (030); ``abort`` undoes them instead. An
-        abort the player endorsed needs the player present: ``player_key: true`` is the player's own key, given
-        knowingly in this call (the screen asks the player for it apart from the director's choice to abort);
-        without it, such an abort is refused by 035 and nothing is undone."""
+        """Settle this chat's acceptances cut short, by what landed (030); ``abort`` undoes them instead. Where
+        035 needs the player present (an abort of an effect they endorsed, or a completion whose endorsement the
+        authority no longer records), ``player_key: true`` is the player's own key, given knowingly in this call
+        (the screen asks the player for it apart from the director's choice); without it, 035 refuses and
+        nothing is settled."""
         chat = parse.chat_of(args)
+        audience = self._audience(args)  # read before any write: a malformed request writes nothing
         abort = parse.field(args, "abort", bool, required=False, default=False)
         own = parse.field(args, "own", bool, required=False, default=False)
         player_key = parse.field(args, "player_key", bool, required=False, default=False)
-        if player_key and not abort:
-            raise ApiRefused("invalid_field", "player_key is given only to abort")
         endorsers = (self.handle,) if player_key else ()
         settled = self.runner.recover_effects(chat, self.handle, abort=abort, endorsers=endorsers, own=own)
-        return self._after(chat, args, lambda names: {"settled": [effect_view(effect, names) for effect in settled]})
+        return self._after(chat, audience,
+                           lambda names: {"settled": [effect_view(effect, names) for effect in settled]})
 
 
 __all__ = ["ADJUDICATOR", "AUDIENCES", "UNAVAILABLE", "CampaignApi"]

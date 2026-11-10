@@ -275,6 +275,35 @@ def test_the_table_sees_only_its_own_characters_party_standing(cards):
         assert (member["member"]["ref"], member["party"]["ref"]) == (str(tamsin), str(mara))
 
 
+def test_a_character_set_in_reserve_keeps_its_players_party_standing(cards):
+    folder, chat = cards
+    with Hub(folder, labelling=False) as hub:
+        hub.api.runner.seat(chat, OWNER)
+        scene = hub.api.runner.open(chat)
+        anya = scene.persona
+        (mara,) = [actor for actor in scene.cast if actor != anya]
+        hub.api.party.join(mara, anya, at=Moment(2), provenance="director").commit()
+        hub.api.party.store_in_reserve(anya, at=Moment(3), provenance="director").commit()
+        table = hub.call("hub", chat=str(chat))
+        assert str(anya) not in {item["actor"] for item in table["cast"]}  # reserve leaves the present cast
+        (member,) = table["party"]["memberships"]
+        assert (member["member"]["ref"], member["status"]) == (str(anya), "reserve")
+        assert str(anya) in table["holdings"]
+
+
+def test_a_malformed_write_is_refused_before_it_writes(cards):
+    folder, chat = cards
+    with Hub(folder, BRIBE) as hub:
+        turn, _, _ = acting(hub, chat)
+        hub.refused("invalid_field", "label", chat=str(chat), obstacle="hold", audience="everyone")
+        assert hub.at.labels.prompts() == []  # no model call was made
+        hub.call("label", chat=str(chat), obstacle="hold")
+        hub.call("confirm", chat=str(chat))
+        hub.refused("invalid_field", "propose_effect", chat=str(chat), turn=turn, summary="Anya pays Mara off.",
+                    audience="everyone")
+        assert hub.call("hub", chat=str(chat), audience="director")["turns"][0]["effects"] == []
+
+
 def test_a_paused_chat_offers_no_step_of_play(cards):
     folder, chat = cards
     with Hub(folder, BRIBE) as hub:
@@ -286,11 +315,11 @@ def test_a_paused_chat_offers_no_step_of_play(cards):
         hub.refused("paused", "label", chat=str(chat), obstacle="hold")
 
 
-def test_an_abort_gives_the_players_key_only_when_asked(cards):
+def test_recovery_gives_the_players_key_only_when_asked(cards):
     folder, chat = cards
     with Hub(folder, labelling=False) as hub:
         hub.api.runner.seat(chat, OWNER)
-        hub.refused("invalid_field", "recover_effects", chat=str(chat), player_key=True)
+        assert hub.call("recover_effects", chat=str(chat), player_key=True)["done"]["settled"] == []
         assert hub.call("recover_effects", chat=str(chat), abort=True, player_key=True)["done"]["settled"] == []
 
 
