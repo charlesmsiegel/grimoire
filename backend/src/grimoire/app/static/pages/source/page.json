@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "id": "source",
+  "route": "source",
+  "title": "Source",
+  "slot": "hidden",
+  "order": 10,
+  "owner": "109",
+  "entry": "page.js",
+  "requires": ["sources.read"],
+  "unavailable": null
+}

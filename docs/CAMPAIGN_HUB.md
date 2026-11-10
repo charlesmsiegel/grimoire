@@ -1,6 +1,6 @@
 # Campaign hub API (113)
 
-**Status: backend adapter only.** `grimoire.campaignapi.CampaignApi` is the typed, authority-aware adapter the campaign hub screen (Sprint 113) calls. It is not yet served over HTTP and has no page: both wait for Sprint 108's shell contract (navigation slots and route registration), which 113 must not invent. Until then it is reachable only from trusted Python code, as here and in its tests.
+**Status: served, with its page.** `grimoire.campaignapi.CampaignApi` is the typed, authority-aware adapter behind the campaign hub. The app serves it as the `campaign.*` adapter ops of 108's [shell contract](APP_SHELL.md) (`grimoire.app.adapters.campaign`), and the **Campaigns** page (`static/pages/campaign/`, route `campaign`) is its screen. In the app the hub acts as the library owner, with the app's own trusted handle. No other handle is accepted: `CampaignApi` refuses a handle that is not the owner's, or not trusted.
 
 It keeps no record of its own. Every write goes through the service that owns the record:
 
@@ -15,8 +15,32 @@ It keeps no record of its own. Every write goes through the service that owns th
 | `endorse_effect` | The player's own key on the effect exactly as shown (its `fingerprint`) | 035 runner, 021 |
 | `approve_effect` | The director's key; the last key accepts the effect, once | 035 runner, 021 |
 | `recover_effects` | Settle (or `abort`) acceptances of this chat that were cut short; where 035 needs the player present (an abort of an effect they endorsed, or a completion whose endorsement the authority no longer records), `player_key: true` is the player's own key, given knowingly | 035 runner, 030 |
+| `chats` (app only) | The library's recent chats, grouped by campaign; with `campaign`, that campaign's alone (read only) | none |
 
 Every op takes `chat` (a `ChatRef` string) and an optional `audience`, checked before anything is written. Write ops return `{"done": ..., "hub": ...}`, the hub as it stands after the write, so a screen never shows a stale situation beside a fresh result. A refusal is an `ApiRefused` with the owning service's own reason (`fingerprint_mismatch`, `already_accepted`, `unknown_effect`, `not_at_table`, `changed` for a stale write, ...) and writes nothing unless that service's refusal says so (035 records a labelling the model refused, so the table sees why). A hub that cannot be read after a committed write comes back as `hub: null` with its problem, never as a refusal of the write.
+
+## The page
+
+- `#/campaign` lists every campaign with a chat in the library, and `#/campaign/<campaign id>` lists that campaign's chats.
+- `#/campaign/<campaign id>?chat=<ChatRef>` is the hub for one chat. It opens in the table's view; `&audience=director` gives the director's.
+- Each view shows what the hub returns for that audience, and nothing more.
+- Every write is one `campaign.*` call. The page then shows the hub that the write returned.
+- The page offers an action only where the hub's `actions` says it is available. Anything else is named under "Not available yet", with what it waits on.
+
+Who acts:
+
+- **The table** confirms a labelling and consents to a setback, naming the frame's fingerprint, after a confirmation that says what it decides. It also endorses an effect exactly as shown.
+- **Either view** asks for a labelling where the app has a labeller. The app passes the hub none yet, so labelling there is named as unavailable.
+- **The director** decides, and proposes an effect. A proposal names a kept turn (read from the core `open` op) or the open action's turn once it is decided and is written in structured form: 021 operations, plus 023 `add` and `consume` lines. The director then approves it. When the director's key is the last one, the confirmation says the effect becomes world truth.
+- A cut-short acceptance of this chat (035's `effect_unsettled`, `effect_untagged` or `effect_elsewhere`) is shown to both views. Only the director's view settles or undoes it. The player's own key is a separate box they tick, and so is the owner's word that an untagged one was accepted in this library (`own`). One that another device accepted is left to that device. The page then says how many effects were settled.
+- A proposal being built survives other writes, and is cleared once it is made.
+- A proposed labelling shows its factors (with how each bears) and its stakes beside the button that confirms it, and a frame shows the same, so what confirming locks in is read first.
+- Each effect is shown in full before either key is given: its operations with who acts, and every holdings line with its counts, its source and destination (a `move`'s `target`, an `adjust`'s `seen` and `to`), who acts, and the holdings note.
+- An action confirmed or decided here is narrated in the chat: the chat's own runner (044) reads its frame with the same adjudication key.
+- A character pinned behind its source links to the import and review screen's source-update tab for the chat (110, `#/import?tab=rebase&chat=<ChatRef>`) when that page is in the app, and is otherwise named as unavailable.
+- A perspective is opened per actor and labelled as theirs.
+
+Not on the page yet: moving or adjusting holdings, and waiving what an obstacle made due. The API takes both.
 
 ## Who acts, and with which key
 

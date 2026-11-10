@@ -5,7 +5,7 @@ over one open library: a JSON object goes in and a JSON object comes out. It is 
 for the library's **owner**. It writes only through the services that own each record:
 
 - 107's `ChatLibrary` (chats and navigation)
-- 035's `SceneRunner` (turns)
+- 035's `SceneRunner` (turns), with 029's `AdjudicationLibrary` on the app's own adjudication key (`app:adjudicator`): the text API frames and decides nothing itself, but an action framed and decided at the campaign hub ([CAMPAIGN_HUB](CAMPAIGN_HUB.md)) is read with the key it was framed under, so `generate` narrates it (and an undecided one is refused `undecided_attempt`)
 - 052's `QuickStart` (seating and openings)
 - 038's `ImageLibrary` (pictures)
 - 028's `transfer` and `resolve_conflict` (sync)
