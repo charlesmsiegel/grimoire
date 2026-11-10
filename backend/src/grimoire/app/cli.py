@@ -32,8 +32,8 @@ from grimoire.store import LibraryStore
 from grimoire.sync import NoDeviceIdentity, SyncError, device_of
 from grimoire.textapi import TextApi
 
+from .adapters import providers
 from .appapi import AppApi
-from .config import ConfigError, build_runtime, load_model_config
 from .launcher import Launcher
 from .libraries import (
     DEFAULT_OWNER,
@@ -172,12 +172,6 @@ def serve(args: argparse.Namespace) -> None:
     there or elsewhere in the browser (108)."""
     path = _library(args.library)
     _check_owner(args.owner)
-    runtime = policy = None
-    if args.model is not None:
-        try:
-            runtime, policy = build_runtime(load_model_config(args.model), args.owner)
-        except ConfigError as error:
-            raise CliError(f"--model: {error}") from None
     try:
         place = inspect(path)
     except SetupError as error:
@@ -185,7 +179,13 @@ def serve(args: argparse.Namespace) -> None:
     peers = dict(args.peer)
 
     def build(store: LibraryStore, authority: DurableAuthority) -> TextApi:
-        return TextApi(store, authority, owner=args.owner, runtime=runtime, policy=policy, peers=peers)
+        api = TextApi(store, authority, owner=args.owner, peers=peers)
+        # 112: the model is the settings file's; one that is missing or unusable starts the app without a
+        # model, and its Models and costs page says why and can set one up
+        settings = providers.configure(api, args.model)
+        if settings.problem is not None and args.model is not None:
+            print(f"no model: {settings.problem['message']}", file=sys.stderr)
+        return api
 
     if place.state == "library":
         _serve_library(args, place.path, build)
@@ -200,7 +200,8 @@ def serve(args: argparse.Namespace) -> None:
     if args.peer or args.sync_port is not None:
         raise CliError(f"{place.path} has no library yet: run `init` (or open the app without --peer and "
                        "--sync-port) first")
-    launcher = Launcher(owner=args.owner, build=build, suggested=place.path, generation=runtime is not None)
+    launcher = Launcher(owner=args.owner, build=build, suggested=place.path,
+                        generation=providers.usable(args.model, args.owner))
     try:
         app = _listen(launcher, args)
         print(f"no library at {place.path} yet: open the address to set one up")
@@ -284,7 +285,7 @@ def parser() -> argparse.ArgumentParser:
     three.add_argument("--port", type=_port, default=8080)
     three.add_argument("--peer", type=_peer, action="append", default=[], help="NAME=HOST:PORT of a paired device")
     three.add_argument("--sync-port", type=_port, help="also serve this library to paired devices on this port")
-    three.add_argument("--model", type=Path, help="the model configuration (JSON)")
+    three.add_argument("--model", type=Path, help="the model settings file (JSON): created by the app when missing")
     three.add_argument("--setup", action="store_true",
                        help="where LIBRARY holds no library yet, serve the first-run page to make one")
     three.set_defaults(run=serve)

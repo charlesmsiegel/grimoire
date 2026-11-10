@@ -108,7 +108,9 @@ export function openPalette({ items, more, label = "Search pages, chats and comm
     });
   };
   const render = () => {
-    shown = rank(input.value, [...items(), ...found]);
+    // Before anything is typed the list is everything offered without asking the app, every page and command:
+    // a cap there would hide the commands behind the pages once enough slices register one.
+    shown = rank(input.value, [...items(), ...found], input.value.trim() ? undefined : Infinity);
     active = 0;
     results.replaceChildren(...shown.map((item) => el("li", { id: id("option"), role: "option", class: "g-palette-option",
       onclick: () => choose(item) }, el("span", {}, item.label), item.detail ? el("span", { class: "g-muted" }, " " + item.detail) : null)));
