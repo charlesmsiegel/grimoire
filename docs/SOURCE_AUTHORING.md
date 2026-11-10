@@ -77,7 +77,7 @@ the revision they replace, and `etag`, that head record's own etag from `sources
 | `sources.save_raw` | `ref`, `payload`, `head`, `etag`, `expected` | the new revision's `ref`, `manifest_etag` |
 | `sources.derive` | `base` (unpinned is pinned to its head now), `source`, `id?`, `name?`, `expected` (of `source`) | the portrayal's `ref` (`r1`), `manifest_etag` |
 | `sources.portrayal` | `ref`, `edit`, `name?` (a section or facet), `text?` (an override), `head`, `etag`, `expected` | the new revision's `ref`, `manifest_etag` |
-| `sources.chats` | `limit?` | recent `chats`, each with the `etag` an attach must name |
+| `sources.chats` | `query?` (in a chat's label or ref, any case), `limit?` (1 to 1000, default 50) | `chats`, newest activity first, each with the `etag` an attach must name; `truncated` when more match |
 | `sources.attach` | `ref` (pinned), `chat`, `expected` (the chat's etag) | `chat`, `ref`, `role`, the chat's new `etag`, the new `actors` |
 
 `edit` is one of `override_section`, `clear_section`, `reset_section`, `override_description`,

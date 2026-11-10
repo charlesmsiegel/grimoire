@@ -283,23 +283,31 @@ class SourceApi:
         return found
 
     def _attach_targets(self, args: Mapping[str, object]) -> dict:
-        """Recent chats with the etag an ``attach`` must name."""
+        """Chats, newest activity first, with the etag an ``attach`` must name: at most ``limit`` of them, and only
+        those whose label or ref holds ``query`` (any case) when one is given. ``truncated`` says more match."""
         limit = _field(args, "limit", int, required=False, default=50)
         if not 1 <= limit <= MAX_LIMIT:
             raise ApiRefused("invalid_field", f"limit must be 1 to {MAX_LIMIT}")
+        query = _field(args, "query", str, required=False, default="").strip().casefold()
         index = self.chats.navigation()
-        chats = []
-        for chat in index.recent(limit):
+        chats: list[dict] = []
+        truncated = False
+        for chat in index.all_chats():
             entry = index.entry(chat)
             if entry.problem is not None:
+                continue
+            if query and query not in (entry.label or "").casefold() and query not in str(chat).casefold():
                 continue
             try:
                 _record, etag = self.chats.read_chat(chat)
             except (RecordNotFound, StoreError, ValueError):
                 continue
+            if len(chats) == limit:
+                truncated = True
+                break
             chats.append({"chat": str(chat), "label": entry.label, "last_activity": entry.last_activity,
                           "etag": etag})
-        return {"chats": chats}
+        return {"chats": chats, "truncated": truncated}
 
     # -- writing -----------------------------------------------------------------------------------------
     def _create_source(self, args: Mapping[str, object]) -> dict:

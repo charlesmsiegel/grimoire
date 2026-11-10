@@ -4,7 +4,7 @@
 // their fields, and attaches the exact revision shown to a chat. Every edit writes a new revision: nothing here
 // changes or deletes an old one. What a draft changes, and how it is held over a newer head, is ./drafts.js.
 
-import { FAMILIES, changesOf, fieldsOf, modelOf, rebase, rebaseRaw, unsafeNumbers } from "./drafts.js";
+import { FAMILIES, changesOf, fieldsOf, modelOf, rebase, rebaseRaw, stale, unsafeNumbers } from "./drafts.js";
 
 const STATES = {
   inherited: "inherited from the base",
@@ -215,7 +215,7 @@ function staleDrafts(ctx, read, drafts) {
   const box = ui.section("Your draft started from an older revision");
   let shown = false;
   const form = drafts.form.get();
-  if (form && form.base !== read.head && FAMILIES.includes(read.family)) {
+  if (form && stale(form, read) && FAMILIES.includes(read.family)) {
     let merged = null;
     try { merged = rebase(read, form); } catch { merged = null; }
     let pending = null;
@@ -223,36 +223,38 @@ function staleDrafts(ctx, read, drafts) {
     if (merged && !merged.conflicts.length && pending && !Object.keys(pending).length) drafts.form.clear();
     else {
       shown = true;
-      box.append(...staleParts(ctx, read, "edit", form.base, merged && merged.changed, merged ? merged.mine : null,
+      box.append(...staleParts(ctx, read, "edit", form, merged && merged.changed, merged ? merged.mine : null,
         merged ? merged.conflicts : null, merged ? conflictText(read, form.model, merged.conflicts) : JSON.stringify(form.model, null, 2),
         merged && !merged.conflicts.length
-          ? () => drafts.form.set({ base: read.head, start: modelOf(read), model: merged.model }) : null,
+          ? () => drafts.form.set({ base: read.head, etag: read.etag, start: modelOf(read), model: merged.model }) : null,
         () => drafts.form.clear()));
     }
-  } else if (form && form.base !== read.head) {
+  } else if (form && stale(form, read)) {
     drafts.form.clear();  // a draft of an editor this record no longer has
   }
   const raw = drafts.raw.get();
-  if (raw && raw.base !== read.head) {
+  if (raw && stale(raw, read)) {
     const merged = rebaseRaw(read, raw);
     if (!merged.error && !merged.conflicts.length && JSON.stringify(merged.payload) === JSON.stringify(read.payload)) drafts.raw.clear();
     else {
       shown = true;
       if (merged.error) box.append(ui.notice(merged.error, { kind: "bad" }));
-      box.append(...staleParts(ctx, read, "raw edit", raw.base, merged.changed || null, merged.mine || null,
+      box.append(...staleParts(ctx, read, "raw edit", raw, merged.changed || null, merged.mine || null,
         merged.conflicts || null, raw.text,
-        !merged.error && !merged.conflicts.length ? () => drafts.raw.set({ base: read.head, start: JSON.stringify(read.payload), text: merged.text }) : null,
+        !merged.error && !merged.conflicts.length ? () => drafts.raw.set({ base: read.head, etag: read.etag, start: JSON.stringify(read.payload), text: merged.text }) : null,
         () => drafts.raw.clear()));
     }
   }
   return shown ? box : null;
 }
 
-function staleParts(ctx, read, what, base, changed, mine, conflicts, kept, onKeep, onDiscard) {
+function staleParts(ctx, read, what, draft, changed, mine, conflicts, kept, onKeep, onDiscard) {
   const { ui } = ctx;
   const { el } = ui;
   const list = (items) => (items && items.length ? items.join(", ") : "nothing");
-  const parts = [el("p", {}, "Your " + what + " started from " + base + "; the head is now " + read.head + "."),
+  const parts = [el("p", {}, draft.base === read.head
+    ? "Your " + what + " started from " + read.head + " as it was then; " + read.head + " has been changed in place since."
+    : "Your " + what + " started from " + draft.base + "; the head is now " + read.head + "."),
     el("p", {}, "Changed since: " + (changed ? list(changed) : "not known") + "."),
     el("p", { class: "g-muted" }, "Your draft changes: " + (mine ? list(mine) : "not known") + ".")];
   if (conflicts && conflicts.length) {
@@ -323,10 +325,10 @@ function structuredEditor(ctx, read, drafts) {
   if (read.actions.save !== null) return ui.section("Edit", el("p", { class: "g-muted" }, read.actions.save));
   if (!ctx.has("sources.save")) return ui.section("Edit", ui.unavailable("Editing", "This app does not serve sources.save."));
   const draft = drafts.form.get();
-  if (draft && draft.base !== read.head) return ui.section("Edit", el("p", { class: "g-muted" }, "Keep or discard your draft above first."));
+  if (draft && stale(draft, read)) return ui.section("Edit", el("p", { class: "g-muted" }, "Keep or discard your draft above first."));
   const start = draft ? draft.start : modelOf(read);
   let model = draft ? draft.model : modelOf(read);
-  const keep = () => drafts.form.set({ base: read.head, start, model });
+  const keep = () => drafts.form.set({ base: read.head, etag: read.etag, start, model });
   const body = el("div", {});
   const box = ui.section(read.derived ? "Edit this portrayal" : "Edit", body);
   const render = () => {
@@ -436,12 +438,12 @@ function rawEditor(ctx, read, drafts) {
       "It holds a whole number too large for the browser to keep exactly, so saving it here would change that number."));
   }
   const draft = drafts.raw.get();
-  if (draft && draft.base !== read.head) return ui.section("Raw payload", el("p", { class: "g-muted" }, "Keep or discard your draft above first."));
+  if (draft && stale(draft, read)) return ui.section("Raw payload", el("p", { class: "g-muted" }, "Keep or discard your draft above first."));
   const start = draft ? draft.start : JSON.stringify(read.payload);
   const field = ui.field("Payload (JSON)", { multiline: true, value: draft ? draft.text : JSON.stringify(read.payload, null, 2),
     hint: "Saved exactly as written, unknown fields included" + (read.schema ? ", in " + read.schema : "") + "." });
   field.input.classList.add("source-raw");
-  field.input.addEventListener("input", () => drafts.raw.set({ base: read.head, start, text: field.value }));
+  field.input.addEventListener("input", () => drafts.raw.set({ base: read.head, etag: read.etag, start, text: field.value }));
   const extra = Object.keys((read.envelope && read.envelope.extra) || {}).filter((key) => key !== "schema");
   const saveButton = ui.button("Save raw as a new revision", () => ctx.act(async () => {
     let payload;
@@ -560,13 +562,31 @@ function attachForm(ctx, read, pinned) {
   return box;
 }
 
-async function listChats(ctx, read, pinned, holder, keep) {
+const CHAT_PAGE = 50;
+
+// The chats it can be attached to, newest activity first: a search over every chat's label and ref, and "Show
+// more chats" while more match, so an older chat is as reachable as a recent one.
+async function listChats(ctx, read, pinned, holder, keep, query = "", limit = CHAT_PAGE) {
   const { ui } = ctx;
   const { el } = ui;
-  const answer = await ctx.api("sources.chats", { limit: 50 });
-  if (!answer.chats.length) { holder.replaceChildren(ui.empty("No chat to attach it to yet.")); return; }
+  const answer = await ctx.api("sources.chats", { limit, query });
+  const search = ui.field("Find a chat by name or ref", { value: query });
+  const find = el("form", { class: "source-chat-search", role: "search" }, search.node,
+    el("button", { type: "submit", class: "g-button" }, "Find"));
+  find.addEventListener("submit", (event) => {
+    event.preventDefault();
+    ctx.act(() => listChats(ctx, read, pinned, holder, keep, search.value.trim()));
+  });
+  if (!answer.chats.length) {
+    holder.replaceChildren(find, ui.empty(query ? "No chat matches " + JSON.stringify(query) + "." : "No chat to attach it to yet."));
+    return;
+  }
+  const kept = answer.chats.some((chat) => chat.chat === keep) ? keep : answer.chats[0].chat;
   const picked = ui.choice("Chat", answer.chats.map((chat) => ({ value: chat.chat, label: (chat.label || chat.chat) + " · " + chat.last_activity })),
-    { value: keep || answer.chats[0].chat });
+    { value: kept });
+  const more = answer.truncated && limit < 1000
+    ? ui.button("Show more chats", () => ctx.act(() => listChats(ctx, read, pinned, holder, picked.value, query, Math.min(limit + CHAT_PAGE, 1000))))
+    : null;
   const go = ui.button("Attach " + read.revision, () => ctx.act(async () => {
     const chat = answer.chats.find((item) => item.chat === picked.value);
     const joins = read.kind === "character" ? " It joins as a new actor that has witnessed nothing so far." : "";
@@ -578,7 +598,7 @@ async function listChats(ctx, read, pinned, holder, keep) {
       done = await ctx.api("sources.attach", { ref: pinned, chat: chat.chat, expected: chat.etag });
     } catch (error) {
       if (error.reason === "changed") {
-        await listChats(ctx, read, pinned, holder, chat.chat);
+        await listChats(ctx, read, pinned, holder, chat.chat, query, limit);
         holder.prepend(ui.notice("That chat changed since it was listed; it is read again. Attach again to use it as it is now.", { kind: "bad" }));
         return;
       }
@@ -588,5 +608,6 @@ async function listChats(ctx, read, pinned, holder, keep) {
     holder.replaceChildren(ui.notice("Attached " + done.ref + " to " + (chat.label || chat.chat) + " as its " + done.role + "."), where || "");
     ctx.notify("Attached " + done.ref + ".");
   }), { kind: "primary" });
-  holder.replaceChildren(picked.node, ui.actions(go));
+  holder.replaceChildren(find, picked.node, ui.actions(go, more),
+    answer.truncated && !more ? el("p", { class: "g-muted" }, "More chats match; search to narrow them.") : "");
 }

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { changesOf, fieldsOf, modelOf, rebase, rebaseRaw, unsafeNumbers } from
+import { changesOf, fieldsOf, modelOf, rebase, rebaseRaw, stale, unsafeNumbers } from
   "../../src/grimoire/app/static/pages/source/drafts.js";
 
 const entity = (head, payload) => ({ family: "entity", head, payload });
@@ -85,6 +85,25 @@ test("openings are matched by id and sections by name", () => {
   assert.deepEqual(changesOf("scenario", draft.start, draft.model), ["opening second"]);
   const removed = drafted(entity("r1", { name: "Mara", sections: { a: "A.", b: "B." } }), (model) => { model.sections.splice(0, 1); });
   assert.deepEqual(rebase(entity("r2", { name: "Mara", sections: { a: "A.", b: "B.", c: "C." } }), removed).model.sections.map((item) => item.name), ["b", "c"]);
+});
+
+test("a list the head no longer lets the structured editor send is a conflict, not a dropped change", () => {
+  const r1 = scenario("r1", { title: "Storm", openings: [{ id: "first", text: "Rain." }] });
+  const draft = drafted(r1, (model) => { model.title = "Squall"; model.openings[0].text = "Rain, sideways."; });
+  // another writer, in the raw editor, added an opening with no id: the head's openings are now locked
+  const r2 = scenario("r2", { title: "Storm", openings: [{ id: "first", text: "Rain." }, { text: "Hail." }] });
+  const merged = rebase(r2, draft);
+  assert.equal(modelOf(r2).locked, true);
+  assert.deepEqual(merged.conflicts, ["opening first"]);
+  assert.equal(merged.model.title, "Squall");
+});
+
+test("a draft is stale when its revision moved on, or when that revision was changed in place", () => {
+  const head = { head: "r3", etag: "e2" };
+  assert.equal(stale({ base: "r3", etag: "e2" }, head), false);
+  assert.equal(stale({ base: "r2", etag: "e2" }, head), true);
+  assert.equal(stale({ base: "r3", etag: "e1" }, head), true);  // the file was edited by hand: same revision, new etag
+  assert.equal(stale({ base: "r3" }, head), false);  // a draft kept before etags were recorded goes by its revision
 });
 
 test("sections that are not all text are left exactly as they are", () => {

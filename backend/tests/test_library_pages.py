@@ -86,6 +86,21 @@ def test_the_adapter_writes_as_the_text_apis_own_handle_and_never_asks_for_one(a
     assert ref.endswith("@r1") and api.call("sources.read", {"ref": ref})["derived"] is True
 
 
+def test_any_chat_can_be_found_to_attach_to_not_only_the_most_recent(app):
+    api, _opened, chat = app
+    everything = api.call("sources.chats", {})
+    assert len(everything["chats"]) == 2 and everything["truncated"] is False
+    newest = api.call("sources.chats", {"limit": 1})
+    assert len(newest["chats"]) == 1 and newest["truncated"] is True
+    older = next(item["chat"] for item in everything["chats"] if item["chat"] != newest["chats"][0]["chat"])
+    found = api.call("sources.chats", {"limit": 1, "query": older.split("#")[0].split(":")[1].upper()})
+    assert [item["chat"] for item in found["chats"]] == [older] and found["truncated"] is False
+    by_label = api.call("sources.chats", {"query": "tide comes"})
+    assert [item["label"] for item in by_label["chats"]] == ["The tide comes in"]
+    assert api.call("sources.chats", {"query": "no such chat"}) == {"chats": [], "truncated": False}
+    assert chat in {item["chat"] for item in everything["chats"]}
+
+
 def test_the_proving_scenario_through_the_adapter(app):
     api, _opened, chat = app
     portrayal = _derive(api)

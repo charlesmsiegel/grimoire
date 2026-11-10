@@ -1,8 +1,9 @@
 // The source page's drafts (109), as pure functions over `sources.read` answers: no DOM, so they are tested on
 // their own (tests/js/library.unit.mjs).
 //
-// A structured draft is { base, start, model }: the head it started from, the editor's model of that head, and
-// the model as edited. A raw draft is { base, start, text }: the head, its payload as JSON, and the text typed.
+// A structured draft is { base, etag, start, model }: the head it started from and that record's etag, the
+// editor's model of that head, and the model as edited. A raw draft is { base, etag, start, text }: the head and
+// its etag, its payload as JSON, and the text typed.
 // What a draft changes is always what differs between its `start` and its edit, never what differs from some
 // later head: so a draft held over a newer head lays only its own changes over that head (`rebase`), and a part
 // that changed under it on both sides is a conflict, shown and never guessed at.
@@ -97,6 +98,13 @@ export function rebase(read, draft) {
     else out[key] = mine[key];
   }
   const list = LIST[family];
+  const mineChanges = changesOf(family, start, mine);
+  if (head.locked) {
+    // The head's list is no longer all text (the raw editor wrote it), so a structured save cannot send it: every
+    // change the draft made to the list is a conflict, kept to copy, never laid over the head or dropped.
+    conflicts.push(...mineChanges.filter((part) => !SIMPLE[family].includes(part)));
+    return { model: out, conflicts, mine: mineChanges, changed: changedParts(family, start, head) };
+  }
   const items = out[list];
   // Each item the draft started from that it edits or removes is found in the head now: a section by its name and
   // an opening by its id; an entry, which has no id and whose index moves, by its exact content. Where the head
@@ -135,7 +143,7 @@ export function rebase(read, draft) {
     }
     items.push({ ...item });
   });
-  return { model: out, conflicts, mine: changesOf(family, start, mine), changed: changedParts(family, start, head) };
+  return { model: out, conflicts, mine: mineChanges, changed: changedParts(family, start, head) };
 }
 
 // The `fields` a structured save sends for `model` over `read`, the head the model is of: only the parts that
@@ -186,6 +194,12 @@ export function fieldsOf(read, model) {
 
 function splitKeys(value) {
   return value.split("\n").map((key) => key.trim()).filter(Boolean);
+}
+
+// Whether a draft started from something other than the head `read` is of: another revision, or the same revision
+// as it was before its record was changed in place (a hand edit of the file keeps the revision, not the etag).
+export function stale(draft, read) {
+  return draft.base !== read.head || (typeof draft.etag === "string" && draft.etag !== read.etag);
 }
 
 // -- the raw editor -------------------------------------------------------------------------------------

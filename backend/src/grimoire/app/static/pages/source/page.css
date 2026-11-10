@@ -11,3 +11,5 @@
 .source-check { display: flex; gap: 6px; align-items: center; }
 .source-raw { font-family: ui-monospace, monospace; min-height: 16em; }
 .source-override summary { cursor: pointer; }
+.source-chat-search { display: flex; gap: 6px; align-items: end; flex-wrap: wrap; margin-bottom: 8px; }
+.source-chat-search .g-field { flex: 1; min-width: 12em; margin: 0; }
