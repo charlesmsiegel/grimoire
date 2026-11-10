@@ -314,6 +314,14 @@ def test_an_authored_personality_section_wins_over_a_v1_cards_own():
     assert v1_voice_texts(blank).personality == "Patient and wry."
 
 
+def test_a_renamed_v1_character_keeps_its_cards_own_example_lines():
+    text = json.dumps({"data": {"name": "Mara Vell", "mes_example": "<START>\nMara Vell: Mind the wick.\nZoe: Hm."}})
+    imported = replace(definition_of(V3), extras={"v1": {"legacy_id": "v1:a:x.json", "text": text}})
+    for name in ("Mara Vell", "Zoe"):
+        derived = derive_voice(replace(imported, name=name), (v1_voice_texts,))
+        assert [example.text for example in derived.profile.examples] == ["Mind the wick."]
+
+
 def test_a_v1_card_nested_too_deep_to_parse_speaks_from_its_description():
     deep = '{"data": {"mes_example": "{{char}}: Hi.", "extensions": ' + "[" * 100000 + "]" * 100000 + "}}"
     v1_style = replace(definition_of(V3), extras={"v1": {"legacy_id": "v1:a:x.json", "text": deep}})

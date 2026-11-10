@@ -53,8 +53,10 @@ def v1_voice_texts(definition: EntityDefinition) -> VoiceTexts | None:
     except RecursionError:  # extensions that parsed but nest too deep to copy: the verbatim text keeps them
         imported, notes = imported_source(fmt, card_version, examples, {})
         notes = (*notes, VoiceNote("extensions", 0, "extensions_not_carried"))
+    name = data.get("name")
+    speaker = name if isinstance(name, str) and name.strip() else None  # the card's own, whatever it is renamed
     return VoiceTexts(examples, _authored_personality(definition) or text_of(data.get("personality")),
-                      definition.description, imported, notes)
+                      definition.description, imported, notes, speaker)
 
 
 def _authored_personality(definition: EntityDefinition) -> str:

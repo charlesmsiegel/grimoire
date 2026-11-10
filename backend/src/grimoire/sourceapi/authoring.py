@@ -28,6 +28,7 @@ from typing import Any
 from grimoire.cards import IMPORT_KIND, LOREBOOK_SCHEMA, SCENARIO_SCHEMA, scenario_lorebook
 from grimoire.cards.lore import read_lorebook
 from grimoire.cards.records import section_ok, slugify
+from grimoire.generation.imported import CARD_FORMAT
 from grimoire.context import MAX_KEYS, SkippedEntry, valid_key
 from grimoire.core.entity_codec import ENTITY_SCHEMA, CodecError, _facet_payload, definition_from_payload
 from grimoire.core.identity import SEGMENT_MAX, SourceRef, validate_segment, validate_source_id
@@ -490,6 +491,15 @@ def _validate(ref: SourceRef, family: str, schema: object, payload: dict) -> str
     return name if isinstance(name, str) and name.strip() else None
 
 
+def _keep_example_speaker(edited: dict, old: object) -> None:
+    """On a rename of an imported card character, record the name its example messages label its own turns
+    with (``card.example_speaker``, read by 037's voice reader), once, so its voice keeps its own lines."""
+    card = edited.get("card")
+    if (isinstance(old, str) and old.strip() and edited["name"] != old and isinstance(card, Mapping)
+            and card.get("format") == CARD_FORMAT and "example_speaker" not in card):
+        edited["card"] = {**card, "example_speaker": old}
+
+
 def _entity_fields(payload: dict, fields: Mapping[str, object], derived: bool) -> dict:
     allowed = {"name", "nature", "description", "sections", "traits"}
     unknown = set(fields) - allowed
@@ -499,6 +509,7 @@ def _entity_fields(payload: dict, fields: Mapping[str, object], derived: bool) -
     edited = dict(payload)
     if "name" in fields or "name" not in edited:
         edited["name"] = _text(fields.get("name"), "name", required=True, limit=MAX_TITLE)
+        _keep_example_speaker(edited, payload.get("name"))
     if "nature" in fields or "nature" not in edited:
         nature = fields.get("nature", "individual")
         if nature not in NATURES:

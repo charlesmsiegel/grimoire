@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from card_fixtures import SCENARIO, encode, land
+from card_fixtures import SCENARIO, V3, card, encode, land
 from chat_fixtures import Clock, Ids
 from scene_fixtures import MARA_LORE, MARA_VELL, STORM, VOICED, secure
 from store_helpers import OWNER, authorizer
@@ -496,3 +496,20 @@ def test_lore_the_reader_would_skip_is_refused_but_an_imported_quirk_stays_edita
         {"index": 0, "keys": ["/b.ll/"], "content": "Regex lore, retold."}]})
     entry = api.call("sources.read", {"ref": saved["ref"]})["payload"]["entries"][0]
     assert entry["settings"] == {"use_regex": True} and entry["content"] == "Regex lore, retold."
+
+
+def _spoken(store, ref):
+    from grimoire.core.entity_codec import definition_from_payload  # noqa: PLC0415
+    from grimoire.generation import derive_voice  # noqa: PLC0415
+    stored = store.load().index.resolve(ref)
+    definition = definition_from_payload(stored.ref, "grimoire.entity/0", stored.envelope.payload)
+    return definition.name, [example.text for example in derive_voice(definition).profile.examples]
+
+
+def test_renaming_an_imported_character_keeps_its_own_example_lines(api, store):
+    land(store, encode(card(V3, mes_example="<START>\nMara Vell: Mind the wick.\nZoe: And you the tide.")))
+    assert _spoken(store, MARA_VELL) == ("Mara Vell", ["Mind the wick."])
+    for name in ("Zoe", "Mara the Elder"):  # another speaker's name, then a second rename
+        saved = edit(api, str(MARA_VELL), "sources.save", fields={"name": name})
+        assert _spoken(store, MARA_VELL) == (name, ["Mind the wick."])
+    assert api.call("sources.read", {"ref": saved["ref"]})["payload"]["card"]["example_speaker"] == "Mara Vell"
