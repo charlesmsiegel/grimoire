@@ -10,6 +10,7 @@ Every name and fact is synthetic; every model call is scripted.
 
 from __future__ import annotations
 
+import dataclasses
 import shutil
 
 import pytest
@@ -20,7 +21,13 @@ from scene_fixtures import LABEL_POLICY, Table, Tagged, attach_tamsin, card_libr
 from store_helpers import OWNER
 
 from grimoire.campaignapi import CampaignApi
-from grimoire.core import DIRECTOR, Event, Moment, Perception
+from grimoire.core import DIRECTOR, Belief, Event, Moment, Perception, Proposition, Report, Ruling, Subject
+from grimoire.core.abilities import Abilities, Ability, Cost as PowerCost, Effect, Limit as PowerLimit
+from grimoire.core.entity_codec import instance_from_payload, instance_to_payload
+from grimoire.core.facets import FacetBundle
+from grimoire.core.identity import SourceRef
+from grimoire.goals import Agenda, Approach as GoalApproach, Goal, Holds, Limit as GoalLimit
+from grimoire.graph.claims import ClaimShape
 from grimoire.effectstore import TurnEffectsLibrary
 from grimoire.obstacles import (
     ACTOR, Approach, Cost, HoldingsChange, Obstacle, ObstacleFact, ObstacleStake, RelationChange,
@@ -69,7 +76,7 @@ def hold(mara) -> Obstacle:
 class Hub:
     """One open library and its campaign hub: the owner plays and directs; the labeller is scripted."""
 
-    def __init__(self, folder, *replies: str, labelling: bool = True) -> None:
+    def __init__(self, folder, *replies: str, labelling: bool = True, agendas=()) -> None:
         self.at = Table(folder, policy=LABEL_POLICY, labels=[say(text) for text in replies] if labelling else None)
         labels, labeller = self.at.labels, None
         if labelling:
@@ -77,7 +84,8 @@ class Hub:
                                     approvals=labels.approvals)
         self.api = CampaignApi(self.at.store, self.at.authority, owner=OWNER, labeller=labeller,
                                label_handle=self.at.label_handle,
-                               policy=LABEL_POLICY if labelling else None, clock=Clock(), new_id=Tagged("h"))
+                               policy=LABEL_POLICY if labelling else None, agendas=agendas, clock=Clock(),
+                               new_id=Tagged("h"))
 
     def call(self, op: str, **args) -> dict:
         return self.api.call(op, args)
@@ -362,3 +370,172 @@ def test_effects_library_is_shared_with_the_runner(cards):
     folder, _ = cards
     with Hub(folder, labelling=False) as hub:
         assert isinstance(hub.api.effects, TurnEffectsLibrary) and hub.api.runner.effects is hub.api.effects
+
+
+# -- slice 2: powers, goals, contested claims and source revisions ------------------------------------------
+
+def empower(hub: Hub, actor, ability: Ability) -> None:
+    """Give ``actor``'s campaign instance one more power (025's ``abilities`` facet, added on the instance)."""
+    store = hub.at.store
+    stored = store.load().instances[actor]
+    envelope = stored.envelope
+    instance = instance_from_payload(actor, envelope.extra["schema"], envelope.payload)
+    added = FacetBundle((*[f for f in instance.added.facets if not isinstance(f, Abilities)], Abilities((ability,))))
+    txn = store.transaction()
+    txn.put(dataclasses.replace(envelope, payload=instance_to_payload(dataclasses.replace(instance, added=added))),
+            stored.etag)
+    txn.commit(hub.api.handle)
+
+
+VEIL = Ability("veil", "Veil", (Effect("hide", "Bends light around her.", frozenset({"light", "concealment"})),),
+               limits=(PowerLimit("no_force", "Light carries no push.", frozenset({"force"})),),
+               costs=(PowerCost("strain", "Her eyes ache after.", frozenset()),))
+TIDE = Ability("tide", "Tide sense", (Effect("read", "Knows when the tide turns.", frozenset({"tide"}),
+                                             certainty="uncertain"),))
+
+
+def test_powers_are_the_players_own_and_an_npcs_the_directors(cards):
+    folder, chat = cards
+    with Hub(folder, labelling=False) as hub:
+        hub.api.runner.seat(chat, OWNER)
+        scene = hub.api.runner.open(chat)
+        anya, (mara,) = scene.persona, [a for a in scene.cast if a != scene.persona]
+        empower(hub, anya, VEIL)
+        empower(hub, mara, TIDE)
+        table = hub.call("hub", chat=str(chat))
+        assert set(table["abilities"]) == {str(anya)}
+        (veil,) = table["abilities"][str(anya)]
+        assert veil["ability"] == "veil" and veil["effects"][0]["tags"] == ["concealment", "light"]
+        assert veil["limits"] == [{"id": "no_force", "text": "Light carries no push.", "excludes": ["force"]}]
+        assert veil["costs"] == [{"id": "strain", "text": "Her eyes ache after.", "applies_to": []}]
+        assert "Tide sense" not in repr(table)  # an NPC's powers are never the table's
+        director = hub.call("hub", chat=str(chat), audience="director")
+        assert set(director["abilities"]) == {str(anya), str(mara)}
+        assert director["abilities"][str(mara)][0]["effects"][0]["certainty"] == "uncertain"
+
+
+WATCH, AIM, RULE = "harbour-watch", "Get the cargo past the harbour before dawn", "Never smuggle while watched"
+
+
+def mara_agenda(mara) -> Agenda:
+    return Agenda(mara.campaign_id, mara, goals=(
+        Goal("cargo", AIM, 50, (GoalApproach("smuggle", "Run the north channel tonight", tags=frozenset({"smuggle"})),
+                                GoalApproach("wait", "Wait for honest papers"))),),
+        limits=(GoalLimit("lie-low", RULE, forbids=frozenset({"smuggle"}), when=(Holds(WATCH, stances={"aware"}),)),))
+
+
+def test_an_npcs_goals_and_recorded_intentions_are_the_directors_alone(cards):
+    folder, chat = cards
+    with Hub(folder, labelling=False) as hub:
+        hub.api.runner.seat(chat, OWNER)
+        scene = hub.api.runner.open(chat)
+        anya, (mara,) = scene.persona, [a for a in scene.cast if a != scene.persona]
+    with Hub(folder, labelling=False, agendas=[mara_agenda(mara)]) as hub:
+        (goals,) = hub.call("hub", chat=str(chat), audience="director")["goals"]
+        assert (goals["usable"], goals["problem"]) == (False, "unknown_proposition")  # play would refuse it
+        hub.api.evidence.append(chat.campaign_id, [
+            Proposition(chat.campaign_id, WATCH, "The quay is watched", Moment(1), "director")]).commit()
+        (goals,) = hub.call("hub", chat=str(chat), audience="director")["goals"]
+        assert goals["usable"] is True and goals["actor"]["ref"] == str(mara)
+        assert goals["goals"][0]["aim"] == AIM and goals["limits"][0]["when"] == [f"holds {WATCH} as aware"]
+        assert AIM not in repr(hub.call("hub", chat=str(chat)))
+    with Table(folder, [say("North channel, then.")], agendas=[mara_agenda(mara)]) as table:
+        table.runner.post(chat, table.player(OWNER), '"Is the cargo safe?"')
+        take = table.runner.generate(chat, table.player(OWNER))
+        table.runner.keep(chat, table.player(OWNER), take.take)
+    with Hub(folder, labelling=False) as hub:
+        director = hub.call("hub", chat=str(chat), audience="director")
+        (turn,) = director["turns"]
+        (intention,) = turn["intentions"]
+        assert (intention["actor"]["ref"], intention["goal"], intention["approach"]) == (str(mara), "cargo", "smuggle")
+        assert intention["kind"] == "intention" and intention["explanation"]
+        table_view = hub.call("hub", chat=str(chat))
+        assert all("intentions" not in item for item in table_view["turns"])
+        assert "smuggle" not in repr(table_view)
+
+
+def test_a_contested_claim_shows_canon_beside_each_belief_for_the_director_only(cards):
+    folder, chat = cards
+    with Hub(folder, labelling=False) as hub:
+        hub.api.runner.seat(chat, OWNER)
+        scene = hub.api.runner.open(chat)
+        anya, (mara,) = scene.persona, [a for a in scene.cast if a != scene.persona]
+        campaign = chat.campaign_id
+        about = (Subject("instance", str(mara)), Subject("instance", str(anya)))
+        rumour = "Mara knows Anya from the docks"
+        hub.api.evidence.append(campaign, [
+            Proposition(campaign, "p-docks", rumour, Moment(1), "director", about=about),
+            Report(campaign, "told-docks", mara, "p-docks", "told", Moment(2), "scene:quay", confirmed=True),
+            Belief(campaign, "b-docks", mara, "p-docks", "believed", Moment(3), DIRECTOR, ("told-docks",)),
+            Ruling(campaign, "r-docks", "p-docks", "refuted", Moment(4), "director"),
+        ], claims=[ClaimShape(campaign, "p-docks", "knows", mara, anya)], controls=scene.controls).commit()
+        director = hub.call("hub", chat=str(chat), audience="director")
+        (claim,) = director["truth"]["claims"]
+        assert (claim["proposition"], claim["standing"], claim["ruling"]) == ("p-docks", "refuted", "r-docks")
+        assert claim["held"] == [{"kind": "belief", "holder": {"ref": str(mara), "name": claim["held"][0]["holder"]["name"]},
+                                  "stance": "believed"}]
+        assert claim["contested"] is True
+        assert claim["shape"]["predicate"] == "knows" and claim["shape"]["object"]["ref"] == str(anya)
+        table = hub.call("hub", chat=str(chat))
+        assert "truth" not in table and rumour not in repr(table) and "refuted" not in repr(table)
+        assert rumour not in repr(hub.call("knowledge", chat=str(chat)))  # Mara's belief is hers, not the table's
+
+
+def test_a_character_behind_its_sources_head_is_handed_to_rebase_review(cards):
+    folder, chat = cards
+    with Hub(folder, labelling=False) as hub:
+        hub.api.runner.seat(chat, OWNER)
+        scene = hub.api.runner.open(chat)
+        anya, (mara,) = scene.persona, [a for a in scene.cast if a != scene.persona]
+        table = hub.call("hub", chat=str(chat))
+        assert {row["actor"]["ref"] for row in table["sources"]} == {str(anya)}  # only the player's own
+        (own,) = table["sources"]
+        assert own["role"] == "persona" and own["resolved"] and own["handoff"] is None
+        assert own["behind"] is False and own["problem"] is None
+        director = hub.call("hub", chat=str(chat), audience="director")
+        roles = {row["role"] for row in director["sources"]}
+        assert {"persona", "character", "lorebook"} <= roles
+        assert all(row["handoff"] is None for row in director["sources"])  # nothing is behind yet
+        newer = publish_revision(hub, chat, mara)
+        (row,) = [r for r in hub.call("hub", chat=str(chat), audience="director")["sources"]
+                  if r["actor"] and r["actor"]["ref"] == str(mara)]
+        assert row["pinned"] and row["behind"] is True and row["head"] == newer
+        assert row["handoff"] == {"api": "review", "op": "rebase.review", "args": {"actor": str(mara)}}
+        assert hub.call("hub", chat=str(chat))["sources"] == table["sources"]  # the table's own row is unchanged
+
+
+def publish_revision(hub: Hub, chat, actor) -> str:
+    """A newer revision of ``actor``'s bound source, made its source's head: the new head's ref."""
+    store = hub.at.store
+    (row,) = [r for r in hub.call("hub", chat=str(chat), audience="director")["sources"]
+              if r["actor"] and r["actor"]["ref"] == str(actor)]
+    ref = SourceRef.parse(row["binding"])
+    stored = store.check_definition(ref.unpinned())
+    newer = SourceRef(ref.source, ref.kind, ref.entity_id, "r-next")
+    source = store.check_source(ref.source)
+    txn = store.transaction()
+    txn.put(dataclasses.replace(stored.envelope, address=newer), None)
+    txn.put(dataclasses.replace(source.manifest, heads={**source.manifest.heads, f"{ref.kind}/{ref.entity_id}": "r-next"}),
+            source.etag)
+    txn.commit(hub.api.handle)
+    return str(newer)
+
+
+@pytest.mark.parametrize("standing, stances, contested", [
+    ("unknown", ("believed",), False),
+    ("unknown", ("believed", "suspected"), False),  # both lean the same way
+    ("unknown", ("believed", "rejected"), True),  # the holders disagree
+    ("refuted", ("suspected",), True),  # against canon
+    ("refuted", ("rejected",), False),
+    ("established", ("rejected",), True),
+    ("established", (), False),
+])
+def test_a_claim_is_contested_only_when_beliefs_disagree_with_each_other_or_canon(standing, stances, contested):
+    from grimoire.campaignapi.views import claim_view
+    from grimoire.core.identity import InstanceRef
+    from grimoire.core.perspective import PropositionStanding
+
+    proposition = Proposition("c1", "p", "A claim.", Moment(1), "director")
+    held = [(InstanceRef("c1", "character", f"a{n}"), stance) for n, stance in enumerate(stances)]
+    view = claim_view(PropositionStanding(proposition, standing, None), None, held, lambda actor: None)
+    assert view["contested"] is contested and [item["stance"] for item in view["held"]] == list(stances)
