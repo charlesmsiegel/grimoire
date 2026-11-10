@@ -1,0 +1,13 @@
+.chat-cast { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 10px; }
+.chat-member { text-align: center; min-width: 72px; font-size: 13px; }
+.chat-face { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 1px solid var(--g-line);
+  display: grid; place-items: center; color: var(--g-muted); margin: 0 auto 4px; }
+.chat-line { margin: 8px 0; }
+.chat-speaker { font-weight: 600; }
+.chat-post { margin: 14px 0 6px; padding-left: 10px; border-left: 3px solid var(--g-accent); }
+.chat-take { border: 1px dashed var(--g-line); border-radius: var(--g-radius); padding: 8px 10px; margin: 8px 0; }
+.chat-picture { display: inline-flex; gap: 6px; align-items: end; flex-wrap: wrap; }
+.chat-picture .g-field { margin: 0; }
+.chat-bar { position: sticky; bottom: 0; padding: 10px 0; background: var(--g-bg); border-top: 1px solid var(--g-line); }
+.chat-bar-row { display: flex; gap: 6px; align-items: end; }
+.chat-bar-row .g-field { flex: 1; margin: 0; }
