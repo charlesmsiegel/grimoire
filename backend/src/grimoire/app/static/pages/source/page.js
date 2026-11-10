@@ -2,7 +2,9 @@
 // the head. It shows what the revision composes to field by field (046), edits the head with drafts that survive
 // a stale write (the etag the page read is named on every save), derives portrayals, overrides, clears and resets
 // their fields, and attaches the exact revision shown to a chat. Every edit writes a new revision: nothing here
-// changes or deletes an old one.
+// changes or deletes an old one. What a draft changes, and how it is held over a newer head, is ./drafts.js.
+
+import { FAMILIES, changesOf, fieldsOf, modelOf, rebase, rebaseRaw, unsafeNumbers } from "./drafts.js";
 
 const STATES = {
   inherited: "inherited from the base",
@@ -46,7 +48,7 @@ export async function mount(root, ctx) {
 
   const drafts = draftsOf(ctx, read.entity);
   if (read.is_head) {
-    const stale = await staleDraft(ctx, read, drafts);
+    const stale = staleDrafts(ctx, read, drafts);
     if (stale) root.append(stale);
   }
   const structured = structuredEditor(ctx, read, drafts);
@@ -183,63 +185,118 @@ function notOffered(ctx, read) {
 
 // -- drafts ---------------------------------------------------------------------------------------------
 
-// One draft per entity and editor, kept until it is saved or discarded: { base: the head it started from, ... }.
+// One draft per entity and editor, kept per tab until it is saved or discarded (see ./drafts.js for its shape).
 function draftsOf(ctx, entity) {
-  const keep = (name) => {
+  const keep = (name, valid) => {
     const store = ctx.draft("source:" + entity + ":" + name);
     return {
       get() {
         let value = null;
         try { value = JSON.parse(store.get() || "null"); } catch { return null; }
-        return value && typeof value === "object" && typeof value.base === "string" ? value : null;
+        return value && typeof value === "object" && typeof value.base === "string" && valid(value) ? value : null;
       },
       set(value) { store.set(JSON.stringify(value)); },
       clear() { store.clear(); },
     };
   };
-  return { form: keep("form"), raw: keep("raw") };
+  return {
+    form: keep("form", (value) => value.start && value.model && typeof value.start === "object" && typeof value.model === "object"),
+    raw: keep("raw", (value) => typeof value.start === "string" && typeof value.text === "string"),
+  };
 }
 
-// A draft that started from an older head: say what changed under it, and let it be saved over the new head or
-// discarded. Nothing is merged silently.
-async function staleDraft(ctx, read, drafts) {
+// Drafts that started from an older head. One whose changes the head already has (it was saved, and the page left
+// before the answer came) is dropped; any other is shown with what changed under it and what it changes, and is
+// kept on the new head (its own changes laid over it) or discarded. A part changed on both sides is a conflict:
+// the draft's text for it is shown to copy, and the draft cannot be kept as it is.
+function staleDrafts(ctx, read, drafts) {
   const { ui } = ctx;
   const { el } = ui;
-  const found = [["form", drafts.form.get()], ["raw", drafts.raw.get()]].filter(([, draft]) => draft && draft.base && draft.base !== read.head);
-  if (!found.length) return null;
   const box = ui.section("Your draft started from an older revision");
-  for (const [which, draft] of found) {
-    let before = null;
-    try {
-      before = await ctx.api("sources.read", { ref: read.entity + "@" + draft.base });
-    } catch (error) {
-      if (error.reason === "left") throw error;
+  let shown = false;
+  const form = drafts.form.get();
+  if (form && form.base !== read.head && FAMILIES.includes(read.family)) {
+    let merged = null;
+    try { merged = rebase(read, form); } catch { merged = null; }
+    let pending = null;
+    try { pending = merged ? fieldsOf(read, merged.model) : null; } catch { pending = { invalid: true }; }
+    if (merged && !merged.conflicts.length && pending && !Object.keys(pending).length) drafts.form.clear();
+    else {
+      shown = true;
+      box.append(...staleParts(ctx, read, "edit", form.base, merged && merged.changed, merged ? merged.mine : null,
+        merged ? merged.conflicts : null, merged ? conflictText(read, form.model, merged.conflicts) : JSON.stringify(form.model, null, 2),
+        merged && !merged.conflicts.length
+          ? () => drafts.form.set({ base: read.head, start: modelOf(read), model: merged.model }) : null,
+        () => drafts.form.clear()));
     }
-    const changed = before ? changedKeys(before.payload, read.payload) : null;
-    const mine = which === "form" ? editedKeys(read, draft.model) : ["the whole payload"];
-    box.append(el("p", {}, "Your " + (which === "form" ? "edit" : "raw edit") + " started from " + draft.base
-      + "; the head is now " + read.head + "."),
-    changed === null ? ui.notice("The revision it started from could not be read, so what changed is not shown.")
-      : el("p", {}, changed.length ? "Changed since: " + changed.join(", ") + "." : "Nothing in the payload changed since."),
-    el("p", { class: "g-muted" }, "Your draft changes: " + (mine.length ? mine.join(", ") : "nothing") + "."),
-    ui.actions(
-      ui.button("Keep my draft on " + read.head, () => {
-        drafts[which].set({ ...draft, base: read.head });
-        ctx.navigate(window.location.hash);
-      }, { kind: "primary" }),
-      ui.button("Discard my draft", () => { drafts[which].clear(); ctx.navigate(window.location.hash); })));
+  } else if (form && form.base !== read.head) {
+    drafts.form.clear();  // a draft of an editor this record no longer has
   }
-  box.append(el("p", { class: "g-muted" }, "Keeping it shows your draft in the editor below over " + read.head
-    + "; saving it then writes a new revision with your values for the fields it changes."));
-  return box;
+  const raw = drafts.raw.get();
+  if (raw && raw.base !== read.head) {
+    const merged = rebaseRaw(read, raw);
+    if (!merged.error && !merged.conflicts.length && JSON.stringify(merged.payload) === JSON.stringify(read.payload)) drafts.raw.clear();
+    else {
+      shown = true;
+      if (merged.error) box.append(ui.notice(merged.error, { kind: "bad" }));
+      box.append(...staleParts(ctx, read, "raw edit", raw.base, merged.changed || null, merged.mine || null,
+        merged.conflicts || null, raw.text,
+        !merged.error && !merged.conflicts.length ? () => drafts.raw.set({ base: read.head, start: JSON.stringify(read.payload), text: merged.text }) : null,
+        () => drafts.raw.clear()));
+    }
+  }
+  return shown ? box : null;
 }
 
-function changedKeys(before, after) {
-  const keys = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
-  return [...keys].filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key])).sort();
+function staleParts(ctx, read, what, base, changed, mine, conflicts, kept, onKeep, onDiscard) {
+  const { ui } = ctx;
+  const { el } = ui;
+  const list = (items) => (items && items.length ? items.join(", ") : "nothing");
+  const parts = [el("p", {}, "Your " + what + " started from " + base + "; the head is now " + read.head + "."),
+    el("p", {}, "Changed since: " + (changed ? list(changed) : "not known") + "."),
+    el("p", { class: "g-muted" }, "Your draft changes: " + (mine ? list(mine) : "not known") + ".")];
+  if (conflicts && conflicts.length) {
+    parts.push(ui.notice("Changed under your draft as well: " + conflicts.join(", ") + ". Your text for "
+      + (conflicts.length === 1 ? "it" : "them") + " is below to copy; then discard the draft and edit the head.", { kind: "bad" }));
+  }
+  if (!onKeep) {
+    const copy = el("textarea", { class: "g-input source-raw", readonly: true, "aria-label": "Your draft" });
+    copy.value = kept;
+    parts.push(copy);
+  }
+  parts.push(ui.actions(
+    onKeep ? ui.button("Keep my changes on " + read.head, () => { onKeep(); ctx.navigate(ctx.href("source", [read.entity])); }, { kind: "primary" }) : null,
+    ui.button("Discard my draft", async () => {
+      if (!onKeep && !await ui.confirm("Discard your draft? Copy any text you want to keep first.", { confirmLabel: "Discard it", danger: true })) return;
+      onDiscard();
+      ctx.navigate(ctx.href("source", [read.entity]));
+    })));
+  if (onKeep) {
+    parts.push(el("p", { class: "g-muted" }, "Keeping lays only your own changes over " + read.head
+      + "; everything else stays as the head has it. Nothing is saved until you save."));
+  }
+  return parts;
 }
 
-// What a save sends: whoever is editing an outdated draft is told so before this runs (staleDraft above).
+// The draft's own text for the parts in conflict, for the person to copy.
+function conflictText(read, model, conflicts) {
+  return JSON.stringify(Object.fromEntries(conflicts.map((part) => [part, partOf(read.family, model, part)])), null, 2);
+}
+
+function partOf(family, model, part) {
+  if (part in model && typeof model[part] !== "object") return model[part];
+  const list = family === "entity" ? model.sections : family === "scenario" ? model.openings : model.entries;
+  const match = /^(section|opening|entry) (.+)$/.exec(part);
+  if (!match) return null;
+  const found = family === "entity" ? list.find((item) => item.name === match[2] || item.slot === match[2])
+    : family === "scenario" ? list.find((item) => item.slot === match[2]) || list[Number(match[2]) - 1]
+      : list[Number(match[2]) - 1];
+  if (!found) return null;
+  const { slot: _slot, original: _original, ...shown } = found;
+  return shown;
+}
+
+// What a save sends, against the head this page read: a refusal "changed" keeps the draft and reads the head again.
 async function save(ctx, read, op, args, draft) {
   try {
     const answer = await ctx.api(op, { ref: read.entity, head: read.head, etag: read.etag, expected: read.manifest_etag, ...args });
@@ -247,7 +304,7 @@ async function save(ctx, read, op, args, draft) {
     ctx.notify("Saved as " + answer.ref.split("@").pop() + ".");
     ctx.navigate(ctx.href("source", [read.entity]));
   } catch (error) {
-    if (error.reason === "changed") {  // the draft is kept: read again, and the page says what changed
+    if (error.reason === "changed") {
       ctx.notify("This entry changed since the page read it. Your draft is kept; check what changed and save again.", { bad: true });
       ctx.navigate(ctx.href("source", [read.entity]));  // the head as it is now, so the draft is held against it
       return;
@@ -258,107 +315,18 @@ async function save(ctx, read, op, args, draft) {
 
 // -- the structured editor ------------------------------------------------------------------------------
 
-function modelOf(read) {
-  const payload = read.payload || {};
-  if (read.family === "entity") {
-    const sections = payload.sections && typeof payload.sections === "object" ? payload.sections : {};
-    return { name: payload.name || "", nature: payload.nature || "individual", description: text(payload.description),
-      sections: Object.entries(sections).map(([name, value]) => ({ name, text: text(value), kept: true })) };
-  }
-  if (read.family === "scenario") {
-    return { title: text(payload.title), premise: text(payload.premise), instructions: text(payload.instructions),
-      openings: (Array.isArray(payload.openings) ? payload.openings : []).map((item) => ({ id: item && item.id, text: text(item && item.text) })) };
-  }
-  if (read.family === "lorebook") {
-    return { name: text(payload.name), description: text(payload.description),
-      entries: (Array.isArray(payload.entries) ? payload.entries : []).map((entry) => ({
-        original: JSON.stringify(entry), keys: (Array.isArray(entry && entry.keys) ? entry.keys : []).join("\n"),
-        content: text(entry && entry.content), constant: !!(entry && entry.settings && entry.settings.constant === true),
-        enabled: !(entry && entry.enabled === false) })) };
-  }
-  return null;
-}
-
-function text(value) { return typeof value === "string" ? value : ""; }
-
-// The fields a save sends: only what the draft changed from the head, so everything else stays exactly as it is.
-function fieldsOf(read, model) {
-  const head = modelOf(read);
-  const fields = {};
-  const differs = (key) => JSON.stringify(model[key]) !== JSON.stringify(head[key]);
-  if (read.family === "entity") {
-    for (const key of ["name", "nature", "description"]) if (differs(key)) fields[key] = model[key];
-    const sections = (items) => JSON.stringify(items.map((item) => [item.name, item.text]));
-    if (sections(model.sections) !== sections(head.sections)) {
-      fields.sections = {};
-      for (const item of model.sections) {
-        const name = item.name.trim();
-        if (!name) {
-          if (item.text.trim()) throw new Error("A new section needs a name.");
-          continue;
-        }
-        if (name in fields.sections) throw new Error("Two sections are named " + JSON.stringify(name) + ".");
-        fields.sections[name] = item.text;
-      }
-    }
-  } else if (read.family === "scenario") {
-    for (const key of ["title", "premise", "instructions"]) if (differs(key)) fields[key] = model[key];
-    if (differs("openings")) {
-      fields.openings = model.openings.filter((item) => item.text.trim())
-        .map((item) => (item.id ? { id: item.id, text: item.text } : { text: item.text }));
-    }
-  } else if (read.family === "lorebook") {
-    for (const key of ["name", "description"]) if (differs(key)) fields[key] = model[key];
-    if (differs("entries")) fields.entries = entriesOf(read, model);
-  }
-  return fields;
-}
-
-// Each entry the draft kept from the head names that entry's index in the head, matched by its exact content,
-// so its settings and extras stay. An entry that changed or went away under the draft is not guessed at.
-function entriesOf(read, model) {
-  const head = Array.isArray(read.payload.entries) ? read.payload.entries.map((entry) => JSON.stringify(entry)) : [];
-  const used = new Set();
-  const lost = [];
-  const entries = [];
-  model.entries.forEach((item, number) => {
-    if (!item.content.trim()) return;  // an emptied entry is removed
-    const entry = { keys: item.keys.split("\n").map((key) => key.trim()).filter(Boolean), content: item.content,
-      constant: item.constant, enabled: item.enabled };
-    if (item.original) {
-      const index = head.findIndex((original, at) => original === item.original && !used.has(at));
-      if (index < 0) { lost.push(number + 1); return; }
-      used.add(index);
-      entry.index = index;
-    }
-    entries.push(entry);
-  });
-  if (lost.length) {
-    const error = new Error("Entr" + (lost.length === 1 ? "y " : "ies ") + lost.join(", ")
-      + " changed or went away in the head since your draft; discard the draft or copy your text into a new entry.");
-    error.reason = "entry_changed";
-    throw error;
-  }
-  return entries;
-}
-
-function editedKeys(read, model) {
-  if (!model) return [];
-  try { return Object.keys(fieldsOf(read, model)); } catch { return ["entries"]; }
-}
-
 function structuredEditor(ctx, read, drafts) {
   const { ui } = ctx;
   const { el } = ui;
-  if (!["entity", "scenario", "lorebook"].includes(read.family)) return null;
+  if (!FAMILIES.includes(read.family)) return null;
   if (!read.is_head) return null;
   if (read.actions.save !== null) return ui.section("Edit", el("p", { class: "g-muted" }, read.actions.save));
   if (!ctx.has("sources.save")) return ui.section("Edit", ui.unavailable("Editing", "This app does not serve sources.save."));
   const draft = drafts.form.get();
   if (draft && draft.base !== read.head) return ui.section("Edit", el("p", { class: "g-muted" }, "Keep or discard your draft above first."));
-  const editing = draft;
-  let model = editing ? editing.model : modelOf(read);
-  const keep = () => drafts.form.set({ base: read.head, model });
+  const start = draft ? draft.start : modelOf(read);
+  let model = draft ? draft.model : modelOf(read);
+  const keep = () => drafts.form.set({ base: read.head, start, model });
   const body = el("div", {});
   const box = ui.section(read.derived ? "Edit this portrayal" : "Edit", body);
   const render = () => {
@@ -372,6 +340,7 @@ function structuredEditor(ctx, read, drafts) {
   }), { kind: "primary" });
   const discard = ui.button("Discard my changes", () => { drafts.form.clear(); model = modelOf(read); render(); });
   box.append(ui.actions(saveButton, discard));
+  if (draft && changesOf(read.family, start, model).length) box.prepend(ui.notice("Your unsaved draft is shown."));
   if (read.derived) {
     box.append(el("p", { class: "g-muted" }, "A description or section written here overrides the base's; one left blank, or a section"
       + " removed, inherits again. Clearing an inherited field is done in the list above, never by leaving it blank."));
@@ -389,48 +358,57 @@ function bound(ctx, labelText, value, onchange, options = {}) {
   return field.node;
 }
 
+const LOCKED = { entity: "sections", scenario: "openings", lorebook: "entries" };
+
 function formFor(ctx, read, model, keep, render) {
   const { ui } = ctx;
   const { el } = ui;
   const set = (target, key) => (value) => { target[key] = value; keep(); };
   const nodes = [];
+  const locked = model.locked
+    ? el("p", { class: "g-muted" }, "Its " + LOCKED[read.family] + " are not all plain text, so they are edited in the raw editor; "
+      + "a save here leaves them exactly as they are.") : null;
   if (read.family === "entity") {
     nodes.push(bound(ctx, "Name", model.name, set(model, "name")));
     const nature = ui.choice("Nature", NATURES.map(([value, labelText]) => ({ value, label: labelText })),
       { value: model.nature, onchange: set(model, "nature") });
     nodes.push(nature.node, bound(ctx, "Description", model.description, set(model, "description"), { multiline: true }));
+    if (locked) return [...nodes, locked];
     model.sections.forEach((item, index) => {
       const group = el("fieldset", { class: "source-group" }, el("legend", {}, "Section " + (item.name || index + 1)));
-      if (!item.kept) group.append(bound(ctx, "Section name", item.name, set(item, "name")));
-      group.append(bound(ctx, item.kept ? "Text" : "Section text", item.text, set(item, "text"), { multiline: true }),
+      if (item.slot === null) group.append(bound(ctx, "Section name", item.name, set(item, "name")));
+      group.append(bound(ctx, item.slot === null ? "Section text" : "Text", item.text, set(item, "text"), { multiline: true }),
         ui.actions(ui.button("Remove this section", () => { model.sections.splice(index, 1); keep(); render(); })));
       nodes.push(group);
     });
-    nodes.push(ui.actions(ui.button("Add a section", () => { model.sections.push({ name: "", text: "", kept: false }); keep(); render(); })));
+    nodes.push(ui.actions(ui.button("Add a section", () => { model.sections.push({ slot: null, name: "", text: "" }); keep(); render(); })));
   } else if (read.family === "scenario") {
     nodes.push(bound(ctx, "Title", model.title, set(model, "title")),
       bound(ctx, "Premise", model.premise, set(model, "premise"), { multiline: true }),
       bound(ctx, "Instructions", model.instructions, set(model, "instructions"), { multiline: true,
         hint: "Private to the narrator: never shown to the players." }));
+    if (locked) return [...nodes, locked];
     model.openings.forEach((item, index) => {
-      nodes.push(el("fieldset", { class: "source-group" }, el("legend", {}, "Opening " + (index + 1) + (item.id ? " (" + item.id + ")" : "")),
+      nodes.push(el("fieldset", { class: "source-group" }, el("legend", {}, "Opening " + (index + 1) + (item.slot ? " (" + item.slot + ")" : "")),
         bound(ctx, "Text", item.text, set(item, "text"), { multiline: true }),
         ui.actions(ui.button("Remove this opening", () => { model.openings.splice(index, 1); keep(); render(); }))));
     });
-    nodes.push(ui.actions(ui.button("Add an opening", () => { model.openings.push({ id: null, text: "" }); keep(); render(); })));
+    nodes.push(ui.actions(ui.button("Add an opening", () => { model.openings.push({ slot: null, text: "" }); keep(); render(); })));
   } else if (read.family === "lorebook") {
     nodes.push(bound(ctx, "Name", model.name, set(model, "name")),
       bound(ctx, "Description", model.description, set(model, "description"), { multiline: true }));
+    if (locked) return [...nodes, locked];
     model.entries.forEach((item, index) => {
       nodes.push(el("fieldset", { class: "source-group" }, el("legend", {}, "Entry " + (index + 1)),
         bound(ctx, "Keys", item.keys, set(item, "keys"), { multiline: true, hint: "One key per line. Lore reaches play when a key is mentioned." }),
-        bound(ctx, "Content", item.content, set(item, "content"), { multiline: true }),
+        bound(ctx, "Content", item.content, set(item, "content"), { multiline: true,
+          hint: item.slot === null ? undefined : "Emptying it removes the entry." }),
         checkbox(ctx, "Always in context (constant)", item.constant, set(item, "constant")),
         checkbox(ctx, "Enabled", item.enabled, set(item, "enabled")),
         ui.actions(ui.button("Remove this entry", () => { model.entries.splice(index, 1); keep(); render(); }))));
     });
     nodes.push(ui.actions(ui.button("Add an entry", () => {
-      model.entries.push({ original: null, keys: "", content: "", constant: false, enabled: true }); keep(); render();
+      model.entries.push({ slot: null, original: null, keys: "", content: "", constant: false, enabled: true }); keep(); render();
     })));
   }
   return nodes;
@@ -453,13 +431,17 @@ function rawEditor(ctx, read, drafts) {
   if (!read.is_head) return null;
   if (read.actions.save_raw !== null) return ui.section("Raw payload", el("p", { class: "g-muted" }, read.actions.save_raw));
   if (!ctx.has("sources.save_raw")) return ui.section("Raw payload", ui.unavailable("The raw editor", "This app does not serve sources.save_raw."));
+  if (unsafeNumbers(read.payload)) {
+    return ui.section("Raw payload", ui.unavailable("The raw editor for this record",
+      "It holds a whole number too large for the browser to keep exactly, so saving it here would change that number."));
+  }
   const draft = drafts.raw.get();
   if (draft && draft.base !== read.head) return ui.section("Raw payload", el("p", { class: "g-muted" }, "Keep or discard your draft above first."));
-  const editing = draft;
-  const field = ui.field("Payload (JSON)", { multiline: true, value: editing ? editing.text : JSON.stringify(read.payload, null, 2),
+  const start = draft ? draft.start : JSON.stringify(read.payload);
+  const field = ui.field("Payload (JSON)", { multiline: true, value: draft ? draft.text : JSON.stringify(read.payload, null, 2),
     hint: "Saved exactly as written, unknown fields included" + (read.schema ? ", in " + read.schema : "") + "." });
   field.input.classList.add("source-raw");
-  field.input.addEventListener("input", () => drafts.raw.set({ base: read.head, text: field.value }));
+  field.input.addEventListener("input", () => drafts.raw.set({ base: read.head, start, text: field.value }));
   const extra = Object.keys((read.envelope && read.envelope.extra) || {}).filter((key) => key !== "schema");
   const saveButton = ui.button("Save raw as a new revision", () => ctx.act(async () => {
     let payload;
@@ -470,6 +452,7 @@ function rawEditor(ctx, read, drafts) {
       return;
     }
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) { field.setError("The payload must be a JSON object."); return; }
+    if (unsafeNumbers(payload)) { field.setError("A whole number here is too large to be kept exactly."); return; }
     field.setError("");
     await save(ctx, read, "sources.save_raw", { payload }, drafts.raw);
   }));
@@ -514,7 +497,7 @@ function portrayalTools(ctx, read, item) {
       if (yes) await run("clear_" + kind);
     }));
   }
-  if ((own && kind !== "facet") || item.state === "cleared") {
+  if (own || item.state === "cleared") {
     tools.push(ui.button("Reset", async () => {
       const yes = await ui.confirm("Reset " + what + " to inherit from the base again? "
         + (item.state === "cleared" ? "The clear is lifted." : "The override is dropped from the new revision; " + read.revision + " keeps it."),

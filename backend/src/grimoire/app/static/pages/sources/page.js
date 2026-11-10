@@ -114,7 +114,16 @@ function renameForm(ctx, source) {
   const { ui } = ctx;
   const title = ui.field("Title", { value: source.title || "", draft: ctx.draft("sources:title:" + source.source) });
   const save = ui.button("Rename", () => ctx.act(async () => {
-    await ctx.api("sources.rename_source", { source: source.source, title: title.value.trim() || null, expected: source.etag });
+    try {
+      await ctx.api("sources.rename_source", { source: source.source, title: title.value.trim() || null, expected: source.etag });
+    } catch (error) {
+      if (error.reason === "changed") {  // the typed title is kept: read the source again and let them retry
+        ctx.notify("The source changed since this page read it. Your title is kept; rename it again.", { bad: true });
+        ctx.navigate(window.location.hash);
+        return;
+      }
+      throw error;
+    }
     title.clear();
     ctx.notify("Renamed " + source.source + ".");
     ctx.navigate(window.location.hash);

@@ -35,7 +35,7 @@ A record's family comes from its schema:
 |---|---|---|---|
 | entity | `grimoire.entity/0` | `character`, `location`, `item`... any kind but the two below | `name`, `nature` (`individual` or `template`), `description`, `sections` (name → text), `traits` (a list of facet objects) |
 | scenario | `grimoire.scenario/1` | `scenario` | `title`, `premise`, `openings` (a list of `{id?, text}`), `instructions` |
-| lorebook | `grimoire.lorebook/1` | `lorebook` | `name`, `description`, `entries` (a list of `{index?, keys, content, constant?, enabled?}`; `constant` is written to the entry's `settings`, where 037 reads it) |
+| lorebook | `grimoire.lorebook/1` | `lorebook` | `name`, `description`, `entries` (a list of `{index?, keys, content, constant?, enabled?}`, where an entry with `index` may leave out its keys and content to keep the head's; `constant` is written to the entry's `settings`, where 037 reads it) |
 | other | anything else | | raw editor only |
 
 A world is a source (`world:...`), not a record. Its locations, items and characters are entities in it.
@@ -143,13 +143,18 @@ on, under the text API's writer lock, as the owner's trusted handle, with the re
   it has the structured editor for its family and the raw editor. A portrayal overrides, clears (after a
   confirmation) and resets inherited fields in the field list. Any entity can be derived from the revision shown,
   and any revision can be attached to a chat exactly as shown, after a confirmation that names it.
-- **Drafts and stale writes.** What is typed is kept per tab, with the head it started from, until it is saved or
-  discarded. A structured save sends only the fields the draft changed. A save refused `changed` keeps the draft
-  and reads the head again. A draft whose head has moved on says what changed since, field by field, and what the
-  draft changes. It is then kept on the new head (and saved again) or discarded; the editors wait until one of the
-  two is chosen. A lorebook entry the draft kept is matched to the head's entry by its exact content, so an entry
-  that changed under the draft is refused instead of guessed at.
+- **Drafts and stale writes.** What is typed is kept per tab, with the head it started from and the editor's model
+  of that head, until it is saved or discarded. A structured save sends only the fields that differ from the head;
+  a lorebook entry the edit leaves alone is sent as `{"index": n}` alone, and an indexed entry keeps whatever keys,
+  content and settings the edit leaves out, so the head keeps it exactly. A save refused `changed` keeps the draft
+  and reads the head again. A draft whose head has moved on says what changed since and what the draft changes.
+  Kept, only the draft's own changes are laid over the new head (`static/pages/source/drafts.js`): sections are
+  matched by name, openings by id and lorebook entries by exact content. A part changed differently on both sides
+  is a conflict: the draft is shown to copy and can only be discarded. A draft the head already holds (saved, then
+  the page left) is dropped. The editors wait until the draft is kept or discarded.
+- The raw editor is unavailable for a payload holding a whole number beyond 2^53, which the browser would round.
+  Nothing is offered to derive from a revision that does not compose.
 - What the ops do not offer is shown as such, with the reason `sources.read` gives (above).
 
 Tested through the adapter in `backend/tests/test_library_pages.py`, and end to end in Node's stand-in DOM by
-`backend/tests/js/library.e2e.mjs`.
+`backend/tests/js/library.e2e.mjs`; the drafts on their own by `backend/tests/js/library.unit.mjs`.

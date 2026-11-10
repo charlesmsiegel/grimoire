@@ -152,27 +152,28 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   assert.equal(fieldRow(page, "Description").querySelector("span").textContent, "cleared");
   assert.equal(fieldRow(page, "Section personality").querySelector("span").textContent, "overridden");
 
-  // a rename typed here goes stale: the head moves on (another tab, say) before it is saved
+  // a rename typed here goes stale: the head moves on (another tab overrides the description) before it is saved
   type(section(page, "Edit this portrayal").querySelector("input"), "Mara of the lamps");
   const seen = await call("sources.read", { ref: PORTRAYAL });
-  await call("sources.save", { ref: PORTRAYAL, head: seen.head, etag: seen.etag, expected: seen.manifest_etag,
-    fields: { name: "Mara Quayside" } });
+  await call("sources.portrayal", { ref: PORTRAYAL, head: seen.head, etag: seen.etag, expected: seen.manifest_etag,
+    edit: "override_description", text: "Pale from the lamps." });
   page = await press(section(page, "Edit this portrayal"), "Save as a new revision", entry, "the stale draft");
   assert.ok(byText(body, "div", "This entry changed since the page read it. Your draft is kept").length);
   const stale = section(page, "Your draft started from an older revision");
   assert.ok(stale, "the draft is said to be stale");
   assert.ok(stale.textContent.includes("started from r3; the head is now r4"));
-  assert.ok(stale.textContent.includes("Changed since: name."));
+  assert.ok(stale.textContent.includes("Changed since: description."));
   assert.ok(stale.textContent.includes("Your draft changes: name."));
   assert.ok(!section(page, "Edit").querySelector("input"), "the editor waits until the draft is kept or discarded");
-  page = await press(stale, "Keep my draft on r4", entry, "the kept draft");
+  page = await press(stale, "Keep my changes on r4", entry, "the kept draft");
   const kept = section(page, "Edit this portrayal");
   assert.equal(kept.querySelector("input").value, "Mara of the lamps");
   page = await press(kept, "Save as a new revision", entry, "r5");
   assert.ok(byText(page, "dd", "r5, the head").length);
   assert.equal(body.querySelector("h1").textContent, "Mara of the lamps");
-  // the override and the clear came through the rename
-  assert.equal(fieldRow(page, "Description").querySelector("span").textContent, "cleared");
+  // only the rename was laid over r4: the other tab's description stands, and the section override too
+  assert.equal(fieldRow(page, "Description").querySelector("span").textContent, "overridden");
+  assert.ok(fieldRow(page, "Description").textContent.includes("Pale from the lamps."));
   assert.equal(fieldRow(page, "Section personality").querySelector("span").textContent, "overridden");
 
   // attach exactly r5 to the card chat

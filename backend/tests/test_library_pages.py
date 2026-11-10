@@ -130,6 +130,14 @@ def test_the_raw_editor_keeps_unknown_fields_through_the_adapter(app):
 
 
 @pytest.mark.skipif(NODE is None, reason="Node is not installed")
+def test_the_source_page_drafts_in_node():
+    result = subprocess.run([NODE, "--test", "--test-reporter=tap", str(TESTS / "library.unit.mjs")],
+                            capture_output=True, text=True, timeout=120, check=False)
+    assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
+    assert "# fail 0" in result.stdout
+
+
+@pytest.mark.skipif(NODE is None, reason="Node is not installed")
 def test_the_library_pages_end_to_end(tmp_path):
     desk, chat = desktop_library(tmp_path / "desk")
     with Device(desk) as device:
@@ -151,4 +159,4 @@ def test_the_library_pages_end_to_end(tmp_path):
         read = AppApi(device.api).call("sources.read", {"ref": "world:harbor/character/mara-of-the-quay"})
         bound = {item["chat"]: item["revisions"] for item in read["chats"]}
         assert bound == {str(chat): [read["head"]]}
-        assert json.dumps(read["payload"]).count("Mara of the lamps") == 1
+        assert read["payload"]["name"] == "Mara of the lamps" and read["payload"]["description"] == "Pale from the lamps."
