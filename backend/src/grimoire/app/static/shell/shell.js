@@ -5,6 +5,7 @@
 
 import * as api from "./api.js";
 import { Drafts } from "./drafts.js";
+import { THEMES, isTyping, openPalette, openShortcuts, opensPalette, rank, readTheme, setTheme } from "./palette.js";
 import { href, pageFor, parse, reserved as reservedRoute, takeToken } from "./router.js";
 import * as ui from "./ui.js";
 
@@ -25,11 +26,18 @@ function safeSessionStorage() {
   try { return window.sessionStorage; } catch (error) { return null; }
 }
 
+// The theme outlives the tab (it is the person's, not the session's): localStorage where the browser allows.
+function safeLocalStorage() {
+  try { return window.localStorage || null; } catch (error) { return null; }
+}
+
 // -- the frame ----------------------------------------------------------------------------------------
 function buildFrame() {
   frame.title = el("h1", { id: "g-title", tabindex: "-1" }, "Grimoire");
   frame.menu = el("button", { type: "button", class: "g-button g-menu", "aria-expanded": "false", "aria-controls": "g-nav" }, "Menu");
   frame.actions = el("div", { class: "g-header-actions" });
+  frame.search = el("button", { type: "button", class: "g-button g-search", title: "Search (Ctrl+K)", "aria-keyshortcuts": "Control+K Meta+K /" }, "Search");
+  frame.search.addEventListener("click", palette);
   frame.nav = el("nav", { id: "g-nav", class: "g-nav", "aria-label": "Main" });
   frame.notices = el("div", { class: "g-notices", "aria-live": "polite" });
   frame.main = el("main", { id: "g-main", class: "g-main", tabindex: "-1" });
@@ -37,11 +45,21 @@ function buildFrame() {
   document.body.replaceChildren(
     el("a", { class: "g-skip", href: "#g-main", onclick: (event) => { event.preventDefault(); frame.main.focus(); } }, "Skip to content"),
     el("div", { class: "g-app" },
-      el("header", { class: "g-header" }, frame.menu, frame.title, frame.actions),
+      el("header", { class: "g-header" }, frame.menu, frame.title, frame.actions, frame.search),
       frame.nav,
       el("div", { class: "g-body" }, frame.notices, frame.main)));
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && frame.menu.getAttribute("aria-expanded") === "true") { setMenu(false); frame.menu.focus(); }
+    if (event.key === "Escape" && frame.menu.getAttribute("aria-expanded") === "true") { setMenu(false); frame.menu.focus(); return; }
+    if (event.defaultPrevented) return;
+    const typing = isTyping(document.activeElement);
+    const opens = opensPalette(event, typing);
+    if (document.body.querySelector("dialog.g-dialog")) {  // one dialog at a time
+      // Ctrl+K is still the app's while one is open: the browser's own would take focus out of the dialog.
+      if (opens && event.key !== "/") event.preventDefault();
+      return;
+    }
+    if (opens) { event.preventDefault(); palette(); }
+    else if (event.key === "?" && !typing && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); openShortcuts(); }
   });
 }
 
@@ -84,6 +102,43 @@ function blocker(page) {
   return null;
 }
 
+// -- search and commands ----------------------------------------------------------------------------------
+// Everything the palette offers without asking the app: every page that can open, then the commands.
+function paletteItems() {
+  const pages = state.registry.pages.filter((page) => page.slot !== "hidden" && !blocker(page))
+    .map((page) => ({ label: page.title, detail: "page", keywords: page.route, run: () => go(href(page.route)) }));
+  const themes = THEMES.map((theme) => ({ label: "Theme: " + theme, detail: theme === readTheme(safeLocalStorage()) ? "current" : "",
+    keywords: "appearance dark light mode colours colors", run: () => setTheme(theme, document.documentElement, safeLocalStorage()) }));
+  return [...pages, ...themes, { label: "Keyboard shortcuts", keywords: "help keys", run: openShortcuts }];
+}
+
+// Chats by name, read once per palette from the app's own list (the most recent first, up to its largest).
+function chatSearch() {
+  const chatPage = pageFor(state.registry.pages, "chat");
+  if (!state.ops.has("chats") || !chatPage || blocker(chatPage)) return undefined;
+  let listed = null;
+  return async (query) => {
+    listed = listed || api.call("chats", { filter: "recent", limit: 1000 }).then((answer) => answer.chats);
+    const chats = (await listed).map((chat) => ({
+      label: chat.label || (chat.launch && chat.launch.name) || chat.chat,
+      detail: "chat" + (chat.scope && chat.scope.title ? " · " + chat.scope.title : ""),
+      keywords: (chat.launch && chat.launch.name) || "",
+      run: () => go(href("chat", [chat.chat])),
+    }));
+    return rank(query, chats);
+  };
+}
+
+function palette() {
+  if (document.body.querySelector("dialog.g-palette")) return;
+  setMenu(false);
+  openPalette({ items: paletteItems, more: chatSearch() });
+}
+
+function go(target) {
+  if (window.location.hash === target) route(); else window.location.hash = target;
+}
+
 // -- notices ------------------------------------------------------------------------------------------
 function notify(text, { bad = false } = {}) {
   const box = ui.notice(text, { kind: bad ? "bad" : "" });
@@ -114,6 +169,14 @@ function context(location, page, controller, root) {
     picture: (ref) => settle(api.picture(ref)),
     get library() { return state.library; },
     async refreshLibrary() { await settle(loadLibrary()); return state.library; },
+    // Load the app again (its pages, ops and library) and open `target`: after first run opens a library, the
+    // pages that waited on it become usable.
+    async restart(target) {
+      if (!live()) return;
+      if (target) history.replaceState(null, "", window.location.pathname + target);
+      await leave();
+      await connect();
+    },
     has: (op) => state.ops.has(op),
     registered: (route) => Boolean(pageFor(state.registry.pages, route)),
     navigate(target) { if (!live()) return; if (window.location.hash === target) route(); else window.location.hash = target; },
@@ -253,7 +316,10 @@ function recordScroll() {
   }, 100);
 }
 
+// The library's own answer (device, peers, model), or null before one is open (first run: the app serves only
+// its setup ops then, and says so in the registry's op list).
 async function loadLibrary() {
+  if (!state.ops.has("library")) { state.library = null; return; }
   state.library = await api.call("library", {});
   state.ops = new Set(state.library.ops || []);
 }
@@ -276,8 +342,9 @@ async function connect() {
     return false;
   }
   try {
-    const [registry] = await Promise.all([api.registry(), loadLibrary()]);
-    state.registry = registry;
+    state.registry = await api.registry();
+    state.ops = new Set(state.registry.ops || []);
+    await loadLibrary();
   } catch (error) {
     show("Grimoire", ui.errorBox(error), ui.actions(ui.button("Try again", () => window.location.reload())));
     return false;
@@ -289,6 +356,7 @@ async function connect() {
 
 async function start() {
   adoptToken();
+  if (document.documentElement) setTheme(readTheme(safeLocalStorage()), document.documentElement, null);
   buildFrame();
   try { history.scrollRestoration = "manual"; } catch (error) { /* an older browser restores on its own */ }
   window.addEventListener("scroll", recordScroll);
