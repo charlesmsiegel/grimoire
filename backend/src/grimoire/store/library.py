@@ -195,9 +195,19 @@ class LibraryStore:
             return
         if names == [TXN] and is_link(root / TXN):  # never list a linked .txn
             raise LinkRefused(f"refusing to follow a link inside the library: {root / TXN}")
-        if names == [TXN] and all(name == LOCK or is_staging_name(name) for name in ops.list_dir(root / TXN)):
-            return  # an interrupted create
+        if LibraryStore.interrupted_create(root, ops):
+            return
         raise LibraryPathError(f"{root} is not empty; refusing to create a library there")
+
+    @staticmethod
+    def interrupted_create(root: Path, ops: FileOps | None = None) -> bool:
+        """Whether the folder ``root`` holds only what a create that stopped before its marker leaves behind:
+        a real ``.txn`` with the lock and staging files in it. ``create`` finishes such a folder, so the app
+        offers it as empty rather than as taken (108)."""
+        ops = ops or DiskOps()
+        if ops.list_dir(root) != [TXN] or is_link(root / TXN) or not (root / TXN).is_dir():
+            return False
+        return all(name == LOCK or is_staging_name(name) for name in ops.list_dir(root / TXN))
 
     @classmethod
     def open(cls, path: str | os.PathLike[str], *, ops: FileOps | None = None, locker: Locker | None = None,

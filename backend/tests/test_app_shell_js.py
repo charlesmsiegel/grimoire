@@ -16,6 +16,9 @@ import pytest
 from textapi_fixtures import Device, desktop_library, say
 
 from grimoire.app import AppServer
+from grimoire.app.launcher import Launcher
+from grimoire.app.libraries import DEFAULT_OWNER
+from grimoire.textapi import TextApi
 
 TESTS = Path(__file__).with_name("js")
 NODE = shutil.which("node")
@@ -50,3 +53,24 @@ def test_the_shell_end_to_end(tmp_path):
             thread.join(10)
     assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
     assert "# pass 1" in result.stdout
+
+
+@needs_node
+def test_first_run_end_to_end(tmp_path):
+    place = tmp_path / "library"
+    launcher = Launcher(owner=DEFAULT_OWNER, suggested=place,
+                        build=lambda store, authority: TextApi(store, authority, owner=DEFAULT_OWNER))
+    app = AppServer(launcher)
+    thread = threading.Thread(target=app.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = app.address
+        result = _node(TESTS / "setup.e2e.mjs", {"GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": app.token,
+                                                     "GRIMOIRE_PLACE": str(place)})
+    finally:
+        app.close()
+        thread.join(10)
+        launcher.close()
+    assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
+    assert "# pass 1" in result.stdout
+    assert (place / "grimoire-library.json").is_file()

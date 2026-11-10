@@ -188,6 +188,32 @@ def _config_message(error: ConfigError) -> str:
     return text
 
 
+def parse_settings(data: bytes) -> ModelConfig:
+    """A settings file's bytes as the configuration they hold; ``ConfigError`` when they hold none."""
+    if len(data) > MAX_CONFIG_BYTES:
+        raise ConfigError("the configuration file is too large")
+    try:
+        raw = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        raise ConfigError("the configuration file is not a JSON object") from None
+    return parse_model_config(raw)
+
+
+def settings_usable(path: Path | None, owner: str, *, environ: Mapping[str, str] | None = None) -> bool:
+    """Whether the settings file at ``path`` configures a model that can play now (its key variable set):
+    what the first-run page shows before any library is open. Reads only."""
+    if path is None:
+        return False
+    try:
+        data, _etag = SettingsFile(path).read()
+        if data is None:
+            return False
+        build_runtime(parse_settings(data), owner, environ=os.environ if environ is None else environ)
+    except (OSError, ConfigError):
+        return False
+    return True
+
+
 class InferenceApi:
     """The settings, usage and diagnostics ops over one served ``TextApi``.
 
@@ -239,13 +265,7 @@ class InferenceApi:
 
     # -- the configuration -------------------------------------------------------------------------------
     def _parse(self, data: bytes) -> ModelConfig:
-        if len(data) > MAX_CONFIG_BYTES:
-            raise ConfigError("the configuration file is too large")
-        try:
-            raw = json.loads(data.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError, RecursionError):
-            raise ConfigError("the configuration file is not a JSON object") from None
-        return parse_model_config(raw)
+        return parse_settings(data)
 
     def _load(self) -> None:
         """Read the file and give the runner what it configures; a file that cannot be used leaves no model."""

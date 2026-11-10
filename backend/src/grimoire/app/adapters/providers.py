@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from grimoire.app.adapter import Adapter, AdapterContext
-from grimoire.app.inference import InferenceApi, SettingsFile
+from grimoire.app.inference import InferenceApi, SettingsFile, settings_usable
 from grimoire.textapi import TextApi
 
 #: Where a text API holds its settings ops: on the text API itself, so they live exactly as long as it does (a
@@ -40,6 +40,11 @@ def table(api: TextApi) -> InferenceApi:
         return found if found is not None else configure(api, None)
 
 
+def usable(path: Path | None, owner: str, *, environ: Mapping[str, str] | None = None) -> bool:
+    """Whether the settings file ``path`` would give a library opened now a model (the first-run page's flag)."""
+    return settings_usable(path, owner, environ=environ)
+
+
 def _op(name: str):  # type: ignore[no-untyped-def]
     def handler(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
         return table(ctx.api).call(name, args)
@@ -53,4 +58,4 @@ OPS = ("models", "check_models", "save_models", "usage", "diagnostics")
 
 ADAPTER = Adapter("providers", owner="112", ops={name: _op(name) for name in OPS})
 
-__all__ = ["ADAPTER", "OPS", "configure", "table"]
+__all__ = ["ADAPTER", "OPS", "configure", "table", "usable"]
