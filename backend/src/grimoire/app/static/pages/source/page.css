@@ -1,0 +1,13 @@
+.source-facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0 0 10px; }
+.source-facts dt { color: var(--g-muted); }
+.source-facts dd { margin: 0; overflow-wrap: anywhere; }
+.source-field { border-top: 1px solid var(--g-line); padding: 8px 0; }
+.source-field-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.source-state { font-size: 12px; border: 1px solid var(--g-line); border-radius: var(--g-radius); padding: 0 6px; }
+.source-state-overridden, .source-state-restated, .source-state-local { border-color: var(--g-accent); }
+.source-state-cleared, .source-state-missing { border-color: var(--g-bad); }
+.source-value { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0; }
+.source-group { border: 1px solid var(--g-line); border-radius: var(--g-radius); margin: 10px 0; padding: 6px 10px; }
+.source-check { display: flex; gap: 6px; align-items: center; }
+.source-raw { font-family: ui-monospace, monospace; min-height: 16em; }
+.source-override summary { cursor: pointer; }

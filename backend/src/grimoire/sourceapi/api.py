@@ -109,11 +109,23 @@ class SourceApi:
 
     def __init__(self, store: LibraryStore, authority, *, owner: str,  # type: ignore[no-untyped-def]
                  clock: Callable[[], str] = _utc_now, new_id: Callable[[str], str] = _new_id) -> None:
+        handle = authority.handle_for(owner, trusted=True)
+        self._setup(store, handle, ChatLibrary(store, handle, clock=clock, new_id=new_id, owner=owner), owner)
+
+    @classmethod
+    def over(cls, store: LibraryStore, handle, chats: ChatLibrary, *, owner: str) -> "SourceApi":  # type: ignore[no-untyped-def]
+        """The ops over a handle and chat library that already exist: the app's adapter (108) builds one per call
+        over the text API's own, so it never asks the authority for a handle of its own."""
+        api = cls.__new__(cls)
+        api._setup(store, handle, chats, owner)
+        return api
+
+    def _setup(self, store: LibraryStore, handle, chats: ChatLibrary, owner: str) -> None:  # type: ignore[no-untyped-def]
         self.store = store
         self.owner = owner
-        self.handle = authority.handle_for(owner, trusted=True)
-        self.authoring = SourceAuthoring(store, self.handle, owner=owner)
-        self.chats = ChatLibrary(store, self.handle, clock=clock, new_id=new_id, owner=owner)
+        self.handle = handle
+        self.authoring = SourceAuthoring(store, handle, owner=owner)
+        self.chats = chats
         self._lock = threading.RLock()
         self._ops: dict[str, Callable[[Mapping[str, object]], dict]] = {
             "sources.catalog": self._catalog, "sources.read": self._read, "sources.create_source": self._create_source,

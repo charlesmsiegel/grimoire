@@ -129,7 +129,27 @@ them:
 
 Only the head revision is edited. An older revision is read exactly and can still be attached.
 
-## Not yet in the app
+## In the app
 
-The Library page that calls these ops plugs into the app shell through 108's route and page contract, which
-lands separately. Until then the ops are reachable from Python only.
+The Library is two pages of the [app shell](APP_SHELL.md), reached from the Library menu and Home. They call these
+ops as the app's `sources` adapter (`backend/src/grimoire/app/adapters/sources.py`): `POST /api/sources.read` and so
+on, under the text API's writer lock, as the owner's trusted handle, with the refusals above.
+
+- **`#/sources`** (`?role=character|persona|scenario|lore|world`, `q=` a search, `source=` one source) lists every
+  entry by its exact ref. Same-named entries are separate rows, each naming the others. It creates and renames
+  sources and creates entries in the source shown.
+- **`#/source/<SourceRef>`** shows one revision exactly: its ref, source and revisions, each field's state, value and
+  source (046), and where it is used (chats and the revisions they bind, portrayals, namesakes, links). On the head
+  it has the structured editor for its family and the raw editor. A portrayal overrides, clears (after a
+  confirmation) and resets inherited fields in the field list. Any entity can be derived from the revision shown,
+  and any revision can be attached to a chat exactly as shown, after a confirmation that names it.
+- **Drafts and stale writes.** What is typed is kept per tab, with the head it started from, until it is saved or
+  discarded. A structured save sends only the fields the draft changed. A save refused `changed` keeps the draft
+  and reads the head again. A draft whose head has moved on says what changed since, field by field, and what the
+  draft changes. It is then kept on the new head (and saved again) or discarded; the editors wait until one of the
+  two is chosen. A lorebook entry the draft kept is matched to the head's entry by its exact content, so an entry
+  that changed under the draft is refused instead of guessed at.
+- What the ops do not offer is shown as such, with the reason `sources.read` gives (above).
+
+Tested through the adapter in `backend/tests/test_library_pages.py`, and end to end in Node's stand-in DOM by
+`backend/tests/js/library.e2e.mjs`.
