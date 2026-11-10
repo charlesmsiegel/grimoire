@@ -255,6 +255,43 @@ def test_the_app_names_only_a_provider_key_variable_unless_the_file_already_name
         assert refused.value.reason == "invalid_settings" and "MY_LOCAL_TOKEN" not in str(refused.value)
 
 
+def test_a_well_known_key_goes_only_to_its_own_provider_or_this_machine(desk, model, tmp_path):
+    path = tmp_path / "model.json"
+    with Device(desk, runtime=False) as device:
+        inference = _table(device, path)
+
+        def check(base: str, name: str) -> dict:
+            return inference.call("check_models", {"settings": _settings(model, base_url=base, key_env=name)})
+
+        for base in ("https://collector.example/v1", "https://api.openai.com.collector.example/v1",
+                     "https://evilapi.openai.com.example/v1"):
+            checked = check(base, "OPENAI_API_KEY")
+            assert checked["ok"] is False and checked["problems"][0]["field"] == "key_env"
+            assert "api.openai.com" in checked["problems"][0]["message"]
+            with pytest.raises(ApiRefused) as refused:
+                inference.call("save_models", {"settings": _settings(model, base_url=base, key_env="OPENAI_API_KEY"),
+                                               "expected": None})
+            assert refused.value.reason == "invalid_settings"
+        assert not path.exists()
+        for base, name in (("https://api.openai.com/v1", "OPENAI_API_KEY"), ("https://openrouter.ai/api/v1",
+                           "OPENROUTER_API_KEY"), ("https://eu.api.openai.com/v1", "OPENAI_API_KEY"),
+                           (base_url(model), "OPENAI_API_KEY"),  # a local proxy on this machine
+                           ("https://collector.example/v1", "COLLECTOR_API_KEY")):  # a name the table does not own
+            assert check(base, name)["ok"] is True, (base, name)
+    # a file the owner wrote by hand keeps a well-known name for the endpoint it names, and only there
+    path.write_text(json.dumps(_settings(model, base_url="https://gateway.example/v1", key_env="OPENAI_API_KEY")))
+    with Device(desk, runtime=False) as device:
+        inference = _table(device, path, environ={"OPENAI_API_KEY": "sk-synthetic-value"})
+        current = inference.call("models")
+        saved = inference.call("save_models", {"settings": {**current["settings"], "max_output_tokens": 300},
+                                               "expected": current["etag"]})
+        assert saved["settings"]["key_env"] == "OPENAI_API_KEY"
+        moved = {**saved["settings"], "base_url": "https://elsewhere.example/v1"}
+        with pytest.raises(ApiRefused) as refused:
+            inference.call("save_models", {"settings": moved, "expected": saved["etag"]})
+        assert refused.value.reason == "invalid_settings"
+
+
 # -- refusals ------------------------------------------------------------------------------------------------
 
 def test_a_save_at_a_revision_that_moved_on_writes_nothing(desk, model, tmp_path):
