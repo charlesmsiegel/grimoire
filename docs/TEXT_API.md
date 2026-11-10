@@ -38,11 +38,11 @@ client hands it back unchanged.
 
 | Op | Arguments | Result |
 |---|---|---|
-| `library` | none | `device`, `owner`, `player`, `peers` (each `peer`, `address`, `paired`, `last` sync report), `generation` (a model is configured), `ops`, `post_modes` |
+| `library` | none | `device`, `owner`, `player`, `peers` (each `peer`, `address`, `paired`, `last` sync report), `generation` (a model is configured), `ops` |
 | `chats` | `filter` `recent` (default), `character` or `scenario`; `source` (a source ref, required with a filter; a pinned ref is unpinned); `limit` 1 to 1000 (default 50) | `chats`, newest activity first, each `chat`, `label`, `last_activity`, `scope` (`campaign`, `title`, `world`: `null` for a world-less chat), `launch`, `sources` (active bindings: `role`, unpinned `ref`, `name`), `problem`; and `sources`, every character and scenario some chat binds, for the filter picker |
 | `open` | `chat` | the **scene** (below) |
 | `continue` | `chat`, `opening` (optional greeting id) | 052's `continue_chat`: seats this device's player and opens a chat with no turn yet. The scene, plus `unfinished` |
-| `post` | `chat`, `text` (at most 20,000 characters), `mode` (`auto`, `speech` or `action`; below) | the scene |
+| `post` | `chat`, `text` (at most 20,000 characters) | the scene |
 | `generate` | `chat`, `speakers` (optional actor refs), `director` (bool) | the scene, with the new take proposed |
 | `keep` | `chat`, `turn` (the open turn the take was read on), `take`, `acknowledge_unscreened` (bool) | the scene; another turn is refused `turn_changed` |
 | `pass` | `chat`, `turn` (the open turn meant) | the scene; another turn is refused `turn_changed` |
@@ -51,27 +51,6 @@ client hands it back unchanged.
 | `add_art` | `chat`, `actor` (one of the cast), `slot` (default `avatar`; `portrait` or a gallery slot; expression slots are not in this slice), `media` (base64, at most 32 MiB decoded), `expected` (the slot's `etag` as `open` gave it, to replace a picture the campaign already placed) | the scene |
 | `sync` | `peer` (a configured peer) | 028's transfer report: `peer`, `status` (`synced`, `incomplete`, `refused`), `reason`, `code` (the reason's first word, such as `unreachable`), `passes`, `conflicts` (`path`, `code`), `copied`, `deleted` |
 | `resolve` | `peer`, `path` (a campaign file `open` reports in conflict), `mine` and `theirs` (the conflict's etags exactly as `open` gave them: a version changed since is refused `changed`), `keep`: `mine`, `theirs` (the one other version kept here, or the peer's deletion), or one of `theirs` by etag | 028's resolve report: `peer`, `path`, `status` (`resolved`, `refused`, `incomplete`), `reason`, `code`, `receiver` |
-
-### Chat launch and play (111)
-
-These ops are `grimoire.textapi.chatplay`, registered on the same `TextApi`. They write only through 052's
-`QuickStart` and 035's `SceneRunner`. Every op that changes a chat returns the scene, with `unfinished` (052's
-reason a launch or an added card's seat stopped after the chat was written; `continue` finishes it).
-
-| Op | Arguments | Result |
-|---|---|---|
-| `start_sources` | none | `characters`, `scenarios`, `lorebooks`: every definition the library could bind now, by head (`ref` unpinned, `name`, `revision`), sorted by name. A persona is a character. Excluded sources and dropped definitions are not listed; nothing is matched by name |
-| `start_options` | a **selection**: `kind` (`character`, `scenario`, `bundle` or `premise`), `ref` (the character or scenario), `lorebook` (a bundle's, optional: default the card's own), `premise` (text, for `premise`) | 052's `options`: `sources` (the pinned refs it would bind), `openings` (`id`, `text`, `group_only`), `default_opening`, `lorebook` (the card's own), `related` (chats already started from it, as `chats` lists them, for **Continue**). Writes nothing |
-| `start` | a selection, `persona` (a character ref; required, else `no_persona`), `opening` (an id `start_options` offered), `label` (at most 200 characters) | 052's `start`: a new world-less chat, every source pinned, the persona seated with the player, opened with the chosen or default opening. The scene. Each call is a new chat |
-| `add_card` | `chat`, `ref`, `role` (`character` default, `lorebook` or `scenario`) | 052's `add_card`, pinned. A new character witnessed nothing and hears only what is said from now on, seated with the director. The scene |
-| `withdraw` | `chat`, `kind` (`skip`, `redirect` or `rephrase`), `lines` (line ids as the scene shows them), `direction` (for a redirect or rephrase) | 035's `request` on those lines. The scene |
-| `strike` | `chat`, `line` (a shown line of a kept take) | 035's `strike`: no one hears that line from now on. The scene |
-| `repairs` | `chat` | `repairs`: every bound source that does not resolve now, each `field`, `ref`, `reason`, `role`, `choices` (`detach`, or none for the launch and a missing actor) |
-| `detach` | `chat`, `field` and `ref` as `repairs` gave them | 052's `detach_broken`: the chat plays on without it; its actor and turns stay. `not_broken` if it resolves now or was detached. The scene |
-
-`post` also takes `mode`: `auto` (default), `speech` or `action` (008's typed intent; `library.post_modes`
-lists them). A director instruction is not played yet, so `director` is refused `invalid_field`. A typed table
-request ("Grimoire, skip", "redirect: kinder") is run as the same request, on the lines on show.
 
 `TextApi.image(ref)` returns a picture's media type and exact bytes. 038 checks them against the blob's name.
 

@@ -48,7 +48,6 @@ from grimoire.store.layout import placement_parts
 from grimoire.sync import NoDeviceIdentity, SyncError, SyncInterrupted, device_of
 from grimoire.sync.turns import open_conflicts
 
-from .chatplay import POST_MODES, ChatPlayOps
 from .errors import ApiRefused
 from .views import (
     FILTER_ROLES,
@@ -141,7 +140,6 @@ class TextApi:
             "pause": self._pause, "resume": self._resume, "choose": self._choose, "add_art": self._add_art,
             "sync": self._sync, "resolve": self._resolve,
         }
-        self._ops.update(ChatPlayOps(self).handlers())  # 111: Start Chat, add card, line requests, repairs
 
     @property
     def ops(self) -> tuple[str, ...]:
@@ -213,7 +211,7 @@ class TextApi:
             peers.append({"peer": peer, "address": f"{host}:{port}", "paired": paired,
                           "last": self.reports.get(peer)})
         return {"device": self._device(), "owner": self.owner, "player": self.player, "peers": peers,
-                "generation": self.runtime is not None, "ops": list(self.ops), "post_modes": list(POST_MODES)}
+                "generation": self.runtime is not None, "ops": list(self.ops)}
 
     def _source_name(self, view, ref: SourceRef) -> str | None:  # type: ignore[no-untyped-def]
         try:
@@ -269,7 +267,8 @@ class TextApi:
         return chats
 
     def chat_entries(self, refs) -> list[dict]:  # type: ignore[no-untyped-def]
-        """``refs`` as the ``chats`` op lists them, in the order given (111's Continue list)."""
+        """``refs`` as the ``chats`` op lists them, in the order given; a ref the library does not know is left out.
+        For the app's ``play.options`` (111), whose Continue list shows the chats 052 says a selection started."""
         view = self.store.load()
         index = self.chats.navigation()
         known = set(index.all_chats())
@@ -278,12 +277,6 @@ class TextApi:
 
     def _chat(self, args: Mapping[str, object]) -> ChatRef:
         return parse_ref(ChatRef.parse, args, "chat")
-
-    #: for 111's ops (``chatplay``): the same argument check and scene view the 044 ops use
-    chat_arg = _chat
-
-    def scene_view(self, chat: ChatRef) -> dict:
-        return self._scene(chat)
 
     def _conflicts(self, campaign: str) -> tuple[list[dict], bool]:
         """The campaign's files that a sync left in a keep-both conflict on this device, each with the etag of
@@ -383,10 +376,7 @@ class TextApi:
         text = field(args, "text", str)
         if len(text) > MAX_POST_CHARS:
             raise ApiRefused("invalid_field", f"a post is at most {MAX_POST_CHARS} characters")
-        mode = _field(args, "mode", str, required=False, default="auto")  # 008's typed intent (111)
-        if mode not in POST_MODES:
-            raise ApiRefused("invalid_field", f"mode must be one of {', '.join(POST_MODES)}")
-        self.runner.post(chat, self.player_handle, text, mode=mode)
+        self.runner.post(chat, self.player_handle, text)
         return self._scene(chat)
 
     def _generate(self, args: Mapping[str, object]) -> dict:
