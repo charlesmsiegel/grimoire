@@ -200,6 +200,7 @@ test("a raw draft lays its own keys over a newer head", () => {
   assert.deepEqual([merged.mine, merged.changed, merged.conflicts], [["a"], ["c"], []]);
   assert.deepEqual(rebaseRaw({ ...r2, payload: { a: 3, b: { x: 1 } } }, draft).conflicts, ["a"]);
   assert.ok(rebaseRaw(r2, { ...draft, text: "{" }).error);
+  assert.match(rebaseRaw(r2, { ...draft, text: '{"a":1e400,"b":{"x":1}}' }).error, /too large/);
   // any JSON key is a key, "__proto__" included
   const odd = { base: "r1", start: JSON.stringify({ name: "A" }), text: '{"name":"A","__proto__":{"extension":true}}' };
   const kept = rebaseRaw({ family: "other", head: "r2", payload: { name: "A", description: "B" } }, odd);

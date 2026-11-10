@@ -308,6 +308,9 @@ export function rebaseRaw(read, draft) {
   let mine;
   try { mine = JSON.parse(draft.text); } catch (error) { return { error: "Your draft is not JSON: " + error.message }; }
   if (!mine || typeof mine !== "object" || Array.isArray(mine)) return { error: "Your draft is not a JSON object." };
+  // read into JavaScript such a number is already changed (1e400 is Infinity, written back as null): the draft
+  // is shown as typed, to correct, and is never laid over the head in its changed form
+  if (unsafeNumbers(mine)) return { error: "Your draft holds a number too large to be kept exactly; correct it before it can be kept." };
   const start = JSON.parse(draft.start);
   const head = read.payload || {};
   // Keys are read and written as own properties only, so any JSON key ("__proto__", "constructor") is kept as one.
