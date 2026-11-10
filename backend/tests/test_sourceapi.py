@@ -61,8 +61,9 @@ def two_maras(api):
 
 def edit(api, ref, op, **args):
     """``op`` on the head of ``ref``'s entity, naming what a client just read."""
-    read = api.call("sources.read", {"ref": ref})
-    return api.call(op, {"ref": read["entity"], "expected": read["manifest_etag"], "head": read["head"], **args})
+    read = api.call("sources.read", {"ref": str(SourceRef.parse(ref).unpinned())})
+    return api.call(op, {"ref": read["entity"], "expected": read["manifest_etag"], "head": read["head"],
+                         "etag": read["etag"], **args})
 
 
 def states(read):
@@ -148,7 +149,7 @@ def test_a_stale_edit_is_refused_and_writes_nothing(api, store):
     before = files_of(store.root)
     for op, extra in (("sources.save", {"fields": {"description": "Mine."}}),
                       ("sources.save_raw", {"payload": {"name": "Mara", "traits": []}})):
-        stale = refused(api, op, ref=read["entity"], expected=read["manifest_etag"], head=read["head"], **extra)
+        stale = refused(api, op, ref=read["entity"], expected=read["manifest_etag"], head=read["head"], etag=read["etag"], **extra)
         assert stale.reason == "changed" and stale.status == 409
     stale = refused(api, "sources.create", source=GOTHIC, kind="character", expected=read["manifest_etag"],
                     fields={"name": "Wren"})
@@ -161,7 +162,7 @@ def test_another_sources_edit_does_not_make_this_one_stale(api):
     read = api.call("sources.read", {"ref": gothic["ref"]})
     edit(api, modern["ref"], "sources.save", fields={"description": "A courier at night."})
     saved = api.call("sources.save", {"ref": read["entity"], "expected": read["manifest_etag"], "head": read["head"],
-                                      "fields": {"description": "Mine."}})
+                                      "etag": read["etag"], "fields": {"description": "Mine."}})
     assert saved["ref"] == "catalog:gothic/character/mara@r2"
 
 
@@ -198,8 +199,8 @@ def test_a_clear_of_something_not_inherited_is_refused_up_front(api):
 
 
 def _head(api, ref):
-    read = api.call("sources.read", {"ref": ref})
-    return {"ref": read["entity"], "expected": read["manifest_etag"], "head": read["head"]}
+    read = api.call("sources.read", {"ref": str(SourceRef.parse(ref).unpinned())})
+    return {"ref": read["entity"], "expected": read["manifest_etag"], "head": read["head"], "etag": read["etag"]}
 
 
 def test_an_old_revision_is_read_exactly_but_not_edited(api):
@@ -230,7 +231,7 @@ def test_the_raw_editor_keeps_unknown_fields_and_the_structured_one_keeps_them_t
     read = api.call("sources.read", {"ref": gothic["ref"]})
     payload = {**read["payload"], "x_custom": {"keep": [1, 2, "three"]}}
     raw = api.call("sources.save_raw", {"ref": read["entity"], "expected": read["manifest_etag"], "head": read["head"],
-                                        "payload": payload})
+                                        "etag": read["etag"], "payload": payload})
     assert api.call("sources.read", {"ref": raw["ref"]})["payload"] == payload
     saved = edit(api, gothic["ref"], "sources.save", fields={"description": "Edited in the form."})
     after = api.call("sources.read", {"ref": saved["ref"]})
@@ -344,7 +345,7 @@ def test_a_scenario_with_odd_raw_keys_is_edited_without_a_crash_or_a_lost_key(ap
     read = api.call("sources.read", {"ref": str(STORM)})
     odd = {**read["payload"], "openings": [{"id": ["x"], "text": "a"}], "roles": ["custom"]}
     raw = api.call("sources.save_raw", {"ref": read["entity"], "expected": read["manifest_etag"],
-                                        "head": read["head"], "payload": odd})
+                                        "head": read["head"], "etag": read["etag"], "payload": odd})
     titled = edit(api, raw["ref"], "sources.save", fields={"title": "Storm, again"})
     assert api.call("sources.read", {"ref": titled["ref"]})["payload"]["roles"] == ["custom"]
     assert refused(api, "sources.save", **_head(api, str(STORM)),
@@ -376,7 +377,7 @@ def test_an_older_revision_is_never_saved_over_the_head(api, store):
     old = api.call("sources.read", {"ref": gothic["ref"]})  # r1, with the head's tokens
     before = files_of(store.root)
     for op, extra in (("sources.save_raw", {"payload": old["payload"]}), ("sources.save", {"fields": {"name": "M"}})):
-        assert refused(api, op, ref=old["ref"], expected=old["manifest_etag"], head=old["head"], **extra).reason \
+        assert refused(api, op, ref=old["ref"], expected=old["manifest_etag"], head=old["head"], etag=old["etag"], **extra).reason \
             == "not_head"
     assert files_of(store.root) == before
 
@@ -401,3 +402,76 @@ def test_a_lore_entrys_constant_flag_is_the_one_the_lore_reader_reads(api, store
                                                                          "content": entry["content"], "constant": False}]})
     edited = api.call("sources.read", {"ref": saved["ref"]})["payload"]["entries"][0]
     assert edited["settings"] == {"constant": False} and _entry(0, edited).constant is False
+
+
+# -- Codex round 2: envelope fields, schema-less records, attach refusals, hand edits ----------------------
+
+def _record_file(store, ref):
+    source = SourceRef.parse(ref)
+    namespace, name = source.source.split(":", 1)
+    return (store.root / "sources" / namespace / name / "_source" / "records" / source.kind / source.entity_id
+            / f"{source.revision}.json")
+
+
+def _hand_edit(store, ref, change):
+    path = _record_file(store, ref)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    change(record)
+    path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def test_an_edit_keeps_the_heads_other_envelope_fields(api, store):
+    gothic, _modern = two_maras(api)
+    _hand_edit(store, gothic["ref"], lambda record: record.update({"x-author-note": {"draft": True}}))
+    for op, extra in (("sources.save", {"fields": {"description": "Kept the note."}}),
+                      ("sources.save_raw", {"payload": {"name": "Mara", "nature": "individual", "traits": []}})):
+        saved = edit(api, gothic["ref"], op, **extra)
+        envelope = api.call("sources.read", {"ref": saved["ref"]})["envelope"]["extra"]
+        assert envelope == {"schema": "grimoire.entity/0", "x-author-note": {"draft": True}}
+    derived = api.call("sources.derive", {"base": "catalog:gothic/character/mara@r3", "source": GOTHIC,
+                                          "expected": api.call("sources.read", {"ref": gothic["ref"]})["manifest_etag"]})
+    _hand_edit(store, derived["ref"], lambda record: record.update({"x-tag": "night"}))
+    overridden = edit(api, derived["ref"], "sources.portrayal", edit="override_description", text="Pale.")
+    assert api.call("sources.read", {"ref": overridden["ref"]})["envelope"]["extra"]["x-tag"] == "night"
+
+
+def test_a_schema_less_record_is_saved_raw_without_one(api, store):
+    gothic, _modern = two_maras(api)
+    _hand_edit(store, gothic["ref"], lambda record: record.pop("schema"))
+    read = api.call("sources.read", {"ref": gothic["ref"]})
+    assert read["family"] == "other" and read["schema"] is None
+    saved = edit(api, gothic["ref"], "sources.save_raw", payload={"anything": ["goes", 1]})
+    after = api.call("sources.read", {"ref": saved["ref"]})
+    assert after["family"] == "other" and after["schema"] is None and after["payload"] == {"anything": ["goes", 1]}
+    assert "schema" not in json.loads(_record_file(store, saved["ref"]).read_text(encoding="utf-8"))
+    assert refused(api, "sources.save", **_head(api, gothic["ref"]), fields={"name": "x"}).reason \
+        == "no_structured_editor"
+
+
+def test_a_hand_edit_of_the_head_after_the_read_is_a_stale_write(api, store):
+    gothic, _modern = two_maras(api)
+    read = api.call("sources.read", {"ref": "catalog:gothic/character/mara"})
+    _hand_edit(store, gothic["ref"], lambda record: record["payload"].update({"description": "Edited by hand."}))
+    before = files_of(store.root)
+    for op, extra in (("sources.save", {"fields": {"description": "Mine."}}),
+                      ("sources.save_raw", {"payload": read["payload"]})):
+        assert refused(api, op, ref=read["entity"], expected=read["manifest_etag"], head=read["head"],
+                       etag=read["etag"], **extra).reason == "changed"
+    assert files_of(store.root) == before
+    # read again and the edit goes on top of the hand edit
+    saved = edit(api, gothic["ref"], "sources.save", fields={"sections": {"history": "Kept."}})
+    assert api.call("sources.read", {"ref": saved["ref"]})["payload"]["description"] == "Edited by hand."
+
+
+def test_an_attach_the_chat_refuses_is_a_refusal_with_its_reason(api):
+    gothic, _modern = two_maras(api)
+    api.chats.start_chat(Launch("premise", premise="A night on the quay.")).commit()
+    target = api.call("sources.chats", {})["chats"][0]
+    attached = api.call("sources.attach", {"ref": gothic["ref"], "chat": target["chat"], "expected": target["etag"]})
+    again = refused(api, "sources.attach", ref=gothic["ref"], chat=target["chat"], expected=attached["etag"])
+    assert again.reason == "duplicate_binding"
+
+
+def test_a_character_made_here_is_said_to_need_a_voice_profile(api):
+    gothic, _modern = two_maras(api)
+    assert "voice" in api.call("sources.read", {"ref": gothic["ref"]})["unavailable"]

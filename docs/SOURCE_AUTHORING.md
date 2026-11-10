@@ -8,8 +8,9 @@ editor: only the importers (026, 037) wrote definitions. This module is the narr
 not already define:
 
 - **Revisions are immutable** (010). Every edit writes a *new* revision `r<n+1>` and moves the entity's head in the
-  source manifest, in one guarded transaction. The manifest is written at the etag the editor read, so an edit made
-  from a stale read is refused and writes nothing.
+  source manifest, in one guarded transaction. The manifest is written at the etag the editor read, and the head
+  record must still have the etag the editor read, so an edit made from a stale read, or over a head whose file was
+  edited by hand since, is refused and writes nothing.
 - **A derived portrayal** is 022's delta: a payload `derivation` with a pinned base, plus a `derived_variant` link
   that the portrayal's own source declares for its exact revision. One-field overrides, typed clears and resets are
   046's pure helpers ([INHERITANCE](INHERITANCE.md)); what a revision composes to, field by field, is 046's
@@ -22,8 +23,8 @@ Nothing is matched by name, no model is called and no campaign record is written
 ```python
 api = SourceApi(store, authority, owner="human:owner")
 read = api.call("sources.read", {"ref": "catalog:gothic/character/mara"})
-api.call("sources.save", {"ref": read["entity"], "head": read["head"], "expected": read["manifest_etag"],
-                          "fields": {"description": "A lamplighter of the quay."}})
+api.call("sources.save", {"ref": read["entity"], "head": read["head"], "etag": read["etag"],
+                          "expected": read["manifest_etag"], "fields": {"description": "A lamplighter of the quay."}})
 ```
 
 ## Families
@@ -42,8 +43,9 @@ A world is a source (`world:...`), not a record. Its locations, items and charac
 **Unknown fields are kept.** A structured edit starts from the head's payload and changes only the keys it names.
 An opening keeps its other keys by `id`, and a lorebook entry that names the `index` of an entry in the head keeps
 that entry's settings, extensions and extras. The **raw editor** (`sources.save_raw`) writes a payload exactly as
-given, in the record's own schema. An entity payload must still decode (009), and a scenario's lorebook must still
-be a pinned lorebook ref.
+given, in the record's own schema (a record that has none keeps having none). An entity payload must still decode
+(009), and a scenario's lorebook must still be a pinned lorebook ref. Every edit, structured, raw or portrayal, keeps
+the head's other envelope fields (STORAGE's preserved unknown keys) on the new revision.
 
 A blank description or an empty section in the structured editor is left out of the payload. On a **portrayal**
 the structured editor goes through 046's helpers: a description or section it is given is an override (which also
@@ -60,7 +62,7 @@ than the base's (`nature_mismatch`), a chain that is too deep, a malformed deriv
 
 Every ref is passed and returned in its own string form, so a client hands it back unchanged. Every write names
 `expected`: the etag of the source manifest that the client read. Edits of an existing entity also name `head`,
-the revision they replace.
+the revision they replace, and `etag`, that head record's own etag from `sources.read` of the entity.
 
 | Op | Arguments | Result |
 |---|---|---|
@@ -69,10 +71,10 @@ the revision they replace.
 | `sources.create_source` | `source`, `title?` | `source`, `manifest_etag` |
 | `sources.rename_source` | `source`, `title?`, `expected` | `source`, `manifest_etag` |
 | `sources.create` | `source`, `kind`, `fields`, `id?`, `expected` | `ref` (the new `r1`), `manifest_etag` |
-| `sources.save` | `ref`, `fields`, `head`, `expected` | the new revision's `ref`, `manifest_etag` |
-| `sources.save_raw` | `ref`, `payload`, `head`, `expected` | the new revision's `ref`, `manifest_etag` |
+| `sources.save` | `ref`, `fields`, `head`, `etag`, `expected` | the new revision's `ref`, `manifest_etag` |
+| `sources.save_raw` | `ref`, `payload`, `head`, `etag`, `expected` | the new revision's `ref`, `manifest_etag` |
 | `sources.derive` | `base` (unpinned is pinned to its head now), `source`, `id?`, `name?`, `expected` (of `source`) | the portrayal's `ref` (`r1`), `manifest_etag` |
-| `sources.portrayal` | `ref`, `edit`, `name?` (a section or facet), `text?` (an override), `head`, `expected` | the new revision's `ref`, `manifest_etag` |
+| `sources.portrayal` | `ref`, `edit`, `name?` (a section or facet), `text?` (an override), `head`, `etag`, `expected` | the new revision's `ref`, `manifest_etag` |
 | `sources.chats` | `limit?` | recent `chats`, each with the `etag` an attach must name |
 | `sources.attach` | `ref` (pinned), `chat`, `expected` (the chat's etag) | `chat`, `ref`, `role`, the chat's new `etag`, the new `actors` |
 
@@ -93,7 +95,7 @@ Every refusal is 044's `ApiRefused`, and nothing was written.
 
 | Reason | Meaning |
 |---|---|
-| `changed` | The source manifest or the head changed since the client read it. The client keeps its draft, reads again, shows the difference and retries. |
+| `changed` | The source manifest, the head or the head record changed since the client read it. The client keeps its draft, reads again, shows the difference and retries. |
 | `not_head` | An edit named an older revision; only the head is edited. |
 | `stale_clear` | A clear of something the revision does not inherit (it is already local, cleared or missing). |
 | `reserved_namespace` | A new source in the `card:` namespace, which the card importer owns. Records of card sources can be edited. |
@@ -101,6 +103,7 @@ Every refusal is 044's `ApiRefused`, and nothing was written.
 | `import_record_read_only` | The `card-import` record is written only by its importer. |
 | `no_structured_editor` | The record's family has no structured editor; use the raw editor. |
 | `not_attachable`, `no_chat` | The kind cannot be attached to a chat, or the chat does not exist. |
+| `duplicate_binding`, `binding_limit` and the chat model's other reasons | The chat refuses the binding (107): that revision is already bound, or the chat is full. |
 | `invalid_field`, `invalid_sections`, `invalid_derivation`, `invalid_payload` and 009's codec reasons | A malformed argument or payload. |
 | `missing_base`, `clear_and_set`, `nature_mismatch`, `chain_too_deep` and 022's other reasons | The new revision would not compose. |
 | `invalid_envelope`, `invalid_source_state` and the store's other refusals | The store refused the transaction (a derivation cycle, a payload nested too deep...): the error's class name in snake case. |
@@ -117,6 +120,9 @@ them:
 - **Typed relations** between actors, which are campaign state (017). A source declares only derivation links here.
 - **Abilities and other facets with fields**, edited in the raw editor.
 - **Moving a chat to a newer revision**, a reviewed rebase (042) done from the chat.
+- **Voices for characters made here.** A character speaks in play from an authored voice profile (014, 027), or,
+  if it was imported, from its own imported text. Voice profiles are not authored in the library yet, so a
+  character created here can be attached but is not yet a speaker.
 
 Only the head revision is edited. An older revision is read exactly and can still be attached.
 

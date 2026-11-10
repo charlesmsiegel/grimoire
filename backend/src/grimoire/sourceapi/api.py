@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from collections.abc import Callable, Mapping
 
 from grimoire.cards import IMPORT_KIND
+from grimoire.chats import ChatModelError
 from grimoire.chatstore import ChatLibrary, InvalidBinding
 from grimoire.core.identity import ChatRef, SourceRef
 from grimoire.core.index import MissingDefinition
@@ -52,6 +53,9 @@ UNAVAILABLE = {
                  "links here.",
     "abilities": "Abilities and other facets with fields are edited in the raw editor.",
     "rebase": "Moving a chat to a newer revision is a reviewed rebase (042), done from the chat.",
+    "voice": "A character made here speaks in play only once a voice profile is authored for it (014, 027); "
+             "voice profiles are not authored in the library yet. Imported characters speak from their own "
+             "imported text.",
 }
 
 
@@ -137,7 +141,7 @@ class SourceApi:
                 raise
             except AuthoringRefused as error:
                 raise ApiRefused(error.reason, str(error)) from None
-            except InvalidBinding as error:
+            except (InvalidBinding, ChatModelError) as error:  # a binding the chat refuses, its limits included
                 raise ApiRefused(getattr(error, "reason", "invalid_binding") or "invalid_binding", str(error)) from None
             except StaleWrite as error:
                 raise ApiRefused("changed", f"the library changed meanwhile; nothing was written ({error})") from None
@@ -302,11 +306,11 @@ class SourceApi:
 
     def _save(self, args: Mapping[str, object]) -> dict:
         return _written(self.authoring.save(_ref(args), _field(args, "fields", dict), expected=_etag(args),
-                                            head=_field(args, "head", str)))
+                                            head=_field(args, "head", str), etag=_etag(args, "etag")))
 
     def _save_raw(self, args: Mapping[str, object]) -> dict:
         return _written(self.authoring.save_raw(_ref(args), _field(args, "payload", dict), expected=_etag(args),
-                                                head=_field(args, "head", str)))
+                                                head=_field(args, "head", str), etag=_etag(args, "etag")))
 
     def _derive(self, args: Mapping[str, object]) -> dict:
         return _written(self.authoring.derive(_ref(args, "base"), _field(args, "source", str), expected=_etag(args),
@@ -315,7 +319,7 @@ class SourceApi:
 
     def _portrayal(self, args: Mapping[str, object]) -> dict:
         return _written(self.authoring.edit_portrayal(_ref(args), _field(args, "edit", str), expected=_etag(args),
-                                                      head=_field(args, "head", str),
+                                                      head=_field(args, "head", str), etag=_etag(args, "etag"),
                                                       name=_field(args, "name", str, required=False),
                                                       text=_field(args, "text", str, required=False)))
 

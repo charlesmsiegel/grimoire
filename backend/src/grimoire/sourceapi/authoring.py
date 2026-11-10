@@ -231,27 +231,29 @@ class SourceAuthoring:
         payload = self._apply_fields(family, {}, fields, derived=False)
         entity_id = self._new_id(source_id, entity_id, self._display_name(family, payload), kind)
         ref = SourceRef(source_id, kind, entity_id, "r1")
-        return self._write(stored, ref, family, payload)
+        return self._write(stored, ref, family, payload, SCHEMA_OF[family])
 
-    def save(self, ref: SourceRef, fields: Mapping[str, object], *, expected: str, head: str) -> Written:
+    def save(self, ref: SourceRef, fields: Mapping[str, object], *, expected: str, head: str, etag: str) -> Written:
         """A new revision of ``ref``'s entity with the structured ``fields`` changed and everything else kept."""
-        stored, current = self._editable(ref, expected, head)
+        stored, current = self._editable(ref, expected, head, etag)
         family = family_of_schema(_schema(current))
         payload = _plain(current.envelope.payload)
         if not isinstance(payload, dict):
             raise AuthoringRefused("invalid_payload", f"{current.ref}'s payload is not an object; use the raw editor")
         payload = self._apply_fields(family, payload, fields, derived="derivation" in payload)
-        return self._write(stored, self._next(current.ref), family, payload)
+        return self._write(stored, self._next(current.ref), family, payload, _schema(current),
+                           current.envelope.extra)
 
-    def save_raw(self, ref: SourceRef, payload: object, *, expected: str, head: str) -> Written:
-        """A new revision holding ``payload`` exactly as given (unknown fields included); its schema is the
-        entity's own. An entity payload must decode (009); a scenario's lorebook must be a pinned ref."""
-        stored, current = self._editable(ref, expected, head)
+    def save_raw(self, ref: SourceRef, payload: object, *, expected: str, head: str, etag: str) -> Written:
+        """A new revision holding ``payload`` exactly as given (unknown fields included); its schema, or the
+        absence of one, and its other envelope fields are the head's own. An entity payload must decode (009);
+        a scenario's lorebook must be a pinned ref."""
+        stored, current = self._editable(ref, expected, head, etag)
         family = family_of_schema(_schema(current))
         if not isinstance(payload, dict):
             raise AuthoringRefused("invalid_payload", "a record's payload must be a JSON object")
-        return self._write(stored, self._next(current.ref), family, payload,
-                           schema=_schema(current) if family == OTHER else None)
+        return self._write(stored, self._next(current.ref), family, payload, _schema(current),
+                           current.envelope.extra)
 
     def derive(self, base: SourceRef, source_id: str, *, expected: str, entity_id: str | None = None,
                name: str | None = None) -> Written:
@@ -279,16 +281,17 @@ class SourceAuthoring:
                    "derivation": {"base": str(base)}}
         if stored.etag != expected:
             raise StaleWrite([(source_id, "changed")])
-        return self._write(stored, SourceRef(source_id, base.kind, entity_id, "r1"), ENTITY, payload)
+        return self._write(stored, SourceRef(source_id, base.kind, entity_id, "r1"), ENTITY, payload,
+                           ENTITY_SCHEMA)
 
-    def edit_portrayal(self, ref: SourceRef, edit: str, *, expected: str, head: str, name: str | None = None,
-                       text: str | None = None) -> Written:
+    def edit_portrayal(self, ref: SourceRef, edit: str, *, expected: str, head: str, etag: str,
+                       name: str | None = None, text: str | None = None) -> Written:
         """One 046 field edit of a derived portrayal as its next revision: override, typed clear or reset of a
         section, the description or a facet. A clear of something the portrayal does not inherit is refused
         here (``stale_clear``) rather than written and refused on composition."""
         if edit not in PORTRAYAL_EDITS:
             raise AuthoringRefused("invalid_field", f"edit must be one of {', '.join(sorted(PORTRAYAL_EDITS))}")
-        stored, current = self._editable(ref, expected, head)
+        stored, current = self._editable(ref, expected, head, etag)
         payload = _plain(current.envelope.payload)
         if family_of_schema(_schema(current)) != ENTITY or not isinstance(payload, dict):
             raise AuthoringRefused("not_derived", f"{current.ref} is not a derived portrayal")
@@ -309,7 +312,8 @@ class SourceAuthoring:
                                                       f"editor ({error})") from None
         if edit == "override_section" and not section_ok(args[1], args[2]):  # type: ignore[arg-type]
             raise AuthoringRefused("invalid_sections", "that section text is not one 022 composes")
-        return self._write(stored, self._next(current.ref), ENTITY, edited)
+        return self._write(stored, self._next(current.ref), ENTITY, edited, _schema(current),
+                           current.envelope.extra)
 
     # -- internals -------------------------------------------------------------------------------------------
     def _source(self, source_id: str):  # type: ignore[no-untyped-def]
@@ -322,16 +326,17 @@ class SourceAuthoring:
             raise AuthoringRefused(found, f"{source_id} cannot be edited ({found})")
         return found
 
-    def _editable(self, ref: SourceRef, expected: str, head: str) -> tuple[Any, StoredDefinition]:
+    def _editable(self, ref: SourceRef, expected: str, head: str, etag: str) -> tuple[Any, StoredDefinition]:
         """The source and the head revision an edit replaces, checked against what the editor read: another
-        head, or another manifest, is ``StaleWrite`` and nothing is written (the client keeps its draft)."""
+        head, another manifest or another head record (``etag``: its canonical file edited by hand since) is
+        ``StaleWrite`` and nothing is written (the client keeps its draft)."""
         stored = self._source(ref.source)
         if ref.kind == IMPORT_KIND:
             raise AuthoringRefused("import_record_read_only", "an import record is written only by its importer")
         current = self.head(self.load(), ref.unpinned())
         if ref.pinned and ref.revision != current.ref.revision:
             raise AuthoringRefused("not_head", f"{ref} is an older revision; only the head ({current.ref}) is edited")
-        if current.ref.revision != head or stored.etag != expected:
+        if current.ref.revision != head or stored.etag != expected or current.etag != etag:
             raise StaleWrite([(str(ref.unpinned()), "changed")])
         return stored, current
 
@@ -383,8 +388,9 @@ class SourceAuthoring:
         return apply(payload, fields, derived)
 
     def _write(self, stored, ref: SourceRef, family: str, payload: dict,  # type: ignore[no-untyped-def]
-               schema: object = None) -> Written:
-        schema = schema if schema is not None else SCHEMA_OF[family]
+               schema: object, carried: Mapping[str, object] | None = None) -> Written:
+        """Write ``payload`` as ``ref`` and move its head. ``schema`` is the record's own (``None``: it has
+        none, kept absent); ``carried`` is the replaced head's envelope fields, kept on the new revision."""
         name = _validate(ref, family, schema, payload)
         manifest = stored.manifest
         heads = dict(manifest.heads)
@@ -398,7 +404,10 @@ class SourceAuthoring:
                 links.append(link)
         if family == ENTITY:
             self._require_composes(ref, payload, link if isinstance(derivation, Mapping) else None)
-        envelope = RecordEnvelope(ref, payload, name=name, owner=self.owner, extra={"schema": schema})
+        extra = {key: value for key, value in (carried or {}).items() if key != "schema"}
+        if schema is not None:
+            extra["schema"] = schema
+        envelope = RecordEnvelope(ref, payload, name=name, owner=self.owner, extra=extra)
         transaction = self.store.transaction()
         transaction.put(envelope, None)
         transaction.put(SourceManifest(manifest.source, manifest.owner, manifest.title, heads, tuple(links),
