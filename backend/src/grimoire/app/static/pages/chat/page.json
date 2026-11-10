@@ -1,0 +1,11 @@
+{
+  "contract": 1,
+  "id": "chat",
+  "route": "chat",
+  "title": "Chat",
+  "slot": "hidden",
+  "order": 0,
+  "owner": "111",
+  "entry": "page.js",
+  "requires": ["open", "post", "keep", "pass", "continue", "pause", "resume", "choose", "resolve", "add_art"]
+}

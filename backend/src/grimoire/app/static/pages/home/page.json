@@ -1,0 +1,11 @@
+{
+  "contract": 1,
+  "id": "home",
+  "route": "home",
+  "title": "Home",
+  "slot": "home",
+  "order": 0,
+  "owner": "108",
+  "entry": "page.js",
+  "requires": ["library"]
+}

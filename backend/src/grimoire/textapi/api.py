@@ -78,7 +78,9 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
-def _field(args: Mapping[str, object], key: str, kind: type, *, required: bool = True, default=None):  # type: ignore[no-untyped-def]
+def field(args: Mapping[str, object], key: str, kind: type, *, required: bool = True, default=None):  # type: ignore[no-untyped-def]
+    """``args[key]`` as exactly ``kind`` (``bool`` is not an ``int``), else ``invalid_field``. Shared with the app's
+    adapter ops (108) so every op checks its fields the same way."""
     value = args.get(key, default)
     if value is None and not required:
         return default
@@ -87,8 +89,10 @@ def _field(args: Mapping[str, object], key: str, kind: type, *, required: bool =
     return value
 
 
-def _parse(parse: Callable[[str], object], args: Mapping[str, object], key: str, *, required: bool = True):  # type: ignore[no-untyped-def]
-    text = _field(args, key, str, required=required)
+def parse_ref(parse: Callable[[str], object], args: Mapping[str, object], key: str, *, required: bool = True):  # type: ignore[no-untyped-def]
+    """``args[key]`` parsed by an owning backend's own parser (``SourceRef.parse``, ``ChatRef.parse``...), else
+    ``invalid_field``: a reference travels as its canonical string and is never guessed from a name."""
+    text = field(args, key, str, required=required)
     if text is None:
         return None
     try:
@@ -151,6 +155,12 @@ class TextApi:
             args = {}
         if not isinstance(args, Mapping):
             raise ApiRefused("invalid_field", "the arguments must be a JSON object")
+        return self.serialized(handler, args)
+
+    def serialized(self, handler: Callable[[Mapping[str, object]], dict], args: Mapping[str, object]) -> dict:
+        """Run ``handler(args)`` as an op: under this library's one writer lock, with each service's refusal
+        turned into ``ApiRefused`` exactly as for the core ops. 108's app adapters (``grimoire.app.adapters``)
+        run through this, so an adapter op can never write beside a core op or answer a refusal differently."""
         with self._lock:
             try:
                 return handler(args)
@@ -218,8 +228,8 @@ class TextApi:
         return lines or ()
 
     def _chats(self, args: Mapping[str, object]) -> dict:
-        which = _field(args, "filter", str, required=False, default="recent")
-        limit = _field(args, "limit", int, required=False, default=50)
+        which = field(args, "filter", str, required=False, default="recent")
+        limit = field(args, "limit", int, required=False, default=50)
         if isinstance(limit, bool) or not 1 <= limit <= MAX_LIMIT:
             raise ApiRefused("invalid_field", f"limit must be 1 to {MAX_LIMIT}")
         view = self.store.load()
@@ -227,7 +237,7 @@ class TextApi:
         if which == "recent":
             found = index.recent(limit)
         elif which in FILTER_ROLES:
-            source = _parse(SourceRef.parse, args, "source")
+            source = parse_ref(SourceRef.parse, args, "source")
             if source.pinned:  # a pinned ref would find only the chats bound to that one revision
                 source = source.unpinned()
             matched = {ref for role in FILTER_ROLES[which] for ref in index.by_source(source, role=role)}
@@ -250,7 +260,7 @@ class TextApi:
         return {"filter": which, "chats": chats, "sources": filter_sources(entries, names)}
 
     def _chat(self, args: Mapping[str, object]) -> ChatRef:
-        return _parse(ChatRef.parse, args, "chat")
+        return parse_ref(ChatRef.parse, args, "chat")
 
     def _conflicts(self, campaign: str) -> tuple[list[dict], bool]:
         """The campaign's files that a sync left in a keep-both conflict on this device, each with the etag of
@@ -339,7 +349,7 @@ class TextApi:
     # -- playing -----------------------------------------------------------------------------------------
     def _continue(self, args: Mapping[str, object]) -> dict:
         chat = self._chat(args)
-        opening = _field(args, "opening", str, required=False)
+        opening = field(args, "opening", str, required=False)
         started = self.quick.continue_chat(chat, self.player_handle, opening=opening)
         result = self._scene(chat)
         result["unfinished"] = started.unfinished
@@ -347,7 +357,7 @@ class TextApi:
 
     def _post(self, args: Mapping[str, object]) -> dict:
         chat = self._chat(args)
-        text = _field(args, "text", str)
+        text = field(args, "text", str)
         if len(text) > MAX_POST_CHARS:
             raise ApiRefused("invalid_field", f"a post is at most {MAX_POST_CHARS} characters")
         self.runner.post(chat, self.player_handle, text)
@@ -355,7 +365,7 @@ class TextApi:
 
     def _generate(self, args: Mapping[str, object]) -> dict:
         chat = self._chat(args)
-        director = _field(args, "director", bool, required=False, default=False)
+        director = field(args, "director", bool, required=False, default=False)
         speakers = args.get("speakers")
         if speakers is not None:
             if not isinstance(speakers, list) or not all(isinstance(item, str) for item in speakers):
@@ -369,21 +379,21 @@ class TextApi:
 
     def _keep(self, args: Mapping[str, object]) -> dict:
         chat = self._chat(args)
-        take = _field(args, "take", int)
+        take = field(args, "take", int)
         if isinstance(take, bool) or take < 1:
             raise ApiRefused("invalid_field", "take must be a take number")
         # take numbers restart on every turn: the turn the take was read on, so a late keep never keeps
         # another turn's take nobody read
-        turn = _field(args, "turn", str)
+        turn = field(args, "turn", str)
         # a director take that used lore no reply screen covered is kept only once the owner, who directs,
         # says so (035: ``unscreened_lore`` otherwise)
-        acknowledge = _field(args, "acknowledge_unscreened", bool, required=False, default=False)
+        acknowledge = field(args, "acknowledge_unscreened", bool, required=False, default=False)
         self.runner.keep(chat, self.player_handle, take, acknowledge_unscreened=acknowledge, turn=turn)
         return self._scene(chat)
 
     def _pass(self, args: Mapping[str, object]) -> dict:
         chat = self._chat(args)
-        turn = _field(args, "turn", str)  # the turn meant: a late pass never closes a newer one
+        turn = field(args, "turn", str)  # the turn meant: a late pass never closes a newer one
         self.runner.pass_turn(chat, self.player_handle, turn=turn)
         return self._scene(chat)
 
@@ -399,7 +409,7 @@ class TextApi:
 
     def _choose(self, args: Mapping[str, object]) -> dict:
         chat = self._chat(args)
-        turn = _field(args, "turn", str)
+        turn = field(args, "turn", str)
         self.runner.choose(chat, self.owner_handle, turn)
         return self._scene(chat)
 
@@ -420,9 +430,9 @@ class TextApi:
         038 batch with compare-and-swap on the slot. The image id is drawn fresh, so two devices adding
         pictures offline never write one image object with two contents."""
         chat = self._chat(args)
-        actor = _parse(InstanceRef.parse, args, "actor")
-        slot = _field(args, "slot", str, required=False, default=DEFAULT_SLOT)
-        media = _field(args, "media", str)
+        actor = parse_ref(InstanceRef.parse, args, "actor")
+        slot = field(args, "slot", str, required=False, default=DEFAULT_SLOT)
+        media = field(args, "media", str)
         if len(media) > (MAX_ART_BYTES // 3 + 1) * 4 + 4:
             raise ApiRefused("too_large", "a picture is at most 32 MiB")
         try:
@@ -443,7 +453,7 @@ class TextApi:
             target = PlacementRef(actor, slot)
         except ValueError as error:
             raise ApiRefused("invalid_field", f"slot: {error}") from None
-        expected = _field(args, "expected", str, required=False)
+        expected = field(args, "expected", str, required=False)
         if expected is not None and not is_etag(expected):
             raise ApiRefused("invalid_field", "expected must be the slot's etag as open gave it")
         conflicts, complete = self._conflicts(chat.campaign_id)
@@ -460,7 +470,7 @@ class TextApi:
 
     # -- sync ----------------------------------------------------------------------------------------------
     def _sync(self, args: Mapping[str, object]) -> dict:
-        peer = _field(args, "peer", str)
+        peer = field(args, "peer", str)
         address = self.peers.get(peer)
         if address is None:
             raise ApiRefused("unknown_peer", f"no address is configured for {peer!r}")
@@ -481,12 +491,12 @@ class TextApi:
         device's version) or ``theirs`` (the peer's version this device holds). Both devices must be
         reachable. ``mine`` and ``theirs`` name the versions the client read, as ``open`` reported them:
         anything since is refused ``changed``."""
-        peer = _field(args, "peer", str)
+        peer = field(args, "peer", str)
         address = self.peers.get(peer)
         if address is None:
             raise ApiRefused("unknown_peer", f"no address is configured for {peer!r}")
-        path = _field(args, "path", str)
-        keep = _field(args, "keep", str)
+        path = field(args, "path", str)
+        keep = field(args, "keep", str)
         parts = path.split("/")
         if len(parts) < 3 or parts[0] != "campaigns":
             raise ApiRefused("invalid_field", "path must be a campaign file that open reports in conflict")
@@ -539,4 +549,4 @@ class TextApi:
                 "receiver": report.receiver}
 
 
-__all__ = ["DEFAULT_SLOT", "MAX_ART_BYTES", "MAX_POST_CHARS", "TextApi"]
+__all__ = ["DEFAULT_SLOT", "MAX_ART_BYTES", "MAX_POST_CHARS", "TextApi", "field", "parse_ref"]

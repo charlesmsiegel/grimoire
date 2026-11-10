@@ -57,7 +57,7 @@ An SSH tunnel from Termux (`ssh -N -L 8765:127.0.0.1:8765 you@desktop`) works th
 python -m grimoire.app serve ~/grimoire-library --peer desktop=127.0.0.1:8765
 ```
 
-It prints `open http://127.0.0.1:8080/#token=...`. Open that address in the phone's browser. The token in the
+It prints `open http://127.0.0.1:8080/#token=...`. Open that address in the phone's browser. The page is the app's [shell](APP_SHELL.md): **Chats** is in its menu. The token in the
 address is this serve's key: a new one each time, kept only in that browser tab.
 
 - **Sync** brings the desktop's chats over the first time, and every later change both ways.
