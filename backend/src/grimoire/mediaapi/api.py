@@ -23,6 +23,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 
 from grimoire.chats.codec import ChatCodecError
+from grimoire.chats.navigation import MAX_RECENT
 from grimoire.core.identity import ChatRef, ImageRef, InstanceRef, PlacementRef, ScopeRef, SourceRef, TurnRef
 from grimoire.devicetag import DeviceIdentityUnusable, device_tag
 from grimoire.images import (
@@ -47,6 +48,7 @@ from grimoire.store.layout import classify, placement_parts
 from grimoire.store.replica import parse_exact
 from grimoire.sync import NoDeviceIdentity, SyncError, SyncInterrupted, device_of, identify
 from grimoire.sync.documents import check_device_id
+from grimoire.sync.keeps import other_peers
 from grimoire.sync.turns import open_conflicts
 from grimoire.textapi import ApiRefused, TextApi
 from grimoire.textapi.views import fork_view, set_aside_view, turn_view
@@ -61,7 +63,7 @@ MAX_NOTE_CHARS = 2000
 MAX_GALLERY = 1000
 GALLERY_PAGE = 200
 #: The most chats ``sync.forks`` opens, and the default.
-MAX_FORK_CHATS = 1000
+MAX_FORK_CHATS = MAX_RECENT - 1  # one more is read, to say whether there are more
 FORK_CHATS = 50
 #: The placement modes a person may write here. ``unresolved`` is an importer's record of a missing picture,
 #: never something the app writes: a person adds the picture instead.
@@ -185,6 +187,7 @@ class MediaSyncApi:
         self.images = text.images
         self.owner = text.owner
         self._new_id = new_id
+        self._paired: set[str] = set()  # peers paired here while this app runs, with or without an address
         # the text API's own lock (reentrant): one writer at a time across both, and its ``sync``, ``resolve``
         # and ``choose`` are called under it
         self._lock = text._lock  # noqa: SLF001 -- the one library's writer lock, shared on purpose
@@ -423,10 +426,10 @@ class MediaSyncApi:
             else:
                 if tag != expected:
                     raise ApiRefused("changed", f"{target.slot} changed since it was read: open it again")
-                if existing.mode == mode:
-                    return replace(existing, **fields)
-                # a new kind of placement: its old ``note`` (an importer's reason a picture is missing, say)
-                # no longer describes it, but where it came from (``legacy_id``, kept keys) still does
+                if existing.mode == mode and existing.image == image:
+                    return replace(existing, **fields)  # a re-crop of the same picture: its record still holds
+                # another picture or another kind of placement: its old ``note`` (an importer's reason a picture
+                # is missing, say) and ``origin`` no longer describe it, but its ``legacy_id`` and kept keys do
                 kept = {key: value for key, value in (existing.provenance or {}).items() if key != "note"}
                 return replace(existing, **fields, provenance={**kept, "origin": "placed in the app"})
         return Placement(**fields, provenance={"origin": "placed in the app"})
@@ -504,14 +507,21 @@ class MediaSyncApi:
         """This device's name, every configured peer (its address, whether it is paired, its last sync), what
         the transport can and cannot do, and the device actions the app does not offer yet."""
         device, problem = self._device()
+        known = set(self.text.peers) | self._paired
+        if device is not None:
+            try:
+                known |= set(other_peers(self.store, device))  # every device this one ever synced with
+            except (StoreError, OSError, SyncInterrupted):
+                pass
         peers = []
-        for peer, (host, port) in sorted(self.text.peers.items()):
+        for peer in sorted(known):
             try:
                 paired = read_pairing(self.store, peer) is not None
             except (StoreError, OSError, ValueError):
                 paired = False
-            peers.append({"peer": peer, "address": f"{host}:{port}", "paired": paired,
-                          "last": self.text.reports.get(peer)})
+            address = self.text.peers.get(peer)
+            peers.append({"peer": peer, "address": None if address is None else f"{address[0]}:{address[1]}",
+                          "paired": paired, "last": self.text.reports.get(peer)})
         return {"device": device, "device_problem": problem, "owner": self.owner, "peers": peers,
                 "transport": dict(TRANSPORT), "unavailable": [dict(item) for item in UNAVAILABLE]}
 
@@ -567,6 +577,7 @@ class MediaSyncApi:
             pair(self.store, self.authority, peer, key, granted_by=self.owner)
         except PairingError as error:
             raise ApiRefused("pairing_refused", str(error)) from None
+        self._paired.add(peer)
         if address is not None:
             self.text.peers[peer] = address
         return {"peer": peer, "device": device, "paired": True, "key": None if given is not None else key.hex(),
@@ -680,7 +691,8 @@ class MediaSyncApi:
         with its branches, and the turns any earlier choice set aside (heard by no one, 035)."""
         limit = _limit(args, FORK_CHATS, MAX_FORK_CHATS)
         found, problems = [], []
-        for chat in self.text.chats.navigation().recent(limit):
+        recent = self.text.chats.navigation().recent(limit + 1)
+        for chat in recent[:limit]:
             try:
                 scene = self.text.runner.open(chat)
             except (SceneRefused, StoreError, ChatCodecError, OSError, ValueError) as error:
@@ -690,7 +702,7 @@ class MediaSyncApi:
                 continue
             found.append({"chat": str(chat), "fork": fork_view(scene.turns.fork),
                           "set_aside": [set_aside_view(stored) for stored in scene.turns.set_aside]})
-        return {"forks": found, "problems": problems}
+        return {"forks": found, "more": len(recent) > limit, "problems": problems}
 
     def _choose(self, args: Mapping[str, object]) -> dict:
         """The owner's fork choice (044's ``choose``): ``turn`` is the first turn of the branch that goes on.

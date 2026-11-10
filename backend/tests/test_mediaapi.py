@@ -12,6 +12,8 @@ import socket
 import pytest
 from textapi_fixtures import DESKTOP, PHONE, Device, desktop_library, keep, pair_devices, phone_library, say, serving
 
+from grimoire.core.identity import ImageRef, SourceRef
+from grimoire.images import Placement
 from grimoire.mediaapi import MediaSyncApi
 from grimoire.peersync import read_pairing
 from grimoire.textapi import ApiRefused
@@ -155,7 +157,9 @@ def test_a_chat_forked_offline_lists_its_branches_and_the_choice_reports_the_bra
             mobile("generate", chat=chat)
             keep(mobile_device, chat)
             assert mobile("sync.run", peer=DESKTOP)["status"] == "synced"
-            (fork,) = mobile("sync.forks")["forks"]
+            forks = mobile("sync.forks")
+            assert forks["more"] is False
+            (fork,) = forks["forks"]
             assert fork["chat"] == chat and len(fork["fork"]["branches"]) == 2
             chosen, other = fork["fork"]["branches"]
             result = mobile("sync.choose", chat=chat, turn=chosen["head"])
@@ -338,6 +342,8 @@ def test_a_new_library_is_named_and_paired_from_the_app_and_then_syncs(tmp_path)
         assert len(shown["key"]) == 64 and shown["device"] == DESKTOP
         # pairing a paired device again would end its key: it must be asked for
         assert _refused(desktop, "sync.pair", peer="laptop").reason == "already_paired"
+        # the desktop never dials the laptop, which dials it: still listed, with no address
+        assert desktop("sync.devices")["peers"] == [{"peer": "laptop", "address": None, "paired": True, "last": None}]
         with serving(desk_device) as server:
             host, port = server.address
             paired = other("sync.pair", peer=DESKTOP, key=shown["key"], address=f"{host}:{port}")
@@ -347,6 +353,8 @@ def test_a_new_library_is_named_and_paired_from_the_app_and_then_syncs(tmp_path)
             assert other("sync.run", peer=DESKTOP)["status"] == "synced"
             assert other("chats")["chats"] and str(card_chat) in {item["chat"] for item in other("chats")["chats"]}
             assert other("sync.devices")["peers"][0]["last"]["status"] == "synced"
+        # after the app restarts, the device it synced with is still listed
+        assert [peer["peer"] for peer in Both(desk_device)("sync.devices")["peers"]] == ["laptop"]
 
 
 def test_an_unreachable_peer_leaves_every_local_picture_and_chat_in_place(synced):
@@ -388,3 +396,25 @@ def test_keeping_mine_over_a_peers_deletion_reports_the_deletion_not_kept(synced
                                              "theirs": []})
         assert result["kept"] == mine["etag"]
         assert result["not_kept"] == [{"etag": None, "deleted": True, "preview": None, "holder": "another device"}]
+
+
+def test_placing_another_picture_over_an_imported_one_says_it_was_placed_here(synced):
+    _desk, phone, _chat = synced
+    with Device(phone) as device:
+        mobile = Both(device)
+        first = mobile("media.upload", scope="card:mara-vell", media=_media(PNG))["image"]["image"]
+        second = mobile("media.upload", scope="card:mara-vell", media=_media(OTHER_PNG))["image"]["image"]
+        batch = device.api.images.change()
+        batch.place(SourceRef.parse(MARA_CARD), "gallery2",
+                    Placement("set", "gallery", ImageRef.parse(first),
+                              provenance={"origin": "an importer", "note": "from the card", "legacy_id": "v1:arch:assets/x.json"}), None)
+        batch.commit()
+        art = mobile("media.art", subject=MARA_CARD)
+        art = mobile("media.place", subject=MARA_CARD, slot="gallery2", mode="set", image=first,
+                     crop={"x": 0, "y": 0, "w": 5000, "h": 5000}, expected=_own(art, "gallery2")["etag"])
+        assert _own(art, "gallery2")["provenance"]["note"] == "from the card"  # a re-crop keeps its record
+        art = mobile("media.place", subject=MARA_CARD, slot="gallery2", mode="set", image=second,
+                     expected=_own(art, "gallery2")["etag"])
+        provenance = _own(art, "gallery2")["provenance"]
+        assert (provenance["origin"], provenance["note"], provenance["legacy_id"]) == \
+            ("placed in the app", None, "v1:arch:assets/x.json")

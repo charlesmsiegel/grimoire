@@ -63,7 +63,8 @@ there. A slot that changed since it was read is refused `changed` (409). An uplo
 the new picture in the same 038 batch, so a refused placement leaves no picture behind. A new picture's id is
 drawn fresh and qualified by this device's tag, so two devices adding pictures offline never write one image
 with two contents. Rewriting a placement keeps its unknown fields and provenance; changing its mode drops its
-old `note` and records `origin: placed in the app`. `crop` is `{x, y, w, h}` and `focus` is `{x, y}`, in
+old `note` and records `origin: placed in the app`, and so does placing another picture; re-cropping the same
+picture keeps its record. `crop` is `{x, y, w, h}` and `focus` is `{x, y}`, in
 integer basis points (0 to 10000).
 
 **Conflicted slots.** A slot of an instance that a sync left in conflict is listed in `conflicts`, and every
@@ -81,12 +82,16 @@ is refused.
 | `sync.run` | `peer` | the text API's `sync` report |
 | `sync.conflicts` | none | `conflicts` with `mine` and every `theirs`, and campaigns whose records are `unknown` |
 | `sync.resolve` | `peer`, `path`, `keep`, `mine`, `theirs` | the text API's report with `kept` and `not_kept` |
-| `sync.forks` | `limit` (1 to 1000, default 50) | recent chats waiting on a fork choice, with what was set aside |
+| `sync.forks` | `limit` (1 to 999, default 50) | recent chats waiting on a fork choice, with what was set aside, and `more` |
 | `sync.choose` | `chat`, `turn` | the fork, `set_aside` and whether the chat waits |
 
 **Transport.** `transport` says plainly what sync can and cannot do: loopback only, authenticated by the pairing
 key but not encrypted, and never in the background. A peer is dialed through a forwarded loopback address
 (`adb reverse` or an SSH tunnel; [MOBILE](MOBILE.md)).
+
+**Peers.** `peers` lists every device this one is configured to dial, paired with while the app runs, or ever
+synced with, each with its `address` (or `null`: this device does not dial it, it dials here), whether it is
+`paired`, and its `last` sync report since the app started.
 
 **Pairing.** Pairing needs a named device. Without `key`, a new key is drawn and returned once, to type on the
 other device. Pairing a device that is already paired replaces its key and ends the old one's access, so it
