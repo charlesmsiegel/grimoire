@@ -34,7 +34,7 @@ A record's family comes from its schema:
 |---|---|---|---|
 | entity | `grimoire.entity/0` | `character`, `location`, `item`... any kind but the two below | `name`, `nature` (`individual` or `template`), `description`, `sections` (name → text), `traits` (a list of facet objects) |
 | scenario | `grimoire.scenario/1` | `scenario` | `title`, `premise`, `openings` (a list of `{id?, text}`), `instructions` |
-| lorebook | `grimoire.lorebook/1` | `lorebook` | `name`, `description`, `entries` (a list of `{index?, keys, content, constant?, enabled?}`) |
+| lorebook | `grimoire.lorebook/1` | `lorebook` | `name`, `description`, `entries` (a list of `{index?, keys, content, constant?, enabled?}`; `constant` is written to the entry's `settings`, where 037 reads it) |
 | other | anything else | | raw editor only |
 
 A world is a source (`world:...`), not a record. Its locations, items and characters are entities in it.
@@ -94,6 +94,7 @@ Every refusal is 044's `ApiRefused`, and nothing was written.
 | Reason | Meaning |
 |---|---|
 | `changed` | The source manifest or the head changed since the client read it. The client keeps its draft, reads again, shows the difference and retries. |
+| `not_head` | An edit named an older revision; only the head is edited. |
 | `stale_clear` | A clear of something the revision does not inherit (it is already local, cleared or missing). |
 | `reserved_namespace` | A new source in the `card:` namespace, which the card importer owns. Records of card sources can be edited. |
 | `source_exists`, `entity_exists` | A new source or id that is already used. |

@@ -8,6 +8,8 @@ and the actions this slice does not offer, which are named rather than faked.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from card_fixtures import SCENARIO, encode, land
 from chat_fixtures import Clock, Ids
@@ -364,3 +366,38 @@ def test_a_blank_field_never_lifts_a_clear(api):
     saved = edit(api, portrayal, "sources.save", fields={"description": "", "sections": {"personality": ""}})
     assert states(api.call("sources.read", {"ref": saved["ref"]})) == \
         {"name": "restated", "description": "cleared", "section:personality": "cleared"}
+
+
+# -- from the PR review ---------------------------------------------------------------------------------
+
+def test_an_older_revision_is_never_saved_over_the_head(api, store):
+    gothic, _modern = two_maras(api)
+    edit(api, gothic["ref"], "sources.save", fields={"description": "Newer."})
+    old = api.call("sources.read", {"ref": gothic["ref"]})  # r1, with the head's tokens
+    before = files_of(store.root)
+    for op, extra in (("sources.save_raw", {"payload": old["payload"]}), ("sources.save", {"fields": {"name": "M"}})):
+        assert refused(api, op, ref=old["ref"], expected=old["manifest_etag"], head=old["head"], **extra).reason \
+            == "not_head"
+    assert files_of(store.root) == before
+
+
+def test_every_read_is_json_including_uncomposed_card_fields(api, store):
+    land(store, encode(VOICED))
+    read = api.call("sources.read", {"ref": str(MARA_VELL)})
+    assert read["effective"]["uncomposed"] and all(set(item) == {"ref", "field"} for item in read["effective"]["uncomposed"])
+    json.dumps(read)
+    json.dumps(api.call("sources.catalog", {}))
+    json.dumps(api.call("sources.read", {"ref": str(MARA_LORE)}))
+
+
+def test_a_lore_entrys_constant_flag_is_the_one_the_lore_reader_reads(api, store):
+    from grimoire.cards.lore import _entry  # noqa: PLC0415  -- 037's reader of one entry
+    etag = source(api, "world:harbor", "Harbor")
+    lore = api.call("sources.create", {"source": "world:harbor", "kind": "lorebook", "expected": etag, "fields": {
+        "entries": [{"keys": [], "content": "The bell rings at dusk.", "constant": True}]}})
+    entry = api.call("sources.read", {"ref": lore["ref"]})["payload"]["entries"][0]
+    assert entry["settings"] == {"constant": True} and _entry(0, entry).constant is True  # read with no keys
+    saved = edit(api, lore["ref"], "sources.save", fields={"entries": [{"index": 0, "keys": ["bell"],
+                                                                         "content": entry["content"], "constant": False}]})
+    edited = api.call("sources.read", {"ref": saved["ref"]})["payload"]["entries"][0]
+    assert edited["settings"] == {"constant": False} and _entry(0, edited).constant is False

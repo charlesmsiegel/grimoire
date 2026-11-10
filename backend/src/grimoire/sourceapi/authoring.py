@@ -329,6 +329,8 @@ class SourceAuthoring:
         if ref.kind == IMPORT_KIND:
             raise AuthoringRefused("import_record_read_only", "an import record is written only by its importer")
         current = self.head(self.load(), ref.unpinned())
+        if ref.pinned and ref.revision != current.ref.revision:
+            raise AuthoringRefused("not_head", f"{ref} is an older revision; only the head ({current.ref}) is edited")
         if current.ref.revision != head or stored.etag != expected:
             raise StaleWrite([(str(ref.unpinned()), "changed")])
         return stored, current
@@ -649,10 +651,18 @@ def _lorebook_fields(payload: dict, fields: Mapping[str, object], _derived: bool
                 entry = {}
             entry["keys"] = _keys(item.get("keys", entry.get("keys", [])), f"entry {number} keys")
             entry["content"] = _text(item.get("content"), f"entry {number} content", required=True)
-            if "constant" in item:
+            if "constant" in item:  # 037's lore reader reads ``settings.constant``; its other settings stay
                 if type(item["constant"]) is not bool:
                     raise AuthoringRefused("invalid_field", f"entry {number} constant must be true or false")
-                entry["constant"] = item["constant"]
+                settings = entry.get("settings", {})
+                if not isinstance(settings, Mapping):
+                    raise AuthoringRefused("invalid_payload", f"entry {number}'s settings are not an object; use the "
+                                                              "raw editor")
+                settings = dict(settings)
+                if item["constant"] or "constant" in settings:
+                    settings["constant"] = item["constant"]
+                if settings or "settings" in entry:
+                    entry["settings"] = settings
             if "enabled" in item:
                 if type(item["enabled"]) is not bool:
                     raise AuthoringRefused("invalid_field", f"entry {number} enabled must be true or false")

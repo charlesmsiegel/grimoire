@@ -359,7 +359,7 @@ def _effective(inspection, composed) -> dict:  # type: ignore[no-untyped-def]
                     "value": values.get(view.field)} for view in inspection.fields],
         "notices": [{"code": notice.code, "ref": str(notice.ref), "detail": notice.detail}
                     for notice in inspection.notices],
-        "uncomposed": sorted(getattr(composed, "uncomposed", ()) or ()),
+        "uncomposed": [{"ref": str(ref), "field": key} for ref, key in composed.uncomposed],
     }
 
 
