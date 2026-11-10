@@ -193,7 +193,9 @@ export async function render(root, ctx) {
       call.attempts.length ? el("ol", {}, call.attempts.map((attempt) => el("li", {},
         `${attempt.outcome} via ${attempt.route || "an unknown route"}, ${attempt.measurement.replaceAll("_", " ")}: ` +
         TOKEN_NAMES.map(([name, label]) => `${label} ${attempt.tokens[name] === null ? "unreported" : attempt.tokens[name]}`).join(", ") +
-        `; cost ${cost(attempt)}`))) : el("p", { class: "g-bad" }, "No attempt was recorded: what it used is unknown."));
+        `; cost ${cost(attempt)}`)))
+        : call.status === "not_issued" ? el("p", {}, "Never sent, so it used nothing.")
+        : el("p", { class: "g-bad" }, "No attempt was recorded: what it used is unknown."));
   }
 
   async function diagnosticsSection() {
