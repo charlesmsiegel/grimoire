@@ -36,13 +36,14 @@ from grimoire.images import (
     slot_role,
 )
 from grimoire.imagestore import ART_PIN, InvalidBatch, InvalidImage, InvalidPlacement, pinned_base
+from grimoire.imagestore.lineage import is_derived
 from grimoire.peersync import PairingError, new_pairing_key, pair, read_pairing
 from grimoire.peersync.pairing import KEY_BYTES, pairing_ended
 from grimoire.peersync.wire import is_loopback
 from grimoire.scene import SceneRefused
 from grimoire.scene.codec import turn_from_payload
 from grimoire.scenestore.library import StoredTurn
-from grimoire.store import BlobCorrupt, StaleWrite, StoreError, etag
+from grimoire.store import BlobCorrupt, StaleWrite, StoredDefinition, StoreError, etag
 from grimoire.store.jsonfmt import is_etag
 from grimoire.store.layout import classify, placement_parts
 from grimoire.store.replica import parse_exact
@@ -374,7 +375,7 @@ class MediaSyncApi:
             modes = list(EDIT_MODES)
         else:
             reusable = [subject.source]
-            modes = list(EDIT_MODES) if len(resolution.lineage) >= 2 else ["set"]  # only a portrayal inherits
+            modes = list(EDIT_MODES) if self._derived(subject) else ["set"]  # only a portrayal inherits
         problems = report_problems(resolution.problems) + own_problems
         if not complete:
             problems.append({"path": f"campaigns/{subject.campaign_id}", "code": "conflicts_unknown",  # type: ignore[union-attr]
@@ -384,6 +385,16 @@ class MediaSyncApi:
                 "own": own,
                 "modes": modes, "reusable": reusable, "conflicts": sorted(conflicts), "editable": complete,
                 "problems": problems}
+
+    def _derived(self, subject: SourceRef) -> bool:
+        """Whether a definition's head is a 022 derived portrayal, as 038's placement check decides it (046):
+        its own head, never how much of its ancestry resolves now, so a portrayal whose base went missing may
+        still hide or reset its own picture."""
+        try:
+            found = self.store.check_definition(subject)
+        except (StoreError, OSError, ValueError):
+            return False
+        return isinstance(found, StoredDefinition) and is_derived(found.envelope)
 
     @staticmethod
     def _inherits(view, subject: InstanceRef) -> dict | None:  # type: ignore[no-untyped-def]
@@ -589,11 +600,14 @@ class MediaSyncApi:
         here is deleted, and the device plays on offline."""
         return self.text.call("sync", {"peer": _field(args, "peer", str)})
 
-    def _names(self, chat: ChatRef) -> Mapping[InstanceRef, str]:
+    def _table(self, chat: ChatRef) -> tuple[Mapping[InstanceRef, str], frozenset[str] | None]:
+        """The chat's cast names and the ids of the turns a fork choice set aside (``None``: the chat cannot be
+        opened, so whether a turn was set aside is unknown)."""
         try:
-            return self.text.runner.open(chat).names
+            scene = self.text.runner.open(chat)
         except (SceneRefused, StoreError, ChatCodecError, OSError, ValueError):
-            return {}
+            return {}, None
+        return scene.names, frozenset(stored.record.turn_id for stored in scene.turns.set_aside)
 
     def _candidate(self, path: str, data: bytes | None) -> dict:
         """One version of a file in conflict: its etag and what it holds, shown only as the table may read it.
@@ -611,7 +625,15 @@ class MediaSyncApi:
                 ref: TurnRef = found[1]  # type: ignore[index]
                 record = turn_from_payload(ref, envelope.schema, envelope.payload)  # type: ignore[union-attr]
                 chat = ChatRef(ref.campaign_id, ref.turn_id.rsplit(".", 1)[0])
-                preview["turn"] = turn_view(StoredTurn(record, etag(data)), self._names(chat))
+                stored = StoredTurn(record, etag(data))
+                names, set_aside = self._table(chat)
+                if record.set_aside is not None or set_aside is None or record.turn_id in set_aside:
+                    # heard by no one (035), or the chat that would say otherwise cannot be read: its id,
+                    # number and device only
+                    preview["turn"] = set_aside_view(stored)
+                    preview["set_aside"] = True if set_aside is not None else None
+                else:
+                    preview["turn"] = turn_view(stored, names)
                 preview["chat"] = str(chat)
             elif kind == "placement":
                 preview["placement"] = placement_view(placement_from_payload(envelope.payload))  # type: ignore[union-attr]
@@ -620,9 +642,13 @@ class MediaSyncApi:
         return {"etag": etag(data), "deleted": False, "size": len(data), "preview": preview}
 
     def _campaign_conflicts(self, campaign: str) -> tuple[list[dict], bool]:
+        """The campaign's open conflicts, each with every kept version, and whether that is the whole of it.
+        A kept version whose bytes are lost or damaged here makes it incomplete (``require_kept``), so an empty
+        ``theirs`` in a complete answer is the other device's deletion (``their_deletion``), never a version
+        that went missing unseen."""
         try:
             found, complete = open_conflicts(self.store, f"campaigns/{campaign}",
-                                             ended=lambda peer: pairing_ended(self.store, peer))
+                                             ended=lambda peer: pairing_ended(self.store, peer), require_kept=True)
         except (StoreError, OSError, ValueError, SyncInterrupted):
             return [], False
         conflicts = []
@@ -641,6 +667,8 @@ class MediaSyncApi:
             if parsed is not None and parsed[0] == "placement":
                 entry["subject"], entry["slot"] = str(parsed[1].subject), parsed[1].slot
             conflicts.append(entry)
+        for entry in conflicts:
+            entry["their_deletion"] = complete and not entry["theirs"]
         return conflicts, complete
 
     def _conflict_list(self, args: Mapping[str, object]) -> dict:
@@ -682,8 +710,11 @@ class MediaSyncApi:
             kept = keep
         not_kept = [item for item in candidates if item["etag"] != kept]
         if keep == "mine" and not found["theirs"]:
-            # the other version is the peer's deletion (or none is readable here): still a version not kept
-            not_kept.append({"etag": None, "deleted": True, "preview": None, "holder": "another device"})
+            # the other version is the peer's deletion, or one whose bytes are not readable here: either way a
+            # version not kept
+            deleted = found["their_deletion"]
+            not_kept.append({"etag": None, "deleted": deleted, "unreadable": not deleted, "preview": None,
+                             "holder": "another device"})
         return {**report, "kept": kept, "not_kept": not_kept}
 
     def _forks(self, args: Mapping[str, object]) -> dict:

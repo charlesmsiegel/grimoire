@@ -12,10 +12,12 @@ import socket
 import pytest
 from textapi_fixtures import DESKTOP, PHONE, Device, desktop_library, keep, pair_devices, phone_library, say, serving
 
-from grimoire.core.identity import ImageRef, SourceRef
+from grimoire.core.identity import ImageRef, SourceRef, TurnRef
 from grimoire.images import Placement
 from grimoire.mediaapi import MediaSyncApi
 from grimoire.peersync import read_pairing
+from grimoire.store.layout import turn_parts
+from grimoire.sync.keeps import kept_slots
 from grimoire.textapi import ApiRefused
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR synthetic"
@@ -121,6 +123,18 @@ def test_art_on_a_character_and_its_chat_syncs_and_a_conflict_reports_the_versio
                 image = candidate["preview"]["placement"]["image"]
                 shown[candidate["etag"]] = mobile_device.api.image(image)[1]
             assert sorted(shown.values()) == sorted([OTHER_PNG, THIRD_PNG])
+            assert conflict["their_deletion"] is False
+            # a kept version whose bytes are lost here is never taken for the other device's deletion
+            store = mobile_device.api.store
+            (slot,) = kept_slots(store, conflict["path"], theirs["etag"])[0]
+            kept_file = store.root / slot
+            saved = kept_file.read_bytes()
+            kept_file.unlink()
+            lost = mobile("sync.conflicts")
+            assert lost["unknown"] == ["q-c-1"]
+            assert not any(item["their_deletion"] for item in lost["conflicts"])
+            kept_file.write_bytes(saved)
+            assert mobile("sync.conflicts")["unknown"] == []
             # the slot is held until the conflict is resolved: a third version would leave nothing to resolve
             art = mobile("media.art", subject=mara)
             assert art["conflicts"] == ["avatar"]
@@ -165,6 +179,12 @@ def test_a_chat_forked_offline_lists_its_branches_and_the_choice_reports_the_bra
             result = mobile("sync.choose", chat=chat, turn=chosen["head"])
             assert "forked" not in result["waiting"]
             assert {turn["turn"] for turn in result["set_aside"]} == set(other["turns"])
+            # a set-aside turn was heard by no one: a preview of it shows its id, number and device only
+            for turn in result["set_aside"]:
+                path = "/".join(turn_parts(TurnRef("q-c-1", turn["turn"])))
+                preview = mobile.media._candidate(path, (mobile_device.api.store.root / path).read_bytes())["preview"]
+                assert preview.get("set_aside") is True, preview
+                assert set(preview["turn"]) == {"turn", "number", "device"}
             assert mobile("sync.forks")["forks"] == []
 
 
@@ -390,12 +410,13 @@ def test_keeping_mine_over_a_peers_deletion_reports_the_deletion_not_kept(synced
         mine = {"etag": "sha256:" + "1" * 64, "deleted": False, "size": 3, "preview": None}
         monkeypatch.setattr(media, "_campaign_conflicts",
                             lambda campaign: ([{"path": path, "campaign": campaign, "kind": "placement",
-                                                "mine": mine, "theirs": []}], True))
+                                                "mine": mine, "theirs": [], "their_deletion": True}], True))
         monkeypatch.setattr(device.api, "call", lambda op, args: {"status": "resolved", "path": path})
         result = media.call("sync.resolve", {"peer": DESKTOP, "path": path, "keep": "mine", "mine": mine["etag"],
                                              "theirs": []})
         assert result["kept"] == mine["etag"]
-        assert result["not_kept"] == [{"etag": None, "deleted": True, "preview": None, "holder": "another device"}]
+        assert result["not_kept"] == [{"etag": None, "deleted": True, "unreadable": False, "preview": None,
+                                       "holder": "another device"}]
 
 
 def test_placing_another_picture_over_an_imported_one_says_it_was_placed_here(synced):

@@ -101,7 +101,10 @@ the app's `--peer` keeps it across restarts.
 **Conflicts.** Each conflict shows this device's version and every other version kept here side by side: its
 `etag`, whether it was deleted, its size and a preview. A turn's preview is 035's table view, so intentions,
 briefs and unshown lines are never shown; a placement shows its mode and picture; any other record shows its kind.
-A version this build cannot read is still listed (`unreadable`). `sync.resolve` takes the etags as read, and its
+A turn a fork choice set aside was heard by no one, so it shows its id, number and device only
+(`set_aside`), and so does any turn whose chat cannot be opened to tell. A version this build cannot parse is still
+listed (`unreadable`). A kept version whose bytes are lost or damaged here puts its campaign under `unknown`, so
+an empty `theirs` in a campaign that is not unknown is the other device's deletion (`their_deletion`). `sync.resolve` takes the etags as read, and its
 `not_kept` lists every version that was not kept, with which device held it. Keeping this device's version over
 the other device's deletion reports that deletion as not kept.
 
