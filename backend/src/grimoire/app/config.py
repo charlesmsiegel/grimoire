@@ -1,7 +1,7 @@
 """The app's model configuration (044): one OpenAI-compatible endpoint, from a small JSON file.
 
-The file names the endpoint and the model, and the environment variable that holds the key. The key itself
-is never in the file or the library. The runtime calls the model under a trusted ``app:runtime`` handle,
+The file names the endpoint, the model (and fallback models on the same endpoint, 112), and the environment
+variable that holds the key. The key itself is never in the file or the library. The runtime calls the model under a trusted ``app:runtime`` handle,
 granted ``EXECUTE`` on ``providers`` by an in-memory authorizer: the app's own handle for the configured
 provider only (013, the audit's call (b)). Those provider decisions are not recorded in the library's
 durable security ledger.
@@ -25,9 +25,14 @@ from grimoire.security import Authorizer, Grant, Permission, ResourcePath
 RUNTIME_PRINCIPAL = "app:runtime"
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 KEYS = frozenset({"provider_id", "base_url", "model", "key_env", "max_tokens_field", "max_output_tokens",
-                  "director"})
+                  "director", "fallbacks", "attempts"})
 #: Calls a director reply (a scene with no NPC that can answer) may make per turn; 0 turns the stage off.
 DEFAULT_DIRECTOR_CALLS = 1
+#: Fallback models a configuration may name (112): each is tried only by a retry, so only with ``attempts`` > 1.
+MAX_FALLBACKS = 4
+#: Attempts per planned call (004's ``max_attempts_per_call``): every one may be billed, so it stays small.
+MAX_ATTEMPTS = 3
+MAX_OUTPUT_TOKENS = 32_768
 
 
 class ConfigError(ValueError):
@@ -41,6 +46,13 @@ class ModelConfig:
     key_env: str | None
     max_output_tokens: int
     director_calls: int
+    fallbacks: tuple[str, ...] = ()
+    attempts: int = 1
+
+    @property
+    def models(self) -> tuple[str, ...]:
+        """The primary model, then its fallbacks: attempt *i* of a call uses the *i*-th (013)."""
+        return (self.model, *self.fallbacks)
 
 
 def load_model_config(path: Path) -> ModelConfig:
@@ -66,15 +78,42 @@ def parse_model_config(raw: object) -> ModelConfig:
         raise ConfigError("key_env must be the name of an environment variable (letters, digits, _), not a key")
     tokens = raw.get("max_output_tokens", 1024)
     director = raw.get("director", DEFAULT_DIRECTOR_CALLS)
-    for name, value in (("max_output_tokens", tokens), ("director", director)):
-        if isinstance(value, bool) or not isinstance(value, int) or value < (1 if name == "max_output_tokens" else 0):
-            raise ConfigError(f"{name} must be a whole number")
+    attempts = raw.get("attempts", 1)
+    for name, value, low, high in (("max_output_tokens", tokens, 1, MAX_OUTPUT_TOKENS), ("director", director, 0, 1_000),
+                                   ("attempts", attempts, 1, MAX_ATTEMPTS)):
+        if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+            # a director reply is at most one per turn whatever the cap (004); 044 took any count
+            raise ConfigError(f"{name} must be a whole number from {low} to {high}")
+    fallbacks = raw.get("fallbacks", [])
+    if not isinstance(fallbacks, list) or len(fallbacks) > MAX_FALLBACKS:
+        raise ConfigError(f"fallbacks must be a list of at most {MAX_FALLBACKS} model names")
     try:
         endpoint = ProviderEndpoint(raw["provider_id"], raw["base_url"], needs_key=key_env is not None,
                                     max_tokens_field=raw.get("max_tokens_field", "max_tokens"))
+        for model in (raw["model"], *fallbacks):
+            RouteChoice(endpoint.provider_id, model)
     except (ValueError, TypeError) as error:
         raise ConfigError(str(error)) from None
-    return ModelConfig(endpoint, raw["model"], key_env, tokens, director)
+    if len(set(fallbacks)) != len(fallbacks) or raw["model"] in fallbacks:
+        raise ConfigError("fallbacks must be other models, each named once")
+    return ModelConfig(endpoint, raw["model"], key_env, tokens, director, tuple(fallbacks), attempts)
+
+
+def config_json(config: ModelConfig) -> dict:
+    """``config`` as the file holds it: what ``parse_model_config`` reads back as the same configuration."""
+    raw: dict = {"provider_id": config.endpoint.provider_id, "base_url": config.endpoint.base_url,
+                 "model": config.model, "max_tokens_field": config.endpoint.max_tokens_field,
+                 "max_output_tokens": config.max_output_tokens, "director": config.director_calls,
+                 "fallbacks": list(config.fallbacks), "attempts": config.attempts}
+    if config.key_env is not None:
+        raw["key_env"] = config.key_env
+    return raw
+
+
+def policy_for(config: ModelConfig) -> InferencePolicy:
+    """The 004 policy a configuration plays turns under: a director reply only when enabled, and its attempts."""
+    caps = {"director_generation": config.director_calls} if config.director_calls else {}
+    return InferencePolicy(caps, max_attempts_per_call=config.attempts)
 
 
 def build_runtime(config: ModelConfig, owner: str, *, environ=os.environ, transport=None):  # type: ignore[no-untyped-def]
@@ -89,10 +128,10 @@ def build_runtime(config: ModelConfig, owner: str, *, environ=os.environ, transp
     credentials = EnvironmentCredentials({config.endpoint.provider_id: config.key_env} if config.key_env else {})
     adapter = ProviderAdapter(ProviderRegistry([config.endpoint]), credentials, authorizer,
                               transport if transport is not None else HttpTransport())
-    runtime = GenerationRuntime(adapter, (RouteChoice(config.endpoint.provider_id, config.model),), handle,
-                                max_output_tokens=config.max_output_tokens)
-    caps = {"director_generation": config.director_calls} if config.director_calls else {}
-    return runtime, InferencePolicy(caps)
+    routes = tuple(RouteChoice(config.endpoint.provider_id, model) for model in config.models)
+    runtime = GenerationRuntime(adapter, routes, handle, max_output_tokens=config.max_output_tokens)
+    return runtime, policy_for(config)
 
 
-__all__ = ["ConfigError", "ModelConfig", "build_runtime", "load_model_config", "parse_model_config"]
+__all__ = ["ConfigError", "ModelConfig", "build_runtime", "config_json", "load_model_config", "parse_model_config",
+           "policy_for"]
