@@ -73,4 +73,22 @@ assert.equal(seen.title, "Models and costs");
 assert.deepEqual(seen.styles, ["page.css"]);
 assert.equal(seen.refreshed, 1, "the shell's library facts are refreshed after a save");
 assert.ok(seen.sent.includes("providers.save_models") && seen.sent.includes("chats"));
+// a long chat list: a full page offers Show more, and a chat named in the address is chosen though unlisted
+const asks = [];
+const many = async (op, args) => {
+  if (op === "providers.chats" || op === "chats") { asks.push(args.limit);
+    return { chats: Array.from({ length: args.limit }, (_v, i) => ({ chat: "chat-" + i, label: "Chat " + i })) }; }
+  return api(op.replace(/^providers\./, ""), args); };
+const second = new Node_("main");
+const usageAsked = [];
+await page.mount(second, { api: (op, args) => { if (op === "providers.usage") usageAsked.push(args.chat); return many(op, args); },
+  query: new URLSearchParams("chat=old-chat"), setTitle() {}, styles() {}, refreshLibrary: async () => {} });
+await new Promise((r) => setTimeout(r, 10));
+assert.deepEqual(usageAsked, ["old-chat"], "the chat named in the address is shown");
+const options = second.querySelector("#inf-chat").children.flat(Infinity);
+assert.ok(options.some((o) => o.attrs && o.attrs.value === "old-chat"), "the named chat is in the picker");
+const findText = (n, text) => (n.tag === "button" && n.textContent === text) ? n : (n.children || []).map((c) => c.tag ? findText(c, text) : null).find(Boolean);
+findText(second, "Show more chats").listeners.click();
+await new Promise((r) => setTimeout(r, 10));
+assert.deepEqual(asks, [100, 400]);
 console.log("ok");

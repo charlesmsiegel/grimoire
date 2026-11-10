@@ -4,6 +4,9 @@
 // the app's settings file at the revision this page read.
 "use strict";
 
+/** Chats listed at first, and the most the text API lists (044's MAX_LIMIT). */
+const CHATS_PAGE = 100, CHATS_MAX = 1000;
+
 const TOKEN_NAMES = [["input_tokens", "prompt"], ["output_tokens", "completion"], ["cache_read_tokens", "cached"],
   ["reasoning_tokens", "reasoning"]];
 const STAGE_NAMES = {
@@ -71,7 +74,9 @@ export async function mount(root, ctx) {
   const api = (op, args) => ctx.api(OWN.has(op) ? "providers." + op : op, args);
   ctx.setTitle("Models and costs");
   if (ctx.styles) ctx.styles("page.css");
-  const state = { models: null, check: null, chat: null, asked: 0 };
+  // a chat can be named in the address (#/providers?chat=<ChatRef>), so one past the list's end is reachable too
+  const named = ctx.query && ctx.query.get ? ctx.query.get("chat") : null;
+  const state = { models: null, check: null, chat: named || null, asked: 0, limit: CHATS_PAGE };
   const live = el("div", { class: "providers-live", role: "status", "aria-live": "polite" });
   const sections = {
     model: el("section", { "aria-labelledby": "inf-model" }),
@@ -163,13 +168,20 @@ export async function mount(root, ctx) {
 
   async function chatsSection() {
     let listed;
-    try { listed = await api("chats", { limit: 100 }); } catch (error) { listed = { chats: [], error }; }
+    try { listed = await api("chats", { limit: state.limit }); } catch (error) { listed = { chats: [], error }; }
+    const known = new Set(listed.chats.map((entry) => entry.chat));
     const picker = el("select", { id: "inf-chat", class: "g-input", onchange: (event) => { state.chat = event.target.value || null; usage(); } },
       el("option", { value: "" }, "Choose a chat"),
+      // the chosen chat stays choosable even when it is past the list's end (its exact ref is shown)
+      state.chat && !known.has(state.chat) ? el("option", { value: state.chat, selected: true }, state.chat) : null,
       listed.chats.map((entry) => el("option", { value: entry.chat, selected: entry.chat === state.chat }, entry.label || entry.chat)));
+    // a full list may have more behind it: ask for a longer one, up to the API's largest
+    const more = !listed.error && listed.chats.length >= state.limit && state.limit < CHATS_MAX
+      ? el("button", { type: "button", class: "g-button", onclick: () => { state.limit = Math.min(state.limit * 4, CHATS_MAX); chatsSection(); } }, "Show more chats")
+      : null;
     fill(sections.usage, el("h2", { id: "inf-usage" }, "Usage by chat"),
       listed.error ? el("p", { class: "g-bad" }, "The chats cannot be listed: " + listed.error.message) : null,
-      field("inf-chat", "Chat", picker), el("div", { id: "inf-usage-body" }));
+      field("inf-chat", "Chat", picker), more, el("div", { id: "inf-usage-body" }));
     if (state.chat) usage();
   }
 

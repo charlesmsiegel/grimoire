@@ -105,7 +105,7 @@ real provider on the real clock; `synthetic`, `partial` or `unreported` otherwis
 `grimoire/app/static/pages/providers/` is the page: `page.json` and `page.js`, which exports the shell's
 `mount(root, ctx)` and calls `providers.<op>` and the text API's `chats` through `ctx.api`. It
 has five sections: **Model** (the settings form, **Check** and **Save**), **Model calls a turn may make**,
-**Usage by chat**, **Recent calls on this device** and **Not available yet**. Every library and provider text is
+**Usage by chat** (the 100 most recent chats, **Show more chats** for up to 1,000; `#/providers?chat=<ChatRef>` opens one chat's usage directly), **Recent calls on this device** and **Not available yet**. Every library and provider text is
 set as text, never markup. `backend/tests/test_app_inference_page.py` runs the page in Node over a fake DOM and
 fake ops (skipped where Node is not installed); `backend/tests/test_app_inference_shell.py` serves it through
 the shell, from `serve --model FILE` as a process too.
