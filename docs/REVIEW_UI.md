@@ -77,10 +77,22 @@ decision per staged path in the security audit, whether or not the proposal is a
 
 ## The page
 
-These are the adapters only. The review page (one tab per kind, the shared proposal panel with every file's
-size, hash, text or diff and Approve and Reject bound to the digest, and the "Not available yet" list from
-`review.capabilities`) is registered through the app shell's route contract (108) in a later slice; until
-then no route serves these ops.
+The app serves these ops through 108's adapter seam as `imports.<op>`, one per review op (`imports.card_preview`
+is `card.preview`, `imports.proposal_apply` is `proposal.apply`; `imports.capabilities` lists the `imports.*`
+names). The adapter (`grimoire/app/adapters/imports.py`) keeps one `ReviewApi` per open library over the app's
+trusted owner handle, so a proposal previewed in one request is approved in the next; proposals stay in memory
+and are gone when the app restarts. The shell's client keeps only a refusal's reason and message, so the adapter
+folds a refusal's details into its message (cut at 600 characters).
+
+The Import page (`static/pages/import/`, route `import`, Library menu) has one tab per kind the app serves:
+Card, Chat history, V1 library, Change set and Source update (a chat's characters following a newer revision
+of their source). A tab shows only when the app serves every op its form calls. Each tab previews; the shared proposal
+panel then lists every file with its action, size, sha256 and its text or diff, and the digest. Approve and
+write asks first, naming how many files, and sends the digest back; Reject discards the proposal. A stale or
+conflicting approval says nothing was written and to preview again; a proposal the server no longer holds (an
+approval whose answer was lost, or an app restart) says to check the library first, since it may have been written. The "Not available yet" list comes from `imports.capabilities`.
+Files are sent as base64 in one request, which the app server caps at 48 MiB, so one card or history file is
+limited to about 34 MiB.
 
 ## Not available yet
 

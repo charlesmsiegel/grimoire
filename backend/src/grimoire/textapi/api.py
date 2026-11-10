@@ -263,8 +263,15 @@ class TextApi:
         else:
             raise ApiRefused("invalid_field", "filter must be recent, character or scenario")
         entries: list[NavEntry] = [index.entry(ref) for ref in index.all_chats()]
+        names = self._mention_names(view, entries)
+        return {"filter": which, "chats": self._entries(view, index, found, names),
+                "sources": filter_sources(entries, names)}
+
+    def _mention_names(self, view, entries) -> dict[str, str | None]:  # type: ignore[no-untyped-def]
         refs = {source_key(key) for entry in entries for _role, key, _rev, _active in entry.mentions}
-        names = {ref: self._source_name(view, SourceRef.parse(ref)) for ref in refs}
+        return {ref: self._source_name(view, SourceRef.parse(ref)) for ref in refs}
+
+    def _entries(self, view, index, found, names) -> list[dict]:  # type: ignore[no-untyped-def]
         chats = []
         for ref in found:
             stored = view.chats.get(ref)
@@ -275,7 +282,16 @@ class TextApi:
                 except ChatCodecError:
                     record = None
             chats.append(chat_entry(index.entry(ref), index.scope(ref.campaign_id), record, names))
-        return {"filter": which, "chats": chats, "sources": filter_sources(entries, names)}
+        return chats
+
+    def chat_entries(self, refs) -> list[dict]:  # type: ignore[no-untyped-def]
+        """``refs`` as the ``chats`` op lists them, in the order given; a ref the library does not know is left out.
+        For the app's ``play.options`` (111), whose Continue list shows the chats 052 says a selection started."""
+        view = self.store.load()
+        index = self.chats.navigation()
+        known = set(index.all_chats())
+        found = [ref for ref in refs if ref in known]
+        return self._entries(view, index, found, self._mention_names(view, [index.entry(ref) for ref in found]))
 
     def _chat(self, args: Mapping[str, object]) -> ChatRef:
         return parse_ref(ChatRef.parse, args, "chat")

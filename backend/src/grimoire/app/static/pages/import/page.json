@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "id": "import",
+  "route": "import",
+  "title": "Import and review",
+  "slot": "library",
+  "order": 50,
+  "owner": "110",
+  "entry": "page.js",
+  "requires": ["imports.capabilities", "imports.proposal_get", "imports.proposal_apply", "imports.proposal_reject"],
+  "unavailable": null
+}
