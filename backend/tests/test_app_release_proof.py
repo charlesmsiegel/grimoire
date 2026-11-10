@@ -18,23 +18,28 @@ import contextlib
 import http.client
 import json
 import os
+import queue
 import re
-import socket
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote
 
 import pytest
 from card_fixtures import PORTRAIT, PORTRAIT_2, V3, card, encode
-from grimoire.app.server import TOKEN_HEADER
-from grimoire.testing.fileops import snapshot
 from import_fixtures import build_two_npc_library
 from v1_fixture import sha
 
+from grimoire.app.server import TOKEN_HEADER
+from grimoire.testing.fileops import snapshot
+
 SRC = Path(__file__).resolve().parent.parent / "src"
+#: Seconds a serve may take to say where it listens before the proof fails.
+START_WAIT = 60
 OWNER = "human:owner"
 #: The rooted folders a refused op must leave as they were (the security audit may record a decision).
 CANONICAL = ("sources", "campaigns", "assets", "kept")
@@ -97,6 +102,20 @@ def speakers(requests: list[dict]) -> list[str]:
     return found
 
 
+#: Authored voice material each NPC's own request must carry (from its card or V1 file), and no other NPC's.
+AUTHORED = {"Mara Vell": "A smuggler of the Silver Guild", "Seraphine Lark": "A lamplighter who distrusts smugglers",
+            "Mara": "A tide-reader who keeps the drowned ledger", "Seraphine": "A lamplighter of Saltmarch"}
+
+
+def voiced_apart(requests: list[dict]) -> None:
+    """Each NPC call was sent its own character's authored voice and none of another speaker's in the batch."""
+    names = speakers(requests)
+    for name, request in zip(names, requests):
+        prompt = json.dumps(request)
+        assert AUTHORED[name] in prompt, name
+        assert not any(AUTHORED[other] in prompt for other in names if other != name), name
+
+
 # -- the app, as a process -----------------------------------------------------------------------------------
 
 class Refused(Exception):
@@ -112,20 +131,40 @@ class App:
         environment = {key: value for key, value in os.environ.items() if not key.startswith("GRIMOIRE")}
         environment.update(PYTHONPATH=os.pathsep.join([str(SRC), os.environ.get("PYTHONPATH", "")]),
                            HOME=str(home), USERPROFILE=str(home), GRIMOIRE_V2_HOME=str(home / ".grimoire-v2"))
+        # a file, not a pipe, so a chatty app never blocks on it; closed by stop()
+        self.errors = tempfile.TemporaryFile("w+", encoding="utf-8")  # noqa: SIM115
         self.process = subprocess.Popen([sys.executable, "-m", "grimoire.app", "serve", *args, "--owner", OWNER,
-                                         "--port", "0"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                         "--port", "0"], stdout=subprocess.PIPE, stderr=self.errors, text=True,
                                         env=environment)
-        seen = []
+        try:
+            self.port, self.token, self.sync_port = self._started()
+        except BaseException:
+            self.stop()
+            raise
+
+    def _started(self) -> tuple[int, str, int | None]:
+        """Read the serve's announcements until its address, within ``START_WAIT`` seconds."""
+        lines: queue.Queue[str] = queue.Queue()
+        self.reader = threading.Thread(target=lambda: [lines.put(line) for line in iter(self.process.stdout.readline, "")]
+                                       + [lines.put("")], daemon=True)
+        self.reader.start()
+        deadline, seen, sync_port = time.monotonic() + START_WAIT, [], None
         while True:
-            line = self.process.stdout.readline()
+            try:
+                line = lines.get(timeout=max(0.0, deadline - time.monotonic()))
+            except queue.Empty:
+                raise AssertionError(f"serve did not start within {START_WAIT} s: {''.join(seen)}") from None
             if not line:
                 self.process.wait(30)
-                raise AssertionError("".join(seen) + self.process.stderr.read())
+                self.errors.seek(0)
+                raise AssertionError("".join(seen) + self.errors.read())
             seen.append(line)
+            synced = re.search(r"paired devices sync on 127\.0\.0\.1:(\d+)", line)
+            if synced:
+                sync_port = int(synced.group(1))
             match = re.match(r"open http://127\.0\.0\.1:(\d+)/#token=(\S+)", line)
             if match:
-                break
-        self.port, self.token = int(match.group(1)), match.group(2)
+                return int(match.group(1)), match.group(2), sync_port
 
     def request(self, method: str, path: str, body: bytes | None = None, *, token: bool = True):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=120)
@@ -159,12 +198,20 @@ class App:
         return data
 
     def stop(self) -> str:
+        """End the serve (killed if it will not stop) and give what it wrote to stderr."""
         if self.process.poll() is None:
             self.process.terminate()
-        self.process.wait(30)
+        try:
+            self.process.wait(30)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(30)
+        if getattr(self, "reader", None) is not None:
+            self.reader.join(30)  # it ends at the closed pipe's end, before the pipe is closed here
         self.process.stdout.close()
-        errors = self.process.stderr.read()
-        self.process.stderr.close()
+        self.errors.seek(0)
+        errors = self.errors.read()
+        self.errors.close()
         return errors
 
 
@@ -180,12 +227,6 @@ def serving(home: Path, *args: str):
 
 def b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
-
-
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
 
 
 def use_model(app: App, model) -> None:
@@ -349,6 +390,7 @@ def test_the_wave_7_release_proof(places):
             second = play_turn(app, chat, "Who else is here tonight?")
             calls = model.requests[heard:]
             assert sorted(speakers(calls)) == ["Mara Vell", "Seraphine Lark"]  # one call per speaking NPC
+            voiced_apart(calls)  # each from its own card, so a lost voice is caught, not masked by the stub
             newcomer = calls[speakers(calls).index("Seraphine Lark")]
             assert "BRINE" not in json.dumps(newcomer) and opening["text"] not in json.dumps(newcomer)
             assert "Who else is here tonight?" in json.dumps(newcomer)  # she hears what is said from now on
@@ -426,7 +468,10 @@ def test_the_wave_7_release_proof(places):
             opened = app("continue", chat=migrated)
             assert [line["speaker"] for line in opened["history"]] == ["Winifred", "Mara", "Seraphine"]
             assert opened["problems"] == []
+            heard = len(model.requests)
             migrated_turn = play_turn(app, migrated, '"What happened to the ledger?"')
+            assert sorted(speakers(model.requests[heard:])) == ["Mara", "Seraphine"]
+            voiced_apart(model.requests[heard:])  # each imported NPC speaks from its own V1 description
             assert {line["speaker"] for line in migrated_turn["kept"]["lines"]} == {"Mara", "Seraphine"}
             missing = app("media.art", subject="world:realm/character/mara.default")["slots"]
             assert [(slot["slot"], slot["state"], slot["reason"]) for slot in missing] == \
@@ -446,11 +491,11 @@ def test_the_wave_7_release_proof(places):
         with serving(phone_home, "--model", str(phone_settings)) as phone:
             phone_library = Path(phone("setup.status")["suggested"])
             phone("setup.create", path=str(phone_library), device="phone")
-        sync_port = free_port()
-        with serving(phone_home, str(phone_library), "--model", str(phone_settings), "--sync-port", str(sync_port)) \
-                as phone, serving(desk_home, str(library), "--model", str(settings)) as app:
+        with serving(phone_home, str(phone_library), "--model", str(phone_settings), "--sync-port", "0") as phone, \
+                serving(desk_home, str(library), "--model", str(settings)) as app:
+            assert phone.sync_port  # the phone picked its own port and said which, so no other process can take it
             use_model(phone, model)
-            paired = app("media.pair", peer="phone", address=f"127.0.0.1:{sync_port}")
+            paired = app("media.pair", peer="phone", address=f"127.0.0.1:{phone.sync_port}")
             assert paired["paired"] and len(paired["key"]) == 64
             phone("media.pair", peer="desktop", key=paired["key"])
             lamp = actors["Seraphine Lark"]
@@ -511,8 +556,12 @@ def test_the_wave_7_release_proof(places):
             app.refused("unsupported_format", "imports.card_preview", card=b64(b'{"spec": "nonsense"}'))
             app.refused("no_chat", "open", chat=chat.rsplit("/", 1)[0] + "/t-000000000000")
             app.refused("invalid_selection", "play.start", kind="premise", persona=wren)
-            app.refused("changed", "sources.save", ref="local:mine/character/wren", head="r1",
-                        etag="sha256:" + "0" * 64, expected=read["manifest_etag"], fields={"description": "x"})
+            fresh = app("sources.read", ref="local:mine/character/wren")  # the manifest moved on with harbor-night
+            assert fresh["manifest_etag"] != read["manifest_etag"]
+            app.refused("changed", "sources.save", ref="local:mine/character/wren", head=fresh["revision"],
+                        etag="sha256:" + "0" * 64, expected=fresh["manifest_etag"], fields={"description": "x"})
+            app.refused("changed", "sources.save", ref="local:mine/character/wren", head=fresh["revision"],
+                        etag=fresh["etag"], expected=read["manifest_etag"], fields={"description": "x"})
             app("imports.card_preview", card=b64(encode(card(name="Never Saved"))), origin="never.json")
             assert canonical(library) == before  # refusals and an unapproved preview wrote nothing
             assert len(model.requests) == heard
