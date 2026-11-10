@@ -18,6 +18,7 @@ const state = {
   registry: { pages: [], slots: [] }, library: null, ops: new Set(), modules: new Map(),
   current: null,  // { key, cleanup, controller, root }
   scroll: new Map(),  // location hash -> scrollY, restored on return
+  focus: new Map(),  // location hash -> { key, start, end }: the control the person was in, restored on return
 };
 const drafts = new Drafts(safeSessionStorage());
 const frame = {};
@@ -217,6 +218,7 @@ async function leave() {
   const current = state.current;
   if (!current) return;
   if (current.ready) state.scroll.set(current.key, window.scrollY);
+  rememberFocus(current);  // even before the page is ready: a person may start typing while it still loads
   current.controller.abort();
   ui.closeConfirmations();
   current.root.remove();  // detached: whatever the page still does lands nowhere
@@ -261,7 +263,8 @@ async function route() {
   if (blocked) { show(page.title, ui.unavailable(page.title, blocked)); focusTitle(); return; }
   const controller = new AbortController();
   const root = el("div", { class: "g-page", "data-page": page.id });
-  const current = { key, cleanup: null, controller, root };
+  const current = { key, cleanup: null, controller, root, lastFocus: null };
+  root.addEventListener("focusin", (event) => { current.lastFocus = event.target; });
   state.current = current;
   show(page.title, el("p", { class: "g-muted" }, "Loading…"));
   let module;
@@ -289,9 +292,38 @@ async function route() {
     if (controller.signal.aborted) return;
     root.replaceChildren(ui.errorBox(error), ui.actions(ui.button("Try again", () => route())));
   }
-  focusTitle();
+  if (!restoreFocus(key, root)) focusTitle();
   if (state.scroll.has(key)) window.scrollTo(0, state.scroll.get(key));  // back where the person left it
   current.ready = true;
+}
+
+// Which control the person was in when they left a page, by its data-focus-key (every field with a draft has one;
+// a page may give one to any other control), and where the caret was. Ids are made fresh on every mount, so the
+// key is what finds the same control again. The last control focused on the page counts, not whatever holds
+// focus as the page goes: a click on a link in the menu moves focus there first.
+function rememberFocus(current) {
+  const active = document.activeElement;
+  const control = active && current.root.contains(active) && active !== current.root ? active : current.lastFocus;
+  const key = control && control.getAttribute ? control.getAttribute("data-focus-key") : null;
+  if (!key || !current.root.contains(control)) { state.focus.delete(current.key); return; }
+  const caret = typeof control.selectionStart === "number"
+    ? { start: control.selectionStart, end: control.selectionEnd } : {};
+  state.focus.set(current.key, { key, ...caret });
+}
+
+// Put the person back in the control they left, with the caret where it was; false when there is none to return
+// to (a first visit, or the control is gone), so the shell focuses the page's heading instead.
+function restoreFocus(key, root) {
+  const kept = state.focus.get(key);
+  if (!kept) return false;
+  const control = [...root.querySelectorAll("[data-focus-key]")].find((node) => node.getAttribute("data-focus-key") === kept.key);
+  if (!control || control.disabled) return false;
+  control.focus({ preventScroll: true });
+  if (typeof kept.start === "number" && typeof control.setSelectionRange === "function") {
+    const end = String(control.value || "").length;
+    try { control.setSelectionRange(Math.min(kept.start, end), Math.min(kept.end, end)); } catch (error) { /* not a text box */ }
+  }
+  return true;
 }
 
 function focusTitle() {

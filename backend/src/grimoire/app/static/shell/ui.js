@@ -59,7 +59,11 @@ export function field(label, { value = "", draft, multiline = false, placeholder
     ? el("textarea", { id: inputId, class: "g-input", placeholder, required, name, "aria-describedby": hintId })
     : el("input", { id: inputId, class: "g-input", type, placeholder, required, name, autocomplete, "aria-describedby": hintId });
   input.value = draft ? draft.get() || value : value;
-  if (draft) input.addEventListener("input", () => draft.set(input.value));
+  if (draft) {
+    input.addEventListener("input", () => draft.set(input.value));
+    // The shell puts focus back here when the person returns to this page (see shell.js, restoreFocus).
+    input.setAttribute("data-focus-key", "draft:" + draft.key);
+  }
   const error = el("div", { id: errorId, class: "g-field-error", role: "alert", hidden: true });
   const wrap = el("div", { class: "g-field" }, el("label", { for: inputId }, label),
     hint ? el("div", { id: hintId, class: "g-muted" }, hint) : null, input, error);

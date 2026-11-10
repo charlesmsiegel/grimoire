@@ -124,7 +124,11 @@ export class Element extends Node {
     this.dispatchEvent(event);
     if (!event.defaultPrevented && this.tagName === "A" && this.hasAttribute("href")) this.ownerDocument.defaultView.location.hash = this.getAttribute("href");
   }
-  focus() { this.ownerDocument.activeElement = this; }
+  focus() {
+    this.ownerDocument.activeElement = this;
+    // focusin bubbles, as in a browser: the shell watches it on a page's root
+    for (let at = this; at instanceof Element; at = at.parentNode) at.dispatchEvent({ type: "focusin", target: this });
+  }
   showModal() { this.open = true; }
   close() { this.open = false; }
   querySelectorAll(selector) {

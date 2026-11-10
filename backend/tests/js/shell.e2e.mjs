@@ -88,14 +88,18 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   const composer = await until(() => main.querySelector("textarea"), 15000, "the chat");
   assert.equal(window.location.hash, chatHash);
   assert.equal(document.activeElement, body.querySelector("h1"), "focus moves to the new page's heading");
+  composer.focus();
   type(composer, "Hello over the shell.");
 
-  // go elsewhere and come back: the draft is still there
+  // go elsewhere by the menu and come back: the draft is still there, and so is the person, in the composer
+  byText(body.querySelector("nav"), "a", "Home").at(0).focus();  // a click on a link takes focus first
   window.location.hash = "#/home";
   await until(() => byText(main, "h2", "What next").length, 15000, "Home again");
+  assert.equal(document.activeElement, body.querySelector("h1"), "a page with no control to return to starts at its heading");
   window.location.hash = chatHash;
   const again = await until(() => main.querySelector("textarea"), 15000, "the chat again");
   assert.equal(again.value, "Hello over the shell.");
+  await until(() => document.activeElement === again, 15000, "focus back in the composer");
 
   // post it: the post shows in the chat and the draft is cleared
   const before = main.querySelectorAll("div").filter((node) => node.className === "chat-post").length;
