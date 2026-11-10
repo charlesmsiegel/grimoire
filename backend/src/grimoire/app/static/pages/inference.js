@@ -21,7 +21,7 @@ function el(tag, attrs, ...children) {
     else if (value === true) node.setAttribute(key, "");
     else node.setAttribute(key, String(value));
   }
-  for (const child of children.flat()) {
+  for (const child of children.flat(Infinity)) {
     if (child === null || child === undefined || child === false) continue;
     node.append(typeof child === "string" || typeof child === "number" ? document.createTextNode(String(child)) : child);
   }
@@ -30,7 +30,7 @@ function el(tag, attrs, ...children) {
 
 // replaceChildren with the empty slots (null, false) left out: the DOM would write them as text
 function fill(node, ...children) {
-  node.replaceChildren(...children.flat().filter((child) => child !== null && child !== undefined && child !== false));
+  node.replaceChildren(...children.flat(Infinity).filter((child) => child !== null && child !== undefined && child !== false));
 }
 
 function count(totals, name) {
