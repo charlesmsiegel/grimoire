@@ -30,6 +30,7 @@ export async function mount(root, ctx) {
   const detail = el("div", { class: "start-detail", "aria-live": "polite" });
   const pickers = el("div", {});
   let asked = 0;  // the newest options request: an older answer that arrives late is dropped
+  let shown = null;  // the selection whose options are on screen: Start sends only what was seen
 
   const named = (items, ref) => items.some((item) => item.ref === ref);
   const pickFrom = (kind) => (kind === "scenario" ? sources.scenarios : sources.characters);
@@ -84,10 +85,13 @@ export async function mount(root, ctx) {
   async function refresh() {
     const chosen = selection();
     const mine = ++asked;
+    shown = null;
     if (!chosen) {
       detail.replaceChildren(ui.empty(form.kind === "premise" ? "Write a premise to start from." : "Choose what to start from."));
       return;
     }
+    // the last pick's openings and chats go at once: an opening id or a Continue row must be this pick's
+    detail.replaceChildren(ui.empty("Loading…"));
     let options;
     try { options = await ctx.api("play.options", chosen); }
     catch (error) {
@@ -99,7 +103,7 @@ export async function mount(root, ctx) {
     const parts = [];
     if (form.kind === "bundle") {
       parts.push(el("p", { class: "g-muted" }, options.lorebook || form.lorebook
-        ? "The lorebook is bound with the card." : "This card has no lorebook of its own: choose one, or start without."));
+        ? "The lorebook is bound with the card." : "This card has no lorebook of its own: choose one, or start from the character alone."));
     }
     if (options.openings.length) {
       const group = el("fieldset", { class: "start-openings" }, el("legend", {}, "Opening"));
@@ -121,17 +125,21 @@ export async function mount(root, ctx) {
         ui.list(options.related.map((chat) => chatRow(ctx, chat)))));
     }
     detail.replaceChildren(...parts);
+    shown = JSON.stringify(chosen);
   }
 
   const start = ui.button("Start Chat", () => ctx.act(async () => {
     if (!persona.value) { ctx.notify("Choose who you play first.", { bad: true }); persona.select.focus(); return; }
     const chosen = selection();
     if (!chosen) { ctx.notify(form.kind === "premise" ? "Write a premise first." : "Choose what to start from first.", { bad: true }); return; }
+    if (shown !== JSON.stringify(chosen)) { await refresh(); return; }  // show this pick's openings before starting
     const args = { ...chosen, persona: persona.value };
     if (form.opening) args.opening = form.opening;
     if (label.value.trim()) args.label = label.value.trim();
     const scene = await ctx.api("play.start", args);
     premise.clear();
+    // 052 wrote the chat but stopped before it finished; the chat says how (take your seat) once it opens
+    if (scene.unfinished) ctx.notify("The chat was started, but starting stopped before it finished (" + scene.unfinished + ").", { bad: true });
     ctx.navigate(ctx.href("chat", [scene.chat]));
   }), { kind: "primary" });
 

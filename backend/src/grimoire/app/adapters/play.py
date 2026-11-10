@@ -73,9 +73,16 @@ def _opening_view(opening) -> dict:  # type: ignore[no-untyped-def]
     return {"id": opening.opening_id, "text": opening.text, "group_only": opening.group_only}
 
 
+def _detachable(repair: Repair) -> bool:
+    """Whether the app offers 052's ``detach`` for a repair. Not for the persona: the chat would take no post
+    again and nothing in the app seats another persona, where importing the card again mends it."""
+    return "detach" in repair.choices and repair.role != "persona"
+
+
 def _repair_view(repair: Repair) -> dict:
+    choices = [choice for choice in repair.choices if choice != "detach" or _detachable(repair)]
     return {"field": repair.field, "ref": repair.ref, "reason": repair.reason, "role": repair.role,
-            "choices": list(repair.choices)}
+            "choices": choices}
 
 
 # -- the launch picker -------------------------------------------------------------------------------------
@@ -105,8 +112,8 @@ def _sources(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
 
 
 def _selection(args: Mapping[str, object]) -> Selection:
-    kind = _text(args, "kind")
-    if kind not in START_KINDS:
+    kind = args.get("kind")
+    if type(kind) is not str or kind not in START_KINDS:
         raise ApiRefused("invalid_selection", "kind must be character, scenario, bundle or premise")
     if kind == "premise":
         for key in ("ref", "lorebook"):
@@ -157,8 +164,10 @@ def _post(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     assert text is not None
     if len(text) > MAX_POST_CHARS:
         raise ApiRefused("invalid_field", f"a post is at most {MAX_POST_CHARS} characters")
-    mode = args.get("mode", "auto")
-    if mode not in POST_MODES:
+    mode = args.get("mode")
+    if mode is None:
+        mode = "auto"
+    if type(mode) is not str or mode not in POST_MODES:
         raise ApiRefused("invalid_field", f"mode must be one of {', '.join(POST_MODES)}")
     ctx.runner.post(chat, ctx.handle, text, mode=str(mode))
     return _scene(ctx, chat)
@@ -220,6 +229,8 @@ def _detach(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     found = next((repair for repair in ctx.quick.repairs(chat) if repair.field == field and repair.ref == ref), None)
     if found is None:
         raise ApiRefused("not_broken", "that source resolves now, or was already detached")
+    if found.role == "persona":
+        raise ApiRefused("invalid_field", "the persona is who you play: import its card again to mend the chat")
     ctx.quick.detach_broken(chat, found, ctx.handle)
     return _scene(ctx, chat)
 

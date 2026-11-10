@@ -213,6 +213,30 @@ def test_a_missing_card_is_reported_and_detached_and_the_chat_plays_on(folder):
         device("post", chat=scene["chat"], text='"Mara?"')
 
 
+def test_the_persona_is_mended_by_its_card_not_detached(folder):
+    with Device(folder) as device:
+        chat = device("play.start", kind="character", ref=str(MARA_VELL), persona=str(ANYA))["chat"]
+    shutil.rmtree(folder / "sources" / "card" / "anya-rook")
+    with Device(folder) as device:
+        (persona,) = [r for r in device("play.repairs", chat=chat)["repairs"] if r["role"] == "persona"]
+        assert persona["choices"] == []  # detaching it would leave a chat nobody can post in
+        before = json.dumps(device("open", chat=chat), sort_keys=True)
+        assert refused(device, "play.detach", chat=chat, field=persona["field"], ref=persona["ref"]).reason == "invalid_field"
+        assert json.dumps(device("open", chat=chat), sort_keys=True) == before
+
+
+def test_the_typed_mode_is_how_the_post_is_read(folder):
+    with Device(folder) as device:
+        chat = device("play.start", kind="character", ref=str(MARA_VELL), persona=str(ANYA))["chat"]
+        scene = device("play.post", chat=chat, text="I set the lantern down.", mode="action")
+        assert scene["turns"][-1]["post"]["kind"] == "action"
+        device("pass", chat=chat, turn=scene["state"]["open_turn"])
+        scene = device("play.post", chat=chat, text="I set the lantern down.", mode="speech")
+        assert scene["turns"][-1]["post"]["kind"] == "speech"  # the same words, read as said
+        device("pass", chat=chat, turn=scene["state"]["open_turn"])
+        device("play.post", chat=chat, text="Hello.", mode=None)  # null is the default, auto
+
+
 # -- refusals write nothing -------------------------------------------------------------------------------------
 
 def _tree(folder) -> dict[str, bytes]:
@@ -223,6 +247,8 @@ def _tree(folder) -> dict[str, bytes]:
 @pytest.mark.parametrize("args,reason", [
     ({"kind": "character", "ref": str(MARA_VELL)}, "no_persona"),
     ({"kind": "lorebook", "ref": str(MARA_LORE), "persona": str(ANYA)}, "invalid_selection"),
+    ({"ref": str(MARA_VELL), "persona": str(ANYA)}, "invalid_selection"),
+    ({"kind": 7, "ref": str(MARA_VELL), "persona": str(ANYA)}, "invalid_selection"),
     ({"kind": "character", "ref": str(STORM), "persona": str(ANYA)}, "invalid_field"),
     ({"kind": "character", "ref": "not a ref", "persona": str(ANYA)}, "invalid_field"),
     ({"kind": "premise", "premise": "   ", "persona": str(ANYA)}, "invalid_selection"),

@@ -17,13 +17,19 @@ export async function mount(root, ctx) {
   ctx.styles("page.css");
   // ctx.act turns the page's buttons back on when its work ends, so the composer's own state (no seat, a stop)
   // is drawn again after every action, or Post would come back on where it must stay off.
-  const run = (work) => ctx.act(work).finally(() => { if (page.scene && !ctx.signal.aborted) drawComposer(page.scene); });
-  const page = { scene: null, mode: "auto", redirecting: null, striking: null, pickable: null, modes: null };
+  // While one runs, whatever render draws is drawn off too (ctx.act turns off only the buttons it found), and the
+  // whole chat is drawn again when it ends.
+  const run = (work) => {
+    if (page.busy || ctx.signal.aborted) return Promise.resolve(undefined);
+    page.busy = true;
+    return ctx.act(work).finally(() => { page.busy = false; if (page.scene && !ctx.signal.aborted) render(page.scene); });
+  };
+  const page = { busy: false, scene: null, mode: "auto", redirecting: null, striking: null, pickable: null, modes: null };
   const view = el("div", {});
   const composer = ui.field("Your turn", { draft: ctx.draft("composer:" + chat), multiline: true });
   composer.input.setAttribute("maxlength", "20000");
   composer.input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); run(post); }
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!send.disabled) run(post); }
   });
   const mode = el("select", { class: "g-input chat-mode", "aria-label": "How to read it",
     onchange: () => { page.mode = mode.value; } });
@@ -50,13 +56,17 @@ export async function mount(root, ctx) {
   }
 
   async function post() {
-    const text = composer.value.trim();
+    const typed = composer.value;
+    const text = typed.trim();
     if (!text || !page.scene) return;
     const before = page.scene.turns.length;
     const args = { text };
     if (posting === "play.post") args.mode = page.mode;
     const scene = await call(posting, args);
-    composer.clear();  // saved as a turn: the draft is done, even if the answer below fails
+    // saved as a turn: the draft is done, even if the answer below fails. Whatever was typed after Post was
+    // pressed is kept as the next draft.
+    if (composer.value === typed) composer.clear();
+    else composer.value = composer.value.startsWith(typed) ? composer.value.slice(typed.length).trimStart() : composer.value;
     render(scene, { bottom: true });
     // a typed table request ("Grimoire, skip") writes no new turn: nobody is asked to answer it
     const last = scene.turns[scene.turns.length - 1];
@@ -68,11 +78,15 @@ export async function mount(root, ctx) {
 
   function render(scene, { bottom = false } = {}) {
     page.scene = scene;
+    // while play is held up (no seat, a pause, a fork, a conflict, unreadable turns) nothing new is taken
+    page.stopped = !scene.state.seated || scene.state.waiting.some((item) => STOPS.includes(item));
     const players = scene.cast.filter((member) => !member.persona).map((member) => member.name).join(", ");
     ctx.setTitle(scene.label || (scene.launch && scene.launch.kind === "premise" ? "Premise chat" : players)
       || (scene.launch && scene.launch.ref) || "Chat");
     view.replaceChildren(castStrip(scene), ...notices(scene), transcript(scene), controls(scene));
     drawComposer(scene);
+    if (page.busy) for (const node of view.querySelectorAll("button")) node.disabled = true;
+    else if (page.stopped) for (const log of view.querySelectorAll("section.chat-log")) for (const node of log.querySelectorAll("button")) node.disabled = true;
     if (bottom) scrollDown();
   }
 
@@ -96,32 +110,38 @@ export async function mount(root, ctx) {
     return el("section", { "aria-label": "Who is here" }, strip, tools);
   }
 
+  // The picker stays open across the chat being drawn again (page.adding); the cards are read once, when first opened.
   function addCard(scene) {
-    const box = el("details", { class: "chat-add" }, el("summary", {}, "Add a character or card"));
+    const box = el("details", { class: "chat-add", open: page.adding }, el("summary", {}, "Add a character or card"));
+    if (page.adding && page.pickable) fillPicker(box, scene);
     box.addEventListener("toggle", () => {
-      if (!box.open || box.dataset.ready) return;
-      box.dataset.ready = "1";
-      run(async () => {
-        page.pickable = page.pickable || await ctx.api("play.sources", {});
-        const here = new Set(scene.cast.map((member) => member.name));
-        const options = [{ value: "", label: "Choose" }];
-        for (const [role, items] of [["character", page.pickable.characters], ["lorebook", page.pickable.lorebooks], ["scenario", page.pickable.scenarios]]) {
-          for (const item of items) {
-            options.push({ value: role + " " + item.ref,
-              label: (role === "character" ? "" : role[0].toUpperCase() + role.slice(1) + ": ") + item.name
-                + (role === "character" && here.has(item.name) ? " (a character of that name is here)" : "") });
-          }
-        }
-        const pick = ui.choice("Card to add", options);
-        box.append(pick.node, el("p", { class: "g-muted" }, "A newcomer hears only what is said from now on."),
-          ui.button("Add", () => run(async () => {
-            if (!pick.value) return;
-            const space = pick.value.indexOf(" ");
-            await act("play.add_card", { role: pick.value.slice(0, space), ref: pick.value.slice(space + 1) });
-          })));
-      });
+      page.adding = box.open;
+      if (!box.open || box.querySelector("select")) return;
+      if (page.pickable) fillPicker(box, scene);
+      else run(async () => { page.pickable = await ctx.api("play.sources", {}); });  // drawn filled when it ends
     });
     return box;
+  }
+
+  function fillPicker(box, scene) {
+    const here = new Set(scene.cast.map((member) => member.name));
+    const options = [{ value: "", label: "Choose" }];
+    for (const [role, items] of [["character", page.pickable.characters], ["lorebook", page.pickable.lorebooks], ["scenario", page.pickable.scenarios]]) {
+      for (const item of items) {
+        options.push({ value: role + " " + item.ref,
+          label: (role === "character" ? "" : role[0].toUpperCase() + role.slice(1) + ": ") + item.name
+            + (role === "character" && here.has(item.name) ? " (a character of that name is here)" : "") });
+      }
+    }
+    const pick = ui.choice("Card to add", options);
+    box.append(pick.node, el("p", { class: "g-muted" }, "A newcomer hears only what is said from now on."),
+      ui.button("Add", () => run(async () => {
+        if (!pick.value) return;
+        const space = pick.value.indexOf(" ");
+        const scene = await call("play.add_card", { role: pick.value.slice(0, space), ref: pick.value.slice(space + 1) });
+        page.adding = false;
+        render(scene);
+      })));
   }
 
   function addPicture(scene) {
@@ -166,7 +186,9 @@ export async function mount(root, ctx) {
       out.push(box("This chat forked: two devices played on. Choose the branch that goes on.", ...choices));
     }
     for (const conflict of scene.state.conflicts) {
-      const peer = ctx.library && ctx.library.peers[0] ? ctx.library.peers[0].peer : null;
+      // which device a version came from is not in the scene, so keeping one is offered only with one paired device
+      const peers = (ctx.library && ctx.library.peers) || [];
+      const peer = peers.length === 1 ? peers[0].peer : null;
       const keeps = peer && ctx.has("resolve") ? ["mine", "theirs"].map((keep) =>
         ui.button(keep === "mine" ? "Keep this device's" : "Keep " + peer + "'s", () => run(async () => {
           const report = await ctx.api("resolve", { peer, path: conflict.path, mine: conflict.mine, theirs: conflict.theirs, keep });
@@ -187,7 +209,11 @@ export async function mount(root, ctx) {
             el("div", { class: "chat-repair" }, el("span", {}, repair.field + ": "), el("span", { class: "g-ref" }, repair.ref),
               el("span", { class: "g-muted" }, " (" + repair.reason + ") "),
               repair.choices.includes("detach") && ctx.has("play.detach")
-                ? ui.button("Detach", () => run(() => act("play.detach", { field: repair.field, ref: repair.ref })))
+                ? ui.button("Detach", () => run(async () => {
+                  const sure = await ui.confirm("Detach " + repair.ref + " from this chat? It plays on without it, and this cannot be undone here.",
+                    { confirmLabel: "Detach", danger: true });
+                  if (sure) await act("play.detach", { field: repair.field, ref: repair.ref });
+                }))
                 : el("span", { class: "g-muted" }, "Import the card again to bring it back.")))));
         }))));
       }
@@ -298,7 +324,7 @@ export async function mount(root, ctx) {
     const openTurn = scene.state.open_turn;  // Pass names the turn on screen, so a late tap never closes a newer one
     if (openTurn) {
       const pass = ui.button("Pass", () => run(() => act("pass", { turn: openTurn })));
-      pass.disabled = scene.state.waiting.includes("paused");
+      pass.disabled = page.stopped;
       bar.append(pass);
     }
     if (!scene.state.waiting.includes("paused")) bar.append(ui.button("Pause", () => run(() => act("pause", {}))));

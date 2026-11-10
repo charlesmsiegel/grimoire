@@ -71,7 +71,8 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   byText(main, "button", "Start Chat").at(-1).click();
   await until(() => window.location.hash.startsWith("#/chat/"), 15000, "the new chat");
   const chatHash = window.location.hash;
-  await until(() => byText(main, "div", "You came back. I didn't think you would.").length, 15000, "the greeting");
+  // the greeting kept as the chat's first line (the Start Chat page also showed it, as an opening to pick)
+  await until(() => main.querySelectorAll("div.chat-line").some((node) => node.textContent.includes("You came back. I didn't think you would.")), 15000, "the greeting");
   assert.ok(byText(main, "li", "Anya Rook").some((node) => node.textContent.includes("you")), "Anya is the persona");
 
   // post as speech: the post is answered at once, as a take to keep
@@ -79,8 +80,9 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   type(composer, "\"Is the cargo safe?\"");
   pick(choice(main, "How to read it") || main.querySelector("select.chat-mode"), "speech");
   byText(main, "button", "Post").at(-1).click();
+  assert.ok(byText(main, "button", "Pause")[0].disabled, "the chat's buttons are off while the post is sent");
   await until(() => takes(main).some((node) => node.textContent.includes("Safe as the tide.")), 30000, "the first take");
-  await until(() => idle(body), 30000, "the answer");
+  await until(() => idle(body) && !byText(main, "button", "Pause")[0].disabled, 30000, "the answer");
   assert.equal(main.querySelector("textarea").value, "");
   assert.ok(byText(main, "div", "Keep a take or pass this turn before you post again.").length);
 
@@ -107,9 +109,11 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   const add = main.querySelector("details.chat-add");
   add.open = true;
   add.dispatchEvent({ type: "toggle" });
-  const card = await until(() => choice(add, "Card to add"), 15000, "the card picker");
+  // the cards are read once, and the picker is drawn open again when they arrive
+  const card = await until(() => choice(main.querySelector("details.chat-add"), "Card to add"), 15000, "the card picker");
+  await until(() => idle(body), 15000, "the cards");
   pick(card, "character " + env.GRIMOIRE_NEWCOMER);
-  byText(add, "button", "Add")[0].click();
+  byText(main.querySelector("details.chat-add"), "button", "Add")[0].click();
   await until(() => byText(main.querySelector("ul.chat-cast"), "li", "Tamsin Hale").length, 15000, "the newcomer");
   assert.ok(byText(main, "button", "Ask Tamsin Hale").length && byText(main, "button", "Ask Mara Vell").length);
 
