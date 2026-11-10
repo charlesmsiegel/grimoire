@@ -258,7 +258,7 @@ export async function chatPage(root, ctx, params) {
       const pick = el("select", { "aria-label": "Card to add" }, el("option", { value: "" }, "Choose"));
       for (const [role, items, title] of [["character", pickable.characters, "Characters"], ["lorebook", pickable.lorebooks, "Lorebooks"], ["scenario", pickable.scenarios, "Scenarios"]]) {
         const group = el("optgroup", { label: title });
-        for (const item of items) group.append(el("option", { value: role + " " + item.ref }, item.name + (role === "character" && bound.has(item.name) ? " (a second one)" : "")));
+        for (const item of items) group.append(el("option", { value: role + " " + item.ref }, item.name + (role === "character" && bound.has(item.name) ? " (already here)" : "")));
         pick.append(group);
       }
       box.append(pick, el("p", { class: "muted" }, "A newcomer hears only what is said from now on."),
@@ -366,7 +366,8 @@ export async function chatPage(root, ctx, params) {
 
   function callNote(scene, call) {
     const who = (scene.cast.find((m) => m.actor.endsWith("/" + call.actor) || m.actor === call.actor) || {}).name || call.actor;
-    const what = { refused: "the model refused", rejected: "a line was held back", failed: "the call failed", cancelled: "cancelled" }[call.status] || call.status;
+    const what = { refused: "the model refused", rejected: "its line was held back", failed: "the call failed", incomplete: "the reply was cut off",
+                   cancelled: "cancelled", planned: "not run yet", not_issued: "not asked" }[call.status] || call.status;
     return who + ": " + what + (call.reason ? " (" + call.reason + ")" : "");
   }
 
@@ -411,17 +412,24 @@ export async function chatPage(root, ctx, params) {
     async function send() {
       const said = text.value.trim();
       if (!said) return;
+      const before = page.scene.turns.length;
       const scene = await ctx.api("post", { chat, text: said, mode: page.mode });
       writeDraft(chat, "");  // saved as a turn: the draft is done, even if the answer below fails
       render(scene);
-      const typedCommand = scene.turns.length && !scene.turns[scene.turns.length - 1].post;
-      if (library.generation && !typedCommand && !scene.state.waiting.length) await answer();
+      // a typed table request ("Grimoire, skip") writes no new turn: nobody is asked to answer it
+      const last = scene.turns[scene.turns.length - 1];
+      const posted = scene.turns.length > before && last && last.post && last.open;
+      if (library.generation && posted && !scene.state.waiting.length) await answer();
     }
     text.addEventListener("keydown", (event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); busy(send); } });
     const seated = scene.state.seated && !scene.state.waiting.some((w) => ["paused", "forked", "conflicted"].includes(w));
+    // 035 takes a new post only once the last turn is closed: keep a take, or pass. A typed table request
+    // ("Grimoire, skip") is still read while a turn is open, so the composer stays usable for it.
+    const open = scene.state.open_turn !== null;
     return el("form", { class: "composer", onsubmit: (event) => { event.preventDefault(); } },
       text, el("div", { class: "row" }, mode, el("button", { type: "button", class: "primary", disabled: !seated || !scene.persona, onclick: () => busy(send) }, "Post")),
       scene.persona ? null : el("p", { class: "muted" }, "This chat has no character for you to play, so it takes no posts."),
+      open && scene.persona ? el("p", { class: "muted" }, "Keep a take or pass this turn before you post again.") : null,
       el("p", { class: "muted" }, "Ctrl+Enter posts. Type “Grimoire, skip” or “redirect: kinder” to ask for the lines on show."));
   }
 
