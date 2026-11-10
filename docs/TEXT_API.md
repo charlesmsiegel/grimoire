@@ -10,7 +10,9 @@ for the library's **owner**. It writes only through the services that own each r
 - 038's `ImageLibrary` (pictures)
 - 028's `transfer` and `resolve_conflict` (sync)
 
-It keeps no record of its own. The app that serves it on loopback, with the phone page, is [MOBILE](MOBILE.md).
+It keeps no record of its own. The app that serves it on loopback, with the phone page, is [MOBILE](MOBILE.md). The graphical
+app's gallery, picture editing, devices, pairing and keep-both conflicts are [MEDIA_SYNC_UI](MEDIA_SYNC_UI.md), over the same
+library and lock.
 
 ```python
 api = TextApi(store, authority, owner="human:owner", runtime=runtime, policy=policy, voices=voices,
