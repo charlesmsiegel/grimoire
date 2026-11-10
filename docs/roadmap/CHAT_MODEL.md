@@ -1,6 +1,6 @@
 # World-optional chats, reusable portrayals and navigation
 
-**Status: V2 architectural decision and implementation handoff, not an existing playable feature.** Sprint 107's headless storage and navigation slice is implemented ([CHATS](../CHATS.md)). Implement the follow-up to the shipped Sprint 010 contract in [Sprint 107](sprints/world-optional-chat-scopes.md). The first usable world-less text chat is a **Wave 5** gate; desktop/phone navigation starts in Waves 5–6, with a richer library browser later. The [ordered roadmap](README.md) schedules these tasks. Do **not** re-open or rewrite 010 to get there.
+**Status: V2 architectural decision and implementation handoff, not an existing playable feature.** Sprint 107's headless storage and navigation slice is implemented ([CHATS](../CHATS.md)). Implement the follow-up to the shipped Sprint 010 contract in [Sprint 107](sprints/world-optional-chat-scopes.md). The first playable headless world-less text chat is a **Wave 5** gate; minimal desktop/phone navigation starts in Waves 5–6, **full user-facing UI integration is the new Wave 7 gate**, and Sprint 065 extends navigation/workspace UX in Wave 8. The [ordered roadmap](README.md) schedules these tasks. Do **not** re-open or rewrite 010 to get there.
 
 ## Decisions
 
@@ -83,7 +83,7 @@ These promotions are later functionality in **042 / 052 / 056** as appropriate; 
 
 **Filters are derived**, using stable source and instance references, not copied chat folders or a mutable single `character_id` foreign key. One chat may appear under multiple characters and scenarios while its canonical record appears **once**. A character is **not** a unique owner of a chat (group chats exist). A chat may have a different current cast than its original launch source; `launched_from` is immutable provenance, while `attached_sources` and roster are versioned mutable associations.
 
-Minimal UI behavior: a unified chat list with search/recency, recognizable provenance chips, a **Continue** action, and **New Chat** from a character or scenario; allow adding cards mid-chat and a **Make/Attach Campaign or World** action without changing chat ID. Mobile and desktop should use the same association semantics. The fuller browsing and cross-link experience belongs to 065, but **035 cannot require users to build a world to start**.
+Minimal UI behavior: a unified chat list with search/recency, recognizable provenance chips, a **Continue** action, and **New Chat** from a character or scenario; allow adding cards mid-chat and a **Make/Attach Campaign or World** action without changing chat ID. Mobile and desktop should use the same association semantics. The full usable first-pass browsing and cross-link experience belongs to Wave 7 sprints **108/109/111**; 065 (Wave 8) then improves mature workspace layout/navigation. **035 cannot require users to build a world to start**.
 
 ## Migration and continuity
 
