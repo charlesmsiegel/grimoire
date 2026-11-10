@@ -137,13 +137,27 @@ export function actions(...children) {
   return el("div", { class: "g-actions" }, ...children);
 }
 
-// Ask before something that cannot be undone. Resolves true or false; Escape and the backdrop say no. The
-// dialog names exactly what is about to happen (and at which revision, when that matters).
+// Every confirmation still open, so the shell can answer them "no" when the person leaves the page that asked
+// (a modal left behind would block the next page, and a late "yes" would resume an action on a page now gone).
+const openConfirmations = new Set();
+
+export function closeConfirmations() {
+  for (const done of [...openConfirmations]) done(null);  // no: and focus stays with the new page
+}
+
+// Ask before something that cannot be undone. Resolves true or false; Escape, the backdrop and leaving the page
+// say no. The dialog names exactly what is about to happen (and at which revision, when that matters).
 export function confirm(message, { confirmLabel = "Confirm", danger = false } = {}) {
   return new Promise((resolve) => {
     const returnFocus = document.activeElement;
     const dialog = el("dialog", { class: "g-dialog", "aria-label": "Confirm" });
-    const done = (answer) => { dialog.close(); dialog.remove(); if (returnFocus && returnFocus.focus) returnFocus.focus(); resolve(answer); };
+    const done = (answer) => {
+      if (!openConfirmations.delete(done)) return;  // answered once
+      dialog.close(); dialog.remove();
+      if (answer !== null && returnFocus && returnFocus.focus) returnFocus.focus();
+      resolve(answer === true);
+    };
+    openConfirmations.add(done);
     dialog.append(el("p", {}, message), actions(button("Cancel", () => done(false)),
       button(confirmLabel, () => done(true), { kind: danger ? "danger" : "primary" })));
     dialog.addEventListener("cancel", (event) => { event.preventDefault(); done(false); });

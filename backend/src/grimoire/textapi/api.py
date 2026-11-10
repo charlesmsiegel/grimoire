@@ -106,6 +106,23 @@ def _refused(error: Exception) -> ApiRefused:
     return ApiRefused(reason if isinstance(reason, str) and reason else type(error).__name__, str(error))
 
 
+def refusal(error: BaseException) -> ApiRefused | None:
+    """How the text API answers ``error``: the refusal of a service it knows, or ``None`` for anything else (a
+    bug, or a refusal of a service only an app adapter knows). Shared with the app's adapters (108), which map
+    their own services' refusals only where this gives ``None``, so a stale write is ``changed`` everywhere."""
+    if isinstance(error, (SceneRefused, QuickStartRefused, InvalidImage, InvalidPlacement, InvalidBinding)):
+        return _refused(error)
+    if isinstance(error, StaleWrite):
+        return ApiRefused("changed", f"the library changed meanwhile; nothing was written ({error})")
+    if isinstance(error, BlobCorrupt):
+        return ApiRefused("blob_corrupt", str(error))
+    if isinstance(error, (DeviceIdentityUnusable, SyncError)):
+        return ApiRefused("device_identity", str(error))
+    if isinstance(error, StoreError):  # any other refusal of the store: nothing was written
+        return ApiRefused(type(error).__name__, str(error))
+    return None
+
+
 class TextApi:
     """The ops a client may call on one open library. ``owner`` is the library owner (a ``human:`` principal)
     and ``player`` who plays at its table: in this slice only the owner (one person, one library; a different
@@ -166,16 +183,11 @@ class TextApi:
                 return handler(args)
             except ApiRefused:
                 raise
-            except (SceneRefused, QuickStartRefused, InvalidImage, InvalidPlacement, InvalidBinding) as error:
-                raise _refused(error) from None
-            except StaleWrite as error:
-                raise ApiRefused("changed", f"the library changed meanwhile; nothing was written ({error})") from None
-            except BlobCorrupt as error:
-                raise ApiRefused("blob_corrupt", str(error)) from None
-            except (DeviceIdentityUnusable, SyncError) as error:
-                raise ApiRefused("device_identity", str(error)) from None
-            except StoreError as error:  # any other refusal of the store: nothing was written
-                raise ApiRefused(type(error).__name__, str(error)) from None
+            except Exception as error:
+                refused = refusal(error)
+                if refused is None:
+                    raise
+                raise refused from None
 
     def image(self, ref: str) -> tuple[str, bytes]:
         """A picture's media type and exact bytes (038 checks them against the blob's name)."""
@@ -549,4 +561,4 @@ class TextApi:
                 "receiver": report.receiver}
 
 
-__all__ = ["DEFAULT_SLOT", "MAX_ART_BYTES", "MAX_POST_CHARS", "TextApi", "field", "parse_ref"]
+__all__ = ["DEFAULT_SLOT", "MAX_ART_BYTES", "MAX_POST_CHARS", "TextApi", "field", "parse_ref", "refusal"]

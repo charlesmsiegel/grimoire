@@ -70,22 +70,30 @@ STATIC_POLICY = "default-src 'none'; sandbox"
 
 def static_file(static: Path, path: str) -> tuple[Path, str] | None:
     """The file ``/static/<path>`` names, and its type, or ``None``. Every segment must be a plain name, the
-    extension one ``STATIC_TYPES`` serves, and the file a regular file inside ``static`` once links are resolved."""
-    segments = path.split("/")
-    if not segments or not all(_SEGMENT.fullmatch(part) and ".." not in part for part in segments):
-        return None
-    kind = STATIC_TYPES.get(Path(segments[-1]).suffix)
-    if kind is None:
+    extension one ``STATIC_TYPES`` serves, and the file a regular file inside ``static`` once links are resolved;
+    the file a link resolves to must pass the same checks, so an ``alias.js`` naming a manifest or a dot file
+    serves nothing."""
+    if _servable(path.split("/")) is None:
         return None
     root = static.resolve()
-    target = root.joinpath(*segments)
     try:
-        resolved = target.resolve(strict=True)
+        resolved = root.joinpath(*path.split("/")).resolve(strict=True)
     except (OSError, RuntimeError):
         return None
     if not resolved.is_relative_to(root) or not resolved.is_file():
         return None
+    kind = _servable(list(resolved.relative_to(root).parts))
+    if kind is None:
+        return None
     return resolved, kind
+
+
+def _servable(segments: list[str]) -> str | None:
+    """The type of the file these path segments name, or ``None`` when some segment is not a plain name or the
+    extension is not one ``STATIC_TYPES`` serves."""
+    if not segments or not all(_SEGMENT.fullmatch(part) and ".." not in part for part in segments):
+        return None
+    return STATIC_TYPES.get(Path(segments[-1]).suffix)
 
 
 class _Server(ThreadingHTTPServer):

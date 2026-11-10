@@ -207,6 +207,28 @@ def test_a_link_out_of_the_static_folder_is_not_followed(device, tmp_path):
     assert response.status == 404 and b"secret" not in data
 
 
+def test_a_link_inside_the_static_folder_serves_only_what_could_be_served_by_name(device, tmp_path):
+    opened, _chat = device
+    static = _static(tmp_path)
+    (static / "shell" / ".hidden.js").write_text("hidden", encoding="utf-8")
+    shutil.copytree(STATIC / "pages" / "home", static / "pages" / "home")
+    manifest = static / "pages" / "home" / "page.json"
+    try:
+        os.symlink(manifest, static / "shell" / "manifest.js")
+        os.symlink(static / "shell" / ".hidden.js", static / "shell" / "hidden.js")
+        os.symlink(static / "shell" / "shell.js", static / "shell" / "alias.js")
+    except (OSError, NotImplementedError):
+        pytest.skip("this platform cannot make the link")
+    server = Served(opened.api, static=static)
+    try:
+        assert server.get("/static/shell/manifest.js")[0].status == 404
+        hidden, data = server.get("/static/shell/hidden.js")
+        assert hidden.status == 404 and b"hidden" not in data
+        assert server.get("/static/shell/alias.js")[0].status == 200  # a link to a servable module is fine
+    finally:
+        server.close()
+
+
 # -- adapters -------------------------------------------------------------------------------------------
 
 def _probe(seen: list):
@@ -286,6 +308,25 @@ def test_an_adapters_own_refusals_are_answered_with_its_reason_and_anything_else
         app.call("probe.broken", {})
     with pytest.raises(TypeError, match="not JSON"):
         app.call("probe.not_json", {})
+
+
+def test_an_adapters_refusals_never_rename_the_text_apis_own(device):
+    opened, _chat = device
+
+    def stale(ctx, args):
+        raise StaleWrite([("sources/probe.json", "changed")])
+
+    def other(ctx, args):
+        raise _OtherServiceError("anything else")
+
+    broad = Adapter("broad", owner="test", refusals={Exception: "broad_refused"}, ops={"stale": stale, "other": other})
+    app = AppApi(opened.api, (broad,))
+    with pytest.raises(ApiRefused) as refused:
+        app.call("broad.stale", {})
+    assert refused.value.reason == "changed"
+    with pytest.raises(ApiRefused) as refused:
+        app.call("broad.other", {})
+    assert refused.value.reason == "broad_refused"
 
 
 def test_a_bug_in_an_adapter_is_answered_500_over_http_and_the_app_goes_on(device):
