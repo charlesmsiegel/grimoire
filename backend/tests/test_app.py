@@ -22,7 +22,7 @@ from textapi_fixtures import DESKTOP, Device, desktop_library, pair_devices, pho
 
 from grimoire.app import AppServer, ConfigError, build_runtime, parse_model_config
 from grimoire.app.cli import main
-from grimoire.app.server import MAX_BODY, PAGE, TOKEN_HEADER, page_policy
+from grimoire.app.server import MAX_BODY, PAGE, PAGE_POLICY, STATIC, TOKEN_HEADER
 from grimoire.peersync import PeerServer
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR synthetic"
@@ -87,13 +87,24 @@ def test_the_page_is_served_with_a_policy_that_allows_only_itself(running):
     assert response.status == 200
     page = data.decode("utf-8")
     policy = response.getheader("Content-Security-Policy")
-    assert policy == page_policy(page)
+    assert policy == PAGE_POLICY
     assert "default-src 'none'" in policy and "connect-src 'self'" in policy and "frame-ancestors 'none'" in policy
+    assert "unsafe-inline" not in policy and "unsafe-eval" not in policy
     assert response.getheader("Cache-Control") == "no-store"
-    # nothing from another origin, and nothing that turns library text into markup
-    assert not re.search(r"(src|href)\s*=\s*\"(https?:)?//", page)
-    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"):
-        assert sink not in page
+    # nothing from another origin, and nothing that turns library text into markup, in the page or the code it runs
+    served = [page]
+    linked = set(re.findall(r"(?:src|href)=\"(/static/[^\"]+)\"", page))
+    assert "/static/shell/shell.js" in linked
+    modules = {"/static/" + path.relative_to(STATIC).as_posix() for path in STATIC.rglob("*")
+               if path.suffix in (".js", ".css")}  # every module a page can import, not just the two it links
+    for path in sorted(linked | modules):
+        response, data = server.request("GET", path, token=None)
+        assert response.status == 200
+        served.append(data.decode("utf-8"))
+    for text in served:
+        assert not re.search(r"(src|href)\s*=\s*\"(https?:)?//", text)
+        for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"):
+            assert sink not in text
 
 
 def test_a_request_for_another_host_is_refused_before_anything_is_read(running):
@@ -309,8 +320,8 @@ def test_a_post_on_the_phones_app_resumes_on_the_desktops_app(tmp_path):
             peer_server.close()
 
 
-def test_the_page_file_is_packaged_beside_the_server():
-    assert PAGE.is_file() and "<script>" in PAGE.read_text(encoding="utf-8")
+def test_the_page_and_its_shell_are_packaged_beside_the_server():
+    assert PAGE.is_file() and (STATIC / "shell" / "shell.js").is_file()
 
 
 def test_identify_names_an_existing_library_once(tmp_path, capsys):
