@@ -28,6 +28,11 @@ function el(tag, attrs, ...children) {
   return node;
 }
 
+// replaceChildren with the empty slots (null, false) left out: the DOM would write them as text
+function fill(node, ...children) {
+  node.replaceChildren(...children.flat().filter((child) => child !== null && child !== undefined && child !== false));
+}
+
 function count(totals, name) {
   // a sum is a lower bound while any of its counts went unreported: say so, never show a bare number
   const sum = totals.sums[name], missing = totals.unreported[name];
@@ -57,7 +62,7 @@ export async function render(root, ctx) {
     diagnostics: el("section", { "aria-labelledby": "inf-diag" }),
     missing: el("section", { "aria-labelledby": "inf-missing" }),
   };
-  root.replaceChildren(el("h1", {}, "Models and costs"), live, ...Object.values(sections));
+  fill(root, el("h1", {}, "Models and costs"), live, ...Object.values(sections));
   const say = (text, bad) => { live.textContent = text; live.classList.toggle("g-bad", Boolean(bad)); };
 
   function draft() {
@@ -108,7 +113,7 @@ export async function render(root, ctx) {
         el("button", { type: "submit", class: "g-primary", disabled: readOnly }, "Save")),
       readOnly ? el("p", { class: "g-hint" }, "Read only: the app was started without a settings file (serve --model FILE).") : null,
       state.check ? checkView(state.check) : null);
-    sections.model.replaceChildren(el("h2", { id: "inf-model" }, "Model"), status, form);
+    fill(sections.model, el("h2", { id: "inf-model" }, "Model"), status, form);
   }
 
   function checkView(result) {
@@ -126,7 +131,7 @@ export async function render(root, ctx) {
       el("td", {}, stage.kind === "baseline" ? "Always" : stage.available ? (stage.enabled ? "On" : "Off") : "Not available"),
       el("td", {}, stage.note)));
     const limits = state.models.limits;
-    sections.stages.replaceChildren(el("h2", { id: "inf-stages" }, "Model calls a turn may make"),
+    fill(sections.stages, el("h2", { id: "inf-stages" }, "Model calls a turn may make"),
       el("p", { class: "g-hint" }, "Every NPC who speaks gets its own call. Every other call is optional, off unless switched on, and capped per turn."),
       el("div", { class: "g-scroll" }, el("table", {}, el("thead", {}, el("tr", {}, el("th", { scope: "col" }, "Call"), el("th", { scope: "col" }, "State"), el("th", { scope: "col" }, "Why"))), el("tbody", {}, rows))),
       limits ? el("p", {}, `At most ${limits.attempts_per_call} attempt(s) per call and ${limits.max_output_tokens} tokens per reply` +
@@ -134,7 +139,7 @@ export async function render(root, ctx) {
   }
 
   function missingSection() {
-    sections.missing.replaceChildren(el("h2", { id: "inf-missing" }, "Not available yet"),
+    fill(sections.missing, el("h2", { id: "inf-missing" }, "Not available yet"),
       el("ul", {}, state.models.unavailable.map((item) => el("li", {}, el("strong", {}, item.feature.replaceAll("_", " ")), ": ", item.reason))));
   }
 
@@ -144,7 +149,7 @@ export async function render(root, ctx) {
     const picker = el("select", { id: "inf-chat", onchange: (event) => { state.chat = event.target.value || null; usage(); } },
       el("option", { value: "" }, "Choose a chat"),
       listed.chats.map((entry) => el("option", { value: entry.chat, selected: entry.chat === state.chat }, entry.label || entry.chat)));
-    sections.usage.replaceChildren(el("h2", { id: "inf-usage" }, "Usage by chat"),
+    fill(sections.usage, el("h2", { id: "inf-usage" }, "Usage by chat"),
       listed.error ? el("p", { class: "g-bad" }, "The chats cannot be listed: " + listed.error.message) : null,
       field("inf-chat", "Chat", picker), el("div", { id: "inf-usage-body" }));
     if (state.chat) usage();
@@ -152,10 +157,10 @@ export async function render(root, ctx) {
 
   async function usage() {
     const body = root.querySelector("#inf-usage-body");
-    if (!state.chat) { body.replaceChildren(); return; }
+    if (!state.chat) { fill(body); return; }
     let result;
     try { result = await api("usage", { chat: state.chat }); } catch (error) {
-      body.replaceChildren(el("p", { class: "g-bad" }, error.message)); return;
+      fill(body, el("p", { class: "g-bad" }, error.message)); return;
     }
     const total = result.total;
     const summary = el("dl", { class: "g-totals" },
@@ -166,7 +171,7 @@ export async function render(root, ctx) {
     const turns = result.turns.filter((turn) => turn.calls.length).reverse().map((turn) => el("details", {},
       el("summary", {}, `Turn ${turn.number}` + (turn.set_aside ? " (set aside at a fork)" : "") + `: ${turn.calls.filter((c) => c.stage).length} call(s)`),
       el("ul", {}, turn.calls.map(callView))));
-    body.replaceChildren(summary,
+    fill(body, summary,
       result.problems.length ? el("p", { class: "g-bad" }, "Some turns cannot be read; their calls are not counted.") : null,
       turns.length ? el("div", {}, turns) : el("p", {}, "No model calls in this chat yet."));
   }
@@ -191,7 +196,7 @@ export async function render(root, ctx) {
       trace.calls.length ? el("ul", {}, trace.calls.map((role) => el("li", {},
         `${STAGE_NAMES[role.stage] || role.stage} (${role.actor || "scene"}): ${role.attempts} attempt(s), ` +
         (role.provider_seconds === null ? `provider time ${role.latency}` : `provider ${(role.provider_seconds * 1000).toFixed(0)} ms (${role.latency})`)))) : null));
-    sections.diagnostics.replaceChildren(el("h2", { id: "inf-diag" }, "Recent calls on this device"),
+    fill(sections.diagnostics, el("h2", { id: "inf-diag" }, "Recent calls on this device"),
       el("p", { class: "g-hint" }, "Timings of this app's play calls since it started, kept in memory only. Speakers are numbered, never named."),
       result.available ? null : el("p", {}, "Not available: " + result.reason), refresh,
       items.length ? el("ol", {}, items) : el("p", {}, "Nothing played since the app started."));
