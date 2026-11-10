@@ -123,3 +123,17 @@ def test_serve_starts_without_a_model_when_its_settings_file_is_missing_and_serv
     finally:
         process.terminate()
         process.wait(30)
+
+
+def test_the_first_run_flag_says_whether_the_settings_file_would_give_a_model(desk, model, tmp_path):
+    path = tmp_path / "model.json"
+    assert providers.usable(None, OWNER) is False and providers.usable(path, OWNER) is False  # none, missing
+    path.write_text("{", encoding="utf-8")
+    assert providers.usable(path, OWNER) is False  # unusable
+    path.unlink()
+    with Device(desk, runtime=False) as device:
+        settings = providers.configure(device.api, path, environ={})
+        etag = settings.call("models")["etag"]
+        settings.call("save_models", {"settings": {**_settings(model), "key_env": "LOCAL_API_KEY"}, "expected": etag})
+    assert providers.usable(path, OWNER, environ={}) is False  # saved, but its key variable is not set
+    assert providers.usable(path, OWNER, environ={"LOCAL_API_KEY": "sk-synthetic-value"}) is True

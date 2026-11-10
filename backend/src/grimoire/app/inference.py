@@ -529,4 +529,4 @@ def _totals(attempts, unmetered: int, unsent: int) -> dict:  # type: ignore[no-u
     return view
 
 
-__all__ = ["APP_KEY_ENV", "InferenceApi", "SettingsFile", "UNAVAILABLE"]
+__all__ = ["APP_KEY_ENV", "UNAVAILABLE", "InferenceApi", "SettingsFile", "parse_settings", "settings_usable"]
