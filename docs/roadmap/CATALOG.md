@@ -1,4 +1,4 @@
-# V2 thematic sprint catalog (107 proposals)
+# V2 thematic sprint catalog (119 proposals)
 
 The [ordered roadmap](README.md) is authoritative for **priorities, dependencies, parallel waves and the early migration/play/sync path**. This thematic catalog preserves the 90 earlier ideas and highlights 17 V2-specific foundations. V1 assumptions in carried proposal bodies are not implemented V2 features.
 
@@ -23,6 +23,30 @@ The [ordered roadmap](README.md) is authoritative for **priorities, dependencies
 | [Minimal Text Scene Runner](sprints/minimal-text-scene-runner.md) | Play/resume both a world-based campaign and world-less card/scenario chat | 5 |
 | [Source Rebase And Semantic Merge](sprints/source-rebase-and-semantic-merge.md) | Update one root fact while two campaigns retain independent memories | 5 |
 | [V2 Mobile Client](sprints/v2-mobile-client.md) | Play on phone, sync an accepted turn plus picture, resume on desktop | 6 |
+
+## UI product delivery and sequential wave exits (12 new proposals)
+
+**New Wave 7 P0:** converge all existing Waves 1–6 domain features into one usable desktop/web/phone UI, not another headless proof. [Coverage and release test](UI_COVERAGE.md). All seven can be developed against stable earlier domain contracts with separate ownership and a frozen shell/API handoff.
+
+| # | UI proposal | Wave | First useful result |
+|---:|---|---:|---|
+| 108 | [UI shell, onboarding and navigation](sprints/ui-shell-onboarding-navigation.md) | **7** | Fresh install, V2 library/provider setup, accessible navigation and Start Chat entry |
+| 109 | [UI library, facets and portrayals](sprints/ui-library-facets-portrayals.md) | **7** | Source-qualified record authoring, pin/override/clear views |
+| 110 | [UI import, migration and change review](sprints/ui-import-migration-review.md) | **7** | Import/migration preview, exact-change human review |
+| 111 | [UI chat launch and scene play](sprints/ui-chat-launch-play.md) | **7** | Create, play, review, save and resume both quick chats and imported scenes |
+| 112 | [UI inference, prompts and costs](sprints/ui-inference-prompts-costs.md) | **7** | Provider settings, authorized actor prompt inspection and metered calls |
+| 113 | [UI campaign state and canon review](sprints/ui-campaign-state-canon.md) | **7** | Cast, stage, evidence, proposal and accepted-effect review |
+| 114 | [UI media, sync and resilience](sprints/ui-media-sync-resilience.md) | **7** | Artwork, paired-device transfer, conflicts and recovery |
+
+**Later waves:** these are *sequential UI exit slices*, deliberately **after** their wave's domain first slices, and **not counted as same-wave parallel work**.
+
+| # | UI exit proposal | Wave | First useful result |
+|---:|---|---:|---|
+| 115 | [Reliable campaign play](sprints/wave-8-ui-exit.md) | **8** | Conflict-safe long-term play, retcons and mature workspace |
+| 116 | [Mechanics, authoring and audio](sprints/wave-9-ui-exit.md) | **9** | Rolls/sheets, proposals, context and voice drafts |
+| 117 | [Rich interaction and presentation](sprints/wave-10-ui-exit.md) | **10** | Encounter, map, growth, visual and publishing controls |
+| 118 | [Collaboration and publication](sprints/wave-11-ui-exit.md) | **11** | Multi-controller authority, arcs and packages |
+| 119 | [Voice and immersion](sprints/wave-12-ui-exit.md) | **12** | Spoken roleplay and optional spatial interface with text fallback |
 
 ## Earlier 90 proposals by theme
 
