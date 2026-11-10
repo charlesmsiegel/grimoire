@@ -404,6 +404,9 @@ class InferenceApi:
         limit = args.get("limit", DEFAULT_TURNS)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_TURNS:
             raise ApiRefused("invalid_field", f"limit must be 1 to {MAX_TURNS}")
+        skip = args.get("skip", 0)  # the newest turns left out, so earlier ones can be listed
+        if isinstance(skip, bool) or not isinstance(skip, int) or skip < 0:
+            raise ApiRefused("invalid_field", "skip must be a whole number of turns, 0 or more")
         try:
             scene = self.text_api.runner.open(chat)
         except SceneRefused as error:
@@ -437,8 +440,10 @@ class InferenceApi:
                           "calls": [{key: value for key, value in entry.items() if key != "_attempts"}
                                     for entry in entries]})
         problems = [{"code": code, "detail": detail} for code, detail in scene.problems]
+        end = max(len(turns) - skip, 0)
+        window = turns[max(end - limit, 0):end]
         return {
-            "chat": str(chat), "turns": turns[-limit:], "listed": min(len(turns), limit), "of": len(turns),
+            "chat": str(chat), "turns": window, "skip": skip, "listed": len(window), "of": len(turns),
             "total": _totals(everything, sum(unmetered.values()), sum(unsent.values())),
             "by_stage": [{"stage": stage, **_totals(attempts, unmetered[stage], unsent[stage])}
                          for stage, attempts in sorted(by_stage.items())],

@@ -91,4 +91,19 @@ const findText = (n, text) => (n.tag === "button" && n.textContent === text) ? n
 findText(second, "Show more chats").listeners.click();
 await new Promise((r) => setTimeout(r, 10));
 assert.deepEqual(asks, [100, 400]);
+// a long chat: its turns come a window at a time, and an empty window is not called an empty chat
+const windows = [];
+const third = new Node_("main");
+await page.mount(third, { api: (op, args) => { if (op !== "providers.usage") return many(op, args);
+    windows.push(args.skip);
+    return Promise.resolve({ turns: [], skip: args.skip, listed: args.skip === 0 ? 200 : 0, of: 450,
+      total: { ...totals, unmetered_calls: 0, not_issued_calls: 0 }, by_stage: [], complete: true, problems: [] }); },
+  query: new URLSearchParams("chat=long"), setTitle() {}, styles() {}, refreshLibrary: async () => {} });
+await new Promise((r) => setTimeout(r, 10));
+let text = third.querySelector("#inf-usage-body").textContent;
+assert.ok(text.includes("Turns 251 to 450 of 450") && text.includes("No model calls in these turns.") && !text.includes("in this chat yet"), text);
+findText(third, "Earlier turns").listeners.click();
+await new Promise((r) => setTimeout(r, 10));
+assert.deepEqual(windows, [0, 200]);
+assert.ok(findText(third, "Later turns"), "a later window can be gone back to");
 console.log("ok");

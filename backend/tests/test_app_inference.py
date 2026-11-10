@@ -381,6 +381,31 @@ def test_checking_a_draft_sends_nothing_and_says_what_a_save_would_play_by(desk,
         assert model.requests == [] and not (tmp_path / "model.json").exists()
 
 
+def test_usage_lists_turns_a_window_at_a_time_and_its_totals_cover_every_turn(desk, model, tmp_path):
+    with Device(desk, runtime=False) as device:
+        inference = _table(device, tmp_path / "model.json")
+        inference.call("save_models", {"settings": _settings(model), "expected": None})
+        device("continue", chat=CHAT)
+        for text in ("First.", "Second.", "Third."):
+            _turn(device, text)
+            keep(device, CHAT)
+        whole = inference.call("usage", {"chat": CHAT})
+        played = [turn["number"] for turn in whole["turns"]]
+        assert len(played) >= 3 and (whole["skip"], whole["listed"], whole["of"]) == (0, len(played), len(played))
+        newest = inference.call("usage", {"chat": CHAT, "limit": 1})
+        earlier = inference.call("usage", {"chat": CHAT, "limit": 1, "skip": 1})
+        past = inference.call("usage", {"chat": CHAT, "limit": 1, "skip": len(played)})
+        assert [turn["number"] for turn in newest["turns"]] == played[-1:]
+        assert [turn["number"] for turn in earlier["turns"]] == played[-2:-1]
+        assert (past["turns"], past["listed"], past["of"]) == ([], 0, len(played))
+        for window in (newest, earlier, past):  # a window never changes what the totals say
+            assert window["total"] == whole["total"] and window["by_stage"] == whole["by_stage"]
+        for skip in (-1, True, "1"):
+            with pytest.raises(ApiRefused) as refused:
+                inference.call("usage", {"chat": CHAT, "skip": skip})
+            assert refused.value.reason == "invalid_field"
+
+
 def test_usage_refuses_what_is_not_a_chat(desk, tmp_path):
     with Device(desk, runtime=False) as device:
         inference = _table(device, tmp_path / "model.json")

@@ -21,7 +21,7 @@ Each is called as `providers.<op>`.
 | `models` | none | `settings` (the configuration, with `key_set`: whether the key variable is set where the app runs, never its value; `null` when none), `etag` (the file's revision, `null`: no file yet), `file` (`configured`: the app was served with a settings file; `exists`), `generation` (`available`, `problem` with `code` and `message`, `routes`: the route labels in the order attempts use them, `local`), `stages`, `limits`, `unavailable`, `bounds` |
 | `check_models` | `settings` (a draft) | `ok`, `problems` (each `field`, `message`), `routes`, `local`, `key_set`, `sent: false`. Nothing is saved or sent |
 | `save_models` | `settings`, `expected` (the `etag` `models` gave; `null` when there was no file) | `models`' answer, after the file is written and the runner given what it configures |
-| `usage` | `chat`, `limit` (turns listed, 1 to 1000, default 200; the totals cover every turn) | `turns` (each `turn`, `number`, `set_aside`, `calls`), `total`, `by_stage`, `complete`, `problems` |
+| `usage` | `chat`, `limit` (turns listed, 1 to 1000, default 200), `skip` (the newest turns left out, default 0: how earlier turns are listed); the totals always cover every turn | `turns` (each `turn`, `number`, `set_aside`, `calls`), `skip`, `listed`, `of`, `total`, `by_stage`, `complete`, `problems` |
 | `diagnostics` | none | `available`, `traces`: this process's last runner calls, newest first |
 
 ### Settings
@@ -84,7 +84,7 @@ labelling of its turns, the turns a fork choice set aside included (they were bi
 booked: a screen never shows it bare),
 `measurements`, `unmetered_calls` (planned calls with no attempt booked, as 004 counts them) and `not_issued_calls`
 (those of them never sent, so they used nothing; what the rest used is unknown, never free). `listed` and `of` say
-how many turns are listed, of how many.
+how many turns are listed, of how many, after the `skip` newest.
 
 **No prices ship (013)**, so every `cost` is `null` with `cost_state: "unpriced"`: unknown, never zero.
 
@@ -105,7 +105,7 @@ real provider on the real clock; `synthetic`, `partial` or `unreported` otherwis
 `grimoire/app/static/pages/providers/` is the page: `page.json` and `page.js`, which exports the shell's
 `mount(root, ctx)` and calls `providers.<op>` and the text API's `chats` through `ctx.api`. It
 has five sections: **Model** (the settings form, **Check** and **Save**), **Model calls a turn may make**,
-**Usage by chat** (the 100 most recent chats, **Show more chats** for up to 1,000; `#/providers?chat=<ChatRef>` opens one chat's usage directly), **Recent calls on this device** and **Not available yet**. Every library and provider text is
+**Usage by chat** (the 100 most recent chats, **Show more chats** for up to 1,000; `#/providers?chat=<ChatRef>` opens one chat's usage directly; a chat's turns come 200 at a time, newest first, with **Earlier turns** and **Later turns**), **Recent calls on this device** and **Not available yet**. Every library and provider text is
 set as text, never markup. `backend/tests/test_app_inference_page.py` runs the page in Node over a fake DOM and
 fake ops (skipped where Node is not installed); `backend/tests/test_app_inference_shell.py` serves it through
 the shell, from `serve --model FILE` as a process too.

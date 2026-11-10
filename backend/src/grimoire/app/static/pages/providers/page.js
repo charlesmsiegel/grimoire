@@ -6,6 +6,8 @@
 
 /** Chats listed at first, and the most the text API lists (044's MAX_LIMIT). */
 const CHATS_PAGE = 100, CHATS_MAX = 1000;
+/** Turns listed at a time in one chat's usage (the totals always cover every turn). */
+const TURNS_PAGE = 200;
 
 const TOKEN_NAMES = [["input_tokens", "prompt"], ["output_tokens", "completion"], ["cache_read_tokens", "cached"],
   ["reasoning_tokens", "reasoning"]];
@@ -76,7 +78,7 @@ export async function mount(root, ctx) {
   if (ctx.styles) ctx.styles("page.css");
   // a chat can be named in the address (#/providers?chat=<ChatRef>), so one past the list's end is reachable too
   const named = ctx.query && ctx.query.get ? ctx.query.get("chat") : null;
-  const state = { models: null, check: null, chat: named || null, asked: 0, limit: CHATS_PAGE };
+  const state = { models: null, check: null, chat: named || null, asked: 0, limit: CHATS_PAGE, skip: 0 };
   const live = el("div", { class: "providers-live", role: "status", "aria-live": "polite" });
   const sections = {
     model: el("section", { "aria-labelledby": "inf-model" }),
@@ -170,7 +172,7 @@ export async function mount(root, ctx) {
     let listed;
     try { listed = await api("chats", { limit: state.limit }); } catch (error) { listed = { chats: [], error }; }
     const known = new Set(listed.chats.map((entry) => entry.chat));
-    const picker = el("select", { id: "inf-chat", class: "g-input", onchange: (event) => { state.chat = event.target.value || null; usage(); } },
+    const picker = el("select", { id: "inf-chat", class: "g-input", onchange: (event) => { state.chat = event.target.value || null; state.skip = 0; usage(); } },
       el("option", { value: "" }, "Choose a chat"),
       // the chosen chat stays choosable even when it is past the list's end (its exact ref is shown)
       state.chat && !known.has(state.chat) ? el("option", { value: state.chat, selected: true }, state.chat) : null,
@@ -191,7 +193,7 @@ export async function mount(root, ctx) {
     if (!chat) { fill(body); return; }
     fill(body, el("p", {}, "Reading this chat's usage…"));
     let result;
-    try { result = await api("usage", { chat }); } catch (error) {
+    try { result = await api("usage", { chat, limit: TURNS_PAGE, skip: state.skip }); } catch (error) {
       if (asked === state.asked) fill(body, el("p", { class: "g-bad" }, error.message));
       return;
     }
@@ -205,9 +207,18 @@ export async function mount(root, ctx) {
     const turns = result.turns.filter((turn) => turn.calls.length).reverse().map((turn) => el("details", {},
       el("summary", {}, `Turn ${turn.number}` + (turn.set_aside ? " (set aside at a fork)" : "") + `: ${turn.calls.filter((c) => c.stage).length} call(s)`),
       el("ul", {}, turn.calls.map(callView))));
+    // the totals cover every turn; the turns themselves come a window at a time, newest first
+    const whole = result.listed === result.of;
+    const first = result.of - result.skip - result.listed + 1, last = result.of - result.skip;
+    const move = (skip) => () => { state.skip = Math.max(skip, 0); usage(); };
+    const paging = whole ? null : el("div", { class: "g-actions" },
+      el("p", { class: "g-muted" }, result.listed ? `Turns ${first} to ${last} of ${result.of}, newest first. The totals above cover all of them.` : `No turns here: this chat has ${result.of}.`),
+      result.skip + result.listed < result.of ? el("button", { type: "button", class: "g-button", onclick: move(result.skip + result.listed) }, "Earlier turns") : null,
+      result.skip > 0 ? el("button", { type: "button", class: "g-button", onclick: move(result.skip - TURNS_PAGE) }, "Later turns") : null);
     fill(body, summary,
       result.problems.length ? el("p", { class: "g-bad" }, "Some turns cannot be read; their calls are not counted.") : null,
-      turns.length ? el("div", {}, turns) : el("p", {}, "No model calls in this chat yet."));
+      paging,
+      turns.length ? el("div", {}, turns) : el("p", {}, whole ? "No model calls in this chat yet." : "No model calls in these turns."));
   }
 
   function callView(call) {
