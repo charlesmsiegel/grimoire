@@ -7,5 +7,5 @@
   "order": 0,
   "owner": "111",
   "entry": "page.js",
-  "requires": ["open", "post", "keep", "pass", "continue", "pause", "resume", "choose", "resolve", "add_art"]
+  "requires": ["open", "post", "keep", "pass", "continue", "pause", "resume", "choose"]
 }

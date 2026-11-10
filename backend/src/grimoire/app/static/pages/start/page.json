@@ -1,0 +1,11 @@
+{
+  "contract": 1,
+  "id": "start",
+  "route": "start",
+  "title": "Start Chat",
+  "slot": "play",
+  "order": 20,
+  "owner": "111",
+  "entry": "page.js",
+  "requires": ["play.sources", "play.options", "play.start"]
+}

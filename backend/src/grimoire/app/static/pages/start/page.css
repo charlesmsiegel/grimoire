@@ -1,0 +1,3 @@
+.start-openings { border: 1px solid var(--g-line); border-radius: var(--g-radius); padding: 8px 12px; margin: 12px 0; }
+.start-opening { display: flex; gap: 8px; align-items: baseline; margin: 6px 0; }
+.start-detail { margin: 8px 0; }
