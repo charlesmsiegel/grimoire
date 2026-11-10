@@ -105,12 +105,28 @@ def turn_view(record, names: Names, player: str | None = None) -> dict:  # type:
     post = record.post
     effects = [effect for effect in record.effects
                if player is None or any(who == player for _, who in effect.endorsers)]
-    return {"turn": record.turn_id, "number": record.number, "open": record.open,
-            "kept": record.kept is not None, "passed": record.passed_by is not None,
-            "post": None if post is None else {"actor": actor_ref(post.actor, names), "kind": post.kind,
-                                               "withheld": post.withheld, "channel": post.channel},
-            "labels": [label_view(label) for label in record.labels],
-            "effects": [effect_view(effect, names) for effect in effects]}
+    found = {"turn": record.turn_id, "number": record.number, "open": record.open,
+             "kept": record.kept is not None, "passed": record.passed_by is not None,
+             "post": None if post is None else {"actor": actor_ref(post.actor, names), "kind": post.kind,
+                                                "withheld": post.withheld, "channel": post.channel},
+             "labels": [label_view(label) for label in record.labels],
+             "effects": [effect_view(effect, names) for effect in effects]}
+    if player is None:  # 039's recorded intentions name actors and propositions by id: the director's alone
+        found["intentions"] = [intention_view(item, names) for item in record.intentions]
+    return found
+
+
+def intention_view(intention, names: Names) -> dict:  # type: ignore[no-untyped-def]
+    """039's choice for one NPC in one take, as the runner recorded it: an account of a choice, never an agenda."""
+    return {"kind": "intention", "take": intention.take, "actor": actor_ref(intention.actor, names),
+            "as_of": intention.as_of, "goal": intention.goal_id, "approach": intention.approach_id,
+            "refusals": list(intention.refusals),
+            "considered": [{"goal": item.goal_id, "approach": item.approach_id, "outcome": item.outcome,
+                            "unmet": list(item.unmet), "forbidden_by": list(item.forbidden_by)}
+                           for item in intention.considered],
+            "omitted": intention.omitted, "explanation": list(intention.explanation),
+            "present": [actor_ref(actor, names) for actor in intention.present],
+            "unrecognised": [actor_ref(actor, names) for actor in intention.unrecognised]}
 
 
 def event_view(event, names: Names) -> dict:  # type: ignore[no-untyped-def]
@@ -187,6 +203,77 @@ def knowledge_view(knowledge, names: Names) -> dict:  # type: ignore[no-untyped-
             [belief(item) for item in knowledge.inherited_history]}
 
 
+def claim_view(item, shape, held: Iterable[tuple[InstanceRef, str]], names: Names) -> dict:  # type: ignore[no-untyped-def]
+    """One proposition as the director reviews it: canon's ``standing`` (012, with the ruling that governs it),
+    its 017 claim shape if it has one, and what each cast actor currently believes of it. A stance is that
+    actor's belief, never the standing; ``contested`` is true when one holder rejects what another believes or
+    suspects, or a holder's stance goes against canon (believed or suspected while refuted, rejected while
+    established)."""
+    proposition = item.proposition
+    stances = [{"kind": "belief", "holder": actor_ref(actor, names), "stance": stance} for actor, stance in held]
+    found = {entry["stance"] for entry in stances}
+    leaning = bool(found & {"believed", "suspected"})
+    contested = ("rejected" in found and (leaning or item.standing == "established")) or \
+        (item.standing == "refuted" and leaning)
+    return {"kind": "proposition", "proposition": proposition.proposition_id, "text": proposition.text,
+            "moment": moment_view(proposition.moment), "provenance": proposition.provenance,
+            "standing": item.standing, "ruling": item.ruling_id,
+            "shape": None if shape is None else {"predicate": shape.predicate,
+                                                 "subject": actor_ref(shape.subject, names),
+                                                 "object": actor_ref(shape.object, names)},
+            "held": stances, "contested": contested}
+
+
+# -- goals (039) and abilities (025): authored, director-side or the player's own ---------------------------
+
+def agenda_view(agenda, names: Names, problem: str | None) -> dict:  # type: ignore[no-untyped-def]
+    """An NPC's authored agenda as the app configured it (director only). ``usable`` is false, with 039's
+    reason, when play would refuse it now (``unknown_proposition``, ``unknown_actor``, ``ledger_damaged``)."""
+    return {"actor": actor_ref(agenda.actor, names), "usable": problem is None, "problem": problem,
+            "goals": [{"goal": goal.goal_id, "aim": goal.aim, "priority": goal.priority,
+                       "approaches": [{"approach": approach.approach_id, "action": approach.action,
+                                       "needs": [condition.describe() for condition in approach.needs],
+                                       "tags": sorted(approach.tags)} for approach in goal.approaches]}
+                      for goal in agenda.goals],
+            "limits": [{"limit": limit.limit_id, "rule": limit.rule, "forbids": sorted(limit.forbids),
+                        "when": [condition.describe() for condition in limit.when]} for limit in agenda.limits]}
+
+
+def abilities_view(facet) -> list[dict]:  # type: ignore[no-untyped-def]
+    """An actor's effective ``abilities`` facet (025): what each power permits, never produces, costs and
+    needs. ``None`` (no facet) and an empty facet both mean no powers."""
+    if facet is None:
+        return []
+
+    def parts(values, field: str) -> list[dict]:  # type: ignore[no-untyped-def]
+        return [{"id": value.id, "text": value.text, field: sorted(getattr(value, field))} for value in values]
+
+    return [{"ability": ability.id, "name": ability.name, "description": ability.description,
+             "effects": [{"id": effect.id, "text": effect.text, "tags": sorted(effect.tags), "range": effect.range,
+                          "certainty": effect.certainty} for effect in ability.effects],
+             "limits": parts(ability.limits, "excludes"), "costs": parts(ability.costs, "applies_to"),
+             "prerequisites": parts(ability.prerequisites, "applies_to")}
+            for ability in facet.abilities]
+
+
+# -- sources (042 handoff) ------------------------------------------------------------------------------
+
+def source_view(binding, resolution, head: str | None, problem: str | None, notices, names: Names) -> dict:  # type: ignore[no-untyped-def]
+    """One active binding of the chat: the revision it is pinned to, the source's head, and, for an actor whose
+    pin is behind the head, the review screen's rebase op (110, over 042) as a handoff, never done here."""
+    ref_ = binding.ref
+    behind = head is not None and ref_.pinned and head != str(ref_)
+    handoff = None
+    if behind and binding.actor is not None:
+        handoff = {"api": "review", "op": "rebase.review", "args": {"actor": str(binding.actor)}}
+    return {"role": binding.role, "binding": str(ref_), "pinned": ref_.pinned,
+            "resolved": None if resolution is None or resolution.resolved is None else str(resolution.resolved),
+            "broken": None if resolution is None or resolution.broken is None else resolution.broken.reason,
+            "head": head, "problem": problem, "behind": behind, "actor": actor_ref(binding.actor, names),
+            "notices": [{"code": notice.code, "detail": notice.detail} for notice in notices],
+            "handoff": handoff}
+
+
 # -- stage (041), party (033), holdings (023), items (034) ------------------------------------------------
 
 def stage_view(stage, names: Names) -> dict | None:  # type: ignore[no-untyped-def]
@@ -215,7 +302,7 @@ def items_view(items: Iterable, equipped: Mapping[str, Iterable]) -> dict:
 
 
 __all__ = [
-    "Names", "actor_ref", "effect_view", "event_view", "factor_view", "framed_view", "holdings_view", "items_view",
-    "knowledge_view", "label_view", "moment_view", "obstacle_view", "outcome_view", "relation_view", "stage_view",
-    "turn_view",
+    "Names", "abilities_view", "actor_ref", "agenda_view", "claim_view", "effect_view", "event_view", "factor_view", "framed_view", "holdings_view", "items_view",
+    "intention_view", "knowledge_view", "label_view", "moment_view", "obstacle_view", "outcome_view",
+    "relation_view", "source_view", "stage_view", "turn_view",
 ]
