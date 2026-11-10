@@ -355,3 +355,12 @@ def test_each_write_returns_the_etag_of_exactly_what_it_wrote(api, store):
     renamed = api.call("sources.rename_source", {"source": GOTHIC, "title": "Gothic tales", "expected": etag})
     assert renamed["manifest_etag"] == store.read_source(GOTHIC).etag != etag
     assert refused(api, "sources.rename_source", source=GOTHIC, title="Late", expected=etag).reason == "changed"
+
+
+def test_a_blank_field_never_lifts_a_clear(api):
+    _gothic, portrayal = portrayal_of(api)
+    edit(api, portrayal, "sources.portrayal", edit="clear_description")
+    edit(api, portrayal, "sources.portrayal", edit="clear_section", name="personality")
+    saved = edit(api, portrayal, "sources.save", fields={"description": "", "sections": {"personality": ""}})
+    assert states(api.call("sources.read", {"ref": saved["ref"]})) == \
+        {"name": "restated", "description": "cleared", "section:personality": "cleared"}

@@ -47,8 +47,9 @@ be a pinned lorebook ref.
 
 A blank description or an empty section in the structured editor is left out of the payload. On a **portrayal**
 the structured editor goes through 046's helpers: a description or section it is given is an override (which also
-lifts a clear of it), and a blank one, or a local section left out, inherits again. A clear is always the typed
-`clear_*` edit, never a blank field.
+lifts a clear of it), and a blank one, or a local section left out, drops the override and inherits again. A blank
+field never lifts a clear, since a form posts a cleared field back blank: that is the typed `reset_*` edit. A clear
+is always the typed `clear_*` edit, never a blank field.
 
 **Every entity revision must compose.** Before anything is written, the new revision is composed (022) over the
 library as it would be. A head that could not be played is refused with 022's reason: a derivation base that does

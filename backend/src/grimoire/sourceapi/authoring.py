@@ -493,9 +493,13 @@ def _entity_fields(payload: dict, fields: Mapping[str, object], derived: bool) -
         edited["nature"] = nature
     if "description" in fields:
         description = _text(fields["description"], "description")
-        if derived:  # an override, or blank to inherit again (a clear is always the typed edit)
-            edited = _helper(override_description, edited, description) if description and description.strip() \
-                else _helper(reset_description, edited)
+        if derived:  # an override; blank drops a local override but never lifts a clear (that is "reset")
+            derivation = edited.get("derivation")
+            cleared = isinstance(derivation, Mapping) and derivation.get("clear_description") is True
+            if description and description.strip():
+                edited = _helper(override_description, edited, description)
+            elif not cleared:
+                edited = _helper(reset_description, edited)
         elif description:
             edited["description"] = description
         else:
