@@ -115,7 +115,8 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | `import` | 110 | |
 | `providers` | 112 | |
 | `campaign` | 113 | `/<campaign id>` |
-| `art`, `sync` | 114 | |
+| `art` | 114 | `?scope=<scope>&subject=<subject>&limit=<n>` |
+| `sync` | 114 | |
 
 A sprint may register other routes of its own (prefix them with its area, such as `source-history`).
 
