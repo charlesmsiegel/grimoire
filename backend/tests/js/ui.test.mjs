@@ -1,14 +1,14 @@
 // The design primitives (108) that hold state of their own, in fakedom. Run by test_app_shell_js.py.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 import { install } from "./fakedom.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 install("http://127.0.0.1:1");
-const ui = await import(path.join(here, "..", "..", "src", "grimoire", "app", "static", "shell", "ui.js"));
+const ui = await import(pathToFileURL(path.join(here, "..", "..", "src", "grimoire", "app", "static", "shell", "ui.js")).href);
 
 test("a confirmation still open when its page is left is answered no and goes", async () => {
   const asked = ui.confirm("Delete Mara's ledger?", { confirmLabel: "Delete", danger: true });

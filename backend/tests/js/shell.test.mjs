@@ -1,13 +1,13 @@
 // The shell's pure modules (108): routes and drafts. Run by test_app_shell_js.py with `node --test`.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const shell = path.join(here, "..", "..", "src", "grimoire", "app", "static", "shell");
-const { RESERVED, href, pageFor, parse, reserved, takeToken } = await import(path.join(shell, "router.js"));
-const { Drafts } = await import(path.join(shell, "drafts.js"));
+const { RESERVED, href, pageFor, parse, reserved, takeToken } = await import(pathToFileURL(path.join(shell, "router.js")).href);
+const { Drafts } = await import(pathToFileURL(path.join(shell, "drafts.js")).href);
 
 test("a reference survives a round trip through the address exactly", () => {
   const chat = "chat:campaign-1/chat-2#x?y&z";

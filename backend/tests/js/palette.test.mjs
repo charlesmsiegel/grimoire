@@ -1,12 +1,12 @@
 // The palette's pure parts (108): ranking, the keys that open it and the theme. Run by test_app_shell_js.py.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const shell = path.join(here, "..", "..", "src", "grimoire", "app", "static", "shell");
-const { THEMES, isTyping, opensPalette, rank, readTheme, score, setTheme } = await import(path.join(shell, "palette.js"));
+const { THEMES, isTyping, opensPalette, rank, readTheme, score, setTheme } = await import(pathToFileURL(path.join(shell, "palette.js")).href);
 
 const item = (label, keywords) => ({ label, keywords, run() {} });
 
@@ -50,7 +50,7 @@ test("a theme is kept and applied; anything else is the system's", () => {
 });
 
 test("the theme showing is the person's choice, or the system's when they made none", async () => {
-  const { shownTheme } = await import(path.join(shell, "palette.js"));
+  const { shownTheme } = await import(pathToFileURL(path.join(shell, "palette.js")).href);
   const storage = { value: null, getItem() { return this.value; }, setItem(_key, value) { this.value = value; } };
   assert.equal(shownTheme(storage, true), "dark");
   assert.equal(shownTheme(storage, false), "light");
