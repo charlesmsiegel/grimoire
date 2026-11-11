@@ -59,10 +59,11 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   const { window, body, main } = await boot();
   const nav = await until(() => byText(body.querySelector("nav"), "a", "New chat").length && body.querySelector("nav"), 15000, "the menu");
 
-  // Chats has the way to Start Chat, and an All tab beside Recent
+  // Chats has the way to a new chat beside its search, and All among its filters
   byText(nav, "a", "Chats")[0].click();
-  await until(() => byText(main, "a", "All").length && byText(main, "p", "No chats yet").length, 15000, "an empty chat list");
-  const startLink = await until(() => byText(body.querySelector("header"), "a", "Start Chat")[0], 15000, "Start Chat in the header");
+  await until(() => byText(main, "button", "All").length && byText(main, "p", "No chats yet").length, 15000, "an empty chat list");
+  assert.equal(main.querySelector("div.chats-status").textContent, "", "nothing is counted in an empty list");
+  const startLink = await until(() => byText(main, "a", "New chat")[0], 15000, "New chat on Chats");
   startLink.click();
 
   // pick Mara, played as Anya, with her default opening
@@ -138,7 +139,10 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
 
   // the same chat from All, and under Continue on Start Chat for Mara
   window.location.hash = "#/chats?filter=all";
-  await until(() => main.querySelectorAll("a").some((node) => node.getAttribute("href") === chatHash), 15000, "the chat under All");
+  await until(() => main.querySelectorAll("a.chats-row").some((node) => node.getAttribute("href") === chatHash), 15000, "the chat under All");
+  assert.equal(byText(main, "button", "All")[0].getAttribute("aria-pressed"), "true", "the old address of every chat still opens it");
+  assert.equal(byText(body.querySelector("nav"), "a", "Chats")[0].querySelector("span.g-nav-count").textContent, "1");
+  assert.ok(main.querySelector("a.chats-row").querySelector("time"), "the row says when it was played");
   window.location.hash = "#/start?source=" + encodeURIComponent(env.GRIMOIRE_CHARACTER);
   await until(() => byText(main, "h2", "Continue").length, 15000, "Continue on Start Chat");
   assert.ok(main.querySelectorAll("a").some((node) => node.getAttribute("href") === chatHash));

@@ -135,6 +135,12 @@ palette still lists it when its route takes no path segment (Library setup).
 The header shows the page's crumb and title, the page's own actions, **Search** and a button that switches between
 the light and dark themes.
 
+**Home** (`home`) opens on the chat played last, with **Continue chat**, then the three chats played last and
+the library's characters, ending in the way to import a card. A library with no chat yet points to a new chat
+and to Import instead, and Home says so when no model is set up. A screen this app has not registered is named
+as not in this app yet, never linked. Home reads the `chats` op and `sources.catalog`, and shows a placeholder
+where neither names a picture.
+
 ### Addresses
 
 An address is `#/<route>/<segment>/...?<query>`. These routes are reserved for their owners, so any page can link

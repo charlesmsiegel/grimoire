@@ -33,7 +33,7 @@ test("a pasted change set is reviewed, approved and written", { skip: !base }, a
   await import("/static/shell/shell.js");
   const body = document.body;
   const main = await until(() => body.querySelector("main"), 15000, "the frame");
-  await until(() => byText(main, "h2", "What next").length, 15000, "Home");
+  await until(() => byText(main, "h2", "Your characters").length, 15000, "Home");
 
   // Home links Import now that this page is registered
   const importLink = byText(main, "a", "Import")[0];

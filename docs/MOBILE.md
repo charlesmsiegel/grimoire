@@ -64,7 +64,7 @@ It prints `open http://127.0.0.1:8080/#token=...`. Open that address in the phon
 address is this serve's key: a new one each time, kept only in that browser tab.
 
 - **Sync** brings the desktop's chats over the first time, and every later change both ways.
-- **Chats** lists recent chats, or the chats of one character or scenario. A world-less card chat and an
+- **Chats** lists every chat, latest first, or the chats of one character or scenario. A world-less card chat and an
   imported V1 chat both appear, each once.
 - **Take your seat** is needed once on each device: who plays which character is kept per device.
 - **Post**, **Answer**, **Keep** and **Pass** play a turn. **Add picture** gives a character of the chat a new
@@ -108,4 +108,4 @@ and can set one up.
   few seconds at a time.
 - **Model calls** are allowed by the app's own handle for the configured endpoint. They are not in the
   library's security ledger.
-- **Recent Chats** orders chats by when the chat record last changed, not by the last post.
+- **Chats** sorted by Recent orders chats by when the chat record last changed, not by the last post.

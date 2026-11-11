@@ -1,0 +1,37 @@
+/* Chats: the search and controls over one card per group of chats. */
+.chats-page { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+.chats-search { flex: 1 1 260px; padding: 10px 14px; font-size: 16px; }
+.chats-label { font-size: 13px; color: var(--g-muted); }
+.chats-picker:empty { display: none; }
+.chats-picker .g-field { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0; }
+.chats-picker select { flex: 0 1 320px; min-width: 0; }
+.chats-status { font-size: 13px; color: var(--g-muted); min-height: 20px; }
+.chats-results { display: flex; flex-direction: column; gap: 14px; }
+
+.chats-heading { margin: 0; font: inherit; }
+.chats-head { display: flex; align-items: baseline; gap: 10px; width: 100%; padding: 10px 16px; border: 0;
+  background: var(--g-raised); color: inherit; text-align: left; cursor: pointer; }
+.chats-head:focus-visible { outline-offset: -3px; }
+.chats-count { font-size: 13px; color: var(--g-muted); }
+.chats-toggle { margin-left: auto; font-size: 13px; color: var(--g-muted); }
+.chats-head:hover .chats-toggle { color: var(--g-fg); }
+
+.chats-rows { list-style: none; margin: 0; padding: 0; }
+.chats-row { display: flex; align-items: center; gap: 14px; padding: 10px 16px; border-top: 1px solid var(--g-line);
+  color: inherit; text-decoration: none; }
+.chats-row:hover { background: var(--g-raised); color: inherit; }
+.chats-row:focus-visible { outline-offset: -3px; }
+.chats-faces { flex: none; width: 74px; display: flex; }
+.chats-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.chats-titleline { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.chats-meta { font-size: 13px; color: var(--g-muted); }
+.chats-when { flex: none; font-size: 13px; color: var(--g-muted); }
+.chats-more { display: block; width: 100%; padding: 9px 16px; border: 0; border-top: 1px solid var(--g-line);
+  background: transparent; color: var(--g-accent); text-align: left; cursor: pointer; }
+.chats-more:hover { color: var(--g-fg); }
+.chats-more:focus-visible { outline-offset: -3px; }
+
+@media (max-width: 720px) {
+  .chats-faces { width: auto; }
+  .chats-row { gap: 10px; padding: 10px 12px; }
+}

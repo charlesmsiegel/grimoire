@@ -79,12 +79,12 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   await import("/static/shell/shell.js");
   const body = document.body;
   const main = await until(() => body.querySelector("main"), 15000, "the frame");
-  await until(() => window.location.hash === "#/home" && byText(main, "h2", "What next").length, 15000, "Home");
+  await until(() => window.location.hash === "#/home" && byText(main, "h2", "Your characters").length, 15000, "Home");
   const go = (hash, ready, what) => step(main, () => { window.location.hash = hash; }, ready, what);
   const press = (scope, label, ready, what) => step(main, () => byText(scope, "button", label).at(-1).click(), ready, what);
 
   // Home now links the library, and the menu lists it
-  const fromHome = await until(() => byText(main, "a", "Your library")[0], 15000, "the library on Home");
+  const fromHome = await until(() => byText(main, "a", "Open the library")[0], 15000, "the library on Home");
   assert.ok(byText(body.querySelector("nav"), "a", "Characters and lore").length, "the library is in the menu");
   await step(main, () => fromHome.click(), (root) => library(root) && byText(root, "h2", "Everything").length, "the library");
 
