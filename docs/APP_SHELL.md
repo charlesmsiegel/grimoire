@@ -217,8 +217,20 @@ the next create finishes it. One library per serve. A create that fails after th
 names an unnamed library's device once and refuses a different name for a named one (`device_differs`). The setup
 ops are served alongside an open library too, so Library setup always shows which library is open and the
 `serve` command that opens it next time. Once one is open, every page that waited
-on it is usable, and setup lists where to go next (Start Chat, Import, a provider), each shown as not available
-until its sprint adds it. `GET /shell/pages` lists the ops the app serves now (`ops`), so a page is usable or
+on it is usable, and setup lists where to go next (Start a chat, Import, a provider), each shown as not available
+until its sprint adds it.
+
+Library setup is a `hidden` page: the rail does not list it, the shell opens it by default in first-run mode
+(where every item of the rail is shown blocked), and the command palette lists it at any time. It reads as four
+steps, **Library folder · First card · Who you play · Begin** (`#/setup?step=card|persona|begin`; the last three
+only once a library is open). A new library goes on to the second step. Each of those steps uses the library's own
+ops, and is a link to the page that does the same where the app does not serve them: **First card** previews a
+Character Card V3 JSON file with `imports.card_preview`, lists every file it would write and writes them only on
+`imports.proposal_apply` with the digest shown (a portrait, a separate lorebook and a scenario card stay on Import),
+or takes a one-line premise, or a card the library already has; **Who you play** makes a character with
+`sources.create` in the source `local:mine` (made the first time with `sources.create_source`), or takes a
+character the library already has; **Begin** shows the openings `play.options` answers and starts the chat with
+`play.start`, saying so when no model is set up. The picks are drafts until the chat begins. `GET /shell/pages` lists the ops the app serves now (`ops`), so a page is usable or
 not before the library op exists; the core `library` op answers only once a library is open.
 
 The header's **Search** button, or Ctrl+K, Cmd+K or `/` outside a text box, opens the **command palette**: every

@@ -13,6 +13,8 @@ import threading
 from pathlib import Path
 
 import pytest
+from card_fixtures import encode
+from scene_fixtures import VOICED
 from textapi_fixtures import Device, desktop_library, say
 
 from grimoire.app import AppServer
@@ -66,7 +68,8 @@ def test_first_run_end_to_end(tmp_path):
     try:
         host, port = app.address
         result = _node(TESTS / "setup.e2e.mjs", {"GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": app.token,
-                                                     "GRIMOIRE_PLACE": str(place)})
+                                                     "GRIMOIRE_PLACE": str(place),
+                                                     "GRIMOIRE_CARD": encode(VOICED).decode("utf-8")})
     finally:
         app.close()
         thread.join(10)

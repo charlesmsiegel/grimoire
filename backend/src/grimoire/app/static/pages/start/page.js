@@ -1,77 +1,224 @@
-// Start Chat (Sprint 111): pick a character, a character with a lorebook, a scenario or a premise, who you play,
-// and an opening, then start a new world-less chat, or continue one already started from the same pick.
+// Start a chat (Sprint 111): pick a character, a character with a lorebook, a scenario or a premise, who you
+// play, and an opening, then start a new world-less chat, or continue one already started from the same pick.
 // #/start?source=<SourceRef> starts from that character or scenario. The persona and an unsent premise are drafts.
+// Every name, opening and premise comes from the library and is only ever set as text.
 
-import { chatRow } from "../chats/page.js";
-
-const KINDS = [["character", "A character"], ["bundle", "A character with a lorebook"], ["scenario", "A scenario"],
-  ["premise", "A premise"]];
+const KINDS = [
+  ["character", "A character", "Talk to one card"],
+  ["bundle", "Character + lorebook", "A card with lore bound in"],
+  ["scenario", "A scenario", "A set scene with openings"],
+  ["premise", "A premise", "Just an idea, no card"],
+];
+const SHOWN = 12;  // how many cards one list shows before the search narrows it
 
 // The definition kind a SourceRef names: "<source>/<kind>/<entity>[@revision]".
-function kindOf(ref) {
-  const parts = String(ref || "").replace(/@[^/]*$/, "").split("/");
+export function kindOf(ref) {
+  const parts = unpinned(ref).split("/");
   return parts.length >= 3 ? parts[parts.length - 2] : null;
+}
+
+export function unpinned(ref) {
+  return String(ref || "").replace(/@[^/]*$/, "");
+}
+
+// Where a card comes from, in a word: the source its ref names.
+export function sourceLabel(ref) {
+  const source = String(ref || "").split("/")[0];
+  return source.split(":")[0] === "card" ? "Imported card" : source;
+}
+
+// How recently each source was used, from the chats played last: "<ref>" for a card in a chat and "persona <ref>"
+// for who was played, each mapped to its place (0 is the newest). Null when the app cannot say.
+export async function recentUse(ctx) {
+  if (!ctx.has("chats")) return null;
+  const rank = new Map();
+  try {
+    const { chats } = await ctx.api("chats", { filter: "recent", limit: 200 });
+    for (const chat of chats) {
+      for (const source of chat.sources || []) {
+        const key = (source.role === "persona" ? "persona " : "") + unpinned(source.ref);
+        if (!rank.has(key)) rank.set(key, rank.size);
+      }
+    }
+  } catch (error) {
+    if (error.reason === "left") throw error;
+    return null;  // the list still works, in name order
+  }
+  return rank;
+}
+
+// `items` with the ones used most recently first; the rest keep their order (by name).
+export function byRecency(items, rank, prefix = "") {
+  if (!rank) return items;
+  const place = (item) => (rank.has(prefix + item.ref) ? rank.get(prefix + item.ref) : Infinity);
+  return items.map((item, index) => [item, index]).sort((a, b) => place(a[0]) - place(b[0]) || a[1] - b[1]).map(([item]) => item);
+}
+
+// What a search shows of `items`: the first few that match, and always the one that is chosen.
+export function shortlist(items, query, chosen) {
+  const needle = query.trim().toLowerCase();
+  const matches = needle
+    ? items.filter((item) => item.name.toLowerCase().includes(needle) || item.ref.toLowerCase().includes(needle)) : items;
+  const shown = matches.slice(0, SHOWN);
+  const picked = chosen && !shown.some((item) => item.ref === chosen) ? items.find((item) => item.ref === chosen) : null;
+  if (picked) shown.unshift(picked);
+  return { matches, shown };
+}
+
+function chatTitle(chat) {
+  return chat.label || (chat.launch && chat.launch.name)
+    || (chat.launch && chat.launch.kind === "premise" ? "Premise chat" : chat.chat);
 }
 
 export async function mount(root, ctx) {
   const { ui } = ctx;
   const { el } = ui;
-  ctx.setTitle("Start Chat");
+  ctx.setTitle("Start a chat");
+  ctx.setCrumb("Play");
+  ctx.layout("page");
   ctx.styles("page.css");
-  const sources = await ctx.api("play.sources", {});
+  const [sources, rank] = await Promise.all([ctx.api("play.sources", {}), recentUse(ctx)]);
+  const characters = byRecency(sources.characters, rank);
+  const scenarios = byRecency(sources.scenarios, rank);
+  const personas = byRecency(sources.characters, rank, "persona ");
   const linked = ctx.query.get("source");
   const linkedKind = kindOf(linked);
   const personaDraft = ctx.draft("persona");
+  const named = (items, ref) => items.some((item) => item.ref === ref);
   const form = {
     kind: linkedKind === "scenario" ? "scenario" : "character",
     ref: linkedKind === "scenario" || linkedKind === "character" ? linked : "",
     lorebook: "", opening: "",
+    persona: named(personas, personaDraft.get()) ? personaDraft.get() : "",
   };
-  const detail = el("div", { class: "start-detail", "aria-live": "polite" });
-  const pickers = el("div", {});
+  const queries = { pick: "", persona: "" };
   let asked = 0;  // the newest options request: an older answer that arrives late is dropped
   let shown = null;  // the selection whose options are on screen: Start sends only what was seen
 
-  const named = (items, ref) => items.some((item) => item.ref === ref);
-  const pickFrom = (kind) => (kind === "scenario" ? sources.scenarios : sources.characters);
-
-  const kind = ui.choice("Start from", KINDS.map(([value, label]) => ({ value, label })), {
-    value: form.kind, onchange: (value) => { form.kind = value; form.ref = ""; form.lorebook = ""; form.opening = ""; draw(); },
-  });
-  const personaOptions = [{ value: "", label: "Choose who you play" },
-    ...sources.characters.map((item) => ({ value: item.ref, label: item.name }))];
-  const persona = ui.choice("You play", personaOptions, {
-    value: named(sources.characters, personaDraft.get()) ? personaDraft.get() : "",
-    onchange: (value) => personaDraft.set(value),
-  });
-  const premise = ui.field("Premise", { draft: ctx.draft("premise"), multiline: true,
-    hint: "What the chat is about. {{user}} is you." });
-  premise.input.setAttribute("maxlength", "4000");
-  premise.input.addEventListener("change", () => refresh());
-  const label = ui.field("Name", { hint: "Optional: how the chat is listed." });
-  label.input.setAttribute("maxlength", "200");
-
-  function draw() {
-    pickers.replaceChildren();
-    if (form.kind === "premise") {
-      pickers.append(premise.node);
-    } else {
-      const items = pickFrom(form.kind);
-      const options = [{ value: "", label: form.kind === "scenario" ? "Choose a scenario" : "Choose a character" },
-        ...items.map((item) => ({ value: item.ref, label: item.name }))];
-      // a linked source the library cannot bind now is still named by its exact ref, never swapped for another
-      if (form.ref && !named(items, form.ref)) options.push({ value: form.ref, label: form.ref });
-      pickers.append(ui.choice(form.kind === "scenario" ? "Scenario" : "Character", options, {
-        value: form.ref, onchange: (value) => { form.ref = value; form.opening = ""; refresh(); },
-      }).node);
-      if (form.kind === "bundle") {
-        pickers.append(ui.choice("Lorebook", [{ value: "", label: "The card's own lorebook" },
-          ...sources.lorebooks.map((item) => ({ value: item.ref, label: item.name }))], {
-          value: form.lorebook, onchange: (value) => { form.lorebook = value; refresh(); },
-        }).node);
-      }
+  // A linked source the library cannot bind now is still named by its exact ref, never swapped for another.
+  const pickFrom = (kind) => {
+    const items = kind === "scenario" ? scenarios : characters;
+    return form.ref && !named(items, form.ref) ? [{ ref: form.ref, name: form.ref }, ...items] : items;
+  };
+  const nameOf = (items, ref) => { const found = items.find((item) => item.ref === ref); return found ? found.name : ref; };
+  const press = (box, attribute, value) => {
+    for (const node of box.querySelectorAll("button")) {
+      if (node.hasAttribute(attribute)) node.setAttribute("aria-pressed", String(node.getAttribute(attribute) === value));
     }
+  };
+
+  // -- 1 · Start from ----------------------------------------------------------------------------------------
+  const kinds = el("div", { class: "start-kinds", role: "group", "aria-label": "Start from" });
+  for (const [value, label, detail] of KINDS) {
+    const node = ui.selectable([el("span", { class: "start-kind-label" }, label), el("span", { class: "start-kind-detail" }, detail)], {
+      selected: value === form.kind,
+      onclick: () => {
+        if (form.kind === value) return;
+        form.kind = value; form.ref = ""; form.lorebook = ""; form.opening = ""; queries.pick = "";
+        press(kinds, "data-kind", value);
+        drawPick();
+      },
+    });
+    node.classList.add("start-kind");
+    node.setAttribute("data-kind", value);
+    node.setAttribute("data-focus-key", "start:kind:" + value);
+    kinds.append(node);
+  }
+
+  // -- 2 · Choose --------------------------------------------------------------------------------------------
+  const premise = ui.field("Premise", { draft: ctx.draft("premise"), multiline: true,
+    hint: "What the chat is about. {{user}} is you.", placeholder: "What the chat is about. Write yourself in as the player." });
+  premise.input.setAttribute("maxlength", "4000");
+  premise.input.setAttribute("rows", "5");
+  premise.input.classList.add("start-premise");
+  premise.input.addEventListener("change", () => refresh());
+  const pickTitle = el("h2", { class: "g-heading" });
+  const pickBody = el("div", { class: "start-step" });
+
+  function drawPick() {
+    const scenario = form.kind === "scenario";
+    pickTitle.textContent = form.kind === "premise" ? "2 · Write the premise" : scenario ? "2 · Choose a scenario" : "2 · Choose a character";
+    if (form.kind === "premise") { pickBody.replaceChildren(premise.node); refresh(); return; }
+    const what = scenario ? "scenarios" : "characters";
+    const count = (scenario ? scenarios : characters).length;
+    const more = el("div", { class: "g-muted start-more", "aria-live": "polite" });
+    const tiles = el("div", { class: "start-picks", role: "group", "aria-label": scenario ? "Scenario" : "Character" });
+    const fill = () => {
+      const { matches, shown: some } = shortlist(pickFrom(form.kind), queries.pick, form.ref);
+      more.textContent = matches.length > SHOWN ? "Showing " + SHOWN + " of " + matches.length + ". Keep typing to narrow."
+        : matches.length || !count ? "" : "Nothing matches.";
+      tiles.replaceChildren(...some.map((item) => {
+        const node = el("button", { type: "button", class: "g-select start-pick", "aria-pressed": String(item.ref === form.ref),
+          "data-ref": item.ref, "data-focus-key": "start:pick:" + item.ref, title: item.ref,
+          onclick: () => { form.ref = item.ref; form.opening = ""; press(tiles, "data-ref", item.ref); refresh(); } },
+        ui.portrait(item.name, { key: item.ref }),
+        el("span", { class: "start-pick-text" }, el("span", { class: "start-pick-name" }, item.name),
+          el("span", { class: "start-pick-source" }, sourceLabel(item.ref))));
+        return node;
+      }));
+    };
+    const search = ui.search("Search " + what, { value: queries.pick, oninput: (text) => { queries.pick = text; fill(); },
+      placeholder: "Search " + count + " " + what + (rank ? " · most recent shown first" : "") });
+    search.classList.add("start-search");
+    search.setAttribute("data-focus-key", "start:search");
+    const parts = [search, more, tiles];
+    if (!count) {
+      parts.push(ui.empty("This library has no " + what + " yet."), ui.actions(
+        ctx.registered("import") ? ui.buttonLink("Import a card", "import") : null,
+        ctx.registered("sources") ? ui.buttonLink("Characters and lore", "sources") : null));
+    }
+    if (form.kind === "bundle") {
+      parts.push(ui.choice("Lorebook", [{ value: "", label: "The card's own lorebook" },
+        ...sources.lorebooks.map((item) => ({ value: item.ref, label: item.name }))], {
+        value: form.lorebook, onchange: (value) => { form.lorebook = value; refresh(); },
+      }).node);
+    }
+    pickBody.replaceChildren(...parts);
+    fill();
     refresh();
+  }
+
+  // -- 3 · You play ------------------------------------------------------------------------------------------
+  const chips = el("div", { class: "g-chips", role: "group", "aria-label": "You play" });
+  const personaMore = el("div", { class: "g-muted start-more", "aria-live": "polite" });
+  function drawPersonas() {
+    const { matches, shown: some } = shortlist(personas, queries.persona, form.persona);
+    personaMore.textContent = matches.length > SHOWN ? "Showing " + SHOWN + " of " + matches.length + ". Keep typing to narrow."
+      : matches.length || !personas.length ? "" : "Nothing matches.";
+    chips.replaceChildren(...some.map((item) => {
+      const node = ui.selectable([ui.avatar(item.name, { size: 22, key: item.ref }), el("span", {}, item.name)], {
+        chip: true, selected: item.ref === form.persona, title: item.ref,
+        onclick: () => { form.persona = item.ref; personaDraft.set(item.ref); press(chips, "data-ref", item.ref); summarize(); },
+      });
+      node.setAttribute("data-ref", item.ref);
+      node.setAttribute("data-focus-key", "start:persona:" + item.ref);
+      return node;
+    }));
+  }
+  const personaParts = [];
+  if (personas.length > SHOWN) {
+    const search = ui.search("Search who you play", { oninput: (text) => { queries.persona = text; drawPersonas(); },
+      placeholder: "Search " + personas.length + " characters" + (rank ? " · most recent shown first" : "") });
+    search.classList.add("start-search");
+    search.setAttribute("data-focus-key", "start:persona-search");
+    personaParts.push(search, personaMore);
+  }
+  personaParts.push(chips);
+  if (!sources.characters.length) personaParts.push(ui.notice("There is no character to play yet: import or create one first."));
+
+  // -- the summary -------------------------------------------------------------------------------------------
+  const title = el("div", { class: "start-summary-title" });
+  const detail = el("div", { class: "g-stack start-detail", "aria-live": "polite" });
+  const related = el("div", { class: "start-related", hidden: true });
+  const label = ui.field("Name", { placeholder: "Optional: how the chat is listed" });
+  label.input.setAttribute("maxlength", "200");
+  label.node.classList.add("start-name");
+
+  function summarize() {
+    const who = form.persona ? nameOf(personas, form.persona) : "You";
+    if (form.kind === "premise") title.textContent = who + " in a new premise";
+    else if (!form.ref) title.textContent = "Choose what to start from";
+    else title.textContent = who + (form.persona ? " meets " : " meet ") + nameOf(pickFrom(form.kind), form.ref);
   }
 
   function selection() {
@@ -83,14 +230,17 @@ export async function mount(root, ctx) {
   }
 
   async function refresh() {
+    summarize();
     const chosen = selection();
     const mine = ++asked;
     shown = null;
+    related.hidden = true;
+    related.replaceChildren();
     if (!chosen) {
-      detail.replaceChildren(ui.empty(form.kind === "premise" ? "Write a premise to start from." : "Choose what to start from."));
+      detail.replaceChildren(ui.empty(form.kind === "premise" ? "Write a premise to start from." : "Pick a card to see how it opens."));
       return;
     }
-    // the last pick's openings and chats go at once: an opening id or a Continue row must be this pick's
+    // the last pick's openings and chats go at once: an opening id or a chat to continue must be this pick's
     detail.replaceChildren(ui.empty("Loading…"));
     let options;
     try { options = await ctx.api("play.options", chosen); }
@@ -106,34 +256,46 @@ export async function mount(root, ctx) {
         ? "The lorebook is bound with the card." : "This card has no lorebook of its own: choose one, or start from the character alone."));
     }
     if (options.openings.length) {
-      const group = el("fieldset", { class: "start-openings" }, el("legend", {}, "Opening"));
       if (!options.openings.some((opening) => opening.id === form.opening)) form.opening = options.default_opening || "";
+      const group = el("div", { class: "g-stack start-openings", role: "group", "aria-label": "Opening" },
+        el("div", { class: "start-label" }, "Opening"));
       for (const opening of options.openings) {
-        const input = el("input", { type: "radio", name: "start-opening", value: opening.id,
-          onchange: () => { form.opening = opening.id; } });
-        input.checked = opening.id === form.opening;
-        group.append(el("label", { class: "start-opening" }, input, el("span", {}, opening.text),
-          opening.group_only ? el("span", { class: "g-muted" }, " (group greeting)") : null));
+        const node = ui.selectable([el("span", { class: "start-opening-text" }, opening.text),
+          opening.group_only ? ui.pill("group greeting") : null], {
+          selected: opening.id === form.opening,
+          onclick: () => { form.opening = opening.id; press(group, "data-opening", opening.id); },
+        });
+        node.classList.add("start-opening");
+        node.setAttribute("data-opening", opening.id);
+        group.append(node);
       }
       parts.push(group);
     } else {
       form.opening = "";
       parts.push(el("p", { class: "g-muted" }, form.kind === "premise" ? "The premise opens the chat." : "Nothing to open with: you speak first."));
     }
-    if (options.related.length) {
-      parts.push(ui.section("Continue", el("p", { class: "g-muted" }, "Chats already started from this. Continuing never makes a copy."),
-        ui.list(options.related.map((chat) => chatRow(ctx, chat)))));
-    }
     detail.replaceChildren(...parts);
+    if (options.related.length) {
+      related.replaceChildren(el("div", { class: "g-muted" }, "Or continue one already started from this pick"),
+        ...options.related.map((chat) => el("a", { class: "start-related-row", href: ctx.href("chat", [chat.chat]) },
+          el("span", { class: "start-related-title" }, chatTitle(chat)),
+          chat.problem ? el("span", { class: "g-muted" }, chat.problem) : null)));
+      related.hidden = false;
+    }
     shown = JSON.stringify(chosen);
   }
 
-  const start = ui.button("Start Chat", () => ctx.act(async () => {
-    if (!persona.value) { ctx.notify("Choose who you play first.", { bad: true }); persona.select.focus(); return; }
+  const start = ui.button("Start chat", () => ctx.act(async () => {
+    if (!form.persona) {
+      ctx.notify("Choose who you play first.", { bad: true });
+      const first = chips.querySelector("button");
+      if (first) first.focus();
+      return;
+    }
     const chosen = selection();
     if (!chosen) { ctx.notify(form.kind === "premise" ? "Write a premise first." : "Choose what to start from first.", { bad: true }); return; }
     if (shown !== JSON.stringify(chosen)) { await refresh(); return; }  // show this pick's openings before starting
-    const args = { ...chosen, persona: persona.value };
+    const args = { ...chosen, persona: form.persona };
     if (form.opening) args.opening = form.opening;
     if (label.value.trim()) args.label = label.value.trim();
     const scene = await ctx.api("play.start", args);
@@ -142,11 +304,20 @@ export async function mount(root, ctx) {
     // 052 wrote the chat but stopped before it finished: the chat page says so and offers Finish starting, as
     // opening the chat does not say it
     ctx.navigate(ctx.href("chat", [scene.chat], scene.unfinished ? { unfinished: scene.unfinished } : undefined));
-  }), { kind: "primary" });
+  }), { kind: "primary", size: "large" });
+  start.classList.add("start-go");
+  start.setAttribute("data-focus-key", "start:go");
 
-  root.append(el("p", { class: "g-muted" }, "No world is needed. Every source is bound at the revision it has now."),
-    kind.node, pickers, persona.node);
-  if (!sources.characters.length) root.append(ui.notice("There is no character to play yet: import or create one first."));
-  root.append(label.node, detail, ui.actions(start));
-  draw();
+  const step = (heading, ...children) => el("section", { class: "start-step" }, heading, ...children);
+  root.append(el("div", { class: "start-layout" },
+    el("div", { class: "start-steps" },
+      step(el("h2", { class: "g-heading" }, "1 · Start from"), kinds),
+      step(pickTitle, pickBody),
+      step(el("h2", { class: "g-heading" }, "3 · You play"), ...personaParts)),
+    el("aside", { class: "g-card start-summary", "aria-label": "New chat" },
+      el("div", { class: "start-summary-head" }, ui.eyebrow("New chat"), title,
+        el("div", { class: "g-muted start-small" }, "No world needed. Everything is bound at the revision it has now.")),
+      detail, label.node, start, related)));
+  drawPersonas();
+  drawPick();
 }

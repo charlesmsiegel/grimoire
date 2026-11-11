@@ -1,7 +1,7 @@
-// Sprint 111's pages end to end in the shell (108), against a real app server, in fakedom: Start Chat from a
+// Sprint 111's pages end to end in the shell (108), against a real app server, in fakedom: Start a chat from a
 // character played as a persona, post with a typed mode, wait for the answer, pause, skip a line, ask again, step
-// through the takes and keep one by its keys, strike, see a reply fail and ask again, pass, add a card, then
-// find the chat under All and under Continue on Start Chat. A second test mends a chat whose added card is gone.
+// through the takes and keep one by its keys, strike, see a reply fail and ask again, pass, add a card, then find
+// the chat under All and among the chats to continue on Start a chat. A second test mends a chat whose added card is gone.
 // Run by test_app_play_js.py, which serves a synthetic card library with a scripted model and passes
 // GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_CHARACTER (Mara), GRIMOIRE_PERSONA (Anya) and GRIMOIRE_NEWCOMER (Tamsin),
 // or, for the second test, GRIMOIRE_BROKEN: a chat whose newcomer's card was removed, or, for the third,
@@ -38,6 +38,13 @@ function pick(select, value) {
   select.value = value;
   select.dispatchEvent({ type: "change" });
 }
+
+// Start a chat's controls: the "Start from" cards, the portrait tiles, the persona chips and the openings.
+const kindCard = (main, kind) => main.querySelector('button.start-kind[data-kind="' + kind + '"]');
+const tileOf = (main, ref) => main.querySelectorAll("button.start-pick").find((node) => node.getAttribute("data-ref") === ref);
+const chipOf = (main, ref) => main.querySelectorAll("button.g-chip").find((node) => node.getAttribute("data-ref") === ref);
+const openingsOf = (main) => main.querySelectorAll("button.start-opening");
+const pressed = (node) => node.getAttribute("aria-pressed") === "true";
 
 function type(input, text) {
   input.value = text;
@@ -96,23 +103,55 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   startLink.click();
 
   // pick Mara, played as Anya, with her default opening
-  const character = await until(() => choice(main, "Character"), 15000, "the Start Chat form");
+  await until(() => tileOf(main, env.GRIMOIRE_CHARACTER), 15000, "the Start a chat page");
   assert.equal(window.location.hash, "#/start");
+  assert.equal(body.querySelector("h1").textContent, "Start a chat");
+  // four ways to start, the first chosen; the three steps and the summary of the new chat
+  assert.deepEqual(main.querySelectorAll("button.start-kind").map((node) => node.querySelector("span").textContent),
+    ["A character", "Character + lorebook", "A scenario", "A premise"]);
+  assert.ok(pressed(kindCard(main, "character")) && !pressed(kindCard(main, "premise")));
+  assert.deepEqual(main.querySelectorAll("h2").map((node) => node.textContent), ["1 · Start from", "2 · Choose a character", "3 · You play"]);
+  const summary = main.querySelector("aside.start-summary");
+  assert.ok(byText(summary, "div", "Choose what to start from").length, "nothing is picked yet");
   // a premise written and left unsent stays a draft when a character is started instead
-  pick(choice(main, "Start from"), "premise");
+  kindCard(main, "premise").click();
+  assert.ok(pressed(kindCard(main, "premise")) && !pressed(kindCard(main, "character")));
+  assert.ok(byText(main, "h2", "2 · Write the premise").length && !main.querySelectorAll("button.start-pick").length);
   type(await until(() => main.querySelector("textarea"), 15000, "the premise field"), "A lighthouse keeper's last night.");
-  pick(choice(main, "Start from"), "character");
-  pick(await until(() => choice(main, "Character"), 15000, "the character picker"), env.GRIMOIRE_CHARACTER);
-  await until(() => byText(main, "legend", "Opening").length, 15000, "the openings");
-  assert.equal(main.querySelectorAll("input").filter((node) => node.type === "radio" && node.checked).length, 1);
-  byText(main, "button", "Start Chat").at(-1).click();
+  assert.ok(byText(summary, "div", "You in a new premise").length);
+  // a scenario is chosen from the scenarios, a character from the characters
+  kindCard(main, "scenario").click();
+  assert.ok(byText(main, "h2", "2 · Choose a scenario").length && !tileOf(main, env.GRIMOIRE_CHARACTER));
+  assert.ok(main.querySelectorAll("button.start-pick").length, "the library's scenario is offered");
+  kindCard(main, "bundle").click();
+  assert.ok(choice(main, "Lorebook"), "a character with a lorebook offers the lorebook choice");
+  kindCard(main, "character").click();
+  assert.ok(!choice(main, "Lorebook"));
+  // the search narrows the tiles, and says so when nothing matches
+  const search = main.querySelector("input.start-search");
+  type(search, "no such card");
+  assert.ok(!main.querySelectorAll("button.start-pick").length && byText(main, "div", "Nothing matches.").length);
+  type(search, "mara");
+  assert.equal(main.querySelectorAll("button.start-pick").length, 1, "one character matches");
+  type(search, "");
+  assert.equal(main.querySelectorAll("button.start-pick").length, 3, "every character again");
+  tileOf(main, env.GRIMOIRE_CHARACTER).click();
+  assert.ok(pressed(tileOf(main, env.GRIMOIRE_CHARACTER)));
+  await until(() => openingsOf(main).length, 15000, "the openings");
+  assert.ok(byText(summary, "div", "Opening").length);
+  assert.equal(openingsOf(main).filter(pressed).length, 1, "the default opening is chosen");
+  assert.ok(openingsOf(main).some((node) => node.textContent.includes("You came back. I didn't think you would.")));
+  assert.ok(byText(summary, "div", "You meet Mara Vell").length);
+  byText(main, "button", "Start chat").at(-1).click();
   await until(() => byText(body, "div", "Choose who you play first.").length, 15000, "the persona refusal");
   assert.equal(window.location.hash, "#/start", "no chat is started without a persona");
-  pick(choice(main, "You play"), env.GRIMOIRE_PERSONA);
-  byText(main, "button", "Start Chat").at(-1).click();
+  chipOf(main, env.GRIMOIRE_PERSONA).click();
+  assert.ok(pressed(chipOf(main, env.GRIMOIRE_PERSONA)) && main.querySelectorAll("button.g-chip").filter(pressed).length === 1);
+  assert.ok(byText(summary, "div", "Anya Rook meets Mara Vell").length);
+  byText(main, "button", "Start chat").at(-1).click();
   await until(() => window.location.hash.startsWith("#/chat/"), 15000, "the new chat");
   const chatHash = window.location.hash;
-  // the greeting kept as the chat's first line (the Start Chat page also showed it, as an opening to pick)
+  // the greeting kept as the chat's first line (Start a chat also showed it, as an opening to pick)
   await until(() => main.querySelectorAll("div.chat-line").some((node) => node.textContent.includes("You came back. I didn't think you would.")), 15000, "the greeting");
   // Anya is the persona: in the cast, in the scene bar and over the composer
   assert.ok(byText(main.querySelector("ul.chat-cast"), "li", "Anya Rook").some((node) => node.textContent.includes("You")), "Anya is the persona");
@@ -260,16 +299,27 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   assert.ok(byText(main, "button", "Ask the director").length, "the director can be asked alone");
   assert.equal(byText(main.querySelector("ul.chat-cast"), "button", "Add picture").length, 3, "each of the cast can be given a picture");
 
-  // the same chat from All, and under Continue on Start Chat for Mara
+  // the same chat from All, and among the chats to continue on Start a chat for Mara
   window.location.hash = "#/chats?filter=all";
   await until(() => main.querySelectorAll("a.chats-row").some((node) => node.getAttribute("href") === chatHash), 15000, "the chat under All");
   assert.equal(byText(main, "button", "All")[0].getAttribute("aria-pressed"), "true", "the old address of every chat still opens it");
   assert.equal(byText(body.querySelector("nav"), "a", "Chats")[0].querySelector("span.g-nav-count").textContent, "1");
   assert.ok(main.querySelector("a.chats-row").querySelector("time"), "the row says when it was played");
   window.location.hash = "#/start?source=" + encodeURIComponent(env.GRIMOIRE_CHARACTER);
-  await until(() => byText(main, "h2", "Continue").length, 15000, "Continue on Start Chat");
-  assert.ok(main.querySelectorAll("a").some((node) => node.getAttribute("href") === chatHash));
-  pick(choice(main, "Start from"), "premise");
+  const again = await until(() => byText(main, "div", "Or continue one already started from this pick").at(-1), 15000, "the chats to continue");
+  assert.ok(main.querySelector("aside.start-summary").contains(again));
+  assert.ok(main.querySelectorAll("a.start-related-row").some((node) => node.getAttribute("href") === chatHash));
+  // the linked character is the one picked, the persona is still chosen, and the ones played last are listed first
+  assert.ok(pressed(tileOf(main, env.GRIMOIRE_CHARACTER)) && pressed(chipOf(main, env.GRIMOIRE_PERSONA)));
+  assert.equal(main.querySelectorAll("button.start-pick")[0].getAttribute("data-ref"), env.GRIMOIRE_CHARACTER, "the character played last is first");
+  assert.equal(main.querySelectorAll("button.g-chip")[0].getAttribute("data-ref"), env.GRIMOIRE_PERSONA, "the persona played last is first");
+  // a source the library cannot bind is still named by its exact ref, and its refusal is shown
+  window.location.hash = "#/start?source=" + encodeURIComponent("card:nobody/character/nobody");
+  const gone = await until(() => tileOf(main, "card:nobody/character/nobody"), 15000, "the unknown source");
+  assert.ok(pressed(gone) && gone.textContent.includes("card:nobody/character/nobody"));
+  await until(() => main.querySelector("aside.start-summary").querySelectorAll("div.g-bad").length, 15000, "the refusal of the unknown source");
+  assert.ok(!openingsOf(main).length && !main.querySelectorAll("a.start-related-row").length);
+  kindCard(main, "premise").click();
   const premise = await until(() => main.querySelector("textarea"), 15000, "the premise field again");
   assert.equal(premise.value, "A lighthouse keeper's last night.", "the unsent premise is still a draft");
 });
@@ -327,9 +377,9 @@ test("a start that stops before it finishes is finished from the chat", { skip: 
   const { window, body, main } = await boot();
   await until(() => body.querySelector("nav"), 15000, "the menu");
   window.location.hash = "#/start?source=" + encodeURIComponent(env.GRIMOIRE_CHARACTER);
-  await until(() => byText(main, "legend", "Opening").length, 15000, "the openings");
-  pick(choice(main, "You play"), env.GRIMOIRE_PERSONA);
-  byText(main, "button", "Start Chat").at(-1).click();
+  await until(() => openingsOf(main).length, 15000, "the openings");
+  chipOf(main, env.GRIMOIRE_PERSONA).click();
+  byText(main, "button", "Start chat").at(-1).click();
   await until(() => window.location.hash.startsWith("#/chat/"), 15000, "the new chat");
   const finish = await until(() => byText(main, "button", "Finish starting")[0], 15000, "Finish starting");
   assert.ok(!main.querySelectorAll("div.chat-line").length, "nothing opened the chat yet");
