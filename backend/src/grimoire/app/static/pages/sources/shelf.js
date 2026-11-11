@@ -41,6 +41,9 @@ export function pinnedChats(shelf) {
   return pinned;
 }
 
+// What makes two spellings one tag here: its capitals do not count. The app shows each tag in one spelling, and
+// which spelling can change when another entry is tagged, so a tag kept in an address or a saved filter is
+// matched by this, never by its exact text.
 const fold = (text) => String(text).normalize("NFC").toLowerCase();
 
 // The tags a person typed, separated by commas: trimmed, single-spaced, and one of each whatever its capitals
@@ -63,14 +66,15 @@ export function tagsParam(tags) { return (tags || []).join(","); }
 
 // `tags` with `tag` added, or taken away when it is there.
 export function toggleTag(tags, tag) {
-  return tags.includes(tag) ? tags.filter((item) => item !== tag) : [...tags, tag];
+  const key = fold(tag);
+  return tags.some((item) => fold(item) === key) ? tags.filter((item) => fold(item) !== key) : [...tags, tag];
 }
 
 // Whether an entry carries every one of `tags` (several tags combine with AND; no tags is every entry).
 export function hasTags(shelf, ref, tags) {
   if (!tags || !tags.length) return true;
-  const own = marksOf(shelf, ref).tags;
-  return tags.every((tag) => own.includes(tag));
+  const own = new Set(marksOf(shelf, ref).tags.map(fold));
+  return tags.every((tag) => own.has(fold(tag)));
 }
 
 // The tag chips over `entries`: every tag one of them carries, with how many carry it, A to Z, then every
@@ -78,8 +82,10 @@ export function hasTags(shelf, ref, tags) {
 export function tagChips(shelf, entries, chosen = []) {
   const counts = new Map();
   for (const entry of entries) for (const tag of marksOf(shelf, entry.ref).tags) counts.set(tag, (counts.get(tag) || 0) + 1);
-  for (const tag of chosen) if (!counts.has(tag)) counts.set(tag, 0);
-  return [...counts].map(([tag, count]) => ({ tag, count, chosen: chosen.includes(tag) }))
+  const asked = new Set(chosen.map(fold));
+  const carried = new Set([...counts.keys()].map(fold));
+  for (const tag of chosen) if (!carried.has(fold(tag))) counts.set(tag, 0);
+  return [...counts].map(([tag, count]) => ({ tag, count, chosen: asked.has(fold(tag)) }))
     .sort((a, b) => a.tag.localeCompare(b.tag, undefined, { sensitivity: "base" }) || (a.tag < b.tag ? -1 : 1));
 }
 
@@ -101,7 +107,7 @@ export function filterOf({ role = "", shelf = "", source = "", tags = [], query 
 export function sameFilter(a, b) {
   const x = filterOf(a), y = filterOf(b);
   return x.role === y.role && x.shelf === y.shelf && x.source === y.source && x.query === y.query && x.sort === y.sort
-    && x.tags.length === y.tags.length && x.tags.every((tag, index) => tag === y.tags[index]);
+    && x.tags.length === y.tags.length && x.tags.every((tag, index) => fold(tag) === fold(y.tags[index]));
 }
 
 // Whether a view is anything but the whole library in its usual order: only then is there a filter to save.

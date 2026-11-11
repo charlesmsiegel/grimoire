@@ -138,8 +138,9 @@ def _filter_view(stored: Stored, known: Mapping[str, str] | None = None) -> dict
 
 # -- the ops -----------------------------------------------------------------------------------------------
 def _read(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
-    """Everything on the shelf. Each tag shows in one spelling everywhere (``grimoire.shelf.vocabulary``), so a
-    page compares tags as exact text. ``problems`` names every file that is not a readable record."""
+    """Everything on the shelf. Each tag shows in one spelling everywhere (``grimoire.shelf.vocabulary``). Which
+    spelling can change when another entry is tagged, so a page that keeps a tag (in an address, in a saved
+    filter) matches it whatever its capitals, not as exact text. ``problems`` names every file that is not a readable record."""
     view = _shelf(ctx).view()
     known = vocabulary(stored.value.tags for stored in view.entries.values())
     tags: dict[str, int] = {}

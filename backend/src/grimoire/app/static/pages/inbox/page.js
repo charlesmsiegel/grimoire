@@ -18,7 +18,21 @@ export async function mount(root, ctx) {
   const { ui } = ctx;
   const { el } = ui;
   let feed = null;
-  let focus = ctx.query.get("item");  // the item to expand: the one asked for, else the first that is open
+  const asked = ctx.query.get("item");
+  const askedChat = ctx.query.get("chat");
+  let focus = asked;  // the item to expand: the one asked for, else the first that is open
+  // The whole list looks at the chats played last. An item a link asks for may wait in an older chat, so when it
+  // is not in the list that chat's own items are read too and take their places in it.
+  const read = async () => {
+    const whole = await loadFeed(ctx);
+    if (!asked || !askedChat || whole.items.some((item) => item.id === asked)) return whole;
+    let own;
+    try { own = await loadFeed(ctx, { chat: askedChat }); }
+    catch (error) { if (error && error.reason === "left") throw error; return whole; }  // the list as it is
+    const have = new Set(whole.items.map((item) => item.id));
+    const more = own.items.filter((item) => !have.has(item.id));
+    return more.length ? { ...whole, items: [...whole.items, ...more].sort((a, b) => a.order - b.order) } : whole;
+  };
   const decided = [];                 // what was decided on this visit: { order, title, text, report }
   const said = new Map();             // item id -> what a try that decided nothing answered
   let lastChat;                       // the chat played last, for the way back once nothing waits
@@ -34,7 +48,7 @@ export async function mount(root, ctx) {
       outcome = await perform(ctx, item, action);
     } catch (error) {
       // refused (a version that moved on, a key already given): show the list as it stands now, then the reason
-      if (error && error.reason !== "left") { try { feed = await loadFeed(ctx); draw(); } catch (again) { /* the refusal is what is shown */ } }
+      if (error && error.reason !== "left") { try { feed = await read(); draw(); } catch (again) { /* the refusal is what is shown */ } }
       throw error;
     }
     if (!outcome) return;
@@ -50,7 +64,7 @@ export async function mount(root, ctx) {
     draw();  // what was decided is on the page before the list is read again: a refresh that fails loses nothing
     const waiting = [...list.querySelectorAll("button")];  // drawn just now: off until the list is read again
     for (const node of waiting) node.disabled = true;
-    try { feed = await loadFeed(ctx); } finally { for (const node of waiting) node.disabled = false; }
+    try { feed = await read(); } finally { for (const node of waiting) node.disabled = false; }
     draw();
   });
 
@@ -144,6 +158,6 @@ export async function mount(root, ctx) {
     try { return (await ctx.api("chats", { filter: "recent", limit: 1 })).chats[0] || null; }
     catch (error) { if (error && error.reason === "left") throw error; return undefined; }
   };
-  [feed, lastChat] = await Promise.all([loadFeed(ctx), recent()]);
+  [feed, lastChat] = await Promise.all([read(), recent()]);
   draw();
 }

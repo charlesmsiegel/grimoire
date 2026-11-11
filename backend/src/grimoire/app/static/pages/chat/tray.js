@@ -43,7 +43,7 @@ export function makeTray(ctx, chat, { run, reopen, redraw }) {
     const [item] = items;
     const quick = item.actions.filter((action) => action.quick);
     const ways = quick.length ? quick.map((action, index) => actionButton(ctx, action, index, () => decide(item, action), { size: "small" }))
-      : [el("a", { class: "g-button g-primary g-small", href: itemHref(ctx, item.id) }, "Decide")];
+      : [el("a", { class: "g-button g-primary g-small", href: itemHref(ctx, item.id, item.where && item.where.chat) }, "Decide")];
     return el("div", { class: "chat-tray", role: "group", "aria-label": "Waiting on you" },
       el("span", { class: "g-pill chat-tray-kind" }, item.label),
       el("span", { class: "chat-tray-title", title: item.title }, item.title), ways,

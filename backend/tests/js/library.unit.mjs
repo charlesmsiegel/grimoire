@@ -499,8 +499,17 @@ test("several tags combine with AND, beside the shelf and the role", () => {
   assert.deepEqual(filterEntries(SHELF, { tags: ["crew"], source: "world:realm", marks: MARKS }), []);
   assert.equal(filterEntries(SHELF, { tags: [], marks: MARKS }).length, 6, "no tag is every entry");
   assert.deepEqual(filterEntries(SHELF, { tags: ["crew"], marks: null }), [], "without a shelf nothing carries a tag");
+  // a tag is matched whatever its capitals: the app shows each tag in one spelling, and which one can change when
+  // another entry is tagged, so a tag kept in an address or a saved filter still finds its entries
+  assert.deepEqual(refsOf(filterEntries(SHELF, { tags: ["CREW", "Noir"], marks: MARKS })), ["world:harbor/character/mara"]);
+  assert.deepEqual(toggleTag(["crew", "noir"], "Crew"), ["noir"], "the chosen tag is unchosen by any spelling of it");
+  assert.deepEqual(toggleTag(["noir"], "Crew"), ["noir", "Crew"]);
+  assert.deepEqual(tagChips(MARKS, SHELF, ["CREW"]).filter((chip) => chip.chosen).map((chip) => chip.tag), ["crew"],
+    "the chip of a tag asked for in other capitals is the chosen one, and no second chip is made for it");
+  assert.equal(sameFilter({ role: "character", tags: ["Crew"] }, { role: "character", tags: ["crew"] }), true);
   assert.equal(hasTags(MARKS, "world:harbor/character/mara", ["noir", "crew"]), true);
-  assert.equal(hasTags(MARKS, "world:harbor/character/mara", ["Noir"]), false, "tags are compared as the app spells them");
+  assert.equal(hasTags(MARKS, "world:harbor/character/mara", ["Noir"]), true, "a tag is the same tag whatever its capitals");
+  assert.equal(hasTags(MARKS, "world:harbor/character/mara", ["noirs"]), false);
 });
 
 test("the Pinned shelf holds the pinned entries that are listed, and is offered only where pins are kept", () => {

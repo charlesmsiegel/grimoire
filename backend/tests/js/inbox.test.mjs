@@ -55,6 +55,8 @@ test("the feed is served only with its op and its page, and reading it keeps the
   assert.equal(feed.countLabel(1), "1 thing needs you");
   assert.equal(feed.itemHref(ctx, "label:" + CHAT + ":t"), "#/inbox?" + new URLSearchParams({ item: "label:" + CHAT + ":t" }));
   assert.equal(feed.itemHref(ctx), "#/inbox");
+  // a link to an item names its chat too, so the page can read that chat's own items
+  assert.equal(feed.itemHref(ctx, "label:" + CHAT + ":t", CHAT), "#/inbox?" + new URLSearchParams({ item: "label:" + CHAT + ":t", chat: CHAT }));
   assert.equal(feed.itemId.effect(CHAT, "t1.000001", 2), "effect:" + CHAT + ":t1.000001:2");
   assert.equal(feed.whereHref(ctx, item("action", "a", [])), "#/campaign/c1?" + new URLSearchParams({ chat: CHAT }));
   assert.equal(feed.whereHref(context(() => null, { routes: ["inbox"] }).ctx, item("action", "a", [])), null, "a screen this app lacks is not linked");
@@ -157,7 +159,8 @@ test("the tray shows the chat's first item with its quick actions, and what the 
   // a change is read in full before its key is given: the tray links to it and offers no button
   assert.equal(next.querySelector("span.g-pill").textContent, "Your approval");
   assert.equal(next.querySelectorAll("button").length, 0);
-  assert.equal(byText(next, "a", "Decide")[0].getAttribute("href"), "#/inbox?" + new URLSearchParams({ item: "effect" }));
+  assert.equal(byText(next, "a", "Decide")[0].getAttribute("href"), "#/inbox?" + new URLSearchParams({ item: "effect", chat: CHAT }),
+    "the link names the item's chat, so the inbox finds it though the chat is an old one");
   assert.equal(byText(next, "a", "more waiting").length, 0);
 
   // the chat moving on (a new turn) asks again; the same scene drawn again does not
@@ -178,4 +181,36 @@ test("an app with no inbox has no tray, and a tray that cannot be read shows not
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(broken.tray.view(scene()), null);
   assert.equal(broken.page.failed, undefined);
+});
+
+// The whole list looks only at the chats played last. An item a link asks for may wait in an older chat: the
+// page then reads that chat's own items too, and the item is there to decide.
+test("an item asked for by a link is shown though its chat is not among the chats played last", async () => {
+  const { mount } = await import(pathToFileURL(path.join(STATIC, "pages", "inbox", "page.js")).href);
+  const old = item("reply", "reply:" + CHAT + ":t1", [action({ op: "pass", args: { chat: CHAT, turn: "t1" }, done: "Passed" })], "Cut-off reply");
+  const page = (query, answers) => {
+    const { ctx, seen } = context((op, args) => (op === "chats" ? { chats: [] } : answers(args)), { ops: ["inbox.list", "chats"], routes: ["inbox", "campaign", "chat"] });
+    Object.assign(ctx, { query: new URLSearchParams(query), setTitle() {}, setCrumb() {}, layout() {}, act: (work) => work() });
+    const root = document.createElement("div");
+    return { root, seen, done: mount(root, ctx) };
+  };
+  // asked for with its chat: the whole list is empty, the chat's own list holds it
+  const asked = page({ item: old.id, chat: CHAT }, (args) => (args.chat ? answer([old], { scope: "chat" }) : answer([])));
+  await asked.done;
+  assert.deepEqual(asked.seen.calls.filter(([op]) => op === "inbox.list").map(([, args]) => args), [{}, { chat: CHAT }]);
+  assert.ok(asked.root.querySelector("section.inbox-open").textContent.includes("Anya slips past the lantern"), "the item is open to decide");
+  assert.deepEqual(asked.seen.counts, [["inbox", null]], "the rail counts the whole list only");
+  // already in the whole list: the chat is not asked for again
+  const near = page({ item: old.id, chat: CHAT }, () => answer([old]));
+  await near.done;
+  assert.deepEqual(near.seen.calls.filter(([op]) => op === "inbox.list").map(([, args]) => args), [{}]);
+  // no item asked for: only the whole list is read
+  const plain = page({}, () => answer([]));
+  await plain.done;
+  assert.deepEqual(plain.seen.calls.filter(([op]) => op === "inbox.list").map(([, args]) => args), [{}]);
+  assert.equal(plain.root.querySelector("section.inbox-open"), null);
+  // the chat's own list refusing leaves the whole list as it is
+  const refused = page({ item: old.id, chat: CHAT }, (args) => { if (args.chat) throw Object.assign(new Error("gone"), { reason: "not_found" }); return answer([]); });
+  await refused.done;
+  assert.equal(refused.root.querySelector("section.inbox-open"), null);
 });

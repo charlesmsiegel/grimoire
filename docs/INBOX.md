@@ -79,7 +79,9 @@ opened and nothing else.
 
 ## The page and its readers
 
-- **Needs you** (`#/inbox`, `?item=<id>` opens on one item) lists the items in order under "N things need you".
+- **Needs you** (`#/inbox`; `?item=<id>` opens on one item, and `&chat=<ChatRef>` names the chat it waits in, so
+  the page reads that chat's own items too when the item is not in the whole list, which looks only at the chats
+  played last) lists the items in order under "N things need you".
   Exactly one is expanded: its kind and where, its title, what deciding does, what it holds in full (a conflict's
   versions side by side, an effect's operations and keys, a labelling's factors and stakes), its actions and
   "Open where it happened". The others are rows that expand on a click. A decided item stays on the page, struck

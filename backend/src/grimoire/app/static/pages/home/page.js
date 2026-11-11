@@ -145,7 +145,7 @@ function needsYou(ctx) {
       return;
     }
     const rest = feed.items.length - 1;
-    body.replaceChildren(el("a", { class: "g-card g-accent home-top", href: itemHref(ctx, top.id) },
+    body.replaceChildren(el("a", { class: "g-card g-accent home-top", href: itemHref(ctx, top.id, top.where && top.where.chat) },
       el("span", { class: "home-top-meta" }, ui.pill(top.label, { kind: "accent" }), el("span", { class: "home-top-where" }, top.where.text)),
       el("span", { class: "g-heading home-top-title" }, top.title),
       el("span", { class: "home-top-foot" }, el("span", { class: "g-muted" }, rest ? "and " + rest + " more" : ""),

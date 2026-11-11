@@ -195,7 +195,7 @@ function actionCard({ ctx, hub, nameOf, write, director, numberOf, chat }) {
       // or for a labelling the inbox does not list because it is not one to confirm)
       parts.push(available(ctx, can.confirm, "Confirming the labelling", () => el("div", { class: "g-row campaign-band" },
         el("span", { class: "g-grow" }, "Waiting on you to confirm how this was read."),
-        inboxServed(ctx) && label.state === "proposed" ? decideLink(ctx, itemId.label(chat, action.turn))
+        inboxServed(ctx) && label.state === "proposed" ? decideLink(ctx, itemId.label(chat, action.turn), chat)
           : ui.button("Confirm this labelling", () => write("confirm", {}, "Labelling confirmed."), { kind: "primary" }))));
     }
   }
@@ -374,7 +374,7 @@ function effectBlock({ ctx, hub, nameOf, write, director, chat }, turn, effect, 
   // hold both, but this page never gives one key for the other.
   // the table endorses in the inbox, beside everything else that waits on it (here only where there is none)
   if (!director && mine && inboxServed(ctx)) {
-    put(box, available(ctx, can.endorse_effect, "Endorsing this effect", () => ui.actions(decideLink(ctx, itemId.effect(chat, turn.turn, effect.number)))));
+    put(box, available(ctx, can.endorse_effect, "Endorsing this effect", () => ui.actions(decideLink(ctx, itemId.effect(chat, turn.turn, effect.number), chat))));
   } else if (!director && mine) {
     put(box, available(ctx, can.endorse_effect, "Endorsing this effect", () => ui.actions(ui.button("Endorse as shown", async () => {
       if (await ui.confirm("Give your key to effect " + effect.number + ", exactly as shown: " + effect.summary, { confirmLabel: "Endorse" })) {
@@ -600,8 +600,8 @@ function unavailableCard({ ctx, hub }) {
 // -- small helpers ----------------------------------------------------------------------------------------
 
 // Where the table decides what waits on it: that item, open in the inbox.
-function decideLink(ctx, item) {
-  return ctx.ui.el("a", { class: "g-button g-primary", href: itemHref(ctx, item) }, "Decide in Needs you");
+function decideLink(ctx, item, chat) {
+  return ctx.ui.el("a", { class: "g-button g-primary", href: itemHref(ctx, item, chat) }, "Decide in Needs you");
 }
 
 function put(parent, node) { if (node) parent.append(node); }

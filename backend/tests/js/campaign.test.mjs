@@ -287,7 +287,7 @@ test("with an inbox, the table's view links to the item to decide there, and the
     approved_by: null, event: null, fingerprint: "e".repeat(64), accepted_on: null };
   const turns = [{ turn: "t0.000001", number: 1, open: false, kept: true, passed: false, post: null, labels: [], effects: [effect], intentions: [] }];
   const waiting = { open_action: { ...hub("table").open_action, label, framed: null }, turns };
-  const item = (id) => "#/inbox?" + new URLSearchParams({ item: id }).toString();
+  const item = (id) => "#/inbox?" + new URLSearchParams({ item: id, chat: CHAT }).toString();  // the link names the chat too
   const { root, calls } = await mounted("table", hub("table", waiting), null, ["chat", "inbox"]);
   // what confirming locks in is still read here; the confirming itself is the inbox's
   const action = section(root, "Open action");

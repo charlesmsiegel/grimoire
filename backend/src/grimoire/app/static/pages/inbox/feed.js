@@ -26,9 +26,11 @@ export async function loadFeed(ctx, { chat } = {}) {
   return feed;
 }
 
-// The inbox's address, open on one item when its id is given.
-export function itemHref(ctx, id) {
-  return ctx.href(ROUTE, [], id ? { item: id } : undefined);
+// The inbox's address, open on one item when its id is given. `chat` is the chat the item waits in: the whole
+// list looks only at the chats played last, so the page reads that chat's own items too when the item is not
+// among them (an approval waiting in an older chat is still decided from its link).
+export function itemHref(ctx, id, chat) {
+  return ctx.href(ROUTE, [], id ? (chat ? { item: id, chat } : { item: id }) : undefined);
 }
 
 // The ids of the items a campaign hub links to (as `inbox.list` makes them).

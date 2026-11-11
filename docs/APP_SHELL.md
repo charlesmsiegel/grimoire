@@ -156,7 +156,7 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | Route | Owner | Path / query |
 |---|---|---|
 | `home`, `setup` | 108 | |
-| `inbox` | 108 | `?item=<item id>` (the item to open on, as `inbox.list` names it) |
+| `inbox` | 108 | `?item=<item id>` (the item to open on, as `inbox.list` names it), `&chat=<ChatRef>` (the chat it waits in) |
 | `chats` | 111 | `?filter=character\|scenario&source=<SourceRef>`, `?filter=pinned` |
 | `chat` | 111 | `/<ChatRef>?turn=<number>` (open at a turn) |
 | `start` | 111 | `?source=<SourceRef>` |

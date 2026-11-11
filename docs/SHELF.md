@@ -30,9 +30,10 @@ them). An entry or a saved filter carries at most 32 tags (`too_many_tags`).
 
 A tag's identity is its name casefolded, so `Noir` and `noir` are one tag. One entry never holds both. Across
 entries the tag is shown in **one** spelling everywhere: the spelling most entries use, and among equals the
-first in code-point order (`grimoire.shelf.vocabulary`). `shelf.read` answers every tag in that spelling, so a
-page compares tags as exact text. The rule depends only on the records, so two devices holding the same
-records show the same spelling.
+first in code-point order (`grimoire.shelf.vocabulary`). `shelf.read` answers every tag in that spelling. The rule
+depends only on the records, so two devices holding the same records show the same spelling. Which spelling is
+shown can change when another entry is tagged, so a tag that is kept (in an address, in a saved filter) is matched
+whatever its capitals: the library page finds `?tags=crew` after the tag has come to read `Crew`.
 
 ## Files
 
