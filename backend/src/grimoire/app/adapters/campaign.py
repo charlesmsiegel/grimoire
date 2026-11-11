@@ -9,8 +9,9 @@ keeps no record: its writes go through 035's runner to 029, 040 and 021. 029 and
 under the app's own adjudication key (``app:adjudicator``, never the owner's), which the hub's 029/040 libraries
 take from the library's authority as 035 requires; that key never writes anything but adjudication and obstacles.
 
-``chats`` lists the library's chats by campaign (from the core ``chats`` op), so the hub page can be reached
-from a campaign id (the ``campaign`` route, ``/<campaign id>``).
+``chats`` lists the library's chats by campaign (from the core ``chats`` op, and nothing that op does not
+answer: each campaign's title and world, each chat's label, last activity and bound characters), so the page
+can list the campaigns and reach a hub from a campaign id (the ``campaign`` route, ``/<campaign id>``).
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ HUB_OPS = ("hub", "knowledge", "label", "confirm", "decide", "propose_effect", "
            "recover_effects")
 #: The most chats one ``chats`` answer lists (the core ``chats`` op's own largest page).
 MAX_CHATS = 1000
+#: The bindings of a chat that the list names as its cast.
+CAST_ROLES = ("character", "persona")
 
 _HUBS: WeakKeyDictionary = WeakKeyDictionary()
 
@@ -49,7 +52,8 @@ def _op(name: str):  # type: ignore[no-untyped-def]
 
 
 def _chats(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
-    """The library's recent chats grouped by campaign; with ``campaign``, that campaign's alone."""
+    """The library's recent chats grouped by campaign, each campaign's newest first; with ``campaign``, that
+    campaign's alone."""
     wanted = args.get("campaign")
     if wanted is not None:
         if type(wanted) is not str:
@@ -59,18 +63,24 @@ def _chats(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
         except ValueError:
             raise ApiRefused("invalid_field", "campaign is not a valid campaign id") from None
     listed = ctx.core("chats", {"filter": "recent", "limit": MAX_CHATS})
-    campaigns: dict[str, list[dict]] = {}
-    for chat in listed["chats"]:
+    campaigns: dict[str, dict] = {}
+    for chat in listed["chats"]:  # newest activity first, so a campaign's first chat is the one played last
         try:
             campaign = ChatRef.parse(chat["chat"]).campaign_id
         except (ValueError, TypeError, KeyError):
             continue
         if wanted is not None and campaign != wanted:
             continue
-        campaigns.setdefault(campaign, []).append({"chat": chat["chat"], "label": chat.get("label"),
-                                                    "name": (chat.get("launch") or {}).get("name"),
-                                                    "problem": chat.get("problem")})
-    return {"campaigns": [{"campaign": name, "chats": found} for name, found in sorted(campaigns.items())],
+        scope = chat.get("scope") or {}
+        found = campaigns.setdefault(campaign, {"campaign": campaign, "title": scope.get("title"),
+                                                "world": scope.get("world"), "chats": []})
+        found["chats"].append({"chat": chat["chat"], "label": chat.get("label"),
+                               "name": (chat.get("launch") or {}).get("name"),
+                               "problem": chat.get("problem"), "last_activity": chat.get("last_activity"),
+                               "cast": [{"role": source["role"], "ref": source["ref"], "name": source.get("name")}
+                                        for source in chat.get("sources") or ()
+                                        if source.get("role") in CAST_ROLES]})
+    return {"campaigns": [campaigns[name] for name in sorted(campaigns)],
             "complete": len(listed["chats"]) < MAX_CHATS}
 
 
